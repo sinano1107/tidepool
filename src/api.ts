@@ -3,7 +3,14 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { listEvents } from "./events.js";
-import { getTask, listTasks, moveTask, registerTask, type Task } from "./tasks.js";
+import {
+  DomainError,
+  getTask,
+  listTasks,
+  moveTask,
+  registerTask,
+  type Task,
+} from "./tasks.js";
 
 const registerTaskSchema = z.object({
   type: z.enum(["work", "question", "review"]),
@@ -16,6 +23,13 @@ const registerTaskSchema = z.object({
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
 });
+
+function queueHeadId(db: Db): string | null {
+  const head = db
+    .prepare("SELECT id FROM tasks WHERE status = 'todo' ORDER BY sort_key LIMIT 1")
+    .get() as { id: string } | undefined;
+  return head?.id ?? null;
+}
 
 export function createApiRouter(
   db: Db,
@@ -54,8 +68,20 @@ export function createApiRouter(
       }
       after = found;
     }
-    const moved = moveTask(db, task, after, clock.now());
-    onQueueHeadChanged();
+    const headBefore = queueHeadId(db);
+    let moved: Task;
+    try {
+      moved = moveTask(db, task, after, clock.now());
+    } catch (err) {
+      if (err instanceof DomainError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+    // "run now" (after: null) is always an explicit immediate-poll trigger,
+    // even when the task already sits at the head
+    if (after === null || queueHeadId(db) !== headBefore) onQueueHeadChanged();
     res.json(moved);
   });
 

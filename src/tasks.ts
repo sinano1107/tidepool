@@ -165,6 +165,12 @@ export function moveTask(
   now: Date,
   workerId: string = HUMAN_WORKER_ID,
 ): Task {
+  if (task.status !== "todo") {
+    throw new DomainError("only todo tasks can be reordered");
+  }
+  if (after !== null && after.status !== "todo") {
+    throw new DomainError("a task can only be placed after a todo task");
+  }
   const sortKey = fractionalKeyAfter(db, task, after);
   db.transaction(() => {
     db.prepare("UPDATE tasks SET sort_key = ? WHERE id = ?").run(sortKey, task.id);

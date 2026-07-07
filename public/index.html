@@ -53,8 +53,10 @@
 <script>
   const queueEl = document.getElementById("queue");
   let todos = [];
+  let dragging = false;
 
   async function load() {
+    if (dragging) return; // a re-render mid-drag would yank the row out from under the pointer
     const all = await fetch("/api/tasks").then((r) => r.json());
     todos = all.filter((t) => t.status === "todo");
     const running = all.find((t) => t.status === "in_progress");
@@ -97,13 +99,12 @@
       type.className = "type";
       type.textContent = t.type;
       row.append(pos, title, type);
-      if (i > 0) {
-        const front = document.createElement("button");
-        front.textContent = "↑";
-        front.title = "Move to front";
-        front.addEventListener("click", () => move(t.id, null));
-        row.append(front);
-      }
+      // also on the head row: front on the head is the immediate-poll trigger
+      const front = document.createElement("button");
+      front.textContent = "↑";
+      front.title = "Move to front";
+      front.addEventListener("click", () => move(t.id, null));
+      row.append(front);
       row.addEventListener("pointerdown", (e) => onDragStart(e, i, row));
       queueEl.append(row);
     });
@@ -112,6 +113,7 @@
   function onDragStart(e, index, el) {
     if (e.target.closest("button") || e.button > 0) return;
     e.preventDefault();
+    dragging = true;
     el.setPointerCapture(e.pointerId);
     const gap = 6;
     const shift = el.getBoundingClientRect().height + gap;
@@ -136,6 +138,7 @@
       el.classList.remove("dragging");
       el.style.transform = "";
       rows.forEach((r) => (r.style.transform = ""));
+      dragging = false;
       if (projected !== index) {
         // after = the task that ends up right above the drop position
         const after = projected === 0 ? null : todos[projected < index ? projected - 1 : projected].id;

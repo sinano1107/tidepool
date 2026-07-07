@@ -21,8 +21,9 @@ function queueIds(list: any[]): string[] {
 /** Park a filler task in the slot so reordering below never triggers a pickup:
  *  a queue-head change while the slot is free immediately executes the new head. */
 async function occupySlot(t: Tidepool) {
-  await registerWork(t, "occupies the slot");
+  const filler = await registerWork(t, "occupies the slot");
   await t.clock.advance(HOUR);
+  return filler;
 }
 
 it("moving a task to the head (after: null) reorders the queue, surviving a restart", async () => {
@@ -103,4 +104,56 @@ it("moving a task to the head triggers an immediate poll: the new head is picked
 
   expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${b.id}`)).json.status).toBe("in_progress");
+});
+
+it("a reorder that leaves the queue head unchanged does not fire an immediate poll", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "a");
+  await registerWork(t, "b");
+  const c = await registerWork(t, "c");
+
+  // a stays at the head: no human said "run now", so the slot stays idle
+  await api(t.baseUrl, "POST", `/api/tasks/${c.id}/move`, { after: a.id });
+  expect(t.worker.started).toEqual([]);
+
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.id)).toEqual([a.id]);
+});
+
+it("run-now on the task already at the head still fires the immediate poll", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "a");
+
+  // the head's front button is the human's immediate-poll trigger
+  await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, { after: null });
+  expect(t.worker.started.map((x) => x.id)).toEqual([a.id]);
+});
+
+it("moving the head task down fires the poll for the new head", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "a");
+  const b = await registerWork(t, "b");
+
+  await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, { after: b.id });
+  expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
+});
+
+it("only todo tasks can be reordered, and only relative to todo tasks", async () => {
+  t = await bootTidepool();
+  const running = await occupySlot(t);
+  const a = await registerWork(t, "a");
+
+  const moveRunning = await api(t.baseUrl, "POST", `/api/tasks/${running.id}/move`, {
+    after: null,
+  });
+  expect(moveRunning.status).toBe(400);
+
+  const moveAfterRunning = await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, {
+    after: running.id,
+  });
+  expect(moveAfterRunning.status).toBe(400);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${running.id}/events`)).json.filter(
+    (e: any) => e.kind === "task_moved",
+  )).toEqual([]);
 });
