@@ -129,15 +129,23 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff }) 
   // completion rows carry a handoff doc: tap unfolds it in place (the log's
   // link back to the deliverable) and the objection entry point moves inside
   // the expansion. decision rows keep tap = object.
+  // per-entry state is keyed by the entry's stable id (falling back to the
+  // array index for id-less mock data) so a log refresh can't retarget an
+  // objection at a different line
+  const logKey = (entry, i) => (entry.id != null ? entry.id : i);
   const [handoffOpen, setHandoffOpen] = React.useState({});
   const handoffCache = React.useRef({});
-  const toggleObjecting = (i) => { setObjecting(objecting === i ? null : i); setDraft(''); };
-  const toggleHandoff = async (i, l) => {
-    if (handoffOpen[i]) { setHandoffOpen((prev) => ({ ...prev, [i]: false })); return; }
-    if (handoffCache.current[i] == null) {
-      handoffCache.current[i] = l.handoff != null ? l.handoff : await loadHandoff(l);
+  const toggleObjecting = (k) => { setObjecting(objecting === k ? null : k); setDraft(''); };
+  const toggleHandoff = async (k, entry) => {
+    if (handoffOpen[k]) { setHandoffOpen((prev) => ({ ...prev, [k]: false })); return; }
+    if (handoffCache.current[k] == null) {
+      try {
+        handoffCache.current[k] = entry.handoff != null ? entry.handoff : await loadHandoff(entry);
+      } catch {
+        handoffCache.current[k] = '(handoff doc failed to load)';
+      }
     }
-    setHandoffOpen((prev) => ({ ...prev, [i]: true }));
+    setHandoffOpen((prev) => ({ ...prev, [k]: true }));
   };
   const answered = Object.values(answers).filter(Boolean).length;
   const unread = data.log.filter((l) => l.unread);
@@ -172,20 +180,21 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff }) 
       {section === 1 && (
         <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           {data.log.map((l, i) => {
+            const k = logKey(l, i);
             const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
             return (
-            <div key={i}>
-              <LogEntry entry={{ ...l, objection: objections[i] }} active={objecting === i} onObject={() => (hasHandoff ? toggleHandoff(i, l) : toggleObjecting(i))} />
-              {handoffOpen[i] && (
+            <div key={k}>
+              <LogEntry entry={{ ...l, objection: objections[k] }} active={objecting === k} onObject={() => (hasHandoff ? toggleHandoff(k, l) : toggleObjecting(k))} />
+              {handoffOpen[k] && (
                 <div style={{ padding: '10px 14px 12px', background: 'var(--surface-recessed)' }}>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>handoff — {l.taskId}</div>
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', lineHeight: 1.6, color: 'var(--text-body)', overflowX: 'auto' }}>{handoffCache.current[i]}</pre>
-                  {objecting !== i && (
-                    <button onClick={() => toggleObjecting(i)} style={{ background: 'none', border: 'none', color: 'var(--coral-4)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '8px 0 0', display: 'block' }}>object to this completion…</button>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', lineHeight: 1.6, color: 'var(--text-body)', overflowX: 'auto' }}>{handoffCache.current[k]}</pre>
+                  {objecting !== k && (
+                    <button onClick={() => toggleObjecting(k)} style={{ background: 'none', border: 'none', color: 'var(--coral-4)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '8px 0 0', display: 'block' }}>object to this completion…</button>
                   )}
                 </div>
               )}
-              {objecting === i && (
+              {objecting === k && (
                 <div style={{ padding: '10px 12px', background: 'var(--coral-1)', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                   <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
                   <Button variant="danger" size="sm" disabled={!draft.trim()} onClick={() => { setObjections({ ...objections, [objecting]: draft }); setObjecting(null); }}>Object</Button>
@@ -205,11 +214,13 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff }) 
         if (Object.keys(objections).length > 0) {
           pending.push({ id: 'tp-0151', title: `repair task — ${Object.keys(objections).length} objection${Object.keys(objections).length > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true });
         }
+        // a pending front-insert may already sit in the queue as a blocked row — show it once, up top
+        const previewQueue = data.queue.filter((t) => !pending.some((p) => p.id === t.id));
         return (
           <div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {pending.map((t, i) => <QueueItem key={t.id} position={i + 1} task={t} frontInserted />)}
-              <TpQueueList tasks={data.queue} baseIndex={pending.length} onReorder={onReorderQueue} onFront={onFront} />
+              <TpQueueList tasks={previewQueue} baseIndex={pending.length} onReorder={onReorderQueue} onFront={onFront} />
             </div>
             {scratch.length > 0 && (
               <div style={{ marginTop: 20, background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', padding: 14 }}>

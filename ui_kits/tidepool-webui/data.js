@@ -55,6 +55,8 @@ const tpData = {
   ],
   queue: [
     { id: 'tp-0144', title: 'Write board schema DDL', assignee: 'reef-crab', workspace: 'tidepool' },
+    // derived-blocked: holds its queue position dimmed — the slot skips it until the children finish
+    { id: 'tp-0141', title: 'Registry loader + agent.md parser', assignee: 'reef-crab', risk: true, workspace: 'tidepool', blocked: true },
     { id: 'tp-0146', title: 'Scaffold MCP server verbs', assignee: 'reef-crab', risk: true, workspace: 'tidepool' },
     { id: 'tp-0147', title: 'Vite PWA shell + push subscription', assignee: 'hermit', skipped: true, workspace: 'tidepool' },
     { id: 'tp-0150', title: 'Watchdog repair: clear stale timer on SIGKILL path', assignee: 'reef-crab', workspace: 'registry' },

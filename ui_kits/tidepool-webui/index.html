@@ -259,6 +259,8 @@ function App() {
       const q = data.questions.find((x) => x.id === qid);
       return q.parent ? { id: q.parent, title: q.title, assignee: q.agent, frontInserted: true, flash: true } : null;
     }).filter(Boolean);
+    // an unblocked parent MOVES to the front — it may already sit (blocked) in the queue
+    const remaining = data.queue.filter((x) => !unblocked.some((u) => u.id === x.id));
     const repairs = Object.keys(objections).length
       ? [{ id: 'tp-0151', title: `repair task — ${Object.keys(objections).length} objection${Object.keys(objections).length > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true, flash: true }]
       : [];
@@ -273,7 +275,7 @@ function App() {
         ...data,
         questions: [],
         log: data.log.map((l) => ({ ...l, unread: false })),
-        queue: [...unblocked, ...repairs, ...data.queue, ...scratchTasks],
+        queue: [...unblocked, ...repairs, ...remaining, ...scratchTasks],
       });
       setCommitted(true);
       setTab('queue');

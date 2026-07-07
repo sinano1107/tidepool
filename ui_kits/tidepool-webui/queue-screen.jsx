@@ -109,10 +109,15 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, gap = 6 }) {
           key={t.id}
           ref={setRef(t.id)}
           onPointerDown={(e) => onPointerDown(e, i, t.id)}
+          title={t.blocked ? 'blocked — the slot skips this row until its children finish' : undefined}
           style={{
             touchAction: onReorder ? 'none' : undefined,
             cursor: onReorder ? (draggingId === t.id ? 'grabbing' : 'grab') : undefined,
             userSelect: 'none', position: 'relative',
+            // derived-blocked rows hold their queue position (the slot skips
+            // them until the children finish) — hiding them would let the
+            // displayed order lie about where a drop actually lands
+            opacity: t.blocked ? 0.55 : undefined,
           }}
         >
           {/* the head row keeps "↑ front" too: front on the head is the explicit immediate-poll trigger (run now) */}

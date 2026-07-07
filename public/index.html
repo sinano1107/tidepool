@@ -4,10 +4,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>tidepool</title>
 <link rel="stylesheet" href="/styles.css">
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.min.js" integrity="sha384-8nT3SpButyvenpAdKYPJzXdSz3zidMGduMoaMvwjKnAWVv238n6P1mhveiJJQWrV" crossorigin="anonymous"></script>
 <script src="/_ds_bundle.js"></script>
 <style>
   html, body { margin: 0; height: 100%; }
@@ -52,7 +52,9 @@
 </head>
 <body>
 <div id="root"></div>
-<!-- screens come straight from the design-synced kit — single source, no copies -->
+<!-- triage/board/queue come straight from the design-synced kit (single
+     source, no copies); register stays a local plain form until the LLM-draft
+     flow and its backend fields (assignee, risk) exist -->
 <script type="text/babel" src="/kit/queue-screen.jsx"></script>
 <script type="text/babel" src="/kit/triage-screen.jsx"></script>
 <script type="text/babel" src="/kit/board-screen.jsx"></script>
@@ -80,10 +82,10 @@ async function api(path, body) {
 }
 
 // transient "just moved to the front" ids — presentation only, never persisted
-const FRONTS = new Set();
+const RECENT_FRONTS = new Set();
 function markFront(id) {
-  FRONTS.add(id);
-  setTimeout(() => FRONTS.delete(id), 4000);
+  RECENT_FRONTS.add(id);
+  setTimeout(() => RECENT_FRONTS.delete(id), 4000);
 }
 
 // Map the server board + decision log into the shape the kit screens consume.
@@ -95,7 +97,9 @@ function mapData(board, log) {
   const questions = board
     .filter((t) => t.status === 'todo' && t.type === 'question')
     .map((q) => ({
-      id: q.id, parent: q.parent_id, agent: q.assignee ?? 'agent',
+      id: q.id, parent: q.parent_id,
+      // a question has no assignee (it is answered here); show who it blocks
+      agent: board.find((p) => p.id === q.parent_id)?.assignee ?? '—',
       title: q.title, context: q.purpose,
       options: (q.question_options ?? []).map((o) => ({ label: o, recommended: o === q.question_recommendation })),
     }));
@@ -107,11 +111,17 @@ function mapData(board, log) {
     unread: e.id > log.cursor,
     handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
   }));
+  // the queue is the todo order the slot walks. derived-blocked rows keep
+  // their sort_key position (the slot skips them until the children finish),
+  // so they stay visible — hiding them would make the displayed order lie
+  // about where a drag actually lands. questions stay out: they never enter
+  // the slot and are answered in triage.
   const queue = board
-    .filter((t) => t.status === 'todo' && t.type !== 'question')
+    .filter((t) => (t.status === 'todo' || t.status === 'blocked') && t.type !== 'question')
     .map((t) => ({
       id: t.id, title: t.title, assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
-      frontInserted: FRONTS.has(t.id), flash: FRONTS.has(t.id),
+      blocked: t.status === 'blocked',
+      frontInserted: RECENT_FRONTS.has(t.id), flash: RECENT_FRONTS.has(t.id),
     }));
   const openChildren = {};
   for (const t of board) {
@@ -133,7 +143,10 @@ function mapData(board, log) {
     ? { color: 'var(--tide-4)', line: `${running.id} · ${running.title}`, meta: running.assignee ?? '' }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1' };
   return {
-    questions, log: logEntries, queue, board: cols, humanTasks: [], agents: [],
+    questions, log: logEntries, queue, board: cols,
+    // empty until their domain slices exist: human tasks / agent registry /
+    // out-of-authority approval questions — the kit sections render empty
+    humanTasks: [], agents: [],
     slot, running: !!running,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
   };
@@ -214,27 +227,30 @@ function App() {
   const tabRef = React.useRef(tab);
   tabRef.current = tab;
 
+  const refreshFull = () => fetchData().then(setData).catch(() => {});
+
   // every tab entry takes a fresh snapshot; screens remount per tab (key)
   const setTab = (next) => {
     setTabRaw((prev) => {
       if (next !== prev) setTabDir(tabOrder.indexOf(next) > tabOrder.indexOf(prev) ? 'right' : 'left');
       return next;
     });
-    fetchData().then(setData).catch(() => {});
+    refreshFull();
   };
 
   React.useEffect(() => {
-    fetchData().then(setData).catch(() => {});
+    refreshFull();
     const dn = () => { pointerDown.current = true; };
     const up = () => { pointerDown.current = false; };
     window.addEventListener('pointerdown', dn);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
-    // background refresh — never mid-drag, never over an in-flight triage
-    // (the triage snapshot must stay stable: objections are keyed by log position)
+    // background refresh — never mid-drag, and not over an in-flight triage:
+    // triage state is keyed by stable entry/question ids, but the skim is a
+    // morning snapshot and must not grow new lines under the reader
     const iv = setInterval(() => {
       if (pointerDown.current || tabRef.current === 'triage') return;
-      fetchData().then(setData).catch(() => {});
+      refreshFull();
     }, 15000);
     return () => {
       clearInterval(iv);
@@ -275,18 +291,26 @@ function App() {
 
   // Triage commit: answers apply (unblocked parents go to the head server-side),
   // one repair task per objection front-inserted, scratchpad notes to the tail,
-  // then the read cursor advances over everything skimmed.
+  // then the read cursor advances over everything skimmed — last, so a partial
+  // failure never marks unhandled lines as read. Not atomic (N sequential
+  // calls): on failure the toast reports exactly what applied and the board is
+  // re-fetched so the UI shows the true server state.
   const commitTriage = async (answers, objections, scratch) => {
+    const applied = { answered: 0, repairs: 0, noted: 0 };
     try {
       const picked = Object.entries(answers).filter(([, a]) => a);
       for (const [qid, a] of picked) {
         await api(`/api/tasks/${qid}/answer`, { answer: a });
+        applied.answered += 1;
         const q = data.questions.find((x) => x.id === qid);
         if (q && q.parent) markFront(q.parent);
       }
-      let repairs = 0;
-      for (const [i, direction] of Object.entries(objections)) {
-        const entry = data.log[+i];
+      // objections are keyed by the log entry's stable id. register the repair
+      // tasks first, then front-insert in reverse so the first objection ends
+      // up frontmost.
+      const repairIds = [];
+      for (const [key, direction] of Object.entries(objections)) {
+        const entry = data.log.find((e) => String(e.id) === String(key));
         if (!entry) continue;
         const t = await api('/api/tasks', {
           type: 'work',
@@ -294,11 +318,13 @@ function App() {
           purpose: `objection to ${entry.taskId} (${entry.agent}): ${direction}`,
           completion_criteria: 'the objection direction is applied and the outcome is logged',
         });
-        await api(`/api/tasks/${t.id}/move`, { after: null });
-        markFront(t.id);
-        repairs += 1;
+        repairIds.push(t.id);
+        applied.repairs += 1;
       }
-      let noted = 0;
+      for (const id of [...repairIds].reverse()) {
+        await api(`/api/tasks/${id}/move`, { after: null });
+        markFront(id);
+      }
       for (const s of scratch) {
         if (s.kind === 'drop') continue;
         await api('/api/tasks', {
@@ -307,16 +333,18 @@ function App() {
           purpose: s.text,
           completion_criteria: 'scratchpad note triaged — refine criteria at pickup',
         });
-        noted += 1;
+        applied.noted += 1;
       }
       if (data.lastLogId != null) await api('/api/log/cursor', { last_read: data.lastLogId });
       runWash('The tide is going out.', '🌊', () => {
         setTab('queue');
         say('success', 'triage committed — one pass',
-          `${picked.length} answered${repairs ? ` · ${repairs} repair` : ''}${noted ? ` · ${noted} from scratchpad` : ''}`);
+          `${applied.answered} answered${applied.repairs ? ` · ${applied.repairs} repair` : ''}${applied.noted ? ` · ${applied.noted} from scratchpad` : ''}`);
       });
     } catch (err) {
-      say('danger', 'triage commit failed', String(err.message || err));
+      refreshFull();
+      say('danger', 'triage commit failed partway — cursor NOT advanced',
+        `applied: ${applied.answered} answered · ${applied.repairs} repair · ${applied.noted} noted — ${String(err.message || err)}`);
     }
   };
 
@@ -347,9 +375,12 @@ function App() {
   };
 
   // a completion entry unfolds its handoff doc in place — the log's link back
-  // to the deliverable (issue #5)
+  // to the deliverable (issue #5). a failed fetch surfaces in the expansion
+  // via the kit's catch, not as a silent no-op.
   const loadHandoff = async (entry) => {
-    const task = await fetch(`/api/tasks/${entry.taskId}`).then((r) => r.json());
+    const res = await fetch(`/api/tasks/${entry.taskId}`);
+    if (!res.ok) throw new Error(res.statusText);
+    const task = await res.json();
     return task.handoff_doc ?? '(no handoff doc)';
   };
 
