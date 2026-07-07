@@ -8,6 +8,7 @@ import { openDb } from "./db.js";
 import { createMcpRouter } from "./mcp.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
+import { autoCommitStaleTriage } from "./triage.js";
 import type { WorkerAdapter } from "./worker.js";
 
 export interface ServerOptions {
@@ -34,6 +35,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   if (interrupted) slot.occupy(interrupted.id);
   const app = express();
   const scheduler = startScheduler({ db, clock: options.clock, slot, worker: options.worker });
+  // an abandoned triage session may not pause pickup forever: the watchdog
+  // auto-commits it past the timeout, and the commit is a "run now" trigger
+  const stopTriageWatchdog = options.clock.setInterval(() => {
+    if (autoCommitStaleTriage(db, options.clock.now())) scheduler.pollNow();
+  }, 60 * 1000);
   app.use("/api", createApiRouter(db, options.clock, () => scheduler.pollNow()));
   app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock }));
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -54,6 +60,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     port: (listener.address() as AddressInfo).port,
     stop: () =>
       new Promise((resolve, reject) => {
+        stopTriageWatchdog();
         scheduler.stop();
         listener.close((err) => (err ? reject(err) : resolve()));
         db.close();

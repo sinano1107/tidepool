@@ -23,7 +23,15 @@ export type EventPayload =
       answer: string;
       recommendation_accepted: boolean;
       recommended_by: string;
-    };
+    }
+  // a triage objection annotates one log entry (entry_id = event id); the
+  // direction comment is mandatory — silence is approval, so the only explicit
+  // action carries where to go instead. session_id scopes commit-time bundling
+  // to the session the objection was raised in.
+  | { kind: "objection_raised"; entry_id: number; comment: string; session_id: number }
+  // "this entry was put in front of the human" — the denominator of the
+  // objection rate; an entry never displayed is unobserved, not approved
+  | { kind: "log_entry_displayed"; entry_id: number; session_id: number };
 
 export type EventKind = EventPayload["kind"];
 

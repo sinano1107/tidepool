@@ -45,6 +45,34 @@ export function openDb(path: string): Db {
     );
     INSERT OR IGNORE INTO log_cursor (id, last_read) VALUES (1, 0);
 
+    -- the morning triage session (issue #6): while one is open (committed_at
+    -- IS NULL) pickup pauses and queue application is staged until commit
+    CREATE TABLE IF NOT EXISTS triage_sessions (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      started_at       TEXT NOT NULL,
+      -- refreshed on every answer/objection/scratchpad touch; the watchdog
+      -- auto-commits a session left alone past the timeout
+      last_activity_at TEXT NOT NULL,
+      committed_at     TEXT
+    );
+
+    -- queue applications staged by an open triage session: tasks this session
+    -- will move to the queue head when it commits (e.g. parents unblocked by
+    -- an answer). id preserves answer order for the commit-time application.
+    CREATE TABLE IF NOT EXISTS triage_front_inserts (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL REFERENCES triage_sessions(id),
+      task_id    TEXT NOT NULL REFERENCES tasks(id)
+    );
+
+    -- the triage scratchpad: irritation lines jotted anywhere in the flow,
+    -- durable at once, dispositioned (meta-review / task / discard) at commit
+    CREATE TABLE IF NOT EXISTS triage_scratchpad (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL REFERENCES triage_sessions(id),
+      line       TEXT NOT NULL
+    );
+
     -- append-only is enforced by structure, not convention
     CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
       BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;

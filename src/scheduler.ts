@@ -2,6 +2,7 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
 import { nextSlotTask, pickupTask } from "./tasks.js";
+import { activeTriageSession } from "./triage.js";
 import type { WorkerAdapter } from "./worker.js";
 
 export const HOURLY = 60 * 60 * 1000;
@@ -25,6 +26,9 @@ export function startScheduler(deps: {
 
   function poll(): void {
     if (slot.currentTaskId !== null) return;
+    // triage pauses pickup: the human is re-steering the queue, so nothing
+    // new enters the slot until the session commits (issue #6)
+    if (activeTriageSession(db)) return;
     const head = nextSlotTask(db);
     if (!head) return;
     const picked = pickupTask(db, head, worker.id, clock.now());

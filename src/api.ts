@@ -13,6 +13,18 @@ import {
   registerTask,
   type Task,
 } from "./tasks.js";
+import {
+  activeTriageSession,
+  addScratchpadLine,
+  commitTriage,
+  listScratchpad,
+  raiseObjection,
+  recordDisplayedEntries,
+  startTriage,
+  touchTriage,
+  triagePreview,
+  TriageError,
+} from "./triage.js";
 
 const registerTaskSchema = z.object({
   type: z.enum(["work", "question", "review"]),
@@ -37,6 +49,30 @@ const answerSchema = z.object({
 
 const cursorSchema = z.object({
   last_read: z.number().int().nonnegative(),
+});
+
+const objectionSchema = z.object({
+  entry_id: z.number().int().positive(),
+  comment: z.string().min(1),
+});
+
+const scratchpadSchema = z.object({
+  line: z.string().min(1),
+});
+
+const displayedSchema = z.object({
+  entry_ids: z.array(z.number().int().positive()).min(1),
+});
+
+const commitSchema = z.object({
+  scratchpad: z
+    .array(
+      z.object({
+        id: z.number().int().positive(),
+        disposition: z.enum(["meta_review", "task", "discard"]),
+      }),
+    )
+    .default([]),
 });
 
 function queueHeadId(db: Db): string | null {
@@ -116,7 +152,15 @@ export function createApiRouter(
       return;
     }
     try {
-      const { question, parentUnblocked } = answerQuestion(db, task, parsed.data.answer, clock.now());
+      const session = activeTriageSession(db);
+      const { question, parentUnblocked } = answerQuestion(
+        db,
+        task,
+        parsed.data.answer,
+        clock.now(),
+        session?.id,
+      );
+      if (session) touchTriage(db, clock.now());
       // an answer that unblocked the parent put it at the head — "run now"
       if (parentUnblocked) onQueueHeadChanged();
       res.json(presentTask(db, question));
@@ -142,6 +186,96 @@ export function createApiRouter(
       return;
     }
     res.json({ cursor: advanceLogCursor(db, parsed.data.last_read) });
+  });
+
+  router.post("/triage/start", (_req, res) => {
+    res.status(201).json(startTriage(db, clock.now()));
+  });
+
+  router.get("/triage", (_req, res) => {
+    const session = activeTriageSession(db);
+    if (!session) {
+      res.json({ session: null, queue: null, scratchpad: null });
+      return;
+    }
+    res.json({
+      session,
+      queue: triagePreview(db, session.id),
+      scratchpad: listScratchpad(db, session.id),
+    });
+  });
+
+  router.post("/triage/scratchpad", (req, res) => {
+    const parsed = scratchpadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    try {
+      res.status(201).json(addScratchpadLine(db, parsed.data.line, clock.now()));
+    } catch (err) {
+      if (err instanceof TriageError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  router.post("/triage/objection", (req, res) => {
+    const parsed = objectionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    try {
+      const id = raiseObjection(db, parsed.data.entry_id, parsed.data.comment, clock.now());
+      res.status(201).json({ id });
+    } catch (err) {
+      if (err instanceof TriageError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  router.post("/triage/displayed", (req, res) => {
+    const parsed = displayedSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    try {
+      recordDisplayedEntries(db, parsed.data.entry_ids, clock.now());
+      res.status(201).json({});
+    } catch (err) {
+      if (err instanceof TriageError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  router.post("/triage/commit", (req, res) => {
+    const parsed = commitSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    try {
+      const session = commitTriage(db, clock.now(), parsed.data.scratchpad);
+      // committing re-opens pickup and is itself the "run now" trigger
+      onQueueHeadChanged();
+      res.json(session);
+    } catch (err) {
+      if (err instanceof TriageError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   router.get("/tasks", (_req, res) => {

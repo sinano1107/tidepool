@@ -302,12 +302,17 @@ export function escalateTask(
 /** The human steering channel: answer a question from the WebUI. One tap on an
  *  option or a free-text override — either way a plain string. The question
  *  completes; only a parent this answer actually unblocks returns to the queue
- *  head (the caller fires the immediate poll on `parentUnblocked`). */
+ *  head (the caller fires the immediate poll on `parentUnblocked`).
+ *
+ *  During an open triage session (`triageSessionId` set) the answer is just as
+ *  durable, but the head move is staged on the session and applied at commit —
+ *  abandoning triage never changes the queue. */
 export function answerQuestion(
   db: Db,
   question: Task,
   answer: string,
   now: Date,
+  triageSessionId?: number,
 ): { question: Task; parentUnblocked: boolean } {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
@@ -339,8 +344,14 @@ export function answerQuestion(
     });
     const parent = question.parent_id ? getTask(db, question.parent_id) : undefined;
     if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
-      moveTask(db, parent, null, now);
-      parentUnblocked = true;
+      if (triageSessionId !== undefined) {
+        db.prepare(
+          "INSERT INTO triage_front_inserts (session_id, task_id) VALUES (?, ?)",
+        ).run(triageSessionId, parent.id);
+      } else {
+        moveTask(db, parent, null, now);
+        parentUnblocked = true;
+      }
     }
   })();
   return { question: getTask(db, question.id)!, parentUnblocked };
