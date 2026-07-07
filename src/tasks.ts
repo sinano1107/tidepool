@@ -23,10 +23,22 @@ export interface Task {
   parent_id: string | null;
   sort_key: number;
   handoff_doc: string | null;
-  question_options: string | null;
+  question_options: string[] | null;
   question_recommendation: string | null;
   question_answer: string | null;
   created_at: string;
+}
+
+/** The SQLite shape of a task: options are a JSON TEXT column. The JSON stays
+ *  at this boundary — domain code sees `string[]`. */
+type TaskRow = Omit<Task, "question_options"> & { question_options: string | null };
+
+function parseOptions(json: string | null): string[] | null {
+  return json === null ? null : JSON.parse(json);
+}
+
+export function rowToTask(row: TaskRow): Task {
+  return { ...row, question_options: parseOptions(row.question_options) };
 }
 
 export interface QuestionSpec {
@@ -43,6 +55,26 @@ export interface RegisterTaskInput {
   question?: QuestionSpec;
 }
 
+/** Every question carries 2-4 options plus a recommendation among them,
+ *  whichever door it enters by (escalate or the JSON API) — the answer view
+ *  is one-tap first, free text only as an override. The degraded free-text-only
+ *  question is reserved for the watchdog's auto-escalation safety valve (#17). */
+function assertQuestionSpec(input: RegisterTaskInput): void {
+  if (input.type !== "question") {
+    if (input.question) throw new DomainError("only a question task carries options");
+    return;
+  }
+  const q = input.question;
+  if (!q || q.options.length < 2 || q.options.length > 4) {
+    throw new DomainError("a question carries 2 to 4 options");
+  }
+  if (!q.recommendation.trim() || !q.options.includes(q.recommendation)) {
+    throw new DomainError(
+      "a question carries the registrant's recommendation, one of its options",
+    );
+  }
+}
+
 /** New tasks always join the queue tail: sort_key = max + 1. */
 export function registerTask(
   db: Db,
@@ -50,6 +82,7 @@ export function registerTask(
   now: Date,
   workerId: string = HUMAN_WORKER_ID,
 ): Task {
+  assertQuestionSpec(input);
   const { maxKey } = db
     .prepare("SELECT COALESCE(MAX(sort_key), 0) AS maxKey FROM tasks")
     .get() as { maxKey: number };
@@ -66,7 +99,7 @@ export function registerTask(
     parent_id: input.parent_id ?? null,
     sort_key: maxKey + 1,
     handoff_doc: null,
-    question_options: input.question ? JSON.stringify(input.question.options) : null,
+    question_options: input.question?.options ?? null,
     question_recommendation: input.question?.recommendation ?? null,
     question_answer: null,
     created_at: now.toISOString(),
@@ -79,7 +112,10 @@ export function registerTask(
        VALUES (@id, @type, @status, @assignee, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc,
          @question_options, @question_recommendation, @question_answer, @created_at)`,
-    ).run(task);
+    ).run({
+      ...task,
+      question_options: task.question_options && JSON.stringify(task.question_options),
+    });
     appendEvent(db, {
       taskId: task.id,
       workerId,
@@ -90,9 +126,6 @@ export function registerTask(
   return task;
 }
 
-export function listTasks(db: Db): Task[] {
-  return db.prepare("SELECT * FROM tasks ORDER BY sort_key").all() as Task[];
-}
 
 export const HANDOFF_FIELDS = [
   "outcome",
@@ -206,16 +239,15 @@ function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
   return next === undefined ? after.sort_key + 1 : (after.sort_key + next.sort_key) / 2;
 }
 
-export interface EscalateInput {
+export interface EscalateInput extends QuestionSpec {
   title: string;
   context: string;
-  options: string[];
-  recommendation: string;
 }
 
 /** Escalation: a question child carrying 2-4 choices and the registrant's
- *  recommendation. The parent returns to `todo` (blocked is derived from the
- *  unfinished child, never stored) and the slot is freed by the caller. */
+ *  recommendation (enforced at registration, like every question). The parent
+ *  returns to `todo` (blocked is derived from the unfinished child, never
+ *  stored) and the slot is freed by the caller. */
 export function escalateTask(
   db: Db,
   parent: Task,
@@ -223,12 +255,6 @@ export function escalateTask(
   workerId: string,
   now: Date,
 ): Task {
-  if (input.options.length < 2 || input.options.length > 4) {
-    throw new DomainError("an escalation carries 2 to 4 options");
-  }
-  if (!input.options.includes(input.recommendation) || !input.recommendation.trim()) {
-    throw new DomainError("an escalation carries the registrant's recommendation, one of its options");
-  }
   let question: Task;
   db.transaction(() => {
     question = registerTask(
@@ -257,20 +283,31 @@ export function escalateTask(
 
 /** The human steering channel: answer a question from the WebUI. One tap on an
  *  option or a free-text override — either way a plain string. The question
- *  completes, and an escalated parent returns to the queue head (the caller
- *  fires the immediate poll). */
-export function answerQuestion(db: Db, question: Task, answer: string, now: Date): Task {
+ *  completes; only a parent this answer actually unblocks returns to the queue
+ *  head (the caller fires the immediate poll on `parentUnblocked`). */
+export function answerQuestion(
+  db: Db,
+  question: Task,
+  answer: string,
+  now: Date,
+): { question: Task; parentUnblocked: boolean } {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
   }
   if (question.status !== "todo") {
     throw new DomainError(`a ${question.status} question cannot be answered`);
   }
+  let parentUnblocked = false;
   db.transaction(() => {
     db.prepare("UPDATE tasks SET status = 'done', question_answer = ? WHERE id = ?").run(
       answer,
       question.id,
     );
+    // the recommender is whoever registered the question — carried on the
+    // answer event so per-agent acceptance rates need no join
+    const registered = db
+      .prepare("SELECT worker_id FROM events WHERE task_id = ? AND kind = 'task_registered'")
+      .get(question.id) as { worker_id: string } | undefined;
     appendEvent(db, {
       taskId: question.id,
       workerId: HUMAN_WORKER_ID,
@@ -278,39 +315,75 @@ export function answerQuestion(db: Db, question: Task, answer: string, now: Date
         kind: "question_answered",
         answer,
         recommendation_accepted: answer === question.question_recommendation,
+        recommended_by: registered?.worker_id ?? HUMAN_WORKER_ID,
       },
       at: now,
     });
     const parent = question.parent_id ? getTask(db, question.parent_id) : undefined;
-    if (parent) moveTask(db, parent, null, now);
+    if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
+      moveTask(db, parent, null, now);
+      parentUnblocked = true;
+    }
   })();
-  return getTask(db, question.id)!;
+  return { question: getTask(db, question.id)!, parentUnblocked };
+}
+
+/** The one SQL shape of the derived-blocked rule (CONTEXT.md): a child not
+ *  done/cancelled. `parentRef` is the SQL expression holding the parent's id. */
+export function unfinishedChildSql(parentRef: string): string {
+  return `EXISTS (SELECT 1 FROM tasks c
+            WHERE c.parent_id = ${parentRef} AND c.status NOT IN ('done', 'cancelled'))`;
+}
+
+export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
+  const { blocked } = db
+    .prepare(`SELECT ${unfinishedChildSql("?")} AS blocked`)
+    .get(taskId) as { blocked: number };
+  return blocked === 1;
 }
 
 /** How a task appears on the board: `blocked` derived from unfinished
- *  children, question options parsed back into an array. Presentation only —
- *  the stored status stays one of the four persisted values. */
-export type BoardTask = Omit<Task, "status" | "question_options"> & {
-  status: TaskStatus | "blocked";
-  question_options: string[] | null;
-};
+ *  children. Presentation only — the stored status stays one of the four
+ *  persisted values. */
+export type BoardTask = Omit<Task, "status"> & { status: TaskStatus | "blocked" };
 
 export function presentTask(db: Db, task: Task): BoardTask {
-  const { blocked } = db
+  const blocked = task.status === "todo" && hasUnfinishedChildren(db, task.id);
+  return { ...task, status: blocked ? "blocked" : task.status };
+}
+
+/** The whole board in one query — the list view derives blocked in SQL rather
+ *  than issuing one probe per row. */
+export function listBoard(db: Db): BoardTask[] {
+  const rows = db
     .prepare(
-      `SELECT EXISTS(
-         SELECT 1 FROM tasks c
-         WHERE c.parent_id = ? AND c.status NOT IN ('done', 'cancelled')
-       ) AS blocked`,
+      `SELECT *,
+         CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")}
+              THEN 'blocked' ELSE status END AS status
+       FROM tasks ORDER BY sort_key`,
     )
-    .get(task.id) as { blocked: number };
-  return {
-    ...task,
-    status: task.status === "todo" && blocked ? "blocked" : task.status,
-    question_options: task.question_options === null ? null : JSON.parse(task.question_options),
-  };
+    .all() as Array<Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" }>;
+  return rows.map((row) => ({ ...row, question_options: parseOptions(row.question_options) }));
 }
 
 export function getTask(db: Db, id: string): Task | undefined {
-  return db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Task | undefined;
+  const row = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | undefined;
+  return row && rowToTask(row);
+}
+
+/** The queue head the slot may take: lowest-sort_key todo that is
+ *  agent-executable. Blocked is derived from parent/child alone — a task with
+ *  an unfinished child never enters the slot — and questions never enter it
+ *  either: they are human tasks, answered outside the slot (WebUI). */
+export function nextSlotTask(db: Db): Task | undefined {
+  const row = db
+    .prepare(
+      `SELECT * FROM tasks t
+       WHERE t.status = 'todo'
+         AND t.type <> 'question'
+         AND NOT ${unfinishedChildSql("t.id")}
+       ORDER BY t.sort_key LIMIT 1`,
+    )
+    .get() as TaskRow | undefined;
+  return row && rowToTask(row);
 }

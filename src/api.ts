@@ -7,7 +7,7 @@ import {
   answerQuestion,
   DomainError,
   getTask,
-  listTasks,
+  listBoard,
   moveTask,
   presentTask,
   registerTask,
@@ -20,6 +20,11 @@ const registerTaskSchema = z.object({
   purpose: z.string().min(1),
   completion_criteria: z.string().min(1),
   parent_id: z.string().optional(),
+  // shape stays permissive: the 2-4-options + recommendation invariant is
+  // enforced in the domain so callers get a domain error
+  question: z
+    .object({ options: z.array(z.string()), recommendation: z.string() })
+    .optional(),
 });
 
 const moveTaskSchema = z.object({
@@ -51,7 +56,15 @@ export function createApiRouter(
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    res.status(201).json(registerTask(db, parsed.data, clock.now()));
+    try {
+      res.status(201).json(registerTask(db, parsed.data, clock.now()));
+    } catch (err) {
+      if (err instanceof DomainError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   router.post("/tasks/:id/move", (req, res) => {
@@ -99,10 +112,10 @@ export function createApiRouter(
       return;
     }
     try {
-      const answered = answerQuestion(db, task, parsed.data.answer, clock.now());
-      // the unblocked parent sits at the head now — "run now", same as a move
-      if (task.parent_id !== null) onQueueHeadChanged();
-      res.json(presentTask(db, answered));
+      const { question, parentUnblocked } = answerQuestion(db, task, parsed.data.answer, clock.now());
+      // an answer that unblocked the parent put it at the head — "run now"
+      if (parentUnblocked) onQueueHeadChanged();
+      res.json(presentTask(db, question));
     } catch (err) {
       if (err instanceof DomainError) {
         res.status(409).json({ error: err.message });
@@ -113,7 +126,7 @@ export function createApiRouter(
   });
 
   router.get("/tasks", (_req, res) => {
-    res.json(listTasks(db).map((task) => presentTask(db, task)));
+    res.json(listBoard(db));
   });
 
   router.get("/tasks/:id/events", (req, res) => {

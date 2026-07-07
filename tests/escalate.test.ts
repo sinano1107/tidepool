@@ -140,10 +140,12 @@ it("a one-tap answer matching the recommendation is recorded as acceptance in th
   const answered = events.filter((e: any) => e.kind === "question_answered");
   expect(answered).toHaveLength(1);
   expect(answered[0].worker_id).toBe("human");
+  // recommended_by makes per-agent acceptance rates a one-event statistic
   expect(answered[0].payload).toEqual({
     kind: "question_answered",
     answer: "clerk",
     recommendation_accepted: true,
+    recommended_by: "fake-worker",
   });
 });
 
@@ -184,6 +186,61 @@ it("a question answers exactly once, and only questions answer at all", async ()
     answer: "clerk",
   });
   expect(onWork.status).toBe(409);
+});
+
+it("every question carries 2-4 options and a recommendation, whichever door it enters by", async () => {
+  t = await bootTidepool();
+  const base = {
+    type: "question",
+    title: "standalone question",
+    purpose: "a human wants steering input",
+    completion_criteria: "answered",
+  };
+  // no options at all, and an invalid spec, are both refused at registration
+  const bare = await api(t.baseUrl, "POST", "/api/tasks", base);
+  expect(bare.status).toBe(400);
+  const oneOption = await api(t.baseUrl, "POST", "/api/tasks", {
+    ...base,
+    question: { options: ["only"], recommendation: "only" },
+  });
+  expect(oneOption.status).toBe(400);
+
+  const ok = await api(t.baseUrl, "POST", "/api/tasks", {
+    ...base,
+    question: { options: ["yes", "no"], recommendation: "no" },
+  });
+  expect(ok.status).toBe(201);
+  const stored = (await api(t.baseUrl, "GET", `/api/tasks/${ok.json.id}`)).json;
+  expect(stored.question_options).toEqual(["yes", "no"]);
+  expect(stored.question_recommendation).toBe("no");
+});
+
+it("answering one of two open questions leaves the parent blocked; the last answer unblocks it", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const q1 = await escalateFrom(t, parent.id);
+  const q2 = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "question",
+      title: "second question",
+      purpose: "another decision on the same parent",
+      completion_criteria: "answered",
+      parent_id: parent.id,
+      question: { options: ["yes", "no"], recommendation: "yes" },
+    })
+  ).json;
+
+  await api(t.baseUrl, "POST", `/api/tasks/${q1.id}/answer`, { answer: "clerk" });
+
+  // still blocked on q2: no pickup, and no spurious move to the head
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("blocked");
+  expect(t.worker.started.map((x) => x.id)).toEqual([parent.id]);
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${parent.id}/events`)).json;
+  expect(events.filter((e: any) => e.kind === "task_moved")).toEqual([]);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${q2.id}/answer`, { answer: "yes" });
+  expect(t.worker.started.map((x) => x.id)).toEqual([parent.id, parent.id]);
 });
 
 it("answering is a human steering channel: no MCP tool exposes it", async () => {

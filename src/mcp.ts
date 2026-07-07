@@ -43,6 +43,23 @@ function resolveAttributedTask(
   return { task };
 }
 
+/** The shape every agent verb shares: resolve attribution, run the domain
+ *  verb, hand DomainError back as a tool error rather than a protocol one. */
+function runVerb(
+  deps: McpDeps,
+  attributedTaskId: string | null,
+  verb: (task: Task) => unknown,
+) {
+  const resolved = resolveAttributedTask(deps, attributedTaskId);
+  if ("error" in resolved) return toolError(resolved.error);
+  try {
+    return toolResult(verb(resolved.task));
+  } catch (err) {
+    if (err instanceof DomainError) return toolError(err.message);
+    throw err;
+  }
+}
+
 function taskContext(task: Task) {
   return {
     id: task.id,
@@ -60,17 +77,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   server.registerTool(
     "get_current_task",
     { description: "Fetch the context of the task occupying the slot." },
-    async () => {
-      const resolved = resolveAttributedTask(deps, attributedTaskId);
-      if ("error" in resolved) return toolError(resolved.error);
-      const { task } = resolved;
-      const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
-      return toolResult({
-        ...taskContext(task),
-        type: task.type,
-        parent: parent && taskContext(parent),
-      });
-    },
+    async () =>
+      runVerb(deps, attributedTaskId, (task) => {
+        const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
+        return { ...taskContext(task), type: task.type, parent: parent && taskContext(parent) };
+      }),
   );
 
   server.registerTool(
@@ -86,11 +97,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           .optional(),
       },
     },
-    async ({ handoff }) => {
-      const resolved = resolveAttributedTask(deps, attributedTaskId);
-      if ("error" in resolved) return toolError(resolved.error);
-      const { task } = resolved;
-      try {
+    async ({ handoff }) =>
+      runVerb(deps, attributedTaskId, (task) => {
         const done = completeTask(
           deps.db,
           task,
@@ -99,12 +107,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           deps.clock.now(),
         );
         deps.slot.release();
-        return toolResult({ id: done.id, status: done.status });
-      } catch (err) {
-        if (err instanceof DomainError) return toolError(err.message);
-        throw err;
-      }
-    },
+        return { id: done.id, status: done.status };
+      }),
   );
 
   server.registerTool(
@@ -123,11 +127,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         recommendation: z.string(),
       },
     },
-    async (input) => {
-      const resolved = resolveAttributedTask(deps, attributedTaskId);
-      if ("error" in resolved) return toolError(resolved.error);
-      const { task } = resolved;
-      try {
+    async (input) =>
+      runVerb(deps, attributedTaskId, (task) => {
         const question = escalateTask(
           deps.db,
           task,
@@ -136,12 +137,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           deps.clock.now(),
         );
         deps.slot.release();
-        return toolResult({ question_id: question.id, parent_status: "blocked" });
-      } catch (err) {
-        if (err instanceof DomainError) return toolError(err.message);
-        throw err;
-      }
-    },
+        return { question_id: question.id, parent_status: "blocked" };
+      }),
   );
 
   return server;

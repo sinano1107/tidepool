@@ -9,9 +9,15 @@ export type EventPayload =
   | { kind: "task_moved"; after: string | null }
   | { kind: "task_completed"; handoff_present: boolean }
   | { kind: "task_escalated"; question_id: string }
-  // recommendation_accepted is first-class: per-agent acceptance rates are a
-  // primary statistic, so it is recorded at answer time, not derived later
-  | { kind: "question_answered"; answer: string; recommendation_accepted: boolean };
+  // recommendation_accepted and recommended_by are first-class: per-agent
+  // acceptance rates are a primary statistic, recorded at answer time so they
+  // never need a join back through task_registered
+  | {
+      kind: "question_answered";
+      answer: string;
+      recommendation_accepted: boolean;
+      recommended_by: string;
+    };
 
 export type EventKind = EventPayload["kind"];
 
