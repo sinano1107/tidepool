@@ -155,6 +155,42 @@ export function completeTask(
   return getTask(db, task.id)!;
 }
 
+/** Place a task right after `after`, or at the queue head when `after` is null.
+ *  "Run now" is this same move to the head, never a separate execution path.
+ *  Human steering channel: reachable from the WebUI JSON API only, never MCP. */
+export function moveTask(
+  db: Db,
+  task: Task,
+  after: Task | null,
+  now: Date,
+  workerId: string = HUMAN_WORKER_ID,
+): Task {
+  const sortKey = fractionalKeyAfter(db, task, after);
+  db.transaction(() => {
+    db.prepare("UPDATE tasks SET sort_key = ? WHERE id = ?").run(sortKey, task.id);
+    appendEvent(db, {
+      taskId: task.id,
+      workerId,
+      payload: { kind: "task_moved", after: after?.id ?? null },
+      at: now,
+    });
+  })();
+  return getTask(db, task.id)!;
+}
+
+function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
+  if (after === null) {
+    const { minKey } = db
+      .prepare("SELECT COALESCE(MIN(sort_key), 0) AS minKey FROM tasks")
+      .get() as { minKey: number };
+    return minKey - 1;
+  }
+  const next = db
+    .prepare("SELECT sort_key FROM tasks WHERE sort_key > ? AND id <> ? ORDER BY sort_key LIMIT 1")
+    .get(after.sort_key, task.id) as { sort_key: number } | undefined;
+  return next === undefined ? after.sort_key + 1 : (after.sort_key + next.sort_key) / 2;
+}
+
 export function getTask(db: Db, id: string): Task | undefined {
   return db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Task | undefined;
 }

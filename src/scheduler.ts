@@ -8,6 +8,9 @@ export const HOURLY = 60 * 60 * 1000;
 
 export interface Scheduler {
   stop: () => void;
+  /** Immediate poll, fired by human-input-originated queue-head changes.
+   *  Same poll as the hourly tick: a no-op while the slot is occupied. */
+  pollNow: () => void;
 }
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
@@ -42,5 +45,5 @@ export function startScheduler(deps: {
   }
 
   const cancel = clock.setInterval(poll, HOURLY);
-  return { stop: cancel };
+  return { stop: cancel, pollNow: poll };
 }

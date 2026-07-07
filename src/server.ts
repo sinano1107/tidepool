@@ -33,10 +33,10 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     .get() as { id: string } | undefined;
   if (interrupted) slot.occupy(interrupted.id);
   const app = express();
-  app.use("/api", createApiRouter(db, options.clock));
+  const scheduler = startScheduler({ db, clock: options.clock, slot, worker: options.worker });
+  app.use("/api", createApiRouter(db, options.clock, () => scheduler.pollNow()));
   app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock }));
   app.use(express.static(join(dirname(fileURLToPath(import.meta.url)), "..", "public")));
-  const scheduler = startScheduler({ db, clock: options.clock, slot, worker: options.worker });
 
   const listener = await new Promise<import("node:http").Server>((resolve) => {
     const l = app.listen(options.port, "127.0.0.1", () => resolve(l));

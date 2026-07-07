@@ -6,6 +6,7 @@ import type { TaskType } from "./tasks.js";
 export type EventPayload =
   | { kind: "task_registered"; type: TaskType; title: string }
   | { kind: "task_picked_up" }
+  | { kind: "task_moved"; after: string | null }
   | { kind: "task_completed"; handoff_present: boolean };
 
 export type EventKind = EventPayload["kind"];
