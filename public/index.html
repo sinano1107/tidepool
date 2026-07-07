@@ -289,62 +289,101 @@ function App() {
       : fresh));
   };
 
-  // Triage commit: answers apply (unblocked parents go to the head server-side),
-  // one repair task per objection front-inserted, scratchpad notes to the tail,
-  // then the read cursor advances over everything skimmed — last, so a partial
-  // failure never marks unhandled lines as read. Not atomic (N sequential
-  // calls): on failure the toast reports exactly what applied and the board is
-  // re-fetched so the UI shows the true server state.
-  const commitTriage = async (answers, objections, scratch) => {
-    const applied = { answered: 0, repairs: 0, noted: 0 };
+  // The triage session (issue #6): entering the skim opens it server-side —
+  // pickup pauses, and answers/objections/scratchpad persist at once but stage
+  // their queue effects until commit (or the abandonment timeout).
+  React.useEffect(() => {
+    if (tab === 'triage' && data && (data.questions.length || data.log.some((l) => l.unread))) {
+      api('/api/triage/start', {}).catch(() => {});
+    }
+  }, [tab, data === null]);
+
+  // S1 — one tap persists the answer; the unblocked parent is staged server-side
+  const answerNow = async (q, a) => {
     try {
-      const picked = Object.entries(answers).filter(([, a]) => a);
-      for (const [qid, a] of picked) {
-        await api(`/api/tasks/${qid}/answer`, { answer: a });
-        applied.answered += 1;
+      await api(`/api/tasks/${q.id}/answer`, { answer: a });
+    } catch (err) {
+      say('danger', 'answer failed', String(err.message || err));
+      throw err;
+    }
+  };
+
+  // S2 — the objection annotation lands on the log entry the moment it is raised
+  const objectNow = async (entry, direction) => {
+    try {
+      await api('/api/triage/objection', { entry_id: entry.id, comment: direction });
+    } catch (err) {
+      say('danger', 'objection failed', String(err.message || err));
+      throw err;
+    }
+  };
+
+  const scratchAdd = async (text) => {
+    try {
+      const l = await api('/api/triage/scratchpad', { line: text });
+      return { id: l.id, text: l.line };
+    } catch (err) {
+      say('danger', 'scratchpad failed', String(err.message || err));
+      throw err;
+    }
+  };
+
+  // an entry never displayed is unobserved — report each skimmed entry once
+  const displayedReported = React.useRef(new Set());
+  const reportDisplayed = (entries) => {
+    const ids = entries.map((e) => e.id)
+      .filter((id) => typeof id === 'number' && !displayedReported.current.has(id));
+    if (!ids.length) return;
+    ids.forEach((id) => displayedReported.current.add(id));
+    api('/api/triage/displayed', { entry_ids: ids }).catch(() => {
+      ids.forEach((id) => displayedReported.current.delete(id));
+    });
+  };
+
+  // S3 — the server's staged preview: this session's front-inserts on top
+  const loadPreview = async () => {
+    const res = await fetch('/api/triage');
+    if (!res.ok) throw new Error(res.statusText);
+    const { queue } = await res.json();
+    return (queue ?? []).map((t) => ({
+      id: t.id, title: t.title, assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
+      blocked: t.status === 'blocked', frontInserted: t.front_inserted,
+    }));
+  };
+
+  // Triage commit: one server-side transaction applies everything the session
+  // staged (unblocked parents to the head, objections bundled into one repair
+  // task per objected task, scratchpad dispositions) and fires the immediate
+  // poll. The read cursor advances after — a failed commit never marks the
+  // skimmed lines as read.
+  const commitTriage = async (answers, objections, scratch) => {
+    const kindToDisposition = { task: 'task', meta: 'meta_review', drop: 'discard' };
+    try {
+      await api('/api/triage/commit', {
+        scratchpad: scratch
+          .filter((s) => typeof s.id === 'number')
+          .map((s) => ({ id: s.id, disposition: kindToDisposition[s.kind] || 'task' })),
+      });
+      for (const [qid, a] of Object.entries(answers)) {
+        if (!a) continue;
         const q = data.questions.find((x) => x.id === qid);
         if (q && q.parent) markFront(q.parent);
       }
-      // objections are keyed by the log entry's stable id. register the repair
-      // tasks first, then front-insert in reverse so the first objection ends
-      // up frontmost.
-      const repairIds = [];
-      for (const [key, direction] of Object.entries(objections)) {
-        const entry = data.log.find((e) => String(e.id) === String(key));
-        if (!entry) continue;
-        const t = await api('/api/tasks', {
-          type: 'work',
-          title: `repair: ${entry.text.slice(0, 64)}`,
-          purpose: `objection to ${entry.taskId} (${entry.agent}): ${direction}`,
-          completion_criteria: 'the objection direction is applied and the outcome is logged',
-        });
-        repairIds.push(t.id);
-        applied.repairs += 1;
-      }
-      for (const id of [...repairIds].reverse()) {
-        await api(`/api/tasks/${id}/move`, { after: null });
-        markFront(id);
-      }
-      for (const s of scratch) {
-        if (s.kind === 'drop') continue;
-        await api('/api/tasks', {
-          type: 'work',
-          title: s.kind === 'meta' ? `meta-review: ${s.text}` : s.text,
-          purpose: s.text,
-          completion_criteria: 'scratchpad note triaged — refine criteria at pickup',
-        });
-        applied.noted += 1;
-      }
       if (data.lastLogId != null) await api('/api/log/cursor', { last_read: data.lastLogId });
+      const answered = Object.values(answers).filter(Boolean).length;
+      const repairTasks = new Set(Object.keys(objections)
+        .map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId)
+        .filter(Boolean)).size;
+      const noted = scratch.filter((s) => s.kind !== 'drop').length;
       runWash('The tide is going out.', '🌊', () => {
         setTab('queue');
-        say('success', 'triage committed — one pass',
-          `${applied.answered} answered${applied.repairs ? ` · ${applied.repairs} repair` : ''}${applied.noted ? ` · ${applied.noted} from scratchpad` : ''}`);
+        say('success', 'triage committed — one transaction',
+          `${answered} answered${repairTasks ? ` · ${repairTasks} repair` : ''}${noted ? ` · ${noted} from scratchpad` : ''} · immediate poll fired`);
       });
     } catch (err) {
       refreshFull();
-      say('danger', 'triage commit failed partway — cursor NOT advanced',
-        `applied: ${applied.answered} answered · ${applied.repairs} repair · ${applied.noted} noted — ${String(err.message || err)}`);
+      say('danger', 'triage commit failed — nothing applied, cursor NOT advanced',
+        String(err.message || err));
     }
   };
 
@@ -420,7 +459,8 @@ function App() {
       <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
         {tab === 'triage' && (data.questions.length || unreadCount
-          ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff} />
+          ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff}
+              onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
               <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
