@@ -1,0 +1,5 @@
+{
+  "projectId": "8a0ead19-062f-4cea-9ffa-7bd7c545f8bc",
+  "shape": "mirror",
+  "note": "This repo is NOT a component-library source: the design system is authored in the Claude Design project itself, and the repo root holds a synced-down mirror (styles.css, tokens/, _ds_bundle.js, ui_kits/). Sync direction here is write-back only: push locally-edited ui_kits/tidepool-webui/** files up. Never run the converter against this repo."
+}
