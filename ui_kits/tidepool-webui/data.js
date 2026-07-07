@@ -47,7 +47,8 @@ const tpData = {
   ],
   log: [
     { time: '06:41', taskId: 'tp-0142', agent: 'reef-crab', kind: 'decision', text: 'used better-sqlite3 transactions for queue reorder — single writer, no locking needed', unread: true },
-    { time: '03:52', taskId: 'tp-0139', agent: 'anemone', kind: 'completion', text: 'criteria met — review of watchdog timer, findings → 1 repair task. handoff: PR #58', unread: true },
+    { time: '03:52', taskId: 'tp-0139', agent: 'anemone', kind: 'completion', text: 'criteria met — review of watchdog timer, findings → 1 repair task. handoff: PR #58', unread: true,
+      handoff: 'outcome vs criteria: review complete — 2 findings, 1 escalated to a repair task\ndeliverable location: PR #58 review comments\nkey decision refs: d-041\ndead ends: none\ncontext to resume: SIGKILL path of the watchdog timer is still unclear\nknown issues (no task): timer test is flaky on CI' },
     { time: '02:07', taskId: 'tp-0141', agent: 'reef-crab', kind: 'decision', text: 'chose YAML over TOML for authority profiles — matches workspaces.yaml', unread: true },
     { time: '01:30', taskId: 'tp-0141', agent: 'reef-crab', kind: 'escalation', text: 'escalated: merge PR #58 → question tp-0143', unread: true },
     { time: '23:58', taskId: 'tp-0138', agent: 'hermit', kind: 'completion', text: 'criteria met — workspaces.yaml documented, branch task/tp-0138', unread: false },

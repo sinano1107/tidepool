@@ -115,7 +115,7 @@ const TP_SCRATCH_KINDS = [
   { key: 'drop', label: 'discard' },
 ];
 
-function TriageScreen({ data, onCommit, onReorderQueue, onFront }) {
+function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff }) {
   const { Button, Input, LogEntry, QueueItem } = window.TidepoolDesignSystem_8a0ead;
   const nQuestions = data.questions.length;
   // no questions overnight → the flow still exists for the log skim; start at section 2
@@ -126,6 +126,19 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront }) {
   const [draft, setDraft] = React.useState('');
   const [scratch, setScratch] = React.useState([]);
   const [scratchKinds, setScratchKinds] = React.useState({});
+  // completion rows carry a handoff doc: tap unfolds it in place (the log's
+  // link back to the deliverable) and the objection entry point moves inside
+  // the expansion. decision rows keep tap = object.
+  const [handoffOpen, setHandoffOpen] = React.useState({});
+  const handoffCache = React.useRef({});
+  const toggleObjecting = (i) => { setObjecting(objecting === i ? null : i); setDraft(''); };
+  const toggleHandoff = async (i, l) => {
+    if (handoffOpen[i]) { setHandoffOpen((prev) => ({ ...prev, [i]: false })); return; }
+    if (handoffCache.current[i] == null) {
+      handoffCache.current[i] = l.handoff != null ? l.handoff : await loadHandoff(l);
+    }
+    setHandoffOpen((prev) => ({ ...prev, [i]: true }));
+  };
   const answered = Object.values(answers).filter(Boolean).length;
   const unread = data.log.filter((l) => l.unread);
   const progress = (section + (section === 0 ? answered / Math.max(1, nQuestions) : 0)) / 3;
@@ -158,9 +171,20 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront }) {
 
       {section === 1 && (
         <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          {data.log.map((l, i) => (
+          {data.log.map((l, i) => {
+            const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
+            return (
             <div key={i}>
-              <LogEntry entry={{ ...l, objection: objections[i] }} active={objecting === i} onObject={() => { setObjecting(objecting === i ? null : i); setDraft(''); }} />
+              <LogEntry entry={{ ...l, objection: objections[i] }} active={objecting === i} onObject={() => (hasHandoff ? toggleHandoff(i, l) : toggleObjecting(i))} />
+              {handoffOpen[i] && (
+                <div style={{ padding: '10px 14px 12px', background: 'var(--surface-recessed)' }}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>handoff — {l.taskId}</div>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', lineHeight: 1.6, color: 'var(--text-body)', overflowX: 'auto' }}>{handoffCache.current[i]}</pre>
+                  {objecting !== i && (
+                    <button onClick={() => toggleObjecting(i)} style={{ background: 'none', border: 'none', color: 'var(--coral-4)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '8px 0 0', display: 'block' }}>object to this completion…</button>
+                  )}
+                </div>
+              )}
               {objecting === i && (
                 <div style={{ padding: '10px 12px', background: 'var(--coral-1)', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                   <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
@@ -168,7 +192,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront }) {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

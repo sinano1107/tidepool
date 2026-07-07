@@ -105,6 +105,7 @@ function mapData(board, log) {
     kind: e.kind === 'task_completed' ? 'completion' : 'decision',
     text: e.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
     unread: e.id > log.cursor,
+    handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
   }));
   const queue = board
     .filter((t) => t.status === 'todo' && t.type !== 'question')
@@ -345,6 +346,13 @@ function App() {
     }
   };
 
+  // a completion entry unfolds its handoff doc in place — the log's link back
+  // to the deliverable (issue #5)
+  const loadHandoff = async (entry) => {
+    const task = await fetch(`/api/tasks/${entry.taskId}`).then((r) => r.json());
+    return task.handoff_doc ?? '(no handoff doc)';
+  };
+
   const register = async (fields) => {
     try {
       const t = await api('/api/tasks', fields);
@@ -381,7 +389,7 @@ function App() {
       <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
         {tab === 'triage' && (data.questions.length || unreadCount
-          ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} />
+          ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
               <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
