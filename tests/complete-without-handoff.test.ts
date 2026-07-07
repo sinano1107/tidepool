@@ -4,14 +4,17 @@ import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js"
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("a question task may attach a handoff, and it is stored rather than dropped", async () => {
+// question tasks never enter the slot (they are answered from the WebUI), so
+// review is the slot-completed type that exercises the "no handoff required,
+// but one supplied is stored" rule
+it("a review task may attach a handoff, and it is stored rather than dropped", async () => {
   t = await bootTidepool();
   const task = (
     await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "question",
-      title: "which sensor to buy?",
+      type: "review",
+      title: "review the sensor choice",
       purpose: "unblock the hardware order",
-      completion_criteria: "a model is chosen",
+      completion_criteria: "the choice is confirmed",
     })
   ).json;
   await t.clock.advance(HOUR);
@@ -31,7 +34,7 @@ it("a question task may attach a handoff, and it is stored rather than dropped",
   }
 });
 
-for (const type of ["question", "review"] as const) {
+for (const type of ["review"] as const) {
   it(`a ${type} task completes without a handoff doc`, async () => {
     t = await bootTidepool();
     const task = (

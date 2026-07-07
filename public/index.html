@@ -42,6 +42,43 @@
     color: var(--tide); cursor: pointer; flex-shrink: 0;
   }
   .meta { color: var(--muted); font-size: 0.85rem; }
+  /* single-question answer view: one open question at a time, above the queue */
+  .question {
+    background: var(--card-bg); border: 1px solid var(--tide);
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;
+  }
+  .question .tag {
+    font-family: var(--mono); font-size: 0.65rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--tide);
+  }
+  .question h2 { font-size: 0.95rem; margin: 4px 0 2px; }
+  .question .context { font-size: 0.8rem; color: var(--muted); margin: 0 0 10px; white-space: pre-wrap; }
+  .question .options { display: flex; flex-direction: column; gap: 6px; }
+  .question .options button {
+    font: inherit; font-size: 0.85rem; text-align: left;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--card-border); background: transparent; color: inherit;
+  }
+  .question .options button.recommended {
+    border-color: var(--tide);
+    background: color-mix(in srgb, var(--tide) 14%, transparent);
+  }
+  .question .options button.recommended::after {
+    content: "recommended"; float: right;
+    font-family: var(--mono); font-size: 0.6rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--tide); margin-top: 3px;
+  }
+  .question .override { display: flex; gap: 6px; margin-top: 10px; }
+  .question .override input {
+    flex: 1; font: inherit; font-size: 0.8rem; padding: 6px 10px;
+    border: 1px solid var(--card-border); border-radius: 8px;
+    background: transparent; color: inherit;
+  }
+  .question .override button {
+    font: inherit; font-size: 0.75rem; padding: 4px 10px;
+    border: none; border-radius: 999px; cursor: pointer;
+    background: color-mix(in srgb, var(--rock) 18%, transparent); color: inherit;
+  }
 </style>
 </head>
 <body>
@@ -49,16 +86,21 @@
 <p class="sub">FIFO · new tasks append · reorder never resets · concurrency=1</p>
 <div class="slotline"><span class="tag" id="slot-tag">slot</span><span id="slot-line" class="meta">loading…</span></div>
 <div class="slotbar" id="slot-bar"></div>
+<div id="question"></div>
 <div id="queue"></div>
 <script>
   const queueEl = document.getElementById("queue");
+  const questionEl = document.getElementById("question");
   let todos = [];
+  let questions = [];
   let dragging = false;
 
   async function load() {
     if (dragging) return; // a re-render mid-drag would yank the row out from under the pointer
     const all = await fetch("/api/tasks").then((r) => r.json());
-    todos = all.filter((t) => t.status === "todo");
+    // questions are human tasks answered here, not queue rows for the slot
+    todos = all.filter((t) => t.status === "todo" && t.type !== "question");
+    questions = all.filter((t) => t.status === "todo" && t.type === "question");
     const running = all.find((t) => t.status === "in_progress");
     const tag = document.getElementById("slot-tag");
     const line = document.getElementById("slot-line");
@@ -79,7 +121,55 @@
     await load();
   }
 
+  async function answer(id, text) {
+    await fetch(`/api/tasks/${id}/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answer: text }),
+    });
+    await load();
+  }
+
+  // one question at a time: one-tap options, free text only as an override
+  function renderQuestion() {
+    questionEl.innerHTML = "";
+    if (questions.length === 0) return;
+    const q = questions[0];
+    const card = document.createElement("div");
+    card.className = "question";
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = questions.length > 1 ? `question 1 of ${questions.length}` : "question";
+    const title = document.createElement("h2");
+    title.textContent = q.title;
+    const context = document.createElement("p");
+    context.className = "context";
+    context.textContent = q.purpose;
+    const options = document.createElement("div");
+    options.className = "options";
+    for (const opt of q.question_options ?? []) {
+      const b = document.createElement("button");
+      b.textContent = opt;
+      if (opt === q.question_recommendation) b.classList.add("recommended");
+      b.addEventListener("click", () => answer(q.id, opt));
+      options.append(b);
+    }
+    const override = document.createElement("div");
+    override.className = "override";
+    const input = document.createElement("input");
+    input.placeholder = "override with a free-text answer…";
+    const send = document.createElement("button");
+    send.textContent = "override";
+    send.addEventListener("click", () => {
+      if (input.value.trim()) answer(q.id, input.value.trim());
+    });
+    override.append(input, send);
+    card.append(tag, title, context, options, override);
+    questionEl.append(card);
+  }
+
   function render() {
+    renderQuestion();
     queueEl.innerHTML = "";
     if (todos.length === 0) {
       queueEl.innerHTML = '<p class="meta">queue is empty</p>';

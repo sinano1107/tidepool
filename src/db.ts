@@ -20,6 +20,11 @@ export function openDb(path: string): Db {
       parent_id           TEXT REFERENCES tasks(id),
       sort_key            REAL NOT NULL,
       handoff_doc         TEXT,
+      -- question-only fields: 2-4 choices (JSON array), the registrant's
+      -- recommendation, and the human's answer once given
+      question_options        TEXT,
+      question_recommendation TEXT,
+      question_answer         TEXT,
       created_at          TEXT NOT NULL
     );
 
@@ -38,5 +43,12 @@ export function openDb(path: string): Db {
     CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
       BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
   `);
+  // boards created before the question fields existed get them added in place
+  const cols = (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
+    (c) => c.name,
+  );
+  for (const col of ["question_options", "question_recommendation", "question_answer"]) {
+    if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
+  }
   return db;
 }

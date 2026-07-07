@@ -23,7 +23,15 @@ export interface Task {
   parent_id: string | null;
   sort_key: number;
   handoff_doc: string | null;
+  question_options: string | null;
+  question_recommendation: string | null;
+  question_answer: string | null;
   created_at: string;
+}
+
+export interface QuestionSpec {
+  options: string[];
+  recommendation: string;
 }
 
 export interface RegisterTaskInput {
@@ -32,6 +40,7 @@ export interface RegisterTaskInput {
   purpose: string;
   completion_criteria: string;
   parent_id?: string;
+  question?: QuestionSpec;
 }
 
 /** New tasks always join the queue tail: sort_key = max + 1. */
@@ -57,14 +66,19 @@ export function registerTask(
     parent_id: input.parent_id ?? null,
     sort_key: maxKey + 1,
     handoff_doc: null,
+    question_options: input.question ? JSON.stringify(input.question.options) : null,
+    question_recommendation: input.question?.recommendation ?? null,
+    question_answer: null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria,
-         risk_flag, review_flag, parent_id, sort_key, handoff_doc, created_at)
+         risk_flag, review_flag, parent_id, sort_key, handoff_doc,
+         question_options, question_recommendation, question_answer, created_at)
        VALUES (@id, @type, @status, @assignee, @title, @purpose, @completion_criteria,
-         @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @created_at)`,
+         @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc,
+         @question_options, @question_recommendation, @question_answer, @created_at)`,
     ).run(task);
     appendEvent(db, {
       taskId: task.id,
@@ -190,6 +204,111 @@ function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
     .prepare("SELECT sort_key FROM tasks WHERE sort_key > ? AND id <> ? ORDER BY sort_key LIMIT 1")
     .get(after.sort_key, task.id) as { sort_key: number } | undefined;
   return next === undefined ? after.sort_key + 1 : (after.sort_key + next.sort_key) / 2;
+}
+
+export interface EscalateInput {
+  title: string;
+  context: string;
+  options: string[];
+  recommendation: string;
+}
+
+/** Escalation: a question child carrying 2-4 choices and the registrant's
+ *  recommendation. The parent returns to `todo` (blocked is derived from the
+ *  unfinished child, never stored) and the slot is freed by the caller. */
+export function escalateTask(
+  db: Db,
+  parent: Task,
+  input: EscalateInput,
+  workerId: string,
+  now: Date,
+): Task {
+  if (input.options.length < 2 || input.options.length > 4) {
+    throw new DomainError("an escalation carries 2 to 4 options");
+  }
+  if (!input.options.includes(input.recommendation) || !input.recommendation.trim()) {
+    throw new DomainError("an escalation carries the registrant's recommendation, one of its options");
+  }
+  let question: Task;
+  db.transaction(() => {
+    question = registerTask(
+      db,
+      {
+        type: "question",
+        title: input.title,
+        purpose: input.context,
+        completion_criteria: "a human answer is recorded",
+        parent_id: parent.id,
+        question: { options: input.options, recommendation: input.recommendation },
+      },
+      now,
+      workerId,
+    );
+    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
+    appendEvent(db, {
+      taskId: parent.id,
+      workerId,
+      payload: { kind: "task_escalated", question_id: question.id },
+      at: now,
+    });
+  })();
+  return question!;
+}
+
+/** The human steering channel: answer a question from the WebUI. One tap on an
+ *  option or a free-text override — either way a plain string. The question
+ *  completes, and an escalated parent returns to the queue head (the caller
+ *  fires the immediate poll). */
+export function answerQuestion(db: Db, question: Task, answer: string, now: Date): Task {
+  if (question.type !== "question") {
+    throw new DomainError("only a question task can be answered");
+  }
+  if (question.status !== "todo") {
+    throw new DomainError(`a ${question.status} question cannot be answered`);
+  }
+  db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'done', question_answer = ? WHERE id = ?").run(
+      answer,
+      question.id,
+    );
+    appendEvent(db, {
+      taskId: question.id,
+      workerId: HUMAN_WORKER_ID,
+      payload: {
+        kind: "question_answered",
+        answer,
+        recommendation_accepted: answer === question.question_recommendation,
+      },
+      at: now,
+    });
+    const parent = question.parent_id ? getTask(db, question.parent_id) : undefined;
+    if (parent) moveTask(db, parent, null, now);
+  })();
+  return getTask(db, question.id)!;
+}
+
+/** How a task appears on the board: `blocked` derived from unfinished
+ *  children, question options parsed back into an array. Presentation only —
+ *  the stored status stays one of the four persisted values. */
+export type BoardTask = Omit<Task, "status" | "question_options"> & {
+  status: TaskStatus | "blocked";
+  question_options: string[] | null;
+};
+
+export function presentTask(db: Db, task: Task): BoardTask {
+  const { blocked } = db
+    .prepare(
+      `SELECT EXISTS(
+         SELECT 1 FROM tasks c
+         WHERE c.parent_id = ? AND c.status NOT IN ('done', 'cancelled')
+       ) AS blocked`,
+    )
+    .get(task.id) as { blocked: number };
+  return {
+    ...task,
+    status: task.status === "todo" && blocked ? "blocked" : task.status,
+    question_options: task.question_options === null ? null : JSON.parse(task.question_options),
+  };
 }
 
 export function getTask(db: Db, id: string): Task | undefined {

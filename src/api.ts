@@ -3,7 +3,16 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { listEvents } from "./events.js";
-import { getTask, listTasks, moveTask, registerTask, type Task } from "./tasks.js";
+import {
+  answerQuestion,
+  DomainError,
+  getTask,
+  listTasks,
+  moveTask,
+  presentTask,
+  registerTask,
+  type Task,
+} from "./tasks.js";
 
 const registerTaskSchema = z.object({
   type: z.enum(["work", "question", "review"]),
@@ -15,6 +24,10 @@ const registerTaskSchema = z.object({
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
+});
+
+const answerSchema = z.object({
+  answer: z.string().min(1),
 });
 
 function queueHeadId(db: Db): string | null {
@@ -72,8 +85,35 @@ export function createApiRouter(
     res.json(moved);
   });
 
+  // answering lives on the WebUI JSON API only, never MCP: it is the human
+  // steering channel (CONTEXT.md: escalation is answered by the 上位者)
+  router.post("/tasks/:id/answer", (req, res) => {
+    const parsed = answerSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const task = getTask(db, req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    try {
+      const answered = answerQuestion(db, task, parsed.data.answer, clock.now());
+      // the unblocked parent sits at the head now — "run now", same as a move
+      if (task.parent_id !== null) onQueueHeadChanged();
+      res.json(presentTask(db, answered));
+    } catch (err) {
+      if (err instanceof DomainError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
   router.get("/tasks", (_req, res) => {
-    res.json(listTasks(db));
+    res.json(listTasks(db).map((task) => presentTask(db, task)));
   });
 
   router.get("/tasks/:id/events", (req, res) => {
@@ -86,7 +126,7 @@ export function createApiRouter(
       res.status(404).json({ error: "task not found" });
       return;
     }
-    res.json(task);
+    res.json(presentTask(db, task));
   });
 
   return router;

@@ -25,10 +25,11 @@ it("a blocked parent is skipped and get_current_task exposes the parent context"
   ).json;
   expect(child.parent_id).toBe(parent.id);
 
-  // parent is queue head but blocked (unfinished child) — pickup takes the child
+  // parent is queue head but blocked (unfinished child) — pickup takes the
+  // child, and the board presents the derived state
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([child.id]);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("todo");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("blocked");
 
   const client = await mcpClient(t.baseUrl, child.id);
   try {

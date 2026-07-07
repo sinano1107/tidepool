@@ -8,6 +8,7 @@ import type { Slot } from "./slot.js";
 import {
   completeTask,
   DomainError,
+  escalateTask,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
@@ -99,6 +100,43 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         );
         deps.slot.release();
         return toolResult({ id: done.id, status: done.status });
+      } catch (err) {
+        if (err instanceof DomainError) return toolError(err.message);
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
+    "escalate",
+    {
+      description:
+        "Escalate a decision outside your authority (or an execution dead end): " +
+        "registers a question task with 2-4 options plus your recommendation, " +
+        "blocks the current task on it, and frees the slot.",
+      // the schema stays permissive: option-count and recommendation invariants
+      // are enforced inside the verb so callers get a domain error
+      inputSchema: {
+        title: z.string().min(1),
+        context: z.string().min(1),
+        options: z.array(z.string()),
+        recommendation: z.string(),
+      },
+    },
+    async (input) => {
+      const resolved = resolveAttributedTask(deps, attributedTaskId);
+      if ("error" in resolved) return toolError(resolved.error);
+      const { task } = resolved;
+      try {
+        const question = escalateTask(
+          deps.db,
+          task,
+          input,
+          task.assignee ?? HUMAN_WORKER_ID,
+          deps.clock.now(),
+        );
+        deps.slot.release();
+        return toolResult({ question_id: question.id, parent_status: "blocked" });
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
         throw err;

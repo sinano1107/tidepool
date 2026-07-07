@@ -26,11 +26,13 @@ export function startScheduler(deps: {
   function poll(): void {
     if (slot.currentTaskId !== null) return;
     // blocked is derived from parent/child alone: a task with a child not
-    // done/cancelled never enters the slot
+    // done/cancelled never enters the slot. Questions never enter it either:
+    // they are human tasks, answered outside the slot (WebUI).
     const head = db
       .prepare(
         `SELECT * FROM tasks t
          WHERE t.status = 'todo'
+           AND t.type <> 'question'
            AND NOT EXISTS (
              SELECT 1 FROM tasks c
              WHERE c.parent_id = t.id AND c.status NOT IN ('done', 'cancelled')
