@@ -1,0 +1,56 @@
+import type { Clock } from "./clock.js";
+import type { Db } from "./db.js";
+import { appendEvent } from "./events.js";
+import type { Slot } from "./slot.js";
+import type { Task } from "./tasks.js";
+import type { WorkerAdapter } from "./worker.js";
+
+export const HOURLY = 60 * 60 * 1000;
+
+export interface Scheduler {
+  stop: () => void;
+}
+
+/** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
+ *  to the worker and mark it in_progress. */
+export function startScheduler(deps: {
+  db: Db;
+  clock: Clock;
+  slot: Slot;
+  worker: WorkerAdapter;
+}): Scheduler {
+  const { db, clock, slot, worker } = deps;
+
+  function poll(): void {
+    if (slot.currentTaskId !== null) return;
+    // blocked is derived from parent/child alone: a task with a child not
+    // done/cancelled never enters the slot
+    const head = db
+      .prepare(
+        `SELECT * FROM tasks t
+         WHERE t.status = 'todo'
+           AND NOT EXISTS (
+             SELECT 1 FROM tasks c
+             WHERE c.parent_id = t.id AND c.status NOT IN ('done', 'cancelled')
+           )
+         ORDER BY t.sort_key LIMIT 1`,
+      )
+      .get() as Task | undefined;
+    if (!head) return;
+    db.prepare("UPDATE tasks SET status = 'in_progress', assignee = ? WHERE id = ?").run(
+      worker.id,
+      head.id,
+    );
+    appendEvent(db, {
+      taskId: head.id,
+      workerId: worker.id,
+      payload: { kind: "task_picked_up" },
+      at: clock.now(),
+    });
+    slot.occupy(head.id);
+    worker.start({ ...head, status: "in_progress", assignee: worker.id });
+  }
+
+  const cancel = clock.setInterval(poll, HOURLY);
+  return { stop: cancel };
+}
