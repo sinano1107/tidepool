@@ -9,7 +9,8 @@ export function openDb(path: string): Db {
     CREATE TABLE IF NOT EXISTS tasks (
       id                  TEXT PRIMARY KEY,
       type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review')),
-      status              TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'blocked', 'done', 'cancelled')),
+      -- 'blocked' is not a stored status: it is derived from unfinished children
+      status              TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
       assignee            TEXT,
       title               TEXT NOT NULL,
       purpose             TEXT NOT NULL,
@@ -30,6 +31,12 @@ export function openDb(path: string): Db {
       payload    TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    -- append-only is enforced by structure, not convention
+    CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
+      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
+      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
   `);
   return db;
 }

@@ -6,19 +6,23 @@ import { join } from "node:path";
 import { startServer } from "../src/server.js";
 import { FakeClock, ScriptedWorker } from "./fakes.js";
 
-export const HOUR = 60 * 60 * 1000;
+export { HOURLY as HOUR } from "../src/scheduler.js";
 
 export interface Tidepool {
   baseUrl: string;
   clock: FakeClock;
   worker: ScriptedWorker;
+  dir: string;
+  /** Shut down the process only, keeping the SQLite file — for restart tests. */
+  stopServer: () => Promise<void>;
   stop: () => Promise<void>;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
- *  Only the worker is swapped for a scripted fake, at the WorkerAdapter seam. */
-export async function bootTidepool(): Promise<Tidepool> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-test-"));
+ *  Only the worker is swapped for a scripted fake, at the WorkerAdapter seam.
+ *  Pass an existing dir to reboot on the same board. */
+export async function bootTidepool(existingDir?: string): Promise<Tidepool> {
+  const dir = existingDir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
   const clock = new FakeClock();
   const worker = new ScriptedWorker();
   const server = await startServer({
@@ -27,12 +31,19 @@ export async function bootTidepool(): Promise<Tidepool> {
     clock,
     worker,
   });
+  let stopped = false;
+  const stopServer = async () => {
+    if (!stopped) await server.stop();
+    stopped = true;
+  };
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
     clock,
     worker,
+    dir,
+    stopServer,
     stop: async () => {
-      await server.stop();
+      await stopServer();
       await rm(dir, { recursive: true, force: true });
     },
   };

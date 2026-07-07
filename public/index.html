@@ -20,7 +20,8 @@
 <script>
   fetch("/api/tasks")
     .then((r) => r.json())
-    .then((tasks) => {
+    .then((all) => {
+      const tasks = all.filter((t) => t.status === "todo" || t.status === "in_progress");
       const ol = document.getElementById("queue");
       ol.innerHTML = "";
       if (tasks.length === 0) {

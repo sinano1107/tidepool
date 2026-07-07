@@ -1,8 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
 import type { Slot } from "./slot.js";
-import type { Task } from "./tasks.js";
+import { pickupTask, type Task } from "./tasks.js";
 import type { WorkerAdapter } from "./worker.js";
 
 export const HOURLY = 60 * 60 * 1000;
@@ -37,18 +36,9 @@ export function startScheduler(deps: {
       )
       .get() as Task | undefined;
     if (!head) return;
-    db.prepare("UPDATE tasks SET status = 'in_progress', assignee = ? WHERE id = ?").run(
-      worker.id,
-      head.id,
-    );
-    appendEvent(db, {
-      taskId: head.id,
-      workerId: worker.id,
-      payload: { kind: "task_picked_up" },
-      at: clock.now(),
-    });
-    slot.occupy(head.id);
-    worker.start({ ...head, status: "in_progress", assignee: worker.id });
+    const picked = pickupTask(db, head, worker.id, clock.now());
+    slot.occupy(picked.id);
+    worker.start(picked);
   }
 
   const cancel = clock.setInterval(poll, HOURLY);

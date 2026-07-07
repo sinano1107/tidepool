@@ -5,7 +5,14 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
-import { completeTask, DomainError, getTask, HANDOFF_FIELDS, HUMAN_WORKER_ID } from "./tasks.js";
+import {
+  completeTask,
+  DomainError,
+  getTask,
+  HANDOFF_FIELDS,
+  HUMAN_WORKER_ID,
+  type Task,
+} from "./tasks.js";
 
 export interface McpDeps {
   db: Db;
@@ -21,6 +28,29 @@ function toolError(message: string) {
   return { isError: true, content: [{ type: "text" as const, text: message }] };
 }
 
+/** Resolve the caller's ?task= attribution against the slot; every agent-facing
+ *  verb goes through this (also rejects stray calls from stale killed processes). */
+function resolveAttributedTask(
+  deps: McpDeps,
+  attributedTaskId: string | null,
+): { task: Task } | { error: string } {
+  if (attributedTaskId === null || attributedTaskId !== deps.slot.currentTaskId) {
+    return { error: "call is not attributed to the current slot task" };
+  }
+  const task = getTask(deps.db, attributedTaskId);
+  if (!task) return { error: "current task not found" };
+  return { task };
+}
+
+function taskContext(task: Task) {
+  return {
+    id: task.id,
+    title: task.title,
+    purpose: task.purpose,
+    completion_criteria: task.completion_criteria,
+  };
+}
+
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
@@ -30,24 +60,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "get_current_task",
     { description: "Fetch the context of the task occupying the slot." },
     async () => {
-      if (attributedTaskId === null || attributedTaskId !== deps.slot.currentTaskId) {
-        return toolError("call is not attributed to the current slot task");
-      }
-      const task = getTask(deps.db, attributedTaskId);
-      if (!task) return toolError("current task not found");
+      const resolved = resolveAttributedTask(deps, attributedTaskId);
+      if ("error" in resolved) return toolError(resolved.error);
+      const { task } = resolved;
       const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
       return toolResult({
-        id: task.id,
+        ...taskContext(task),
         type: task.type,
-        title: task.title,
-        purpose: task.purpose,
-        completion_criteria: task.completion_criteria,
-        parent: parent && {
-          id: parent.id,
-          title: parent.title,
-          purpose: parent.purpose,
-          completion_criteria: parent.completion_criteria,
-        },
+        parent: parent && taskContext(parent),
       });
     },
   );
@@ -66,11 +86,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async ({ handoff }) => {
-      if (attributedTaskId === null || attributedTaskId !== deps.slot.currentTaskId) {
-        return toolError("call is not attributed to the current slot task");
-      }
-      const task = getTask(deps.db, attributedTaskId);
-      if (!task) return toolError("current task not found");
+      const resolved = resolveAttributedTask(deps, attributedTaskId);
+      if ("error" in resolved) return toolError(resolved.error);
+      const { task } = resolved;
       try {
         const done = completeTask(
           deps.db,

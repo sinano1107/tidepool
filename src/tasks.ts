@@ -6,7 +6,9 @@ import { appendEvent } from "./events.js";
 export const HUMAN_WORKER_ID = "human";
 
 export type TaskType = "work" | "question" | "review";
-export type TaskStatus = "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+/** `blocked` is deliberately absent: it is derived from unfinished children
+ *  (CONTEXT.md), never stored. */
+export type TaskStatus = "todo" | "in_progress" | "done" | "cancelled";
 
 export interface Task {
   id: string;
@@ -57,18 +59,20 @@ export function registerTask(
     handoff_doc: null,
     created_at: now.toISOString(),
   };
-  db.prepare(
-    `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria,
-       risk_flag, review_flag, parent_id, sort_key, handoff_doc, created_at)
-     VALUES (@id, @type, @status, @assignee, @title, @purpose, @completion_criteria,
-       @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @created_at)`,
-  ).run(task);
-  appendEvent(db, {
-    taskId: task.id,
-    workerId,
-    payload: { kind: "task_registered", type: task.type, title: task.title },
-    at: now,
-  });
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria,
+         risk_flag, review_flag, parent_id, sort_key, handoff_doc, created_at)
+       VALUES (@id, @type, @status, @assignee, @title, @purpose, @completion_criteria,
+         @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @created_at)`,
+    ).run(task);
+    appendEvent(db, {
+      taskId: task.id,
+      workerId,
+      payload: { kind: "task_registered", type: task.type, title: task.title },
+      at: now,
+    });
+  })();
   return task;
 }
 
@@ -96,14 +100,29 @@ const HANDOFF_HEADINGS: Record<HandoffField, string> = {
   known_issues: "Known issues not worth a task",
 };
 
-export function renderHandoffMarkdown(handoff: HandoffDoc): string {
-  return HANDOFF_FIELDS.map((f) => `## ${HANDOFF_HEADINGS[f]}\n\n${handoff[f]}`).join("\n\n");
+export function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
+  return HANDOFF_FIELDS.filter((f) => handoff[f]?.trim())
+    .map((f) => `## ${HANDOFF_HEADINGS[f]}\n\n${handoff[f]}`)
+    .join("\n\n");
 }
 
 export class DomainError extends Error {}
 
+/** Hand the queue head to a worker: in_progress + assignee + event, atomically. */
+export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Task {
+  db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'in_progress', assignee = ? WHERE id = ?").run(
+      workerId,
+      task.id,
+    );
+    appendEvent(db, { taskId: task.id, workerId, payload: { kind: "task_picked_up" }, at: now });
+  })();
+  return getTask(db, task.id)!;
+}
+
 /** Work tasks may not complete without a full handoff doc; question/review
- *  tasks carry none. The doc lands as markdown on the task row, written once. */
+ *  tasks need none, but one supplied is stored, not dropped (nothing may
+ *  degrade recording). The doc lands as markdown on the task row, written once. */
 export function completeTask(
   db: Db,
   task: Task,
@@ -111,7 +130,6 @@ export function completeTask(
   workerId: string,
   now: Date,
 ): Task {
-  let handoffDoc: string | null = null;
   if (task.type === "work") {
     const missing = HANDOFF_FIELDS.filter((f) => !handoff?.[f]?.trim());
     if (missing.length > 0) {
@@ -119,18 +137,21 @@ export function completeTask(
         `a work task cannot complete without a full handoff doc; missing: ${missing.join(", ")}`,
       );
     }
-    handoffDoc = renderHandoffMarkdown(handoff as HandoffDoc);
   }
-  db.prepare("UPDATE tasks SET status = 'done', handoff_doc = ? WHERE id = ?").run(
-    handoffDoc,
-    task.id,
-  );
-  appendEvent(db, {
-    taskId: task.id,
-    workerId,
-    payload: { kind: "task_completed", handoff_present: handoffDoc !== null },
-    at: now,
-  });
+  const rendered = handoff ? renderHandoffMarkdown(handoff) : "";
+  const handoffDoc = rendered === "" ? null : rendered;
+  db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'done', handoff_doc = ? WHERE id = ?").run(
+      handoffDoc,
+      task.id,
+    );
+    appendEvent(db, {
+      taskId: task.id,
+      workerId,
+      payload: { kind: "task_completed", handoff_present: handoffDoc !== null },
+      at: now,
+    });
+  })();
   return getTask(db, task.id)!;
 }
 

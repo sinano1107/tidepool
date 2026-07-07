@@ -25,6 +25,13 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
+  // a restart interrupts any running task (ADR 0001); until the watchdog slice
+  // brings the escalation path, the interrupted task keeps the slot so a
+  // second task can never go in_progress beside it
+  const interrupted = db
+    .prepare("SELECT id FROM tasks WHERE status = 'in_progress'")
+    .get() as { id: string } | undefined;
+  if (interrupted) slot.occupy(interrupted.id);
   const app = express();
   app.use("/api", createApiRouter(db, options.clock));
   app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock }));
