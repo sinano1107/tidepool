@@ -1,0 +1,22 @@
+@import "tokens/fonts.css";
+@import "tokens/colors.css";
+@import "tokens/typography.css";
+@import "tokens/spacing.css";
+@import "tokens/base.css";
+
+/* QueueItem hover — CSS :hover instead of JS state, so it self-corrects
+   when rows reorder under a stationary pointer (drag & drop, move-to-front). */
+.tp-queue-item { background: var(--surface-card); transition: background var(--duration-quick) var(--ease-tidal); }
+.tp-queue-item:hover { background: var(--surface-hover); }
+/* front-inserted — a tidal flash that drains back to the card colour, instead of a permanent tint */
+.tp-queue-item[data-front] { animation: tp-front-fade 2600ms var(--ease-tidal); }
+@keyframes tp-front-fade { 0%, 25% { background: var(--tide-1); } 100% { background: var(--surface-card); } }
+.tp-queue-front-btn { transition: background var(--duration-quick) var(--ease-tidal); }
+.tp-queue-front-btn:hover { background: var(--tide-2); }
+
+/* LogEntry — tap-to-object; hover is an enhancement, not the mechanism */
+.tp-log-entry { transition: background var(--duration-quick) var(--ease-tidal); }
+.tp-log-entry[data-clickable] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+@media (hover: hover) { .tp-log-entry[data-clickable]:hover { background: var(--surface-hover); } }
+.tp-log-entry[data-active] { background: var(--coral-1); }
+@media (prefers-reduced-motion: reduce) { .tp-queue-item[data-front] { animation: none; } }

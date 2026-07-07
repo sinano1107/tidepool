@@ -1,0 +1,294 @@
+<!-- @dsCard group="Tidepool WebUI" viewport="440x820" name="Tidepool WebUI" subtitle="Morning triage · board · queue · register — interactive" -->
+<!-- @startingPoint section="Tidepool WebUI" subtitle="The full PWA: triage flow, board, queue, registration" viewport="440x820" -->
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tidepool</title>
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.min.js" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script src="data.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--rock-2); display: flex; justify-content: center; }
+  #root { width: 100%; max-width: 440px; }
+  /* tidal scrollbars — thin, sea-glass, pill-shaped */
+  .tp-scroll { scrollbar-width: thin; scrollbar-color: var(--tide-2) transparent; }
+  .tp-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .tp-scroll::-webkit-scrollbar-track { background: transparent; }
+  .tp-scroll::-webkit-scrollbar-thumb { background: var(--tide-2); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+  .tp-scroll::-webkit-scrollbar-thumb:hover { background: var(--tide-3); border: 2px solid transparent; background-clip: padding-box; }
+  .tp-scroll::-webkit-scrollbar-corner { background: transparent; }
+
+  /* entrance drift — tidal: fade + small vertical rise */
+  @keyframes tp-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  .tp-rise { animation: tp-rise var(--tp-rise-ms, 480ms) var(--ease-tidal) both; }
+
+  /* tide wash — a wave sweeps up over the screen, then drains away */
+  @keyframes tp-wash { 0% { transform: translateY(103%); } 38% { transform: translateY(-4%); } 58% { transform: translateY(-4%); } 100% { transform: translateY(103%); } }
+  .tp-wash-water { animation: tp-wash 1250ms cubic-bezier(0.45, 0, 0.25, 1) both; }
+  @keyframes tp-wash-label { 0%, 30% { opacity: 0; transform: translateY(8px); } 45%, 62% { opacity: 1; transform: none; } 80%, 100% { opacity: 0; transform: translateY(-8px); } }
+  .tp-wash-label { animation: tp-wash-label 1250ms var(--ease-tidal) both; }
+  @keyframes tp-bob { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-18px); } }
+
+  /* toast — surfaces up from below, sinks back on dismiss */
+  @keyframes tp-toast-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes tp-toast-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(10px); } }
+  .tp-toast-in { animation: tp-toast-in var(--duration-calm) var(--ease-tidal) both; }
+  .tp-toast-out { animation: tp-toast-out var(--duration-calm) var(--ease-tidal) both; }
+
+  /* tab switch — content drifts in from the side of travel */
+  @keyframes tp-tab-right { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+  @keyframes tp-tab-left { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+  .tp-tab-right { animation: tp-tab-right var(--duration-calm) var(--ease-tidal) both; }
+  .tp-tab-left { animation: tp-tab-left var(--duration-calm) var(--ease-tidal) both; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tp-rise, .tp-wash-water, .tp-wash-label, .tp-toast-in, .tp-toast-out, .tp-tab-right, .tp-tab-left { animation: none; }
+    .tp-wash-water { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="triage-screen.jsx"></script>
+<script type="text/babel" src="board-screen.jsx"></script>
+<script type="text/babel" src="queue-screen.jsx"></script>
+<script type="text/babel" src="register-screen.jsx"></script>
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "washMs": 2000,
+  "washEnabled": true,
+  "entranceMs": 560,
+  "easing": "tidal",
+  "commitEmoji": "⛵"
+}/*EDITMODE-END*/;
+
+const tpCommitEmojis = ['🌊', '⛵', '☕', '🌅', '🐚', '🏄', '🪸'];
+
+// Easing candidates — "tidal" is the shipped token; others are trials that override --ease-tidal live.
+const tpEasings = {
+  tidal: 'cubic-bezier(0.25, 0.6, 0.3, 1)',   // shipped: slow decelerating
+  drift: 'cubic-bezier(0.16, 1, 0.3, 1)',      // longer tail, expo-out
+  surge: 'cubic-bezier(0.6, 0, 0.2, 1)',       // slow start, quick middle
+  'ease-in-out': 'ease-in-out',
+  linear: 'linear',
+};
+
+const tabs = [
+  { key: 'triage', label: 'Triage', icon: 'sunrise' },
+  { key: 'board', label: 'Board', icon: 'columns-3' },
+  { key: 'queue', label: 'Queue', icon: 'list-ordered' },
+  { key: 'register', label: 'Register', icon: 'plus' },
+];
+
+// Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
+function TpTideWash({ label, emoji, duration = 1250 }) {
+  const dur = `${duration}ms`;
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 60, overflow: 'hidden', pointerEvents: 'none' }} aria-hidden="true">
+      <div className="tp-wash-water" style={{ position: 'absolute', inset: '-40px 0 0 0', animationDuration: dur }}>
+        <div style={{ animation: `tp-bob ${dur} ease-in-out both` }}>
+          <svg width="calc(100% + 36px)" height="40" viewBox="0 0 476 40" preserveAspectRatio="none" style={{ display: 'block' }}>
+            <path d="M0 24 Q30 10 60 22 T120 22 T180 20 T240 24 T300 18 T360 22 T420 20 T476 22 L476 40 L0 40 Z" fill="var(--tide-4)" opacity="0.92"/>
+            <path d="M0 30 Q40 18 80 28 T160 28 T240 30 T320 26 T400 30 T476 28 L476 40 L0 40 Z" fill="var(--tide-3)" opacity="0.5"/>
+          </svg>
+        </div>
+        <div style={{ position: 'absolute', top: 39, left: 0, right: 0, bottom: -80, background: 'var(--tide-4)', opacity: 0.94 }}></div>
+        <div className="tp-wash-label" style={{ position: 'absolute', top: '36%', left: 0, right: 0, textAlign: 'center', padding: '0 24px', animationDuration: dur }}>
+          {emoji && <div style={{ fontSize: 44, marginBottom: 12 }}>{emoji}</div>}
+          <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', lineHeight: 1.2, color: '#fff' }}>{label}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const { Toast } = window.TidepoolDesignSystem_8a0ead;
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [tab, setTabRaw] = React.useState('triage');
+  const [tabDir, setTabDir] = React.useState('right');
+  const tabOrder = tabs.map((x) => x.key);
+  const setTab = (next) => {
+    setTabRaw((prev) => {
+      if (next !== prev) setTabDir(tabOrder.indexOf(next) > tabOrder.indexOf(prev) ? 'right' : 'left');
+      return next;
+    });
+  };
+  const [data, setData] = React.useState(window.tpData);
+  const [toast, setToast] = React.useState(null);
+  const [committed, setCommitted] = React.useState(false);
+  const [wash, setWash] = React.useState(null);
+
+  // Cover the screen with the tide, apply the state change while covered, drain.
+  const runWash = (label, emoji, apply) => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced || !t.washEnabled) { apply(); return; }
+    setWash({ label, emoji });
+    setTimeout(apply, t.washMs * 0.4);
+    setTimeout(() => setWash(null), t.washMs + 50);
+  };
+
+  // Entrance drift duration → CSS var consumed by .tp-rise
+  React.useEffect(() => {
+    document.documentElement.style.setProperty('--tp-rise-ms', `${t.entranceMs}ms`);
+  }, [t.entranceMs]);
+
+  // Easing trial → overrides the --ease-tidal token live (hovers, waterline, rises, wash label)
+  React.useEffect(() => {
+    document.documentElement.style.setProperty('--ease-tidal', tpEasings[t.easing] || tpEasings.tidal);
+  }, [t.easing]);
+
+  React.useEffect(() => { lucide.createIcons(); });
+  const dismissToast = React.useCallback(() => {
+    setToast((cur) => (cur && !cur.leaving ? { ...cur, leaving: true } : cur));
+    setTimeout(() => setToast(null), 260);
+  }, []);
+  React.useEffect(() => {
+    if (!toast || toast.leaving) return;
+    const t = setTimeout(dismissToast, 3200);
+    return () => clearTimeout(t);
+  }, [toast, dismissToast]);
+
+  const say = (kind, msg, detail) => setToast({ kind, msg, detail });
+
+  const commitTriage = (answers, objections) => {
+    const unblocked = Object.entries(answers).filter(([, a]) => a).map(([qid]) => {
+      const q = data.questions.find((x) => x.id === qid);
+      return q.parent ? { id: q.parent, title: q.title, assignee: q.agent, frontInserted: true, flash: true } : null;
+    }).filter(Boolean);
+    const repairs = Object.keys(objections).length
+      ? [{ id: 'tp-0151', title: `repair task — ${Object.keys(objections).length} objection${Object.keys(objections).length > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true, flash: true }]
+      : [];
+    runWash('The tide is going out.', t.commitEmoji, () => {
+      setData({
+        ...data,
+        questions: [],
+        log: data.log.map((l) => ({ ...l, unread: false })),
+        queue: [...unblocked, ...repairs, ...data.queue],
+      });
+      setCommitted(true);
+      setTab('queue');
+      clearFlash();
+      say('success', 'triage committed — one transaction', `${unblocked.length + repairs.length} front-inserted · immediate poll fired`);
+    });
+  };
+
+  // flash is transient UI state — clear it shortly after so remounts (tab switches) don't replay it
+  const clearFlash = () => setTimeout(() => {
+    setData((d) => ({ ...d, queue: d.queue.map((x) => (x.flash ? { ...x, flash: false } : x)) }));
+  }, 3000);
+
+  const moveFront = (id) => {
+    const t = data.queue.find((x) => x.id === id);
+    setData({ ...data, queue: [{ ...t, frontInserted: true, flash: true }, ...data.queue.filter((x) => x.id !== id)] });
+    clearFlash();
+    say('success', 'moved to front of queue', id);
+  };
+
+  const doneHuman = (id) => {
+    const t = data.humanTasks.find((x) => x.id === id);
+    setData({ ...data, humanTasks: data.humanTasks.filter((x) => x.id !== id) });
+    say('success', t.blocking ? `done — ${t.blocking} unblocked, immediate poll fired` : 'done', id);
+  };
+
+  const register = () => {
+    runWash('Into the pool.', '🫧', () => {
+      setData({ ...data, queue: [...data.queue, { id: 'tp-0152', title: 'Add usage-limit gate to hourly poll', assignee: 'reef-crab' }] });
+      setTab('queue');
+      say('info', 'registered — appended to queue tail', 'tp-0152');
+    });
+  };
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-page)', boxShadow: '0 0 40px rgba(23,33,30,0.12)', position: 'relative', overflow: 'hidden' }}>
+      {wash && <TpTideWash label={wash.label} emoji={wash.emoji} duration={t.washMs} />}
+      <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 16px 10px', borderBottom: '1px solid var(--border-hairline)', position: 'sticky', top: 0, background: 'var(--surface-page)', zIndex: 10 }}>
+        <span style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 22, color: 'var(--tide-5)' }}>tidepool</span>
+        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+          {committed ? 'slot busy · queue ' + data.queue.length : '3 questions, 4 new log entries'}
+        </span>
+      </header>
+
+      <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
+        <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
+        {tab === 'triage' && (data.questions.length
+          ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={(q, movedId, pos) => { setData({ ...data, queue: q }); say('info', 'queue reordered', `${movedId} → position ${pos}`); }} onFront={moveFront} />
+          : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
+              <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills tonight, as tasks come in.</div>
+            </div>)}
+        {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · open task view`)} />}
+        {tab === 'queue' && <QueueScreen data={data} onFront={moveFront} onDoneHuman={doneHuman} onReorder={(q, movedId, pos) => { setData({ ...data, queue: q }); say('info', 'queue reordered', `${movedId} → position ${pos}`); }} />}
+        {tab === 'register' && <RegisterScreen data={data} onRegister={register} />}
+        </div>
+      </main>
+
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 86, left: '50%', transform: 'translateX(-50%)', zIndex: 50, width: 'calc(100% - 32px)', maxWidth: 408 }}>
+          <div className={toast.leaving ? 'tp-toast-out' : 'tp-toast-in'}>
+            <Toast kind={toast.kind} detail={toast.detail} onDismiss={dismissToast}>{toast.msg}</Toast>
+          </div>
+        </div>
+      )}
+
+      <nav style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 440, display: 'flex', background: 'var(--surface-card)', borderTop: '1px solid var(--border-hairline)', zIndex: 20 }}>
+        {tabs.map((t) => {
+          const active = tab === t.key;
+          return (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                padding: '10px 0 12px', minHeight: 56, background: 'none', border: 'none', cursor: 'pointer',
+                color: active ? 'var(--tide-4)' : 'var(--text-muted)',
+                borderTop: `2px solid ${active ? 'var(--tide-4)' : 'transparent'}`, marginTop: -1,
+              }}>
+              <i data-lucide={t.icon} style={{ width: 20, height: 20 }}></i>
+              <span style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)' }}>{t.label.toLowerCase()}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <TweaksPanel>
+        <TweakSection label="Motion" />
+        <TweakToggle label="Tide wash" value={t.washEnabled} onChange={(v) => setTweak('washEnabled', v)} />
+        <TweakSlider label="Wash length" value={t.washMs} min={600} max={3000} step={50} unit="ms" onChange={(v) => setTweak('washMs', v)} />
+        <TweakSlider label="Entrance drift" value={t.entranceMs} min={0} max={1200} step={40} unit="ms" onChange={(v) => setTweak('entranceMs', v)} />
+        <TweakSelect label="Tidal easing" value={t.easing} options={Object.keys(tpEasings)} onChange={(v) => setTweak('easing', v)} />
+        <TweakRow label="Commit emoji">
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {tpCommitEmojis.map((e) => (
+              <button key={e} onClick={() => setTweak('commitEmoji', e)}
+                style={{
+                  fontSize: 18, width: 34, height: 34, cursor: 'pointer',
+                  background: t.commitEmoji === e ? 'var(--tide-1)' : 'transparent',
+                  border: t.commitEmoji === e ? '1.5px solid var(--tide-4)' : '1.5px solid transparent',
+                  borderRadius: 8, padding: 0, lineHeight: 1,
+                }}>{e}</button>
+            ))}
+          </div>
+        </TweakRow>
+      </TweaksPanel>
+    </div>
+  );
+}
+// Wait for the DS bundle before mounting — a slow bundle load must not white-screen the page.
+(function mountWhenReady(tries) {
+  if (window.TidepoolDesignSystem_8a0ead) {
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  } else if (tries > 0) {
+    setTimeout(() => mountWhenReady(tries - 1), 100);
+  } else {
+    document.getElementById('root').innerHTML = '<p style="padding:24px;font-family:monospace;font-size:12px;color:#5c6b66">_ds_bundle.js failed to load — recompile the design system.</p>';
+  }
+})(50);
+</script>
+</body></html>

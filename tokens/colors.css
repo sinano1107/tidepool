@@ -1,0 +1,87 @@
+/* tidepool — color tokens
+   A tidepool at low light: foam whites, rock inks, sea-glass teal.
+   Semantic status colors map 1:1 to the task status set. */
+
+:root {
+  /* ---- base: rock neutrals (cool, slightly green-cast) ---- */
+  --rock-0: #fbfcfb;   /* foam — page background */
+  --rock-1: #f2f5f3;   /* still water — recessed surfaces */
+  --rock-2: #e4eae7;   /* wet sand — hairline fills, hovers */
+  --rock-3: #c9d3cf;   /* pebble — borders, disabled */
+  --rock-4: #94a39e;   /* driftwood — placeholder, muted icons */
+  --rock-5: #5c6b66;   /* wet stone — secondary text */
+  --rock-6: #33403c;   /* dark rock — strong text */
+  --rock-7: #17211e;   /* ink — headings, primary text */
+
+  /* ---- primary: tide (deep sea-glass teal) ---- */
+  --tide-0: #f4f9f7;   /* sea-glass — page background */
+  --tide-1: #e3f1ef;
+  --tide-2: #b9dedb;
+  --tide-3: #5fa8a3;
+  --tide-4: #1d6a66;   /* primary actions, links */
+  --tide-5: #114744;   /* pressed, emphasis */
+
+  /* ---- accent: sun (kelp amber — questions, attention) ---- */
+  --sun-1: #faf0dc;
+  --sun-2: #f0d9a8;
+  --sun-3: #c98f2a;
+  --sun-4: #8f6317;
+
+  /* ---- accent: coral (objections, danger, watchdog) ---- */
+  --coral-1: #fbe9e4;
+  --coral-2: #f2c4b8;
+  --coral-3: #cd5f43;
+  --coral-4: #9c3c25;
+
+  /* ---- accent: eelgrass (done, success) ---- */
+  --grass-1: #e6f2e4;
+  --grass-2: #c1e0bc;
+  --grass-3: #4e8f45;
+  --grass-4: #33682c;
+
+  /* ---- semantic aliases ---- */
+  --surface-page: var(--tide-0);
+  --surface-card: #ffffff;
+  --surface-recessed: #e8f0ed;
+  --surface-hover: #eef5f2;
+  --surface-ink: var(--rock-7);          /* inverted panels */
+
+  --text-heading: var(--rock-7);
+  --text-body: var(--rock-6);
+  --text-secondary: var(--rock-5);
+  --text-muted: var(--rock-4);
+  --text-on-ink: var(--rock-1);
+  --text-link: var(--tide-4);
+
+  --border-hairline: var(--rock-2);
+  --border-default: var(--rock-3);
+  --border-focus: var(--tide-4);
+
+  --action-primary: var(--tide-4);
+  --action-primary-hover: var(--tide-5);
+  --action-danger: var(--coral-3);
+
+  /* ---- task status (todo / in_progress / blocked / done / cancelled / skipped)
+         filled pills: white text on mid accents; todo is white + shadow ("not yet wet") ---- */
+  --status-todo-fg: var(--rock-5);
+  --status-todo-bg: #ffffff;
+  --status-inprogress-fg: #ffffff;
+  --status-inprogress-bg: var(--tide-3);
+  --status-blocked-fg: #ffffff;
+  --status-blocked-bg: var(--sun-3);
+  --status-done-fg: #ffffff;
+  --status-done-bg: var(--grass-3);
+  --status-cancelled-fg: #ffffff;
+  --status-cancelled-bg: var(--rock-4);
+  --status-skipped-fg: var(--rock-4);
+  --status-skipped-bg: transparent;      /* skipped renders dashed, queue-only */
+
+  /* ---- task type ---- */
+  --type-work-fg: var(--rock-6);
+  --type-question-fg: var(--sun-4);
+  --type-review-fg: var(--tide-4);
+
+  /* ---- risk flag ---- */
+  --risk-fg: var(--coral-4);
+  --risk-bg: var(--coral-1);
+}

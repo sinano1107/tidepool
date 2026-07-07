@@ -1,0 +1,29 @@
+/* tidepool — typography tokens
+   Newsreader (display, brand moments) / Hanken Grotesk (UI) / Spline Sans Mono (board data) */
+
+:root {
+  --font-display: "Newsreader", Georgia, serif;
+  --font-ui: "Hanken Grotesk", -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Spline Sans Mono", "SF Mono", Menlo, monospace;
+
+  /* scale — UI-dense app; body is 15px */
+  --text-2xs: 11px;    /* mono metadata, timestamps */
+  --text-xs: 12px;     /* badges, captions */
+  --text-sm: 13px;     /* secondary UI, table rows */
+  --text-md: 15px;     /* body default */
+  --text-lg: 18px;     /* card titles, section heads */
+  --text-xl: 24px;     /* screen titles */
+  --text-2xl: 34px;    /* display, triage greeting */
+  --text-3xl: 48px;    /* marketing display only */
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --tracking-caps: 0.08em;  /* uppercase labels */
+  --tracking-tight: -0.01em;
+}
