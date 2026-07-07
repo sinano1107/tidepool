@@ -115,7 +115,8 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, gap = 6 }) {
             userSelect: 'none', position: 'relative',
           }}
         >
-          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} onFront={onFront && i > 0 ? () => onFront(t.id) : undefined} />
+          {/* the head row keeps "↑ front" too: front on the head is the explicit immediate-poll trigger (run now) */}
+          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>
@@ -133,7 +134,8 @@ const TP_SLOT_STATES = {
 
 function QueueScreen({ data, slotState = 'busy', wsAlert = false, onFront, onDoneHuman, onReorder }) {
   const { Card, Button } = window.TidepoolDesignSystem_8a0ead;
-  const slot = TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
+  // real deployments pass live slot content via data.slot; the canned states remain for the mock
+  const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const throttled = slotState === 'limit';
   const alert = wsAlert ? data.workspaceAlert : null;
   const queue = throttled ? data.queue.map((t) => ({ ...t, skipped: true })) : data.queue;

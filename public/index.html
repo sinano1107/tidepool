@@ -1,364 +1,438 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Tidepool — queue</title>
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tidepool</title>
+<link rel="stylesheet" href="/styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.min.js" crossorigin="anonymous"></script>
+<script src="/_ds_bundle.js"></script>
 <style>
-  :root {
-    color-scheme: light dark;
-    font-family: system-ui, sans-serif;
-    --mono: ui-monospace, "SF Mono", Menlo, monospace;
-    --muted: color-mix(in srgb, currentColor 55%, transparent);
-    --card-bg: light-dark(#fff, #1c211f);
-    --card-border: light-dark(#d8ded9, #333a36);
-    --tide: light-dark(#2f7d6d, #5fb3a1);
-    --rock: light-dark(#8a938e, #6f7873);
-  }
-  body { max-width: 440px; margin: 1.5rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.2rem; margin: 0 0 2px; }
-  .sub { font-size: 0.85rem; color: var(--muted); margin: 0 0 16px; }
-  .slotline { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.85rem; }
-  .slotline .tag { font-family: var(--mono); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; }
-  .slotbar { height: 2px; border-radius: 1px; margin-bottom: 14px; }
-  .busy { color: var(--tide); background: var(--tide); }
-  .free { color: var(--rock); background: var(--rock); }
-  #queue { display: flex; flex-direction: column; gap: 6px; }
-  .row {
-    display: flex; align-items: center; gap: 10px;
-    background: var(--card-bg); border: 1px solid var(--card-border);
-    border-radius: 8px; padding: 10px 12px;
-    user-select: none; -webkit-user-select: none; touch-action: none;
-    cursor: grab; position: relative;
-  }
-  .row.dragging { cursor: grabbing; z-index: 5; box-shadow: 0 6px 14px rgba(23, 33, 30, 0.22); }
-  .row .pos { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); min-width: 1.2em; text-align: right; }
-  .row .title { flex: 1; font-size: 0.9rem; font-weight: 500; }
-  .row .type { font-family: var(--mono); font-size: 0.65rem; color: var(--muted); }
-  .row button {
-    font: inherit; font-size: 0.75rem; padding: 4px 10px;
-    border: none; border-radius: 999px;
-    background: color-mix(in srgb, var(--tide) 14%, transparent);
-    color: var(--tide); cursor: pointer; flex-shrink: 0;
-  }
-  .meta { color: var(--muted); font-size: 0.85rem; }
-  /* single-question answer view: one open question at a time, above the queue */
-  .question {
-    background: var(--card-bg); border: 1px solid var(--tide);
-    border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;
-  }
-  .question .tag {
-    font-family: var(--mono); font-size: 0.65rem; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--tide);
-  }
-  .question h2 { font-size: 0.95rem; margin: 4px 0 2px; }
-  .question .context { font-size: 0.8rem; color: var(--muted); margin: 0 0 10px; white-space: pre-wrap; }
-  .question .options { display: flex; flex-direction: column; gap: 6px; }
-  .question .options button {
-    font: inherit; font-size: 0.85rem; text-align: left;
-    padding: 8px 12px; border-radius: 8px; cursor: pointer;
-    border: 1px solid var(--card-border); background: transparent; color: inherit;
-  }
-  .question .options button.recommended {
-    border-color: var(--tide);
-    background: color-mix(in srgb, var(--tide) 14%, transparent);
-  }
-  .question .options button.recommended::after {
-    content: "recommended"; float: right;
-    font-family: var(--mono); font-size: 0.6rem; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--tide); margin-top: 3px;
-  }
-  .question .override { display: flex; gap: 6px; margin-top: 10px; }
-  .question .override input {
-    flex: 1; font: inherit; font-size: 0.8rem; padding: 6px 10px;
-    border: 1px solid var(--card-border); border-radius: 8px;
-    background: transparent; color: inherit;
-  }
-  .question .override button, .loghead button {
-    font: inherit; font-size: 0.75rem; padding: 4px 10px;
-    border: none; border-radius: 999px; cursor: pointer;
-    background: color-mix(in srgb, var(--rock) 18%, transparent); color: inherit;
-  }
-  /* decision log: a skim view over the event stream, newest first */
-  .loghead { display: flex; align-items: baseline; gap: 8px; margin: 22px 0 8px; }
-  .loghead h2 { font-size: 0.95rem; margin: 0; }
-  .loghead .unread-count {
-    font-family: var(--mono); font-size: 0.65rem; color: var(--tide);
-  }
-  .loghead button { font-size: 0.7rem; padding: 2px 10px; margin-left: auto; }
-  #log { display: flex; flex-direction: column; gap: 4px; }
-  .entry {
-    display: flex; align-items: baseline; gap: 8px;
-    padding: 6px 10px; border-radius: 6px; font-size: 0.8rem;
-    border-left: 2px solid transparent;
-  }
-  .entry .kind {
-    font-family: var(--mono); font-size: 0.6rem; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--muted); flex-shrink: 0; min-width: 3.2em;
-  }
-  .entry .line { flex: 1; }
-  .entry .who { font-family: var(--mono); font-size: 0.65rem; color: var(--muted); flex-shrink: 0; }
-  /* a completion reads apart from an ordinary decision line at a glance */
-  .entry.completion {
-    border-left-color: var(--tide);
-    background: color-mix(in srgb, var(--tide) 8%, transparent);
-  }
-  .entry.completion .kind { color: var(--tide); }
-  .entry.unread { font-weight: 600; }
-  .entry.unread::before { content: "●"; color: var(--tide); font-size: 0.5rem; align-self: center; }
-  /* a completion links back to its handoff doc, unfolded in place */
-  .entry.linked { cursor: pointer; }
-  .handoff {
-    font-size: 0.7rem; margin: 0 0 2px; padding: 8px 12px;
-    background: var(--card-bg); border: 1px solid var(--card-border);
-    border-radius: 6px; white-space: pre-wrap; overflow-x: auto;
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--rock-2); display: flex; justify-content: center; }
+  #root { width: 100%; max-width: 440px; }
+  /* tidal scrollbars — thin, sea-glass, pill-shaped */
+  .tp-scroll { scrollbar-width: thin; scrollbar-color: var(--tide-2) transparent; }
+  .tp-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .tp-scroll::-webkit-scrollbar-track { background: transparent; }
+  .tp-scroll::-webkit-scrollbar-thumb { background: var(--tide-2); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+  .tp-scroll::-webkit-scrollbar-thumb:hover { background: var(--tide-3); border: 2px solid transparent; background-clip: padding-box; }
+  .tp-scroll::-webkit-scrollbar-corner { background: transparent; }
+
+  /* entrance drift — tidal: fade + small vertical rise */
+  @keyframes tp-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  .tp-rise { animation: tp-rise var(--tp-rise-ms, 480ms) var(--ease-tidal) both; }
+
+  /* tide wash — a wave sweeps up over the screen, then drains away */
+  @keyframes tp-wash { 0% { transform: translateY(103%); } 38% { transform: translateY(-4%); } 58% { transform: translateY(-4%); } 100% { transform: translateY(103%); } }
+  .tp-wash-water { animation: tp-wash 1250ms cubic-bezier(0.45, 0, 0.25, 1) both; }
+  @keyframes tp-wash-label { 0%, 30% { opacity: 0; transform: translateY(8px); } 45%, 62% { opacity: 1; transform: none; } 80%, 100% { opacity: 0; transform: translateY(-8px); } }
+  .tp-wash-label { animation: tp-wash-label 1250ms var(--ease-tidal) both; }
+  @keyframes tp-bob { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-18px); } }
+
+  /* toast — surfaces up from below, sinks back on dismiss */
+  @keyframes tp-toast-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes tp-toast-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(10px); } }
+  .tp-toast-in { animation: tp-toast-in var(--duration-calm) var(--ease-tidal) both; }
+  .tp-toast-out { animation: tp-toast-out var(--duration-calm) var(--ease-tidal) both; }
+
+  /* tab switch — content drifts in from the side of travel */
+  @keyframes tp-tab-right { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+  @keyframes tp-tab-left { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+  .tp-tab-right { animation: tp-tab-right var(--duration-calm) var(--ease-tidal) both; }
+  .tp-tab-left { animation: tp-tab-left var(--duration-calm) var(--ease-tidal) both; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tp-rise, .tp-wash-water, .tp-wash-label, .tp-toast-in, .tp-toast-out, .tp-tab-right, .tp-tab-left { animation: none; }
+    .tp-wash-water { display: none; }
   }
 </style>
 </head>
 <body>
-<h1>Queue</h1>
-<p class="sub">FIFO · new tasks append · reorder never resets · concurrency=1</p>
-<div class="slotline"><span class="tag" id="slot-tag">slot</span><span id="slot-line" class="meta">loading…</span></div>
-<div class="slotbar" id="slot-bar"></div>
-<div id="question"></div>
-<div id="queue"></div>
-<div class="loghead">
-  <h2>Log</h2>
-  <span class="unread-count" id="log-unread"></span>
-  <button id="log-mark-read" hidden>mark read</button>
-</div>
-<div id="log"><p class="meta">no entries yet</p></div>
-<script>
-  const queueEl = document.getElementById("queue");
-  const questionEl = document.getElementById("question");
-  let todos = [];
-  let questions = [];
-  let log = { entries: [], cursor: 0 };
-  let dragging = false;
+<div id="root"></div>
+<!-- screens come straight from the design-synced kit — single source, no copies -->
+<script type="text/babel" src="/kit/queue-screen.jsx"></script>
+<script type="text/babel" src="/kit/triage-screen.jsx"></script>
+<script type="text/babel" src="/kit/board-screen.jsx"></script>
+<script type="text/babel">
+const WASH_MS = 1250;
 
-  async function load() {
-    if (dragging) return; // a re-render mid-drag would yank the row out from under the pointer
-    log = await fetch("/api/log").then((r) => r.json());
-    const all = await fetch("/api/tasks").then((r) => r.json());
-    // questions are human tasks answered here, not queue rows for the slot
-    todos = all.filter((t) => t.status === "todo" && t.type !== "question");
-    questions = all.filter((t) => t.status === "todo" && t.type === "question");
-    const running = all.find((t) => t.status === "in_progress");
-    const tag = document.getElementById("slot-tag");
-    const line = document.getElementById("slot-line");
-    const bar = document.getElementById("slot-bar");
-    tag.className = "tag " + (running ? "busy" : "free");
-    bar.className = "slotbar " + (running ? "busy" : "free");
-    line.textContent = running ? `${running.title} — ${running.assignee}` : "slot free — nothing running";
-    render();
+const tabs = [
+  { key: 'triage', label: 'Triage', icon: 'sunrise' },
+  { key: 'board', label: 'Board', icon: 'columns-3' },
+  { key: 'queue', label: 'Queue', icon: 'list-ordered' },
+  { key: 'register', label: 'Register', icon: 'plus' },
+];
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(typeof err.error === 'string' ? err.error : res.statusText);
   }
+  return res.json();
+}
+
+// transient "just moved to the front" ids — presentation only, never persisted
+const FRONTS = new Set();
+function markFront(id) {
+  FRONTS.add(id);
+  setTimeout(() => FRONTS.delete(id), 4000);
+}
+
+// Map the server board + decision log into the shape the kit screens consume.
+function mapData(board, log) {
+  const fmtTime = (iso) => {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  const questions = board
+    .filter((t) => t.status === 'todo' && t.type === 'question')
+    .map((q) => ({
+      id: q.id, parent: q.parent_id, agent: q.assignee ?? 'agent',
+      title: q.title, context: q.purpose,
+      options: (q.question_options ?? []).map((o) => ({ label: o, recommended: o === q.question_recommendation })),
+    }));
+  // newest first for the skim; unread = beyond the read cursor
+  const logEntries = [...log.entries].reverse().map((e) => ({
+    id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
+    kind: e.kind === 'task_completed' ? 'completion' : 'decision',
+    text: e.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
+    unread: e.id > log.cursor,
+  }));
+  const queue = board
+    .filter((t) => t.status === 'todo' && t.type !== 'question')
+    .map((t) => ({
+      id: t.id, title: t.title, assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
+      frontInserted: FRONTS.has(t.id), flash: FRONTS.has(t.id),
+    }));
+  const openChildren = {};
+  for (const t of board) {
+    if (t.parent_id && t.status !== 'done' && t.status !== 'cancelled') {
+      openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
+    }
+  }
+  const cols = { todo: [], in_progress: [], blocked: [], done: [] };
+  for (const t of board) {
+    if (!cols[t.status]) continue; // cancelled stays off the board
+    cols[t.status].push({
+      id: t.id, title: t.title, type: t.type,
+      assignee: t.assignee ?? (t.type === 'question' ? 'you' : undefined),
+      human: t.type === 'question', risk: !!t.risk_flag, children: openChildren[t.id],
+    });
+  }
+  const running = board.find((t) => t.status === 'in_progress');
+  const slot = running
+    ? { color: 'var(--tide-4)', line: `${running.id} · ${running.title}`, meta: running.assignee ?? '' }
+    : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1' };
+  return {
+    questions, log: logEntries, queue, board: cols, humanTasks: [], agents: [],
+    slot, running: !!running,
+    lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
+  };
+}
+
+async function fetchData() {
+  const [board, log] = await Promise.all([
+    fetch('/api/tasks').then((r) => r.json()),
+    fetch('/api/log').then((r) => r.json()),
+  ]);
+  return mapData(board, log);
+}
+
+// Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
+function TpTideWash({ label, emoji, duration = 1250 }) {
+  const dur = `${duration}ms`;
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 60, overflow: 'hidden', pointerEvents: 'none' }} aria-hidden="true">
+      <div className="tp-wash-water" style={{ position: 'absolute', inset: '-40px 0 0 0', animationDuration: dur }}>
+        <div style={{ animation: `tp-bob ${dur} ease-in-out both` }}>
+          <svg width="calc(100% + 36px)" height="40" viewBox="0 0 476 40" preserveAspectRatio="none" style={{ display: 'block' }}>
+            <path d="M0 24 Q30 10 60 22 T120 22 T180 20 T240 24 T300 18 T360 22 T420 20 T476 22 L476 40 L0 40 Z" fill="var(--tide-4)" opacity="0.92"/>
+            <path d="M0 30 Q40 18 80 28 T160 28 T240 30 T320 26 T400 30 T476 28 L476 40 L0 40 Z" fill="var(--tide-3)" opacity="0.5"/>
+          </svg>
+        </div>
+        <div style={{ position: 'absolute', top: 39, left: 0, right: 0, bottom: -80, background: 'var(--tide-4)', opacity: 0.94 }}></div>
+        <div className="tp-wash-label" style={{ position: 'absolute', top: '36%', left: 0, right: 0, textAlign: 'center', padding: '0 24px', animationDuration: dur }}>
+          {emoji && <div style={{ fontSize: 44, marginBottom: 12 }}>{emoji}</div>}
+          <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', lineHeight: 1.2, color: '#fff' }}>{label}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Registration — the plain form from the kit, wired to POST /api/tasks.
+// The brain-dump → LLM-draft flow arrives with the agent runtime.
+function RegisterScreen({ onRegister }) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [type, setType] = React.useState('work');
+  const [title, setTitle] = React.useState('');
+  const [purpose, setPurpose] = React.useState('');
+  const [criteria, setCriteria] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const ok = title.trim() && purpose.trim() && criteria.trim();
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await onRegister({ type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim() });
+      setType('work'); setTitle(''); setPurpose(''); setCriteria('');
+    } catch { /* the toast already reported it; keep the fields */ }
+    setBusy(false);
+  };
+  return (
+    <div style={{ padding: '20px 16px' }}>
+      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Register</h1>
+      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>plain form — the LLM drafting flow arrives with the agent runtime</p>
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
+        <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
+        <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value)} />
+        <Button variant="primary" size="lg" full disabled={!ok || busy} onClick={submit}>Register — appends to queue tail</Button>
+      </Card>
+    </div>
+  );
+}
+
+function App() {
+  const { Toast } = window.TidepoolDesignSystem_8a0ead;
+  const [data, setData] = React.useState(null);
+  const [tab, setTabRaw] = React.useState('triage');
+  const [tabDir, setTabDir] = React.useState('right');
+  const [toast, setToast] = React.useState(null);
+  const [wash, setWash] = React.useState(null);
+  const tabOrder = tabs.map((x) => x.key);
+  const pointerDown = React.useRef(false);
+  const tabRef = React.useRef(tab);
+  tabRef.current = tab;
+
+  // every tab entry takes a fresh snapshot; screens remount per tab (key)
+  const setTab = (next) => {
+    setTabRaw((prev) => {
+      if (next !== prev) setTabDir(tabOrder.indexOf(next) > tabOrder.indexOf(prev) ? 'right' : 'left');
+      return next;
+    });
+    fetchData().then(setData).catch(() => {});
+  };
+
+  React.useEffect(() => {
+    fetchData().then(setData).catch(() => {});
+    const dn = () => { pointerDown.current = true; };
+    const up = () => { pointerDown.current = false; };
+    window.addEventListener('pointerdown', dn);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    // background refresh — never mid-drag, never over an in-flight triage
+    // (the triage snapshot must stay stable: objections are keyed by log position)
+    const iv = setInterval(() => {
+      if (pointerDown.current || tabRef.current === 'triage') return;
+      fetchData().then(setData).catch(() => {});
+    }, 15000);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('pointerdown', dn);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
+  }, []);
+
+  React.useEffect(() => { lucide.createIcons(); });
+
+  const dismissToast = React.useCallback(() => {
+    setToast((cur) => (cur && !cur.leaving ? { ...cur, leaving: true } : cur));
+    setTimeout(() => setToast(null), 260);
+  }, []);
+  React.useEffect(() => {
+    if (!toast || toast.leaving) return;
+    const t = setTimeout(dismissToast, 3200);
+    return () => clearTimeout(t);
+  }, [toast, dismissToast]);
+  const say = (kind, msg, detail) => setToast({ kind, msg, detail });
+
+  // Cover the screen with the tide, apply the state change while covered, drain.
+  const runWash = (label, emoji, apply) => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { apply(); return; }
+    setWash({ label, emoji });
+    setTimeout(apply, WASH_MS * 0.4);
+    setTimeout(() => setWash(null), WASH_MS + 50);
+  };
+
+  // a data refresh mid-triage must not shift the snapshot under the flow
+  const refresh = async () => {
+    const fresh = await fetchData();
+    setData((d) => (tab === 'triage' && d
+      ? { ...fresh, questions: d.questions, log: d.log, lastLogId: d.lastLogId }
+      : fresh));
+  };
+
+  // Triage commit: answers apply (unblocked parents go to the head server-side),
+  // one repair task per objection front-inserted, scratchpad notes to the tail,
+  // then the read cursor advances over everything skimmed.
+  const commitTriage = async (answers, objections, scratch) => {
+    try {
+      const picked = Object.entries(answers).filter(([, a]) => a);
+      for (const [qid, a] of picked) {
+        await api(`/api/tasks/${qid}/answer`, { answer: a });
+        const q = data.questions.find((x) => x.id === qid);
+        if (q && q.parent) markFront(q.parent);
+      }
+      let repairs = 0;
+      for (const [i, direction] of Object.entries(objections)) {
+        const entry = data.log[+i];
+        if (!entry) continue;
+        const t = await api('/api/tasks', {
+          type: 'work',
+          title: `repair: ${entry.text.slice(0, 64)}`,
+          purpose: `objection to ${entry.taskId} (${entry.agent}): ${direction}`,
+          completion_criteria: 'the objection direction is applied and the outcome is logged',
+        });
+        await api(`/api/tasks/${t.id}/move`, { after: null });
+        markFront(t.id);
+        repairs += 1;
+      }
+      let noted = 0;
+      for (const s of scratch) {
+        if (s.kind === 'drop') continue;
+        await api('/api/tasks', {
+          type: 'work',
+          title: s.kind === 'meta' ? `meta-review: ${s.text}` : s.text,
+          purpose: s.text,
+          completion_criteria: 'scratchpad note triaged — refine criteria at pickup',
+        });
+        noted += 1;
+      }
+      if (data.lastLogId != null) await api('/api/log/cursor', { last_read: data.lastLogId });
+      runWash('The tide is going out.', '🌊', () => {
+        setTab('queue');
+        say('success', 'triage committed — one pass',
+          `${picked.length} answered${repairs ? ` · ${repairs} repair` : ''}${noted ? ` · ${noted} from scratchpad` : ''}`);
+      });
+    } catch (err) {
+      say('danger', 'triage commit failed', String(err.message || err));
+    }
+  };
 
   // "Run now" IS a move to the head — the one reorder verb, no separate path.
-  async function move(id, after) {
-    await fetch(`/api/tasks/${id}/move`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ after }),
-    });
-    await load();
-  }
-
-  async function answer(id, text) {
-    await fetch(`/api/tasks/${id}/answer`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ answer: text }),
-    });
-    await load();
-  }
-
-  // one question at a time: one-tap options, free text only as an override
-  function renderQuestion() {
-    questionEl.innerHTML = "";
-    if (questions.length === 0) return;
-    const q = questions[0];
-    const card = document.createElement("div");
-    card.className = "question";
-    const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.textContent = questions.length > 1 ? `question 1 of ${questions.length}` : "question";
-    const title = document.createElement("h2");
-    title.textContent = q.title;
-    const context = document.createElement("p");
-    context.className = "context";
-    context.textContent = q.purpose;
-    const options = document.createElement("div");
-    options.className = "options";
-    for (const opt of q.question_options ?? []) {
-      const b = document.createElement("button");
-      b.textContent = opt;
-      if (opt === q.question_recommendation) b.classList.add("recommended");
-      b.addEventListener("click", () => answer(q.id, opt));
-      options.append(b);
+  const moveFront = async (id) => {
+    try {
+      await api(`/api/tasks/${id}/move`, { after: null });
+      markFront(id);
+      await refresh();
+      say('success', 'moved to front — immediate poll fired', id);
+    } catch (err) {
+      say('danger', 'move failed', String(err.message || err));
     }
-    const override = document.createElement("div");
-    override.className = "override";
-    const input = document.createElement("input");
-    input.placeholder = "override with a free-text answer…";
-    const send = document.createElement("button");
-    send.textContent = "override";
-    send.addEventListener("click", () => {
-      if (input.value.trim()) answer(q.id, input.value.trim());
-    });
-    override.append(input, send);
-    card.append(tag, title, context, options, override);
-    questionEl.append(card);
-  }
+  };
 
-  async function markLogRead() {
-    const latest = log.entries.at(-1);
-    if (!latest) return;
-    await fetch("/api/log/cursor", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ last_read: latest.id }),
-    });
-    await load();
-  }
-  document.getElementById("log-mark-read").addEventListener("click", markLogRead);
-
-  // a completion entry unfolds its handoff doc in place — the log's link back
-  // to the deliverable; survives the 15s re-render via openHandoffs
-  const openHandoffs = new Set();
-  const handoffCache = new Map();
-  async function toggleHandoff(entry) {
-    if (openHandoffs.has(entry.id)) {
-      openHandoffs.delete(entry.id);
-    } else {
-      if (!handoffCache.has(entry.task_id)) {
-        const task = await fetch(`/api/tasks/${entry.task_id}`).then((r) => r.json());
-        handoffCache.set(entry.task_id, task.handoff_doc ?? "(no handoff doc)");
-      }
-      openHandoffs.add(entry.id);
+  const reorder = async (next, movedId, pos) => {
+    try {
+      const idx = next.findIndex((t) => t.id === movedId);
+      const after = idx <= 0 ? null : next[idx - 1].id;
+      setData((d) => ({ ...d, queue: next })); // optimistic: the rows already sit in the new order
+      await api(`/api/tasks/${movedId}/move`, { after });
+      await refresh();
+      say('info', 'queue reordered', `${movedId} → position ${pos}`);
+    } catch (err) {
+      await refresh();
+      say('danger', 'reorder failed', String(err.message || err));
     }
-    renderLog();
-  }
+  };
 
-  // newest first for skimming; unread = beyond the cursor; a completion entry
-  // reads apart from an ordinary decision line
-  function renderLog() {
-    const logEl = document.getElementById("log");
-    const unreadEl = document.getElementById("log-unread");
-    const markEl = document.getElementById("log-mark-read");
-    logEl.innerHTML = "";
-    if (log.entries.length === 0) {
-      logEl.innerHTML = '<p class="meta">no entries yet</p>';
-      unreadEl.textContent = "";
-      markEl.hidden = true;
-      return;
-    }
-    const unread = log.entries.filter((e) => e.id > log.cursor).length;
-    unreadEl.textContent = unread ? `${unread} unread` : "";
-    markEl.hidden = unread === 0;
-    for (const e of [...log.entries].reverse()) {
-      const row = document.createElement("div");
-      const done = e.kind === "task_completed";
-      row.className = "entry" + (done ? " completion" : "") + (e.id > log.cursor ? " unread" : "");
-      const kind = document.createElement("span");
-      kind.className = "kind";
-      kind.textContent = done ? "done" : "note";
-      const line = document.createElement("span");
-      line.className = "line";
-      line.textContent = done ? (e.payload.result ?? "(no outcome recorded)") : e.payload.line;
-      const who = document.createElement("span");
-      who.className = "who";
-      who.textContent = e.worker_id;
-      row.append(kind, line, who);
-      if (done && e.payload.handoff_present) {
-        row.classList.add("linked");
-        row.title = "show handoff doc";
-        row.addEventListener("click", () => toggleHandoff(e));
-      }
-      logEl.append(row);
-      if (openHandoffs.has(e.id)) {
-        const doc = document.createElement("pre");
-        doc.className = "handoff";
-        doc.textContent = handoffCache.get(e.task_id);
-        logEl.append(doc);
-      }
-    }
-  }
-
-  function render() {
-    renderQuestion();
-    renderLog();
-    queueEl.innerHTML = "";
-    if (todos.length === 0) {
-      queueEl.innerHTML = '<p class="meta">queue is empty</p>';
-      return;
-    }
-    todos.forEach((t, i) => {
-      const row = document.createElement("div");
-      row.className = "row";
-      row.dataset.id = t.id;
-      const pos = document.createElement("span");
-      pos.className = "pos";
-      pos.textContent = i + 1;
-      const title = document.createElement("span");
-      title.className = "title";
-      title.textContent = t.title;
-      const type = document.createElement("span");
-      type.className = "type";
-      type.textContent = t.type;
-      row.append(pos, title, type);
-      // also on the head row: front on the head is the immediate-poll trigger
-      const front = document.createElement("button");
-      front.textContent = "↑";
-      front.title = "Move to front";
-      front.addEventListener("click", () => move(t.id, null));
-      row.append(front);
-      row.addEventListener("pointerdown", (e) => onDragStart(e, i, row));
-      queueEl.append(row);
-    });
-  }
-
-  function onDragStart(e, index, el) {
-    if (e.target.closest("button") || e.button > 0) return;
-    e.preventDefault();
-    dragging = true;
-    el.setPointerCapture(e.pointerId);
-    const gap = 6;
-    const shift = el.getBoundingClientRect().height + gap;
-    const rows = [...queueEl.children];
-    let projected = index;
-    el.classList.add("dragging");
-
-    const onMove = (ev) => {
-      const dy = ev.clientY - e.clientY;
-      el.style.transform = `translateY(${dy}px) scale(1.02)`;
-      projected = Math.max(0, Math.min(todos.length - 1, Math.round(index + dy / shift)));
-      rows.forEach((r, j) => {
-        if (j === index) return;
-        const off = j > index && j <= projected ? -shift : j < index && j >= projected ? shift : 0;
-        r.style.transform = off ? `translateY(${off}px)` : "";
+  const register = async (fields) => {
+    try {
+      const t = await api('/api/tasks', fields);
+      runWash('Into the pool.', '🫧', () => {
+        setTab('queue');
+        say('info', 'registered — appended to queue tail', t.id);
       });
-    };
-    const onUp = async () => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-      el.classList.remove("dragging");
-      el.style.transform = "";
-      rows.forEach((r) => (r.style.transform = ""));
-      dragging = false;
-      if (projected !== index) {
-        // after = the task that ends up right above the drop position
-        const after = projected === 0 ? null : todos[projected < index ? projected - 1 : projected].id;
-        await move(todos[index].id, after);
-      }
-    };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
-    el.addEventListener("pointercancel", onUp);
+    } catch (err) {
+      say('danger', 'registration failed', String(err.message || err));
+      throw err;
+    }
+  };
+
+  if (!data) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface-page)' }}>
+        <span style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)' }}>tidepool</span>
+      </div>
+    );
   }
 
-  load();
-  setInterval(load, 15000);
+  const unreadCount = data.log.filter((l) => l.unread).length;
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-page)', boxShadow: '0 0 40px rgba(23,33,30,0.12)', position: 'relative', overflow: 'hidden' }}>
+      {wash && <TpTideWash label={wash.label} emoji={wash.emoji} duration={WASH_MS} />}
+      <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 16px 10px', borderBottom: '1px solid var(--border-hairline)', position: 'sticky', top: 0, background: 'var(--surface-page)', zIndex: 10 }}>
+        <span style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 22, color: 'var(--tide-5)' }}>tidepool</span>
+        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
+          {data.questions.length} questions · {unreadCount} new log · queue {data.queue.length}
+        </span>
+      </header>
+
+      <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
+        <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
+        {tab === 'triage' && (data.questions.length || unreadCount
+          ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} />
+          : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
+              <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills as tasks come in.</div>
+            </div>)}
+        {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · ${t.type}`)} />}
+        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : 'free'} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
+        {tab === 'register' && <RegisterScreen onRegister={register} />}
+        </div>
+      </main>
+
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 86, left: '50%', transform: 'translateX(-50%)', zIndex: 50, width: 'calc(100% - 32px)', maxWidth: 408 }}>
+          <div className={toast.leaving ? 'tp-toast-out' : 'tp-toast-in'}>
+            <Toast kind={toast.kind} detail={toast.detail} onDismiss={dismissToast}>{toast.msg}</Toast>
+          </div>
+        </div>
+      )}
+
+      <nav style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 440, display: 'flex', background: 'var(--surface-card)', borderTop: '1px solid var(--border-hairline)', zIndex: 20 }}>
+        {tabs.map((t) => {
+          const active = tab === t.key;
+          return (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+                padding: '10px 0 12px', minHeight: 56, background: 'none', border: 'none', cursor: 'pointer',
+                color: active ? 'var(--tide-4)' : 'var(--text-muted)',
+                borderTop: `2px solid ${active ? 'var(--tide-4)' : 'transparent'}`, marginTop: -1,
+              }}>
+              <i data-lucide={t.icon} style={{ width: 20, height: 20 }}></i>
+              <span style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)' }}>{t.label.toLowerCase()}</span>
+              {t.key === 'triage' && (data.questions.length + unreadCount) > 0 && !active && (
+                <span style={{ position: 'absolute', transform: 'translate(16px, -2px)', minWidth: 15, height: 15, borderRadius: 999, background: 'var(--tide-4)', color: '#fff', fontFamily: 'var(--font-mono)', fontSize: 10, lineHeight: '15px', padding: '0 3px' }}>{data.questions.length + unreadCount}</span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    </div>
+  );
+}
+// Wait for the DS bundle before mounting — a slow bundle load must not white-screen the page.
+(function mountWhenReady(tries) {
+  if (window.TidepoolDesignSystem_8a0ead) {
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  } else if (tries > 0) {
+    setTimeout(() => mountWhenReady(tries - 1), 100);
+  } else {
+    document.getElementById('root').innerHTML = '<p style="padding:24px;font-family:monospace;font-size:12px;color:#5c6b66">_ds_bundle.js failed to load — recompile the design system.</p>';
+  }
+})(50);
 </script>
-</body>
-</html>
+</body></html>

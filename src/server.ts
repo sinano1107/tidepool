@@ -36,7 +36,15 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const scheduler = startScheduler({ db, clock: options.clock, slot, worker: options.worker });
   app.use("/api", createApiRouter(db, options.clock, () => scheduler.pollNow()));
   app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock }));
-  app.use(express.static(join(dirname(fileURLToPath(import.meta.url)), "..", "public")));
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  app.use(express.static(join(root, "public")));
+  // the WebUI is the design-synced UI kit: screens come straight from the kit
+  // (single source, the /kit mock stays runnable), tokens and the compiled
+  // component bundle from the design-system mirror at the repo root
+  app.use("/kit", express.static(join(root, "ui_kits", "tidepool-webui")));
+  app.use("/tokens", express.static(join(root, "tokens")));
+  app.get("/styles.css", (_req, res) => res.sendFile(join(root, "styles.css")));
+  app.get("/_ds_bundle.js", (_req, res) => res.sendFile(join(root, "_ds_bundle.js")));
 
   const listener = await new Promise<import("node:http").Server>((resolve) => {
     const l = app.listen(options.port, "127.0.0.1", () => resolve(l));
