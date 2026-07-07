@@ -3,14 +3,7 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { listEvents } from "./events.js";
-import {
-  DomainError,
-  getTask,
-  listTasks,
-  moveTask,
-  registerTask,
-  type Task,
-} from "./tasks.js";
+import { getTask, listTasks, moveTask, registerTask, type Task } from "./tasks.js";
 
 const registerTaskSchema = z.object({
   type: z.enum(["work", "question", "review"]),
@@ -69,19 +62,13 @@ export function createApiRouter(
       after = found;
     }
     const headBefore = queueHeadId(db);
-    let moved: Task;
-    try {
-      moved = moveTask(db, task, after, clock.now());
-    } catch (err) {
-      if (err instanceof DomainError) {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      throw err;
+    const moved = moveTask(db, task, after, clock.now());
+    // a todo moved to the top is "run now" — an explicit immediate-poll
+    // trigger even when it already sat at the head; a non-todo move is a
+    // display move and can never change the todo queue head
+    if ((after === null && moved.status === "todo") || queueHeadId(db) !== headBefore) {
+      onQueueHeadChanged();
     }
-    // "run now" (after: null) is always an explicit immediate-poll trigger,
-    // even when the task already sits at the head
-    if (after === null || queueHeadId(db) !== headBefore) onQueueHeadChanged();
     res.json(moved);
   });
 

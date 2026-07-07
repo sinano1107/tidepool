@@ -155,8 +155,9 @@ export function completeTask(
   return getTask(db, task.id)!;
 }
 
-/** Place a task right after `after`, or at the queue head when `after` is null.
- *  "Run now" is this same move to the head, never a separate execution path.
+/** Place a task right after `after`, or at the top of the board when `after`
+ *  is null. sort_key orders the whole board, so any task may move — for a todo
+ *  task a move to the top is "run now", never a separate execution path.
  *  Human steering channel: reachable from the WebUI JSON API only, never MCP. */
 export function moveTask(
   db: Db,
@@ -165,12 +166,6 @@ export function moveTask(
   now: Date,
   workerId: string = HUMAN_WORKER_ID,
 ): Task {
-  if (task.status !== "todo") {
-    throw new DomainError("only todo tasks can be reordered");
-  }
-  if (after !== null && after.status !== "todo") {
-    throw new DomainError("a task can only be placed after a todo task");
-  }
   const sortKey = fractionalKeyAfter(db, task, after);
   db.transaction(() => {
     db.prepare("UPDATE tasks SET sort_key = ? WHERE id = ?").run(sortKey, task.id);

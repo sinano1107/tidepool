@@ -18,6 +18,15 @@ function queueIds(list: any[]): string[] {
   return list.filter((x) => x.status === "todo").map((x) => x.id);
 }
 
+const fullHandoff = {
+  outcome: "done as specified",
+  deliverables: "n/a",
+  decision_refs: "n/a",
+  dead_ends: "n/a",
+  resume_context: "n/a",
+  known_issues: "n/a",
+};
+
 /** Park a filler task in the slot so reordering below never triggers a pickup:
  *  a queue-head change while the slot is free immediately executes the new head. */
 async function occupySlot(t: Tidepool) {
@@ -138,22 +147,37 @@ it("moving the head task down fires the poll for the new head", async () => {
   expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
 });
 
-it("only todo tasks can be reordered, and only relative to todo tasks", async () => {
+it("a non-todo task can be moved — board order is global — without firing a run-now", async () => {
   t = await bootTidepool();
-  const running = await occupySlot(t);
   const a = await registerWork(t, "a");
-
-  const moveRunning = await api(t.baseUrl, "POST", `/api/tasks/${running.id}/move`, {
-    after: null,
+  const b = await registerWork(t, "b");
+  await t.clock.advance(HOUR); // a picked up
+  const client = await mcpClient(t.baseUrl, a.id);
+  const done: any = await client.callTool({
+    name: "complete_task",
+    arguments: { handoff: fullHandoff },
   });
-  expect(moveRunning.status).toBe(400);
+  expect(done.isError ?? false).toBe(false);
+  await client.close();
 
-  const moveAfterRunning = await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, {
-    after: running.id,
-  });
-  expect(moveAfterRunning.status).toBe(400);
+  // slot is free and b heads the queue, but surfacing a done task on the
+  // board is a display move, not a "run now"
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, { after: null });
+  expect(res.status).toBe(200);
+  expect(t.worker.started.map((x) => x.id)).toEqual([a.id]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${b.id}`)).json.status).toBe("todo");
 
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${running.id}/events`)).json.filter(
-    (e: any) => e.kind === "task_moved",
-  )).toEqual([]);
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(list.map((x: any) => x.id)).toEqual([a.id, b.id]);
+});
+
+it("a todo task can be placed after a non-todo task", async () => {
+  t = await bootTidepool();
+  const filler = await occupySlot(t);
+  const a = await registerWork(t, "a");
+  const b = await registerWork(t, "b");
+
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: filler.id });
+  expect(res.status).toBe(200);
+  expect(queueIds((await api(t.baseUrl, "GET", "/api/tasks")).json)).toEqual([b.id, a.id]);
 });
