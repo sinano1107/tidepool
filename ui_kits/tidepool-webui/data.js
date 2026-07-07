@@ -34,6 +34,16 @@ const tpData = {
         { label: 'Skip for v1' },
       ],
     },
+    {
+      id: 'tp-0153', parent: 'tp-0146', agent: 'reef-crab', kind: 'approval',
+      title: 'Child task exceeds my risk — approve?',
+      context: 'register_child_task: "Backfill events for migrated rows" carries a risk flag; parent tp-0146 does not. Held pending — converted server-side, no error returned.',
+      note: 'approving raises tp-0146 risk (upward propagation)',
+      options: [
+        { label: 'Approve — raise parent risk', recommended: true },
+        { label: 'Reject — cancel the child' },
+      ],
+    },
   ],
   log: [
     { time: '06:41', taskId: 'tp-0142', agent: 'reef-crab', kind: 'decision', text: 'used better-sqlite3 transactions for queue reorder — single writer, no locking needed', unread: true },
@@ -43,11 +53,28 @@ const tpData = {
     { time: '23:58', taskId: 'tp-0138', agent: 'hermit', kind: 'completion', text: 'criteria met — workspaces.yaml documented, branch task/tp-0138', unread: false },
   ],
   queue: [
-    { id: 'tp-0144', title: 'Write board schema DDL', assignee: 'reef-crab' },
-    { id: 'tp-0146', title: 'Scaffold MCP server verbs', assignee: 'reef-crab', risk: true },
-    { id: 'tp-0147', title: 'Vite PWA shell + push subscription', assignee: 'hermit', skipped: true },
-    { id: 'tp-0150', title: 'Watchdog repair: clear stale timer on SIGKILL path', assignee: 'reef-crab' },
+    { id: 'tp-0144', title: 'Write board schema DDL', assignee: 'reef-crab', workspace: 'tidepool' },
+    { id: 'tp-0146', title: 'Scaffold MCP server verbs', assignee: 'reef-crab', risk: true, workspace: 'tidepool' },
+    { id: 'tp-0147', title: 'Vite PWA shell + push subscription', assignee: 'hermit', skipped: true, workspace: 'tidepool' },
+    { id: 'tp-0150', title: 'Watchdog repair: clear stale timer on SIGKILL path', assignee: 'reef-crab', workspace: 'registry' },
   ],
+  // tree-rule failure state — surfaced in the queue as a needs-human banner (toggle in tweaks)
+  workspaceAlert: {
+    workspace: 'registry',
+    reason: 'tree rule failed — conflict on task/tp-0141',
+    held: ['tp-0150'],
+    question: 'tp-0154',
+  },
+  // canned single-question flow — the deep-link target of a push notification
+  pushQuestion: {
+    id: 'tp-0156', parent: 'tp-0150', agent: 'reef-crab',
+    title: 'Watchdog grace: 30s or 120s before SIGKILL?',
+    context: 'SIGTERM sent on timeout; how long to wait for the WIP commit before SIGKILL.',
+    options: [
+      { label: '120s — give the tree rule room', recommended: true },
+      { label: '30s' },
+    ],
+  },
   board: {
     todo: [
       { id: 'tp-0144', title: 'Write board schema DDL', type: 'work', assignee: 'reef-crab' },
@@ -72,6 +99,7 @@ const tpData = {
   },
   humanTasks: [
     { id: 'tp-0145', title: 'Plug in the second SSD to the Pi', blocking: 'tp-0147' },
+    { id: 'tp-0155', title: 'Buy a USB-C cable for the Pi', blocking: null },
   ],
 };
 window.tpData = tpData;

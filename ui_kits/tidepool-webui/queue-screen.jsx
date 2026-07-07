@@ -122,22 +122,46 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, gap = 6 }) {
   );
 }
 
-function QueueScreen({ data, onFront, onDoneHuman, onReorder }) {
+// The slot line reflects the four states of the single execution slot.
+// 'limit' additionally renders every queue row as skipped (Swell throttle).
+const TP_SLOT_STATES = {
+  busy: { color: 'var(--tide-4)', line: 'tp-0142 · Queue reorder — fractional sort keys', meta: 'next poll 08:00' },
+  free: { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'next poll 08:00' },
+  warning: { color: 'var(--sun-4)', line: 'close to limit · finishing tp-0142, starting nothing new', meta: 'per Anthropic threshold' },
+  limit: { color: 'var(--coral-4)', line: 'usage limit · nothing starts', meta: 'resumes 06:12 · immediate poll at reset' },
+};
+
+function QueueScreen({ data, slotState = 'busy', wsAlert = false, onFront, onDoneHuman, onReorder }) {
   const { Card, Button } = window.TidepoolDesignSystem_8a0ead;
+  const slot = TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
+  const throttled = slotState === 'limit';
+  const alert = wsAlert ? data.workspaceAlert : null;
+  const queue = throttled ? data.queue.map((t) => ({ ...t, skipped: true })) : data.queue;
   return (
     <div style={{ padding: '20px 16px' }}>
       <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Queue</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>FIFO · new tasks append · reorder never resets · concurrency=1</p>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
-        <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>tp-0142 · Queue reorder — fractional sort keys</span>
-        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>next poll 08:00</span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: slot.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
+        <span style={{ fontSize: 'var(--text-sm)', color: slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
+        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>{slot.meta}</span>
       </div>
-      <div style={{ height: 2, background: 'var(--tide-4)', borderRadius: 1, marginBottom: 14 }}></div>
+      <div style={{ height: 2, background: slot.color, borderRadius: 1, marginBottom: 14 }}></div>
+
+      {alert && (
+        <Card style={{ background: 'var(--coral-1)', border: '1px solid var(--coral-2)', padding: '12px 14px', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--coral-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>workspace needs human</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>{alert.workspace}</span>
+          </div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-body)', marginBottom: 4 }}>{alert.reason}</div>
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>pickup paused for {alert.held.join(', ')} · see question {alert.question}</div>
+        </Card>
+      )}
 
       <div style={{ marginBottom: 28 }}>
-        <TpQueueList tasks={data.queue} onReorder={onReorder} onFront={onFront} />
+        <TpQueueList tasks={queue} onReorder={onReorder} onFront={onFront} />
       </div>
 
       <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Your tasks</h2>

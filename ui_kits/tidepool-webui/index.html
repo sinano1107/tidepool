@@ -66,7 +66,9 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "washEnabled": true,
   "entranceMs": 560,
   "easing": "tidal",
-  "commitEmoji": "⛵"
+  "commitEmoji": "⛵",
+  "slotState": "busy",
+  "wsAlert": false
 }/*EDITMODE-END*/;
 
 const tpCommitEmojis = ['🌊', '⛵', '☕', '🌅', '🐚', '🏄', '🪸'];
@@ -109,6 +111,96 @@ function TpTideWash({ label, emoji, duration = 1250 }) {
   );
 }
 
+// Simulated push notification banner — one of the entrances, never a channel.
+function TpPushBanner({ q, onOpen, onDismiss }) {
+  return (
+    <button onClick={onOpen}
+      style={{
+        position: 'absolute', top: 10, left: 12, right: 12, zIndex: 55, cursor: 'pointer', textAlign: 'left',
+        display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
+        background: 'var(--rock-6)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)',
+      }}>
+      <i data-lucide="bell" style={{ width: 16, height: 16, flexShrink: 0 }}></i>
+      <span style={{ flex: 1, fontSize: 'var(--text-sm)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <b>{q.agent}</b> asks: {q.title}
+      </span>
+      <span onClick={(e) => { e.stopPropagation(); onDismiss(); }} style={{ fontSize: 'var(--text-sm)', opacity: 0.7, padding: '0 2px' }}>×</span>
+    </button>
+  );
+}
+
+// Single-question answer view — the deep-link target of a daytime push.
+// One answer, unambiguous consequence: applies immediately, no triage transaction.
+function TpSingleQuestion({ q, onAnswer, onClose }) {
+  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  const [answer, setAnswer] = React.useState(null);
+  return (
+    <div className="tp-rise" style={{ position: 'absolute', inset: 0, zIndex: 56, background: 'var(--surface-page)', display: 'flex', flexDirection: 'column', padding: '20px 16px', overflowY: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>push → one question</span>
+        <button onClick={onClose} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-lg)', cursor: 'pointer', padding: 0 }}>×</button>
+      </div>
+      <h1 style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', fontWeight: 400, color: 'var(--tide-5)', margin: '0 0 16px', lineHeight: 1.15 }}>One answer, then back to your day.</h1>
+      <TpQuestionCard q={q} answer={answer} onAnswer={setAnswer} />
+      <Button variant="primary" size="lg" full disabled={!answer} onClick={onAnswer}>Answer — {q.parent} to front</Button>
+      <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textAlign: 'center', marginTop: 12 }}>
+        applies immediately · immediate poll if slot free · no transaction needed for one answer
+      </p>
+    </div>
+  );
+}
+
+// Handoff assist — completion of a human task that blocks AI work.
+// Reader-driven: free-text dump → LLM drafts the 6 fields, flags gaps, never forces.
+const TP_HANDOFF_FIELDS = [
+  { label: 'outcome vs criteria', value: 'SSD installed and mounted — criteria met' },
+  { label: 'deliverable location', value: null, hint: 'unknown — mount point not stated' },
+  { label: 'key decision refs', value: '—' },
+  { label: 'dead ends', value: 'direct USB port browned out — used the powered hub' },
+  { label: 'context to resume', value: 'hub must stay on its own PSU' },
+  { label: 'known issues (no task)', value: '—' },
+];
+
+function TpHandoffSheet({ h, setH, onComplete }) {
+  const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 56, background: 'rgba(23,33,30,0.35)', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }} onClick={() => setH(null)}>
+      <div className="tp-rise" onClick={(e) => e.stopPropagation()}
+        style={{ background: 'var(--surface-page)', borderRadius: 'var(--radius-lg) var(--radius-lg) 0 0', padding: '18px 16px 24px', maxHeight: '80%', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>handoff — {h.task.id} blocks {h.task.blocking}</span>
+          <button onClick={() => setH(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-lg)', cursor: 'pointer', padding: 0 }}>×</button>
+        </div>
+        <div style={{ fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', marginBottom: 12 }}>{h.task.title}</div>
+        {!h.drafted && (
+          <>
+            <Input multiline rows={3} placeholder="how did it go? dump it — voice or text, the LLM structures it" value={h.dump} onChange={(e) => setH({ ...h, dump: e.target.value })} />
+            <div style={{ height: 10 }}></div>
+            <Button variant="primary" size="lg" full disabled={!h.dump.trim()} onClick={() => setH({ ...h, drafted: true })}>Draft handoff</Button>
+            <Button variant="ghost" size="lg" full onClick={() => onComplete(false)} style={{ marginTop: 8 }}>Skip handoff — complete without</Button>
+          </>
+        )}
+        {h.drafted && (
+          <>
+            <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', padding: '12px 14px', marginBottom: 12 }}>
+              {TP_HANDOFF_FIELDS.map((f) => (
+                <div key={f.label} style={{ display: 'flex', gap: 10, alignItems: 'baseline', marginBottom: 6 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', width: 130, flexShrink: 0 }}>{f.label}</span>
+                  {f.value
+                    ? <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-body)' }}>{f.value}</span>
+                    : <span style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)' }}>⚠ {f.hint}</span>}
+                </div>
+              ))}
+            </div>
+            <Button variant="primary" size="lg" full onClick={() => onComplete(true)}>Complete with handoff</Button>
+            <Button variant="ghost" size="lg" full onClick={() => onComplete(false)} style={{ marginTop: 8 }}>Skip handoff — explicit</Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const { Toast } = window.TidepoolDesignSystem_8a0ead;
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -125,6 +217,10 @@ function App() {
   const [toast, setToast] = React.useState(null);
   const [committed, setCommitted] = React.useState(false);
   const [wash, setWash] = React.useState(null);
+  const [notif, setNotif] = React.useState(false);   // simulated push banner
+  const [pushQ, setPushQ] = React.useState(null);    // single-question overlay
+  const [handoff, setHandoff] = React.useState(null); // human-task handoff assist sheet
+  const unreadCount = data.log.filter((l) => l.unread).length;
 
   // Cover the screen with the tide, apply the state change while covered, drain.
   const runWash = (label, emoji, apply) => {
@@ -158,7 +254,7 @@ function App() {
 
   const say = (kind, msg, detail) => setToast({ kind, msg, detail });
 
-  const commitTriage = (answers, objections) => {
+  const commitTriage = (answers, objections, scratch = []) => {
     const unblocked = Object.entries(answers).filter(([, a]) => a).map(([qid]) => {
       const q = data.questions.find((x) => x.id === qid);
       return q.parent ? { id: q.parent, title: q.title, assignee: q.agent, frontInserted: true, flash: true } : null;
@@ -166,17 +262,24 @@ function App() {
     const repairs = Object.keys(objections).length
       ? [{ id: 'tp-0151', title: `repair task — ${Object.keys(objections).length} objection${Object.keys(objections).length > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true, flash: true }]
       : [];
+    // scratchpad lines triaged at commit: task → queue tail, meta → meta-review task, drop → discarded
+    const scratchTasks = scratch.filter((s) => s.kind !== 'drop').map((s, i) => ({
+      id: `tp-016${i}`,
+      title: s.kind === 'meta' ? `meta-review: ${s.text}` : s.text,
+      assignee: s.kind === 'meta' ? 'anemone' : 'reef-crab',
+    }));
     runWash('The tide is going out.', t.commitEmoji, () => {
       setData({
         ...data,
         questions: [],
         log: data.log.map((l) => ({ ...l, unread: false })),
-        queue: [...unblocked, ...repairs, ...data.queue],
+        queue: [...unblocked, ...repairs, ...data.queue, ...scratchTasks],
       });
       setCommitted(true);
       setTab('queue');
       clearFlash();
-      say('success', 'triage committed — one transaction', `${unblocked.length + repairs.length} front-inserted · immediate poll fired`);
+      say('success', 'triage committed — one transaction',
+        `${unblocked.length + repairs.length} front-inserted${scratchTasks.length ? ` · ${scratchTasks.length} from scratchpad` : ''} · immediate poll fired`);
     });
   };
 
@@ -192,10 +295,31 @@ function App() {
     say('success', 'moved to front of queue', id);
   };
 
+  // Human-task completion. Isolated tasks close one-tap; a task blocking AI work
+  // routes through the handoff assist sheet first (skip is possible but explicit).
+  const finishHuman = (task, withDoc) => {
+    setData((d) => ({ ...d, humanTasks: d.humanTasks.filter((x) => x.id !== task.id) }));
+    setHandoff(null);
+    say('success',
+      task.blocking ? `done — ${task.blocking} unblocked, immediate poll fired` : 'done',
+      task.blocking ? (withDoc ? `${task.id} · handoff attached` : `${task.id} · handoff skipped`) : task.id);
+  };
   const doneHuman = (id) => {
     const t = data.humanTasks.find((x) => x.id === id);
-    setData({ ...data, humanTasks: data.humanTasks.filter((x) => x.id !== id) });
-    say('success', t.blocking ? `done — ${t.blocking} unblocked, immediate poll fired` : 'done', id);
+    if (t.blocking) setHandoff({ task: t, dump: '', drafted: false });
+    else finishHuman(t, false);
+  };
+
+  // Single-question answer flow — what a daytime push deep-links to.
+  const answerPush = () => {
+    setData((d) => {
+      const target = d.queue.find((x) => x.id === d.pushQuestion.parent);
+      if (!target) return d;
+      return { ...d, queue: [{ ...target, frontInserted: true, flash: true }, ...d.queue.filter((x) => x.id !== target.id)] };
+    });
+    setPushQ(null);
+    clearFlash();
+    say('success', 'answered — parent to front of queue', `${data.pushQuestion.parent} · immediate poll fired`);
   };
 
   const register = () => {
@@ -209,16 +333,19 @@ function App() {
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-page)', boxShadow: '0 0 40px rgba(23,33,30,0.12)', position: 'relative', overflow: 'hidden' }}>
       {wash && <TpTideWash label={wash.label} emoji={wash.emoji} duration={t.washMs} />}
+      {notif && <TpPushBanner q={data.pushQuestion} onOpen={() => { setNotif(false); setPushQ(data.pushQuestion); }} onDismiss={() => setNotif(false)} />}
+      {pushQ && <TpSingleQuestion q={pushQ} onAnswer={answerPush} onClose={() => setPushQ(null)} />}
+      {handoff && <TpHandoffSheet h={handoff} setH={setHandoff} onComplete={(withDoc) => finishHuman(handoff.task, withDoc)} />}
       <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 16px 10px', borderBottom: '1px solid var(--border-hairline)', position: 'sticky', top: 0, background: 'var(--surface-page)', zIndex: 10 }}>
         <span style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 22, color: 'var(--tide-5)' }}>tidepool</span>
         <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
-          {committed ? 'slot busy · queue ' + data.queue.length : '3 questions, 4 new log entries'}
+          {committed ? 'slot busy · queue ' + data.queue.length : `${data.questions.length} questions, ${unreadCount} new log entries`}
         </span>
       </header>
 
       <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
-        {tab === 'triage' && (data.questions.length
+        {tab === 'triage' && (data.questions.length || unreadCount
           ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={(q, movedId, pos) => { setData({ ...data, queue: q }); say('info', 'queue reordered', `${movedId} → position ${pos}`); }} onFront={moveFront} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
@@ -226,7 +353,7 @@ function App() {
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills tonight, as tasks come in.</div>
             </div>)}
         {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · open task view`)} />}
-        {tab === 'queue' && <QueueScreen data={data} onFront={moveFront} onDoneHuman={doneHuman} onReorder={(q, movedId, pos) => { setData({ ...data, queue: q }); say('info', 'queue reordered', `${movedId} → position ${pos}`); }} />}
+        {tab === 'queue' && <QueueScreen data={data} slotState={t.slotState} wsAlert={t.wsAlert} onFront={moveFront} onDoneHuman={doneHuman} onReorder={(q, movedId, pos) => { setData({ ...data, queue: q }); say('info', 'queue reordered', `${movedId} → position ${pos}`); }} />}
         {tab === 'register' && <RegisterScreen data={data} onRegister={register} />}
         </div>
       </main>
@@ -258,6 +385,15 @@ function App() {
       </nav>
 
       <TweaksPanel>
+        <TweakSection label="States" />
+        <TweakSelect label="Slot state" value={t.slotState} options={['busy', 'free', 'warning', 'limit']} onChange={(v) => setTweak('slotState', v)} />
+        <TweakToggle label="Workspace alert" value={t.wsAlert} onChange={(v) => setTweak('wsAlert', v)} />
+        <TweakRow label="Push">
+          <button onClick={() => setNotif(true)}
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', cursor: 'pointer', color: 'var(--tide-4)', background: 'var(--tide-1)', border: 'none', borderRadius: 'var(--radius-full)', padding: '5px 12px' }}>
+            simulate question push
+          </button>
+        </TweakRow>
         <TweakSection label="Motion" />
         <TweakToggle label="Tide wash" value={t.washEnabled} onChange={(v) => setTweak('washEnabled', v)} />
         <TweakSlider label="Wash length" value={t.washMs} min={600} max={3000} step={50} unit="ms" onChange={(v) => setTweak('washMs', v)} />
