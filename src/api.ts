@@ -2,7 +2,7 @@ import { Router, json } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { listEvents } from "./events.js";
+import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import {
   answerQuestion,
   DomainError,
@@ -33,6 +33,10 @@ const moveTaskSchema = z.object({
 
 const answerSchema = z.object({
   answer: z.string().min(1),
+});
+
+const cursorSchema = z.object({
+  last_read: z.number().int().nonnegative(),
 });
 
 function queueHeadId(db: Db): string | null {
@@ -123,6 +127,21 @@ export function createApiRouter(
       }
       throw err;
     }
+  });
+
+  // the decision log: events narrowed to human-facing kinds, oldest first,
+  // plus the human's read position
+  router.get("/log", (_req, res) => {
+    res.json({ entries: listLog(db), cursor: getLogCursor(db) });
+  });
+
+  router.post("/log/cursor", (req, res) => {
+    const parsed = cursorSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    res.json({ cursor: advanceLogCursor(db, parsed.data.last_read) });
   });
 
   router.get("/tasks", (_req, res) => {

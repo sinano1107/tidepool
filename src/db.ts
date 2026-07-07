@@ -37,6 +37,14 @@ export function openDb(path: string): Db {
       created_at TEXT NOT NULL
     );
 
+    -- the human's read position in the decision log (the log itself is the
+    -- events table, never its own entity): one row, the last-read event id
+    CREATE TABLE IF NOT EXISTS log_cursor (
+      id        INTEGER PRIMARY KEY CHECK (id = 1),
+      last_read INTEGER NOT NULL
+    );
+    INSERT OR IGNORE INTO log_cursor (id, last_read) VALUES (1, 0);
+
     -- append-only is enforced by structure, not convention
     CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
       BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;

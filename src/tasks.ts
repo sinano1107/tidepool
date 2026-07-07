@@ -53,6 +53,8 @@ export interface RegisterTaskInput {
   completion_criteria: string;
   parent_id?: string;
   question?: QuestionSpec;
+  /** Decision-log entry (event id) this task rests on — set by decompose. */
+  based_on_decision?: number;
 }
 
 /** Every question carries 2-4 options plus a recommendation among them,
@@ -119,7 +121,14 @@ export function registerTask(
     appendEvent(db, {
       taskId: task.id,
       workerId,
-      payload: { kind: "task_registered", type: task.type, title: task.title },
+      payload: {
+        kind: "task_registered",
+        type: task.type,
+        title: task.title,
+        ...(input.based_on_decision !== undefined && {
+          based_on_decision: input.based_on_decision,
+        }),
+      },
       at: now,
     });
   })();
@@ -185,6 +194,11 @@ export function completeTask(
       );
     }
   }
+  // completion criteria cover the whole tree: a parent completes only after
+  // every child settles (復帰型 — the resumed session integrates, then completes)
+  if (hasUnfinishedChildren(db, task.id)) {
+    throw new DomainError("a task with unfinished children cannot complete");
+  }
   const rendered = handoff ? renderHandoffMarkdown(handoff) : "";
   const handoffDoc = rendered === "" ? null : rendered;
   db.transaction(() => {
@@ -195,7 +209,11 @@ export function completeTask(
     appendEvent(db, {
       taskId: task.id,
       workerId,
-      payload: { kind: "task_completed", handoff_present: handoffDoc !== null },
+      payload: {
+        kind: "task_completed",
+        handoff_present: handoffDoc !== null,
+        result: handoff?.outcome?.trim() || null,
+      },
       at: now,
     });
   })();
@@ -326,6 +344,68 @@ export function answerQuestion(
     }
   })();
   return { question: getTask(db, question.id)!, parentUnblocked };
+}
+
+/** Record an in-authority decision as one log line and move on. The log is the
+ *  events table itself (human-facing kinds), never a separate entity. */
+export function logDecision(
+  db: Db,
+  task: Task,
+  line: string,
+  workerId: string,
+  now: Date,
+): number {
+  return appendEvent(db, {
+    taskId: task.id,
+    workerId,
+    payload: { kind: "decision_logged", line },
+    at: now,
+  });
+}
+
+export interface ChildSpec {
+  title: string;
+  purpose: string;
+  completion_criteria: string;
+}
+
+export interface DecomposeInput {
+  reason: string;
+  children: ChildSpec[];
+}
+
+/** Decomposition: one decision splits the remaining work into child tasks.
+ *  One atomic call — the reason lands as a decision-log entry, the children
+ *  join the queue tail in order, and the parent returns to `todo` (derived
+ *  blocked) until every child is done, when it comes back to the queue head
+ *  for integration and completes for real (the 復帰型 model: completion is
+ *  recorded only once the whole criteria are actually met). */
+export function decomposeTask(
+  db: Db,
+  parent: Task,
+  input: DecomposeInput,
+  workerId: string,
+  now: Date,
+): Task[] {
+  if (input.children.length === 0) {
+    throw new DomainError("a decomposition carries at least one child task");
+  }
+  const children: Task[] = [];
+  db.transaction(() => {
+    const decisionId = logDecision(db, parent, input.reason, workerId, now);
+    for (const child of input.children) {
+      children.push(
+        registerTask(
+          db,
+          { type: "work", ...child, parent_id: parent.id, based_on_decision: decisionId },
+          now,
+          workerId,
+        ),
+      );
+    }
+    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
+  })();
+  return children;
 }
 
 /** The one SQL shape of the derived-blocked rule (CONTEXT.md): a child not

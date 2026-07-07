@@ -79,6 +79,37 @@
     border: none; border-radius: 999px; cursor: pointer;
     background: color-mix(in srgb, var(--rock) 18%, transparent); color: inherit;
   }
+  /* decision log: a skim view over the event stream, newest first */
+  .loghead { display: flex; align-items: baseline; gap: 8px; margin: 22px 0 8px; }
+  .loghead h2 { font-size: 0.95rem; margin: 0; }
+  .loghead .unread-count {
+    font-family: var(--mono); font-size: 0.65rem; color: var(--tide);
+  }
+  .loghead button {
+    font: inherit; font-size: 0.7rem; padding: 2px 10px; margin-left: auto;
+    border: none; border-radius: 999px; cursor: pointer;
+    background: color-mix(in srgb, var(--rock) 18%, transparent); color: inherit;
+  }
+  #log { display: flex; flex-direction: column; gap: 4px; }
+  .entry {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 6px 10px; border-radius: 6px; font-size: 0.8rem;
+    border-left: 2px solid transparent;
+  }
+  .entry .kind {
+    font-family: var(--mono); font-size: 0.6rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted); flex-shrink: 0; min-width: 3.2em;
+  }
+  .entry .line { flex: 1; }
+  .entry .who { font-family: var(--mono); font-size: 0.65rem; color: var(--muted); flex-shrink: 0; }
+  /* a completion reads apart from an ordinary decision line at a glance */
+  .entry.completion {
+    border-left-color: var(--tide);
+    background: color-mix(in srgb, var(--tide) 8%, transparent);
+  }
+  .entry.completion .kind { color: var(--tide); }
+  .entry.unread { font-weight: 600; }
+  .entry.unread::before { content: "●"; color: var(--tide); font-size: 0.5rem; align-self: center; }
 </style>
 </head>
 <body>
@@ -88,15 +119,23 @@
 <div class="slotbar" id="slot-bar"></div>
 <div id="question"></div>
 <div id="queue"></div>
+<div class="loghead">
+  <h2>Log</h2>
+  <span class="unread-count" id="log-unread"></span>
+  <button id="log-mark-read" hidden>mark read</button>
+</div>
+<div id="log"><p class="meta">no entries yet</p></div>
 <script>
   const queueEl = document.getElementById("queue");
   const questionEl = document.getElementById("question");
   let todos = [];
   let questions = [];
+  let log = { entries: [], cursor: 0 };
   let dragging = false;
 
   async function load() {
     if (dragging) return; // a re-render mid-drag would yank the row out from under the pointer
+    log = await fetch("/api/log").then((r) => r.json());
     const all = await fetch("/api/tasks").then((r) => r.json());
     // questions are human tasks answered here, not queue rows for the slot
     todos = all.filter((t) => t.status === "todo" && t.type !== "question");
@@ -168,8 +207,55 @@
     questionEl.append(card);
   }
 
+  async function markLogRead() {
+    const latest = log.entries.at(-1);
+    if (!latest) return;
+    await fetch("/api/log/cursor", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ last_read: latest.id }),
+    });
+    await load();
+  }
+  document.getElementById("log-mark-read").addEventListener("click", markLogRead);
+
+  // newest first for skimming; unread = beyond the cursor; a completion entry
+  // reads apart from an ordinary decision line
+  function renderLog() {
+    const logEl = document.getElementById("log");
+    const unreadEl = document.getElementById("log-unread");
+    const markEl = document.getElementById("log-mark-read");
+    logEl.innerHTML = "";
+    if (log.entries.length === 0) {
+      logEl.innerHTML = '<p class="meta">no entries yet</p>';
+      unreadEl.textContent = "";
+      markEl.hidden = true;
+      return;
+    }
+    const unread = log.entries.filter((e) => e.id > log.cursor).length;
+    unreadEl.textContent = unread ? `${unread} unread` : "";
+    markEl.hidden = unread === 0;
+    for (const e of [...log.entries].reverse()) {
+      const row = document.createElement("div");
+      const done = e.kind === "task_completed";
+      row.className = "entry" + (done ? " completion" : "") + (e.id > log.cursor ? " unread" : "");
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = done ? "done" : "note";
+      const line = document.createElement("span");
+      line.className = "line";
+      line.textContent = done ? (e.payload.result ?? "(no outcome recorded)") : e.payload.line;
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = e.worker_id;
+      row.append(kind, line, who);
+      logEl.append(row);
+    }
+  }
+
   function render() {
     renderQuestion();
+    renderLog();
     queueEl.innerHTML = "";
     if (todos.length === 0) {
       queueEl.innerHTML = '<p class="meta">queue is empty</p>';

@@ -7,11 +7,13 @@ import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
 import {
   completeTask,
+  decomposeTask,
   DomainError,
   escalateTask,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
+  logDecision,
   type Task,
 } from "./tasks.js";
 
@@ -108,6 +110,54 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         );
         deps.slot.release();
         return { id: done.id, status: done.status };
+      }),
+  );
+
+  server.registerTool(
+    "log_decision",
+    {
+      description:
+        "Record an in-authority decision as one log line and keep working. " +
+        "The line lands in the human-skimmed decision log.",
+      inputSchema: { line: z.string().min(1) },
+    },
+    async ({ line }) =>
+      runVerb(deps, attributedTaskId, (task) => {
+        logDecision(deps.db, task, line, task.assignee ?? HUMAN_WORKER_ID, deps.clock.now());
+        return { logged: true };
+      }),
+  );
+
+  server.registerTool(
+    "decompose",
+    {
+      description:
+        "Split the remaining work into child tasks in one decision: records the " +
+        "reason in the decision log, queues the children at the tail, blocks the " +
+        "current task until they all finish, and frees the slot. The task returns " +
+        "to the queue head afterwards for integration and real completion.",
+      inputSchema: {
+        reason: z.string().min(1),
+        children: z.array(
+          z.object({
+            title: z.string().min(1),
+            purpose: z.string().min(1),
+            completion_criteria: z.string().min(1),
+          }),
+        ),
+      },
+    },
+    async (input) =>
+      runVerb(deps, attributedTaskId, (task) => {
+        const children = decomposeTask(
+          deps.db,
+          task,
+          input,
+          task.assignee ?? HUMAN_WORKER_ID,
+          deps.clock.now(),
+        );
+        deps.slot.release();
+        return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),
   );
 
