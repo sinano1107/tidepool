@@ -31,6 +31,12 @@
       "skillPath": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
       "computedHash": "a7d798f49081ea5b2606e8bcafa3bc2b34177cfaa24d71c2ddf2d433f4006a4a"
     },
+    "to-issues": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/to-issues/SKILL.md",
+      "computedHash": "4406ded5e0fb356b9ac8be777270f62d3c5d206a0bc848aaadb19919702a1892"
+    },
     "to-prd": {
       "source": "mattpocock/skills",
       "sourceType": "github",
