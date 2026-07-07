@@ -62,6 +62,21 @@ function runVerb(
   }
 }
 
+/** Verbs that end the slot session (complete, decompose, escalate): run the
+ *  domain verb attributed to the slot worker, then free the slot. A domain
+ *  error keeps the slot — the session continues. */
+function runReleasingVerb(
+  deps: McpDeps,
+  attributedTaskId: string | null,
+  verb: (task: Task, workerId: string, now: Date) => unknown,
+) {
+  return runVerb(deps, attributedTaskId, (task) => {
+    const result = verb(task, task.assignee ?? HUMAN_WORKER_ID, deps.clock.now());
+    deps.slot.release();
+    return result;
+  });
+}
+
 function taskContext(task: Task) {
   return {
     id: task.id,
@@ -100,15 +115,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async ({ handoff }) =>
-      runVerb(deps, attributedTaskId, (task) => {
-        const done = completeTask(
-          deps.db,
-          task,
-          handoff,
-          task.assignee ?? HUMAN_WORKER_ID,
-          deps.clock.now(),
-        );
-        deps.slot.release();
+      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        const done = completeTask(deps.db, task, handoff, workerId, now);
         return { id: done.id, status: done.status };
       }),
   );
@@ -134,8 +142,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       description:
         "Split the remaining work into child tasks in one decision: records the " +
         "reason in the decision log, queues the children at the tail, blocks the " +
-        "current task until they all finish, and frees the slot. The task returns " +
-        "to the queue head afterwards for integration and real completion.",
+        "current task until they all finish, and frees the slot. Once every child " +
+        "settles, the task becomes pickable again in normal queue order to " +
+        "integrate and complete for real.",
       inputSchema: {
         reason: z.string().min(1),
         children: z.array(
@@ -148,15 +157,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async (input) =>
-      runVerb(deps, attributedTaskId, (task) => {
-        const children = decomposeTask(
-          deps.db,
-          task,
-          input,
-          task.assignee ?? HUMAN_WORKER_ID,
-          deps.clock.now(),
-        );
-        deps.slot.release();
+      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        const children = decomposeTask(deps.db, task, input, workerId, now);
         return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),
   );
@@ -178,15 +180,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async (input) =>
-      runVerb(deps, attributedTaskId, (task) => {
-        const question = escalateTask(
-          deps.db,
-          task,
-          input,
-          task.assignee ?? HUMAN_WORKER_ID,
-          deps.clock.now(),
-        );
-        deps.slot.release();
+      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        const question = escalateTask(deps.db, task, input, workerId, now);
         return { question_id: question.id, parent_status: "blocked" };
       }),
   );

@@ -377,9 +377,9 @@ export interface DecomposeInput {
 /** Decomposition: one decision splits the remaining work into child tasks.
  *  One atomic call — the reason lands as a decision-log entry, the children
  *  join the queue tail in order, and the parent returns to `todo` (derived
- *  blocked) until every child is done, when it comes back to the queue head
- *  for integration and completes for real (the 復帰型 model: completion is
- *  recorded only once the whole criteria are actually met). */
+ *  blocked) until every child is done. It then becomes pickable again in
+ *  plain queue order — no head jump (ADR 0003) — to integrate and complete
+ *  for real: completion is recorded only once the whole criteria are met. */
 export function decomposeTask(
   db: Db,
   parent: Task,
