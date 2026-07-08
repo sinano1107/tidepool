@@ -29,7 +29,7 @@ export async function bootTidepool(existingDir?: string): Promise<Tidepool> {
     dbPath: join(dir, "board.sqlite"),
     port: 0,
     clock,
-    worker,
+    worker: () => worker,
   });
   let stopped = false;
   const stopServer = async () => {

@@ -12,14 +12,14 @@ import { autoCommitStaleTriage } from "./triage.js";
 import type { WorkerAdapter } from "./worker.js";
 
 /** The real adapter needs the board's own db and clock, which are created in
- *  here — so the worker option also accepts a factory fed with them. */
+ *  here — so the worker arrives as a factory fed with them. */
 export type WorkerFactory = (deps: { db: Db; clock: Clock }) => WorkerAdapter;
 
 export interface ServerOptions {
   dbPath: string;
   port: number;
   clock: Clock;
-  worker: WorkerAdapter | WorkerFactory;
+  worker: WorkerFactory;
 }
 
 export interface TidepoolServer {
@@ -38,10 +38,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     .get() as { id: string } | undefined;
   if (interrupted) slot.occupy(interrupted.id);
   const app = express();
-  const worker =
-    typeof options.worker === "function"
-      ? options.worker({ db, clock: options.clock })
-      : options.worker;
+  const worker = options.worker({ db, clock: options.clock });
   const scheduler = startScheduler({ db, clock: options.clock, slot, worker });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger

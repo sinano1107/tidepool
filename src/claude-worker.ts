@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { loadRegistry } from "./registry.js";
+import { loadRegistry, type Registry } from "./registry.js";
 import type { Task } from "./tasks.js";
 import type { WorkerAdapter } from "./worker.js";
 
@@ -32,8 +32,17 @@ export interface ClaudeWorkerOptions {
   spawn?: SpawnFn;
 }
 
-const defaultSpawn: SpawnFn = (command, args, opts) =>
-  nodeSpawn(command, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "inherit"] });
+const defaultSpawn: SpawnFn = (command, args, opts) => {
+  const child = nodeSpawn(command, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "inherit"] });
+  // an unlistened "error" (e.g. the claude binary missing) would crash the
+  // whole board process; slot recovery for a dead session is the watchdog
+  // slice (#9), so here we only keep the failure visible
+  child.on("error", (err) => console.error(`[worker] failed to spawn ${command}:`, err));
+  child.on("exit", (code, signal) => {
+    if (code !== 0) console.error(`[worker] ${command} exited with ${signal ?? code}`);
+  });
+  return child;
+};
 
 /** The real WorkerAdapter: spawns a headless Claude Code session per task.
  *  Vendor knowledge (spawn recipe, stream-json, agent definition format) stays
@@ -47,17 +56,27 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.id = options.agent;
     this.options = options;
     this.spawn = options.spawn ?? defaultSpawn;
+    // fail at boot, not at first pickup: a misconfigured registry must refuse
+    // to start the board rather than wedge the first task
+    this.resolve(loadRegistry(options.registryDir));
   }
 
-  start(task: Task): void {
-    // loaded per pickup so a registry update takes effect on the next task
-    const registry = loadRegistry(this.options.registryDir);
+  /** Resolve this worker's agent, authority profile and workspace against a
+   *  loaded registry, or throw the config mistake by name. */
+  private resolve(registry: Registry) {
     const workspace = registry.workspaces[this.options.workspace];
     if (!workspace) throw new Error(`unknown workspace: ${this.options.workspace}`);
     const agent = registry.agents[this.options.agent];
     if (!agent) throw new Error(`unknown agent: ${this.options.agent}`);
     const profile = registry.authority[agent.authority];
     if (!profile) throw new Error(`unknown authority profile: ${agent.authority}`);
+    return { workspace, agent, profile };
+  }
+
+  start(task: Task): void {
+    // loaded per pickup so a registry update takes effect on the next task
+    const registry = loadRegistry(this.options.registryDir);
+    const { workspace, agent, profile } = this.resolve(registry);
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
     const mcpConfigPath = join(this.options.logDir, `${task.id}.mcp.json`);
@@ -104,7 +123,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       payload: {
         kind: "worker_spawned",
         registry_commit: registry.commit,
-        agent_version: agent.version,
+        definition_version: agent.version,
       },
       at: this.options.clock.now(),
     });

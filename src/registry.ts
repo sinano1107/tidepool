@@ -21,13 +21,15 @@ export interface AuthorityProfile {
   guidance: string;
 }
 
+const workspaceEntrySchema = z.object({
+  path: z.string(),
+  repo: z.string().optional(),
+  notes: z.string().optional(),
+});
+
 /** A workspace entry in `workspaces.yaml`: where tasks run (name → path on
  *  the host), plus provenance for setting the checkout up by hand. */
-export interface WorkspaceEntry {
-  path: string;
-  repo?: string;
-  notes?: string;
-}
+export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>;
 
 export interface Registry {
   /** HEAD commit hash of the clone — the provenance stamp recorded on spawn. */
@@ -60,10 +62,7 @@ const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
 });
 
-const workspacesSchema = z.record(
-  z.string(),
-  z.object({ path: z.string(), repo: z.string().optional(), notes: z.string().optional() }),
-);
+const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 
 function parseAuthorityFile(path: string): AuthorityProfile {
   const name = basename(path, ".yaml");

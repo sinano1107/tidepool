@@ -145,6 +145,26 @@ describe("ClaudeCodeWorker", () => {
     });
   });
 
+  it("設定ミス(未知の workspace 名)は boot 時のコンストラクタで即座に失敗する", async () => {
+    // a misconfigured registry must refuse to start the board, not wedge the
+    // first task at pickup time
+    const registryDir = await makeRegistry();
+    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    expect(
+      () =>
+        new ClaudeCodeWorker({
+          db: openDb(":memory:"),
+          clock: new FakeClock(),
+          registryDir,
+          agent: "deckhand",
+          workspace: "no-such-workspace",
+          mcpUrl: "http://127.0.0.1:4589/mcp",
+          logDir,
+          spawn: recordingSpawn().spawn,
+        }),
+    ).toThrow(/unknown workspace/);
+  });
+
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {
     const { start, db, registryDir } = await makeWorker();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: registryDir })
@@ -157,7 +177,7 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned!.payload).toMatchObject({
       kind: "worker_spawned",
       registry_commit: head,
-      agent_version: "0.3.1",
+      definition_version: "0.3.1",
     });
   });
 });

@@ -16,11 +16,12 @@ class LoggingWorker implements WorkerAdapter {
 
 const port = Number(process.env.PORT ?? 4589);
 
-/** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository;
- *  setting it swaps the logging placeholder for the real Claude Code worker. */
-function makeWorker(): WorkerAdapter | WorkerFactory {
+/** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository
+ *  (`npm run start:live` supplies the conventional one); setting it swaps the
+ *  logging placeholder for the real Claude Code worker. */
+function workerFactory(): WorkerFactory {
   const registryDir = process.env.TIDEPOOL_REGISTRY;
-  if (!registryDir) return new LoggingWorker();
+  if (!registryDir) return () => new LoggingWorker();
   const logDir = process.env.TIDEPOOL_WORKER_LOGS ?? "worker-logs";
   mkdirSync(logDir, { recursive: true });
   return ({ db, clock }) =>
@@ -39,6 +40,6 @@ const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
   clock: new SystemClock(),
-  worker: makeWorker(),
+  worker: workerFactory(),
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);

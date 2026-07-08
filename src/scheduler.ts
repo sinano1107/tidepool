@@ -33,7 +33,14 @@ export function startScheduler(deps: {
     if (!head) return;
     const picked = pickupTask(db, head, worker.id, clock.now());
     slot.occupy(picked.id);
-    worker.start(picked);
+    try {
+      worker.start(picked);
+    } catch (err) {
+      // a failed start may not crash the board. The task keeps the slot — the
+      // same deliberate wedge as a restart-interrupted task — until the
+      // watchdog slice (#9) brings the escalation path.
+      console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
+    }
   }
 
   const cancel = clock.setInterval(poll, HOURLY);
