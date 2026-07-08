@@ -14,6 +14,11 @@ export interface AgentDefinition {
   /** Base-AI model for this agent (CONTEXT.md: agent = base AI + skills +
    *  instructions + authority profile). Absent → the adapter's default. */
   model?: string;
+  /** Reasoning effort for this agent's sessions. Absent → the adapter's
+   *  default. Free string here — the closed set of valid values (if any)
+   *  is vendor knowledge that belongs to the adapter, not this registry
+   *  (ADR 0005). */
+  effort?: string;
   systemPrompt: string;
 }
 
@@ -46,6 +51,7 @@ const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
   model: z.string().optional(),
+  effort: z.string().optional(),
 });
 
 function parseAgentFile(path: string): AgentDefinition {
@@ -62,6 +68,7 @@ function parseAgentFile(path: string): AgentDefinition {
     version: meta.version,
     authority: meta.authority,
     model: meta.model,
+    effort: meta.effort,
     systemPrompt: body.trim(),
   };
 }

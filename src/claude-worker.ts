@@ -16,6 +16,11 @@ export type SpawnFn = (
   opts: { cwd: string },
 ) => { stdout: NodeJS.ReadableStream };
 
+// the CLI defines this as a closed 5-value set; unlike --model (an open,
+// ever-growing set of aliases/full names) it's safe and worth validating
+// here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
+const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+
 export interface ClaudeWorkerOptions {
   db: Db;
   clock: Clock;
@@ -74,6 +79,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     if (!agent) throw new Error(`unknown agent: ${this.options.agent}`);
     const profile = registry.authority[agent.authority];
     if (!profile) throw new Error(`unknown authority profile: ${agent.authority}`);
+    if (agent.effort !== undefined && !EFFORT_LEVELS.includes(agent.effort)) {
+      throw new Error(`unknown effort level: ${agent.effort}`);
+    }
     return { workspace, agent, profile };
   }
 
@@ -108,10 +116,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // enforced by the profile guidance and the board's domain verbs
         "--permission-mode",
         "auto",
-        // always explicit: the CLI remembers the host's last model choice, and
-        // a /model flip in some unrelated directory must not leak into runs
+        // always explicit: the CLI remembers the host's last model/effort
+        // choice, and a flip in some unrelated directory must not leak into
+        // runs (ADR 0005)
         "--model",
         agent.model ?? "sonnet",
+        "--effort",
+        agent.effort ?? "medium",
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",

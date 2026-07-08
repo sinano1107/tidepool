@@ -191,6 +191,40 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args.join(" ")).toContain("--model opus");
   });
 
+  it("effort は常に明示的に渡す: frontmatter に無ければ medium(ホストの effort 設定を漏らさない)", async () => {
+    const { start, calls } = await makeWorker();
+    start();
+    expect(calls[0]!.args.join(" ")).toContain("--effort medium");
+  });
+
+  it("frontmatter に effort があればそれを使う", async () => {
+    const { start, calls } = await makeWorker({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: high\n---\nYou are Deckhand.\n`,
+    });
+    start();
+    expect(calls[0]!.args.join(" ")).toContain("--effort high");
+  });
+
+  it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する)", async () => {
+    const registryDir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: super-fast\n---\nYou are Deckhand.\n`,
+    });
+    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    expect(
+      () =>
+        new ClaudeCodeWorker({
+          db: openDb(":memory:"),
+          clock: new FakeClock(),
+          registryDir,
+          agent: "deckhand",
+          workspace: "tidepool",
+          mcpUrl: "http://127.0.0.1:4589/mcp",
+          logDir,
+          spawn: recordingSpawn().spawn,
+        }),
+    ).toThrow(/unknown effort level/);
+  });
+
   it("設定ミス(未知の workspace 名)は boot 時のコンストラクタで即座に失敗する", async () => {
     // a misconfigured registry must refuse to start the board, not wedge the
     // first task at pickup time

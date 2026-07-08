@@ -24,6 +24,15 @@ describe("loadRegistry", () => {
     expect(loadRegistry(without).agents.deckhand!.model).toBeUndefined();
   });
 
+  it("frontmatter の effort は optional: あれば読み、なければ undefined", async () => {
+    const withEffort = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: high\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(withEffort).agents.deckhand!.effort).toBe("high");
+    const without = await makeRegistry();
+    expect(loadRegistry(without).agents.deckhand!.effort).toBeUndefined();
+  });
+
   it("authority プロファイルを読み込む: guidance の prose が取れる", async () => {
     const dir = await makeRegistry();
     const registry = loadRegistry(dir);
