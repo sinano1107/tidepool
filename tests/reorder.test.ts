@@ -49,7 +49,7 @@ it("moving a task to the head (after: null) reorders the queue, surviving a rest
 
   // the order is a fact on the board, not in the process
   await t.stopServer();
-  t = await bootTidepool(t.dir);
+  t = await bootTidepool({ dir: t.dir });
   expect(queueIds((await api(t.baseUrl, "GET", "/api/tasks")).json)).toEqual([c.id, a.id, b.id]);
 });
 

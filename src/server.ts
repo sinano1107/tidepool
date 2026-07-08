@@ -20,6 +20,10 @@ export interface ServerOptions {
   port: number;
   clock: Clock;
   worker: WorkerFactory;
+  /** The board's workspace: a git checkout the branch discipline and the
+   *  slot-release tree rule act on. Absent → a workspaceless board (e.g. a
+   *  human-driven one): no branch rule runs. */
+  workspace?: { name: string; path: string };
 }
 
 export interface TidepoolServer {
@@ -39,14 +43,20 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   if (interrupted) slot.occupy(interrupted.id);
   const app = express();
   const worker = options.worker({ db, clock: options.clock });
-  const scheduler = startScheduler({ db, clock: options.clock, slot, worker });
+  const scheduler = startScheduler({
+    db,
+    clock: options.clock,
+    slot,
+    worker,
+    workspace: options.workspace,
+  });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
   const stopTriageWatchdog = options.clock.setInterval(() => {
     if (autoCommitStaleTriage(db, options.clock.now())) scheduler.pollNow();
   }, 60 * 1000);
   app.use("/api", createApiRouter(db, options.clock, () => scheduler.pollNow()));
-  app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock }));
+  app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock, workspace: options.workspace }));
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   app.use(express.static(join(root, "public")));
   // the WebUI is the design-synced UI kit: screens come straight from the kit

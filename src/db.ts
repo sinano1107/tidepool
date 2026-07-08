@@ -73,6 +73,14 @@ export function openDb(path: string): Db {
       line       TEXT NOT NULL
     );
 
+    -- a workspace the slot-release tree rule failed on (conflict, broken
+    -- checkout): marked needs-human, its tasks stay out of the slot until a
+    -- human repairs it (issue #8)
+    CREATE TABLE IF NOT EXISTS workspace_state (
+      name        TEXT PRIMARY KEY,
+      needs_human INTEGER NOT NULL DEFAULT 0
+    );
+
     -- append-only is enforced by structure, not convention
     CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
       BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;

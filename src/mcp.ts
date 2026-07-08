@@ -16,11 +16,13 @@ import {
   logDecision,
   type Task,
 } from "./tasks.js";
+import { quarantineWorkspace, releaseTree, type WorkspaceConfig } from "./workspace.js";
 
 export interface McpDeps {
   db: Db;
   slot: Slot;
   clock: Clock;
+  workspace?: WorkspaceConfig;
 }
 
 function toolResult(payload: unknown) {
@@ -72,6 +74,25 @@ function runReleasingVerb(
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
     const result = verb(task, task.assignee ?? HUMAN_WORKER_ID, deps.clock.now());
+    // the tree rule runs between the domain verb and the release: a domain
+    // error above keeps the session (and its tree) alive, but once the verb
+    // lands the WIP is stashed before anything else can enter the workspace
+    if (deps.workspace) {
+      try {
+        releaseTree(deps.workspace, task.id);
+      } catch (err) {
+        // the verb already landed, so the release stands — the workspace is
+        // quarantined instead: needs-human halts its pickups, and the repair
+        // lands in front of the human as a question task
+        quarantineWorkspace(
+          deps.db,
+          deps.workspace,
+          err,
+          task.assignee ?? HUMAN_WORKER_ID,
+          deps.clock.now(),
+        );
+      }
+    }
     deps.slot.release();
     return result;
   });

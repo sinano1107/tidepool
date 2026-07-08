@@ -18,11 +18,17 @@ export interface Tidepool {
   stop: () => Promise<void>;
 }
 
+export interface BootOptions {
+  /** Existing board dir to reboot on — for restart tests. */
+  dir?: string;
+  /** The board's workspace: a real git checkout the tree rule acts on. */
+  workspace?: { name: string; path: string };
+}
+
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
- *  Only the worker is swapped for a scripted fake, at the WorkerAdapter seam.
- *  Pass an existing dir to reboot on the same board. */
-export async function bootTidepool(existingDir?: string): Promise<Tidepool> {
-  const dir = existingDir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
+ *  Only the worker is swapped for a scripted fake, at the WorkerAdapter seam. */
+export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
+  const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
   const clock = new FakeClock();
   const worker = new ScriptedWorker();
   const server = await startServer({
@@ -30,6 +36,7 @@ export async function bootTidepool(existingDir?: string): Promise<Tidepool> {
     port: 0,
     clock,
     worker: () => worker,
+    workspace: options.workspace,
   });
   let stopped = false;
   const stopServer = async () => {

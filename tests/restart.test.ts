@@ -24,7 +24,7 @@ it("a restart does not break concurrency=1: the in_progress task still owns the 
 
   // restart the monolith on the same SQLite file
   await t.stopServer();
-  t = await bootTidepool(t.dir);
+  t = await bootTidepool({ dir: t.dir });
 
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);

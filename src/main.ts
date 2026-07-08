@@ -1,9 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
+import { loadRegistry } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
 import type { WorkerAdapter } from "./worker.js";
+import type { WorkspaceConfig } from "./workspace.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -15,12 +17,13 @@ class LoggingWorker implements WorkerAdapter {
 }
 
 const port = Number(process.env.PORT ?? 4589);
+const registryDir = process.env.TIDEPOOL_REGISTRY;
+const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? "sandbox";
 
 /** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository
  *  (`npm run start:live` supplies the conventional one); setting it swaps the
  *  logging placeholder for the real Claude Code worker. */
 function workerFactory(): WorkerFactory {
-  const registryDir = process.env.TIDEPOOL_REGISTRY;
   if (!registryDir) return () => new LoggingWorker();
   const logDir = process.env.TIDEPOOL_WORKER_LOGS ?? "worker-logs";
   mkdirSync(logDir, { recursive: true });
@@ -30,10 +33,19 @@ function workerFactory(): WorkerFactory {
       clock,
       registryDir,
       agent: process.env.TIDEPOOL_AGENT ?? "deckhand",
-      workspace: process.env.TIDEPOOL_WORKSPACE ?? "sandbox",
+      workspace: workspaceName,
       mcpUrl: `http://127.0.0.1:${port}/mcp`,
       logDir,
     });
+}
+
+/** The board's own view of the workspace (branch discipline + tree rule):
+ *  the same registry entry the worker runs in, resolved to its path. */
+function workspaceConfig(): WorkspaceConfig | undefined {
+  if (!registryDir) return undefined;
+  const entry = loadRegistry(registryDir).workspaces[workspaceName];
+  if (!entry) throw new Error(`unknown workspace: ${workspaceName}`);
+  return { name: workspaceName, path: entry.path };
 }
 
 const server = await startServer({
@@ -41,5 +53,6 @@ const server = await startServer({
   port,
   clock: new SystemClock(),
   worker: workerFactory(),
+  workspace: workspaceConfig(),
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
