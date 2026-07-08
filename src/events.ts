@@ -31,7 +31,11 @@ export type EventPayload =
   | { kind: "objection_raised"; entry_id: number; comment: string; session_id: number }
   // "this entry was put in front of the human" — the denominator of the
   // objection rate; an entry never displayed is unobserved, not approved
-  | { kind: "log_entry_displayed"; entry_id: number; session_id: number };
+  | { kind: "log_entry_displayed"; entry_id: number; session_id: number }
+  // full provenance of an agent run: which registry version (commit hash) and
+  // which agent definition stamp made the decisions on this task. The vocabulary
+  // is registry-shaped, not vendor-shaped — no CLI names leak into the core.
+  | { kind: "worker_spawned"; registry_commit: string; agent_version: string };
 
 export type EventKind = EventPayload["kind"];
 
