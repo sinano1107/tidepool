@@ -15,6 +15,15 @@ describe("loadRegistry", () => {
     expect(agent.systemPrompt).not.toContain("version:");
   });
 
+  it("frontmatter の model は optional: あれば読み、なければ undefined", async () => {
+    const withModel = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nmodel: opus\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(withModel).agents.deckhand!.model).toBe("opus");
+    const without = await makeRegistry();
+    expect(loadRegistry(without).agents.deckhand!.model).toBeUndefined();
+  });
+
   it("authority プロファイルを読み込む: guidance の prose が取れる", async () => {
     const dir = await makeRegistry();
     const registry = loadRegistry(dir);

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker, type SpawnFn } from "../src/claude-worker.js";
@@ -70,8 +70,8 @@ function recordingSpawn() {
   return { calls, stdout, spawn };
 }
 
-async function makeWorker() {
-  const registryDir = await makeRegistry();
+async function makeWorker(registryFiles: Record<string, string> = {}) {
+  const registryDir = await makeRegistry(registryFiles);
   const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
   const db = openDb(":memory:");
   const recorder = recordingSpawn();
@@ -143,6 +143,52 @@ describe("ClaudeCodeWorker", () => {
         `{"type":"system","subtype":"init"}\n{"type":"result","result":"done"}\n`,
       );
     });
+  });
+
+  it("相対 logDir でも MCP config への参照は絶対パス(spawn 先の cwd は workspace であって盤面ではない)", async () => {
+    const registryDir = await makeRegistry();
+    const base = await mkdtemp(join(tmpdir(), "tidepool-relative-logs-"));
+    const prevCwd = process.cwd();
+    process.chdir(base);
+    try {
+      const db = openDb(":memory:");
+      const recorder = recordingSpawn();
+      const worker = new ClaudeCodeWorker({
+        db,
+        clock: new FakeClock(),
+        registryDir,
+        agent: "deckhand",
+        workspace: "tidepool",
+        mcpUrl: "http://127.0.0.1:4589/mcp",
+        logDir: "worker-logs",
+        spawn: recorder.spawn,
+      });
+      await mkdir(join(base, "worker-logs"), { recursive: true });
+      const task = makeTask("task-rel");
+      insertTask(db, task);
+      worker.start(task);
+      const args = recorder.calls[0]!.args;
+      const configPath = args[args.indexOf("--mcp-config") + 1]!;
+      expect(isAbsolute(configPath)).toBe(true);
+      // and the file really is where the flag says it is
+      await readFile(configPath, "utf8");
+    } finally {
+      process.chdir(prevCwd);
+    }
+  });
+
+  it("model は常に明示的に渡す: frontmatter に無ければ sonnet(ホストのモデル設定を漏らさない)", async () => {
+    const { start, calls } = await makeWorker();
+    start();
+    expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
+  });
+
+  it("frontmatter に model があればそれを使う", async () => {
+    const { start, calls } = await makeWorker({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nmodel: opus\n---\nYou are Deckhand.\n`,
+    });
+    start();
+    expect(calls[0]!.args.join(" ")).toContain("--model opus");
   });
 
   it("設定ミス(未知の workspace 名)は boot 時のコンストラクタで即座に失敗する", async () => {

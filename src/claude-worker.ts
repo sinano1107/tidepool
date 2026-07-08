@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
@@ -51,11 +51,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   readonly id: string;
   private readonly options: ClaudeWorkerOptions;
   private readonly spawn: SpawnFn;
+  /** logDir pinned to an absolute path: the spawned CLI resolves relative
+   *  paths against its own cwd (the workspace), not against the board. */
+  private readonly logDir: string;
 
   constructor(options: ClaudeWorkerOptions) {
     this.id = options.agent;
     this.options = options;
     this.spawn = options.spawn ?? defaultSpawn;
+    this.logDir = resolve(options.logDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
     this.resolve(loadRegistry(options.registryDir));
@@ -79,7 +83,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const { workspace, agent, profile } = this.resolve(registry);
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
-    const mcpConfigPath = join(this.options.logDir, `${task.id}.mcp.json`);
+    const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);
     writeFileSync(
       mcpConfigPath,
       JSON.stringify({
@@ -104,6 +108,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // enforced by the profile guidance and the board's domain verbs
         "--permission-mode",
         "auto",
+        // always explicit: the CLI remembers the host's last model choice, and
+        // a /model flip in some unrelated directory must not leak into runs
+        "--model",
+        agent.model ?? "sonnet",
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",
@@ -116,7 +124,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     );
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
-    child.stdout.pipe(createWriteStream(join(this.options.logDir, `${task.id}.stream.jsonl`)));
+    child.stdout.pipe(createWriteStream(join(this.logDir, `${task.id}.stream.jsonl`)));
     appendEvent(this.options.db, {
       taskId: task.id,
       workerId: this.id,

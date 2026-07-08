@@ -11,6 +11,9 @@ export interface AgentDefinition {
   name: string;
   version: string;
   authority: string;
+  /** Base-AI model for this agent (CONTEXT.md: agent = base AI + skills +
+   *  instructions + authority profile). Absent → the adapter's default. */
+  model?: string;
   systemPrompt: string;
 }
 
@@ -42,6 +45,7 @@ export interface Registry {
 const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
+  model: z.string().optional(),
 });
 
 function parseAgentFile(path: string): AgentDefinition {
@@ -53,7 +57,13 @@ function parseAgentFile(path: string): AgentDefinition {
     throw new Error(`agent ${name}: missing frontmatter`);
   }
   const meta = agentFrontmatterSchema.parse(parseYaml(frontmatter));
-  return { name, version: meta.version, authority: meta.authority, systemPrompt: body.trim() };
+  return {
+    name,
+    version: meta.version,
+    authority: meta.authority,
+    model: meta.model,
+    systemPrompt: body.trim(),
+  };
 }
 
 // closed schema: an escalation-rights field cannot exist even by
