@@ -70,11 +70,19 @@ read-only の判定行為。レビュアーは決して直さない — 発見�
 
 ## Slot-release tree rule
 
-スロットが解放されるとき(完了・エスカレーション・watchdog 失敗のいずれでも)、作業ツリーを WIP コミットで退避しクリーンに戻すことが機械的に保証される、という規律。エージェントの善意には依存しない。
+スロットが解放されるとき(完了・エスカレーション・watchdog 失敗のいずれでも)、作業ツリーを WIP コミットで退避しクリーンに戻すことが機械的に保証される、という規律。エージェントの善意には依存しない。WIP コミットはタスクブランチ(branch discipline 参照)以外には決して着地しない — セッションが自分のブランチを離れていた場合、規律はコミットを拒否し quarantine に落ちる。
+
+## Branch discipline(ブランチ規律)
+
+workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上で行われ、main への直接書き込みは全エージェントの権限外として構造的に禁止される、という規律。pickup 時に Tidepool がブランチを作成・checkout し(既存ブランチへの復帰は checkout のみ)、slot-release tree rule と対になって main を保護する。
+
+## Quarantine(隔離)
+
+Slot-release tree rule 自体が失敗した(コンフリクトや破損など)ときの封じ込め。該当 workspace が needs-human とマークされ、その workspace を使うタスクの pickup が全停止し、修理を求める question タスクが生成される。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除は現状ボードへの手動介入のみ(自動復帰は将来スライス)。
 
 ## Workspace(ワークスペース)
 
-タスクが実行される場所を指す第一級エンティティ(名前 → Pi 上のパス)。子タスクは親の workspace を既定で継承する。
+タスクが実行される場所を指す第一級エンティティ(名前 → Pi 上のパス)。子タスクは親の workspace を既定で継承する。needs-human(quarantine 参照)は workspace 単位の状態。
 
 ## Handoff doc(ハンドオフドキュメント)
 

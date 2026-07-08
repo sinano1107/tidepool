@@ -10,6 +10,7 @@ import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import type { WorkerAdapter } from "./worker.js";
+import type { WorkspaceConfig } from "./workspace.js";
 
 /** The real adapter needs the board's own db and clock, which are created in
  *  here — so the worker arrives as a factory fed with them. */
@@ -23,7 +24,7 @@ export interface ServerOptions {
   /** The board's workspace: a git checkout the branch discipline and the
    *  slot-release tree rule act on. Absent → a workspaceless board (e.g. a
    *  human-driven one): no branch rule runs. */
-  workspace?: { name: string; path: string };
+  workspace?: WorkspaceConfig;
 }
 
 export interface TidepoolServer {

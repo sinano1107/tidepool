@@ -84,13 +84,7 @@ function runReleasingVerb(
         // the verb already landed, so the release stands — the workspace is
         // quarantined instead: needs-human halts its pickups, and the repair
         // lands in front of the human as a question task
-        quarantineWorkspace(
-          deps.db,
-          deps.workspace,
-          err,
-          task.assignee ?? HUMAN_WORKER_ID,
-          deps.clock.now(),
-        );
+        quarantineWorkspace(deps.db, deps.workspace, err, deps.clock.now());
       }
     }
     deps.slot.release();

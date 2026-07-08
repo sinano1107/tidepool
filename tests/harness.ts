@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
@@ -22,7 +23,7 @@ export interface BootOptions {
   /** Existing board dir to reboot on — for restart tests. */
   dir?: string;
   /** The board's workspace: a real git checkout the tree rule acts on. */
-  workspace?: { name: string; path: string };
+  workspace?: WorkspaceConfig;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.

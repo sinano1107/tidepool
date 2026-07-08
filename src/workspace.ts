@@ -43,6 +43,16 @@ export function ensureTaskBranch(workspace: WorkspaceConfig, taskId: string): vo
  *  slot goes free. Mechanical, on every release — completion, escalation or
  *  failure alike — so nothing rests on the agent having tidied up. */
 export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
+  // the WIP commit lands on the task branch or nowhere: a session that
+  // wandered off its branch (e.g. onto main) must not have its leavings
+  // committed there — refusing here is what makes the main-write ban
+  // structural, and the refusal lands in the quarantine path
+  const head = git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
+  if (head !== taskBranch(taskId)) {
+    throw new Error(
+      `workspace ${workspace.name} is on '${head}', not '${taskBranch(taskId)}' — refusing to commit`,
+    );
+  }
   git(workspace.path, "add", "-A");
   if (git(workspace.path, "status", "--porcelain") !== "") {
     git(
@@ -68,15 +78,18 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
   return row?.needs_human === 1;
 }
 
-/** Tree-rule failure containment: mark the workspace needs-human (its tasks
- *  stay out of the slot) and put the repair in front of the human as a
- *  question task. Clearing the mark is by hand for now — the recovery wiring
- *  is a later slice, like the watchdog (#9). */
+/** Worker id the board acts under when it enforces its own rules: the tree
+ *  rule's failures are the board's to report, never pinned on the agent. */
+export const BOARD_WORKER_ID = "tidepool";
+
+/** Tree-rule failure containment (quarantine): mark the workspace needs-human
+ *  (its tasks stay out of the slot) and put the repair in front of the human
+ *  as a question task. Clearing the mark is by hand for now — the recovery
+ *  wiring is a later slice, like the watchdog (#9). */
 export function quarantineWorkspace(
   db: Db,
   workspace: WorkspaceConfig,
   cause: unknown,
-  workerId: string,
   now: Date,
 ): void {
   db.prepare(
@@ -99,6 +112,6 @@ export function quarantineWorkspace(
       },
     },
     now,
-    workerId,
+    BOARD_WORKER_ID,
   );
 }

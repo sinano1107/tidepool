@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -26,7 +27,7 @@ function git(dir: string, ...args: string[]): string {
 
 /** A real git repository standing in for the workspace — the PRD test policy:
  *  git is never faked, the rule is verified against actual trees. */
-async function makeWorkspace(): Promise<{ name: string; path: string }> {
+async function makeWorkspace(): Promise<WorkspaceConfig> {
   const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
   wsPath = path;
   git(path, "init", "-b", "main");
@@ -161,6 +162,38 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   expect(question.title).toContain("sandbox");
 
   // needs-human の workspace を使うタスクは pickup されない
+  await registerWork(t, "stalled work");
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+
+  // question は盤面自身の名義で登録される — 自分の失敗をエージェントに帰属させない
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
+  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+});
+
+it("ワーカーが main に逃げていても WIP は main にコミットされず、workspace が隔離される", async () => {
+  const ws = await makeWorkspace();
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "rogue work");
+  await t.clock.advance(HOUR);
+
+  // 規律を破るワーカー: セッション中に main へ checkout し、散らかしたまま完了する
+  git(ws.path, "checkout", "main");
+  writeFileSync(join(ws.path, "rogue.txt"), "must not land on main\n");
+  const client = await mcpClient(t.baseUrl, task.id);
+  const res: any = await client.callTool({
+    name: "complete_task",
+    arguments: { handoff: fullHandoff },
+  });
+  expect(res.isError ?? false).toBe(false);
+  await client.close();
+
+  // main には何もコミットされていない(初期コミットのみ)— tree rule は
+  // タスクブランチ以外への WIP コミットを拒否する
+  expect(git(ws.path, "log", "--format=%s", "main")).toBe("initial");
+  // 拒否は隔離として扱われる: question が生まれ、pickup が止まる
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(list.find((x: any) => x.type === "question")).toBeDefined();
   await registerWork(t, "stalled work");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
