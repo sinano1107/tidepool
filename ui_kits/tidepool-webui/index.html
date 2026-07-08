@@ -265,10 +265,10 @@ function App() {
       ? [{ id: 'tp-0151', title: `repair task — ${Object.keys(objections).length} objection${Object.keys(objections).length > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true, flash: true }]
       : [];
     // scratchpad lines triaged at commit: task → queue tail, meta → meta-review task, drop → discarded
-    const scratchTasks = scratch.filter((s) => s.kind !== 'drop').map((s, i) => ({
+    const scratchTasks = scratch.filter((s) => s.kind !== 'discard').map((s, i) => ({
       id: `tp-016${i}`,
-      title: s.kind === 'meta' ? `meta-review: ${s.text}` : s.text,
-      assignee: s.kind === 'meta' ? 'anemone' : 'reef-crab',
+      title: s.kind === 'meta_review' ? `meta-review: ${s.text}` : s.text,
+      assignee: s.kind === 'meta_review' ? 'anemone' : 'reef-crab',
     }));
     runWash('The tide is going out.', t.commitEmoji, () => {
       setData({

@@ -228,6 +228,27 @@ it("scratchpad lines are shared during triage and triaged at commit", async () =
   expect(board.some((x: any) => x.title === "just grumbling")).toBe(false);
 });
 
+it("undisposed scratchpad lines survive an auto-commit into the next session", async () => {
+  t = await bootTidepool();
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  const line = (await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "this again" }))
+    .json;
+  await t.clock.advance(TRIAGE_TIMEOUT); // walk away — auto-commit carries no dispositions
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBe(null);
+
+  // the jotted irritation is not lost: the next session adopts it
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  const pad = (await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad;
+  expect(pad.map((x: any) => x.line)).toEqual(["this again"]);
+
+  // a dispositioned line is consumed for good — discard it and it stays gone
+  await api(t.baseUrl, "POST", "/api/triage/commit", {
+    scratchpad: [{ id: line.id, disposition: "discard" }],
+  });
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad).toEqual([]);
+});
+
 it("showing a log entry to the human is itself a recorded event", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "logged work");

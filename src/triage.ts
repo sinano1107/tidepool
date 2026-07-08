@@ -35,12 +35,19 @@ export function activeTriageSession(db: Db): TriageSession | undefined {
 export function startTriage(db: Db, now: Date): TriageSession {
   const open = activeTriageSession(db);
   if (open) return open;
-  const { lastInsertRowid } = db
-    .prepare("INSERT INTO triage_sessions (started_at, last_activity_at) VALUES (?, ?)")
-    .run(now.toISOString(), now.toISOString());
-  return db
-    .prepare("SELECT * FROM triage_sessions WHERE id = ?")
-    .get(Number(lastInsertRowid)) as TriageSession;
+  let session: TriageSession;
+  db.transaction(() => {
+    const { lastInsertRowid } = db
+      .prepare("INSERT INTO triage_sessions (started_at, last_activity_at) VALUES (?, ?)")
+      .run(now.toISOString(), now.toISOString());
+    // scratchpad lines a previous session never dispositioned (e.g. a timeout
+    // auto-commit) are not lost: the new session adopts them for triage
+    db.prepare("UPDATE triage_scratchpad SET session_id = ?").run(Number(lastInsertRowid));
+    session = db
+      .prepare("SELECT * FROM triage_sessions WHERE id = ?")
+      .get(Number(lastInsertRowid)) as TriageSession;
+  })();
+  return session!;
 }
 
 /** Every human touch (answer, objection, scratchpad) defers the auto-commit. */
@@ -48,6 +55,23 @@ export function touchTriage(db: Db, now: Date): void {
   db.prepare(
     "UPDATE triage_sessions SET last_activity_at = ? WHERE committed_at IS NULL",
   ).run(now.toISOString());
+}
+
+/** A human triage action happened: touch the open session (deferring the
+ *  auto-commit) and return it, or undefined when no session is open. The one
+ *  entry point for routes that behave differently mid-triage. */
+export function triageActivity(db: Db, now: Date): TriageSession | undefined {
+  const open = activeTriageSession(db);
+  if (open) touchTriage(db, now);
+  return open;
+}
+
+/** Stage a task for the queue head: applied, in order, at commit. */
+export function stageFrontInsert(db: Db, sessionId: number, taskId: string): void {
+  db.prepare("INSERT INTO triage_front_inserts (session_id, task_id) VALUES (?, ?)").run(
+    sessionId,
+    taskId,
+  );
 }
 
 /** The watchdog tick: commit a session left alone past TRIAGE_TIMEOUT.
@@ -75,12 +99,7 @@ export function raiseObjection(
     throw new TriageError("objections are raised inside an open triage session");
   }
   if (!comment.trim()) throw new TriageError("an objection carries a direction comment");
-  const entry = db.prepare("SELECT * FROM events WHERE id = ?").get(entryId) as
-    | EventRow
-    | undefined;
-  if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
-    throw new TriageError("objections target a decision-log entry");
-  }
+  const entry = requireLogEntry(db, entryId);
   touchTriage(db, now);
   return appendEvent(db, {
     taskId: entry.task_id,
@@ -159,9 +178,14 @@ function applyScratchpad(
   now: Date,
 ): void {
   const lines = new Map(listScratchpad(db, sessionId).map((l) => [l.id, l]));
+  const consume = db.prepare("DELETE FROM triage_scratchpad WHERE id = ?");
   for (const { id, disposition } of dispositions) {
     const line = lines.get(id);
-    if (!line || disposition === "discard") continue;
+    if (!line) continue;
+    // every disposition consumes the line; undisposed lines stay and are
+    // adopted by the next session (startTriage)
+    consume.run(id);
+    if (disposition === "discard") continue;
     registerTask(
       db,
       {
@@ -178,19 +202,26 @@ function applyScratchpad(
   }
 }
 
+/** An event id that must point at a decision-log entry (a human-facing kind). */
+function requireLogEntry(db: Db, entryId: number): EventRow {
+  const entry = db.prepare("SELECT * FROM events WHERE id = ?").get(entryId) as
+    | EventRow
+    | undefined;
+  if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
+    throw new TriageError(`event ${entryId} is not a decision-log entry`);
+  }
+  return entry;
+}
+
 /** Record that these log entries were actually put in front of the human.
  *  An entry never displayed is unobserved — neither approved nor rejected —
  *  so the objection-rate denominator counts only what flows through here. */
 export function recordDisplayedEntries(db: Db, entryIds: number[], now: Date): void {
   const open = activeTriageSession(db);
   if (!open) throw new TriageError("displayed entries are recorded inside an open triage session");
-  const lookup = db.prepare("SELECT * FROM events WHERE id = ?");
   db.transaction(() => {
     for (const entryId of entryIds) {
-      const entry = lookup.get(entryId) as EventRow | undefined;
-      if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
-        throw new TriageError(`event ${entryId} is not a decision-log entry`);
-      }
+      const entry = requireLogEntry(db, entryId);
       appendEvent(db, {
         taskId: entry.task_id,
         workerId: HUMAN_WORKER_ID,

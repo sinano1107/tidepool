@@ -304,15 +304,15 @@ export function escalateTask(
  *  completes; only a parent this answer actually unblocks returns to the queue
  *  head (the caller fires the immediate poll on `parentUnblocked`).
  *
- *  During an open triage session (`triageSessionId` set) the answer is just as
- *  durable, but the head move is staged on the session and applied at commit —
- *  abandoning triage never changes the queue. */
+ *  `stageUnblock` defers the head move: when given (an open triage session),
+ *  the answer is just as durable but the unblocked parent is handed to the
+ *  callback instead of moving — the queue only changes at triage commit. */
 export function answerQuestion(
   db: Db,
   question: Task,
   answer: string,
   now: Date,
-  triageSessionId?: number,
+  stageUnblock?: (taskId: string) => void,
 ): { question: Task; parentUnblocked: boolean } {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
@@ -344,10 +344,8 @@ export function answerQuestion(
     });
     const parent = question.parent_id ? getTask(db, question.parent_id) : undefined;
     if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
-      if (triageSessionId !== undefined) {
-        db.prepare(
-          "INSERT INTO triage_front_inserts (session_id, task_id) VALUES (?, ?)",
-        ).run(triageSessionId, parent.id);
+      if (stageUnblock) {
+        stageUnblock(parent.id);
       } else {
         moveTask(db, parent, null, now);
         parentUnblocked = true;

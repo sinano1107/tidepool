@@ -20,8 +20,9 @@ import {
   listScratchpad,
   raiseObjection,
   recordDisplayedEntries,
+  stageFrontInsert,
   startTriage,
-  touchTriage,
+  triageActivity,
   triagePreview,
   TriageError,
 } from "./triage.js";
@@ -152,15 +153,16 @@ export function createApiRouter(
       return;
     }
     try {
-      const session = activeTriageSession(db);
+      // an answer during an open triage session is activity (defers the
+      // auto-commit) and stages the unblock instead of moving the queue
+      const session = triageActivity(db, clock.now());
       const { question, parentUnblocked } = answerQuestion(
         db,
         task,
         parsed.data.answer,
         clock.now(),
-        session?.id,
+        session && ((taskId) => stageFrontInsert(db, session.id, taskId)),
       );
-      if (session) touchTriage(db, clock.now());
       // an answer that unblocked the parent put it at the head — "run now"
       if (parentUnblocked) onQueueHeadChanged();
       res.json(presentTask(db, question));

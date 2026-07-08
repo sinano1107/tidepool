@@ -291,12 +291,17 @@ function App() {
 
   // The triage session (issue #6): entering the skim opens it server-side —
   // pickup pauses, and answers/objections/scratchpad persist at once but stage
-  // their queue effects until commit (or the abandonment timeout).
+  // their queue effects until commit (or the abandonment timeout). A failed
+  // open must be loud: without a session, answers would apply to the queue
+  // immediately and the atomic-commit guarantee would silently degrade.
+  const dataLoaded = data !== null; // effect dep: re-fire once the first snapshot lands
   React.useEffect(() => {
     if (tab === 'triage' && data && (data.questions.length || data.log.some((l) => l.unread))) {
-      api('/api/triage/start', {}).catch(() => {});
+      api('/api/triage/start', {}).catch((err) =>
+        say('danger', 'triage session failed to open — answers would apply immediately; reload before answering',
+          String(err.message || err)));
     }
-  }, [tab, data === null]);
+  }, [tab, dataLoaded]);
 
   // S1 — one tap persists the answer; the unblocked parent is staged server-side
   const answerNow = async (q, a) => {
@@ -355,36 +360,43 @@ function App() {
   // staged (unblocked parents to the head, objections bundled into one repair
   // task per objected task, scratchpad dispositions) and fires the immediate
   // poll. The read cursor advances after — a failed commit never marks the
-  // skimmed lines as read.
+  // skimmed lines as read, and a failed cursor advance never masquerades as a
+  // failed commit.
   const commitTriage = async (answers, objections, scratch) => {
-    const kindToDisposition = { task: 'task', meta: 'meta_review', drop: 'discard' };
     try {
       await api('/api/triage/commit', {
+        // kit dispositions already speak the domain vocabulary
         scratchpad: scratch
           .filter((s) => typeof s.id === 'number')
-          .map((s) => ({ id: s.id, disposition: kindToDisposition[s.kind] || 'task' })),
-      });
-      for (const [qid, a] of Object.entries(answers)) {
-        if (!a) continue;
-        const q = data.questions.find((x) => x.id === qid);
-        if (q && q.parent) markFront(q.parent);
-      }
-      if (data.lastLogId != null) await api('/api/log/cursor', { last_read: data.lastLogId });
-      const answered = Object.values(answers).filter(Boolean).length;
-      const repairTasks = new Set(Object.keys(objections)
-        .map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId)
-        .filter(Boolean)).size;
-      const noted = scratch.filter((s) => s.kind !== 'drop').length;
-      runWash('The tide is going out.', '🌊', () => {
-        setTab('queue');
-        say('success', 'triage committed — one transaction',
-          `${answered} answered${repairTasks ? ` · ${repairTasks} repair` : ''}${noted ? ` · ${noted} from scratchpad` : ''} · immediate poll fired`);
+          .map((s) => ({ id: s.id, disposition: s.kind })),
       });
     } catch (err) {
       refreshFull();
       say('danger', 'triage commit failed — nothing applied, cursor NOT advanced',
         String(err.message || err));
+      return;
     }
+    for (const [qid, a] of Object.entries(answers)) {
+      if (!a) continue;
+      const q = data.questions.find((x) => x.id === qid);
+      if (q && q.parent) markFront(q.parent);
+    }
+    let cursorNote = '';
+    try {
+      if (data.lastLogId != null) await api('/api/log/cursor', { last_read: data.lastLogId });
+    } catch {
+      cursorNote = ' · read cursor NOT advanced (retry from the log)';
+    }
+    const answered = Object.values(answers).filter(Boolean).length;
+    const repairTasks = new Set(Object.keys(objections)
+      .map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId)
+      .filter(Boolean)).size;
+    const noted = scratch.filter((s) => s.kind !== 'discard').length;
+    runWash('The tide is going out.', '🌊', () => {
+      setTab('queue');
+      say(cursorNote ? 'warn' : 'success', 'triage committed — one transaction',
+        `${answered} answered${repairTasks ? ` · ${repairTasks} repair` : ''}${noted ? ` · ${noted} from scratchpad` : ''} · immediate poll fired${cursorNote}`);
+    });
   };
 
   // "Run now" IS a move to the head — the one reorder verb, no separate path.

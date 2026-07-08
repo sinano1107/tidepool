@@ -118,10 +118,12 @@ function TpScratchpad({ lines, onAdd, onRemove }) {
   );
 }
 
+// keys are the domain's disposition vocabulary (task / meta_review / discard)
+// so no translation layer sits between the screen and the commit API
 const TP_SCRATCH_KINDS = [
   { key: 'task', label: 'task' },
-  { key: 'meta', label: 'meta-review' },
-  { key: 'drop', label: 'discard' },
+  { key: 'meta_review', label: 'meta-review' },
+  { key: 'discard', label: 'discard' },
 ];
 
 // Live-mode props (all optional — absent, the screen runs standalone on mock
@@ -171,9 +173,27 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   };
   React.useEffect(() => { if (section === 2) refreshPreview(); }, [section]);
   // "displayed" is an event: the objection-rate denominator counts only what
-  // was actually put in front of the human
+  // was actually put in front of the human — an entry reports once it is
+  // genuinely in the viewport, not merely because the skim section mounted
+  const logListRef = React.useRef(null);
+  const displayedSeen = React.useRef(new Set());
   React.useEffect(() => {
-    if (section === 1 && onDisplayed) onDisplayed(data.log.filter((l) => l.unread));
+    if (section !== 1 || !onDisplayed || !logListRef.current) return;
+    const byId = new Map(data.log.filter((l) => l.unread).map((l) => [String(l.id), l]));
+    const io = new IntersectionObserver((observed) => {
+      const shown = [];
+      for (const o of observed) {
+        if (!o.isIntersecting) continue;
+        const id = o.target.dataset.entryId;
+        if (byId.has(id) && !displayedSeen.current.has(id)) {
+          displayedSeen.current.add(id);
+          shown.push(byId.get(id));
+        }
+      }
+      if (shown.length) onDisplayed(shown);
+    }, { threshold: 0.5 });
+    logListRef.current.querySelectorAll('[data-entry-id]').forEach((el) => io.observe(el));
+    return () => io.disconnect();
   }, [section]);
   // completion rows carry a handoff doc: tap unfolds it in place (the log's
   // link back to the deliverable) and the objection entry point moves inside
@@ -203,12 +223,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const heads = [
     { step: '1 / 3 — questions', title: `The tide brought ${nQuestions} question${nQuestions === 1 ? '' : 's'}.`, sub: 'answers persist at once; unblocked parents surface at the front on commit.', next: answered === nQuestions ? 'Log skim' : `Log skim (${nQuestions - answered} unanswered)` },
     { step: nQuestions ? '2 / 3 — decision log' : '2 / 3 — decision log · no questions today', title: `${unread.length} decisions made overnight.`, sub: 'silence is consent — tap an entry to object.', next: 'Queue check' },
-    { step: '3 / 3 — queue', title: 'The tide is going out.', sub: 'front-inserted by this session highlighted. reorder is optional.', next: 'Commit' },
+    { step: '3 / 3 — queue', title: 'The tide is going out.', sub: loadPreview ? 'front-inserted by this session highlighted. the queue applies at commit.' : 'front-inserted by this session highlighted. reorder is optional.', next: 'Commit' },
   ];
   const cur = heads[section];
   const scratchResolved = () => [
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || 'task' })),
-    ...dropped.map((s) => ({ id: s.id, text: s.text, kind: 'drop' })),
+    ...dropped.map((s) => ({ id: s.id, text: s.text, kind: 'discard' })),
   ];
 
   return (
@@ -230,12 +250,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       )}
 
       {section === 1 && (
-        <div style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <div ref={logListRef} style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
           {data.log.map((l, i) => {
             const k = logKey(l, i);
             const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
             return (
-            <div key={k}>
+            <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
               <LogEntry entry={{ ...l, objection: objections[k] }} active={objecting === k} onObject={() => (hasHandoff ? toggleHandoff(k, l) : toggleObjecting(k))} />
               {handoffOpen[k] && (
                 <div style={{ padding: '10px 14px 12px', background: 'var(--surface-recessed)' }}>
@@ -272,7 +292,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>scratchpad — triage before commit</div>
             {scratch.map((l) => (
               <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                <span style={{ flex: '1 1 100%', fontSize: 'var(--text-sm)', color: (scratchKinds[l.id] || 'task') === 'drop' ? 'var(--text-muted)' : 'var(--text-body)', textDecoration: (scratchKinds[l.id] || 'task') === 'drop' ? 'line-through' : 'none' }}>{l.text}</span>
+                <span style={{ flex: '1 1 100%', fontSize: 'var(--text-sm)', color: (scratchKinds[l.id] || 'task') === 'discard' ? 'var(--text-muted)' : 'var(--text-body)', textDecoration: (scratchKinds[l.id] || 'task') === 'discard' ? 'line-through' : 'none' }}>{l.text}</span>
                 <div style={{ display: 'flex', gap: 4 }}>
                   {TP_SCRATCH_KINDS.map((k) => {
                     const picked = (scratchKinds[l.id] || 'task') === k.key;
@@ -281,7 +301,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
                         style={{
                           fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', cursor: 'pointer',
                           color: picked ? '#fff' : 'var(--text-secondary)',
-                          background: picked ? (k.key === 'drop' ? 'var(--rock-4)' : 'var(--tide-4)') : 'var(--surface-recessed)',
+                          background: picked ? (k.key === 'discard' ? 'var(--rock-4)' : 'var(--tide-4)') : 'var(--surface-recessed)',
                           border: 'none', borderRadius: 'var(--radius-full)', padding: '4px 12px',
                         }}>{k.label}</button>
                     );
@@ -292,14 +312,15 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           </div>
         );
         // live mode: the server's staged preview is the truth — this session's
-        // front-inserts arrive on top, already highlighted
+        // front-inserts arrive on top, already highlighted. Read-only: nothing
+        // touches the queue before commit (a mid-session reorder would break
+        // the "abandoning triage never changes the queue" guarantee), so
+        // reorder/front stay on the queue screen.
         if (loadPreview) {
           return (
             <div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <TpQueueList tasks={preview ?? []}
-                  onReorder={async (...a) => { await onReorderQueue(...a); refreshPreview(); }}
-                  onFront={async (id) => { await onFront(id); refreshPreview(); }} />
+                <TpQueueList tasks={preview ?? []} />
               </div>
               {nObjections > 0 && (
                 <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 10 }}>
