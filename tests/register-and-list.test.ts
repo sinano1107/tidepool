@@ -34,7 +34,7 @@ it("a registered task joins the queue tail and can be listed", async () => {
   expect(got.json.purpose).toBe("know soil moisture without walking out");
 });
 
-it("registration accepts assignee, workspace, and risk_flag — the same fields a brain-dump draft fills in", async () => {
+it("registration accepts assignee, workspace, risk_flag, and review_flag — the same fields a brain-dump draft fills in", async () => {
   t = await bootTidepool();
 
   const registered = await api(t.baseUrl, "POST", "/api/tasks", {
@@ -45,14 +45,17 @@ it("registration accepts assignee, workspace, and risk_flag — the same fields 
     assignee: "reef-crab",
     workspace: "tidepool",
     risk_flag: true,
+    review_flag: true,
   });
   expect(registered.status).toBe(201);
   expect(registered.json.assignee).toBe("reef-crab");
   expect(registered.json.workspace).toBe("tidepool");
   expect(registered.json.risk_flag).toBe(1);
+  expect(registered.json.review_flag).toBe(1);
 
   const got = await api(t.baseUrl, "GET", `/api/tasks/${registered.json.id}`);
   expect(got.json.assignee).toBe("reef-crab");
   expect(got.json.workspace).toBe("tidepool");
   expect(got.json.risk_flag).toBe(1);
+  expect(got.json.review_flag).toBe(1);
 });

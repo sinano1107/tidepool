@@ -9,7 +9,7 @@ import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
-import type { AuthorityProfile } from "./registry.js";
+import type { AuthorityProfile, RegistryCandidates } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { getTask } from "./tasks.js";
@@ -43,7 +43,7 @@ export interface ServerOptions {
   authority?: AuthorityProfile;
   /** Assignee/workspace candidates for the registration screen (issue #12).
    *  Absent → no registry configured, so the WebUI gets no suggestions. */
-  registryCandidates?: { assignees: string[]; workspaces: string[] };
+  registryCandidates?: RegistryCandidates;
   /** The LLM draft seam (issue #12). Absent → the draft endpoint reports the
    *  LLM as unreachable, and the WebUI falls back to the plain form. */
   draftClient?: DraftClient;

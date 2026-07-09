@@ -5,6 +5,7 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
+import type { RegistryCandidates } from "./registry.js";
 import {
   answerQuestion,
   DomainError,
@@ -42,6 +43,7 @@ const registerTaskSchema = z.object({
   assignee: z.string().optional(),
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
+  review_flag: z.boolean().optional(),
   // shape stays permissive: the 2-4-options + recommendation invariant is
   // enforced in the domain so callers get a domain error
   question: z
@@ -111,7 +113,7 @@ export interface ApiRouterDeps {
    *  #12), resolved from the agent registry by the caller (main.ts) — the
    *  API layer never touches the filesystem/git registry loader itself.
    *  Absent → no registry configured, so no candidates to suggest. */
-  registryCandidates?: { assignees: string[]; workspaces: string[] };
+  registryCandidates?: RegistryCandidates;
   /** The LLM draft seam (issue #12). Absent → /tasks/draft reports the LLM
    *  as unreachable. */
   draftClient?: DraftClient;
@@ -154,9 +156,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const draft = await draftClient.draftTask(parsed.data.dump);
       res.json(draft);
     } catch (err) {
-      // an LLM-side failure (timeout, outage) is the same "unreachable"
-      // signal as no client configured — the UI falls back to the plain
-      // form either way, so it isn't a 500
+      // deliberate departure from this file's usual DomainError-only-maps-to-4xx
+      // rule: any failure surfacing through the DraftClient seam — timeout,
+      // outage, or a bug in the (future) real adapter — is the same
+      // "unreachable" signal as no client configured. AC3 (issue #12) is that
+      // draft failures never block registration, only push the user to the
+      // plain form, so every draftTask() failure gets 503 here, not 500.
       res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
     }
   });

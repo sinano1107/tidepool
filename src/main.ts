@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import { GhCliClient } from "./github.js";
-import { loadRegistry, type AuthorityProfile } from "./registry.js";
+import { loadRegistry, type AuthorityProfile, type RegistryCandidates } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
@@ -78,7 +78,7 @@ function authorityProfile(): AuthorityProfile | undefined {
 
 /** Assignee/workspace candidates for the registration screen (issue #12).
  *  Without a registry there's nothing to suggest from. */
-function registryCandidates(): { assignees: string[]; workspaces: string[] } | undefined {
+function registryCandidates(): RegistryCandidates | undefined {
   if (!registryDir) return undefined;
   const registry = loadRegistry(registryDir);
   return {

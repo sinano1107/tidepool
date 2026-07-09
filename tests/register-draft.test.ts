@@ -61,6 +61,7 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
     assignee: "reef-crab",
     workspace: "tidepool",
     risk_flag: true,
+    review_flag: true,
   });
   t = await bootTidepool({ draftClient });
 
@@ -85,6 +86,7 @@ it("a drafted response registers unmodified through /api/tasks and appends to th
   expect(registered.json.assignee).toBe("reef-crab");
   expect(registered.json.workspace).toBe("tidepool");
   expect(registered.json.risk_flag).toBe(1);
+  expect(registered.json.review_flag).toBe(1);
 
   const list = await api(t.baseUrl, "GET", "/api/tasks");
   expect(list.json.map((x: any) => x.id)).toEqual([existing.json.id, registered.json.id]);

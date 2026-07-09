@@ -109,6 +109,9 @@ export interface RegisterTaskInput extends TaskContent {
   parent_id?: string;
   /** CONTEXT.md's risk flag — declares external effect at registration. */
   risk_flag?: boolean;
+  /** CONTEXT.md's review flag — opts this task into on-completion review
+   *  (layer 1) at registration time (issue #12). */
+  review_flag?: boolean;
   /** Pre-assigns the task to a specific worker at registration (issue #11). */
   assignee?: string;
   /** Registers the task against a specific workspace (issue #11). Absent →
@@ -186,7 +189,7 @@ export function registerTask(
     purpose: input.purpose,
     completion_criteria: input.completion_criteria,
     risk_flag: input.risk_flag ? 1 : 0,
-    review_flag: 0,
+    review_flag: input.review_flag ? 1 : 0,
     parent_id: input.parent_id ?? null,
     sort_key: maxKey + 1,
     handoff_doc: null,

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DraftClient } from "../src/draft.js";
-import type { AuthorityProfile } from "../src/registry.js";
+import type { AuthorityProfile, RegistryCandidates } from "../src/registry.js";
 import { startServer } from "../src/server.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
@@ -33,7 +33,7 @@ export interface BootOptions {
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
   /** Assignee/workspace candidates for the registration screen (issue #12). */
-  registryCandidates?: { assignees: string[]; workspaces: string[] };
+  registryCandidates?: RegistryCandidates;
   /** The LLM draft seam (issue #12). Absent (the default) — same as no LLM
    *  configured, matching the "LLM outage" fallback path. */
   draftClient?: DraftClient;

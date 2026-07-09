@@ -63,6 +63,14 @@ export interface Registry {
   workspaces: Record<string, WorkspaceEntry>;
 }
 
+/** Assignee/workspace name candidates for the registration screen (issue
+ *  #12), resolved from the registry by the caller (main.ts) — the API/server
+ *  layers never touch the filesystem/git registry loader themselves. */
+export interface RegistryCandidates {
+  assignees: string[];
+  workspaces: string[];
+}
+
 const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
