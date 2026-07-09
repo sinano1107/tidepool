@@ -97,6 +97,42 @@ it("approving a risk-approval question registers the pending child and raises th
   expect(updatedParent.status).toBe("blocked");
 });
 
+it("approving a risk-approval question records an auditable event on the parent's risk flag raise", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const question = await decomposeRiskyChild(t, parent.id);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "approve" });
+
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${parent.id}/events`)).json;
+  const raised = events.filter((e: any) => e.kind === "risk_flag_raised");
+  expect(raised).toHaveLength(1);
+  expect(raised[0].payload).toEqual({
+    kind: "risk_flag_raised",
+    origin_question_id: question.id,
+  });
+});
+
+it("the child materialized on approval carries the same decision-log provenance as an ordinary decomposed child", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const question = await decomposeRiskyChild(t, parent.id);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "approve" });
+
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  const decision = log.entries.find((e: any) => e.kind === "decision_logged");
+  expect(decision).toBeDefined();
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const child = board.find((x: any) => x.title === "migrate the prod table");
+  const childEvents = (await api(t.baseUrl, "GET", `/api/tasks/${child.id}/events`)).json;
+  const registered = childEvents.find((e: any) => e.kind === "task_registered");
+  expect(registered.payload.based_on_decision).toBe(decision.id);
+});
+
 it("rejecting a risk-approval question leaves the child unregistered and the parent's risk flag untouched", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");

@@ -38,6 +38,10 @@ export interface PendingChildSpec {
   title: string;
   purpose: string;
   completion_criteria: string;
+  /** The decision-log entry this child would have rested on had it registered
+   *  normally — carried through so an approved child keeps the same
+   *  provenance as an ordinary decomposed sibling. */
+  based_on_decision?: number;
 }
 
 /** The SQLite shape of a task: options/pending-child are JSON TEXT columns.
@@ -481,6 +485,12 @@ export function answerQuestion(
           HUMAN_WORKER_ID,
         );
         db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
+        appendEvent(db, {
+          taskId: question.parent_id!,
+          workerId: HUMAN_WORKER_ID,
+          payload: { kind: "risk_flag_raised", origin_question_id: question.id },
+          at: now,
+        });
       }
       unblockTarget = question.parent_id ? getTask(db, question.parent_id) : undefined;
     }
@@ -575,6 +585,7 @@ export function decomposeTask(
               title: child.title,
               purpose: child.purpose,
               completion_criteria: child.completion_criteria,
+              based_on_decision: decisionId,
             },
             based_on_decision: decisionId,
           },
