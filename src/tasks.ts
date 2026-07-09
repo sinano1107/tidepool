@@ -564,7 +564,9 @@ export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
  *  children, `held` from an ancestor's unanswered question. Presentation
  *  only — the stored status stays one of the four persisted values. `blocked`
  *  takes precedence when both apply: it names the more local reason. */
-export type BoardTask = Omit<Task, "status"> & { status: TaskStatus | "blocked" | "held" };
+export type BoardTask = Omit<Task, "status"> & {
+  status: TaskStatus | "blocked" | "held" | "skipped";
+};
 
 function isHeld(db: Db, taskId: string): boolean {
   const { held } = db
@@ -580,19 +582,48 @@ export function presentTask(db: Db, task: Task): BoardTask {
   return { ...task, status: task.status };
 }
 
-/** The whole board in one query — the list view derives blocked/held in SQL
- *  rather than issuing one probe per row. */
-export function listBoard(db: Db): BoardTask[] {
-  const rows = db
+/** The shared shape behind `listBoard`/`listQueue`: the same CTE and the same
+ *  blocked/held derivation, with room for one extra `CASE` branch injected
+ *  before the fallback so a view can layer on one more display-only state. */
+function boardRows(
+  db: Db,
+  extraCase: string,
+  params: unknown[] = [],
+): Array<Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" | "held" | "skipped" }> {
+  return db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
        SELECT *,
          CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
               WHEN status = 'todo' AND ${heldSql("tasks.id")} THEN 'held'
+              ${extraCase}
               ELSE status END AS status
        FROM tasks ORDER BY sort_key`,
     )
-    .all() as Array<Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" | "held" }>;
+    .all(...params) as Array<
+    Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" | "held" | "skipped" }
+  >;
+}
+
+/** The whole board in one query — the list view derives blocked/held in SQL
+ *  rather than issuing one probe per row. */
+export function listBoard(db: Db): BoardTask[] {
+  const rows = boardRows(db, "");
+  return rows.map((row) => ({ ...row, question_options: parseOptions(row.question_options) }));
+}
+
+/** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
+ *  frozen by the Swell throttle. `skipped` is display-only and queue-view-only
+ *  (CONTEXT.md's Usage limit) — it never reaches `listBoard`/`presentTask`,
+ *  so the board keeps showing plain `todo` while the account is throttled.
+ *  `throttled` is computed by the caller (`isPickupBlocked`) — this module
+ *  stays free of a dependency on throttle.ts. */
+export function listQueue(db: Db, throttled: boolean): BoardTask[] {
+  const rows = boardRows(
+    db,
+    "WHEN status = 'todo' AND type <> 'question' AND ? = 1 THEN 'skipped'",
+    [throttled ? 1 : 0],
+  );
   return rows.map((row) => ({ ...row, question_options: parseOptions(row.question_options) }));
 }
 

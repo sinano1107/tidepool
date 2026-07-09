@@ -1,5 +1,7 @@
 import type { Clock } from "../src/clock.js";
+import type { Db } from "../src/db.js";
 import type { Task } from "../src/tasks.js";
+import { reportThrottle, type ThrottleEvent } from "../src/throttle.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 
 interface ScheduledInterval {
@@ -49,6 +51,13 @@ export class ScriptedWorker implements WorkerAdapter {
   readonly id = "fake-worker";
   readonly started: Task[] = [];
   readonly killed: Array<{ taskId: string; signal: KillSignal }> = [];
+  private db?: Db;
+
+  /** Wired by the harness once the board's db exists — mirrors how the real
+   *  ClaudeCodeWorker receives it via the WorkerFactory. */
+  attachDb(db: Db): void {
+    this.db = db;
+  }
 
   start(task: Task): void {
     this.started.push(task);
@@ -56,5 +65,12 @@ export class ScriptedWorker implements WorkerAdapter {
 
   kill(taskId: string, signal: KillSignal): void {
     this.killed.push({ taskId, signal });
+  }
+
+  /** Scripts the adapter observing a rate-limit event in stream-json (#10) —
+   *  the same seam the real ClaudeCodeWorker will call. */
+  reportThrottle(event: ThrottleEvent): void {
+    if (!this.db) throw new Error("ScriptedWorker.reportThrottle called before attachDb");
+    reportThrottle(this.db, event);
   }
 }

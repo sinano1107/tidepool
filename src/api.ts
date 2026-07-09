@@ -8,11 +8,13 @@ import {
   DomainError,
   getTask,
   listBoard,
+  listQueue,
   moveTask,
   presentTask,
   registerTask,
   type Task,
 } from "./tasks.js";
+import { isPickupBlocked } from "./throttle.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -282,6 +284,12 @@ export function createApiRouter(
 
   router.get("/tasks", (_req, res) => {
     res.json(listBoard(db));
+  });
+
+  // the queue view (#10): unlike the board, a todo task pickup can't reach
+  // right now (Swell throttle) shows here as skipped
+  router.get("/queue", (_req, res) => {
+    res.json(listQueue(db, isPickupBlocked(db, clock.now())));
   });
 
   router.get("/tasks/:id/events", (req, res) => {

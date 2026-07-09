@@ -40,7 +40,11 @@ export type EventPayload =
   // version (ADR 0001: commit hash = agent version); definition_version is
   // only the human-readable stamp from the definition's frontmatter. The
   // vocabulary is registry-shaped, not vendor-shaped — no CLI names leak in.
-  | { kind: "worker_spawned"; registry_commit: string; definition_version: string };
+  | { kind: "worker_spawned"; registry_commit: string; definition_version: string }
+  // Swell throttle (issue #10): a mid-run rejected event interrupted this
+  // task — an environmental recovery, deliberately not a failure/escalation
+  // kind, so it never touches escalation or failure statistics.
+  | { kind: "worker_throttled"; resets_at: string | null };
 
 export type EventKind = EventPayload["kind"];
 

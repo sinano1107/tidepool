@@ -9,6 +9,7 @@ import { createMcpRouter } from "./mcp.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { getTask } from "./tasks.js";
+import { startThrottleWatch } from "./throttle.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
@@ -66,6 +67,13 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     worker,
     workspace: options.workspace,
   });
+  const throttleWatch = startThrottleWatch({
+    db,
+    clock: options.clock,
+    slot,
+    scheduler,
+    workspace: options.workspace,
+  });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
   const stopTriageWatchdog = options.clock.setInterval(() => {
@@ -103,6 +111,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       new Promise((resolve, reject) => {
         stopTriageWatchdog();
         watchdog?.stop();
+        throttleWatch.stop();
         scheduler.stop();
         listener.close((err) => (err ? reject(err) : resolve()));
         db.close();

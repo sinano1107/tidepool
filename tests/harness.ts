@@ -39,7 +39,10 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     dbPath: join(dir, "board.sqlite"),
     port: 0,
     clock,
-    worker: () => worker,
+    worker: ({ db }) => {
+      worker.attachDb(db);
+      return worker;
+    },
     workspace: options.workspace,
     watchdog: options.watchdog,
   });

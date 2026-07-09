@@ -2,6 +2,7 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
 import { nextSlotTask, pickupTask } from "./tasks.js";
+import { isPickupBlocked } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import type { WorkerAdapter } from "./worker.js";
 import { ensureTaskBranch, workspaceNeedsHuman, type WorkspaceConfig } from "./workspace.js";
@@ -34,6 +35,9 @@ export function startScheduler(deps: {
     // a quarantined workspace halts its tasks — with the board-level single
     // workspace, that is every slot task (issue #8)
     if (workspace && workspaceNeedsHuman(db, workspace.name)) return;
+    // rejected (#10): a usage-limit hit is environmental, not a failure — no
+    // new task starts until the adapter-reported resets_at passes
+    if (isPickupBlocked(db, clock.now())) return;
     const head = nextSlotTask(db);
     if (!head) return;
     const picked = pickupTask(db, head, worker.id, clock.now());
