@@ -610,8 +610,10 @@ export const MERGE_QUESTION_OPTIONS = ["merge", "hold"] as const;
 
 /** Registers the merge-decision question every merge escalation shares
  *  (the `escalate` dial, and `auto_if_ci_green`'s risky-task and CI-failure
- *  fallbacks) — only the title/purpose/recommendation differ per caller. */
-function registerMergeQuestion(
+ *  fallbacks) — only the title/purpose/recommendation differ per caller.
+ *  Exported so merge.ts's CI-failure fallback shares this exact shape too,
+ *  rather than redeclaring it (they must never drift apart). */
+export function registerMergeQuestion(
   db: Db,
   task: Task,
   prNumber: number,

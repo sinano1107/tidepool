@@ -182,6 +182,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         if (status !== "success") {
           throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
         }
+        // the external merge runs before the question is committed answered
+        // (same ordering as openHandoffPr's PR-creation-then-recordPrOpened):
+        // if this throws, the question stays open to retry — committing the
+        // answer first would strand it "answered" with no merge and no retry
+        await github.mergePullRequest({ path: workspace.path, number: mergePr! });
       }
       // an answer during an open triage session is activity (defers the
       // auto-commit) and stages the unblock instead of moving the queue
@@ -194,7 +199,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         session && ((taskId) => stageFrontInsert(db, session.id, taskId)),
       );
       if (wantsMerge) {
-        await github!.mergePullRequest({ path: workspace!.path, number: mergePr! });
         appendEvent(db, {
           taskId: task.id,
           workerId: HUMAN_WORKER_ID,

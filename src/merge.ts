@@ -6,8 +6,7 @@ import {
   getTask,
   HUMAN_WORKER_ID,
   listPendingAutoMerges,
-  MERGE_QUESTION_OPTIONS,
-  registerTask,
+  registerMergeQuestion,
 } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -26,9 +25,12 @@ export async function checkPendingAutoMerges(
   for (const { task_id, pr_number } of listPendingAutoMerges(db)) {
     const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
     if (status === "pending") continue;
-    clearPendingAutoMerge(db, task_id);
     if (status === "success") {
+      // the external merge runs before the row is cleared: if it throws, the
+      // task stays queued and the next poll retries it, rather than the row
+      // vanishing with no merge and no question to fall back on
       await github.mergePullRequest({ path: workspace.path, number: pr_number });
+      clearPendingAutoMerge(db, task_id);
       appendEvent(db, {
         taskId: task_id,
         workerId: HUMAN_WORKER_ID,
@@ -39,20 +41,16 @@ export async function checkPendingAutoMerges(
     }
     const task = getTask(db, task_id);
     if (!task) continue;
-    registerTask(
+    clearPendingAutoMerge(db, task_id);
+    registerMergeQuestion(
       db,
-      {
-        type: "question",
-        title: `merge PR #${pr_number}: ${task.title}`,
-        purpose:
-          `"${task.title}"'s auto_if_ci_green auto-merge found CI red on PR #${pr_number}. ` +
-          "Merge anyway, or hold?",
-        completion_criteria: "a human decides whether to merge",
-        question: { options: [...MERGE_QUESTION_OPTIONS], recommendation: "hold" },
-        pending_merge_pr: pr_number,
-      },
-      now,
+      task,
+      pr_number,
+      `"${task.title}"'s auto_if_ci_green auto-merge found CI red on PR #${pr_number}. ` +
+        "Merge anyway, or hold?",
+      "hold",
       HUMAN_WORKER_ID,
+      now,
     );
   }
 }

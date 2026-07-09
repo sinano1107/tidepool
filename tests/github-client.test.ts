@@ -86,3 +86,70 @@ it("gh pr create の前にタスクブランチを origin へ push する", asyn
   expect(invocations).toContain("pr create");
   expect(invocations).toContain("task/abc");
 });
+
+/** Stands in for `gh pr checks`: prints the given JSON to stdout and exits
+ *  with the given code — `gh` itself exits non-zero while any check is
+ *  pending or failing (its own documented exit codes), which is exactly the
+ *  case getCiStatus's stdout-capture fallback exists for. */
+async function fakeGhChecks(stdout: string, exitCode: number): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const script = join(dir, "gh");
+  writeFileSync(script, `#!/bin/sh\nprintf '%s' '${stdout}'\nexit ${exitCode}\n`);
+  chmodSync(script, 0o755);
+  return dir;
+}
+
+it("getCiStatus は全チェック pass で success を返す", async () => {
+  const dir = await fakeGhChecks('[{"bucket":"pass"}]', 0);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  expect(status).toBe("success");
+});
+
+it("getCiStatus は pending なチェックが残っていれば(非ゼロ終了でも)pending を返す", async () => {
+  const dir = await fakeGhChecks('[{"bucket":"pending"}]', 8);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  expect(status).toBe("pending");
+});
+
+it("getCiStatus は fail バケットがあれば failure を返す", async () => {
+  const dir = await fakeGhChecks('[{"bucket":"pass"},{"bucket":"fail"}]', 1);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  expect(status).toBe("failure");
+});
+
+it("getCiStatus は非ゼロ終了で stdout が全く無い場合、チェック無しとして success を返す", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\nexit 1\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  expect(status).toBe("success");
+});
+
+it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$@" >> "${logPath}"\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  await new GhCliClient().mergePullRequest({ path: "/tmp", number: 7 });
+
+  const invocations = await readFile(logPath, "utf8");
+  expect(invocations).toContain("pr merge 7 --merge");
+});
