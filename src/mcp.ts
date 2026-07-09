@@ -35,7 +35,7 @@ export interface McpDeps {
    *  board). */
   github?: GitHubClient;
   /** This board's one configured worker's authority profile (issue #11).
-   *  Absent → assignable_to is unrestricted. */
+   *  Absent → assignable_to and allowed_workspaces are both unrestricted. */
   authority?: AuthorityProfile;
 }
 

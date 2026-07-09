@@ -39,10 +39,17 @@ export interface Task {
   created_at: string;
 }
 
-export interface PendingChildSpec {
+/** The content shared by every task-registration shape (ChildSpec,
+ *  PendingChildSpec, RegisterTaskInput) — kept as one type so a field added to
+ *  all three in lockstep (as risk_flag/assignee/workspace each were, issue
+ *  #11) only needs declaring once. */
+export interface TaskContent {
   title: string;
   purpose: string;
   completion_criteria: string;
+}
+
+export interface PendingChildSpec extends TaskContent {
   /** The decision-log entry this child would have rested on had it registered
    *  normally — carried through so an approved child keeps the same
    *  provenance as an ordinary decomposed sibling. */
@@ -87,11 +94,8 @@ export interface QuestionSpec {
   recommendation: string;
 }
 
-export interface RegisterTaskInput {
+export interface RegisterTaskInput extends TaskContent {
   type: TaskType;
-  title: string;
-  purpose: string;
-  completion_criteria: string;
   parent_id?: string;
   /** CONTEXT.md's risk flag — declares external effect at registration. */
   risk_flag?: boolean;
@@ -555,10 +559,7 @@ export function logDecision(
   });
 }
 
-export interface ChildSpec {
-  title: string;
-  purpose: string;
-  completion_criteria: string;
+export interface ChildSpec extends TaskContent {
   /** Declares this child has external effect (CONTEXT.md's risk flag). A
    *  child riskier than its parent is out of the registering worker's
    *  authority: decomposeTask converts it into an approval question rather
@@ -580,6 +581,15 @@ export interface ChildSpec {
 export interface AuthorityContext {
   assignable_to?: string[];
   allowed_workspaces?: string[];
+}
+
+/** A requested value is out of authority only when it's explicitly stated
+ *  (an unstated value never itself needs approval) and the profile actually
+ *  restricts it (no allowlist configured means unrestricted). Shared by the
+ *  assignable_to and allowed_workspaces checks in decomposeTask — risk_flag's
+ *  check is its own shape (compared against the parent's flag, not a list). */
+function outsideAuthority(value: string | undefined, allowlist: string[] | undefined): boolean {
+  return value !== undefined && allowlist !== undefined && !allowlist.includes(value);
 }
 
 /** Options fixed by the server for a pending-child approval question (issue
@@ -617,18 +627,10 @@ export function decomposeTask(
       if (child.risk_flag && !parent.risk_flag) {
         reasons.push("carries risk beyond the parent's declared risk");
       }
-      if (
-        child.assignee !== undefined &&
-        authority?.assignable_to !== undefined &&
-        !authority.assignable_to.includes(child.assignee)
-      ) {
+      if (outsideAuthority(child.assignee, authority?.assignable_to)) {
         reasons.push(`assigns to "${child.assignee}", outside ${workerId}'s assignable_to`);
       }
-      if (
-        child.workspace !== undefined &&
-        authority?.allowed_workspaces !== undefined &&
-        !authority.allowed_workspaces.includes(child.workspace)
-      ) {
+      if (outsideAuthority(child.workspace, authority?.allowed_workspaces)) {
         reasons.push(
           `targets workspace "${child.workspace}", outside ${workerId}'s allowed_workspaces`,
         );
