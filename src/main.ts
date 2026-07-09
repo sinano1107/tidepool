@@ -17,6 +17,15 @@ class LoggingWorker implements WorkerAdapter {
   kill(taskId: string, signal: KillSignal): void {
     console.log(`[worker] would send ${signal} to ${taskId}`);
   }
+  /** No registry means no real adapter behind this — report a well-under-
+   *  threshold reading so pickup logging is never fail-closed by a check
+   *  this placeholder cannot actually perform. */
+  async checkUsage(): Promise<string | null> {
+    return (
+      "Current session: 0% used · resets Jan 1 at 12:00am (UTC)\n" +
+      "Current week (all models): 0% used · resets Jan 1 at 12:00am (UTC)\n"
+    );
+  }
 }
 
 const port = Number(process.env.PORT ?? 4589);

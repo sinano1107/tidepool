@@ -1,8 +1,12 @@
 import type { Clock } from "../src/clock.js";
-import type { Db } from "../src/db.js";
 import type { Task } from "../src/tasks.js";
-import { reportThrottle, type ThrottleEvent } from "../src/throttle.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
+
+/** A reading well under the default threshold — the harness default so tests
+ *  unrelated to throttling never need to script usage themselves. */
+const NOT_THROTTLED_USAGE_TEXT =
+  "Current session: 0% used · resets Jan 1 at 12:00am (UTC)\n" +
+  "Current week (all models): 0% used · resets Jan 1 at 12:00am (UTC)\n";
 
 interface ScheduledInterval {
   fn: () => void;
@@ -51,13 +55,7 @@ export class ScriptedWorker implements WorkerAdapter {
   readonly id = "fake-worker";
   readonly started: Task[] = [];
   readonly killed: Array<{ taskId: string; signal: KillSignal }> = [];
-  private db?: Db;
-
-  /** Wired by the harness once the board's db exists — mirrors how the real
-   *  ClaudeCodeWorker receives it via the WorkerFactory. */
-  attachDb(db: Db): void {
-    this.db = db;
-  }
+  private usageText: string | null = NOT_THROTTLED_USAGE_TEXT;
 
   start(task: Task): void {
     this.started.push(task);
@@ -67,10 +65,14 @@ export class ScriptedWorker implements WorkerAdapter {
     this.killed.push({ taskId, signal });
   }
 
-  /** Scripts the adapter observing a rate-limit event in stream-json (#10) —
-   *  the same seam the real ClaudeCodeWorker will call. */
-  reportThrottle(event: ThrottleEvent): void {
-    if (!this.db) throw new Error("ScriptedWorker.reportThrottle called before attachDb");
-    reportThrottle(this.db, event);
+  async checkUsage(): Promise<string | null> {
+    return this.usageText;
+  }
+
+  /** Scripts what the next checkUsage() call(s) return (ADR 0008) — the same
+   *  seam the real ClaudeCodeWorker's `/usage` JIT poll returns through. Pass
+   *  null to script a check failure (fail-closed). */
+  scriptUsage(resultText: string | null): void {
+    this.usageText = resultText;
   }
 }

@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn } from "node:child_process";
+import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Clock } from "./clock.js";
@@ -6,37 +6,7 @@ import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import { loadRegistry, type Registry } from "./registry.js";
 import type { Task } from "./tasks.js";
-import { reportThrottle, type ThrottleEvent } from "./throttle.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-
-/** #10 (要検証): the exact stream-json/exit shape a real rate-limited session
- *  emits has not been observed against a real 429 — this parses the
- *  documented Anthropic error taxonomy (`rate_limit_error`, a Unix-epoch-
- *  seconds `resets_at`) out of any line that carries it. Confirm this against
- *  a real limit-death before trusting it in production.
- *
- *  `allowed_warning` detection is deliberately NOT implemented here: unlike
- *  `rejected` (grounded in the documented error type above), there is no
- *  known signal for "allowed, but near the limit" to pattern-match against —
- *  guessing one would be worse than leaving the gap explicit. Observe a real
- *  near-limit session's stream-json before adding this. */
-function parseThrottleEvent(line: string): ThrottleEvent | null {
-  let msg: unknown;
-  try {
-    msg = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (typeof msg !== "object" || msg === null) return null;
-  const error = (msg as { error?: unknown }).error;
-  if (typeof error !== "object" || error === null) return null;
-  const { type, resets_at: resetsAt } = error as { type?: unknown; resets_at?: unknown };
-  if (type !== "rate_limit_error") return null;
-  return {
-    state: "rejected",
-    resetsAt: typeof resetsAt === "number" ? new Date(resetsAt * 1000) : null,
-  };
-}
 
 /** The process boundary the adapter is tested at: everything vendor-specific
  *  (the claude CLI, its flags) flows through this one call. */
@@ -65,7 +35,21 @@ export interface ClaudeWorkerOptions {
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
   spawn?: SpawnFn;
+  execUsage?: ExecUsageFn;
 }
+
+/** ADR 0008's just-in-time usage check: `claude -p "/usage" --output-format
+ *  json` (measured 663ms, $0, no model call). Request/response, unlike the
+ *  streaming SpawnFn above — a separate seam. */
+export type ExecUsageFn = () => Promise<string>;
+
+const defaultExecUsage: ExecUsageFn = () =>
+  new Promise((resolve, reject) => {
+    execFile("claude", ["-p", "/usage", "--output-format", "json"], (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout);
+    });
+  });
 
 const defaultSpawn: SpawnFn = (command, args, opts) => {
   const child = nodeSpawn(command, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "inherit"] });
@@ -86,6 +70,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   readonly id: string;
   private readonly options: ClaudeWorkerOptions;
   private readonly spawn: SpawnFn;
+  private readonly execUsage: ExecUsageFn;
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
    *  paths against its own cwd (the workspace), not against the board. */
   private readonly logDir: string;
@@ -97,6 +82,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.id = options.agent;
     this.options = options;
     this.spawn = options.spawn ?? defaultSpawn;
+    this.execUsage = options.execUsage ?? defaultExecUsage;
     this.logDir = resolve(options.logDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
@@ -169,20 +155,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
     child.stdout.pipe(createWriteStream(join(this.logDir, `${task.id}.stream.jsonl`)));
-    // a second, independent reader off the same stream (issue #10): rate-limit
-    // events are account-level facts the adapter reports directly, the same
-    // pattern as the worker_spawned event below (ADR 0002: fire-and-forget)
-    let buffer = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString("utf8");
-      let newlineIndex: number;
-      while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
-        const line = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-        const event = parseThrottleEvent(line);
-        if (event) reportThrottle(this.options.db, event);
-      }
-    });
     this.running.set(task.id, child);
     appendEvent(this.options.db, {
       taskId: task.id,
@@ -198,5 +170,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
 
   kill(taskId: string, signal: KillSignal): void {
     this.running.get(taskId)?.kill(signal);
+  }
+
+  async checkUsage(): Promise<string | null> {
+    try {
+      const stdout = await this.execUsage();
+      const parsed: unknown = JSON.parse(stdout);
+      const result = (parsed as { result?: unknown }).result;
+      return typeof result === "string" ? result : null;
+    } catch {
+      return null;
+    }
   }
 }

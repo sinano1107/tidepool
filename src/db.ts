@@ -86,14 +86,13 @@ export function openDb(path: string): Db {
       needs_human INTEGER NOT NULL DEFAULT 0
     );
 
-    -- Swell throttle (issue #10): one row, account-scoped (not per-task/
-    -- workspace) usage-limit state reported by the adapter from stream-json
-    -- rate-limit events. No row means normal (unthrottled).
+    -- Swell throttle (ADR 0008): one row, account-scoped (not per-task/
+    -- workspace) usage state from the last just-in-time /usage poll at pickup
+    -- time. No row means normal (unthrottled).
     CREATE TABLE IF NOT EXISTS throttle_state (
       id         INTEGER PRIMARY KEY CHECK (id = 1),
-      state      TEXT NOT NULL CHECK (state IN ('rejected', 'allowed_warning')),
-      resets_at  TEXT,
-      utilization REAL
+      throttled  INTEGER NOT NULL,
+      resets_at  TEXT
     );
 
     -- append-only is enforced by structure, not convention

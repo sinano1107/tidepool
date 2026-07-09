@@ -17,4 +17,9 @@ export interface WorkerAdapter {
    *  SIGTERM → grace → SIGKILL timing (#9); the adapter only delivers. A
    *  signal to an unknown/already-gone task is a no-op. */
   kill(taskId: string, signal: KillSignal): void;
+  /** Just-in-time usage check (ADR 0008): the raw `result` text of
+   *  `claude -p "/usage" --output-format json`, or null if the check itself
+   *  failed (spawn error, non-zero exit, unparseable JSON). The scheduler
+   *  treats a null the same as an unrecognized snapshot — fail-closed. */
+  checkUsage(): Promise<string | null>;
 }

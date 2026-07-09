@@ -19,6 +19,12 @@ it("worker.start の throw はボードを落とさない: タスクは slot を
       throw new Error("registry went bad after boot");
     },
     kill(): void {},
+    async checkUsage() {
+      return (
+        "Current session: 0% used · resets Jan 1 at 12:00am (UTC)\n" +
+        "Current week (all models): 0% used · resets Jan 1 at 12:00am (UTC)\n"
+      );
+    },
   };
   const task = registerTask(
     db,

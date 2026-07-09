@@ -8,7 +8,6 @@ import { ClaudeCodeWorker, type SpawnFn } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import type { Task } from "../src/tasks.js";
-import { isPickupBlocked } from "../src/throttle.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -248,21 +247,43 @@ describe("ClaudeCodeWorker", () => {
     ).toThrow(/unknown workspace/);
   });
 
-  it("stream-json 中の rate_limit_error を検知して throttle 状態を記録する(#10; 実CLI出力の形は要検証・暫定実装)", async () => {
-    const { start, stdout, db } = await makeWorker();
-    start("task-throttle");
-    const resetsAtEpoch = 1_800_000_000; // fixed unix seconds, far in the future
-    stdout.write(
-      `${JSON.stringify({
-        type: "result",
-        is_error: true,
-        error: { type: "rate_limit_error", resets_at: resetsAtEpoch },
-      })}\n`,
-    );
-    await vi.waitFor(() => {
-      expect(isPickupBlocked(db, new Date(resetsAtEpoch * 1000 - 1000))).toBe(true);
-      expect(isPickupBlocked(db, new Date(resetsAtEpoch * 1000 + 1000))).toBe(false);
+  it("checkUsage は `claude -p /usage --output-format json` の result フィールドをそのまま返す(ADR 0008)", async () => {
+    const registryDir = await makeRegistry();
+    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    const resultText = "Current session: 56% used · resets Jul 9 at 5:59pm (Asia/Tokyo)\n";
+    const worker = new ClaudeCodeWorker({
+      db: openDb(":memory:"),
+      clock: new FakeClock(),
+      registryDir,
+      agent: "deckhand",
+      workspace: "tidepool",
+      mcpUrl: "http://127.0.0.1:4589/mcp",
+      logDir,
+      spawn: recordingSpawn().spawn,
+      execUsage: async () => JSON.stringify({ result: resultText }),
     });
+
+    await expect(worker.checkUsage()).resolves.toBe(resultText);
+  });
+
+  it("checkUsage は exec の失敗を null に丸める(fail-closed の入り口)", async () => {
+    const registryDir = await makeRegistry();
+    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    const worker = new ClaudeCodeWorker({
+      db: openDb(":memory:"),
+      clock: new FakeClock(),
+      registryDir,
+      agent: "deckhand",
+      workspace: "tidepool",
+      mcpUrl: "http://127.0.0.1:4589/mcp",
+      logDir,
+      spawn: recordingSpawn().spawn,
+      execUsage: async () => {
+        throw new Error("claude binary not found");
+      },
+    });
+
+    await expect(worker.checkUsage()).resolves.toBeNull();
   });
 
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {
