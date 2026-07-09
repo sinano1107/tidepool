@@ -145,6 +145,30 @@ it("review タスクの complete_task では PR が作られない", async () =>
   expect(t.github.requests).toHaveLength(0);
 });
 
+it("tree rule が失敗して workspace が quarantine された場合は PR が作られない", async () => {
+  const ws = await makeWorkspace();
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "doomed work");
+  await t.clock.advance(HOUR);
+
+  // tree-rule.test.ts と同じ代役: リポジトリ自体を壊して WIP コミットを失敗させる
+  writeFileSync(join(ws.path, "junk.txt"), "uncommittable\n");
+  await rm(join(ws.path, ".git"), { recursive: true, force: true });
+  const client = await mcpClient(t.baseUrl, task.id);
+  const res: any = await client.callTool({
+    name: "complete_task",
+    arguments: { handoff: fullHandoff },
+  });
+  expect(res.isError ?? false).toBe(false); // 完了自体は成立している
+
+  const done = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+  expect(done.status).toBe("done");
+  await client.close();
+
+  // WIP が乗っていない(乗せられなかった)ブランチに向けて PR は作られない
+  expect(t.github.requests).toHaveLength(0);
+});
+
 it("question タスクの完了(回答)では PR が作られない", async () => {
   const ws = await makeWorkspace();
   t = await bootTidepool({ workspace: ws });

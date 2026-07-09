@@ -17,7 +17,12 @@ import {
   logDecision,
   type Task,
 } from "./tasks.js";
-import { releaseWorkspace, taskBranch, type WorkspaceConfig } from "./workspace.js";
+import {
+  releaseWorkspace,
+  taskBranch,
+  workspaceNeedsHuman,
+  type WorkspaceConfig,
+} from "./workspace.js";
 
 export interface McpDeps {
   db: Db;
@@ -34,17 +39,21 @@ export interface McpDeps {
  *  branch discipline (workspace.ts) forbids direct writes to. */
 const PR_BASE_BRANCH = "main";
 
-/** Work-task completion → PR (issue #19): the tree rule already stashed the
- *  work as a WIP commit on the task branch by the time this runs, so the PR
- *  head always exists. Never entrusted to the worker, never lets a PR failure
- *  touch the completion that already landed — best-effort, logged and
- *  swallowed. question/review tasks carry no handoff doc and open no PR. */
+/** Work-task completion → PR (issue #19): by the time this runs, the tree
+ *  rule has either stashed the work as a WIP commit on the task branch, or
+ *  failed and quarantined the workspace (releaseWorkspace swallows that
+ *  failure so the completion itself still stands) — in the latter case the
+ *  task branch may carry none of the finished work, so no PR is attempted.
+ *  Never entrusted to the worker, never lets a PR failure touch the
+ *  completion that already landed — best-effort, logged and swallowed.
+ *  question/review tasks carry no handoff doc and open no PR. */
 async function openHandoffPr(
   deps: McpDeps,
   task: Task,
   handoffDoc: string | null,
 ): Promise<void> {
   if (task.type !== "work" || !deps.github || !deps.workspace) return;
+  if (workspaceNeedsHuman(deps.db, deps.workspace.name)) return;
   try {
     await deps.github.createPullRequest({
       path: deps.workspace.path,

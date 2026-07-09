@@ -32,6 +32,13 @@ const PR_URL_RE = /\/pull\/(\d+)\s*$/;
  *  the number is the last path segment. */
 export class GhCliClient implements GitHubClient {
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
+    // `gh pr create --head <branch>` needs the branch to already exist on the
+    // remote — run non-interactively, it cannot fall back to its "push now?"
+    // prompt.
+    execFileSync("git", ["push", "-u", "origin", input.branch], {
+      cwd: input.path,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const url = execFileSync(
       "gh",
       [
