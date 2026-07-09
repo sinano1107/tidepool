@@ -28,19 +28,39 @@ export interface Task {
   question_answer: string | null;
   /** System-internal only (ADR 0006) — never set via MCP or the JSON API. */
   question_cancel_option: string | null;
+  /** System-internal only (issue #11): a risk-approval question's would-be
+   *  child, materialized by answerQuestion only on an "approve" answer. */
+  question_pending_child: PendingChildSpec | null;
   created_at: string;
 }
 
-/** The SQLite shape of a task: options are a JSON TEXT column. The JSON stays
- *  at this boundary — domain code sees `string[]`. */
-type TaskRow = Omit<Task, "question_options"> & { question_options: string | null };
+export interface PendingChildSpec {
+  title: string;
+  purpose: string;
+  completion_criteria: string;
+}
+
+/** The SQLite shape of a task: options/pending-child are JSON TEXT columns.
+ *  The JSON stays at this boundary — domain code sees the parsed shape. */
+type TaskRow = Omit<Task, "question_options" | "question_pending_child"> & {
+  question_options: string | null;
+  question_pending_child: string | null;
+};
 
 function parseOptions(json: string | null): string[] | null {
   return json === null ? null : JSON.parse(json);
 }
 
+function parsePendingChild(json: string | null): PendingChildSpec | null {
+  return json === null ? null : JSON.parse(json);
+}
+
 export function rowToTask(row: TaskRow): Task {
-  return { ...row, question_options: parseOptions(row.question_options) };
+  return {
+    ...row,
+    question_options: parseOptions(row.question_options),
+    question_pending_child: parsePendingChild(row.question_pending_child),
+  };
 }
 
 export interface QuestionSpec {
@@ -54,6 +74,8 @@ export interface RegisterTaskInput {
   purpose: string;
   completion_criteria: string;
   parent_id?: string;
+  /** CONTEXT.md's risk flag — declares external effect at registration. */
+  risk_flag?: boolean;
   question?: QuestionSpec;
   /** System-internal only (ADR 0006): declares that answering the question
    *  with this exact option cancels the plan (see `cancelTask`) instead of
@@ -61,6 +83,10 @@ export interface RegisterTaskInput {
    *  options. Never set via MCP or the JSON API — only the watchdog's
    *  failure-question registration sets it. */
   cancel_option?: string;
+  /** System-internal only (issue #11): the would-be child of a risk-approval
+   *  question, materialized by answerQuestion on an "approve" answer. Never
+   *  set via MCP or the JSON API — only decomposeTask sets this. */
+  pending_child?: PendingChildSpec;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
 }
@@ -115,7 +141,7 @@ export function registerTask(
     title: input.title,
     purpose: input.purpose,
     completion_criteria: input.completion_criteria,
-    risk_flag: 0,
+    risk_flag: input.risk_flag ? 1 : 0,
     review_flag: 0,
     parent_id: input.parent_id ?? null,
     sort_key: maxKey + 1,
@@ -124,19 +150,24 @@ export function registerTask(
     question_recommendation: input.question?.recommendation ?? null,
     question_answer: null,
     question_cancel_option: input.cancel_option ?? null,
+    question_pending_child: input.pending_child ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc,
-         question_options, question_recommendation, question_answer, question_cancel_option, created_at)
+         question_options, question_recommendation, question_answer, question_cancel_option,
+         question_pending_child, created_at)
        VALUES (@id, @type, @status, @assignee, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc,
-         @question_options, @question_recommendation, @question_answer, @question_cancel_option, @created_at)`,
+         @question_options, @question_recommendation, @question_answer, @question_cancel_option,
+         @question_pending_child, @created_at)`,
     ).run({
       ...task,
       question_options: task.question_options && JSON.stringify(task.question_options),
+      question_pending_child:
+        task.question_pending_child && JSON.stringify(task.question_pending_child),
     });
     appendEvent(db, {
       taskId: task.id,
@@ -433,6 +464,24 @@ export function answerQuestion(
         cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now);
       }
     } else {
+      // risk-approval question (issue #11): the child was never registered at
+      // decompose time. "approve" materializes it now, riskier than its
+      // parent for real, and raises the parent's own risk flag to match
+      // (upward propagation) — a "reject" answer leaves it unregistered.
+      if (question.question_pending_child && answer === "approve") {
+        registerTask(
+          db,
+          {
+            type: "work",
+            ...question.question_pending_child,
+            risk_flag: true,
+            parent_id: question.parent_id!,
+          },
+          now,
+          HUMAN_WORKER_ID,
+        );
+        db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
+      }
       unblockTarget = question.parent_id ? getTask(db, question.parent_id) : undefined;
     }
 
@@ -473,7 +522,17 @@ export interface ChildSpec {
   title: string;
   purpose: string;
   completion_criteria: string;
+  /** Declares this child has external effect (CONTEXT.md's risk flag). A
+   *  child riskier than its parent is out of the registering worker's
+   *  authority: decomposeTask converts it into an approval question rather
+   *  than registering it (ADR 0002 / issue #11). */
+  risk_flag?: boolean;
 }
+
+/** Options fixed by the server for a risk-approval question (issue #11) — not
+ *  a caller-supplied QuestionSpec, so answerQuestion recognizes this exact
+ *  pair rather than a free-form escalation. */
+const RISK_APPROVAL_OPTIONS = ["approve", "reject"] as const;
 
 export interface DecomposeInput {
   reason: string;
@@ -500,6 +559,30 @@ export function decomposeTask(
   db.transaction(() => {
     const decisionId = logDecision(db, parent, input.reason, workerId, now);
     for (const child of input.children) {
+      if (child.risk_flag && !parent.risk_flag) {
+        registerTask(
+          db,
+          {
+            type: "question",
+            title: `approve risk escalation: ${child.title}`,
+            purpose:
+              `"${child.title}" carries risk beyond the parent's declared risk and is ` +
+              `outside ${workerId}'s authority to register unapproved. ${child.purpose}`,
+            completion_criteria: "a human approves or rejects the child registration",
+            parent_id: parent.id,
+            question: { options: [...RISK_APPROVAL_OPTIONS], recommendation: "approve" },
+            pending_child: {
+              title: child.title,
+              purpose: child.purpose,
+              completion_criteria: child.completion_criteria,
+            },
+            based_on_decision: decisionId,
+          },
+          now,
+          workerId,
+        );
+        continue;
+      }
       children.push(
         registerTask(
           db,
@@ -609,7 +692,11 @@ function boardRows(
  *  rather than issuing one probe per row. */
 export function listBoard(db: Db): BoardTask[] {
   const rows = boardRows(db, "");
-  return rows.map((row) => ({ ...row, question_options: parseOptions(row.question_options) }));
+  return rows.map((row) => ({
+    ...row,
+    question_options: parseOptions(row.question_options),
+    question_pending_child: parsePendingChild(row.question_pending_child),
+  }));
 }
 
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
@@ -624,7 +711,11 @@ export function listQueue(db: Db, throttled: boolean): BoardTask[] {
     "WHEN status = 'todo' AND type <> 'question' AND ? = 1 THEN 'skipped'",
     [throttled ? 1 : 0],
   );
-  return rows.map((row) => ({ ...row, question_options: parseOptions(row.question_options) }));
+  return rows.map((row) => ({
+    ...row,
+    question_options: parseOptions(row.question_options),
+    question_pending_child: parsePendingChild(row.question_pending_child),
+  }));
 }
 
 export function getTask(db: Db, id: string): Task | undefined {

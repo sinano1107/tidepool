@@ -207,6 +207,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             title: z.string().min(1),
             purpose: z.string().min(1),
             completion_criteria: z.string().min(1),
+            risk_flag: z.boolean().optional(),
           }),
         ),
       },
