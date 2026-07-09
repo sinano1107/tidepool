@@ -113,5 +113,23 @@ export function openDb(path: string): Db {
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }
+  // ADR 0008 superseded #10's throttle_state shape (state/utilization ->
+  // throttled). Unlike the tasks columns above, this isn't an additive
+  // change — the old `state` CHECK/NOT NULL can't be relaxed via ALTER, and
+  // the row is a last-observed reading, not board history, so a board still
+  // on the old shape gets the table rebuilt; the next JIT poll repopulates it.
+  const throttleCols = (
+    db.prepare("PRAGMA table_info(throttle_state)").all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (throttleCols.includes("state")) {
+    db.exec(`
+      DROP TABLE throttle_state;
+      CREATE TABLE throttle_state (
+        id         INTEGER PRIMARY KEY CHECK (id = 1),
+        throttled  INTEGER NOT NULL,
+        resets_at  TEXT
+      );
+    `);
+  }
   return db;
 }

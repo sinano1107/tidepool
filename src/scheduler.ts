@@ -12,8 +12,14 @@ export const HOURLY = 60 * 60 * 1000;
 
 const DEFAULT_USAGE_THRESHOLD = 80;
 
+/** An invalid override must not silently disable throttling: `Number(bad)` is
+ *  NaN, and every `percent >= threshold` comparison against NaN is false — a
+ *  fail-open, the opposite of ADR 0008's fail-closed posture. Fall back to
+ *  the default instead of trusting an unparseable env value. */
 function usageThreshold(): number {
-  return Number(process.env.TIDEPOOL_USAGE_THRESHOLD ?? DEFAULT_USAGE_THRESHOLD);
+  if (process.env.TIDEPOOL_USAGE_THRESHOLD === undefined) return DEFAULT_USAGE_THRESHOLD;
+  const parsed = Number(process.env.TIDEPOOL_USAGE_THRESHOLD);
+  return Number.isFinite(parsed) ? parsed : DEFAULT_USAGE_THRESHOLD;
 }
 
 export interface Scheduler {

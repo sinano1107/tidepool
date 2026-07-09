@@ -58,7 +58,10 @@ export interface ThrottleDecision {
 /** ADR 0008: session or week (all models) at or above threshold blocks new
  *  pickup. Neither window touches an already-running task. */
 export function evaluateThrottle(snapshot: UsageSnapshot, thresholdPercent: number): ThrottleDecision {
-  if (snapshot.session === null && snapshot.week === null) return { throttled: true, resetsAt: null };
+  // fail-closed: either window unobserved means the decision can't be trusted,
+  // even if the other window looks fine (issue #22: "観測不能なとき...は
+  // fail-closed で skip する")
+  if (snapshot.session === null || snapshot.week === null) return { throttled: true, resetsAt: null };
   const triggered = [snapshot.session, snapshot.week].filter(
     (w): w is UsageWindowSnapshot => w !== null && w.percent >= thresholdPercent,
   );

@@ -79,3 +79,12 @@ it("パース不能(session/week とも観測不能)なら fail-closed で throt
 
   expect(decision).toEqual({ throttled: true, resetsAt: null });
 });
+
+it("片方の窓だけ観測不能でも fail-closed で throttled(観測できた側が閾値未満でも)", () => {
+  const decision = evaluateThrottle(
+    { session: { percent: 5, resetsAt: new Date("2026-07-09T08:59:00.000Z") }, week: null },
+    80,
+  );
+
+  expect(decision).toEqual({ throttled: true, resetsAt: null });
+});

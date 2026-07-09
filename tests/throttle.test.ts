@@ -13,7 +13,12 @@ const NOT_THROTTLED =
   "Current week (all models): 5% used · resets Jan 1 at 12:00am (UTC)\n";
 
 function overThreshold(resetsAt: Date): string {
-  return `Current session: 85% used · resets ${formatUsageDate(resetsAt)} (UTC)\n`;
+  // both lines present (real /usage output always has both) — only session
+  // crosses the threshold, week stays a well-observed 5%
+  return (
+    `Current session: 85% used · resets ${formatUsageDate(resetsAt)} (UTC)\n` +
+    `Current week (all models): 5% used · resets ${formatUsageDate(resetsAt)} (UTC)\n`
+  );
 }
 
 /** Renders a Date the way `/usage` renders resets: no year, English month,
@@ -76,6 +81,24 @@ it("パース不能(観測不能)は fail-closed で pickup を skip し、次�
   t.worker.scriptUsage(NOT_THROTTLED);
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+});
+
+it("TIDEPOOL_USAGE_THRESHOLD に不正値(非数値)を渡してもデフォルト 80% にフォールバックし、fail-open しない", async () => {
+  const previous = process.env.TIDEPOOL_USAGE_THRESHOLD;
+  process.env.TIDEPOOL_USAGE_THRESHOLD = "not-a-number";
+  try {
+    t = await bootTidepool();
+    await registerWork(t);
+
+    const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
+    t.worker.scriptUsage(overThreshold(resetsAt)); // 85%, over the 80% default
+
+    await t.clock.advance(HOUR);
+    expect(t.worker.started).toEqual([]);
+  } finally {
+    if (previous === undefined) delete process.env.TIDEPOOL_USAGE_THRESHOLD;
+    else process.env.TIDEPOOL_USAGE_THRESHOLD = previous;
+  }
 });
 
 it("閾値超えの間も実行中タスクには決して触れない(常に完走する)", async () => {
