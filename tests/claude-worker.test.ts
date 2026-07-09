@@ -17,6 +17,7 @@ function makeTask(id = "task-1"): Task {
     type: "work",
     status: "in_progress",
     assignee: "deckhand",
+    workspace: null,
     title: "fix the leaky faucet",
     purpose: "stop the drip",
     completion_criteria: "no drip for 24h",

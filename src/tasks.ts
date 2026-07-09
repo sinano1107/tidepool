@@ -15,6 +15,10 @@ export interface Task {
   type: TaskType;
   status: TaskStatus;
   assignee: string | null;
+  /** Where this task runs (issue #11): a registry workspace name, or null to
+   *  inherit the parent's (CONTEXT.md: workspace is first-class, children
+   *  inherit by default). */
+  workspace: string | null;
   title: string;
   purpose: string;
   completion_criteria: string;
@@ -50,6 +54,9 @@ export interface PendingChildSpec {
   /** The assignee originally requested at decompose time, honored as-is on
    *  materialization regardless of which reason(s) triggered this question. */
   assignee?: string;
+  /** The workspace originally requested at decompose time, honored as-is on
+   *  materialization regardless of which reason(s) triggered this question. */
+  workspace?: string;
 }
 
 /** The SQLite shape of a task: options/pending-child are JSON TEXT columns.
@@ -90,6 +97,9 @@ export interface RegisterTaskInput {
   risk_flag?: boolean;
   /** Pre-assigns the task to a specific worker at registration (issue #11). */
   assignee?: string;
+  /** Registers the task against a specific workspace (issue #11). Absent →
+   *  inherits the parent's (or null at the root). */
+  workspace?: string;
   question?: QuestionSpec;
   /** System-internal only (ADR 0006): declares that answering the question
    *  with this exact option cancels the plan (see `cancelTask`) instead of
@@ -153,6 +163,7 @@ export function registerTask(
     type: input.type,
     status: "todo",
     assignee: input.assignee ?? null,
+    workspace: input.workspace ?? null,
     title: input.title,
     purpose: input.purpose,
     completion_criteria: input.completion_criteria,
@@ -170,11 +181,11 @@ export function registerTask(
   };
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria,
+      `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc,
          question_options, question_recommendation, question_answer, question_cancel_option,
          question_pending_child, created_at)
-       VALUES (@id, @type, @status, @assignee, @title, @purpose, @completion_criteria,
+       VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc,
          @question_options, @question_recommendation, @question_answer, @question_cancel_option,
          @question_pending_child, @created_at)`,
@@ -557,6 +568,10 @@ export interface ChildSpec {
    *  worker's authority profile's `assignable_to` (confused-deputy
    *  prevention), this too converts to an approval question (issue #11). */
   assignee?: string;
+  /** Targets the child at a specific workspace. Outside the registering
+   *  worker's authority profile's `allowed_workspaces`, this too converts to
+   *  an approval question (issue #11). Absent → inherits the parent's. */
+  workspace?: string;
 }
 
 /** The registering worker's authority, resolved by the caller (the MCP layer)
@@ -564,6 +579,7 @@ export interface ChildSpec {
  *  itself stays free of any registry/file-loading dependency. */
 export interface AuthorityContext {
   assignable_to?: string[];
+  allowed_workspaces?: string[];
 }
 
 /** Options fixed by the server for a pending-child approval question (issue
@@ -608,6 +624,19 @@ export function decomposeTask(
       ) {
         reasons.push(`assigns to "${child.assignee}", outside ${workerId}'s assignable_to`);
       }
+      if (
+        child.workspace !== undefined &&
+        authority?.allowed_workspaces !== undefined &&
+        !authority.allowed_workspaces.includes(child.workspace)
+      ) {
+        reasons.push(
+          `targets workspace "${child.workspace}", outside ${workerId}'s allowed_workspaces`,
+        );
+      }
+      // an unstated workspace inherits the parent's (CONTEXT.md): it was
+      // already authorized when the parent landed there, so this is a
+      // default fill-in, never itself a reason for a question
+      const workspace = child.workspace ?? parent.workspace ?? undefined;
       if (reasons.length > 0) {
         registerTask(
           db,
@@ -626,6 +655,7 @@ export function decomposeTask(
               completion_criteria: child.completion_criteria,
               risk_flag: child.risk_flag,
               assignee: child.assignee,
+              workspace,
               based_on_decision: decisionId,
             },
             based_on_decision: decisionId,
@@ -638,7 +668,7 @@ export function decomposeTask(
       children.push(
         registerTask(
           db,
-          { type: "work", ...child, parent_id: parent.id, based_on_decision: decisionId },
+          { type: "work", ...child, workspace, parent_id: parent.id, based_on_decision: decisionId },
           now,
           workerId,
         ),

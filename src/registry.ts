@@ -27,11 +27,15 @@ export interface AgentDefinition {
  *  `assignable_to` (issue #11) is a machine-enforced delegation allowlist —
  *  confused-deputy prevention: a decompose child assigned outside this list
  *  converts to an approval question rather than registering (ADR 0002).
- *  Absent means unrestricted (no board-configured profile to check against). */
+ *  `allowed_workspaces` (issue #11) is its spatial analogue: a decompose
+ *  child explicitly targeting a workspace outside this list converts the
+ *  same way. Absent means unrestricted (no board-configured profile to check
+ *  against). */
 export interface AuthorityProfile {
   name: string;
   guidance: string;
   assignable_to?: string[];
+  allowed_workspaces?: string[];
 }
 
 const workspaceEntrySchema = z.object({
@@ -83,6 +87,7 @@ function parseAgentFile(path: string): AgentDefinition {
 const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
   assignable_to: z.array(z.string()).optional(),
+  allowed_workspaces: z.array(z.string()).optional(),
 });
 
 const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
@@ -90,7 +95,12 @@ const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 function parseAuthorityFile(path: string): AuthorityProfile {
   const name = basename(path, ".yaml");
   const profile = authorityProfileSchema.parse(parseYaml(readFileSync(path, "utf8")));
-  return { name, guidance: profile.guidance, assignable_to: profile.assignable_to };
+  return {
+    name,
+    guidance: profile.guidance,
+    assignable_to: profile.assignable_to,
+    allowed_workspaces: profile.allowed_workspaces,
+  };
 }
 
 export function loadRegistry(dir: string): Registry {

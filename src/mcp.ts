@@ -213,6 +213,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             completion_criteria: z.string().min(1),
             risk_flag: z.boolean().optional(),
             assignee: z.string().optional(),
+            workspace: z.string().optional(),
           }),
         ),
       },

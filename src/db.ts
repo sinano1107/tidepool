@@ -12,6 +12,11 @@ export function openDb(path: string): Db {
       -- 'blocked' is not a stored status: it is derived from unfinished children
       status              TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
       assignee            TEXT,
+      -- where this task runs (issue #11): a registry workspace name, or null
+      -- to inherit the parent's. First-class per CONTEXT.md; not yet read by
+      -- the runtime (single-workspace boards only), only by allowed_workspaces
+      -- authority enforcement.
+      workspace           TEXT,
       title               TEXT NOT NULL,
       purpose             TEXT NOT NULL,
       completion_criteria TEXT NOT NULL,
@@ -115,6 +120,7 @@ export function openDb(path: string): Db {
     "question_answer",
     "question_cancel_option",
     "question_pending_child",
+    "workspace",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }
