@@ -82,7 +82,7 @@ read-only の判定行為。レビュアーは決して直さない — 発見�
 
 ## Watchdog(ウォッチドッグ)
 
-タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で SIGTERM → 猶予 → SIGKILL の順にエージェントを回収し、slot-release tree rule を経て、tidepool 名義の failure question(retry / abandon の2択、推奨は retry)を生成する。retry は失敗タスクを先頭復帰させ、abandon は計画ごと破棄する(Cancel 参照)。自動リトライはデフォルトでは存在しない — リトライ判断は常に人間の30秒の回答。現時点で唯一の例外は Usage limit の自動回復(判断の余地がない環境事象のみ、人間を介さず自動的に再開する — Usage limit 参照、ADR 0007)。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
+タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で SIGTERM → 猶予 → SIGKILL の順にエージェントを回収し、slot-release tree rule を経て、tidepool 名義の failure question(retry / abandon の2択、推奨は retry)を生成する。retry は失敗タスクを先頭復帰させ、abandon は計画ごと破棄する(Cancel 参照)。自動リトライは存在しない — リトライ判断は常に人間の30秒の回答(throttle は実行中タスクに触れないため、この原則に例外はない — Throttle 参照)。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
 
 ## Branch discipline(ブランチ規律)
 
@@ -100,14 +100,15 @@ Slot-release tree rule 自体が失敗した(コンフリクトや破損など)�
 
 work タスク完了時に必須の引き継ぎ文書。行動可能な情報はタスクになり、doc は文脈のみを運ぶ。question / review タスクには不要。
 
-## Usage limit(使用量リミット)
+## Throttle(スロットル)
 
-アカウント単位(エージェント単位ではない)の実行制約。リミット到達は「失敗」ではなく自動回復する環境事象であり、エスカレーションや失敗統計を汚さない。2つの状態を区別する:
+アカウント単位(エージェント単位ではない)の予防的な絞り。使用量(Usage limit = Anthropic 側のアカウント制約そのもの)を Tidepool 自身の閾値で監視し、session / week いずれかのウィンドウの使用率が閾値以上と観測されている間、新規タスクの pickup を skip する。この単一状態を **throttled** と呼ぶ(旧 rejected / allowed_warning の2状態は廃止)。
 
-- **rejected**: 新規タスクの pickup を resets_at まで止める。実行中のタスクに当たった場合は slot-release tree rule で WIP を退避し、todo としてキュー先頭へ戻す — resets_at を過ぎれば人間を介さず自動的に再ピックアップされる(Watchdog の「自動リトライはデフォルトでは存在しない」の唯一の例外、ADR 0007)。
-- **allowed_warning**: 新規 pickup のみ止め、実行中のタスクは完走させる(閾値判断は Anthropic 側に乗り、自前推定はしない)。
-
-どちらの状態でも、pickup が止まっている間の todo タスクはキュービューでは `skipped` として現れる(ボードには出ない — Status 参照)。
+- 閾値判断は Tidepool 自前のもの — Anthropic 側の警告イベントには依存しない。閾値到達は「失敗」ではなく環境事象であり、エスカレーションや失敗統計を汚さない
+- 実行中のタスクには決して触れない — throttled が観測されても走っているタスクは完走する
+- リセット時刻を過ぎれば人間を介さず自動的に pickup が再開する。これはタスクのリトライではないため、Watchdog の「自動リトライは存在しない」原則の例外にはならない
+- 使用率が観測不能な間も throttled として扱う(fail-closed — 守るのは不可逆な予算、失うのは回復可能なアイドル時間)
+- throttled の間の todo タスクはキュービューでは `skipped` として現れる(ボードには出ない — Status 参照)
 
 ## Swell / Condensation
 
