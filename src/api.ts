@@ -2,11 +2,13 @@ import { Router, json } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
+import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
+import type { GitHubClient } from "./github.js";
 import {
   answerQuestion,
   DomainError,
   getTask,
+  HUMAN_WORKER_ID,
   listBoard,
   listQueue,
   moveTask,
@@ -15,6 +17,7 @@ import {
   type Task,
 } from "./tasks.js";
 import { isPickupBlocked } from "./throttle.js";
+import type { WorkspaceConfig } from "./workspace.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -85,11 +88,21 @@ function queueHeadId(db: Db): string | null {
   return head?.id ?? null;
 }
 
-export function createApiRouter(
-  db: Db,
-  clock: Clock,
-  onQueueHeadChanged: () => void,
-): Router {
+export interface ApiRouterDeps {
+  db: Db;
+  clock: Clock;
+  onQueueHeadChanged: () => void;
+  /** The board's workspace path — where `gh` runs for the merge dial's live
+   *  CI check (issue #11). Absent → a merge-decision "merge" answer can't
+   *  check CI and is rejected. */
+  workspace?: WorkspaceConfig;
+  /** The GitHub-facing seam (issue #19), reused here for the merge dial's
+   *  CI-check-then-merge (issue #11). Absent → same as no workspace. */
+  github?: GitHubClient;
+}
+
+export function createApiRouter(deps: ApiRouterDeps): Router {
+  const { db, clock, onQueueHeadChanged, workspace, github } = deps;
   const router = Router();
   router.use(json());
 
@@ -143,7 +156,7 @@ export function createApiRouter(
 
   // answering lives on the WebUI JSON API only, never MCP: it is the human
   // steering channel (CONTEXT.md: escalation is answered by the 上位者)
-  router.post("/tasks/:id/answer", (req, res) => {
+  router.post("/tasks/:id/answer", async (req, res) => {
     const parsed = answerSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
@@ -155,6 +168,21 @@ export function createApiRouter(
       return;
     }
     try {
+      // a merge-decision question's "merge" answer (issue #11) must not
+      // resolve the question until CI is actually green, checked live right
+      // now — otherwise a stale approval could merge a build that has since
+      // gone red, and once resolved the question offers no way to retry
+      const mergePr = task.question_pending_merge_pr;
+      const wantsMerge = mergePr !== null && parsed.data.answer === "merge";
+      if (wantsMerge) {
+        if (!github || !workspace) {
+          throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
+        }
+        const status = await github.getCiStatus({ path: workspace.path, number: mergePr! });
+        if (status !== "success") {
+          throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
+        }
+      }
       // an answer during an open triage session is activity (defers the
       // auto-commit) and stages the unblock instead of moving the queue
       const session = triageActivity(db, clock.now());
@@ -165,6 +193,15 @@ export function createApiRouter(
         clock.now(),
         session && ((taskId) => stageFrontInsert(db, session.id, taskId)),
       );
+      if (wantsMerge) {
+        await github!.mergePullRequest({ path: workspace!.path, number: mergePr! });
+        appendEvent(db, {
+          taskId: task.id,
+          workerId: HUMAN_WORKER_ID,
+          payload: { kind: "pr_merged", pr_number: mergePr! },
+          at: clock.now(),
+        });
+      }
       // an answer that unblocked the parent put it at the head — "run now"
       if (parentUnblocked) onQueueHeadChanged();
       res.json(presentTask(db, question));

@@ -27,6 +27,11 @@ export interface Task {
   parent_id: string | null;
   sort_key: number;
   handoff_doc: string | null;
+  /** The PR opened for this task's completed work (issue #11), or null if
+   *  none opened yet (no workspace/github configured, or the task carries no
+   *  handoff-worthy change). Set once by recordPrOpened, never by the MCP
+   *  layer directly. */
+  pr_number: number | null;
   question_options: string[] | null;
   question_recommendation: string | null;
   question_answer: string | null;
@@ -36,6 +41,11 @@ export interface Task {
    *  would-be child, materialized by answerQuestion only on an "approve"
    *  answer. */
   question_pending_child: PendingChildSpec | null;
+  /** System-internal only (issue #11): the PR number a merge-decision
+   *  question is standing in for — set only by recordPrOpened under the
+   *  `escalate` merge dial, read only by the answer route to gate the actual
+   *  merge on a live CI check. Never set via MCP or the JSON API. */
+  question_pending_merge_pr: number | null;
   created_at: string;
 }
 
@@ -116,6 +126,10 @@ export interface RegisterTaskInput extends TaskContent {
    *  answer. Never set via MCP or the JSON API — only decomposeTask sets
    *  this. */
   pending_child?: PendingChildSpec;
+  /** System-internal only (issue #11): the PR number a merge-decision
+   *  question stands in for. Never set via MCP or the JSON API — only
+   *  recordPrOpened's `escalate` branch sets this. */
+  pending_merge_pr?: number;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
 }
@@ -176,23 +190,25 @@ export function registerTask(
     parent_id: input.parent_id ?? null,
     sort_key: maxKey + 1,
     handoff_doc: null,
+    pr_number: null,
     question_options: input.question?.options ?? null,
     question_recommendation: input.question?.recommendation ?? null,
     question_answer: null,
     question_cancel_option: input.cancel_option ?? null,
     question_pending_child: input.pending_child ?? null,
+    question_pending_merge_pr: input.pending_merge_pr ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-         risk_flag, review_flag, parent_id, sort_key, handoff_doc,
+         risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
          question_options, question_recommendation, question_answer, question_cancel_option,
-         question_pending_child, created_at)
+         question_pending_child, question_pending_merge_pr, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
-         @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc,
+         @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
          @question_options, @question_recommendation, @question_answer, @question_cancel_option,
-         @question_pending_child, @created_at)`,
+         @question_pending_child, @question_pending_merge_pr, @created_at)`,
     ).run({
       ...task,
       question_options: task.question_options && JSON.stringify(task.question_options),
@@ -581,6 +597,123 @@ export interface ChildSpec extends TaskContent {
 export interface AuthorityContext {
   assignable_to?: string[];
   allowed_workspaces?: string[];
+  /** The merge dial (issue #11): `escalate` makes recordPrOpened register a
+   *  merge-decision question for every PR; anything else takes no action
+   *  here (`auto_if_ci_green`'s auto-merge poll is a separate mechanism). */
+  merge?: "escalate" | "auto_if_ci_green";
+}
+
+/** Options fixed by the server for a merge-decision question (issue #11) —
+ *  answerQuestion recognizes this exact pair via question_pending_merge_pr,
+ *  same shape as the pending-child mechanism's fixed options. */
+export const MERGE_QUESTION_OPTIONS = ["merge", "hold"] as const;
+
+/** Registers the merge-decision question every merge escalation shares
+ *  (the `escalate` dial, and `auto_if_ci_green`'s risky-task and CI-failure
+ *  fallbacks) — only the title/purpose/recommendation differ per caller. */
+function registerMergeQuestion(
+  db: Db,
+  task: Task,
+  prNumber: number,
+  purpose: string,
+  recommendation: (typeof MERGE_QUESTION_OPTIONS)[number],
+  workerId: string,
+  now: Date,
+): void {
+  registerTask(
+    db,
+    {
+      type: "question",
+      title: `merge PR #${prNumber}: ${task.title}`,
+      purpose,
+      completion_criteria: "a human decides whether to merge",
+      question: { options: [...MERGE_QUESTION_OPTIONS], recommendation },
+      pending_merge_pr: prNumber,
+    },
+    now,
+    workerId,
+  );
+}
+
+/** Queues a completed low-risk task's PR for the auto_if_ci_green poll (issue
+ *  #11) — recordPrOpened's low-risk branch is the only writer; the poll
+ *  itself (merge.ts) is the only reader/deleter. */
+function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
+  db.prepare("INSERT INTO pending_auto_merges (task_id, pr_number) VALUES (?, ?)").run(
+    taskId,
+    prNumber,
+  );
+}
+
+export interface PendingAutoMerge {
+  task_id: string;
+  pr_number: number;
+}
+
+export function listPendingAutoMerges(db: Db): PendingAutoMerge[] {
+  return db
+    .prepare("SELECT task_id, pr_number FROM pending_auto_merges")
+    .all() as PendingAutoMerge[];
+}
+
+export function clearPendingAutoMerge(db: Db, taskId: string): void {
+  db.prepare("DELETE FROM pending_auto_merges WHERE task_id = ?").run(taskId);
+}
+
+/** Records that a completed task's work opened a PR (issue #11): pr_number is
+ *  set once, paired with a pr_opened event — the invariant lives here, not in
+ *  the MCP layer's PR side effect, per ADR 0002. The merge dial then decides
+ *  what happens next: `escalate` always asks a human before merging, via a
+ *  merge-decision question whose "merge" answer the answer route gates on a
+ *  live CI check (never performed here — this module stays free of any
+ *  GitHubClient dependency). `auto_if_ci_green` asks the same way for a task
+ *  that carries risk (never silently auto-merges a risky change, regardless
+ *  of the dial); a low-risk task instead queues for the unattended CI poll
+ *  (merge.ts). Anything else (no dial configured) takes no further action —
+ *  today's pre-#11 baseline. */
+export function recordPrOpened(
+  db: Db,
+  task: Task,
+  prNumber: number,
+  workerId: string,
+  now: Date,
+  authority?: AuthorityContext,
+): void {
+  db.transaction(() => {
+    db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(prNumber, task.id);
+    appendEvent(db, {
+      taskId: task.id,
+      workerId,
+      payload: { kind: "pr_opened", pr_number: prNumber },
+      at: now,
+    });
+    if (authority?.merge === "escalate") {
+      registerMergeQuestion(
+        db,
+        task,
+        prNumber,
+        `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`,
+        "merge",
+        workerId,
+        now,
+      );
+    } else if (authority?.merge === "auto_if_ci_green") {
+      if (task.risk_flag) {
+        registerMergeQuestion(
+          db,
+          task,
+          prNumber,
+          `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
+            `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
+          "merge",
+          workerId,
+          now,
+        );
+      } else {
+        queuePendingAutoMerge(db, task.id, prNumber);
+      }
+    }
+  })();
 }
 
 /** A requested value is out of authority only when it's explicitly stated

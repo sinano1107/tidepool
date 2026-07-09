@@ -30,12 +30,19 @@ export interface AgentDefinition {
  *  `allowed_workspaces` (issue #11) is its spatial analogue: a decompose
  *  child explicitly targeting a workspace outside this list converts the
  *  same way. Absent means unrestricted (no board-configured profile to check
- *  against). */
+ *  against). `merge` (issue #11) is the authority dial over merging a task's
+ *  PR — "merge is the start of external effect": `escalate` always asks a
+ *  human first; `auto_if_ci_green` merges unattended once CI passes, but only
+ *  for a task that carries no risk (a risky task always asks, regardless of
+ *  the dial). Absent means no automatic merge decision at all — a PR opens
+ *  and nothing more happens (today's pre-#11 baseline), same "absent is
+ *  inert" shape as the other two fields. */
 export interface AuthorityProfile {
   name: string;
   guidance: string;
   assignable_to?: string[];
   allowed_workspaces?: string[];
+  merge?: "escalate" | "auto_if_ci_green";
 }
 
 const workspaceEntrySchema = z.object({
@@ -88,6 +95,7 @@ const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
   assignable_to: z.array(z.string()).optional(),
   allowed_workspaces: z.array(z.string()).optional(),
+  merge: z.enum(["escalate", "auto_if_ci_green"]).optional(),
 });
 
 const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
@@ -100,6 +108,7 @@ function parseAuthorityFile(path: string): AuthorityProfile {
     guidance: profile.guidance,
     assignable_to: profile.assignable_to,
     allowed_workspaces: profile.allowed_workspaces,
+    merge: profile.merge,
   };
 }
 

@@ -7,6 +7,7 @@ import type { Clock } from "./clock.js";
 import { type Db, openDb } from "./db.js";
 import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
+import { checkPendingAutoMerges } from "./merge.js";
 import type { AuthorityProfile } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
@@ -91,7 +92,26 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         config: options.watchdog,
       })
     : undefined;
-  app.use("/api", createApiRouter(db, options.clock, () => scheduler.pollNow()));
+  // the auto_if_ci_green poll (issue #11): independent of the scheduler's
+  // pickup poll, since it watches external CI state rather than the queue.
+  // A no-op tick while pending_auto_merges is empty, same shape as the
+  // triage watchdog above.
+  const stopAutoMergePoll =
+    options.workspace && options.github
+      ? options.clock.setInterval(() => {
+          void checkPendingAutoMerges(db, options.github!, options.workspace!, options.clock.now());
+        }, 60 * 1000)
+      : undefined;
+  app.use(
+    "/api",
+    createApiRouter({
+      db,
+      clock: options.clock,
+      onQueueHeadChanged: () => scheduler.pollNow(),
+      workspace: options.workspace,
+      github: options.github,
+    }),
+  );
   app.use(
     "/mcp",
     createMcpRouter({
@@ -122,6 +142,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     stop: () =>
       new Promise((resolve, reject) => {
         stopTriageWatchdog();
+        stopAutoMergePoll?.();
         watchdog?.stop();
         scheduler.stop();
         listener.close((err) => (err ? reject(err) : resolve()));

@@ -26,11 +26,13 @@ function makeTask(id = "task-1"): Task {
     parent_id: null,
     sort_key: 1,
     handoff_doc: null,
+    pr_number: null,
     question_options: null,
     question_recommendation: null,
     question_answer: null,
     question_cancel_option: null,
     question_pending_child: null,
+    question_pending_merge_pr: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
 }

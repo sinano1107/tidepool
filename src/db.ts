@@ -25,6 +25,10 @@ export function openDb(path: string): Db {
       parent_id           TEXT REFERENCES tasks(id),
       sort_key            REAL NOT NULL,
       handoff_doc         TEXT,
+      -- the PR opened for this task's completed work (issue #11), or null —
+      -- no workspace/github configured, or nothing to hand off. Set once by
+      -- recordPrOpened, never by the MCP layer directly.
+      pr_number           INTEGER,
       -- question-only fields: 2-4 choices (JSON array), the registrant's
       -- recommendation, and the human's answer once given
       question_options        TEXT,
@@ -39,6 +43,10 @@ export function openDb(path: string): Db {
       -- would-be child, JSON-encoded, materialized only if the human answers
       -- "approve". Never set via MCP or the JSON API — only decomposeTask sets this.
       question_pending_child  TEXT,
+      -- system-internal only (issue #11): the PR number a merge-decision
+      -- question stands in for. Never set via MCP or the JSON API — only
+      -- recordPrOpened's escalate branch sets this.
+      question_pending_merge_pr INTEGER,
       created_at          TEXT NOT NULL
     );
 
@@ -104,6 +112,16 @@ export function openDb(path: string): Db {
       resets_at  TEXT
     );
 
+    -- the merge dial's auto_if_ci_green queue (issue #11): a completed
+    -- low-risk task's just-opened PR, awaiting the CI poll to merge it
+    -- unattended. Removed once resolved (merged, or converted to an
+    -- escalation question on CI failure) — a risky task never lands here at
+    -- all (it asks immediately instead, same as the escalate dial).
+    CREATE TABLE IF NOT EXISTS pending_auto_merges (
+      task_id   TEXT PRIMARY KEY REFERENCES tasks(id),
+      pr_number INTEGER NOT NULL
+    );
+
     -- append-only is enforced by structure, not convention
     CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
       BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
@@ -123,6 +141,9 @@ export function openDb(path: string): Db {
     "workspace",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
+  }
+  for (const col of ["pr_number", "question_pending_merge_pr"]) {
+    if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
   }
   // ADR 0008 superseded #10's throttle_state shape (state/utilization ->
   // throttled). Unlike the tasks columns above, this isn't an additive

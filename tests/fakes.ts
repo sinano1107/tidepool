@@ -1,5 +1,5 @@
 import type { Clock } from "../src/clock.js";
-import type { CreatePrInput, GitHubClient, PrResult } from "../src/github.js";
+import type { CiStatus, CreatePrInput, GitHubClient, PrRef, PrResult } from "../src/github.js";
 import type { Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 
@@ -83,8 +83,11 @@ export class ScriptedWorker implements WorkerAdapter {
  *  without touching a real GitHub API. */
 export class FakeGitHubClient implements GitHubClient {
   readonly requests: CreatePrInput[] = [];
+  readonly ciChecks: PrRef[] = [];
+  readonly merged: PrRef[] = [];
   private failure: Error | null = null;
   private nextNumber = 1;
+  private ciStatus: CiStatus = "success";
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
@@ -93,7 +96,22 @@ export class FakeGitHubClient implements GitHubClient {
     return { url: `https://github.com/example/repo/pull/${number}`, number };
   }
 
+  async getCiStatus(ref: PrRef): Promise<CiStatus> {
+    this.ciChecks.push(ref);
+    return this.ciStatus;
+  }
+
+  async mergePullRequest(ref: PrRef): Promise<void> {
+    this.merged.push(ref);
+  }
+
   scriptFailure(err: Error): void {
     this.failure = err;
+  }
+
+  /** Scripts what getCiStatus returns from here on (issue #11) — default
+   *  "success" so tests unrelated to the merge dial never need to script it. */
+  scriptCiStatus(status: CiStatus): void {
+    this.ciStatus = status;
   }
 }

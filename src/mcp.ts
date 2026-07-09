@@ -16,6 +16,7 @@ import {
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
   logDecision,
+  recordPrOpened,
   type Task,
 } from "./tasks.js";
 import {
@@ -59,13 +60,21 @@ async function openHandoffPr(
   if (task.type !== "work" || !deps.github || !deps.workspace) return;
   if (workspaceNeedsHuman(deps.db, deps.workspace.name)) return;
   try {
-    await deps.github.createPullRequest({
+    const pr = await deps.github.createPullRequest({
       path: deps.workspace.path,
       branch: taskBranch(task.id),
       base: PR_BASE_BRANCH,
       title: task.title,
       body: handoffDoc ?? "",
     });
+    recordPrOpened(
+      deps.db,
+      task,
+      pr.number,
+      task.assignee ?? HUMAN_WORKER_ID,
+      deps.clock.now(),
+      deps.authority,
+    );
   } catch (err) {
     console.error(`PR creation failed for task ${task.id}:`, err);
   }

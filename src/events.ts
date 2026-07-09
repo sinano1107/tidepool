@@ -15,6 +15,12 @@ export type EventPayload =
   // through task_id
   | { kind: "task_completed"; handoff_present: boolean; result: string | null }
   | { kind: "task_escalated"; question_id: string }
+  // issue #11: a completed work task's handoff opened this PR — pr_number is
+  // the durable link the merge dial (escalate/auto_if_ci_green) reads back
+  | { kind: "pr_opened"; pr_number: number }
+  // issue #11: the merge dial's escalate answer actually merged this PR,
+  // right after a live CI check confirmed success immediately beforehand
+  | { kind: "pr_merged"; pr_number: number }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join
