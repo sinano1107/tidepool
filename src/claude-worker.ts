@@ -35,17 +35,17 @@ export interface ClaudeWorkerOptions {
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
   spawn?: SpawnFn;
-  execUsage?: ExecUsageFn;
+  exec?: ExecFn;
 }
 
-/** ADR 0008's just-in-time usage check: `claude -p "/usage" --output-format
- *  json` (measured 663ms, $0, no model call). Request/response, unlike the
- *  streaming SpawnFn above — a separate seam. */
-export type ExecUsageFn = () => Promise<string>;
+/** Request/response process boundary for one-shot CLI calls (unlike the
+ *  streaming SpawnFn above) — used by checkUsage's `/usage` JIT poll
+ *  (ADR 0008, measured 663ms, $0, no model call). */
+export type ExecFn = (command: string, args: string[]) => Promise<string>;
 
-const defaultExecUsage: ExecUsageFn = () =>
+const defaultExec: ExecFn = (command, args) =>
   new Promise((resolve, reject) => {
-    execFile("claude", ["-p", "/usage", "--output-format", "json"], (err, stdout) => {
+    execFile(command, args, (err, stdout) => {
       if (err) reject(err);
       else resolve(stdout);
     });
@@ -70,7 +70,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   readonly id: string;
   private readonly options: ClaudeWorkerOptions;
   private readonly spawn: SpawnFn;
-  private readonly execUsage: ExecUsageFn;
+  private readonly exec: ExecFn;
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
    *  paths against its own cwd (the workspace), not against the board. */
   private readonly logDir: string;
@@ -82,7 +82,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.id = options.agent;
     this.options = options;
     this.spawn = options.spawn ?? defaultSpawn;
-    this.execUsage = options.execUsage ?? defaultExecUsage;
+    this.exec = options.exec ?? defaultExec;
     this.logDir = resolve(options.logDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
@@ -172,9 +172,27 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.running.get(taskId)?.kill(signal);
   }
 
+  /** --model/--max-turns/--max-budget-usd are a hard ceiling against a
+   *  runaway session, not an expected path: ADR 0008 measured this call at
+   *  $0 with zero model turns, but a misbehaving CLI must fail loud (and
+   *  cheap) rather than run away — checkUsage() then just sees it as a
+   *  failure and reports null (fail-closed). Confirmed against the installed
+   *  CLI (v2.1.205) and the CLI reference: --max-turns exists but is omitted
+   *  from --help. */
   async checkUsage(): Promise<string | null> {
     try {
-      const stdout = await this.execUsage();
+      const stdout = await this.exec("claude", [
+        "-p",
+        "/usage",
+        "--output-format",
+        "json",
+        "--model",
+        "haiku",
+        "--max-turns",
+        "1",
+        "--max-budget-usd",
+        "0.01",
+      ]);
       const parsed: unknown = JSON.parse(stdout);
       const result = (parsed as { result?: unknown }).result;
       return typeof result === "string" ? result : null;

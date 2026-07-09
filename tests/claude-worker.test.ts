@@ -260,7 +260,7 @@ describe("ClaudeCodeWorker", () => {
       mcpUrl: "http://127.0.0.1:4589/mcp",
       logDir,
       spawn: recordingSpawn().spawn,
-      execUsage: async () => JSON.stringify({ result: resultText }),
+      exec: async () => JSON.stringify({ result: resultText }),
     });
 
     await expect(worker.checkUsage()).resolves.toBe(resultText);
@@ -278,12 +278,43 @@ describe("ClaudeCodeWorker", () => {
       mcpUrl: "http://127.0.0.1:4589/mcp",
       logDir,
       spawn: recordingSpawn().spawn,
-      execUsage: async () => {
+      exec: async () => {
         throw new Error("claude binary not found");
       },
     });
 
     await expect(worker.checkUsage()).resolves.toBeNull();
+  });
+
+  it("checkUsage は万一の暴走に備え、--model haiku・--max-turns 1・--max-budget-usd 0.01 を明示指定する(ADR 0005/0008)", async () => {
+    const registryDir = await makeRegistry();
+    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const worker = new ClaudeCodeWorker({
+      db: openDb(":memory:"),
+      clock: new FakeClock(),
+      registryDir,
+      agent: "deckhand",
+      workspace: "tidepool",
+      mcpUrl: "http://127.0.0.1:4589/mcp",
+      logDir,
+      spawn: recordingSpawn().spawn,
+      exec: async (command, args) => {
+        calls.push({ command, args });
+        return JSON.stringify({ result: "" });
+      },
+    });
+
+    await worker.checkUsage();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.command).toBe("claude");
+    const argLine = calls[0]!.args.join(" ");
+    expect(argLine).toContain("-p /usage");
+    expect(argLine).toContain("--output-format json");
+    expect(argLine).toContain("--model haiku");
+    expect(argLine).toContain("--max-turns 1");
+    expect(argLine).toContain("--max-budget-usd 0.01");
   });
 
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {

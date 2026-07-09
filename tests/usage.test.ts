@@ -20,6 +20,18 @@ it("実測の /usage 出力から session/week の使用率と reset 時刻を�
   });
 });
 
+it("30分単位のタイムゾーンオフセット(Asia/Kolkata, GMT+5:30)も分単位まで正確にパースする", () => {
+  const resultText = "Current session: 40% used · resets Jul 9 at 8:15pm (Asia/Kolkata)\n";
+  const now = new Date("2026-07-08T00:00:00.000Z");
+
+  const snapshot = parseUsage(resultText, now);
+
+  expect(snapshot.session).toEqual({
+    percent: 40,
+    resetsAt: new Date("2026-07-09T14:45:00.000Z"),
+  });
+});
+
 it("年境界をまたぐ reset(12月末の now → 1月の resets)は常に未来側の年に丸める", () => {
   const resultText = "Current session: 10% used · resets Jan 3 at 9:00am (Asia/Tokyo)\n";
   const now = new Date("2026-12-30T00:00:00.000Z");
