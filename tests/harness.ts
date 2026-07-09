@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DraftClient } from "../src/draft.js";
 import type { AuthorityProfile } from "../src/registry.js";
 import { startServer } from "../src/server.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
@@ -31,6 +32,11 @@ export interface BootOptions {
   watchdog?: WatchdogConfig;
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
+  /** Assignee/workspace candidates for the registration screen (issue #12). */
+  registryCandidates?: { assignees: string[]; workspaces: string[] };
+  /** The LLM draft seam (issue #12). Absent (the default) — same as no LLM
+   *  configured, matching the "LLM outage" fallback path. */
+  draftClient?: DraftClient;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -50,6 +56,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     watchdog: options.watchdog,
     github,
     authority: options.authority,
+    registryCandidates: options.registryCandidates,
+    draftClient: options.draftClient,
   });
   let stopped = false;
   const stopServer = async () => {

@@ -1,4 +1,5 @@
 import type { Clock } from "../src/clock.js";
+import type { DraftClient, TaskDraft } from "../src/draft.js";
 import type { CiStatus, CreatePrInput, GitHubClient, PrRef, PrResult } from "../src/github.js";
 import type { Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
@@ -113,5 +114,32 @@ export class FakeGitHubClient implements GitHubClient {
    *  "success" so tests unrelated to the merge dial never need to script it. */
   scriptCiStatus(status: CiStatus): void {
     this.ciStatus = status;
+  }
+}
+
+/** Scripted stand-in at the DraftClient seam (issue #12): records every dump
+ *  it was asked to draft, in call order; scriptFailure lets a test simulate
+ *  an LLM outage without touching a real model. */
+export class FakeDraftClient implements DraftClient {
+  readonly dumps: string[] = [];
+  private response: TaskDraft = {
+    title: "drafted title",
+    purpose: "drafted purpose",
+    completion_criteria: "drafted completion criteria",
+  };
+  private failure: Error | null = null;
+
+  async draftTask(dump: string): Promise<TaskDraft> {
+    this.dumps.push(dump);
+    if (this.failure) throw this.failure;
+    return this.response;
+  }
+
+  scriptDraft(draft: TaskDraft): void {
+    this.response = draft;
+  }
+
+  scriptFailure(err: Error): void {
+    this.failure = err;
   }
 }

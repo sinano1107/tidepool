@@ -76,6 +76,20 @@ function authorityProfile(): AuthorityProfile | undefined {
   return profile;
 }
 
+/** Assignee/workspace candidates for the registration screen (issue #12).
+ *  Without a registry there's nothing to suggest from. */
+function registryCandidates(): { assignees: string[]; workspaces: string[] } | undefined {
+  if (!registryDir) return undefined;
+  const registry = loadRegistry(registryDir);
+  return {
+    assignees: [...Object.keys(registry.agents), "human"],
+    workspaces: Object.keys(registry.workspaces),
+  };
+}
+
+// DraftClient (issue #12's brain-dump-to-fields LLM draft) has no real
+// implementation yet — deliberately left unconfigured so the board falls
+// back to the plain form until that's built (tracked as a follow-up issue).
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -84,5 +98,6 @@ const server = await startServer({
   workspace: workspaceConfig(),
   github: new GhCliClient(),
   authority: authorityProfile(),
+  registryCandidates: registryCandidates(),
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);

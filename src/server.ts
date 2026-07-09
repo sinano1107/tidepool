@@ -5,6 +5,7 @@ import express from "express";
 import { createApiRouter } from "./api.js";
 import type { Clock } from "./clock.js";
 import { type Db, openDb } from "./db.js";
+import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
@@ -40,6 +41,12 @@ export interface ServerOptions {
    *  #8), so this is one fixed profile rather than a per-task registry
    *  lookup. Absent → assignable_to is unrestricted. */
   authority?: AuthorityProfile;
+  /** Assignee/workspace candidates for the registration screen (issue #12).
+   *  Absent → no registry configured, so the WebUI gets no suggestions. */
+  registryCandidates?: { assignees: string[]; workspaces: string[] };
+  /** The LLM draft seam (issue #12). Absent → the draft endpoint reports the
+   *  LLM as unreachable, and the WebUI falls back to the plain form. */
+  draftClient?: DraftClient;
 }
 
 export interface TidepoolServer {
@@ -110,6 +117,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       onQueueHeadChanged: () => scheduler.pollNow(),
       workspace: options.workspace,
       github: options.github,
+      registryCandidates: options.registryCandidates,
+      draftClient: options.draftClient,
     }),
   );
   app.use(

@@ -2,6 +2,7 @@ import { Router, json } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import {
@@ -38,11 +39,18 @@ const registerTaskSchema = z.object({
   purpose: z.string().min(1),
   completion_criteria: z.string().min(1),
   parent_id: z.string().optional(),
+  assignee: z.string().optional(),
+  workspace: z.string().optional(),
+  risk_flag: z.boolean().optional(),
   // shape stays permissive: the 2-4-options + recommendation invariant is
   // enforced in the domain so callers get a domain error
   question: z
     .object({ options: z.array(z.string()), recommendation: z.string() })
     .optional(),
+});
+
+const draftTaskSchema = z.object({
+  dump: z.string().min(1),
 });
 
 const moveTaskSchema = z.object({
@@ -99,10 +107,19 @@ export interface ApiRouterDeps {
   /** The GitHub-facing seam (issue #19), reused here for the merge dial's
    *  CI-check-then-merge (issue #11). Absent → same as no workspace. */
   github?: GitHubClient;
+  /** Assignee/workspace name candidates for the registration screen (issue
+   *  #12), resolved from the agent registry by the caller (main.ts) — the
+   *  API layer never touches the filesystem/git registry loader itself.
+   *  Absent → no registry configured, so no candidates to suggest. */
+  registryCandidates?: { assignees: string[]; workspaces: string[] };
+  /** The LLM draft seam (issue #12). Absent → /tasks/draft reports the LLM
+   *  as unreachable. */
+  draftClient?: DraftClient;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
-  const { db, clock, onQueueHeadChanged, workspace, github } = deps;
+  const { db, clock, onQueueHeadChanged, workspace, github, registryCandidates, draftClient } =
+    deps;
   const router = Router();
   router.use(json());
 
@@ -120,6 +137,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         return;
       }
       throw err;
+    }
+  });
+
+  router.post("/tasks/draft", async (req, res) => {
+    const parsed = draftTaskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!draftClient) {
+      res.status(503).json({ error: "LLM draft client not configured" });
+      return;
+    }
+    try {
+      const draft = await draftClient.draftTask(parsed.data.dump);
+      res.json(draft);
+    } catch (err) {
+      // an LLM-side failure (timeout, outage) is the same "unreachable"
+      // signal as no client configured — the UI falls back to the plain
+      // form either way, so it isn't a 500
+      res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
     }
   });
 
@@ -321,6 +359,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
       throw err;
     }
+  });
+
+  router.get("/registry/candidates", (_req, res) => {
+    res.json(registryCandidates ?? { assignees: [], workspaces: [] });
   });
 
   router.get("/tasks", (_req, res) => {
