@@ -12,7 +12,15 @@
 
 ## Status(ステータス)
 
-`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)。
+`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)。`held` もステータスではなく導出される表示状態(Held 参照)。
+
+## Cancel(キャンセル)
+
+人間の判断による作業の放棄。完了基準を満たさないまま終端し、記録は消さない。blocked の導出上は done と同じ完了扱い(cancelled の子は親を塞がない)— これが放棄後に親が再計画へ復帰できる根拠。v1 で cancel に至る唯一の経路は failure question への「abandon」回答であり、失敗タスクのサブツリーと計画の残り(親の未完了子孫、巻き込まれた未回答 question を含む)が一括で cancel され、親が先頭復帰して再計画する(計画ごと破棄 — 子は1つの判断に基づくため、1子の放棄は計画全体を無効にする)。
+
+## Held(保留)
+
+祖先に未回答の question がある間、その配下のタスクが slot に入らない導出状態(保存されない)。blocked が下(未完了の子)から塞ぐのに対し、held は上(人間の判断待ち)から凍結する。question 自身は held の影響を受けない — 人間タスクとして slot の外で回答可能。一般の question は自分の親のサブツリーを、cancel を持ち得る failure question は失敗タスクの親のサブツリー(兄弟含む)を held にする。
 
 ## Risk flag(リスクフラグ)
 
@@ -74,7 +82,7 @@ read-only の判定行為。レビュアーは決して直さない — 発見�
 
 ## Watchdog(ウォッチドッグ)
 
-タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で SIGTERM → 猶予 → SIGKILL の順にエージェントを回収し、slot-release tree rule を経て、tidepool 名義の failure question(常設の「再実行」選択肢つき)を生成する。自動リトライはコードのどこにも存在しない — リトライ判断は常に人間の30秒の回答。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
+タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で SIGTERM → 猶予 → SIGKILL の順にエージェントを回収し、slot-release tree rule を経て、tidepool 名義の failure question(retry / abandon の2択、推奨は retry)を生成する。retry は失敗タスクを先頭復帰させ、abandon は計画ごと破棄する(Cancel 参照)。自動リトライはコードのどこにも存在しない — リトライ判断は常に人間の30秒の回答。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
 
 ## Branch discipline(ブランチ規律)
 
