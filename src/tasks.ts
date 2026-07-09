@@ -26,6 +26,8 @@ export interface Task {
   question_options: string[] | null;
   question_recommendation: string | null;
   question_answer: string | null;
+  /** System-internal only (ADR 0006) — never set via MCP or the JSON API. */
+  question_cancel_option: string | null;
   created_at: string;
 }
 
@@ -53,6 +55,12 @@ export interface RegisterTaskInput {
   completion_criteria: string;
   parent_id?: string;
   question?: QuestionSpec;
+  /** System-internal only (ADR 0006): declares that answering the question
+   *  with this exact option cancels the plan (see `cancelTask`) instead of
+   *  taking the ordinary unblock-to-head path. Must be one of the question's
+   *  options. Never set via MCP or the JSON API — only the watchdog's
+   *  failure-question registration sets it. */
+  cancel_option?: string;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
 }
@@ -64,6 +72,7 @@ export interface RegisterTaskInput {
 function assertQuestionSpec(input: RegisterTaskInput): void {
   if (input.type !== "question") {
     if (input.question) throw new DomainError("only a question task carries options");
+    if (input.cancel_option) throw new DomainError("only a question task carries a cancel option");
     return;
   }
   const q = input.question;
@@ -74,6 +83,16 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     throw new DomainError(
       "a question carries the registrant's recommendation, one of its options",
     );
+  }
+  if (input.cancel_option !== undefined) {
+    if (!q.options.includes(input.cancel_option)) {
+      throw new DomainError("a cancel option must be one of the question's options");
+    }
+    // the abandon cascade (answerQuestion) walks up from the question's own
+    // parent, so a cancel option is meaningless without one
+    if (!input.parent_id) {
+      throw new DomainError("a cancel option requires a parent task");
+    }
   }
 }
 
@@ -104,16 +123,17 @@ export function registerTask(
     question_options: input.question?.options ?? null,
     question_recommendation: input.question?.recommendation ?? null,
     question_answer: null,
+    question_cancel_option: input.cancel_option ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc,
-         question_options, question_recommendation, question_answer, created_at)
+         question_options, question_recommendation, question_answer, question_cancel_option, created_at)
        VALUES (@id, @type, @status, @assignee, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc,
-         @question_options, @question_recommendation, @question_answer, @created_at)`,
+         @question_options, @question_recommendation, @question_answer, @question_cancel_option, @created_at)`,
     ).run({
       ...task,
       question_options: task.question_options && JSON.stringify(task.question_options),
@@ -260,6 +280,9 @@ function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
 export interface EscalateInput extends QuestionSpec {
   title: string;
   context: string;
+  /** System-internal only (ADR 0006) — absent from the MCP tool schema and
+   *  the JSON API; only the watchdog's failure-question path sets this. */
+  cancel_option?: string;
 }
 
 /** Escalation: a question child carrying 2-4 choices and the registrant's
@@ -284,6 +307,7 @@ export function escalateTask(
         completion_criteria: "a human answer is recorded",
         parent_id: parent.id,
         question: { options: input.options, recommendation: input.recommendation },
+        cancel_option: input.cancel_option,
       },
       now,
       workerId,
@@ -299,6 +323,46 @@ export function escalateTask(
   return question!;
 }
 
+/** Cancel a task and every one of its unfinished descendants in one sweep
+ *  (ADR 0006): the human's abandon answer discards a plan wholesale rather
+ *  than picking through which branches survive — no dependency edges exist
+ *  between siblings to reason about, so a partial cancel can't be more
+ *  correct than a full one. `done` descendants are left untouched (nothing
+ *  degrades a completed record); `cancelled` counts as finished for the
+ *  blocked derivation, which is what lets the cancelled tree's own parent
+ *  return to `todo` and pick up work again. Internal only — answerQuestion's
+ *  abandon branch is the sole caller; no MCP or JSON API surface. */
+export function cancelTask(
+  db: Db,
+  task: Task,
+  originQuestionId: string,
+  workerId: string,
+  now: Date,
+): void {
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE subtree(id) AS (
+         SELECT ?
+         UNION
+         SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id
+       )
+       SELECT subtree.id FROM subtree JOIN tasks ON tasks.id = subtree.id
+       WHERE tasks.status NOT IN ('done', 'cancelled')`,
+    )
+    .all(task.id) as Array<{ id: string }>;
+  db.transaction(() => {
+    for (const { id } of rows) {
+      db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
+      appendEvent(db, {
+        taskId: id,
+        workerId,
+        payload: { kind: "task_cancelled", origin_question_id: originQuestionId },
+        at: now,
+      });
+    }
+  })();
+}
+
 /** The human steering channel: answer a question from the WebUI. One tap on an
  *  option or a free-text override — either way a plain string. The question
  *  completes; only a parent this answer actually unblocks returns to the queue
@@ -306,7 +370,15 @@ export function escalateTask(
  *
  *  `stageUnblock` defers the head move: when given (an open triage session),
  *  the answer is just as durable but the unblocked parent is handed to the
- *  callback instead of moving — the queue only changes at triage commit. */
+ *  callback instead of moving — the queue only changes at triage commit.
+ *
+ *  Abandon (ADR 0006): when `answer` matches the question's declared
+ *  `question_cancel_option` (system-internal, set only on the watchdog's
+ *  failure questions), the failed task's plan is discarded instead of
+ *  unblocked — every unfinished descendant of its parent (siblings included,
+ *  the failed task's own subtree among them) is cancelled, and the parent
+ *  itself returns to the queue head to replan. With no parent, the failed
+ *  task's own subtree is cancelled and nothing returns to the head. */
 export function answerQuestion(
   db: Db,
   question: Task,
@@ -342,12 +414,37 @@ export function answerQuestion(
       },
       at: now,
     });
-    const parent = question.parent_id ? getTask(db, question.parent_id) : undefined;
-    if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
-      if (stageUnblock) {
-        stageUnblock(parent.id);
+
+    let unblockTarget: Task | undefined;
+    if (answer === question.question_cancel_option) {
+      const failed = getTask(db, question.parent_id!)!;
+      const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
+      if (plan) {
+        const siblingIds = db
+          .prepare(
+            `SELECT id FROM tasks WHERE parent_id = ? AND status NOT IN ('done', 'cancelled')`,
+          )
+          .all(plan.id) as Array<{ id: string }>;
+        for (const { id } of siblingIds) {
+          cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now);
+        }
+        unblockTarget = plan;
       } else {
-        moveTask(db, parent, null, now);
+        cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now);
+      }
+    } else {
+      unblockTarget = question.parent_id ? getTask(db, question.parent_id) : undefined;
+    }
+
+    if (
+      unblockTarget &&
+      unblockTarget.status === "todo" &&
+      !hasUnfinishedChildren(db, unblockTarget.id)
+    ) {
+      if (stageUnblock) {
+        stageUnblock(unblockTarget.id);
+      } else {
+        moveTask(db, unblockTarget, null, now);
         parentUnblocked = true;
       }
     }
@@ -424,6 +521,38 @@ export function unfinishedChildSql(parentRef: string): string {
             WHERE c.parent_id = ${parentRef} AND c.status NOT IN ('done', 'cancelled'))`;
 }
 
+/** Held (CONTEXT.md, ADR 0006): while an ancestor carries an unanswered
+ *  question, its subtree stays out of the slot — a freeze from above, unlike
+ *  `blocked`'s freeze from below (an unfinished child). Two tiers of root:
+ *  a general question holds its own parent's subtree; a question that can
+ *  cancel the plan (question_cancel_option set — the watchdog's failure
+ *  question) holds its parent's *parent*'s subtree instead, siblings
+ *  included, because an abandon answer may cancel the whole plan out from
+ *  under them (falls back to its own parent's subtree if that parent has no
+ *  parent). A question itself is never held (it stays answerable outside the
+ *  slot regardless of what it's holding). Descendants are found by a
+ *  recursive walk down `parent_id` from each question's held root, derived
+ *  only — nothing is stored. */
+const HELD_IDS_CTE = `
+  held_roots(root_id) AS (
+    SELECT CASE WHEN q.question_cancel_option IS NULL THEN q.parent_id
+                ELSE COALESCE(f.parent_id, f.id) END AS root_id
+    FROM tasks q JOIN tasks f ON f.id = q.parent_id
+    WHERE q.type = 'question' AND q.status = 'todo'
+  ),
+  held_ids(id) AS (
+    SELECT c.id FROM tasks c JOIN held_roots r ON c.parent_id = r.root_id
+    UNION
+    SELECT c.id FROM tasks c JOIN held_ids h ON c.parent_id = h.id
+  )
+`;
+
+/** `idRef` is the SQL expression holding the candidate task's id. */
+export function heldSql(idRef: string): string {
+  return `${idRef} IN (SELECT id FROM held_ids WHERE id NOT IN
+            (SELECT id FROM tasks WHERE type = 'question'))`;
+}
+
 export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
   const { blocked } = db
     .prepare(`SELECT ${unfinishedChildSql("?")} AS blocked`)
@@ -432,26 +561,38 @@ export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
 }
 
 /** How a task appears on the board: `blocked` derived from unfinished
- *  children. Presentation only — the stored status stays one of the four
- *  persisted values. */
-export type BoardTask = Omit<Task, "status"> & { status: TaskStatus | "blocked" };
+ *  children, `held` from an ancestor's unanswered question. Presentation
+ *  only — the stored status stays one of the four persisted values. `blocked`
+ *  takes precedence when both apply: it names the more local reason. */
+export type BoardTask = Omit<Task, "status"> & { status: TaskStatus | "blocked" | "held" };
 
-export function presentTask(db: Db, task: Task): BoardTask {
-  const blocked = task.status === "todo" && hasUnfinishedChildren(db, task.id);
-  return { ...task, status: blocked ? "blocked" : task.status };
+function isHeld(db: Db, taskId: string): boolean {
+  const { held } = db
+    .prepare(`WITH RECURSIVE ${HELD_IDS_CTE} SELECT (${heldSql("?")}) AS held`)
+    .get(taskId) as { held: number };
+  return held === 1;
 }
 
-/** The whole board in one query — the list view derives blocked in SQL rather
- *  than issuing one probe per row. */
+export function presentTask(db: Db, task: Task): BoardTask {
+  if (task.status !== "todo") return { ...task, status: task.status };
+  if (hasUnfinishedChildren(db, task.id)) return { ...task, status: "blocked" };
+  if (isHeld(db, task.id)) return { ...task, status: "held" };
+  return { ...task, status: task.status };
+}
+
+/** The whole board in one query — the list view derives blocked/held in SQL
+ *  rather than issuing one probe per row. */
 export function listBoard(db: Db): BoardTask[] {
   const rows = db
     .prepare(
-      `SELECT *,
-         CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")}
-              THEN 'blocked' ELSE status END AS status
+      `WITH RECURSIVE ${HELD_IDS_CTE}
+       SELECT *,
+         CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
+              WHEN status = 'todo' AND ${heldSql("tasks.id")} THEN 'held'
+              ELSE status END AS status
        FROM tasks ORDER BY sort_key`,
     )
-    .all() as Array<Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" }>;
+    .all() as Array<Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" | "held" }>;
   return rows.map((row) => ({ ...row, question_options: parseOptions(row.question_options) }));
 }
 
@@ -467,10 +608,12 @@ export function getTask(db: Db, id: string): Task | undefined {
 export function nextSlotTask(db: Db): Task | undefined {
   const row = db
     .prepare(
-      `SELECT * FROM tasks t
+      `WITH RECURSIVE ${HELD_IDS_CTE}
+       SELECT * FROM tasks t
        WHERE t.status = 'todo'
          AND t.type <> 'question'
          AND NOT ${unfinishedChildSql("t.id")}
+         AND NOT ${heldSql("t.id")}
        ORDER BY t.sort_key LIMIT 1`,
     )
     .get() as TaskRow | undefined;

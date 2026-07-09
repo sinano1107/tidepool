@@ -51,14 +51,19 @@ export function failTask(
     task,
     {
       title,
-      context: reason,
-      // "abandon" is a placeholder second option to satisfy the 2-4-option
-      // invariant, not a distinct cancel path: no task-cancellation verb
-      // exists in v1, so any answer here — retry or abandon — resumes the
-      // task via the ordinary unblock-to-head mechanism. Out of scope for
-      // #9; add real cancel semantics only when a real need shows up.
+      // the option label alone ("abandon") can't carry what it does, so the
+      // consequence is spelled out here — this is the only human-visible
+      // surface for it (ADR 0006's implementation note); it's declared via
+      // the system-internal cancel_option below, never exposed to agents.
+      context:
+        `${reason}\n\n` +
+        `"retry" restarts this task from scratch at the queue head. ` +
+        `"abandon" discards the rest of this plan — this task's remaining ` +
+        `work plus its parent's other unfinished children — and returns the ` +
+        `parent to the queue head to replan.`,
       options: ["retry", "abandon"],
       recommendation: "retry",
+      cancel_option: "abandon",
     },
     BOARD_WORKER_ID,
     now,

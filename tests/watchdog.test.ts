@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 let wsPath: string | undefined;
@@ -117,6 +117,12 @@ it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付�
   expect(question).toBeDefined();
   expect(question.status).toBe("todo");
   expect(question.question_options).toContain("retry");
+  // the human-facing text (not just a source comment) spells out what
+  // abandon actually does, since the option label alone ("abandon") can't
+  // carry that — ADR 0006's implementation note
+  expect(question.purpose).toMatch(/abandon/i);
+  expect(question.purpose).toMatch(/plan/i);
+  expect(question.purpose).toMatch(/replan|queue head/i);
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
@@ -185,6 +191,62 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
     { taskId: task.id, signal: "SIGTERM" },
     { taskId: task.id, signal: "SIGKILL" },
   ]);
+});
+
+it("failure question が開いている間、失敗タスクの兄弟(計画の残り)も held になり slot に入らない", async () => {
+  const grace = 30 * MIN;
+  const ws = await makeWorkspace();
+  t = await bootTidepool({
+    workspace: ws,
+    watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
+  });
+
+  const parent = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title: "plan",
+      purpose: "plan purpose",
+      completion_criteria: "plan criteria",
+    })
+  ).json;
+  await t.clock.advance(HOUR); // parent picked up
+  const client = await mcpClient(t.baseUrl, parent.id);
+  await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "split into two children based on the same decision",
+      children: [
+        { title: "will fail", purpose: "purpose", completion_criteria: "criteria" },
+        { title: "sibling", purpose: "purpose", completion_criteria: "criteria" },
+      ],
+    },
+  });
+  await client.close();
+
+  const board0 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const sibling = board0.find((x: any) => x.title === "sibling");
+
+  await t.clock.advance(HOUR); // "will fail" picked up (lower sort_key)
+  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  await t.clock.advance(90 * MIN); // t: SIGTERM
+  await t.clock.advance(grace); // SIGKILL — failure question registered
+
+  const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  // sibling has no unfinished children of its own — plain 'todo' (and
+  // pickable) without the abandon-aware held rule reaching past its own
+  // parent's subtree to the whole plan
+  expect(board1.find((x: any) => x.id === sibling.id).status).toBe("held");
+
+  // held keeps it out of the freed slot
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x: any) => x.title)).toEqual(["plan", "will fail"]);
+
+  const question = board1.find((x: any) => x.type === "question");
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "retry" });
+
+  // answered — held clears regardless of which option was chosen
+  const board2 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board2.find((x: any) => x.id === sibling.id).status).toBe("todo");
 });
 
 it("SIGKILL 後に tree rule 自体が失敗すると、failure question ではなく workspace の quarantine に落ちる", async () => {

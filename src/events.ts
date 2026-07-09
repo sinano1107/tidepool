@@ -15,6 +15,10 @@ export type EventPayload =
   // through task_id
   | { kind: "task_completed"; handoff_present: boolean; result: string | null }
   | { kind: "task_escalated"; question_id: string }
+  // ADR 0006: a task cancelled by an abandon answer's plan-scoped cascade —
+  // origin_question_id is the failure question the abandon answer came from,
+  // shared by every task the cascade touches (its own subtree included)
+  | { kind: "task_cancelled"; origin_question_id: string }
   // recommendation_accepted and recommended_by are first-class: per-agent
   // acceptance rates are a primary statistic, recorded at answer time so they
   // never need a join back through task_registered

@@ -28,6 +28,7 @@ function makeTask(id = "task-1"): Task {
     question_options: null,
     question_recommendation: null,
     question_answer: null,
+    question_cancel_option: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
 }

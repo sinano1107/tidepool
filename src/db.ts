@@ -25,6 +25,11 @@ export function openDb(path: string): Db {
       question_options        TEXT,
       question_recommendation TEXT,
       question_answer         TEXT,
+      -- system-internal only (ADR 0006): one of question_options that, if
+      -- answered, cancels the plan instead of the ordinary unblock-to-head
+      -- path. Never set via MCP or the JSON API — only the watchdog's
+      -- failure-question registration sets it.
+      question_cancel_option  TEXT,
       created_at          TEXT NOT NULL
     );
 
@@ -91,7 +96,12 @@ export function openDb(path: string): Db {
   const cols = (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
     (c) => c.name,
   );
-  for (const col of ["question_options", "question_recommendation", "question_answer"]) {
+  for (const col of [
+    "question_options",
+    "question_recommendation",
+    "question_answer",
+    "question_cancel_option",
+  ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }
   return db;
