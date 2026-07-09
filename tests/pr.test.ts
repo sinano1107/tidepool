@@ -1,0 +1,164 @@
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import type { WorkspaceConfig } from "../src/workspace.js";
+import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+
+let t: Tidepool;
+let wsPath: string | undefined;
+afterEach(async () => {
+  await t?.stop();
+  if (wsPath) await rm(wsPath, { recursive: true, force: true });
+  wsPath = undefined;
+});
+
+function git(dir: string, ...args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
+    { cwd: dir },
+  )
+    .toString()
+    .trim();
+}
+
+async function makeWorkspace(): Promise<WorkspaceConfig> {
+  const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+  wsPath = path;
+  git(path, "init", "-b", "main");
+  git(path, "commit", "--allow-empty", "-m", "initial");
+  return { name: "sandbox", path };
+}
+
+async function registerWork(t: Tidepool, title: string) {
+  const res = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title,
+    purpose: `purpose of ${title}`,
+    completion_criteria: `criteria of ${title}`,
+  });
+  return res.json;
+}
+
+const fullHandoff = {
+  outcome: "done as specified",
+  deliverables: "notes.txt on the task branch",
+  decision_refs: "none",
+  dead_ends: "none",
+  resume_context: "none needed",
+  known_issues: "none",
+};
+
+it("work タスクの complete_task 成立後、タスクブランチから PR が作成される", async () => {
+  const ws = await makeWorkspace();
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "build the thing");
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.baseUrl, task.id);
+  const res: any = await client.callTool({
+    name: "complete_task",
+    arguments: { handoff: fullHandoff },
+  });
+  expect(res.isError ?? false).toBe(false);
+  await client.close();
+
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.requests[0]).toMatchObject({
+    path: ws.path,
+    branch: `task/${task.id}`,
+    base: "main",
+    title: "build the thing",
+  });
+});
+
+it("PR 本文がハンドオフドキュメントの6項目を反映している", async () => {
+  const ws = await makeWorkspace();
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "write the report");
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.baseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  const body = t.github.requests[0]?.body ?? "";
+  expect(body).toContain("Outcome vs completion criteria");
+  expect(body).toContain(fullHandoff.outcome);
+  expect(body).toContain("Deliverable locations");
+  expect(body).toContain(fullHandoff.deliverables);
+  expect(body).toContain("Key decision-log references");
+  expect(body).toContain(fullHandoff.decision_refs);
+  expect(body).toContain("Dead ends tried");
+  expect(body).toContain(fullHandoff.dead_ends);
+  expect(body).toContain("Context needed to resume");
+  expect(body).toContain(fullHandoff.resume_context);
+  expect(body).toContain("Known issues not worth a task");
+  expect(body).toContain(fullHandoff.known_issues);
+});
+
+it("PR 作成が失敗しても complete_task 自体は成立し、ツリーはクリーンなまま", async () => {
+  const ws = await makeWorkspace();
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+
+  writeFileSync(join(ws.path, "notes.txt"), "shipped\n");
+  t.github.scriptFailure(new Error("GitHub API is down"));
+  const client = await mcpClient(t.baseUrl, task.id);
+  const res: any = await client.callTool({
+    name: "complete_task",
+    arguments: { handoff: fullHandoff },
+  });
+  expect(res.isError ?? false).toBe(false);
+  await client.close();
+
+  const done = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+  expect(done.status).toBe("done");
+  expect(git(ws.path, "status", "--porcelain")).toBe("");
+  expect(git(ws.path, "log", "--format=%s", `task/${task.id}`)).toContain(
+    `WIP: task ${task.id}`,
+  );
+});
+
+it("review タスクの complete_task では PR が作られない", async () => {
+  const ws = await makeWorkspace();
+  t = await bootTidepool({ workspace: ws });
+  const task = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "review",
+      title: "review the sensor choice",
+      purpose: "unblock the hardware order",
+      completion_criteria: "the choice is confirmed",
+    })
+  ).json;
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.baseUrl, task.id);
+  const res: any = await client.callTool({ name: "complete_task", arguments: {} });
+  expect(res.isError ?? false).toBe(false);
+  await client.close();
+
+  expect(t.github.requests).toHaveLength(0);
+});
+
+it("question タスクの完了(回答)では PR が作られない", async () => {
+  const ws = await makeWorkspace();
+  t = await bootTidepool({ workspace: ws });
+  const task = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "question",
+      title: "which approach?",
+      purpose: "pick a direction",
+      completion_criteria: "a human answer is recorded",
+      question: { options: ["a", "b"], recommendation: "a" },
+    })
+  ).json;
+
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/answer`, { answer: "a" });
+
+  expect(t.github.requests).toHaveLength(0);
+});

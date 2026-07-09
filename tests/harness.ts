@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { startServer } from "../src/server.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
-import { FakeClock, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
 
@@ -14,6 +14,7 @@ export interface Tidepool {
   baseUrl: string;
   clock: FakeClock;
   worker: ScriptedWorker;
+  github: FakeGitHubClient;
   dir: string;
   /** Shut down the process only, keeping the SQLite file — for restart tests. */
   stopServer: () => Promise<void>;
@@ -30,11 +31,13 @@ export interface BootOptions {
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
- *  Only the worker is swapped for a scripted fake, at the WorkerAdapter seam. */
+ *  The worker and the GitHubClient are swapped for scripted fakes, at the
+ *  WorkerAdapter and GitHubClient seams. */
 export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
   const clock = new FakeClock();
   const worker = new ScriptedWorker();
+  const github = new FakeGitHubClient();
   const server = await startServer({
     dbPath: join(dir, "board.sqlite"),
     port: 0,
@@ -42,6 +45,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     worker: () => worker,
     workspace: options.workspace,
     watchdog: options.watchdog,
+    github,
   });
   let stopped = false;
   const stopServer = async () => {
@@ -52,6 +56,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     baseUrl: `http://127.0.0.1:${server.port}`,
     clock,
     worker,
+    github,
     dir,
     stopServer,
     stop: async () => {

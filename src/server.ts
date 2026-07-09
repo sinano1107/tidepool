@@ -5,6 +5,7 @@ import express from "express";
 import { createApiRouter } from "./api.js";
 import type { Clock } from "./clock.js";
 import { type Db, openDb } from "./db.js";
+import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
@@ -29,6 +30,9 @@ export interface ServerOptions {
   workspace?: WorkspaceConfig;
   /** Per-task-type absolute time limits (#9). Absent → no watchdog runs. */
   watchdog?: WatchdogConfig;
+  /** The GitHub-facing seam (issue #19): a work task's completion is promoted
+   *  to a PR through here. Absent → no PR is ever opened. */
+  github?: GitHubClient;
 }
 
 export interface TidepoolServer {
@@ -82,7 +86,16 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       })
     : undefined;
   app.use("/api", createApiRouter(db, options.clock, () => scheduler.pollNow()));
-  app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock, workspace: options.workspace }));
+  app.use(
+    "/mcp",
+    createMcpRouter({
+      db,
+      slot,
+      clock: options.clock,
+      workspace: options.workspace,
+      github: options.github,
+    }),
+  );
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   app.use(express.static(join(root, "public")));
   // the WebUI is the design-synced UI kit: screens come straight from the kit

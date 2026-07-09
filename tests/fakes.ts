@@ -1,4 +1,5 @@
 import type { Clock } from "../src/clock.js";
+import type { CreatePrInput, GitHubClient, PrResult } from "../src/github.js";
 import type { Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 
@@ -74,5 +75,25 @@ export class ScriptedWorker implements WorkerAdapter {
    *  null to script a check failure (fail-closed). */
   scriptUsage(resultText: string | null): void {
     this.usageText = resultText;
+  }
+}
+
+/** Scripted stand-in at the GitHubClient seam (issue #19): records every PR
+ *  request in call order; scriptFailure lets a test make the call throw
+ *  without touching a real GitHub API. */
+export class FakeGitHubClient implements GitHubClient {
+  readonly requests: CreatePrInput[] = [];
+  private failure: Error | null = null;
+  private nextNumber = 1;
+
+  async createPullRequest(input: CreatePrInput): Promise<PrResult> {
+    this.requests.push(input);
+    if (this.failure) throw this.failure;
+    const number = this.nextNumber++;
+    return { url: `https://github.com/example/repo/pull/${number}`, number };
+  }
+
+  scriptFailure(err: Error): void {
+    this.failure = err;
   }
 }

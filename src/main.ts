@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
+import { GhCliClient } from "./github.js";
 import { loadRegistry } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
@@ -66,5 +67,6 @@ const server = await startServer({
   clock: new SystemClock(),
   worker: workerFactory(),
   workspace: workspaceConfig(),
+  github: new GhCliClient(),
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);

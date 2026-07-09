@@ -4,6 +4,7 @@ import express, { Router } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import type { GitHubClient } from "./github.js";
 import type { Slot } from "./slot.js";
 import {
   completeTask,
@@ -16,13 +17,45 @@ import {
   logDecision,
   type Task,
 } from "./tasks.js";
-import { releaseWorkspace, type WorkspaceConfig } from "./workspace.js";
+import { releaseWorkspace, taskBranch, type WorkspaceConfig } from "./workspace.js";
 
 export interface McpDeps {
   db: Db;
   slot: Slot;
   clock: Clock;
   workspace?: WorkspaceConfig;
+  /** The GitHub-facing seam (issue #19): a work task's completion is promoted
+   *  to a PR through here. Absent → no PR is ever opened (e.g. a workspaceless
+   *  board). */
+  github?: GitHubClient;
+}
+
+/** The protected branch every task branch is proposed onto — the same one
+ *  branch discipline (workspace.ts) forbids direct writes to. */
+const PR_BASE_BRANCH = "main";
+
+/** Work-task completion → PR (issue #19): the tree rule already stashed the
+ *  work as a WIP commit on the task branch by the time this runs, so the PR
+ *  head always exists. Never entrusted to the worker, never lets a PR failure
+ *  touch the completion that already landed — best-effort, logged and
+ *  swallowed. question/review tasks carry no handoff doc and open no PR. */
+async function openHandoffPr(
+  deps: McpDeps,
+  task: Task,
+  handoffDoc: string | null,
+): Promise<void> {
+  if (task.type !== "work" || !deps.github || !deps.workspace) return;
+  try {
+    await deps.github.createPullRequest({
+      path: deps.workspace.path,
+      branch: taskBranch(task.id),
+      base: PR_BASE_BRANCH,
+      title: task.title,
+      body: handoffDoc ?? "",
+    });
+  } catch (err) {
+    console.error(`PR creation failed for task ${task.id}:`, err);
+  }
 }
 
 function toolResult(payload: unknown) {
@@ -122,11 +155,16 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           .optional(),
       },
     },
-    async ({ handoff }) =>
-      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+    async ({ handoff }) => {
+      let completed: Task | undefined;
+      const result = runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
         const done = completeTask(deps.db, task, handoff, workerId, now);
+        completed = done;
         return { id: done.id, status: done.status };
-      }),
+      });
+      if (completed) await openHandoffPr(deps, completed, completed.handoff_doc);
+      return result;
+    },
   );
 
   server.registerTool(
