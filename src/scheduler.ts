@@ -1,10 +1,15 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
-import { nextSlotTask, pickupTask } from "./tasks.js";
+import { nextSlotTask, pickupTask, type Task } from "./tasks.js";
 import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
-import { evaluateThrottle, parseUsage, type UsageSnapshot } from "./usage.js";
+import {
+  evaluateThrottle,
+  parseUsage,
+  type ThrottleDecision,
+  type UsageSnapshot,
+} from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
 import { ensureTaskBranch, workspaceNeedsHuman, type WorkspaceConfig } from "./workspace.js";
 
@@ -20,6 +25,45 @@ function usageThreshold(): number {
   if (process.env.TIDEPOOL_USAGE_THRESHOLD === undefined) return DEFAULT_USAGE_THRESHOLD;
   const parsed = Number(process.env.TIDEPOOL_USAGE_THRESHOLD);
   return Number.isFinite(parsed) ? parsed : DEFAULT_USAGE_THRESHOLD;
+}
+
+/** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
+ *  check every time there is a candidate, never a background poll. Persists
+ *  the observation as a side effect so /api/queue reflects it immediately. */
+async function checkThrottle(
+  db: Db,
+  clock: Clock,
+  worker: WorkerAdapter,
+  threshold: number,
+): Promise<ThrottleDecision> {
+  const resultText = await worker.checkUsage();
+  const snapshot: UsageSnapshot =
+    resultText !== null ? parseUsage(resultText, clock.now()) : { session: null, week: null };
+  const decision = evaluateThrottle(snapshot, threshold);
+  reportThrottle(db, decision);
+  return decision;
+}
+
+/** A single, replace-style one-shot timer (ADR 0008): scheduling while
+ *  already armed cancels the stale handle first, so a fresh skip re-arming
+ *  every poll never stacks duplicates. */
+function createResetTimer(clock: Clock, onFire: () => void) {
+  let cancelCurrent: (() => void) | null = null;
+  return {
+    schedule(resetsAt: Date): void {
+      cancelCurrent?.();
+      const delay = Math.max(0, resetsAt.getTime() - clock.now().getTime());
+      const cancel = clock.setInterval(() => {
+        cancel();
+        cancelCurrent = null;
+        onFire();
+      }, delay);
+      cancelCurrent = cancel;
+    },
+    cancel(): void {
+      cancelCurrent?.();
+    },
+  };
 }
 
 export interface Scheduler {
@@ -40,59 +84,48 @@ export function startScheduler(deps: {
 }): Scheduler {
   const { db, clock, slot, worker, workspace } = deps;
   let inFlight = false;
-  // single, replace-style handle (ADR 0008): a fresh skip re-arms this every
-  // poll while still throttled, so it must never stack duplicates
-  let resetTimerCancel: (() => void) | null = null;
+  const resetTimer = createResetTimer(clock, pollNow);
 
-  function scheduleResetTimer(resetsAt: Date): void {
-    resetTimerCancel?.();
-    const delay = Math.max(0, resetsAt.getTime() - clock.now().getTime());
-    const cancel = clock.setInterval(() => {
-      cancel();
-      resetTimerCancel = null;
-      pollNow();
-    }, delay);
-    resetTimerCancel = cancel;
+  function pickupBlocked(): boolean {
+    if (slot.currentTaskId !== null) return true;
+    // triage pauses pickup: the human is re-steering the queue, so nothing
+    // new enters the slot until the session commits (issue #6)
+    if (activeTriageSession(db)) return true;
+    // a quarantined workspace halts its tasks — with the board-level single
+    // workspace, that is every slot task (issue #8)
+    if (workspace && workspaceNeedsHuman(db, workspace.name)) return true;
+    return !nextSlotTask(db);
+  }
+
+  function pickup(task: Task): void {
+    const picked = pickupTask(db, task, worker.id, clock.now());
+    slot.occupy(picked.id);
+    try {
+      // branch discipline is the board's own, not the worker's: by the time
+      // the worker starts, the workspace already sits on the task branch
+      if (workspace) ensureTaskBranch(workspace, picked.id);
+      worker.start(picked);
+    } catch (err) {
+      // a failed start may not crash the board. The task keeps the slot — the
+      // same deliberate wedge as a restart-interrupted task — until the
+      // watchdog slice (#9) brings the escalation path.
+      console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
+    }
   }
 
   async function poll(): Promise<void> {
     if (inFlight) return;
-    if (slot.currentTaskId !== null) return;
-    // triage pauses pickup: the human is re-steering the queue, so nothing
-    // new enters the slot until the session commits (issue #6)
-    if (activeTriageSession(db)) return;
-    // a quarantined workspace halts its tasks — with the board-level single
-    // workspace, that is every slot task (issue #8)
-    if (workspace && workspaceNeedsHuman(db, workspace.name)) return;
-    if (!nextSlotTask(db)) return;
+    if (pickupBlocked()) return;
     inFlight = true;
     try {
-      // ADR 0008: usage only matters at the moment of a pickup decision — a
-      // fresh check every time there is a candidate, never a background poll
-      const resultText = await worker.checkUsage();
-      const snapshot: UsageSnapshot =
-        resultText !== null ? parseUsage(resultText, clock.now()) : { session: null, week: null };
-      const decision = evaluateThrottle(snapshot, usageThreshold());
-      reportThrottle(db, decision);
+      const decision = await checkThrottle(db, clock, worker, usageThreshold());
       if (decision.throttled) {
-        if (decision.resetsAt) scheduleResetTimer(decision.resetsAt);
+        if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
         return;
       }
       const head = nextSlotTask(db);
       if (!head) return;
-      const picked = pickupTask(db, head, worker.id, clock.now());
-      slot.occupy(picked.id);
-      try {
-        // branch discipline is the board's own, not the worker's: by the time
-        // the worker starts, the workspace already sits on the task branch
-        if (workspace) ensureTaskBranch(workspace, picked.id);
-        worker.start(picked);
-      } catch (err) {
-        // a failed start may not crash the board. The task keeps the slot — the
-        // same deliberate wedge as a restart-interrupted task — until the
-        // watchdog slice (#9) brings the escalation path.
-        console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
-      }
+      pickup(head);
     } finally {
       inFlight = false;
     }
@@ -106,7 +139,7 @@ export function startScheduler(deps: {
   return {
     stop: () => {
       cancel();
-      resetTimerCancel?.();
+      resetTimer.cancel();
     },
     pollNow,
   };
