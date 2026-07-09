@@ -72,6 +72,10 @@ read-only の判定行為。レビュアーは決して直さない — 発見�
 
 スロットが解放されるとき(完了・エスカレーション・watchdog 失敗のいずれでも)、作業ツリーを WIP コミットで退避しクリーンに戻すことが機械的に保証される、という規律。エージェントの善意には依存しない。WIP コミットはタスクブランチ(branch discipline 参照)以外には決して着地しない — セッションが自分のブランチを離れていた場合、規律はコミットを拒否し quarantine に落ちる。
 
+## Watchdog(ウォッチドッグ)
+
+タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で SIGTERM → 猶予 → SIGKILL の順にエージェントを回収し、slot-release tree rule を経て、tidepool 名義の failure question(常設の「再実行」選択肢つき)を生成する。自動リトライはコードのどこにも存在しない — リトライ判断は常に人間の30秒の回答。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
+
 ## Branch discipline(ブランチ規律)
 
 workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上で行われ、main への直接書き込みは全エージェントの権限外として構造的に禁止される、という規律。pickup 時に Tidepool がブランチを作成・checkout し(既存ブランチへの復帰は checkout のみ)、slot-release tree rule と対になって main を保護する。

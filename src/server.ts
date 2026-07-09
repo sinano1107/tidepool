@@ -8,7 +8,9 @@ import { type Db, openDb } from "./db.js";
 import { createMcpRouter } from "./mcp.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
+import { getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
+import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -25,6 +27,8 @@ export interface ServerOptions {
    *  slot-release tree rule act on. Absent → a workspaceless board (e.g. a
    *  human-driven one): no branch rule runs. */
   workspace?: WorkspaceConfig;
+  /** Per-task-type absolute time limits (#9). Absent → no watchdog runs. */
+  watchdog?: WatchdogConfig;
 }
 
 export interface TidepoolServer {
@@ -35,13 +39,24 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
-  // a restart interrupts any running task (ADR 0001); until the watchdog slice
-  // brings the escalation path, the interrupted task keeps the slot so a
-  // second task can never go in_progress beside it
+  // a restart interrupts any running task (ADR 0001): it drops into the same
+  // failure-escalation path as a watchdog kill, so the slot never wedges past
+  // a restart (#9) — no graceful-drain machinery exists or is needed
   const interrupted = db
     .prepare("SELECT id FROM tasks WHERE status = 'in_progress'")
     .get() as { id: string } | undefined;
-  if (interrupted) slot.occupy(interrupted.id);
+  if (interrupted) {
+    const task = getTask(db, interrupted.id)!;
+    failTask(
+      db,
+      task,
+      `restart interrupted task: ${task.title}`,
+      "the server restarted while this task was in progress; no self-report is " +
+        "possible (ADR 0001: a restart never drains gracefully).",
+      options.workspace,
+      options.clock.now(),
+    );
+  }
   const app = express();
   const worker = options.worker({ db, clock: options.clock });
   const scheduler = startScheduler({
@@ -56,6 +71,16 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const stopTriageWatchdog = options.clock.setInterval(() => {
     if (autoCommitStaleTriage(db, options.clock.now())) scheduler.pollNow();
   }, 60 * 1000);
+  const watchdog = options.watchdog
+    ? startWatchdog({
+        db,
+        clock: options.clock,
+        slot,
+        worker,
+        workspace: options.workspace,
+        config: options.watchdog,
+      })
+    : undefined;
   app.use("/api", createApiRouter(db, options.clock, () => scheduler.pollNow()));
   app.use("/mcp", createMcpRouter({ db, slot, clock: options.clock, workspace: options.workspace }));
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,6 +102,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     stop: () =>
       new Promise((resolve, reject) => {
         stopTriageWatchdog();
+        watchdog?.stop();
         scheduler.stop();
         listener.close((err) => (err ? reject(err) : resolve()));
         db.close();

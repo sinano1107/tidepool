@@ -6,7 +6,7 @@ import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import { loadRegistry, type Registry } from "./registry.js";
 import type { Task } from "./tasks.js";
-import type { WorkerAdapter } from "./worker.js";
+import type { KillSignal, WorkerAdapter } from "./worker.js";
 
 /** The process boundary the adapter is tested at: everything vendor-specific
  *  (the claude CLI, its flags) flows through this one call. */
@@ -14,7 +14,7 @@ export type SpawnFn = (
   command: string,
   args: string[],
   opts: { cwd: string },
-) => { stdout: NodeJS.ReadableStream };
+) => { stdout: NodeJS.ReadableStream; kill(signal: NodeJS.Signals): void };
 
 // the CLI defines this as a closed 5-value set; unlike --model (an open,
 // ever-growing set of aliases/full names) it's safe and worth validating
@@ -59,6 +59,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
    *  paths against its own cwd (the workspace), not against the board. */
   private readonly logDir: string;
+  /** Live child processes by task id, for the watchdog's kill() (#9). A
+   *  finished process removes itself so a stale entry never outlives it. */
+  private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
 
   constructor(options: ClaudeWorkerOptions) {
     this.id = options.agent;
@@ -136,6 +139,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
     child.stdout.pipe(createWriteStream(join(this.logDir, `${task.id}.stream.jsonl`)));
+    this.running.set(task.id, child);
     appendEvent(this.options.db, {
       taskId: task.id,
       workerId: this.id,
@@ -146,5 +150,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       },
       at: this.options.clock.now(),
     });
+  }
+
+  kill(taskId: string, signal: KillSignal): void {
+    this.running.get(taskId)?.kill(signal);
   }
 }

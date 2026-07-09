@@ -18,6 +18,7 @@ it("worker.start の throw はボードを落とさない: タスクは slot を
       started.push(task.id);
       throw new Error("registry went bad after boot");
     },
+    kill(): void {},
   };
   const task = registerTask(
     db,

@@ -4,7 +4,7 @@ import { SystemClock } from "./clock.js";
 import { loadRegistry } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
-import type { WorkerAdapter } from "./worker.js";
+import type { KillSignal, WorkerAdapter } from "./worker.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
@@ -13,6 +13,9 @@ class LoggingWorker implements WorkerAdapter {
   readonly id = "logging-worker";
   start(task: Task): void {
     console.log(`[worker] picked up ${task.id}: ${task.title}`);
+  }
+  kill(taskId: string, signal: KillSignal): void {
+    console.log(`[worker] would send ${signal} to ${taskId}`);
   }
 }
 

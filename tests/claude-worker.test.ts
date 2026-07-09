@@ -63,11 +63,12 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
 function recordingSpawn() {
   const calls: SpawnCall[] = [];
   const stdout = new PassThrough();
+  const killed: NodeJS.Signals[] = [];
   const spawn: SpawnFn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd });
-    return { stdout };
+    return { stdout, kill: (signal) => killed.push(signal) };
   };
-  return { calls, stdout, spawn };
+  return { calls, stdout, killed, spawn };
 }
 
 async function makeWorker(registryFiles: Record<string, string> = {}) {

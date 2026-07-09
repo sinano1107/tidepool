@@ -15,7 +15,10 @@ async function registerWork(t: Tidepool, title: string) {
 }
 
 function queueIds(list: any[]): string[] {
-  return list.filter((x) => x.status === "todo").map((x) => x.id);
+  // "work" only: a restart-time failure escalation (#9) can add its own
+  // question task to the todo list, which isn't part of the work ordering
+  // these tests are about
+  return list.filter((x) => x.status === "todo" && x.type === "work").map((x) => x.id);
 }
 
 const fullHandoff = {

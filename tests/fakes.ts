@@ -1,6 +1,6 @@
 import type { Clock } from "../src/clock.js";
 import type { Task } from "../src/tasks.js";
-import type { WorkerAdapter } from "../src/worker.js";
+import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 
 interface ScheduledInterval {
   fn: () => void;
@@ -43,12 +43,18 @@ export class FakeClock implements Clock {
   }
 }
 
-/** Scripted stand-in at the WorkerAdapter seam: records what it was asked to start. */
+/** Scripted stand-in at the WorkerAdapter seam: records what it was asked to
+ *  start and killed, in call order. */
 export class ScriptedWorker implements WorkerAdapter {
   readonly id = "fake-worker";
   readonly started: Task[] = [];
+  readonly killed: Array<{ taskId: string; signal: KillSignal }> = [];
 
   start(task: Task): void {
     this.started.push(task);
+  }
+
+  kill(taskId: string, signal: KillSignal): void {
+    this.killed.push({ taskId, signal });
   }
 }

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.js";
+import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, ScriptedWorker } from "./fakes.js";
 
@@ -24,6 +25,8 @@ export interface BootOptions {
   dir?: string;
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
+  /** Per-task-type absolute time limits (#9). */
+  watchdog?: WatchdogConfig;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -38,6 +41,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     clock,
     worker: () => worker,
     workspace: options.workspace,
+    watchdog: options.watchdog,
   });
   let stopped = false;
   const stopServer = async () => {

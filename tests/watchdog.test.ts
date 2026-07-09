@@ -1,0 +1,219 @@
+import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import type { WorkspaceConfig } from "../src/workspace.js";
+import { api, bootTidepool, HOUR, type Tidepool } from "./harness.js";
+
+let t: Tidepool;
+let wsPath: string | undefined;
+afterEach(async () => {
+  await t?.stop();
+  if (wsPath) await rm(wsPath, { recursive: true, force: true });
+  wsPath = undefined;
+});
+
+function git(dir: string, ...args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
+    { cwd: dir },
+  )
+    .toString()
+    .trim();
+}
+
+async function makeWorkspace(): Promise<WorkspaceConfig> {
+  const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+  wsPath = path;
+  git(path, "init", "-b", "main");
+  writeFileSync(join(path, "README.md"), "workspace\n");
+  git(path, "add", "-A");
+  git(path, "commit", "-m", "initial");
+  return { name: "sandbox", path };
+}
+
+const MIN = 60 * 1000;
+const WORK_LIMIT = 90 * MIN;
+
+async function registerWork(t: Tidepool) {
+  return (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title: "long haul",
+      purpose: "runs past its limit",
+      completion_criteria: "n/a",
+    })
+  ).json;
+}
+
+it("タスク種別の絶対リミットを超えると SIGTERM が一度だけ送られる、超えるまでは送られない", async () => {
+  t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace: 1000 * MIN } });
+  const task = await registerWork(t);
+
+  await t.clock.advance(HOUR); // picked up at t = 60min
+  await t.clock.advance(89 * MIN); // t = 149min, elapsed since pickup = 89min: still under 90min
+  expect(t.worker.killed).toEqual([]);
+
+  await t.clock.advance(1 * MIN); // t = 150min, elapsed = 90min: past the limit
+  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+
+  await t.clock.advance(1 * MIN); // no repeat signalling on later ticks
+  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+});
+
+it("SIGTERM 後、猶予を過ぎると SIGKILL が一度だけ追加で送られる", async () => {
+  const grace = 30 * MIN;
+  t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
+  const task = await registerWork(t);
+
+  await t.clock.advance(HOUR); // picked up at t = 60min
+  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM fires (elapsed = 90min)
+  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+
+  await t.clock.advance(29 * MIN); // t = 179min: grace (30min from 150min) not yet elapsed
+  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+
+  await t.clock.advance(1 * MIN); // t = 180min: grace elapsed, SIGKILL fires
+  expect(t.worker.killed).toEqual([
+    { taskId: task.id, signal: "SIGTERM" },
+    { taskId: task.id, signal: "SIGKILL" },
+  ]);
+
+  await t.clock.advance(10 * MIN); // no repeat SIGKILL
+  expect(t.worker.killed).toEqual([
+    { taskId: task.id, signal: "SIGTERM" },
+    { taskId: task.id, signal: "SIGKILL" },
+  ]);
+});
+
+it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付きの question が生まれ、slot が解放される", async () => {
+  const grace = 30 * MIN;
+  const ws = await makeWorkspace();
+  t = await bootTidepool({
+    workspace: ws,
+    watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
+  });
+  const task = await registerWork(t);
+
+  await t.clock.advance(HOUR); // picked up at t = 60min, checked out onto its task branch
+  // the killed session left work mid-flight, uncommitted
+  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+
+  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
+  await t.clock.advance(grace); // t = 180min: SIGKILL — the failure path runs
+
+  // tree rule stashed the WIP and the tree is clean
+  expect(git(ws.path, "status", "--porcelain")).toBe("");
+  expect(git(ws.path, "show", `task/${task.id}:draft.txt`)).toBe("stuck work");
+
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  // the original task is blocked on its own failure question (derived, not stored)
+  expect(list.find((x: any) => x.id === task.id).status).toBe("blocked");
+
+  const question = list.find((x: any) => x.type === "question");
+  expect(question).toBeDefined();
+  expect(question.status).toBe("todo");
+  expect(question.question_options).toContain("retry");
+
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
+  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+
+  // slot is free: a second task can now proceed
+  const second = await registerWork(t);
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id, second.id]);
+});
+
+it("failure question の「再実行」を選ぶと元タスクが先頭復帰し、再ピックアップされる", async () => {
+  const grace = 30 * MIN;
+  const ws = await makeWorkspace();
+  t = await bootTidepool({
+    workspace: ws,
+    watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
+  });
+  const task = await registerWork(t);
+
+  await t.clock.advance(HOUR); // picked up at t = 60min
+  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
+  await t.clock.advance(grace); // t = 180min: SIGKILL, failure question registered
+
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const question = list.find((x: any) => x.type === "question");
+
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "retry" });
+
+  // answered → parent returns to the queue head and is immediately re-picked up
+  const after = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+  expect(after.status).toBe("in_progress");
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id, task.id]);
+});
+
+it("再実行で再ピックアップされたタスクにも、新しい pickup から改めて時間リミットが働く(以前の kill 状態を引きずらない)", async () => {
+  const grace = 30 * MIN;
+  const ws = await makeWorkspace();
+  t = await bootTidepool({
+    workspace: ws,
+    watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
+  });
+  const task = await registerWork(t);
+
+  // first run: hits the limit, gets killed
+  await t.clock.advance(HOUR); // picked up at t = 60min
+  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
+  await t.clock.advance(grace); // t = 180min: SIGKILL
+  expect(t.worker.killed).toEqual([
+    { taskId: task.id, signal: "SIGTERM" },
+    { taskId: task.id, signal: "SIGKILL" },
+  ]);
+
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const question = list.find((x: any) => x.type === "question");
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "retry" });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+
+  // second run, from the retry's own pickup: hits the limit again and is
+  // killed again — the earlier kill must not have permanently disabled the
+  // watchdog for this task id
+  await t.clock.advance(90 * MIN);
+  await t.clock.advance(grace);
+  expect(t.worker.killed).toEqual([
+    { taskId: task.id, signal: "SIGTERM" },
+    { taskId: task.id, signal: "SIGKILL" },
+    { taskId: task.id, signal: "SIGTERM" },
+    { taskId: task.id, signal: "SIGKILL" },
+  ]);
+});
+
+it("SIGKILL 後に tree rule 自体が失敗すると、failure question ではなく workspace の quarantine に落ちる", async () => {
+  const grace = 30 * MIN;
+  const ws = await makeWorkspace();
+  t = await bootTidepool({
+    workspace: ws,
+    watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
+  });
+  const task = await registerWork(t);
+
+  await t.clock.advance(HOUR); // picked up at t = 60min
+
+  // 破壊してWIPコミット自体を失敗させる(tree-rule.test.tsの代役と同じ手法)
+  writeFileSync(join(ws.path, "junk.txt"), "uncommittable\n");
+  await rm(join(ws.path, ".git"), { recursive: true, force: true });
+
+  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
+  await t.clock.advance(grace); // t = 180min: SIGKILL, tree rule fails → quarantine
+
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  // failure question に加えて、quarantine 用の question も盤面自身の名義で立つ
+  const quarantineQuestion = list.find((x: any) => x.type === "question" && x.title.includes("sandbox"));
+  expect(quarantineQuestion).toBeDefined();
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${quarantineQuestion.id}/events`)).json;
+  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+
+  // needs-human の workspace はpickupを止める
+  await registerWork(t);
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+});

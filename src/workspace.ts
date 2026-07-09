@@ -115,3 +115,19 @@ export function quarantineWorkspace(
     BOARD_WORKER_ID,
   );
 }
+
+/** Every slot release runs the tree rule and falls back to quarantine on its
+ *  failure — the shared shape behind the releasing MCP verbs (complete,
+ *  escalate, decompose) and the watchdog/restart failure path alike (#9). */
+export function releaseWorkspace(
+  db: Db,
+  workspace: WorkspaceConfig,
+  taskId: string,
+  now: Date,
+): void {
+  try {
+    releaseTree(workspace, taskId);
+  } catch (err) {
+    quarantineWorkspace(db, workspace, err, now);
+  }
+}
