@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AuthorityProfile } from "../src/registry.js";
 import { startServer } from "../src/server.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
@@ -28,6 +29,8 @@ export interface BootOptions {
   workspace?: WorkspaceConfig;
   /** Per-task-type absolute time limits (#9). */
   watchdog?: WatchdogConfig;
+  /** This board's one worker's authority profile (issue #11). */
+  authority?: AuthorityProfile;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -46,6 +49,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     workspace: options.workspace,
     watchdog: options.watchdog,
     github,
+    authority: options.authority,
   });
   let stopped = false;
   const stopServer = async () => {

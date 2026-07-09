@@ -42,6 +42,8 @@ export interface PendingChildSpec {
    *  normally — carried through so an approved child keeps the same
    *  provenance as an ordinary decomposed sibling. */
   based_on_decision?: number;
+  risk_flag?: boolean;
+  assignee?: string;
 }
 
 /** The SQLite shape of a task: options/pending-child are JSON TEXT columns.
@@ -80,6 +82,8 @@ export interface RegisterTaskInput {
   parent_id?: string;
   /** CONTEXT.md's risk flag — declares external effect at registration. */
   risk_flag?: boolean;
+  /** Pre-assigns the task to a specific worker at registration (issue #11). */
+  assignee?: string;
   question?: QuestionSpec;
   /** System-internal only (ADR 0006): declares that answering the question
    *  with this exact option cancels the plan (see `cancelTask`) instead of
@@ -141,7 +145,7 @@ export function registerTask(
     id: randomUUID(),
     type: input.type,
     status: "todo",
-    assignee: null,
+    assignee: input.assignee ?? null,
     title: input.title,
     purpose: input.purpose,
     completion_criteria: input.completion_criteria,
@@ -468,29 +472,29 @@ export function answerQuestion(
         cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now);
       }
     } else {
-      // risk-approval question (issue #11): the child was never registered at
-      // decompose time. "approve" materializes it now, riskier than its
-      // parent for real, and raises the parent's own risk flag to match
-      // (upward propagation) — a "reject" answer leaves it unregistered.
-      if (question.question_pending_child && answer === "approve") {
+      // pending-child approval question (issue #11): the child (out-of-
+      // authority on risk and/or assignee) was never registered at decompose
+      // time. "approve" materializes it now, for real, and — only if it
+      // actually carries risk beyond its parent — raises the parent's own
+      // risk flag to match (upward propagation). A "reject" answer leaves it
+      // unregistered.
+      const pending = question.question_pending_child;
+      if (pending && answer === "approve") {
         registerTask(
           db,
-          {
-            type: "work",
-            ...question.question_pending_child,
-            risk_flag: true,
-            parent_id: question.parent_id!,
-          },
+          { type: "work", ...pending, parent_id: question.parent_id! },
           now,
           HUMAN_WORKER_ID,
         );
-        db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
-        appendEvent(db, {
-          taskId: question.parent_id!,
-          workerId: HUMAN_WORKER_ID,
-          payload: { kind: "risk_flag_raised", origin_question_id: question.id },
-          at: now,
-        });
+        if (pending.risk_flag) {
+          db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
+          appendEvent(db, {
+            taskId: question.parent_id!,
+            workerId: HUMAN_WORKER_ID,
+            payload: { kind: "risk_flag_raised", origin_question_id: question.id },
+            at: now,
+          });
+        }
       }
       unblockTarget = question.parent_id ? getTask(db, question.parent_id) : undefined;
     }
@@ -537,12 +541,23 @@ export interface ChildSpec {
    *  authority: decomposeTask converts it into an approval question rather
    *  than registering it (ADR 0002 / issue #11). */
   risk_flag?: boolean;
+  /** Pre-assigns the child to a specific worker. Outside the registering
+   *  worker's authority profile's `assignable_to` (confused-deputy
+   *  prevention), this too converts to an approval question (issue #11). */
+  assignee?: string;
 }
 
-/** Options fixed by the server for a risk-approval question (issue #11) — not
- *  a caller-supplied QuestionSpec, so answerQuestion recognizes this exact
- *  pair rather than a free-form escalation. */
-const RISK_APPROVAL_OPTIONS = ["approve", "reject"] as const;
+/** The registering worker's authority, resolved by the caller (the MCP layer)
+ *  against the board's one configured profile (issue #11) — decomposeTask
+ *  itself stays free of any registry/file-loading dependency. */
+export interface AuthorityContext {
+  assignable_to?: string[];
+}
+
+/** Options fixed by the server for a pending-child approval question (issue
+ *  #11) — not a caller-supplied QuestionSpec, so answerQuestion recognizes
+ *  this exact pair rather than a free-form escalation. */
+const PENDING_CHILD_OPTIONS = ["approve", "reject"] as const;
 
 export interface DecomposeInput {
   reason: string;
@@ -561,6 +576,7 @@ export function decomposeTask(
   input: DecomposeInput,
   workerId: string,
   now: Date,
+  authority?: AuthorityContext,
 ): Task[] {
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
@@ -569,22 +585,35 @@ export function decomposeTask(
   db.transaction(() => {
     const decisionId = logDecision(db, parent, input.reason, workerId, now);
     for (const child of input.children) {
+      const reasons: string[] = [];
       if (child.risk_flag && !parent.risk_flag) {
+        reasons.push("carries risk beyond the parent's declared risk");
+      }
+      if (
+        child.assignee !== undefined &&
+        authority?.assignable_to !== undefined &&
+        !authority.assignable_to.includes(child.assignee)
+      ) {
+        reasons.push(`assigns to "${child.assignee}", outside ${workerId}'s assignable_to`);
+      }
+      if (reasons.length > 0) {
         registerTask(
           db,
           {
             type: "question",
-            title: `approve risk escalation: ${child.title}`,
+            title: `authorize child registration: ${child.title}`,
             purpose:
-              `"${child.title}" carries risk beyond the parent's declared risk and is ` +
-              `outside ${workerId}'s authority to register unapproved. ${child.purpose}`,
+              `"${child.title}" ${reasons.join("; ")} — outside ${workerId}'s authority to ` +
+              `register unapproved. ${child.purpose}`,
             completion_criteria: "a human approves or rejects the child registration",
             parent_id: parent.id,
-            question: { options: [...RISK_APPROVAL_OPTIONS], recommendation: "approve" },
+            question: { options: [...PENDING_CHILD_OPTIONS], recommendation: "approve" },
             pending_child: {
               title: child.title,
               purpose: child.purpose,
               completion_criteria: child.completion_criteria,
+              risk_flag: child.risk_flag,
+              assignee: child.assignee,
               based_on_decision: decisionId,
             },
             based_on_decision: decisionId,

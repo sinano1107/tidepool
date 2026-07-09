@@ -23,10 +23,15 @@ export interface AgentDefinition {
 }
 
 /** An authority profile: `authority/<profile>.yaml` in the registry clone.
- *  `guidance` is prose injected into the agent's system prompt at spawn. */
+ *  `guidance` is prose injected into the agent's system prompt at spawn.
+ *  `assignable_to` (issue #11) is a machine-enforced delegation allowlist —
+ *  confused-deputy prevention: a decompose child assigned outside this list
+ *  converts to an approval question rather than registering (ADR 0002).
+ *  Absent means unrestricted (no board-configured profile to check against). */
 export interface AuthorityProfile {
   name: string;
   guidance: string;
+  assignable_to?: string[];
 }
 
 const workspaceEntrySchema = z.object({
@@ -77,6 +82,7 @@ function parseAgentFile(path: string): AgentDefinition {
 // misconfiguration — upward escalation is never restricted (issue #7)
 const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
+  assignable_to: z.array(z.string()).optional(),
 });
 
 const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
@@ -84,7 +90,7 @@ const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 function parseAuthorityFile(path: string): AuthorityProfile {
   const name = basename(path, ".yaml");
   const profile = authorityProfileSchema.parse(parseYaml(readFileSync(path, "utf8")));
-  return { name, guidance: profile.guidance };
+  return { name, guidance: profile.guidance, assignable_to: profile.assignable_to };
 }
 
 export function loadRegistry(dir: string): Registry {

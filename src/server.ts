@@ -9,6 +9,7 @@ import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
+import type { AuthorityProfile } from "./registry.js";
 import { getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -33,6 +34,11 @@ export interface ServerOptions {
   /** The GitHub-facing seam (issue #19): a work task's completion is promoted
    *  to a PR through here. Absent → no PR is ever opened. */
   github?: GitHubClient;
+  /** This board's one configured worker's authority profile (issue #11) — the
+   *  n=1 board runs a single worker at a time (ADR-adjacent design principle
+   *  #8), so this is one fixed profile rather than a per-task registry
+   *  lookup. Absent → assignable_to is unrestricted. */
+  authority?: AuthorityProfile;
 }
 
 export interface TidepoolServer {
@@ -94,6 +100,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       clock: options.clock,
       workspace: options.workspace,
       github: options.github,
+      authority: options.authority,
     }),
   );
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");

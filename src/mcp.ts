@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { GitHubClient } from "./github.js";
+import type { AuthorityProfile } from "./registry.js";
 import type { Slot } from "./slot.js";
 import {
   completeTask,
@@ -33,6 +34,9 @@ export interface McpDeps {
    *  to a PR through here. Absent → no PR is ever opened (e.g. a workspaceless
    *  board). */
   github?: GitHubClient;
+  /** This board's one configured worker's authority profile (issue #11).
+   *  Absent → assignable_to is unrestricted. */
+  authority?: AuthorityProfile;
 }
 
 /** The protected branch every task branch is proposed onto — the same one
@@ -208,13 +212,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             purpose: z.string().min(1),
             completion_criteria: z.string().min(1),
             risk_flag: z.boolean().optional(),
+            assignee: z.string().optional(),
           }),
         ),
       },
     },
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-        const children = decomposeTask(deps.db, task, input, workerId, now);
+        const children = decomposeTask(deps.db, task, input, workerId, now, deps.authority);
         return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),
   );
