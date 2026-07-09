@@ -28,8 +28,9 @@ export interface Task {
   question_answer: string | null;
   /** System-internal only (ADR 0006) — never set via MCP or the JSON API. */
   question_cancel_option: string | null;
-  /** System-internal only (issue #11): a risk-approval question's would-be
-   *  child, materialized by answerQuestion only on an "approve" answer. */
+  /** System-internal only (issue #11): a pending-child approval question's
+   *  would-be child, materialized by answerQuestion only on an "approve"
+   *  answer. */
   question_pending_child: PendingChildSpec | null;
   created_at: string;
 }
@@ -42,7 +43,12 @@ export interface PendingChildSpec {
    *  normally — carried through so an approved child keeps the same
    *  provenance as an ordinary decomposed sibling. */
   based_on_decision?: number;
+  /** Whether the child itself carries risk — checked against the parent's
+   *  *current* risk flag at approval time (not a decompose-time snapshot) to
+   *  decide whether this approval propagates risk upward at all. */
   risk_flag?: boolean;
+  /** The assignee originally requested at decompose time, honored as-is on
+   *  materialization regardless of which reason(s) triggered this question. */
   assignee?: string;
 }
 
@@ -91,9 +97,10 @@ export interface RegisterTaskInput {
    *  options. Never set via MCP or the JSON API — only the watchdog's
    *  failure-question registration sets it. */
   cancel_option?: string;
-  /** System-internal only (issue #11): the would-be child of a risk-approval
-   *  question, materialized by answerQuestion on an "approve" answer. Never
-   *  set via MCP or the JSON API — only decomposeTask sets this. */
+  /** System-internal only (issue #11): the would-be child of a pending-child
+   *  approval question, materialized by answerQuestion on an "approve"
+   *  answer. Never set via MCP or the JSON API — only decomposeTask sets
+   *  this. */
   pending_child?: PendingChildSpec;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
@@ -486,7 +493,12 @@ export function answerQuestion(
           now,
           HUMAN_WORKER_ID,
         );
-        if (pending.risk_flag) {
+        // "beyond its parent" is evaluated against the parent's current risk
+        // flag, not a decompose-time snapshot: a second, unrelated (e.g.
+        // assignee-only) approval on an already-risky parent propagates
+        // nothing new and must not re-fire the audit event.
+        const currentParent = getTask(db, question.parent_id!)!;
+        if (pending.risk_flag && !currentParent.risk_flag) {
           db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
           appendEvent(db, {
             taskId: question.parent_id!,

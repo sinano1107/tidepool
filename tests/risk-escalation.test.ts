@@ -153,3 +153,75 @@ it("rejecting a risk-approval question leaves the child unregistered and the par
   // and the free slot picks it back up at once
   expect(updatedParent.status).toBe("in_progress");
 });
+
+/** Complete the slot task via MCP with a full work handoff. */
+async function completeVia(t: Tidepool, taskId: string) {
+  const client = await mcpClient(t.baseUrl, taskId);
+  await client.callTool({
+    name: "complete_task",
+    arguments: {
+      handoff: {
+        outcome: "criteria met",
+        deliverables: "the migration ran",
+        decision_refs: "none",
+        dead_ends: "none",
+        resume_context: "none",
+        known_issues: "none",
+      },
+    },
+  });
+  await client.close();
+}
+
+it("approving a later, non-risk escalation once the parent is already risky does not re-fire risk_flag_raised", async () => {
+  t = await bootTidepool({
+    authority: { name: "standard", guidance: "", assignable_to: ["deckhand"] },
+  });
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR); // parent picked up
+
+  // first escalation: genuinely raises the parent from risk_flag=0 to 1
+  const firstQuestion = await decomposeRiskyChild(t, parent.id);
+  await api(t.baseUrl, "POST", `/api/tasks/${firstQuestion.id}/answer`, { answer: "approve" });
+  const firstChild = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.title === "migrate the prod table",
+  );
+
+  // clear the board of that child so the parent can resume and decompose again
+  await t.clock.advance(HOUR); // firstChild picked up
+  await completeVia(t, firstChild.id);
+  await t.clock.advance(HOUR); // parent resumes and is picked up again
+
+  // second escalation on the now-already-risky parent: assignee-only (the
+  // child itself declares risk, but the parent's risk was already raised by
+  // the first approval — this approval propagates nothing new)
+  const client = await mcpClient(t.baseUrl, parent.id);
+  await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "a specialist should also own the follow-up",
+      children: [
+        {
+          title: "verify the migrated data",
+          purpose: "spot-check the backfilled rows",
+          completion_criteria: "spot-checks pass",
+          risk_flag: true,
+          assignee: "dba-specialist",
+        },
+      ],
+    },
+  });
+  await client.close();
+  const secondQuestion = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question" && x.status === "todo" && x.parent_id === parent.id,
+  );
+
+  await api(t.baseUrl, "POST", `/api/tasks/${secondQuestion.id}/answer`, { answer: "approve" });
+
+  // only the first approval's propagation is on record — the second
+  // approval found the parent already risky and raised nothing new
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${parent.id}/events`)).json;
+  const raised = events.filter((e: any) => e.kind === "risk_flag_raised");
+  expect(raised).toHaveLength(1);
+  expect(raised[0].payload.origin_question_id).toBe(firstQuestion.id);
+});

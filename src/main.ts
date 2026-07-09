@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import { GhCliClient } from "./github.js";
-import { loadRegistry } from "./registry.js";
+import { loadRegistry, type AuthorityProfile } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
@@ -61,6 +61,21 @@ function workspaceConfig(): WorkspaceConfig | undefined {
   return { name: workspaceName, path: entry.path };
 }
 
+/** The board's one configured worker's authority profile (issue #11): same
+ *  agent/authority resolution ClaudeCodeWorker does for spawn-time guidance,
+ *  surfaced here too so the MCP layer can enforce assignable_to. Without a
+ *  registry, no worker's authority is knowable — unrestricted. */
+function authorityProfile(): AuthorityProfile | undefined {
+  if (!registryDir) return undefined;
+  const registry = loadRegistry(registryDir);
+  const agentName = process.env.TIDEPOOL_AGENT ?? "deckhand";
+  const agent = registry.agents[agentName];
+  if (!agent) throw new Error(`unknown agent: ${agentName}`);
+  const profile = registry.authority[agent.authority];
+  if (!profile) throw new Error(`unknown authority profile: ${agent.authority}`);
+  return profile;
+}
+
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -68,5 +83,6 @@ const server = await startServer({
   worker: workerFactory(),
   workspace: workspaceConfig(),
   github: new GhCliClient(),
+  authority: authorityProfile(),
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);

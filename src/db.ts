@@ -30,9 +30,9 @@ export function openDb(path: string): Db {
       -- path. Never set via MCP or the JSON API — only the watchdog's
       -- failure-question registration sets it.
       question_cancel_option  TEXT,
-      -- system-internal only (issue #11): a risk-approval question's would-be
-      -- child, JSON-encoded, materialized only if the human answers "approve".
-      -- Never set via MCP or the JSON API — only decomposeTask sets this.
+      -- system-internal only (issue #11): a pending-child approval question's
+      -- would-be child, JSON-encoded, materialized only if the human answers
+      -- "approve". Never set via MCP or the JSON API — only decomposeTask sets this.
       question_pending_child  TEXT,
       created_at          TEXT NOT NULL
     );
