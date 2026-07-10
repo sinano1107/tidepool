@@ -19,7 +19,11 @@ it("the hourly tick hands the queue head to the worker and marks it in_progress"
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const byId = Object.fromEntries(list.map((x: any) => [x.id, x]));
   expect(byId[first.id].status).toBe("in_progress");
-  expect(byId[first.id].assignee).toBe(t.worker.id);
+  // an unspecified assignee is never baked in at pickup (ADR 0012 / issue
+  // #36): it stays a live reference to the board's default agent, resolved
+  // fresh wherever it's used, not pinned to the worker that happened to pick
+  // it up
+  expect(byId[first.id].assignee).toBeNull();
   expect(byId[second.id].status).toBe("todo");
 
   // slot is busy (concurrency = 1): the next tick starts nothing new

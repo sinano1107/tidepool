@@ -101,13 +101,17 @@ export function startScheduler(deps: {
     // new enters the slot until the session commits (issue #6)
     if (activeTriageSession(db)) return true;
     // the gate is keyed on each candidate's own execution workspace (issue
-    // #26 / ADR 0009), skipped in SQL by nextSlotTask itself — a quarantined
-    // workspace halts only its own tasks, never the whole board.
-    return !nextSlotTask(db, workspace?.name);
+    // #26 / ADR 0009) and assignee (ADR 0012 / issue #36), skipped in SQL by
+    // nextSlotTask itself — a quarantined workspace or agent halts only its
+    // own tasks, never the whole board.
+    return !nextSlotTask(db, workspace?.name, worker.id);
   }
 
   function pickup(task: Task): void {
-    const picked = pickupTask(db, task, worker.id, clock.now());
+    // assignee is never overwritten (ADR 0012 / issue #36) — the event's
+    // attribution resolves the same three-value read CONTEXT.md's Assignee
+    // describes: pre-set name as-is, unspecified to the board's default agent
+    const picked = pickupTask(db, task, task.assignee ?? worker.id, clock.now());
     slot.occupy(picked.id);
     // branch discipline is the board's own, not the worker's: by the time
     // the worker starts, the workspace already sits on the task branch
@@ -146,7 +150,7 @@ export function startScheduler(deps: {
         if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
         return;
       }
-      const head = nextSlotTask(db, workspace?.name);
+      const head = nextSlotTask(db, workspace?.name, worker.id);
       if (!head) return;
       pickup(head);
     } finally {

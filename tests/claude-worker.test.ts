@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { agentNeedsHuman } from "../src/agent.js";
 import { ClaudeCodeWorker, type SpawnFn } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -12,12 +13,12 @@ import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
-function makeTask(id = "task-1", workspace: string | null = null): Task {
+function makeTask(id = "task-1", workspace: string | null = null, assignee: string | null = "deckhand"): Task {
   return {
     id,
     type: "work",
     status: "in_progress",
-    assignee: "deckhand",
+    assignee,
     workspace,
     title: "fix the leaky faucet",
     purpose: "stop the drip",
@@ -35,6 +36,7 @@ function makeTask(id = "task-1", workspace: string | null = null): Task {
     question_pending_child: null,
     question_pending_merge_pr: null,
     question_quarantine_workspace: null,
+    question_quarantine_agent: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
 }
@@ -95,8 +97,12 @@ async function makeWorker(registryFiles: Record<string, string> = {}) {
     spawn: recorder.spawn,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */
-  const start = (id?: string, workspace: string | null = null): Task => {
-    const task = makeTask(id, workspace);
+  const start = (
+    id?: string,
+    workspace: string | null = null,
+    assignee: string | null = "deckhand",
+  ): Task => {
+    const task = makeTask(id, workspace, assignee);
     insertTask(db, task);
     worker.start(task);
     return task;
@@ -145,6 +151,43 @@ describe("ClaudeCodeWorker", () => {
     expect(workspaceNeedsHuman(db, "ghost")).toBe(true);
     const question = listBoard(db).find((t) => t.type === "question");
     expect(question?.question_quarantine_workspace).toBe("ghost");
+  });
+
+  const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\n---\nYou are Navigator, the specialist.\n`;
+
+  it("task.assignee が指定されていれば、コンストラクタの agent より優先してそのエージェントとして spawn する(ADR 0012 / issue #36)", async () => {
+    const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
+    start("task-navigator", null, "navigator");
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain("You are Navigator");
+    expect(systemPrompt).not.toContain("You are Deckhand");
+  });
+
+  it("task.assignee が null なら、これまで通りコンストラクタの agent(既定 agent)として spawn する", async () => {
+    const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
+    start("task-default-agent", null, null);
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain("You are Deckhand");
+  });
+
+  it("task.assignee が registry に存在しない agent 名(registry drift)なら、投げずに agent を quarantine して spawn しない(ADR 0012 / issue #36)", async () => {
+    const { start, calls, db } = await makeWorker();
+    start("task-drifted-agent", null, "ghost");
+    expect(calls).toEqual([]);
+    expect(agentNeedsHuman(db, "ghost")).toBe(true);
+    const question = listBoard(db).find((t) => t.type === "question");
+    expect(question?.question_quarantine_agent).toBe("ghost");
+  });
+
+  it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {
+    const { start, db } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
+    start("task-attributed", null, "navigator");
+    const spawned = listEvents(db, "task-attributed").find((e) => e.kind === "worker_spawned");
+    expect(spawned?.worker_id).toBe("navigator");
   });
 
   it("一時 MCP 設定でボードを ?task= 付きで指す(呼び出しのタスク帰属)", async () => {

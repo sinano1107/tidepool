@@ -43,8 +43,21 @@ export interface McpDeps {
    *  board). */
   github?: GitHubClient;
   /** This board's one configured worker's authority profile (issue #11).
-   *  Absent → assignable_to and allowed_workspaces are both unrestricted. */
+   *  Absent → assignable_to and allowed_workspaces are both unrestricted.
+   *  Superseded by `resolveAuthority` below when both are given. */
   authority?: AuthorityProfile;
+  /** Resolves the executing task's own agent's authority profile (ADR 0012 /
+   *  issue #36), read fresh every call from the task's own `assignee` (null →
+   *  the board's default agent) — the delegation-aware successor to the
+   *  single fixed `authority` above, which every task shared regardless of
+   *  who it was actually assigned to. Absent → falls back to `authority`. */
+  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
+  /** The board's default agent name (ADR 0012 / issue #36): every MCP call is
+   *  attributed to a real agent session (never human — that's the separate
+   *  /answer route), so a task's unspecified (null) `assignee` resolves here,
+   *  not to `HUMAN_WORKER_ID`. Absent → falls back to `HUMAN_WORKER_ID`, same
+   *  as the pre-#36 shape for a board with no worker configured at all. */
+  defaultAgentName?: string;
 }
 
 /** The protected branch every task branch is proposed onto — the same one
@@ -87,13 +100,28 @@ async function openHandoffPr(
       deps.db,
       task,
       pr.number,
-      task.assignee ?? HUMAN_WORKER_ID,
+      attributedWorkerId(deps, task),
       deps.clock.now(),
-      deps.authority,
+      attributedAuthority(deps, task),
     );
   } catch (err) {
     console.error(`PR creation failed for task ${task.id}:`, err);
   }
+}
+
+/** Every MCP call is attributed to a real agent session (never human — that's
+ *  the separate /answer route), so an unspecified (null) assignee resolves to
+ *  the board's default agent, not `HUMAN_WORKER_ID` (ADR 0012 / issue #36). */
+function attributedWorkerId(deps: McpDeps, task: Task): string {
+  return task.assignee ?? deps.defaultAgentName ?? HUMAN_WORKER_ID;
+}
+
+/** The authority governing this task: `resolveAuthority` read fresh against
+ *  the task's own `assignee` when configured (ADR 0012 / issue #36), else the
+ *  board's single fixed `authority` (pre-#36 shape, and still today's shape
+ *  for a board with no registry-backed resolver at all). */
+function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | undefined {
+  return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
 }
 
 function toolResult(payload: unknown) {
@@ -144,7 +172,7 @@ function runReleasingVerb(
   verb: (task: Task, workerId: string, now: Date) => unknown,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
-    const result = verb(task, task.assignee ?? HUMAN_WORKER_ID, deps.clock.now());
+    const result = verb(task, attributedWorkerId(deps, task), deps.clock.now());
     // the tree rule runs between the domain verb and the release: a domain
     // error above keeps the session (and its tree) alive, but once the verb
     // lands the WIP is stashed before anything else can enter the workspace.
@@ -221,7 +249,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async ({ line }) =>
       runVerb(deps, attributedTaskId, (task) => {
-        logDecision(deps.db, task, line, task.assignee ?? HUMAN_WORKER_ID, deps.clock.now());
+        logDecision(deps.db, task, line, attributedWorkerId(deps, task), deps.clock.now());
         return { logged: true };
       }),
   );
@@ -269,7 +297,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             }
           }
         }
-        const children = decomposeTask(deps.db, task, input, workerId, now, deps.authority);
+        const children = decomposeTask(
+          deps.db,
+          task,
+          input,
+          workerId,
+          now,
+          attributedAuthority(deps, task),
+        );
         return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),
   );

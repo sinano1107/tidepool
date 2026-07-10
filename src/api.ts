@@ -1,5 +1,6 @@
 import { Router, json } from "express";
 import { z } from "zod";
+import { verifyAgentRepaired } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -128,6 +129,19 @@ export interface ApiRouterDeps {
   /** The LLM draft seam (issue #12). Absent → /tasks/draft reports the LLM
    *  as unreachable. */
   draftClient?: DraftClient;
+  /** The board's default agent name (ADR 0012 / issue #36), mirroring
+   *  `workspace?.name` above — gates `/api/queue`'s `skipped` display on
+   *  agent-name quarantine the same way `workspace` gates it on workspace
+   *  quarantine. Absent → no agent tracking exists, so the gate is skipped
+   *  entirely (nextSlotTask's own shape). */
+  defaultAgentName?: string;
+  /** Whether an agent name is currently registered (read fresh against the
+   *  registry by the caller, main.ts) — one half of a quarantine Confirmation
+   *  question's clearance check (CONTEXT.md's Quarantine): the other half is
+   *  "no more todo tasks depend on it", checked here regardless. Absent → only
+   *  that second half can ever clear an agent quarantine (no registry
+   *  configured at all). */
+  agentRegistered?: (name: string) => boolean;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -140,6 +154,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     github,
     registryCandidates,
     draftClient,
+    defaultAgentName,
+    agentRegistered,
   } = deps;
   const router = Router();
   router.use(json());
@@ -309,6 +325,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       }
+      // the agent-name generalization of the workspace branch above (ADR
+      // 0012 / issue #36): never taken on faith either — clears only if the
+      // registry has the name back, or no more todo work depends on it
+      const quarantineAgentName = task.question_quarantine_agent;
+      if (quarantineAgentName !== null) {
+        try {
+          verifyAgentRepaired(db, quarantineAgentName, agentRegistered?.(quarantineAgentName) ?? false);
+        } catch (err) {
+          throw new DomainError(err instanceof Error ? err.message : String(err));
+        }
+      }
       // an answer during an open triage session is activity (defers the
       // auto-commit) and stages the unblock instead of moving the queue
       const session = triageActivity(db, clock.now());
@@ -457,7 +484,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // the queue view (#10): unlike the board, a todo task pickup can't reach
   // right now (Swell throttle) shows here as skipped
   router.get("/queue", (_req, res) => {
-    res.json(listQueue(db, isPickupBlocked(db, clock.now()), workspace?.name));
+    res.json(listQueue(db, isPickupBlocked(db, clock.now()), workspace?.name, defaultAgentName));
   });
 
   router.get("/tasks/:id/events", (req, res) => {

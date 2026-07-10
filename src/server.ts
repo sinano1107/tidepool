@@ -43,14 +43,26 @@ export interface ServerOptions {
   /** This board's one configured worker's authority profile (issue #11) — the
    *  n=1 board runs a single worker at a time (ADR-adjacent design principle
    *  #8), so this is one fixed profile rather than a per-task registry
-   *  lookup. Absent → assignable_to is unrestricted. */
+   *  lookup. Absent → assignable_to is unrestricted. Superseded by
+   *  `resolveAuthority` below when both are given. */
   authority?: AuthorityProfile;
+  /** Resolves the executing task's own agent's authority profile (ADR 0012 /
+   *  issue #36), read fresh every call from `task.assignee` (null → the
+   *  board's default agent) — the delegation-aware successor to the single
+   *  fixed `authority` above, which every task shared regardless of who it
+   *  was actually assigned to. Absent → falls back to `authority`. */
+  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
   /** Assignee/workspace candidates for the registration screen (issue #12).
    *  Absent → no registry configured, so the WebUI gets no suggestions. */
   registryCandidates?: RegistryCandidates;
   /** The LLM draft seam (issue #12). Absent → the draft endpoint reports the
    *  LLM as unreachable, and the WebUI falls back to the plain form. */
   draftClient?: DraftClient;
+  /** Whether an agent name is currently registered (ADR 0012 / issue #36),
+   *  read fresh against the registry by the caller — one half of an agent
+   *  quarantine Confirmation question's clearance check (api.ts). Absent →
+   *  only "no more todo tasks depend on it" can ever clear it. */
+  agentRegistered?: (name: string) => boolean;
 }
 
 export interface TidepoolServer {
@@ -135,6 +147,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       github: options.github,
       registryCandidates: options.registryCandidates,
       draftClient: options.draftClient,
+      defaultAgentName: worker.id,
+      agentRegistered: options.agentRegistered,
     }),
   );
   app.use(
@@ -147,6 +161,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
       authority: options.authority,
+      resolveAuthority: options.resolveAuthority,
+      defaultAgentName: worker.id,
     }),
   );
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");

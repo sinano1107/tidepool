@@ -59,7 +59,11 @@ export type EventPayload =
   // issue #21: a quarantine Confirmation question's answer was accepted as a
   // repair confirmation (the board verified the tree clean first) — needs_human
   // cleared, resuming pickup for this workspace
-  | { kind: "workspace_reinstated"; workspace: string };
+  | { kind: "workspace_reinstated"; workspace: string }
+  // ADR 0012 / issue #36: the agent-name generalization of workspace_reinstated
+  // above — needs_human cleared for this agent name, resuming pickup for tasks
+  // assigned to it
+  | { kind: "agent_reinstated"; agent: string };
 
 export type EventKind = EventPayload["kind"];
 

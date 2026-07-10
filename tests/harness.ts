@@ -37,6 +37,11 @@ export interface BootOptions {
   watchdog?: WatchdogConfig;
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
+  /** Resolves the executing task's own agent's authority profile (ADR 0012 /
+   *  issue #36), read fresh every call from `task.assignee` (null → the
+   *  board's default agent). Takes precedence over the static `authority`
+   *  above when both are given. Absent → falls back to `authority`. */
+  resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
   /** Assignee/workspace candidates for the registration screen (issue #12). */
   registryCandidates?: RegistryCandidates;
   /** The LLM draft seam (issue #12). Absent (the default) — same as no LLM
@@ -62,6 +67,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     watchdog: options.watchdog,
     github,
     authority: options.authority,
+    resolveAuthority: options.resolveAuthority,
     registryCandidates: options.registryCandidates,
     draftClient: options.draftClient,
   });

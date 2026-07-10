@@ -9,7 +9,12 @@ export type KillSignal = "SIGTERM" | "SIGKILL";
  *  the board speaks tasks; adapters speak vendors). The real adapter spawns a
  *  Claude Code child process; tests substitute a scripted fake here. */
 export interface WorkerAdapter {
-  /** Worker id recorded as the task assignee. */
+  /** The board's default agent name (ADR 0012 / issue #36) — a pointer to
+   *  whichever registry agent an unspecified assignee resolves to, not "the
+   *  one worker" (that concept doesn't exist: slot is capacity, not
+   *  identity). Used as the pickup/spawn-time fallback and as the
+   *  attribution on events an unspecified assignee's task generates; never
+   *  written onto a task's own `assignee` column. */
   readonly id: string;
   /** Fire-and-forget: the worker acts back on the board via MCP. */
   start(task: Task): void;

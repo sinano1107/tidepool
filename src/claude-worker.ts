@@ -1,13 +1,19 @@
 import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveExecutionAgent, quarantineAgent, UnknownAgentError } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import { loadRegistry, type Registry } from "./registry.js";
 import type { Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import { quarantineWorkspace, resolveExecutionWorkspace, UnknownWorkspaceError } from "./workspace.js";
+import {
+  quarantineWorkspace,
+  resolveExecutionWorkspace,
+  UnknownWorkspaceError,
+  type WorkspaceConfig,
+} from "./workspace.js";
 
 /** The process boundary the adapter is tested at: everything vendor-specific
  *  (the claude CLI, its flags) flows through this one call. */
@@ -95,24 +101,21 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.logDir = resolve(options.logDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
-    this.resolve(loadRegistry(options.registryDir));
+    this.validateDefaults(loadRegistry(options.registryDir));
   }
 
-  /** Resolve this worker's agent, authority profile and (issue #26 / ADR
-   *  0009) the given task's own execution workspace against a loaded
-   *  registry, or throw the config mistake by name. `workspaceName` defaults
-   *  to this worker's configured default — the constructor's boot-time
-   *  validation call relies on that default. */
-  private resolve(registry: Registry, workspaceName: string = this.options.workspace) {
-    const workspace = resolveExecutionWorkspace(registry, workspaceName, null);
-    const agent = registry.agents[this.options.agent];
-    if (!agent) throw new Error(`unknown agent: ${this.options.agent}`);
-    const profile = registry.authority[agent.authority];
-    if (!profile) throw new Error(`unknown authority profile: ${agent.authority}`);
-    if (agent.effort !== undefined && !EFFORT_LEVELS.includes(agent.effort)) {
-      throw new Error(`unknown effort level: ${agent.effort}`);
+  /** Boot-time validation only: the configured default workspace/agent/
+   *  authority/effort must all resolve against the registry, or the
+   *  misconfiguration is thrown by name — a board must refuse to start
+   *  rather than wedge the first task. Per-task resolution (task.workspace,
+   *  task.assignee) happens fresh in `start()` below (issue #26 / ADR 0009,
+   *  ADR 0012 / issue #36) — drift there quarantines instead of throwing. */
+  private validateDefaults(registry: Registry): void {
+    resolveExecutionWorkspace(registry, this.options.workspace, null);
+    const agent = resolveExecutionAgent(registry, this.options.agent, null);
+    if (agent.definition.effort !== undefined && !EFFORT_LEVELS.includes(agent.definition.effort)) {
+      throw new Error(`unknown effort level: ${agent.definition.effort}`);
     }
-    return { workspace, agent, profile };
   }
 
   start(task: Task): void {
@@ -121,19 +124,35 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // task.workspace (issue #26 / ADR 0009) takes precedence over this
     // worker's configured default — resolved fresh against the registry
     // every pickup, never pinned to a path. An unknown name is registry
-    // drift, not a config mistake (unlike an unknown agent/authority below):
-    // it fails closed into quarantine rather than throwing out of start() —
-    // defense in depth alongside the scheduler's own pre-pickup gate, which
-    // is what ordinarily catches this before start() is ever called.
-    let resolved: ReturnType<typeof this.resolve>;
+    // drift, not a config mistake: it fails closed into quarantine rather
+    // than throwing out of start() — defense in depth alongside the
+    // scheduler's own pre-pickup gate, which is what ordinarily catches this
+    // before start() is ever called.
+    let workspace: WorkspaceConfig;
     try {
-      resolved = this.resolve(registry, task.workspace ?? this.options.workspace);
+      workspace = resolveExecutionWorkspace(registry, this.options.workspace, task.workspace);
     } catch (err) {
       if (!(err instanceof UnknownWorkspaceError)) throw err;
       quarantineWorkspace(this.options.db, err.workspaceName, err, this.options.clock.now());
       return;
     }
-    const { workspace, agent, profile } = resolved;
+    // task.assignee (ADR 0012 / issue #36) takes precedence over this
+    // worker's configured default agent — resolved fresh against the
+    // registry every pickup, never pinned. Same drift-vs-config-mistake
+    // split as the workspace resolution above: an unknown assignee name
+    // quarantines the agent name rather than throwing.
+    let agent: ReturnType<typeof resolveExecutionAgent>;
+    try {
+      agent = resolveExecutionAgent(registry, this.options.agent, task.assignee);
+    } catch (err) {
+      if (!(err instanceof UnknownAgentError)) throw err;
+      quarantineAgent(this.options.db, err.agentName, err, this.options.clock.now());
+      return;
+    }
+    const { definition, profile } = agent;
+    if (definition.effort !== undefined && !EFFORT_LEVELS.includes(definition.effort)) {
+      throw new Error(`unknown effort level: ${definition.effort}`);
+    }
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
     const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);
@@ -161,14 +180,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // enforced by the profile guidance and the board's domain verbs
         "--permission-mode",
         "auto",
-        ...pinnedModelFlags(agent.model ?? "sonnet", agent.effort ?? "medium"),
+        ...pinnedModelFlags(definition.model ?? "sonnet", definition.effort ?? "medium"),
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",
         // who the agent is (registry definition body) and what its authority
         // sounds like (profile guidance prose), stitched at spawn time
         "--append-system-prompt",
-        `${agent.systemPrompt}\n\n## Authority\n\n${profile.guidance}`,
+        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}`,
       ],
       { cwd: workspace.path },
     );
@@ -178,11 +197,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.running.set(task.id, child);
     appendEvent(this.options.db, {
       taskId: task.id,
-      workerId: this.id,
+      // attributed to whichever agent actually got spawned (ADR 0012 / issue
+      // #36) — not this worker's configured default, which a pre-set
+      // delegation may override
+      workerId: agent.name,
       payload: {
         kind: "worker_spawned",
         registry_commit: registry.commit,
-        definition_version: agent.version,
+        definition_version: definition.version,
       },
       at: this.options.clock.now(),
     });

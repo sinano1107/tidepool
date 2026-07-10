@@ -52,6 +52,11 @@ export function openDb(path: string): Db {
       -- read only to dedup a re-fire onto the same open question. Never set
       -- via MCP or the JSON API.
       question_quarantine_workspace TEXT,
+      -- system-internal only (ADR 0012 / issue #36): the agent name a
+      -- quarantine Confirmation question stands in for — set only by
+      -- quarantineAgent, the agent-name generalization of the workspace
+      -- quarantine above. Never set via MCP or the JSON API.
+      question_quarantine_agent TEXT,
       created_at          TEXT NOT NULL
     );
 
@@ -108,6 +113,14 @@ export function openDb(path: string): Db {
       needs_human INTEGER NOT NULL DEFAULT 0
     );
 
+    -- an agent name pickup could not resolve against the registry (ADR 0012 /
+    -- issue #36): marked needs-human, its tasks stay out of the slot until a
+    -- human repairs it — the agent-name generalization of workspace_state.
+    CREATE TABLE IF NOT EXISTS agent_state (
+      name        TEXT PRIMARY KEY,
+      needs_human INTEGER NOT NULL DEFAULT 0
+    );
+
     -- Swell throttle (ADR 0008): one row, account-scoped (not per-task/
     -- workspace) usage state from the last just-in-time /usage poll at pickup
     -- time. No row means normal (unthrottled).
@@ -144,6 +157,7 @@ export function openDb(path: string): Db {
     "question_cancel_option",
     "question_pending_child",
     "question_quarantine_workspace",
+    "question_quarantine_agent",
     "workspace",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);

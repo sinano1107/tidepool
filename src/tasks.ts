@@ -56,6 +56,11 @@ export interface Task {
    *  Confirmation question stands in for, set only by quarantineWorkspace —
    *  never set via MCP or the JSON API. */
   question_quarantine_workspace: string | null;
+  /** System-internal only (ADR 0012 / issue #36): the agent name a quarantine
+   *  Confirmation question stands in for, set only by quarantineAgent — the
+   *  agent-name generalization of the workspace field above. Never set via
+   *  MCP or the JSON API. */
+  question_quarantine_agent: string | null;
   created_at: string;
 }
 
@@ -147,6 +152,10 @@ export interface RegisterTaskInput extends TaskContent {
    *  Confirmation question stands in for. Never set via MCP or the JSON
    *  API — only quarantineWorkspace sets this. */
   quarantine_workspace?: string;
+  /** System-internal only (ADR 0012 / issue #36): the agent name a
+   *  quarantine Confirmation question stands in for. Never set via MCP or
+   *  the JSON API — only quarantineAgent sets this. */
+  quarantine_agent?: string;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
 }
@@ -157,14 +166,15 @@ export interface RegisterTaskInput extends TaskContent {
  *  question is reserved for the watchdog's auto-escalation safety valve (#17).
  *
  *  The lower bound relaxes to 1 only for an actual quarantine Confirmation
- *  question (issue #21, CONTEXT.md) — `quarantine_workspace` set, which only
- *  quarantineWorkspace itself ever does: it asks for a completion
- *  confirmation, not a choice, and a fake second option would be filler with
- *  no effect of its own. This is deliberately keyed on `quarantine_workspace`
- *  rather than the registering `workerId` (e.g. `=== BOARD_WORKER_ID`): a
- *  worker's id is operator-configured and could collide with BOARD_WORKER_ID
- *  by accident, which would otherwise let an ordinary agent question sneak
- *  past the 2-4 floor. `quarantine_workspace` itself is never reachable from
+ *  question (issue #21, CONTEXT.md) — `quarantine_workspace` or (ADR 0012 /
+ *  issue #36) `quarantine_agent` set, which only quarantineWorkspace /
+ *  quarantineAgent themselves ever do: it asks for a completion confirmation,
+ *  not a choice, and a fake second option would be filler with no effect of
+ *  its own. This is deliberately keyed on those fields rather than the
+ *  registering `workerId` (e.g. `=== BOARD_WORKER_ID`): a worker's id is
+ *  operator-configured and could collide with BOARD_WORKER_ID by accident,
+ *  which would otherwise let an ordinary agent question sneak past the 2-4
+ *  floor. `quarantine_workspace`/`quarantine_agent` are never reachable from
  *  MCP or the JSON API (unlike an assignee/worker id), so this floor can't be
  *  gamed the same way — an agent's question is always a real 2-4-way choice. */
 function assertQuestionSpec(input: RegisterTaskInput): void {
@@ -174,7 +184,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     return;
   }
   const q = input.question;
-  const minOptions = input.quarantine_workspace !== undefined ? 1 : 2;
+  const minOptions =
+    input.quarantine_workspace !== undefined || input.quarantine_agent !== undefined ? 1 : 2;
   if (!q || q.options.length < minOptions || q.options.length > 4) {
     throw new DomainError(`a question carries ${minOptions} to 4 options`);
   }
@@ -228,6 +239,7 @@ export function registerTask(
     question_pending_child: input.pending_child ?? null,
     question_pending_merge_pr: input.pending_merge_pr ?? null,
     question_quarantine_workspace: input.quarantine_workspace ?? null,
+    question_quarantine_agent: input.quarantine_agent ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
@@ -235,11 +247,13 @@ export function registerTask(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
          question_options, question_recommendation, question_answer, question_cancel_option,
-         question_pending_child, question_pending_merge_pr, question_quarantine_workspace, created_at)
+         question_pending_child, question_pending_merge_pr, question_quarantine_workspace,
+         question_quarantine_agent, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
          @question_options, @question_recommendation, @question_answer, @question_cancel_option,
-         @question_pending_child, @question_pending_merge_pr, @question_quarantine_workspace, @created_at)`,
+         @question_pending_child, @question_pending_merge_pr, @question_quarantine_workspace,
+         @question_quarantine_agent, @created_at)`,
     ).run({
       ...task,
       question_options: task.question_options && JSON.stringify(task.question_options),
@@ -292,13 +306,18 @@ export function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
 
 export class DomainError extends Error {}
 
-/** Hand the queue head to a worker: in_progress + assignee + event, atomically. */
+/** Hand the queue head to a worker: in_progress + event, atomically. `assignee`
+ *  is never touched here (ADR 0012 / issue #36): slot is capacity, not
+ *  identity, so pickup must not overwrite a pre-set delegation, nor bake in
+ *  an unspecified assignee's resolution — null stays a live reference to
+ *  whichever agent is the board's default at the moment it's next read
+ *  (CONTEXT.md's Assignee), same as workspace's own "resolved fresh every
+ *  use, never pinned" rule (ADR 0009). `workerId` is only the event's
+ *  attribution — the caller resolves it (`task.assignee ?? the default
+ *  agent`) before calling. */
 export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Task {
   db.transaction(() => {
-    db.prepare("UPDATE tasks SET status = 'in_progress', assignee = ? WHERE id = ?").run(
-      workerId,
-      task.id,
-    );
+    db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(task.id);
     appendEvent(db, { taskId: task.id, workerId, payload: { kind: "task_picked_up" }, at: now });
   })();
   return getTask(db, task.id)!;
@@ -538,6 +557,21 @@ export function answerQuestion(
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
         payload: { kind: "workspace_reinstated", workspace: wsName },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
+
+    // the agent-name generalization of the workspace branch above (ADR 0012 /
+    // issue #36)
+    if (question.question_quarantine_agent !== null) {
+      const agentName = question.question_quarantine_agent;
+      db.prepare("UPDATE agent_state SET needs_human = 0 WHERE name = ?").run(agentName);
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        payload: { kind: "agent_reinstated", agent: agentName },
         at: now,
       });
       pickupResumed = true;
@@ -893,6 +927,20 @@ export function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: st
             WHERE w.name = COALESCE(${taskWorkspaceRef}, ${defaultRef}) AND w.needs_human = 1)`;
 }
 
+/** The agent-name generalization of `workspaceQuarantinedSql` (ADR 0012 /
+ *  issue #36): "this task's assignee is quarantined", shared the same way by
+ *  `nextSlotTask`'s pickup gate and `listQueue`'s skipped display, gating on
+ *  the same `task.assignee ?? the board's default agent` fallback
+ *  (CONTEXT.md's Assignee). `taskAssigneeRef` is the SQL expression holding
+ *  the candidate task's `assignee` column; `defaultRef` is the SQL expression
+ *  holding the board's default agent name. A task's assignee is never
+ *  literally `human` when this runs (the caller excludes it beforehand), so
+ *  no separate carve-out is needed here. */
+export function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string): string {
+  return `EXISTS (SELECT 1 FROM agent_state a
+            WHERE a.name = COALESCE(${taskAssigneeRef}, ${defaultRef}) AND a.needs_human = 1)`;
+}
+
 /** Held (CONTEXT.md, ADR 0006): while an ancestor carries an unanswered
  *  question, its subtree stays out of the slot — a freeze from above, unlike
  *  `blocked`'s freeze from below (an unfinished child). Two tiers of root:
@@ -997,14 +1045,29 @@ export function listBoard(db: Db): BoardTask[] {
  *  (`isPickupBlocked`) — this module stays free of a dependency on
  *  throttle.ts. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
  *  gate (issue #26 / ADR 0009: `task.workspace ?? the board's default`) —
- *  absent, no workspace tracking exists and the gate is skipped entirely. */
-export function listQueue(db: Db, throttled: boolean, defaultWorkspaceName?: string): BoardTask[] {
+ *  absent, no workspace tracking exists and the gate is skipped entirely.
+ *  `defaultAgentName` is the same gate over the agent-name generalization of
+ *  quarantine (ADR 0012 / issue #36: `task.assignee ?? the board's default
+ *  agent`) — absent, no agent tracking exists and this gate is skipped too. */
+export function listQueue(
+  db: Db,
+  throttled: boolean,
+  defaultWorkspaceName?: string,
+  defaultAgentName?: string,
+): BoardTask[] {
   const rows = boardRows(
     db,
     `WHEN status = 'todo' AND type <> 'question' AND (
        ? = 1 OR (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
+         OR (? IS NOT NULL AND ${agentQuarantinedSql("tasks.assignee", "?")})
      ) THEN 'skipped'`,
-    [throttled ? 1 : 0, defaultWorkspaceName ?? null, defaultWorkspaceName ?? null],
+    [
+      throttled ? 1 : 0,
+      defaultWorkspaceName ?? null,
+      defaultWorkspaceName ?? null,
+      defaultAgentName ?? null,
+      defaultAgentName ?? null,
+    ],
   );
   return rows.map((row) => ({
     ...row,
@@ -1021,29 +1084,50 @@ export function getTask(db: Db, id: string): Task | undefined {
 /** The queue head the slot may take: lowest-sort_key todo that is
  *  agent-executable. Blocked is derived from parent/child alone — a task with
  *  an unfinished child never enters the slot — and questions never enter it
- *  either: they are human tasks, answered outside the slot (WebUI).
+ *  either: they are human tasks, answered outside the slot (WebUI). Slot is
+ *  capacity, not identity (ADR 0012 / issue #36): every assignee but `human`
+ *  takes the same slot — `human` is the one assignee that always sits outside
+ *  it (issue #13's your tasks), never resolved against the registry at all.
  *
  *  `defaultWorkspaceName` gates on quarantine per the task's own execution
  *  workspace (issue #26 / ADR 0009: `task.workspace ?? the board's default`)
  *  — a needs-human todo is skipped in favor of the next runnable one, so
  *  quarantine halts only the workspace it's on, never the whole board.
  *  Absent (a workspaceless board with no registered workspace at all) skips
- *  the gate entirely, same as no workspace tracking existing. */
-export function nextSlotTask(db: Db, defaultWorkspaceName?: string): Task | undefined {
+ *  the gate entirely, same as no workspace tracking existing.
+ *
+ *  `defaultAgentName` is the same gate over the agent-name generalization of
+ *  quarantine (ADR 0012 / issue #36: `task.assignee ?? the board's default
+ *  agent`) — a resource-scoped halt, never the whole board. Absent (no agent
+ *  registry tracking configured) skips this gate entirely too. */
+export function nextSlotTask(
+  db: Db,
+  defaultWorkspaceName?: string,
+  defaultAgentName?: string,
+): Task | undefined {
   const row = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
        SELECT * FROM tasks t
        WHERE t.status = 'todo'
          AND t.type <> 'question'
+         AND t.assignee IS NOT @humanWorkerId
          AND NOT ${unfinishedChildSql("t.id")}
          AND NOT ${heldSql("t.id")}
          AND (@defaultWorkspaceName IS NULL OR NOT ${workspaceQuarantinedSql(
            "t.workspace",
            "@defaultWorkspaceName",
          )})
+         AND (@defaultAgentName IS NULL OR NOT ${agentQuarantinedSql(
+           "t.assignee",
+           "@defaultAgentName",
+         )})
        ORDER BY t.sort_key LIMIT 1`,
     )
-    .get({ defaultWorkspaceName: defaultWorkspaceName ?? null }) as TaskRow | undefined;
+    .get({
+      defaultWorkspaceName: defaultWorkspaceName ?? null,
+      defaultAgentName: defaultAgentName ?? null,
+      humanWorkerId: HUMAN_WORKER_ID,
+    }) as TaskRow | undefined;
   return row && rowToTask(row);
 }

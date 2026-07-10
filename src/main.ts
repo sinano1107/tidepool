@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
@@ -34,6 +35,10 @@ class LoggingWorker implements WorkerAdapter {
 const port = Number(process.env.PORT ?? 4589);
 const registryDir = process.env.TIDEPOOL_REGISTRY;
 const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? "sandbox";
+// ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
+// agent, not "the one worker" — an unspecified assignee resolves here, but a
+// pre-set delegation to a different registry name overrides it per task
+const defaultAgentName = process.env.TIDEPOOL_AGENT ?? "deckhand";
 
 /** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository
  *  (`npm run start:live` supplies the conventional one); setting it swaps the
@@ -47,7 +52,7 @@ function workerFactory(): WorkerFactory {
       db,
       clock,
       registryDir,
-      agent: process.env.TIDEPOOL_AGENT ?? "deckhand",
+      agent: defaultAgentName,
       workspace: workspaceName,
       mcpUrl: `http://127.0.0.1:${port}/mcp`,
       logDir,
@@ -73,19 +78,34 @@ function workspaceResolver(): ((taskWorkspace: string | null) => WorkspaceConfig
     resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace);
 }
 
-/** The board's one configured worker's authority profile (issue #11): same
- *  agent/authority resolution ClaudeCodeWorker does for spawn-time guidance,
- *  surfaced here too so the MCP layer can enforce assignable_to. Without a
- *  registry, no worker's authority is knowable — unrestricted. */
-function authorityProfile(): AuthorityProfile | undefined {
+/** Resolves the executing task's own agent's authority profile (ADR 0012 /
+ *  issue #36), read fresh against the registry every call from the task's own
+ *  `assignee` (null → the board's default agent, `TIDEPOOL_AGENT`) — the
+ *  delegation-aware successor to a single board-wide fixed profile, which
+ *  every task shared regardless of who it was actually assigned to. An
+ *  assignee the registry no longer knows (drift since the owning task's own
+ *  session spawned) falls back to unrestricted here rather than throwing —
+ *  the spawn-time gate (ClaudeCodeWorker.start) is what quarantines that.
+ *  Without a registry, no agent's authority is knowable at all — unrestricted. */
+function authorityResolver(): ((assignee: string | null) => AuthorityProfile | undefined) | undefined {
   if (!registryDir) return undefined;
-  const registry = loadRegistry(registryDir);
-  const agentName = process.env.TIDEPOOL_AGENT ?? "deckhand";
-  const agent = registry.agents[agentName];
-  if (!agent) throw new Error(`unknown agent: ${agentName}`);
-  const profile = registry.authority[agent.authority];
-  if (!profile) throw new Error(`unknown authority profile: ${agent.authority}`);
-  return profile;
+  return (assignee) => {
+    try {
+      return resolveExecutionAgent(loadRegistry(registryDir), defaultAgentName, assignee).profile;
+    } catch (err) {
+      if (!(err instanceof UnknownAgentError)) throw err;
+      return undefined;
+    }
+  };
+}
+
+/** Whether an agent name is currently registered (ADR 0012 / issue #36), read
+ *  fresh against the registry — one half of an agent quarantine Confirmation
+ *  question's clearance check (api.ts). Without a registry, no name is ever
+ *  "back" — only "no more todo tasks depend on it" can clear it. */
+function agentRegisteredChecker(): ((name: string) => boolean) | undefined {
+  if (!registryDir) return undefined;
+  return (name) => name in loadRegistry(registryDir).agents;
 }
 
 /** Assignee/workspace candidates for the registration screen (issue #12).
@@ -116,7 +136,8 @@ const server = await startServer({
   workspace: workspaceConfig(),
   resolveWorkspace: workspaceResolver(),
   github: new GhCliClient(),
-  authority: authorityProfile(),
+  resolveAuthority: authorityResolver(),
+  agentRegistered: agentRegisteredChecker(),
   registryCandidates: registryCandidates(),
   draftClient: draftClientFactory(),
 });
