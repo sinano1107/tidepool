@@ -44,7 +44,7 @@ export interface ClaudeWorkerOptions {
  *  (ADR 0008, measured 663ms, $0, no model call). */
 export type ExecFn = (command: string, args: string[]) => Promise<string>;
 
-const defaultExec: ExecFn = (command, args) =>
+export const defaultExec: ExecFn = (command, args) =>
   new Promise((resolve, reject) => {
     execFile(command, args, (err, stdout) => {
       if (err) reject(err);

@@ -1,6 +1,8 @@
 import { mkdirSync } from "node:fs";
+import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
+import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
 import { loadRegistry, type AuthorityProfile, type RegistryCandidates } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
@@ -97,9 +99,15 @@ function registryCandidates(): RegistryCandidates | undefined {
   };
 }
 
-// DraftClient (issue #12's brain-dump-to-fields LLM draft) has no real
-// implementation yet — deliberately left unconfigured so the board falls
-// back to the plain form until that's built (tracked as a follow-up issue).
+/** DraftClient (issue #12's brain-dump-to-fields LLM draft), wired to the
+ *  real Claude CLI (issue #25) only when a registry is configured — same
+ *  registryDir gate as workerFactory() above. Without it there's no worker
+ *  either, so the board runs the LoggingWorker with drafting off too. */
+function draftClientFactory(): DraftClient | undefined {
+  if (!registryDir) return undefined;
+  return new ClaudeDraftClient({ candidates: registryCandidates() });
+}
+
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -110,5 +118,6 @@ const server = await startServer({
   github: new GhCliClient(),
   authority: authorityProfile(),
   registryCandidates: registryCandidates(),
+  draftClient: draftClientFactory(),
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
