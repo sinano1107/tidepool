@@ -13,9 +13,9 @@ export function openDb(path: string): Db {
       status              TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
       assignee            TEXT,
       -- where this task runs (issue #11): a registry workspace name, or null
-      -- to inherit the parent's. First-class per CONTEXT.md; not yet read by
-      -- the runtime (single-workspace boards only), only by allowed_workspaces
-      -- authority enforcement.
+      -- to inherit the board's default. First-class per CONTEXT.md; resolved
+      -- against the registry fresh at every use — pickup, release, watchdog,
+      -- restart (issue #26 / ADR 0009) — never pinned to a path.
       workspace           TEXT,
       title               TEXT NOT NULL,
       purpose             TEXT NOT NULL,

@@ -7,6 +7,7 @@ import { appendEvent } from "./events.js";
 import { loadRegistry, type Registry } from "./registry.js";
 import type { Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
+import { resolveExecutionWorkspace } from "./workspace.js";
 
 /** The process boundary the adapter is tested at: everything vendor-specific
  *  (the claude CLI, its flags) flows through this one call. */
@@ -89,11 +90,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.resolve(loadRegistry(options.registryDir));
   }
 
-  /** Resolve this worker's agent, authority profile and workspace against a
-   *  loaded registry, or throw the config mistake by name. */
-  private resolve(registry: Registry) {
-    const workspace = registry.workspaces[this.options.workspace];
-    if (!workspace) throw new Error(`unknown workspace: ${this.options.workspace}`);
+  /** Resolve this worker's agent, authority profile and (issue #26 / ADR
+   *  0009) the given task's own execution workspace against a loaded
+   *  registry, or throw the config mistake by name. `workspaceName` defaults
+   *  to this worker's configured default — the constructor's boot-time
+   *  validation call relies on that default. */
+  private resolve(registry: Registry, workspaceName: string = this.options.workspace) {
+    const workspace = resolveExecutionWorkspace(registry, workspaceName, null);
     const agent = registry.agents[this.options.agent];
     if (!agent) throw new Error(`unknown agent: ${this.options.agent}`);
     const profile = registry.authority[agent.authority];
@@ -107,7 +110,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   start(task: Task): void {
     // loaded per pickup so a registry update takes effect on the next task
     const registry = loadRegistry(this.options.registryDir);
-    const { workspace, agent, profile } = this.resolve(registry);
+    // task.workspace (issue #26 / ADR 0009) takes precedence over this
+    // worker's configured default — resolved fresh against the registry
+    // every pickup, never pinned to a path
+    const { workspace, agent, profile } = this.resolve(
+      registry,
+      task.workspace ?? this.options.workspace,
+    );
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
     const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);

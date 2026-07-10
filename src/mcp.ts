@@ -21,6 +21,7 @@ import {
 } from "./tasks.js";
 import {
   releaseWorkspace,
+  resolveOrQuarantine,
   taskBranch,
   workspaceNeedsHuman,
   type WorkspaceConfig,
@@ -31,6 +32,10 @@ export interface McpDeps {
   slot: Slot;
   clock: Clock;
   workspace?: WorkspaceConfig;
+  /** Resolves a task's execution workspace against the registry (issue #26 /
+   *  ADR 0009), read fresh every call. Absent → every task releases against
+   *  the board's single fixed `workspace` (pre-#26 behavior). */
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   /** The GitHub-facing seam (issue #19): a work task's completion is promoted
    *  to a PR through here. Absent → no PR is ever opened (e.g. a workspaceless
    *  board). */
@@ -134,7 +139,13 @@ function runReleasingVerb(
     // lands the WIP is stashed before anything else can enter the workspace.
     // A tree-rule failure falls back to quarantine — the verb already
     // landed, so the release stands, and needs-human halts further pickups.
-    if (deps.workspace) releaseWorkspace(deps.db, deps.workspace, task.id, deps.clock.now());
+    // Resolved against the task's own execution workspace (issue #26 / ADR
+    // 0009), never just the board's default.
+    const resolve = deps.resolveWorkspace ?? (deps.workspace && (() => deps.workspace!));
+    if (resolve) {
+      const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+      if (resolved) releaseWorkspace(deps.db, resolved, task.id, deps.clock.now());
+    }
     deps.slot.release();
     return result;
   });

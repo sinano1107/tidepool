@@ -6,7 +6,7 @@ import { loadRegistry, type AuthorityProfile, type RegistryCandidates } from "./
 import { startServer, type WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import type { WorkspaceConfig } from "./workspace.js";
+import { resolveExecutionWorkspace, type WorkspaceConfig } from "./workspace.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -61,6 +61,16 @@ function workspaceConfig(): WorkspaceConfig | undefined {
   return { name: workspaceName, path: entry.path };
 }
 
+/** Resolves any task's execution workspace against the registry (issue #26 /
+ *  ADR 0009): read fresh every call, never pinned to a path at pickup. Absent
+ *  → every task runs against the single `workspaceConfig()` above (no
+ *  registry configured at all). */
+function workspaceResolver(): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
+  if (!registryDir) return undefined;
+  return (taskWorkspace) =>
+    resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace);
+}
+
 /** The board's one configured worker's authority profile (issue #11): same
  *  agent/authority resolution ClaudeCodeWorker does for spawn-time guidance,
  *  surfaced here too so the MCP layer can enforce assignable_to. Without a
@@ -96,6 +106,7 @@ const server = await startServer({
   clock: new SystemClock(),
   worker: workerFactory(),
   workspace: workspaceConfig(),
+  resolveWorkspace: workspaceResolver(),
   github: new GhCliClient(),
   authority: authorityProfile(),
   registryCandidates: registryCandidates(),

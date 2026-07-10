@@ -31,6 +31,10 @@ export interface ServerOptions {
    *  slot-release tree rule act on. Absent → a workspaceless board (e.g. a
    *  human-driven one): no branch rule runs. */
   workspace?: WorkspaceConfig;
+  /** Resolves a task's execution workspace against the registry (issue #26 /
+   *  ADR 0009), read fresh every call. Absent → every task runs against the
+   *  board's single fixed `workspace` (pre-#26 behavior). */
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   /** Per-task-type absolute time limits (#9). Absent → no watchdog runs. */
   watchdog?: WatchdogConfig;
   /** The GitHub-facing seam (issue #19): a work task's completion is promoted
@@ -71,7 +75,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       `restart interrupted task: ${task.title}`,
       "the server restarted while this task was in progress; no self-report is " +
         "possible (ADR 0001: a restart never drains gracefully).",
-      options.workspace,
+      options.resolveWorkspace ?? options.workspace,
       options.clock.now(),
     );
   }
@@ -83,6 +87,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     slot,
     worker,
     workspace: options.workspace,
+    resolveWorkspace: options.resolveWorkspace,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
@@ -96,6 +101,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         slot,
         worker,
         workspace: options.workspace,
+        resolveWorkspace: options.resolveWorkspace,
         config: options.watchdog,
       })
     : undefined;
@@ -128,6 +134,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       slot,
       clock: options.clock,
       workspace: options.workspace,
+      resolveWorkspace: options.resolveWorkspace,
       github: options.github,
       authority: options.authority,
     }),

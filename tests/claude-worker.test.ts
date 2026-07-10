@@ -11,13 +11,13 @@ import type { Task } from "../src/tasks.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
-function makeTask(id = "task-1"): Task {
+function makeTask(id = "task-1", workspace: string | null = null): Task {
   return {
     id,
     type: "work",
     status: "in_progress",
     assignee: "deckhand",
-    workspace: null,
+    workspace,
     title: "fix the leaky faucet",
     purpose: "stop the drip",
     completion_criteria: "no drip for 24h",
@@ -47,14 +47,15 @@ interface SpawnCall {
 /** Events reference tasks by FK, so a started task must exist on the board. */
 function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
   db.prepare(
-    `INSERT INTO tasks (id, type, status, assignee, title, purpose, completion_criteria,
+    `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
        risk_flag, review_flag, sort_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     task.id,
     task.type,
     task.status,
     task.assignee,
+    task.workspace,
     task.title,
     task.purpose,
     task.completion_criteria,
@@ -93,8 +94,8 @@ async function makeWorker(registryFiles: Record<string, string> = {}) {
     spawn: recorder.spawn,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */
-  const start = (id?: string): Task => {
-    const task = makeTask(id);
+  const start = (id?: string, workspace: string | null = null): Task => {
+    const task = makeTask(id, workspace);
     insertTask(db, task);
     worker.start(task);
     return task;
@@ -116,6 +117,24 @@ describe("ClaudeCodeWorker", () => {
     // self-approves routine actions but keeps the classifier safety layer —
     // authority itself comes from the profile + MCP verbs.
     expect(call.args.join(" ")).toContain("--permission-mode auto");
+  });
+
+  it("task.workspace が設定されていれば、コンストラクタの workspace より優先して cwd に使う(issue #26)", async () => {
+    const { start, calls } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\nprod:\n  path: /home/pi/work/prod\n`,
+    });
+    start("task-prod", "prod");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cwd).toBe("/home/pi/work/prod");
+  });
+
+  it("task.workspace が null なら、これまで通りコンストラクタの workspace を cwd に使う", async () => {
+    const { start, calls } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\nprod:\n  path: /home/pi/work/prod\n`,
+    });
+    start("task-default", null);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.cwd).toBe("/home/pi/work/tidepool");
   });
 
   it("一時 MCP 設定でボードを ?task= 付きで指す(呼び出しのタスク帰属)", async () => {

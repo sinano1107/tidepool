@@ -97,7 +97,7 @@ it("同一 workspace への2度目の quarantine は question を増やさず、
   const question = before.find((x: any) => x.type === "question");
 
   const db = openDb(join(t.dir, "board.sqlite"));
-  quarantineWorkspace(db, ws, new Error("second, unrelated tree-rule failure"), t.clock.now());
+  quarantineWorkspace(db, ws.name, new Error("second, unrelated tree-rule failure"), t.clock.now());
   db.close();
 
   const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;

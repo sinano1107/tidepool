@@ -28,6 +28,10 @@ export interface BootOptions {
   dir?: string;
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
+  /** Resolves a task's execution workspace against the registry (issue #26 /
+   *  ADR 0009). Absent → every task runs against the single `workspace`
+   *  above. */
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   /** Per-task-type absolute time limits (#9). */
   watchdog?: WatchdogConfig;
   /** This board's one worker's authority profile (issue #11). */
@@ -53,6 +57,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     clock,
     worker: () => worker,
     workspace: options.workspace,
+    resolveWorkspace: options.resolveWorkspace,
     watchdog: options.watchdog,
     github,
     authority: options.authority,

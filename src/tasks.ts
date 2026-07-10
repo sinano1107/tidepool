@@ -997,8 +997,15 @@ export function getTask(db: Db, id: string): Task | undefined {
 /** The queue head the slot may take: lowest-sort_key todo that is
  *  agent-executable. Blocked is derived from parent/child alone — a task with
  *  an unfinished child never enters the slot — and questions never enter it
- *  either: they are human tasks, answered outside the slot (WebUI). */
-export function nextSlotTask(db: Db): Task | undefined {
+ *  either: they are human tasks, answered outside the slot (WebUI).
+ *
+ *  `defaultWorkspaceName` gates on quarantine per the task's own execution
+ *  workspace (issue #26 / ADR 0009: `task.workspace ?? the board's default`)
+ *  — a needs-human todo is skipped in favor of the next runnable one, so
+ *  quarantine halts only the workspace it's on, never the whole board.
+ *  Absent (a workspaceless board with no registered workspace at all) skips
+ *  the gate entirely, same as no workspace tracking existing. */
+export function nextSlotTask(db: Db, defaultWorkspaceName?: string): Task | undefined {
   const row = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
@@ -1007,8 +1014,12 @@ export function nextSlotTask(db: Db): Task | undefined {
          AND t.type <> 'question'
          AND NOT ${unfinishedChildSql("t.id")}
          AND NOT ${heldSql("t.id")}
+         AND (@defaultWorkspaceName IS NULL OR NOT EXISTS (
+           SELECT 1 FROM workspace_state w
+           WHERE w.name = COALESCE(t.workspace, @defaultWorkspaceName) AND w.needs_human = 1
+         ))
        ORDER BY t.sort_key LIMIT 1`,
     )
-    .get() as TaskRow | undefined;
+    .get({ defaultWorkspaceName: defaultWorkspaceName ?? null }) as TaskRow | undefined;
   return row && rowToTask(row);
 }

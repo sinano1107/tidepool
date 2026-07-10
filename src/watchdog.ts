@@ -3,7 +3,12 @@ import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
 import { escalateTask, getTask, type Task, type TaskType } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import { BOARD_WORKER_ID, releaseWorkspace, type WorkspaceConfig } from "./workspace.js";
+import {
+  BOARD_WORKER_ID,
+  releaseWorkspace,
+  resolveOrQuarantine,
+  type WorkspaceConfig,
+} from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
 
@@ -39,7 +44,11 @@ export function failTask(
   task: Task,
   title: string,
   reason: string,
-  workspace: WorkspaceConfig | undefined,
+  /** Resolves the failed task's own execution workspace against the registry
+   *  (issue #26 / ADR 0009). A bare `WorkspaceConfig` is accepted too — every
+   *  task then releases against that single fixed workspace (pre-#26
+   *  behavior, and still today's shape for a workspaceless caller). */
+  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | WorkspaceConfig | undefined,
   now: Date,
 ): void {
   // the failure question registers first, mirroring an agent's own escalate
@@ -68,7 +77,11 @@ export function failTask(
     BOARD_WORKER_ID,
     now,
   );
-  if (workspace) releaseWorkspace(db, workspace, task.id, now);
+  if (resolve) {
+    const resolveFn = typeof resolve === "function" ? resolve : () => resolve;
+    const resolved = resolveOrQuarantine(db, resolveFn, task.workspace, now);
+    if (resolved) releaseWorkspace(db, resolved, task.id, now);
+  }
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
@@ -82,9 +95,13 @@ export function startWatchdog(deps: {
   slot: Slot;
   worker: WorkerAdapter;
   workspace?: WorkspaceConfig;
+  /** Resolves a task's execution workspace against the registry (issue #26 /
+   *  ADR 0009), read fresh every call. Absent → every task fails against the
+   *  board's single fixed `workspace` (pre-#26 behavior). */
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   config: WatchdogConfig;
 }): Watchdog {
-  const { db, clock, slot, worker, workspace, config } = deps;
+  const { db, clock, slot, worker, workspace, resolveWorkspace, config } = deps;
   // keyed by task id; reset whenever a fresh pickup shows up for that id so a
   // retried run starts its own SIGTERM/SIGKILL clock instead of inheriting
   // the previous run's already-tripped state
@@ -126,7 +143,7 @@ export function startWatchdog(deps: {
         `watchdog killed task: ${task.title}`,
         `the task hit its ${task.type} time limit (${limit}ms) and was terminated ` +
           `(SIGTERM, then SIGKILL after ${config.grace}ms grace). No self-report is possible.`,
-        workspace,
+        resolveWorkspace ?? workspace,
         clock.now(),
       );
       slot.release();

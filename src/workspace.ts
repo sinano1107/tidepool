@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
+import type { Registry } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
@@ -22,6 +23,28 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
     .toString()
     .trim();
+}
+
+/** A task's `workspace` (or the board's default) names a workspace absent
+ *  from the registry — registry drift (issue #26). */
+export class UnknownWorkspaceError extends Error {
+  constructor(public readonly workspaceName: string) {
+    super(`unknown workspace: ${workspaceName}`);
+  }
+}
+
+/** ADR 0009: `task.workspace` is a reference to a registry name, resolved
+ *  fresh against the registry every time it's used, never pinned to a path.
+ *  Null inherits the board's default (CONTEXT.md's Workspace). */
+export function resolveExecutionWorkspace(
+  registry: Registry,
+  defaultWorkspaceName: string,
+  taskWorkspace: string | null,
+): WorkspaceConfig {
+  const name = taskWorkspace ?? defaultWorkspaceName;
+  const entry = registry.workspaces[name];
+  if (!entry) throw new UnknownWorkspaceError(name);
+  return { name, path: entry.path };
 }
 
 export function taskBranch(taskId: string): string {
@@ -105,17 +128,21 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
  *  needs-human (its tasks stay out of the slot) and put the repair in front of
  *  the human as a 1-choice Confirmation question (issue #21) — the answer
  *  isn't a choice between outcomes, it's a confirmation that repair happened,
- *  verified before it clears needs-human (see answerQuestion in tasks.ts). */
+ *  verified before it clears needs-human (see answerQuestion in tasks.ts).
+ *  Name-only (issue #26 / ADR 0009): the trigger can be a tree-rule failure
+ *  (path known, folded into `cause`'s message) or an unknown workspace name
+ *  encountered at resolution time (no path to know) — both quarantine the
+ *  same way, keyed on the name alone. */
 export function quarantineWorkspace(
   db: Db,
-  workspace: WorkspaceConfig,
+  workspaceName: string,
   cause: unknown,
   now: Date,
 ): void {
   db.prepare(
     `INSERT INTO workspace_state (name, needs_human) VALUES (?, 1)
      ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(workspace.name);
+  ).run(workspaceName);
   const causeMessage = cause instanceof Error ? cause.message : String(cause);
   // 1 workspace = at most 1 open Confirmation question (CONTEXT.md's
   // Quarantine): a re-fire before the human answers just adds to the record
@@ -124,7 +151,7 @@ export function quarantineWorkspace(
     .prepare(
       `SELECT id FROM tasks WHERE question_quarantine_workspace = ? AND status = 'todo'`,
     )
-    .get(workspace.name) as { id: string } | undefined;
+    .get(workspaceName) as { id: string } | undefined;
   if (existing) {
     appendEvent(db, {
       taskId: existing.id,
@@ -138,9 +165,9 @@ export function quarantineWorkspace(
     db,
     {
       type: "question",
-      title: `workspace ${workspace.name} needs human attention`,
+      title: `workspace ${workspaceName} needs human attention`,
       purpose:
-        `the slot-release tree rule failed on ${workspace.path}: ${causeMessage}. ` +
+        `${causeMessage}. ` +
         "Tasks in this workspace stay out of the slot until it is repaired. " +
         "Answering confirms the repair — the board verifies the tree is " +
         "clean before it resumes pickup; any answer text is kept as a repair note.",
@@ -149,11 +176,33 @@ export function quarantineWorkspace(
         options: ["repaired by hand"],
         recommendation: "repaired by hand",
       },
-      quarantine_workspace: workspace.name,
+      quarantine_workspace: workspaceName,
     },
     now,
     BOARD_WORKER_ID,
   );
+}
+
+/** The shared shape behind every async, board-driven use of a task's
+ *  execution workspace (issue #26 / ADR 0009: pickup, release, watchdog,
+ *  restart) — `resolve` throwing `UnknownWorkspaceError` (registry drift)
+ *  never escapes to the caller; it quarantines the name in its place and the
+ *  caller treats the workspace step as absent for this cycle. A human's own
+ *  synchronous request (registration, a quarantine/merge answer) is not this
+ *  seam — those fail fast with a DomainError instead (ADR 0009). */
+export function resolveOrQuarantine(
+  db: Db,
+  resolve: (taskWorkspace: string | null) => WorkspaceConfig,
+  taskWorkspace: string | null,
+  now: Date,
+): WorkspaceConfig | undefined {
+  try {
+    return resolve(taskWorkspace);
+  } catch (err) {
+    if (!(err instanceof UnknownWorkspaceError)) throw err;
+    quarantineWorkspace(db, err.workspaceName, err, now);
+    return undefined;
+  }
 }
 
 /** Every slot release runs the tree rule and falls back to quarantine on its
@@ -168,6 +217,6 @@ export function releaseWorkspace(
   try {
     releaseTree(workspace, taskId);
   } catch (err) {
-    quarantineWorkspace(db, workspace, err, now);
+    quarantineWorkspace(db, workspace.name, err, now);
   }
 }

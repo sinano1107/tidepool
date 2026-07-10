@@ -11,7 +11,7 @@ import {
   type UsageSnapshot,
 } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
-import { ensureTaskBranch, workspaceNeedsHuman, type WorkspaceConfig } from "./workspace.js";
+import { ensureTaskBranch, resolveOrQuarantine, type WorkspaceConfig } from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
 
@@ -81,8 +81,12 @@ export function startScheduler(deps: {
   slot: Slot;
   worker: WorkerAdapter;
   workspace?: WorkspaceConfig;
+  /** Resolves a task's execution workspace against the registry (issue #26 /
+   *  ADR 0009), read fresh every call. Absent → every task runs in the
+   *  board's single fixed `workspace` (pre-#26 behavior). */
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
 }): Scheduler {
-  const { db, clock, slot, worker, workspace } = deps;
+  const { db, clock, slot, worker, workspace, resolveWorkspace } = deps;
   let inFlight = false;
   const resetTimer = createResetTimer(clock, pollNow);
 
@@ -91,21 +95,33 @@ export function startScheduler(deps: {
     // triage pauses pickup: the human is re-steering the queue, so nothing
     // new enters the slot until the session commits (issue #6)
     if (activeTriageSession(db)) return true;
-    // the gate is keyed on the workspace a task actually runs in (issue #21):
-    // with today's single execution workspace this halts every slot task
-    // (issue #8); per-task workspace resolution (#26) will make it selective
-    // the moment the runtime supports more than one execution workspace
-    if (workspace && workspaceNeedsHuman(db, workspace.name)) return true;
-    return !nextSlotTask(db);
+    // the gate is keyed on each candidate's own execution workspace (issue
+    // #26 / ADR 0009), skipped in SQL by nextSlotTask itself — a quarantined
+    // workspace halts only its own tasks, never the whole board.
+    return !nextSlotTask(db, workspace?.name);
   }
 
   function pickup(task: Task): void {
     const picked = pickupTask(db, task, worker.id, clock.now());
     slot.occupy(picked.id);
+    // branch discipline is the board's own, not the worker's: by the time
+    // the worker starts, the workspace already sits on the task branch
+    const resolve = resolveWorkspace ?? (workspace && (() => workspace));
+    if (resolve) {
+      const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now());
+      // an unknown workspace name (registry drift) quarantines in place of a
+      // thrown error — the task stays wedged in the slot, same deliberate
+      // posture as a failed start below, until the watchdog or a human acts
+      if (!resolved) return;
+      try {
+        ensureTaskBranch(resolved, picked.id);
+        worker.start(picked);
+      } catch (err) {
+        console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
+      }
+      return;
+    }
     try {
-      // branch discipline is the board's own, not the worker's: by the time
-      // the worker starts, the workspace already sits on the task branch
-      if (workspace) ensureTaskBranch(workspace, picked.id);
       worker.start(picked);
     } catch (err) {
       // a failed start may not crash the board. The task keeps the slot — the
@@ -125,7 +141,7 @@ export function startScheduler(deps: {
         if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
         return;
       }
-      const head = nextSlotTask(db);
+      const head = nextSlotTask(db, workspace?.name);
       if (!head) return;
       pickup(head);
     } finally {
