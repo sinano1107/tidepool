@@ -183,6 +183,19 @@ export function quarantineWorkspace(
   );
 }
 
+/** The one fallback shape shared by every board-driven workspace consumer
+ *  (scheduler pickup, mcp release, watchdog/restart failTask): prefer the
+ *  registry-backed resolver when configured, else fall back to a fixed
+ *  single workspace (pre-#26 shape, and still today's shape for a caller
+ *  with no registry at all). Undefined means no workspace tracking exists —
+ *  the caller skips the workspace step entirely, not just resolution. */
+export function buildWorkspaceResolver(
+  resolveWorkspace: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
+  workspace: WorkspaceConfig | undefined,
+): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
+  return resolveWorkspace ?? (workspace && (() => workspace));
+}
+
 /** The shared shape behind every async, board-driven use of a task's
  *  execution workspace (issue #26 / ADR 0009: pickup, release, watchdog,
  *  restart) — `resolve` throwing `UnknownWorkspaceError` (registry drift)

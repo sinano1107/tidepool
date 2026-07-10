@@ -11,7 +11,12 @@ import {
   type UsageSnapshot,
 } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
-import { ensureTaskBranch, resolveOrQuarantine, type WorkspaceConfig } from "./workspace.js";
+import {
+  buildWorkspaceResolver,
+  ensureTaskBranch,
+  resolveOrQuarantine,
+  type WorkspaceConfig,
+} from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
 
@@ -106,7 +111,7 @@ export function startScheduler(deps: {
     slot.occupy(picked.id);
     // branch discipline is the board's own, not the worker's: by the time
     // the worker starts, the workspace already sits on the task branch
-    const resolve = resolveWorkspace ?? (workspace && (() => workspace));
+    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     if (resolve) {
       const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now());
       // an unknown workspace name (registry drift) quarantines in place of a

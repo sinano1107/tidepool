@@ -7,7 +7,7 @@ import { appendEvent } from "./events.js";
 import { loadRegistry, type Registry } from "./registry.js";
 import type { Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import { resolveExecutionWorkspace } from "./workspace.js";
+import { quarantineWorkspace, resolveExecutionWorkspace, UnknownWorkspaceError } from "./workspace.js";
 
 /** The process boundary the adapter is tested at: everything vendor-specific
  *  (the claude CLI, its flags) flows through this one call. */
@@ -112,11 +112,20 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const registry = loadRegistry(this.options.registryDir);
     // task.workspace (issue #26 / ADR 0009) takes precedence over this
     // worker's configured default — resolved fresh against the registry
-    // every pickup, never pinned to a path
-    const { workspace, agent, profile } = this.resolve(
-      registry,
-      task.workspace ?? this.options.workspace,
-    );
+    // every pickup, never pinned to a path. An unknown name is registry
+    // drift, not a config mistake (unlike an unknown agent/authority below):
+    // it fails closed into quarantine rather than throwing out of start() —
+    // defense in depth alongside the scheduler's own pre-pickup gate, which
+    // is what ordinarily catches this before start() is ever called.
+    let resolved: ReturnType<typeof this.resolve>;
+    try {
+      resolved = this.resolve(registry, task.workspace ?? this.options.workspace);
+    } catch (err) {
+      if (!(err instanceof UnknownWorkspaceError)) throw err;
+      quarantineWorkspace(this.options.db, err.workspaceName, err, this.options.clock.now());
+      return;
+    }
+    const { workspace, agent, profile } = resolved;
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
     const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);

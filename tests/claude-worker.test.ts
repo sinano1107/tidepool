@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker, type SpawnFn } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import type { Task } from "../src/tasks.js";
+import { listBoard, type Task } from "../src/tasks.js";
+import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -135,6 +136,15 @@ describe("ClaudeCodeWorker", () => {
     start("task-default", null);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.cwd).toBe("/home/pi/work/tidepool");
+  });
+
+  it("task.workspace が registry に存在しない名前(registry drift)なら、投げずに quarantine して spawn しない(issue #26 / ADR 0009)", async () => {
+    const { start, calls, db } = await makeWorker();
+    start("task-drifted", "ghost");
+    expect(calls).toEqual([]);
+    expect(workspaceNeedsHuman(db, "ghost")).toBe(true);
+    const question = listBoard(db).find((t) => t.type === "question");
+    expect(question?.question_quarantine_workspace).toBe("ghost");
   });
 
   it("一時 MCP 設定でボードを ?task= 付きで指す(呼び出しのタスク帰属)", async () => {

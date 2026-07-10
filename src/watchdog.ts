@@ -5,6 +5,7 @@ import { escalateTask, getTask, type Task, type TaskType } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
   BOARD_WORKER_ID,
+  buildWorkspaceResolver,
   releaseWorkspace,
   resolveOrQuarantine,
   type WorkspaceConfig,
@@ -45,10 +46,9 @@ export function failTask(
   title: string,
   reason: string,
   /** Resolves the failed task's own execution workspace against the registry
-   *  (issue #26 / ADR 0009). A bare `WorkspaceConfig` is accepted too — every
-   *  task then releases against that single fixed workspace (pre-#26
-   *  behavior, and still today's shape for a workspaceless caller). */
-  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | WorkspaceConfig | undefined,
+   *  (issue #26 / ADR 0009). Build with `buildWorkspaceResolver` — absent
+   *  means no workspace tracking at all (a workspaceless caller). */
+  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
   now: Date,
 ): void {
   // the failure question registers first, mirroring an agent's own escalate
@@ -78,8 +78,7 @@ export function failTask(
     now,
   );
   if (resolve) {
-    const resolveFn = typeof resolve === "function" ? resolve : () => resolve;
-    const resolved = resolveOrQuarantine(db, resolveFn, task.workspace, now);
+    const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);
     if (resolved) releaseWorkspace(db, resolved, task.id, now);
   }
 }
@@ -102,6 +101,7 @@ export function startWatchdog(deps: {
   config: WatchdogConfig;
 }): Watchdog {
   const { db, clock, slot, worker, workspace, resolveWorkspace, config } = deps;
+  const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
   // keyed by task id; reset whenever a fresh pickup shows up for that id so a
   // retried run starts its own SIGTERM/SIGKILL clock instead of inheriting
   // the previous run's already-tripped state
@@ -143,7 +143,7 @@ export function startWatchdog(deps: {
         `watchdog killed task: ${task.title}`,
         `the task hit its ${task.type} time limit (${limit}ms) and was terminated ` +
           `(SIGTERM, then SIGKILL after ${config.grace}ms grace). No self-report is possible.`,
-        resolveWorkspace ?? workspace,
+        resolve,
         clock.now(),
       );
       slot.release();

@@ -16,7 +16,7 @@ import { getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
-import type { WorkspaceConfig } from "./workspace.js";
+import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 /** The real adapter needs the board's own db and clock, which are created in
  *  here — so the worker arrives as a factory fed with them. */
@@ -75,7 +75,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       `restart interrupted task: ${task.title}`,
       "the server restarted while this task was in progress; no self-report is " +
         "possible (ADR 0001: a restart never drains gracefully).",
-      options.resolveWorkspace ?? options.workspace,
+      buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
       options.clock.now(),
     );
   }

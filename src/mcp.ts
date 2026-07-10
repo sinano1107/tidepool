@@ -20,6 +20,7 @@ import {
   type Task,
 } from "./tasks.js";
 import {
+  buildWorkspaceResolver,
   releaseWorkspace,
   resolveOrQuarantine,
   taskBranch,
@@ -141,7 +142,7 @@ function runReleasingVerb(
     // landed, so the release stands, and needs-human halts further pickups.
     // Resolved against the task's own execution workspace (issue #26 / ADR
     // 0009), never just the board's default.
-    const resolve = deps.resolveWorkspace ?? (deps.workspace && (() => deps.workspace!));
+    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     if (resolve) {
       const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
       if (resolved) releaseWorkspace(deps.db, resolved, task.id, deps.clock.now());
