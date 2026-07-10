@@ -47,6 +47,11 @@ export function openDb(path: string): Db {
       -- question stands in for. Never set via MCP or the JSON API — only
       -- recordPrOpened's escalate branch sets this.
       question_pending_merge_pr INTEGER,
+      -- system-internal only (issue #21): the workspace name a quarantine
+      -- Confirmation question stands in for — set only by quarantineWorkspace,
+      -- read only to dedup a re-fire onto the same open question. Never set
+      -- via MCP or the JSON API.
+      question_quarantine_workspace TEXT,
       created_at          TEXT NOT NULL
     );
 
@@ -138,6 +143,7 @@ export function openDb(path: string): Db {
     "question_answer",
     "question_cancel_option",
     "question_pending_child",
+    "question_quarantine_workspace",
     "workspace",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);

@@ -19,7 +19,7 @@ import {
   type Task,
 } from "./tasks.js";
 import { isPickupBlocked } from "./throttle.js";
-import type { WorkspaceConfig } from "./workspace.js";
+import { verifyWorkspaceClean, type WorkspaceConfig } from "./workspace.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -231,10 +231,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // answer first would strand it "answered" with no merge and no retry
         await github.mergePullRequest({ path: workspace.path, number: mergePr! });
       }
+      // a quarantine Confirmation question's answer (issue #21) is never
+      // taken on faith: the board verifies the workspace's tree is actually
+      // clean before treating it as a repair confirmation — a dirty tree
+      // rejects the answer outright, leaving the question open
+      const quarantineWs = task.question_quarantine_workspace;
+      if (quarantineWs !== null) {
+        if (!workspace || workspace.name !== quarantineWs) {
+          throw new DomainError(
+            `no workspace configured for "${quarantineWs}" — cannot verify repair`,
+          );
+        }
+        try {
+          verifyWorkspaceClean(workspace);
+        } catch (err) {
+          throw new DomainError(err instanceof Error ? err.message : String(err));
+        }
+      }
       // an answer during an open triage session is activity (defers the
       // auto-commit) and stages the unblock instead of moving the queue
       const session = triageActivity(db, clock.now());
-      const { question, parentUnblocked } = answerQuestion(
+      const { question, parentUnblocked, pickupResumed } = answerQuestion(
         db,
         task,
         parsed.data.answer,
@@ -249,8 +266,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           at: clock.now(),
         });
       }
-      // an answer that unblocked the parent put it at the head — "run now"
-      if (parentUnblocked) onQueueHeadChanged();
+      // an answer that unblocked the parent, or resumed a quarantined
+      // workspace's pickup (issue #21), put something pickable at the head —
+      // "run now" either way
+      if (parentUnblocked || pickupResumed) onQueueHeadChanged();
       res.json(presentTask(db, question));
     } catch (err) {
       if (err instanceof DomainError) {

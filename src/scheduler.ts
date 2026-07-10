@@ -91,8 +91,10 @@ export function startScheduler(deps: {
     // triage pauses pickup: the human is re-steering the queue, so nothing
     // new enters the slot until the session commits (issue #6)
     if (activeTriageSession(db)) return true;
-    // a quarantined workspace halts its tasks — with the board-level single
-    // workspace, that is every slot task (issue #8)
+    // the gate is keyed on the workspace a task actually runs in (issue #21):
+    // with today's single execution workspace this halts every slot task
+    // (issue #8); per-task workspace resolution (#26) will make it selective
+    // the moment the runtime supports more than one execution workspace
     if (workspace && workspaceNeedsHuman(db, workspace.name)) return true;
     return !nextSlotTask(db);
   }

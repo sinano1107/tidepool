@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
 import type { Db } from "./db.js";
-import { registerTask } from "./tasks.js";
+import { appendEvent } from "./events.js";
+import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
+
+export { BOARD_WORKER_ID } from "./tasks.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
  *  branch discipline and the slot-release tree rule (issue #8) act on it —
@@ -71,6 +74,26 @@ export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
   }
 }
 
+/** Quarantine resolution's verification gate (issue #21, CONTEXT.md): the
+ *  board never takes a repair confirmation on faith. Any failure to observe
+ *  a clean tree — dirty, or not even a usable git repository — is treated
+ *  the same, fail-closed, same posture as the tree rule's own dirty-after-
+ *  WIP-commit check. */
+export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
+  let status: string;
+  try {
+    status = git(workspace.path, "status", "--porcelain");
+  } catch (err) {
+    throw new Error(
+      `workspace ${workspace.name} is not a usable git repository: ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+  if (status !== "") {
+    throw new Error(`workspace ${workspace.name} still has uncommitted changes`);
+  }
+}
+
 export function workspaceNeedsHuman(db: Db, name: string): boolean {
   const row = db
     .prepare("SELECT needs_human FROM workspace_state WHERE name = ?")
@@ -78,14 +101,11 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
   return row?.needs_human === 1;
 }
 
-/** Worker id the board acts under when it enforces its own rules: the tree
- *  rule's failures are the board's to report, never pinned on the agent. */
-export const BOARD_WORKER_ID = "tidepool";
-
-/** Tree-rule failure containment (quarantine): mark the workspace needs-human
- *  (its tasks stay out of the slot) and put the repair in front of the human
- *  as a question task. Clearing the mark is by hand for now — the recovery
- *  wiring is a later slice, like the watchdog (#9). */
+/** Tree-rule failure containment (quarantine, CONTEXT.md): mark the workspace
+ *  needs-human (its tasks stay out of the slot) and put the repair in front of
+ *  the human as a 1-choice Confirmation question (issue #21) — the answer
+ *  isn't a choice between outcomes, it's a confirmation that repair happened,
+ *  verified before it clears needs-human (see answerQuestion in tasks.ts). */
 export function quarantineWorkspace(
   db: Db,
   workspace: WorkspaceConfig,
@@ -96,20 +116,40 @@ export function quarantineWorkspace(
     `INSERT INTO workspace_state (name, needs_human) VALUES (?, 1)
      ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
   ).run(workspace.name);
+  const causeMessage = cause instanceof Error ? cause.message : String(cause);
+  // 1 workspace = at most 1 open Confirmation question (CONTEXT.md's
+  // Quarantine): a re-fire before the human answers just adds to the record
+  // of why, on the question already standing.
+  const existing = db
+    .prepare(
+      `SELECT id FROM tasks WHERE question_quarantine_workspace = ? AND status = 'todo'`,
+    )
+    .get(workspace.name) as { id: string } | undefined;
+  if (existing) {
+    appendEvent(db, {
+      taskId: existing.id,
+      workerId: BOARD_WORKER_ID,
+      payload: { kind: "quarantine_refired", cause: causeMessage },
+      at: now,
+    });
+    return;
+  }
   registerTask(
     db,
     {
       type: "question",
       title: `workspace ${workspace.name} needs human attention`,
       purpose:
-        `the slot-release tree rule failed on ${workspace.path}: ` +
-        `${cause instanceof Error ? cause.message : String(cause)}. ` +
-        "Tasks in this workspace stay out of the slot until it is repaired.",
+        `the slot-release tree rule failed on ${workspace.path}: ${causeMessage}. ` +
+        "Tasks in this workspace stay out of the slot until it is repaired. " +
+        "Answering confirms the repair — the board verifies the tree is " +
+        "clean before it resumes pickup; any answer text is kept as a repair note.",
       completion_criteria: "the workspace is repaired by hand",
       question: {
-        options: ["repaired by hand", "abandon this workspace"],
+        options: ["repaired by hand"],
         recommendation: "repaired by hand",
       },
+      quarantine_workspace: workspace.name,
     },
     now,
     BOARD_WORKER_ID,

@@ -33,6 +33,7 @@ function makeTask(id = "task-1"): Task {
     question_cancel_option: null,
     question_pending_child: null,
     question_pending_merge_pr: null,
+    question_quarantine_workspace: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
 }

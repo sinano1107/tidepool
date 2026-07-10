@@ -50,7 +50,16 @@ export type EventPayload =
   // version (ADR 0001: commit hash = agent version); definition_version is
   // only the human-readable stamp from the definition's frontmatter. The
   // vocabulary is registry-shaped, not vendor-shaped — no CLI names leak in.
-  | { kind: "worker_spawned"; registry_commit: string; definition_version: string };
+  | { kind: "worker_spawned"; registry_commit: string; definition_version: string }
+  // issue #21: a workspace already needs-human failed the tree rule again
+  // before its open Confirmation question was answered — recorded on that
+  // same question rather than opening a second one (CONTEXT.md's Quarantine:
+  // "1 workspace につき確認は最大1枚")
+  | { kind: "quarantine_refired"; cause: string }
+  // issue #21: a quarantine Confirmation question's answer was accepted as a
+  // repair confirmation (the board verified the tree clean first) — needs_human
+  // cleared, resuming pickup for this workspace
+  | { kind: "workspace_reinstated"; workspace: string };
 
 export type EventKind = EventPayload["kind"];
 

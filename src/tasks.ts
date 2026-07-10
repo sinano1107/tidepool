@@ -5,6 +5,12 @@ import { appendEvent } from "./events.js";
 /** Worker id attributed to bare (non ?task=) sessions, e.g. the JSON API. */
 export const HUMAN_WORKER_ID = "human";
 
+/** Worker id the board acts under when it enforces its own rules (issue #8):
+ *  the tree rule's failures are the board's to report, never pinned on the
+ *  agent. Also the sole registrant allowed a 1-choice confirmation question
+ *  (issue #21) — a plain agent question always carries 2-4 choices. */
+export const BOARD_WORKER_ID = "tidepool";
+
 export type TaskType = "work" | "question" | "review";
 /** `blocked` is deliberately absent: it is derived from unfinished children
  *  (CONTEXT.md), never stored. */
@@ -46,6 +52,10 @@ export interface Task {
    *  `escalate` merge dial, read only by the answer route to gate the actual
    *  merge on a live CI check. Never set via MCP or the JSON API. */
   question_pending_merge_pr: number | null;
+  /** System-internal only (issue #21): the workspace name a quarantine
+   *  Confirmation question stands in for, set only by quarantineWorkspace —
+   *  never set via MCP or the JSON API. */
+  question_quarantine_workspace: string | null;
   created_at: string;
 }
 
@@ -133,6 +143,10 @@ export interface RegisterTaskInput extends TaskContent {
    *  question stands in for. Never set via MCP or the JSON API — only
    *  recordPrOpened's `escalate` branch sets this. */
   pending_merge_pr?: number;
+  /** System-internal only (issue #21): the workspace name a quarantine
+   *  Confirmation question stands in for. Never set via MCP or the JSON
+   *  API — only quarantineWorkspace sets this. */
+  quarantine_workspace?: string;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
 }
@@ -140,16 +154,23 @@ export interface RegisterTaskInput extends TaskContent {
 /** Every question carries 2-4 options plus a recommendation among them,
  *  whichever door it enters by (escalate or the JSON API) — the answer view
  *  is one-tap first, free text only as an override. The degraded free-text-only
- *  question is reserved for the watchdog's auto-escalation safety valve (#17). */
-function assertQuestionSpec(input: RegisterTaskInput): void {
+ *  question is reserved for the watchdog's auto-escalation safety valve (#17).
+ *
+ *  The lower bound relaxes to 1 for the board's own registrations only (issue
+ *  #21's Confirmation question, CONTEXT.md): quarantine's "repaired by hand"
+ *  asks for a completion confirmation, not a choice, and a fake second option
+ *  would be filler with no effect of its own. An agent's question is never
+ *  a confirmation — it always carries a real 2-4-way choice. */
+function assertQuestionSpec(input: RegisterTaskInput, workerId: string): void {
   if (input.type !== "question") {
     if (input.question) throw new DomainError("only a question task carries options");
     if (input.cancel_option) throw new DomainError("only a question task carries a cancel option");
     return;
   }
   const q = input.question;
-  if (!q || q.options.length < 2 || q.options.length > 4) {
-    throw new DomainError("a question carries 2 to 4 options");
+  const minOptions = workerId === BOARD_WORKER_ID ? 1 : 2;
+  if (!q || q.options.length < minOptions || q.options.length > 4) {
+    throw new DomainError(`a question carries ${minOptions} to 4 options`);
   }
   if (!q.recommendation.trim() || !q.options.includes(q.recommendation)) {
     throw new DomainError(
@@ -175,7 +196,7 @@ export function registerTask(
   now: Date,
   workerId: string = HUMAN_WORKER_ID,
 ): Task {
-  assertQuestionSpec(input);
+  assertQuestionSpec(input, workerId);
   const { maxKey } = db
     .prepare("SELECT COALESCE(MAX(sort_key), 0) AS maxKey FROM tasks")
     .get() as { maxKey: number };
@@ -200,6 +221,7 @@ export function registerTask(
     question_cancel_option: input.cancel_option ?? null,
     question_pending_child: input.pending_child ?? null,
     question_pending_merge_pr: input.pending_merge_pr ?? null,
+    question_quarantine_workspace: input.quarantine_workspace ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
@@ -207,11 +229,11 @@ export function registerTask(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
          question_options, question_recommendation, question_answer, question_cancel_option,
-         question_pending_child, question_pending_merge_pr, created_at)
+         question_pending_child, question_pending_merge_pr, question_quarantine_workspace, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
          @question_options, @question_recommendation, @question_answer, @question_cancel_option,
-         @question_pending_child, @question_pending_merge_pr, @created_at)`,
+         @question_pending_child, @question_pending_merge_pr, @question_quarantine_workspace, @created_at)`,
     ).run({
       ...task,
       question_options: task.question_options && JSON.stringify(task.question_options),
@@ -458,14 +480,21 @@ export function cancelTask(
  *  unblocked — every unfinished descendant of its parent (siblings included,
  *  the failed task's own subtree among them) is cancelled, and the parent
  *  itself returns to the queue head to replan. With no parent, the failed
- *  task's own subtree is cancelled and nothing returns to the head. */
+ *  task's own subtree is cancelled and nothing returns to the head.
+ *
+ *  Quarantine resolution (issue #21): a Confirmation question (declared by
+ *  `question_quarantine_workspace`, system-internal) takes any answer at all
+ *  as a repair confirmation — the caller has already verified the workspace's
+ *  tree is clean before this runs (see api.ts). needs_human clears at once,
+ *  reported back as `pickupResumed` so the caller fires the immediate poll,
+ *  same as `parentUnblocked`. */
 export function answerQuestion(
   db: Db,
   question: Task,
   answer: string,
   now: Date,
   stageUnblock?: (taskId: string) => void,
-): { question: Task; parentUnblocked: boolean } {
+): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
   }
@@ -473,6 +502,7 @@ export function answerQuestion(
     throw new DomainError(`a ${question.status} question cannot be answered`);
   }
   let parentUnblocked = false;
+  let pickupResumed = false;
   db.transaction(() => {
     db.prepare("UPDATE tasks SET status = 'done', question_answer = ? WHERE id = ?").run(
       answer,
@@ -494,6 +524,19 @@ export function answerQuestion(
       },
       at: now,
     });
+
+    if (question.question_quarantine_workspace !== null) {
+      const wsName = question.question_quarantine_workspace;
+      db.prepare("UPDATE workspace_state SET needs_human = 0 WHERE name = ?").run(wsName);
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        payload: { kind: "workspace_reinstated", workspace: wsName },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
 
     let unblockTarget: Task | undefined;
     if (answer === question.question_cancel_option) {
@@ -558,7 +601,7 @@ export function answerQuestion(
       }
     }
   })();
-  return { question: getTask(db, question.id)!, parentUnblocked };
+  return { question: getTask(db, question.id)!, parentUnblocked, pickupResumed };
 }
 
 /** Record an in-authority decision as one log line and move on. The log is the
