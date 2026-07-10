@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defaultExec, type ExecFn } from "./claude-worker.js";
+import { defaultExec, pinnedModelFlags, type ExecFn } from "./claude-worker.js";
 import type { DraftClient, TaskDraft } from "./draft.js";
 import type { RegistryCandidates } from "./registry.js";
 
@@ -32,6 +32,23 @@ function buildPrompt(dump: string, candidates?: RegistryCandidates): string {
   return [instructions, candidateGuidance, `Brain dump:\n${dump}`].filter(Boolean).join("\n\n");
 }
 
+/** Safely extracts a JSON object from a CLI response (issue #25): the model
+ *  is instructed to answer with bare JSON, but real-world output sometimes
+ *  wraps it in a markdown fence or a sentence of prose around it — a strict
+ *  JSON.parse alone would reject those instead of drafting. Falls back to
+ *  parsing the trimmed text as-is when no fence/braces are found, so a
+ *  genuinely malformed response still throws (draftTask rejects → #12's 503
+ *  fallback), not silently drafts garbage. */
+function extractJson(text: string): unknown {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const candidate = fenced ? fenced[1]! : trimmed;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  const jsonSlice = start !== -1 && end > start ? candidate.slice(start, end + 1) : candidate;
+  return JSON.parse(jsonSlice);
+}
+
 export interface ClaudeDraftClientOptions {
   /** Assignee/workspace candidates (issue #12's registryCandidates) to steer
    *  the drafted assignee/workspace toward known names. Absent → the model
@@ -58,21 +75,20 @@ export class ClaudeDraftClient implements DraftClient {
       prompt,
       "--output-format",
       "json",
-      // always explicit: the CLI remembers the host's last model/effort
-      // choice, and a flip in some unrelated directory must not leak into
-      // runs (ADR 0005) — draftTask is a real generation task, not the
-      // trivial ping checkUsage() deliberately downgrades to haiku for
-      "--model",
-      "sonnet",
-      "--effort",
-      "medium",
+      // draftTask is a real generation task, not the trivial ping
+      // checkUsage() deliberately downgrades to haiku for
+      ...pinnedModelFlags("sonnet", "medium"),
       // no MCP tools are configured for this call — it's a single JSON
       // answer, not a working session, so more than one turn is a
       // malfunction to fail loud on, not something to allow for
       "--max-turns",
       "1",
     ]);
-    const envelope = JSON.parse(stdout) as { result: string };
-    return taskDraftSchema.parse(JSON.parse(envelope.result)) as TaskDraft;
+    const envelope: unknown = JSON.parse(stdout);
+    const result = (envelope as { result?: unknown }).result;
+    if (typeof result !== "string") {
+      throw new Error("draft CLI response missing a string result field");
+    }
+    return taskDraftSchema.parse(extractJson(result)) as TaskDraft;
   }
 }

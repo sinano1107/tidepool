@@ -27,9 +27,37 @@ describe("ClaudeDraftClient", () => {
     });
   });
 
+  it("コードフェンスや前後の散文に包まれていても JSON を抽出する(issue #25 の「安全に抽出」要件)", async () => {
+    const draftJson = JSON.stringify({
+      title: "set up the greenhouse sensor",
+      purpose: "know soil moisture without walking out",
+      completion_criteria: "dashboard shows a live moisture reading",
+    });
+    const client = new ClaudeDraftClient({
+      exec: async () =>
+        JSON.stringify({
+          result: `Sure! Here's the draft:\n\n\`\`\`json\n${draftJson}\n\`\`\`\n\nLet me know if you'd like changes.`,
+        }),
+    });
+
+    await expect(client.draftTask("set up the greenhouse sensor")).resolves.toEqual({
+      title: "set up the greenhouse sensor",
+      purpose: "know soil moisture without walking out",
+      completion_criteria: "dashboard shows a live moisture reading",
+    });
+  });
+
   it("CLI 出力が JSON でない場合、draftTask は reject する(#12 の 503 フォールバック契約を守る)", async () => {
     const client = new ClaudeDraftClient({
       exec: async () => JSON.stringify({ result: "sure, here's your task: not actually JSON" }),
+    });
+
+    await expect(client.draftTask("set up the greenhouse sensor")).rejects.toThrow();
+  });
+
+  it("エンベロープに result フィールド(文字列)が無い場合、draftTask は reject する", async () => {
+    const client = new ClaudeDraftClient({
+      exec: async () => JSON.stringify({ result: 123 }),
     });
 
     await expect(client.draftTask("set up the greenhouse sensor")).rejects.toThrow();

@@ -22,6 +22,14 @@ export type SpawnFn = (
 // here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
 const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
 
+// always explicit: the CLI remembers the host's last model/effort choice,
+// and a flip in some unrelated directory must not leak into runs (ADR
+// 0005) — shared by every `claude` CLI spawn site so the pinning rule has
+// one shape, not one copy per call site
+export function pinnedModelFlags(model: string, effort: string): string[] {
+  return ["--model", model, "--effort", effort];
+}
+
 export interface ClaudeWorkerOptions {
   db: Db;
   clock: Clock;
@@ -153,13 +161,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // enforced by the profile guidance and the board's domain verbs
         "--permission-mode",
         "auto",
-        // always explicit: the CLI remembers the host's last model/effort
-        // choice, and a flip in some unrelated directory must not leak into
-        // runs (ADR 0005)
-        "--model",
-        agent.model ?? "sonnet",
-        "--effort",
-        agent.effort ?? "medium",
+        ...pinnedModelFlags(agent.model ?? "sonnet", agent.effort ?? "medium"),
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",
