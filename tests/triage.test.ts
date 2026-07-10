@@ -1,19 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
-
-async function registerWork(t: Tidepool, title: string) {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-  });
-  return res.json;
-}
 
 it("starting a triage session pauses task pickup", async () => {
   t = await bootTidepool();

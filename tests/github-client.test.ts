@@ -1,10 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { chmodSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { GhCliClient } from "../src/github.js";
+import { git } from "./harness.js";
 
 let repoPath: string | undefined;
 let remotePath: string | undefined;
@@ -18,16 +18,6 @@ afterEach(async () => {
   }
   repoPath = remotePath = binPath = originalPath = undefined;
 });
-
-function git(dir: string, ...args: string[]): string {
-  return execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
-  )
-    .toString()
-    .trim();
-}
 
 /** Stands in for the real `gh` binary on PATH: git itself stays real (the
  *  PRD test policy), but the GitHub API side of `gh` would need real network

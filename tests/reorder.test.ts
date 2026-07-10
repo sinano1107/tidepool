@@ -1,18 +1,16 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF as fullHandoff,
+  HOUR,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
-
-async function registerWork(t: Tidepool, title: string) {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-  });
-  return res.json;
-}
 
 function queueIds(list: any[]): string[] {
   // "work" only: a restart-time failure escalation (#9) can add its own
@@ -20,15 +18,6 @@ function queueIds(list: any[]): string[] {
   // these tests are about
   return list.filter((x) => x.status === "todo" && x.type === "work").map((x) => x.id);
 }
-
-const fullHandoff = {
-  outcome: "done as specified",
-  deliverables: "n/a",
-  decision_refs: "n/a",
-  dead_ends: "n/a",
-  resume_context: "n/a",
-  known_issues: "n/a",
-};
 
 /** Park a filler task in the slot so reordering below never triggers a pickup:
  *  a queue-head change while the slot is free immediately executes the new head. */

@@ -1,57 +1,31 @@
-import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  git,
+  HOUR,
+  makeWorkspace,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
-let wsPath: string | undefined;
+const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  if (wsPath) await rm(wsPath, { recursive: true, force: true });
-  wsPath = undefined;
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-
-function git(dir: string, ...args: string[]): string {
-  return execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
-  )
-    .toString()
-    .trim();
-}
-
-async function makeWorkspace(): Promise<WorkspaceConfig> {
-  const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
-  wsPath = path;
-  git(path, "init", "-b", "main");
-  writeFileSync(join(path, "README.md"), "workspace\n");
-  git(path, "add", "-A");
-  git(path, "commit", "-m", "initial");
-  return { name: "sandbox", path };
-}
 
 const MIN = 60 * 1000;
 const WORK_LIMIT = 90 * MIN;
 
-async function registerWork(t: Tidepool) {
-  return (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "long haul",
-      purpose: "runs past its limit",
-      completion_criteria: "n/a",
-    })
-  ).json;
-}
-
 it("タスク種別の絶対リミットを超えると SIGTERM が一度だけ送られる、超えるまでは送られない", async () => {
   t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace: 1000 * MIN } });
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
   await t.clock.advance(89 * MIN); // t = 149min, elapsed since pickup = 89min: still under 90min
@@ -67,7 +41,7 @@ it("タスク種別の絶対リミットを超えると SIGTERM が一度だけ�
 it("SIGTERM 後、猶予を過ぎると SIGKILL が一度だけ追加で送られる", async () => {
   const grace = 30 * MIN;
   t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
   await t.clock.advance(90 * MIN); // t = 150min: SIGTERM fires (elapsed = 90min)
@@ -91,12 +65,12 @@ it("SIGTERM 後、猶予を過ぎると SIGKILL が一度だけ追加で送ら�
 
 it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付きの question が生まれ、slot が解放される", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min, checked out onto its task branch
   // the killed session left work mid-flight, uncommitted
@@ -128,19 +102,19 @@ it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付�
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
 
   // slot is free: a second task can now proceed
-  const second = await registerWork(t);
+  const second = await registerWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, second.id]);
 });
 
 it("failure question の「再実行」を選ぶと元タスクが先頭復帰し、再ピックアップされる", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
   await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
@@ -159,12 +133,12 @@ it("failure question の「再実行」を選ぶと元タスクが先頭復帰�
 
 it("再実行で再ピックアップされたタスクにも、新しい pickup から改めて時間リミットが働く(以前の kill 状態を引きずらない)", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   // first run: hits the limit, gets killed
   await t.clock.advance(HOUR); // picked up at t = 60min
@@ -195,7 +169,7 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
 
 it("failure question が開いている間、失敗タスクの兄弟(計画の残り)も held になり slot に入らない", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
@@ -251,12 +225,12 @@ it("failure question が開いている間、失敗タスクの兄弟(計画の�
 
 it("SIGKILL 後に tree rule 自体が失敗すると、failure question ではなく workspace の quarantine に落ちる", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
 
@@ -275,7 +249,7 @@ it("SIGKILL 後に tree rule 自体が失敗すると、failure question では�
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
 
   // needs-human の workspace はpickupを止める
-  await registerWork(t);
+  await registerWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });

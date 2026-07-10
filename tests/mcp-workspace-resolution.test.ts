@@ -1,9 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import express from "express";
@@ -13,43 +11,17 @@ import { Slot } from "../src/slot.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-
-function git(dir: string, ...args: string[]): string {
-  return execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
-  )
-    .toString()
-    .trim();
-}
+import { FULL_HANDOFF as fullHandoff, git, makeWorkspace } from "./harness.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-async function makeWorkspace(name: string): Promise<WorkspaceConfig> {
-  const path = await mkdtemp(join(tmpdir(), `tidepool-${name}-`));
-  dirs.push(path);
-  git(path, "init", "-b", "main");
-  git(path, "commit", "--allow-empty", "-m", "initial");
-  return { name, path };
-}
-
-const fullHandoff = {
-  outcome: "done",
-  deliverables: "n/a",
-  decision_refs: "n/a",
-  dead_ends: "n/a",
-  resume_context: "n/a",
-  known_issues: "n/a",
-};
-
 describe("mcp の releasing verb が task.workspace を解決する", () => {
   it("complete_task は task 自身の workspace の checkout で tree rule を実行する", async () => {
-    const sandbox = await makeWorkspace("sandbox");
-    const prod = await makeWorkspace("prod");
+    const sandbox = await makeWorkspace(dirs, "sandbox");
+    const prod = await makeWorkspace(dirs, "prod");
     const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();

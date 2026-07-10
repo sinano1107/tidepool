@@ -1,46 +1,30 @@
-import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF as fullHandoff,
+  HOUR,
+  makeWorkspace,
+  mcpClient,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
-let wsPath: string | undefined;
+const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  if (wsPath) await rm(wsPath, { recursive: true, force: true });
-  wsPath = undefined;
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-
-function git(dir: string, ...args: string[]): string {
-  return execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
-  )
-    .toString()
-    .trim();
-}
-
-async function makeWorkspace(): Promise<WorkspaceConfig> {
-  const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
-  wsPath = path;
-  git(path, "init", "-b", "main");
-  writeFileSync(join(path, "README.md"), "workspace\n");
-  git(path, "add", "-A");
-  git(path, "commit", "-m", "initial");
-  return { name: "sandbox", path };
-}
 
 const MIN = 60 * 1000;
 const WORK_LIMIT = 90 * MIN;
 
 it("abandon の回答で計画ごと破棄される: 失敗タスクと兄弟が cancelled になり、親が先頭復帰して再ピックアップされる", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
@@ -100,18 +84,9 @@ it("abandon の回答で計画ごと破棄される: 失敗タスクと兄弟が
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["plan", "will fail", "plan"]);
 });
 
-const fullHandoff = {
-  outcome: "done before the sibling failed",
-  deliverables: "n/a",
-  decision_refs: "n/a",
-  dead_ends: "n/a",
-  resume_context: "n/a",
-  known_issues: "n/a",
-};
-
 it("abandon のカスケードは done の兄弟には触れない(記録は劣化しない)", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },

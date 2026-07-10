@@ -1,63 +1,28 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF as fullHandoff,
+  git,
+  HOUR,
+  makeWorkspace,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
-let wsPath: string | undefined;
+const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  if (wsPath) await rm(wsPath, { recursive: true, force: true });
-  wsPath = undefined;
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-function git(dir: string, ...args: string[]): string {
-  return execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
-  )
-    .toString()
-    .trim();
-}
-
-/** A real git repository standing in for the workspace — the PRD test policy:
- *  git is never faked, the rule is verified against actual trees. */
-async function makeWorkspace(): Promise<WorkspaceConfig> {
-  const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
-  wsPath = path;
-  git(path, "init", "-b", "main");
-  writeFileSync(join(path, "README.md"), "workspace\n");
-  git(path, "add", "-A");
-  git(path, "commit", "-m", "initial");
-  return { name: "sandbox", path };
-}
-
-async function registerWork(t: Tidepool, title: string) {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-  });
-  return res.json;
-}
-
-const fullHandoff = {
-  outcome: "done as specified",
-  deliverables: "notes.txt on the task branch",
-  decision_refs: "none",
-  dead_ends: "none",
-  resume_context: "none needed",
-  known_issues: "none",
-};
-
 it("pickup 時にタスクブランチが作成・checkout され、作業はそのブランチ上で行われる", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
@@ -69,7 +34,7 @@ it("pickup 時にタスクブランチが作成・checkout され、作業はそ
 });
 
 it("complete による解放で WIP コミットが強制され、ツリーがクリーンに戻る", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write things");
   await t.clock.advance(HOUR);
@@ -93,7 +58,7 @@ it("complete による解放で WIP コミットが強制され、ツリーが�
 });
 
 it("エスカレーション解放でも WIP が退避され、再開は自ブランチの checkout だけで済む", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "risky work");
   await t.clock.advance(HOUR);
@@ -136,7 +101,7 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
 });
 
 it("tree rule の失敗で workspace が needs-human になり、pickup が止まり、question が生まれる", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "doomed work");
   await t.clock.advance(HOUR);
@@ -172,7 +137,7 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
 });
 
 it("ワーカーが main に逃げていても WIP は main にコミットされず、workspace が隔離される", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "rogue work");
   await t.clock.advance(HOUR);

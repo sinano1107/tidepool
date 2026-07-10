@@ -1,58 +1,25 @@
-import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
-import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF as fullHandoff,
+  HOUR,
+  makeWorkspace,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
-let wsPath: string | undefined;
+const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  if (wsPath) await rm(wsPath, { recursive: true, force: true });
-  wsPath = undefined;
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-function git(dir: string, ...args: string[]): string {
-  return execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
-  )
-    .toString()
-    .trim();
-}
-
-async function makeWorkspace(): Promise<WorkspaceConfig> {
-  const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
-  wsPath = path;
-  git(path, "init", "-b", "main");
-  git(path, "commit", "--allow-empty", "-m", "initial");
-  return { name: "sandbox", path };
-}
-
-async function registerWork(t: Tidepool, title: string) {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-  });
-  return res.json;
-}
-
-const fullHandoff = {
-  outcome: "done as specified",
-  deliverables: "notes.txt on the task branch",
-  decision_refs: "none",
-  dead_ends: "none",
-  resume_context: "none needed",
-  known_issues: "none",
-};
-
 it("completing a work task under the escalate merge dial registers a merge-decision question referencing the opened PR", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -81,7 +48,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
 });
 
 it("completing a work task with no merge dial configured opens the PR without any merge-decision question (pre-#11 baseline)", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -110,7 +77,7 @@ async function completeUnderEscalate(t: Tidepool) {
 }
 
 it("answering a merge-decision question with \"merge\" while CI is green performs the actual merge", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -131,7 +98,7 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
 });
 
 it("answering \"merge\" while CI is not green is rejected, and the question stays open to retry", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -151,7 +118,7 @@ it("answering \"merge\" while CI is not green is rejected, and the question stay
 });
 
 it("answering \"hold\" resolves the question without checking CI or merging", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -170,7 +137,7 @@ it("answering \"hold\" resolves the question without checking CI or merging", as
 const MINUTE = 60 * 1000;
 
 it("a low-risk task under auto_if_ci_green queues for auto-merge instead of asking, then merges once the poll sees CI green", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -204,7 +171,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
 });
 
 it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge into an escalation question instead of merging", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -228,7 +195,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
 });
 
 it("a risky task under auto_if_ci_green asks for merge approval immediately instead of queueing for auto-merge", async () => {
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },

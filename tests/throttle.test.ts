@@ -1,5 +1,13 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF as fullHandoff,
+  HOUR,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(async () => {
@@ -33,29 +41,9 @@ function formatUsageDate(d: Date): string {
   return `${month} ${day} at ${hour}:${minute.padStart(2, "0")}${meridiem}`;
 }
 
-async function registerWork(t: Tidepool) {
-  return (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "long haul",
-      purpose: "runs while the account is throttled",
-      completion_criteria: "n/a",
-    })
-  ).json;
-}
-
-const fullHandoff = {
-  outcome: "done",
-  deliverables: "n/a",
-  decision_refs: "n/a",
-  dead_ends: "n/a",
-  resume_context: "n/a",
-  known_issues: "n/a",
-};
-
 it("session が閾値以上だと新規 pickup が resets_at まで skip され、resets_at 到達で(hourly tick を待たず)再開する", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
   t.worker.scriptUsage(overThreshold(resetsAt));
@@ -72,7 +60,7 @@ it("session が閾値以上だと新規 pickup が resets_at まで skip され�
 
 it("パース不能(観測不能)は fail-closed で pickup を skip し、次の hourly tick で再試行する", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   t.worker.scriptUsage(null); // simulates a checkUsage failure
   await t.clock.advance(HOUR);
@@ -88,7 +76,7 @@ it("TIDEPOOL_USAGE_THRESHOLD に不正値(非数値)を渡してもデフォル�
   process.env.TIDEPOOL_USAGE_THRESHOLD = "not-a-number";
   try {
     t = await bootTidepool();
-    await registerWork(t);
+    await registerWork(t, "long haul");
 
     const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
     t.worker.scriptUsage(overThreshold(resetsAt)); // 85%, over the 80% default
@@ -103,7 +91,7 @@ it("TIDEPOOL_USAGE_THRESHOLD に不正値(非数値)を渡してもデフォル�
 
 it("閾値超えの間も実行中タスクには決して触れない(常に完走する)", async () => {
   t = await bootTidepool();
-  const first = await registerWork(t);
+  const first = await registerWork(t, "long haul");
   await t.clock.advance(HOUR); // first picked up while usage is still fine
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
@@ -116,7 +104,7 @@ it("閾値超えの間も実行中タスクには決して触れない(常に完
   await client.close();
   expect(t.worker.killed).toEqual([]);
 
-  const second = await registerWork(t);
+  const second = await registerWork(t, "long haul");
   await t.clock.advance(HOUR); // slot free, but usage is still over threshold
   expect(t.worker.started.map((x) => x.id)).toEqual([first.id]);
 
@@ -127,7 +115,7 @@ it("閾値超えの間も実行中タスクには決して触れない(常に完
 
 it("throttled の間、todo タスクはキュービュー(/api/queue)では skipped、ボード(/api/tasks)では todo のまま", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t);
+  const task = await registerWork(t, "long haul");
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
   t.worker.scriptUsage(overThreshold(resetsAt));

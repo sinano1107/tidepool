@@ -1,18 +1,8 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
-
-async function registerWork(t: Tidepool, title: string) {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-  });
-  return res.json;
-}
 
 it("the hourly tick hands the queue head to the worker and marks it in_progress", async () => {
   t = await bootTidepool();

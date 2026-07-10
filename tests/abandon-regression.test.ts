@@ -1,46 +1,22 @@
-import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import type { WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-let wsPath: string | undefined;
+const dirs: string[] = [];
 afterEach(async () => {
   await t?.stop();
-  if (wsPath) await rm(wsPath, { recursive: true, force: true });
-  wsPath = undefined;
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-
-function git(dir: string, ...args: string[]): string {
-  return execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-    { cwd: dir },
-  )
-    .toString()
-    .trim();
-}
-
-async function makeWorkspace(): Promise<WorkspaceConfig> {
-  const path = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
-  wsPath = path;
-  git(path, "init", "-b", "main");
-  writeFileSync(join(path, "README.md"), "workspace\n");
-  git(path, "add", "-A");
-  git(path, "commit", "-m", "initial");
-  return { name: "sandbox", path };
-}
 
 const MIN = 60 * 1000;
 const WORK_LIMIT = 90 * MIN;
 
 it("failure question で「再実行」を選んでも、計画の残りは cancel されず既存の再実行挙動(#9)のまま", async () => {
   const grace = 30 * MIN;
-  const ws = await makeWorkspace();
+  const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
