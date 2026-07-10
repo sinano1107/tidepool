@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { nextSlotTask, registerTask } from "../src/tasks.js";
-
-function quarantineAgentRow(db: ReturnType<typeof openDb>, name: string): void {
-  db.prepare(
-    `INSERT INTO agent_state (name, needs_human) VALUES (?, 1)
-     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(name);
-}
+import { quarantineAgentRow } from "./harness.js";
 
 describe("nextSlotTask の per-task agent ゲート(ADR 0012 / issue #36)", () => {
   it("quarantine 済み agent 名を assignee に持つ todo は飛ばされ、他 agent 宛ての todo が返る", () => {

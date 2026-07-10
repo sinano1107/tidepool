@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listBoard, listQueue, registerTask } from "../src/tasks.js";
-
-function quarantineAgentRow(db: ReturnType<typeof openDb>, name: string): void {
-  db.prepare(
-    `INSERT INTO agent_state (name, needs_human) VALUES (?, 1)
-     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(name);
-}
+import { quarantineAgentRow } from "./harness.js";
 
 describe("listQueue は quarantine 済み agent 宛ての todo を skipped と表示する(ADR 0012 / issue #36)", () => {
   it("quarantine 済み agent 宛ての todo はキュービューで skipped、他 agent 宛てはそのまま todo", () => {

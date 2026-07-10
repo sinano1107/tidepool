@@ -1,20 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { agentNeedsHuman } from "../src/agent.js";
 import { openDb } from "../src/db.js";
 import { answerQuestion, BOARD_WORKER_ID, DomainError, registerTask } from "../src/tasks.js";
-
-function quarantineAgentRow(db: ReturnType<typeof openDb>, name: string): void {
-  db.prepare(
-    `INSERT INTO agent_state (name, needs_human) VALUES (?, 1)
-     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(name);
-}
-
-function agentNeedsHumanRow(db: ReturnType<typeof openDb>, name: string): boolean {
-  const row = db.prepare("SELECT needs_human FROM agent_state WHERE name = ?").get(name) as
-    | { needs_human: number }
-    | undefined;
-  return row?.needs_human === 1;
-}
+import { quarantineAgentRow } from "./harness.js";
 
 describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
   it("quarantine_agent 付きの question は1択(workspace 版と同じ緩和)で登録できる", () => {
@@ -78,6 +66,6 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
 
     expect(pickupResumed).toBe(true);
     expect(answered.status).toBe("done");
-    expect(agentNeedsHumanRow(db, "navigator")).toBe(false);
+    expect(agentNeedsHuman(db, "navigator")).toBe(false);
   });
 });

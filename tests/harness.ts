@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Db } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { AuthorityProfile, RegistryCandidates } from "../src/registry.js";
 import { startServer } from "../src/server.js";
@@ -119,6 +120,18 @@ export async function api(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, json: await res.json() };
+}
+
+/** Marks an agent name needs-human directly in `agent_state`, bypassing
+ *  `quarantineAgent`'s own question-registration side effect — for tests that
+ *  want to drive just the pickup/queue gate SQL (ADR 0012 / issue #36), not
+ *  the whole quarantine-registration flow (that flow has its own coverage in
+ *  tests/quarantine-agent.test.ts and tests/quarantine-confirm-agent.test.ts). */
+export function quarantineAgentRow(db: Db, name: string): void {
+  db.prepare(
+    `INSERT INTO agent_state (name, needs_human) VALUES (?, 1)
+     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
+  ).run(name);
 }
 
 /** A real git checkout for tree-rule/branch-discipline/quarantine tests —
