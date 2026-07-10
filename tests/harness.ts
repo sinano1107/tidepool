@@ -42,6 +42,13 @@ export interface BootOptions {
    *  board's default agent). Takes precedence over the static `authority`
    *  above when both are given. Absent → falls back to `authority`. */
   resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
+  /** Whether an agent name is currently registered (ADR 0012 / issue #36),
+   *  read fresh against the registry — used both for registration-time
+   *  validation and an agent quarantine Confirmation question's clearance
+   *  check. Absent → no registry configured, so any name is accepted at
+   *  registration and only "no more todo tasks depend on it" can clear a
+   *  quarantine. */
+  agentRegistered?: (name: string) => boolean;
   /** Assignee/workspace candidates for the registration screen (issue #12). */
   registryCandidates?: RegistryCandidates;
   /** The LLM draft seam (issue #12). Absent (the default) — same as no LLM
@@ -68,6 +75,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     github,
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
+    agentRegistered: options.agentRegistered,
     registryCandidates: options.registryCandidates,
     draftClient: options.draftClient,
   });

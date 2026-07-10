@@ -1,19 +1,14 @@
 import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { resolveExecutionAgent, quarantineAgent, UnknownAgentError } from "./agent.js";
+import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { loadRegistry, type Registry } from "./registry.js";
+import { loadRegistry, type AgentDefinition, type Registry } from "./registry.js";
 import type { Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import {
-  quarantineWorkspace,
-  resolveExecutionWorkspace,
-  UnknownWorkspaceError,
-  type WorkspaceConfig,
-} from "./workspace.js";
+import { resolveExecutionWorkspace, resolveOrQuarantine } from "./workspace.js";
 
 /** The process boundary the adapter is tested at: everything vendor-specific
  *  (the claude CLI, its flags) flows through this one call. */
@@ -27,6 +22,14 @@ export type SpawnFn = (
 // ever-growing set of aliases/full names) it's safe and worth validating
 // here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
 const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+
+/** Shared by boot-time default validation and every per-task spawn — one
+ *  check, not a copy at each call site. */
+function assertKnownEffort(definition: AgentDefinition): void {
+  if (definition.effort !== undefined && !EFFORT_LEVELS.includes(definition.effort)) {
+    throw new Error(`unknown effort level: ${definition.effort}`);
+  }
+}
 
 // always explicit: the CLI remembers the host's last model/effort choice,
 // and a flip in some unrelated directory must not leak into runs (ADR
@@ -113,46 +116,36 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   private validateDefaults(registry: Registry): void {
     resolveExecutionWorkspace(registry, this.options.workspace, null);
     const agent = resolveExecutionAgent(registry, this.options.agent, null);
-    if (agent.definition.effort !== undefined && !EFFORT_LEVELS.includes(agent.definition.effort)) {
-      throw new Error(`unknown effort level: ${agent.definition.effort}`);
-    }
+    assertKnownEffort(agent.definition);
   }
 
   start(task: Task): void {
     // loaded per pickup so a registry update takes effect on the next task
     const registry = loadRegistry(this.options.registryDir);
-    // task.workspace (issue #26 / ADR 0009) takes precedence over this
-    // worker's configured default — resolved fresh against the registry
-    // every pickup, never pinned to a path. An unknown name is registry
-    // drift, not a config mistake: it fails closed into quarantine rather
-    // than throwing out of start() — defense in depth alongside the
-    // scheduler's own pre-pickup gate, which is what ordinarily catches this
-    // before start() is ever called.
-    let workspace: WorkspaceConfig;
-    try {
-      workspace = resolveExecutionWorkspace(registry, this.options.workspace, task.workspace);
-    } catch (err) {
-      if (!(err instanceof UnknownWorkspaceError)) throw err;
-      quarantineWorkspace(this.options.db, err.workspaceName, err, this.options.clock.now());
-      return;
-    }
-    // task.assignee (ADR 0012 / issue #36) takes precedence over this
-    // worker's configured default agent — resolved fresh against the
-    // registry every pickup, never pinned. Same drift-vs-config-mistake
-    // split as the workspace resolution above: an unknown assignee name
-    // quarantines the agent name rather than throwing.
-    let agent: ReturnType<typeof resolveExecutionAgent>;
-    try {
-      agent = resolveExecutionAgent(registry, this.options.agent, task.assignee);
-    } catch (err) {
-      if (!(err instanceof UnknownAgentError)) throw err;
-      quarantineAgent(this.options.db, err.agentName, err, this.options.clock.now());
-      return;
-    }
+    // task.workspace (issue #26 / ADR 0009) and task.assignee (ADR 0012 /
+    // issue #36) both take precedence over this worker's configured
+    // defaults — resolved fresh against the registry every pickup, never
+    // pinned. An unknown name in either is registry drift, not a config
+    // mistake: resolveOrQuarantine/resolveAgentOrQuarantine fail it closed
+    // into quarantine rather than throwing out of start() — defense in depth
+    // alongside the scheduler's own pre-pickup gate, which is what
+    // ordinarily catches this before start() is ever called.
+    const workspace = resolveOrQuarantine(
+      this.options.db,
+      (taskWorkspace) => resolveExecutionWorkspace(registry, this.options.workspace, taskWorkspace),
+      task.workspace,
+      this.options.clock.now(),
+    );
+    if (!workspace) return;
+    const agent = resolveAgentOrQuarantine(
+      this.options.db,
+      (taskAssignee) => resolveExecutionAgent(registry, this.options.agent, taskAssignee),
+      task.assignee,
+      this.options.clock.now(),
+    );
+    if (!agent) return;
     const { definition, profile } = agent;
-    if (definition.effort !== undefined && !EFFORT_LEVELS.includes(definition.effort)) {
-      throw new Error(`unknown effort level: ${definition.effort}`);
-    }
+    assertKnownEffort(definition);
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
     const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);

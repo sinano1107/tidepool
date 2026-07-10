@@ -163,6 +163,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       authority: options.authority,
       resolveAuthority: options.resolveAuthority,
       defaultAgentName: worker.id,
+      agentRegistered: options.agentRegistered,
     }),
   );
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");

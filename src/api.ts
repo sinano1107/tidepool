@@ -183,6 +183,22 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           }
         }
       }
+      // the agent-name generalization of the workspace check above (ADR 0012
+      // / issue #36): an explicitly named assignee must exist in the
+      // registry, rejected fast with a 400 rather than registering silently
+      // and only surfacing as a pickup-time quarantine. `human` is never a
+      // registry agent (CONTEXT.md's Assignee: it names the slot-external
+      // facet, not a spawnable identity) so it's exempt — same "absent a real
+      // registry, every name is accepted" fallback when `agentRegistered`
+      // isn't configured.
+      if (
+        parsed.data.assignee !== undefined &&
+        parsed.data.assignee !== HUMAN_WORKER_ID &&
+        agentRegistered &&
+        !agentRegistered(parsed.data.assignee)
+      ) {
+        throw new DomainError(`unknown agent: ${parsed.data.assignee}`);
+      }
       res.status(201).json(registerTask(db, parsed.data, clock.now()));
     } catch (err) {
       if (err instanceof DomainError) {

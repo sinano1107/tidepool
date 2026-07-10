@@ -58,6 +58,13 @@ export interface McpDeps {
    *  not to `HUMAN_WORKER_ID`. Absent → falls back to `HUMAN_WORKER_ID`, same
    *  as the pre-#36 shape for a board with no worker configured at all. */
   defaultAgentName?: string;
+  /** Whether an agent name is currently registered (ADR 0012 / issue #36),
+   *  read fresh against the registry — used to reject a decompose child's
+   *  unknown assignee outright (the registering agent's own mistake, same
+   *  treatment as an unknown child workspace). Absent → no registry
+   *  configured, so any assignee name is accepted, same as the workspace
+   *  check's fallback. */
+  agentRegistered?: (name: string) => boolean;
 }
 
 /** The protected branch every task branch is proposed onto — the same one
@@ -294,6 +301,19 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             } catch (err) {
               if (!(err instanceof UnknownWorkspaceError)) throw err;
               throw new DomainError(`unknown workspace: ${child.workspace}`);
+            }
+          }
+        }
+        // the agent-name generalization of the check above (ADR 0012 / issue
+        // #36): an explicitly named child assignee must exist in the
+        // registry — the registering agent's own mistake, not an authority
+        // question, so it's rejected outright before the assignable_to check
+        // even runs. `human` is exempt (never a registry agent).
+        if (deps.agentRegistered) {
+          for (const child of input.children) {
+            if (child.assignee === undefined || child.assignee === HUMAN_WORKER_ID) continue;
+            if (!deps.agentRegistered(child.assignee)) {
+              throw new DomainError(`unknown agent: ${child.assignee}`);
             }
           }
         }
