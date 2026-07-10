@@ -19,7 +19,12 @@ import {
   type Task,
 } from "./tasks.js";
 import { isPickupBlocked } from "./throttle.js";
-import { verifyWorkspaceClean, type WorkspaceConfig } from "./workspace.js";
+import {
+  buildWorkspaceResolver,
+  UnknownWorkspaceError,
+  verifyWorkspaceClean,
+  type WorkspaceConfig,
+} from "./workspace.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -106,6 +111,12 @@ export interface ApiRouterDeps {
    *  CI check (issue #11). Absent → a merge-decision "merge" answer can't
    *  check CI and is rejected. */
   workspace?: WorkspaceConfig;
+  /** Resolves a task's execution workspace against the registry (issue #26 /
+   *  ADR 0009), read fresh every call — used to verify a quarantine
+   *  Confirmation question's workspace by name, whatever workspace it names.
+   *  Absent → quarantine answers verify only against the board's single
+   *  fixed `workspace` (pre-#26 behavior). */
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   /** The GitHub-facing seam (issue #19), reused here for the merge dial's
    *  CI-check-then-merge (issue #11). Absent → same as no workspace. */
   github?: GitHubClient;
@@ -120,8 +131,16 @@ export interface ApiRouterDeps {
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
-  const { db, clock, onQueueHeadChanged, workspace, github, registryCandidates, draftClient } =
-    deps;
+  const {
+    db,
+    clock,
+    onQueueHeadChanged,
+    workspace,
+    resolveWorkspace,
+    github,
+    registryCandidates,
+    draftClient,
+  } = deps;
   const router = Router();
   router.use(json());
 
@@ -132,6 +151,22 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
+      // an explicitly named workspace must exist in the registry (issue #26)
+      // — this is the human's own synchronous request, so an unknown name
+      // fails fast with a 400 rather than quarantining (ADR 0009); absent a
+      // real registry (single fixed `workspace` or none at all), every name
+      // is accepted, same as execution-time resolution's fallback
+      if (parsed.data.workspace !== undefined) {
+        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+        if (resolve) {
+          try {
+            resolve(parsed.data.workspace);
+          } catch (err) {
+            if (!(err instanceof UnknownWorkspaceError)) throw err;
+            throw new DomainError(`unknown workspace: ${parsed.data.workspace}`);
+          }
+        }
+      }
       res.status(201).json(registerTask(db, parsed.data, clock.now()));
     } catch (err) {
       if (err instanceof DomainError) {
@@ -218,10 +253,26 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const mergePr = task.question_pending_merge_pr;
       const wantsMerge = mergePr !== null && parsed.data.answer === "merge";
       if (wantsMerge) {
-        if (!github || !workspace) {
+        if (!github) {
           throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
         }
-        const status = await github.getCiStatus({ path: workspace.path, number: mergePr! });
+        // resolved against the question's own workspace (issue #26 / ADR
+        // 0009: registerMergeQuestion carries the originating work task's
+        // workspace) rather than just the board's default
+        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+        if (!resolve) {
+          throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
+        }
+        let mergeWorkspace: WorkspaceConfig;
+        try {
+          mergeWorkspace = resolve(task.workspace);
+        } catch (err) {
+          if (!(err instanceof UnknownWorkspaceError)) throw err;
+          throw new DomainError(
+            `no workspace configured for "${err.workspaceName}" — cannot check CI or merge`,
+          );
+        }
+        const status = await github.getCiStatus({ path: mergeWorkspace.path, number: mergePr! });
         if (status !== "success") {
           throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
         }
@@ -229,7 +280,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // (same ordering as openHandoffPr's PR-creation-then-recordPrOpened):
         // if this throws, the question stays open to retry — committing the
         // answer first would strand it "answered" with no merge and no retry
-        await github.mergePullRequest({ path: workspace.path, number: mergePr! });
+        await github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr! });
       }
       // a quarantine Confirmation question's answer (issue #21) is never
       // taken on faith: the board verifies the workspace's tree is actually
@@ -237,13 +288,23 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // rejects the answer outright, leaving the question open
       const quarantineWs = task.question_quarantine_workspace;
       if (quarantineWs !== null) {
-        if (!workspace || workspace.name !== quarantineWs) {
+        // resolved by name, not the task's own workspace field (quarantine
+        // is a workspace-scoped question, not a task-scoped one) — this is a
+        // human's synchronous request, so an unresolvable name fails fast
+        // with a DomainError rather than quarantining again (ADR 0009)
+        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+        let target: WorkspaceConfig;
+        try {
+          if (!resolve) throw new UnknownWorkspaceError(quarantineWs);
+          target = resolve(quarantineWs);
+        } catch (err) {
+          if (!(err instanceof UnknownWorkspaceError)) throw err;
           throw new DomainError(
             `no workspace configured for "${quarantineWs}" — cannot verify repair`,
           );
         }
         try {
-          verifyWorkspaceClean(workspace);
+          verifyWorkspaceClean(target);
         } catch (err) {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
@@ -396,7 +457,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // the queue view (#10): unlike the board, a todo task pickup can't reach
   // right now (Swell throttle) shows here as skipped
   router.get("/queue", (_req, res) => {
-    res.json(listQueue(db, isPickupBlocked(db, clock.now())));
+    res.json(listQueue(db, isPickupBlocked(db, clock.now()), workspace?.name));
   });
 
   router.get("/tasks/:id/events", (req, res) => {

@@ -24,6 +24,7 @@ import {
   releaseWorkspace,
   resolveOrQuarantine,
   taskBranch,
+  UnknownWorkspaceError,
   workspaceNeedsHuman,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -63,11 +64,20 @@ async function openHandoffPr(
   task: Task,
   handoffDoc: string | null,
 ): Promise<void> {
-  if (task.type !== "work" || !deps.github || !deps.workspace) return;
-  if (workspaceNeedsHuman(deps.db, deps.workspace.name)) return;
+  if (task.type !== "work" || !deps.github) return;
+  // resolved against the task's own execution workspace (issue #26 / ADR
+  // 0009), never just the board's default, through the same fail-closed
+  // seam every other async board-driven use of a task's workspace goes
+  // through — an unresolvable name (registry drift) re-quarantines (a no-op
+  // if the task's slot release already did moments earlier) and skips the PR
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (!resolve) return;
+  const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+  if (!workspace) return;
+  if (workspaceNeedsHuman(deps.db, workspace.name)) return;
   try {
     const pr = await deps.github.createPullRequest({
-      path: deps.workspace.path,
+      path: workspace.path,
       branch: taskBranch(task.id),
       base: PR_BASE_BRANCH,
       title: task.title,
@@ -241,6 +251,24 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        // an explicitly named child workspace must exist in the registry
+        // (issue #26) — this is the registering agent's own mistake, not an
+        // authority question, so it's rejected outright before anything
+        // registers rather than converted into an approval question (ADR
+        // 0009). Absent a real registry, every name is accepted, same as
+        // execution-time resolution's fallback.
+        const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+        if (resolve) {
+          for (const child of input.children) {
+            if (child.workspace === undefined) continue;
+            try {
+              resolve(child.workspace);
+            } catch (err) {
+              if (!(err instanceof UnknownWorkspaceError)) throw err;
+              throw new DomainError(`unknown workspace: ${child.workspace}`);
+            }
+          }
+        }
         const children = decomposeTask(deps.db, task, input, workerId, now, deps.authority);
         return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),

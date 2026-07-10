@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DraftClient } from "../src/draft.js";
@@ -105,3 +106,54 @@ export async function api(
   });
   return { status: res.status, json: await res.json() };
 }
+
+/** A real git checkout for tree-rule/branch-discipline/quarantine tests —
+ *  stderr captured, not inherited, same as workspace.ts's own `git`. */
+export function git(dir: string, ...args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
+    { cwd: dir },
+  )
+    .toString()
+    .trim();
+}
+
+/** A fresh temp git checkout named `name`, one commit deep. The path is
+ *  pushed onto the caller's own `dirs` array so its own `afterEach` cleans it
+ *  up — this helper only creates, never tracks cleanup itself. */
+export async function makeWorkspace(dirs: string[], name: string): Promise<WorkspaceConfig> {
+  const path = await mkdtemp(join(tmpdir(), `tidepool-${name}-`));
+  dirs.push(path);
+  git(path, "init", "-b", "main");
+  await writeFile(join(path, "README.md"), "workspace\n");
+  git(path, "add", "-A");
+  git(path, "commit", "-m", "initial");
+  return { name, path };
+}
+
+export async function registerWork(
+  t: Tidepool,
+  title: string,
+  workspace?: string,
+): Promise<any> {
+  const res = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title,
+    purpose: `purpose of ${title}`,
+    completion_criteria: `criteria of ${title}`,
+    ...(workspace !== undefined && { workspace }),
+  });
+  return res.json;
+}
+
+/** The 6-field handoff doc, filled in with placeholder content — shared by
+ *  every test that just needs *a* valid handoff to complete a work task. */
+export const FULL_HANDOFF = {
+  outcome: "done as specified",
+  deliverables: "n/a",
+  decision_refs: "n/a",
+  dead_ends: "n/a",
+  resume_context: "n/a",
+  known_issues: "n/a",
+};

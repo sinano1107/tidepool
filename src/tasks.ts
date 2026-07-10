@@ -683,6 +683,12 @@ export function registerMergeQuestion(
       completion_criteria: "a human decides whether to merge",
       question: { options: [...MERGE_QUESTION_OPTIONS], recommendation },
       pending_merge_pr: prNumber,
+      // carries the originating work task's execution workspace (issue #26 /
+      // ADR 0009), so the answer route's live CI check and the auto-merge
+      // poll both resolve the right registry entry, not just the board's
+      // default — a plain top-level question with no parent would otherwise
+      // never inherit it
+      workspace: task.workspace ?? undefined,
     },
     now,
     workerId,
@@ -971,16 +977,25 @@ export function listBoard(db: Db): BoardTask[] {
 }
 
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
- *  frozen by the Swell throttle. `skipped` is display-only and queue-view-only
- *  (CONTEXT.md's Usage limit) — it never reaches `listBoard`/`presentTask`,
- *  so the board keeps showing plain `todo` while the account is throttled.
- *  `throttled` is computed by the caller (`isPickupBlocked`) — this module
- *  stays free of a dependency on throttle.ts. */
-export function listQueue(db: Db, throttled: boolean): BoardTask[] {
+ *  frozen by an environmental event — the Swell throttle, or (issue #26) its
+ *  own execution workspace under quarantine. `skipped` is display-only and
+ *  queue-view-only (CONTEXT.md's Usage limit / Quarantine) — it never reaches
+ *  `listBoard`/`presentTask`, so the board keeps showing plain `todo` while
+ *  either condition holds. `throttled` is computed by the caller
+ *  (`isPickupBlocked`) — this module stays free of a dependency on
+ *  throttle.ts. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
+ *  gate (issue #26 / ADR 0009: `task.workspace ?? the board's default`) —
+ *  absent, no workspace tracking exists and the gate is skipped entirely. */
+export function listQueue(db: Db, throttled: boolean, defaultWorkspaceName?: string): BoardTask[] {
   const rows = boardRows(
     db,
-    "WHEN status = 'todo' AND type <> 'question' AND ? = 1 THEN 'skipped'",
-    [throttled ? 1 : 0],
+    `WHEN status = 'todo' AND type <> 'question' AND (
+       ? = 1 OR (? IS NOT NULL AND EXISTS (
+         SELECT 1 FROM workspace_state w
+         WHERE w.name = COALESCE(tasks.workspace, ?) AND w.needs_human = 1
+       ))
+     ) THEN 'skipped'`,
+    [throttled ? 1 : 0, defaultWorkspaceName ?? null, defaultWorkspaceName ?? null],
   );
   return rows.map((row) => ({
     ...row,

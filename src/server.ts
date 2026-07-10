@@ -109,10 +109,19 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // pickup poll, since it watches external CI state rather than the queue.
   // A no-op tick while pending_auto_merges is empty, same shape as the
   // triage watchdog above.
+  const autoMergeWorkspaceResolver = buildWorkspaceResolver(
+    options.resolveWorkspace,
+    options.workspace,
+  );
   const stopAutoMergePoll =
-    options.workspace && options.github
+    autoMergeWorkspaceResolver && options.github
       ? options.clock.setInterval(() => {
-          void checkPendingAutoMerges(db, options.github!, options.workspace!, options.clock.now());
+          void checkPendingAutoMerges(
+            db,
+            options.github!,
+            autoMergeWorkspaceResolver,
+            options.clock.now(),
+          );
         }, 60 * 1000)
       : undefined;
   app.use(
@@ -122,6 +131,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       clock: options.clock,
       onQueueHeadChanged: () => scheduler.pollNow(),
       workspace: options.workspace,
+      resolveWorkspace: options.resolveWorkspace,
       github: options.github,
       registryCandidates: options.registryCandidates,
       draftClient: options.draftClient,
