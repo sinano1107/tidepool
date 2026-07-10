@@ -156,19 +156,25 @@ export interface RegisterTaskInput extends TaskContent {
  *  is one-tap first, free text only as an override. The degraded free-text-only
  *  question is reserved for the watchdog's auto-escalation safety valve (#17).
  *
- *  The lower bound relaxes to 1 for the board's own registrations only (issue
- *  #21's Confirmation question, CONTEXT.md): quarantine's "repaired by hand"
- *  asks for a completion confirmation, not a choice, and a fake second option
- *  would be filler with no effect of its own. An agent's question is never
- *  a confirmation — it always carries a real 2-4-way choice. */
-function assertQuestionSpec(input: RegisterTaskInput, workerId: string): void {
+ *  The lower bound relaxes to 1 only for an actual quarantine Confirmation
+ *  question (issue #21, CONTEXT.md) — `quarantine_workspace` set, which only
+ *  quarantineWorkspace itself ever does: it asks for a completion
+ *  confirmation, not a choice, and a fake second option would be filler with
+ *  no effect of its own. This is deliberately keyed on `quarantine_workspace`
+ *  rather than the registering `workerId` (e.g. `=== BOARD_WORKER_ID`): a
+ *  worker's id is operator-configured and could collide with BOARD_WORKER_ID
+ *  by accident, which would otherwise let an ordinary agent question sneak
+ *  past the 2-4 floor. `quarantine_workspace` itself is never reachable from
+ *  MCP or the JSON API (unlike an assignee/worker id), so this floor can't be
+ *  gamed the same way — an agent's question is always a real 2-4-way choice. */
+function assertQuestionSpec(input: RegisterTaskInput): void {
   if (input.type !== "question") {
     if (input.question) throw new DomainError("only a question task carries options");
     if (input.cancel_option) throw new DomainError("only a question task carries a cancel option");
     return;
   }
   const q = input.question;
-  const minOptions = workerId === BOARD_WORKER_ID ? 1 : 2;
+  const minOptions = input.quarantine_workspace !== undefined ? 1 : 2;
   if (!q || q.options.length < minOptions || q.options.length > 4) {
     throw new DomainError(`a question carries ${minOptions} to 4 options`);
   }
@@ -196,7 +202,7 @@ export function registerTask(
   now: Date,
   workerId: string = HUMAN_WORKER_ID,
 ): Task {
-  assertQuestionSpec(input, workerId);
+  assertQuestionSpec(input);
   const { maxKey } = db
     .prepare("SELECT COALESCE(MAX(sort_key), 0) AS maxKey FROM tasks")
     .get() as { maxKey: number };

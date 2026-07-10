@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { BOARD_WORKER_ID } from "../src/tasks.js";
 import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
@@ -160,4 +161,39 @@ it("ツリーがクリーンだと確認されれば needs_human が解除され
 
   // pickup が即時再開し、止まっていたタスクが動く(clock を進めなくても良い)
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work", "stalled work"]);
+});
+
+// code-review 指摘: 1択緩和を workerId === BOARD_WORKER_ID で判定すると、
+// worker id はオペレータ設定値であり BOARD_WORKER_ID ("tidepool") と偶然
+// 衝突しうる — その場合、衝突した worker が担当する普通のタスクからの
+// MCP escalate が1択の question を人間の確認なしにすり抜けてしまう
+// (盤面名義の形式的確認で人間を呼ぶ道を開かないという設計合意②に反する)。
+// 判定を quarantine_workspace の有無(MCP/JSON API からは絶対に設定でき
+// ない system-internal フィールド)に変えたことで、この衝突が実害を持た
+// ないことを直接確認する。衝突は worker id の設定次第で起こるため、
+// tests/worker-failure.test.ts と同様に db を直接いじってシミュレートする。
+it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由の escalate は1択を拒否する", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "ordinary work");
+  await t.clock.advance(HOUR); // picked up — assignee はワーカー自身の id
+
+  // ワーカー id が盤面名義と衝突してしまった状態をシミュレート
+  const db = openDb(join(t.dir, "board.sqlite"));
+  db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(BOARD_WORKER_ID, task.id);
+  db.close();
+
+  const client = await mcpClient(t.baseUrl, task.id);
+  const res: any = await client.callTool({
+    name: "escalate",
+    arguments: {
+      title: "one-option escalate attempt",
+      context: "a plain agent question, not a quarantine confirmation",
+      options: ["only"],
+      recommendation: "only",
+    },
+  });
+  await client.close();
+
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toContain("2 to 4 options");
 });
