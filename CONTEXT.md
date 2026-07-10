@@ -90,7 +90,11 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 ## Quarantine(隔離)
 
-Slot-release tree rule 自体が失敗した(コンフリクトや破損など)ときの封じ込め。該当 workspace が needs-human とマークされ、その workspace を使うタスクの pickup が全停止し、修理を求める question タスクが生成される。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除は現状ボードへの手動介入のみ(自動復帰は将来スライス)。
+Slot-release tree rule 自体が失敗した(コンフリクトや破損など)ときの封じ込め。該当 workspace が needs-human とマークされ、その workspace で実行されるタスクの pickup が停止し(workspace 単位の状態 — 他の workspace は流れ続ける)、修理を求める確認型 question が生成される(同じ workspace に未回答のものが既にあれば重ねない — 1 workspace につき確認は最大1枚)。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず、ツリーがクリーンであることを検証してから受理する(まだ壊れていれば回答は拒否され、question は開いたまま)。
+
+## Confirmation question(確認型 question)
+
+選択肢が1つしかない question。選択を求めるのではなく、人間の作業完了の確認を求める。盤面(Tidepool 名義)だけが登録できる — エージェントの question は常に2〜4択であり、形式的な確認で人間を呼ぶ道は開かない。v1 の用途は quarantine の解除確認のみ。
 
 ## Workspace(ワークスペース)
 
