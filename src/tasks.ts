@@ -881,6 +881,18 @@ export function unfinishedChildSql(parentRef: string): string {
             WHERE c.parent_id = ${parentRef} AND c.status NOT IN ('done', 'cancelled'))`;
 }
 
+/** The one SQL shape of "this task's execution workspace is quarantined"
+ *  (issue #26 / ADR 0009), shared by `nextSlotTask`'s pickup gate and
+ *  `listQueue`'s skipped display — both gate on the same
+ *  `task.workspace ?? the board's default` fallback and must never drift
+ *  apart. `taskWorkspaceRef` is the SQL expression holding the candidate
+ *  task's `workspace` column; `defaultRef` is the SQL expression (a bound
+ *  param, named or positional) holding the board's default workspace name. */
+export function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: string): string {
+  return `EXISTS (SELECT 1 FROM workspace_state w
+            WHERE w.name = COALESCE(${taskWorkspaceRef}, ${defaultRef}) AND w.needs_human = 1)`;
+}
+
 /** Held (CONTEXT.md, ADR 0006): while an ancestor carries an unanswered
  *  question, its subtree stays out of the slot — a freeze from above, unlike
  *  `blocked`'s freeze from below (an unfinished child). Two tiers of root:
@@ -990,10 +1002,7 @@ export function listQueue(db: Db, throttled: boolean, defaultWorkspaceName?: str
   const rows = boardRows(
     db,
     `WHEN status = 'todo' AND type <> 'question' AND (
-       ? = 1 OR (? IS NOT NULL AND EXISTS (
-         SELECT 1 FROM workspace_state w
-         WHERE w.name = COALESCE(tasks.workspace, ?) AND w.needs_human = 1
-       ))
+       ? = 1 OR (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
      ) THEN 'skipped'`,
     [throttled ? 1 : 0, defaultWorkspaceName ?? null, defaultWorkspaceName ?? null],
   );
@@ -1029,10 +1038,10 @@ export function nextSlotTask(db: Db, defaultWorkspaceName?: string): Task | unde
          AND t.type <> 'question'
          AND NOT ${unfinishedChildSql("t.id")}
          AND NOT ${heldSql("t.id")}
-         AND (@defaultWorkspaceName IS NULL OR NOT EXISTS (
-           SELECT 1 FROM workspace_state w
-           WHERE w.name = COALESCE(t.workspace, @defaultWorkspaceName) AND w.needs_human = 1
-         ))
+         AND (@defaultWorkspaceName IS NULL OR NOT ${workspaceQuarantinedSql(
+           "t.workspace",
+           "@defaultWorkspaceName",
+         )})
        ORDER BY t.sort_key LIMIT 1`,
     )
     .get({ defaultWorkspaceName: defaultWorkspaceName ?? null }) as TaskRow | undefined;
