@@ -212,6 +212,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         "1",
         "--max-budget-usd",
         "0.01",
+        // this call runs with the board's own cwd (unlike start(), which
+        // pins cwd to the task's workspace) — --safe-mode keeps the board
+        // repo's own CLAUDE.md/skills/MCP config from leaking into a trivial
+        // /usage ping. Auth/model/tools/permissions are unaffected (unlike
+        // --bare, which would force API-key-only auth)
+        "--safe-mode",
       ]);
       const parsed: unknown = JSON.parse(stdout);
       const result = (parsed as { result?: unknown }).result;

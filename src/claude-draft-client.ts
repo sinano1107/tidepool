@@ -83,6 +83,12 @@ export class ClaudeDraftClient implements DraftClient {
       // malfunction to fail loud on, not something to allow for
       "--max-turns",
       "1",
+      // this call runs with the board's own cwd, not a task workspace —
+      // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
+      // from leaking into what must stay a bare JSON answer. Auth/model/
+      // tools/permissions are unaffected (unlike --bare, which would force
+      // API-key-only auth)
+      "--safe-mode",
     ]);
     const envelope: unknown = JSON.parse(stdout);
     const result = (envelope as { result?: unknown }).result;

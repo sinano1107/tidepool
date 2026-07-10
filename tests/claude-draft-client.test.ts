@@ -126,4 +126,20 @@ describe("ClaudeDraftClient", () => {
 
     expect(calls[0]!.join(" ")).toContain("--max-turns 1");
   });
+
+  it("--safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+        });
+      },
+    });
+
+    await client.draftTask("set up the greenhouse sensor");
+
+    expect(calls[0]!.join(" ")).toContain("--safe-mode");
+  });
 });

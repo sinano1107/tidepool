@@ -351,6 +351,30 @@ describe("ClaudeCodeWorker", () => {
     expect(argLine).toContain("--max-budget-usd 0.01");
   });
 
+  it("checkUsage は --safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {
+    const registryDir = await makeRegistry();
+    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const worker = new ClaudeCodeWorker({
+      db: openDb(":memory:"),
+      clock: new FakeClock(),
+      registryDir,
+      agent: "deckhand",
+      workspace: "tidepool",
+      mcpUrl: "http://127.0.0.1:4589/mcp",
+      logDir,
+      spawn: recordingSpawn().spawn,
+      exec: async (command, args) => {
+        calls.push({ command, args });
+        return JSON.stringify({ result: "" });
+      },
+    });
+
+    await worker.checkUsage();
+
+    expect(calls[0]!.args.join(" ")).toContain("--safe-mode");
+  });
+
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {
     const { start, db, registryDir } = await makeWorker();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: registryDir })
