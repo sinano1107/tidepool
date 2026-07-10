@@ -12,7 +12,7 @@
 
 ## Status(ステータス)
 
-`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)。`held` もステータスではなく導出される表示状態(Held 参照)。
+`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)— タスク自身にもキュー順序にも問題はないが、環境事象(throttle、実行 workspace の quarantine)が今は slot に入れさせないことを示す。`held` もステータスではなく導出される表示状態(Held 参照)。
 
 ## Cancel(キャンセル)
 
@@ -90,7 +90,7 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 ## Quarantine(隔離)
 
-Slot-release tree rule 自体が失敗した(コンフリクトや破損など)ときの封じ込め。該当 workspace が needs-human とマークされ、その workspace で実行されるタスクの pickup が停止し(workspace 単位の状態 — 他の workspace は流れ続ける)、修理を求める確認型 question が生成される(同じ workspace に未回答のものが既にあれば重ねない — 1 workspace につき確認は最大1枚)。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず、ツリーがクリーンであることを検証してから受理する(まだ壊れていれば回答は拒否され、question は開いたまま)。
+workspace が実行不能と判明したときの封じ込め。契機は slot-release tree rule 自体の失敗(コンフリクトや破損など)と、registry に存在しない workspace 名への遭遇の2つ。該当 workspace が needs-human とマークされ、その workspace で実行されるタスクの pickup が停止し(workspace 単位の状態 — 他の workspace は流れ続ける)、修理を求める確認型 question が生成される(同じ workspace に未回答のものが既にあれば重ねない — 1 workspace につき確認は最大1枚)。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず、workspace が registry に存在しツリーがクリーンであることを検証してから受理する(まだ壊れていれば回答は拒否され、question は開いたまま)。
 
 ## Confirmation question(確認型 question)
 
@@ -98,7 +98,7 @@ Slot-release tree rule 自体が失敗した(コンフリクトや破損など)�
 
 ## Workspace(ワークスペース)
 
-タスクが実行される場所を指す第一級エンティティ(名前 → Pi 上のパス)。子タスクは親の workspace を既定で継承する。needs-human(quarantine 参照)は workspace 単位の状態。
+タスクが実行される場所を指す第一級エンティティ(名前 → Pi 上のパス)。子タスクは親の workspace を既定で継承する。盤面は既定 workspace を1つ持ち、workspace を指定しないタスクは値を焼き込まれるのではなく、実行の瞬間にその時の既定へ解決される(既定への参照)。needs-human(quarantine 参照)は workspace 単位の状態。
 
 ## Handoff doc(ハンドオフドキュメント)
 
