@@ -9,11 +9,15 @@ import type { GitHubClient } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import {
   answerQuestion,
+  completeTask,
   DomainError,
   getTask,
+  HANDOFF_FIELDS,
+  hasUnfinishedChildren,
   HUMAN_WORKER_ID,
   listBoard,
   listQueue,
+  listYourTasks,
   moveTask,
   presentTask,
   registerTask,
@@ -63,6 +67,10 @@ const draftTaskSchema = z.object({
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
+});
+
+const completeTaskSchema = z.object({
+  handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
 });
 
 const answerSchema = z.object({
@@ -384,6 +392,92 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
+  // the human-facing completion route (issue #13): agents complete via MCP's
+  // complete_task, but a human's own task has no worker session to call it
+  // from. A `human`-assignee task carries no handoff requirement
+  // (completeTask's own exemption) — an orphan task closes with an empty
+  // body, one tap. When completion unblocks a parent still sitting at its
+  // own queue position (no head jump, unlike answerQuestion's escalation
+  // re-prioritization — this is plain parent/child derivation), the
+  // immediate poll fires the same way a freed slot does elsewhere. Gated to
+  // `assignee === human` only (code review, issue #13): an agent-assigned
+  // task must keep completing through complete_task's slot-scoped path (PR
+  // opening, tree-rule release) — this route is never a shortcut around it.
+  // Not gated on "blocks a parent" too: AC4's orphan human task must stay
+  // completable through this same route.
+  router.post("/tasks/:id/complete", (req, res) => {
+    const parsed = completeTaskSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const task = getTask(db, req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    if (task.assignee !== HUMAN_WORKER_ID) {
+      res.status(409).json({
+        error: "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
+      });
+      return;
+    }
+    try {
+      const done = completeTask(db, task, parsed.data.handoff, HUMAN_WORKER_ID, clock.now());
+      if (done.parent_id) {
+        const parent = getTask(db, done.parent_id);
+        if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
+          onQueueHeadChanged();
+        }
+      }
+      res.json(presentTask(db, done));
+    } catch (err) {
+      if (err instanceof DomainError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // the handoff-draft route (issue #13): same propose-don't-commit shape as
+  // /tasks/draft — drafts the 6-field doc from a free-text/voice dump but
+  // never completes the task itself; the human reviews/edits, then calls
+  // /complete separately. `missing` names the fields the dump didn't cover
+  // (HANDOFF_FIELDS minus what the LLM filled in) as a warning only — the
+  // human task's completion never enforces them (completeTask's exemption).
+  // Gated to `assignee === human` (code review, issue #13), same reasoning
+  // and same "not also blocking a parent" carve-out as /complete above.
+  router.post("/tasks/:id/complete/draft", async (req, res) => {
+    const parsed = draftTaskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const task = getTask(db, req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    if (task.assignee !== HUMAN_WORKER_ID) {
+      res.status(409).json({ error: "only a human-assignee task can draft a handoff here" });
+      return;
+    }
+    if (!draftClient) {
+      res.status(503).json({ error: "LLM draft client not configured" });
+      return;
+    }
+    try {
+      const draft = await draftClient.draftHandoff(parsed.data.dump);
+      const missing = HANDOFF_FIELDS.filter((f) => !draft[f]?.trim());
+      res.json({ ...draft, missing });
+    } catch (err) {
+      // same "any failure = unreachable" 503 fallback /tasks/draft uses
+      // (AC3: a draft failure never blocks completion, only the assist)
+      res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
+    }
+  });
+
   // the decision log: events narrowed to human-facing kinds, oldest first,
   // plus the human's read position
   router.get("/log", (_req, res) => {
@@ -495,6 +589,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   router.get("/tasks", (_req, res) => {
     res.json(listBoard(db));
+  });
+
+  // the persistent your-tasks list (issue #13): every unsettled human-
+  // assignee task, never the execution queue's business
+  router.get("/your-tasks", (_req, res) => {
+    res.json(listYourTasks(db));
   });
 
   // the queue view (#10): unlike the board, a todo task pickup can't reach

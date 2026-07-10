@@ -1,5 +1,5 @@
 import type { Clock } from "../src/clock.js";
-import type { DraftClient, TaskDraft } from "../src/draft.js";
+import type { DraftClient, HandoffDraft, TaskDraft } from "../src/draft.js";
 import type { CiStatus, CreatePrInput, GitHubClient, PrRef, PrResult } from "../src/github.js";
 import type { Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
@@ -122,12 +122,15 @@ export class FakeGitHubClient implements GitHubClient {
  *  an LLM outage without touching a real model. */
 export class FakeDraftClient implements DraftClient {
   readonly dumps: string[] = [];
+  readonly handoffDumps: string[] = [];
   private response: TaskDraft = {
     title: "drafted title",
     purpose: "drafted purpose",
     completion_criteria: "drafted completion criteria",
   };
+  private handoffResponse: HandoffDraft = {};
   private failure: Error | null = null;
+  private handoffFailure: Error | null = null;
 
   async draftTask(dump: string): Promise<TaskDraft> {
     this.dumps.push(dump);
@@ -135,11 +138,25 @@ export class FakeDraftClient implements DraftClient {
     return this.response;
   }
 
+  async draftHandoff(dump: string): Promise<HandoffDraft> {
+    this.handoffDumps.push(dump);
+    if (this.handoffFailure) throw this.handoffFailure;
+    return this.handoffResponse;
+  }
+
   scriptDraft(draft: TaskDraft): void {
     this.response = draft;
   }
 
+  scriptHandoffDraft(draft: HandoffDraft): void {
+    this.handoffResponse = draft;
+  }
+
   scriptFailure(err: Error): void {
     this.failure = err;
+  }
+
+  scriptHandoffFailure(err: Error): void {
+    this.handoffFailure = err;
   }
 }

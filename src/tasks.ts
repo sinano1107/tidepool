@@ -325,7 +325,11 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Tas
 
 /** Work tasks may not complete without a full handoff doc; question/review
  *  tasks need none, but one supplied is stored, not dropped (nothing may
- *  degrade recording). The doc lands as markdown on the task row, written once. */
+ *  degrade recording). The doc lands as markdown on the task row, written
+ *  once. A `human`-assignee task is exempt regardless of type (issue #13):
+ *  actionable follow-up belongs to a *new* task, not this doc, so a physical/
+ *  approval task carries no agent session to hand off from — the doc stays
+ *  fully optional, same as question/review. */
 export function completeTask(
   db: Db,
   task: Task,
@@ -333,7 +337,7 @@ export function completeTask(
   workerId: string,
   now: Date,
 ): Task {
-  if (task.type === "work") {
+  if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
     const missing = HANDOFF_FIELDS.filter((f) => !handoff?.[f]?.trim());
     if (missing.length > 0) {
       throw new DomainError(
@@ -1048,7 +1052,10 @@ export function listBoard(db: Db): BoardTask[] {
  *  absent, no workspace tracking exists and the gate is skipped entirely.
  *  `defaultAgentName` is the same gate over the agent-name generalization of
  *  quarantine (ADR 0012 / issue #36: `task.assignee ?? the board's default
- *  agent`) — absent, no agent tracking exists and this gate is skipped too. */
+ *  agent`) — absent, no agent tracking exists and this gate is skipped too.
+ *  A `human`-assignee task never appears here at all (issue #13): it lives
+ *  outside the execution queue entirely, in the your-tasks list
+ *  (`listYourTasks`), not merely marked skipped within it. */
 export function listQueue(
   db: Db,
   throttled: boolean,
@@ -1069,11 +1076,27 @@ export function listQueue(
       defaultAgentName ?? null,
     ],
   );
-  return rows.map((row) => ({
-    ...row,
-    question_options: parseOptions(row.question_options),
-    question_pending_child: parsePendingChild(row.question_pending_child),
-  }));
+  return rows
+    .filter((row) => row.assignee !== HUMAN_WORKER_ID)
+    .map((row) => ({
+      ...row,
+      question_options: parseOptions(row.question_options),
+      question_pending_child: parsePendingChild(row.question_pending_child),
+    }));
+}
+
+/** The your-tasks list (issue #13): every unsettled `human`-assignee task,
+ *  the persistent home the Assignee/Slot glossary entries promise them — they
+ *  never enter the execution queue (`listQueue`) or the slot (`nextSlotTask`)
+ *  at all. Ordered by `sort_key` like every other board view. */
+export function listYourTasks(db: Db): Task[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM tasks WHERE assignee = @humanWorkerId
+         AND status NOT IN ('done', 'cancelled') ORDER BY sort_key`,
+    )
+    .all({ humanWorkerId: HUMAN_WORKER_ID }) as TaskRow[];
+  return rows.map(rowToTask);
 }
 
 export function getTask(db: Db, id: string): Task | undefined {
