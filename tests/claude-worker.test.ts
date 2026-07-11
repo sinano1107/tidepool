@@ -241,8 +241,9 @@ describe("ClaudeCodeWorker", () => {
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(systemPrompt).toContain("Agent tool");
     expect(systemPrompt).toContain("decompose");
-    // the doctrine is a fixed third part, not something profile guidance provides
-    expect(systemPrompt).not.toBe("You are Navigator, the specialist.");
+    // ADR 0010 追補の受け入れ基準: 教義自体にオーケストレーション禁止の1行が含まれる
+    // (--disallowedTools でツールを塞ぐのとは別に、教義の文言としても明示する)
+    expect(systemPrompt).toContain("Workflow tool");
   });
 
   it("Workflow ツールを spawn 時に無効化する(オーケストレーションは worker にカテゴリ禁止・ADR 0010 追補 / issue #31)", async () => {
