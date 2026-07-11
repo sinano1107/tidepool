@@ -861,11 +861,19 @@ export function recordPrOpened(
 
 /** A requested value is out of authority only when it's explicitly stated
  *  (an unstated value never itself needs approval) and the profile actually
- *  restricts it (no allowlist configured means unrestricted). Shared by the
- *  assignable_to and allowed_workspaces checks in decomposeTask — risk_flag's
- *  check is its own shape (compared against the parent's flag, not a list). */
+ *  restricts it (no allowlist configured means unrestricted, same as an
+ *  allowlist carrying the explicit wildcard "*" — issue #41: a registry
+ *  profile must spell out "unrestricted" rather than get it by omission, but
+ *  the meaning is unchanged). Shared by the assignable_to and
+ *  allowed_workspaces checks in decomposeTask — risk_flag's check is its own
+ *  shape (compared against the parent's flag, not a list). */
 function outsideAuthority(value: string | undefined, allowlist: string[] | undefined): boolean {
-  return value !== undefined && allowlist !== undefined && !allowlist.includes(value);
+  return (
+    value !== undefined &&
+    allowlist !== undefined &&
+    !allowlist.includes("*") &&
+    !allowlist.includes(value)
+  );
 }
 
 /** Options fixed by the server for a pending-child approval question (issue

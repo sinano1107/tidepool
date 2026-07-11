@@ -15,6 +15,10 @@ Work only through the tidepool MCP verbs.
 
 const AUTHORITY_YAML = `guidance: |
   Prefer reversible actions. Anything irreversible is outside your authority.
+assignable_to:
+  - "*"
+allowed_workspaces:
+  - "*"
 `;
 
 const WORKSPACES_YAML = `tidepool:

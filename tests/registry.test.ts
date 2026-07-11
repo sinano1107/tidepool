@@ -39,6 +39,20 @@ describe("loadRegistry", () => {
     expect(registry.authority.standard!.guidance).toContain("Prefer reversible actions");
   });
 
+  it("assignable_to を省略した authority profile は registry ロード時にエラーになる(issue #41: 省略=無制限のフットガンを潰す)", async () => {
+    const dir = await makeRegistry({
+      "authority/standard.yaml": `guidance: be careful\nallowed_workspaces:\n  - "*"\n`,
+    });
+    expect(() => loadRegistry(dir)).toThrow(/assignable_to/i);
+  });
+
+  it("allowed_workspaces を省略した authority profile は registry ロード時にエラーになる(issue #41: 省略=無制限のフットガンを潰す)", async () => {
+    const dir = await makeRegistry({
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\n`,
+    });
+    expect(() => loadRegistry(dir)).toThrow(/allowed_workspaces/i);
+  });
+
   it("エスカレーション権らしきフィールドを持つプロファイルは読み込み自体を拒否する", async () => {
     // the safety valve: upward escalation is never restricted, so the schema
     // is closed — a profile cannot even express such a field by mistake

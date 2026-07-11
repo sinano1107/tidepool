@@ -75,6 +75,38 @@ it("a child assigned within assignable_to registers directly, with no approval q
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
 });
 
+it("assignable_to に明示 wildcard \"*\" があれば任意の assignee が無制限に振る舞う(issue #41)", async () => {
+  t = await bootTidepool({
+    authority: { name: "standard", guidance: "", assignable_to: ["*"] },
+  });
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.baseUrl, parent.id);
+  const res: any = await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "the specialist agent should own this one",
+      children: [
+        {
+          title: "tune the database indexes",
+          purpose: "improve query latency",
+          completion_criteria: "p95 query latency under 100ms",
+          assignee: "dba-specialist",
+        },
+      ],
+    },
+  });
+  expect(res.isError ?? false).toBe(false);
+  await client.close();
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const child = board.find((x: any) => x.title === "tune the database indexes");
+  expect(child).toBeDefined();
+  expect(child.type).toBe("work");
+  expect(child.assignee).toBe("dba-specialist");
+  expect(board.filter((x: any) => x.type === "question")).toEqual([]);
+});
+
 async function decomposeOutOfBoundsAssignee(t: Tidepool, parentId: string) {
   const client = await mcpClient(t.baseUrl, parentId);
   await client.callTool({

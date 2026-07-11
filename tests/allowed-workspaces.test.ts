@@ -75,6 +75,38 @@ it("a child targeting a workspace within allowed_workspaces registers directly, 
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
 });
 
+it("allowed_workspaces に明示 wildcard \"*\" があれば任意の workspace が無制限に振る舞う(issue #41)", async () => {
+  t = await bootTidepool({
+    authority: { name: "standard", guidance: "", allowed_workspaces: ["*"] },
+  });
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.baseUrl, parent.id);
+  const res: any = await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "this piece belongs in the prod checkout",
+      children: [
+        {
+          title: "run the prod migration",
+          purpose: "apply the schema change",
+          completion_criteria: "schema matches the migration",
+          workspace: "prod",
+        },
+      ],
+    },
+  });
+  expect(res.isError ?? false).toBe(false);
+  await client.close();
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const child = board.find((x: any) => x.title === "run the prod migration");
+  expect(child).toBeDefined();
+  expect(child.type).toBe("work");
+  expect(child.workspace).toBe("prod");
+  expect(board.filter((x: any) => x.type === "question")).toEqual([]);
+});
+
 async function decomposeOutOfBoundsWorkspace(t: Tidepool, parentId: string) {
   const client = await mcpClient(t.baseUrl, parentId);
   await client.callTool({

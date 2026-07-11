@@ -107,8 +107,8 @@ function parseAgentFile(path: string): AgentDefinition {
 // misconfiguration — upward escalation is never restricted (issue #7)
 const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
-  assignable_to: z.array(z.string()).optional(),
-  allowed_workspaces: z.array(z.string()).optional(),
+  assignable_to: z.array(z.string()),
+  allowed_workspaces: z.array(z.string()),
   merge: z.enum(["escalate", "auto_if_ci_green"]).optional(),
 });
 
