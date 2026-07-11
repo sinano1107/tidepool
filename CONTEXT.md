@@ -126,6 +126,10 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 実行に必要な資源が実行不能と判明したときの封じ込め。資源は2種: **workspace**(契機は slot-release tree rule 自体の失敗 — コンフリクトや破損など — と、registry に存在しない workspace 名への遭遇)と **agent 名**(契機は pickup 時に assignee が registry に解決できないこと)。該当資源が needs-human とマークされ、その資源に依存するタスクの pickup が停止し(資源単位の状態 — 他の資源のタスクは流れ続ける)、修理を求める確認型 question が生成される(同じ資源に未回答のものが既にあれば重ねない — 1資源につき確認は最大1枚)。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず検証してから受理する: workspace は「registry に存在し、かつツリーがクリーン」、agent 名は「registry に復活している、またはその名前宛ての未着手タスクがもう存在しない」(まだ壊れていれば回答は拒否され、question は開いたまま)。
 
+## Question(質問)
+
+人間の判断を求めるタスク type。人間以外の登録者からのみ生まれる — エージェントのエスカレーション(Escalation 参照)、または盤面(Tidepool)自身の名義(watchdog の失敗質問・quarantine の確認・merge 判断・decompose の承認)。人間が自分自身へ question を登録する門は存在しない — 人間向けの登録手段が受け付けるのは work / review のみ。question は常に2〜4個の選択肢と登録者の推奨を携え(1択の例外は Confirmation question 参照)、人間タスクとして slot の外で回答される(Held 参照)。
+
 ## Confirmation question(確認型 question)
 
 選択肢が1つしかない question。選択を求めるのではなく、人間の作業完了の確認を求める。盤面(Tidepool 名義)だけが登録できる — エージェントの question は常に2〜4択であり、形式的な確認で人間を呼ぶ道は開かない。v1 の用途は quarantine の解除確認のみ。
