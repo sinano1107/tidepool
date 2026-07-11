@@ -49,6 +49,10 @@ export interface Task {
    *  answered (issue #30): the submission is atomic, so a partial-answer
    *  state is never stored. */
   question_answer: string[] | null;
+  /** The reject-reason steering channel (issue #40): one per submission (not
+   *  per item), optional — set only alongside question_answer, by
+   *  answerQuestion. Never set via MCP or the JSON API directly. */
+  question_answer_comment: string | null;
   /** System-internal only (ADR 0006) — never set via MCP or the JSON API. */
   question_cancel_option: string | null;
   /** System-internal only (issue #11): a pending-child approval question's
@@ -258,6 +262,7 @@ export function registerTask(
     pr_number: null,
     question_items: input.question ?? null,
     question_answer: null,
+    question_answer_comment: null,
     question_cancel_option: input.cancel_option ?? null,
     question_pending_child: input.pending_child ?? null,
     question_pending_merge_pr: input.pending_merge_pr ?? null,
@@ -269,12 +274,12 @@ export function registerTask(
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
-         question_items, question_answer, question_cancel_option,
+         question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_quarantine_workspace,
          question_quarantine_agent, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
-         @question_items, @question_answer, @question_cancel_option,
+         @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_quarantine_workspace,
          @question_quarantine_agent, @created_at)`,
     ).run({
@@ -595,6 +600,13 @@ export function answerQuestion(
   answers: string[],
   now: Date,
   stageUnblock?: (taskId: string) => void,
+  /** The reject-reason steering channel (issue #40): optional, one per
+   *  submission (not per item) — a reject often needs no more than the
+   *  option name, so this is never required. Carried verbatim onto the
+   *  `question_answered` event; omitted from the event payload entirely
+   *  when absent, rather than stored as null, so an unanswered comment
+   *  leaves the event shape exactly as it was before this existed. */
+  comment?: string,
 ): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
@@ -612,10 +624,9 @@ export function answerQuestion(
   let parentUnblocked = false;
   let pickupResumed = false;
   db.transaction(() => {
-    db.prepare("UPDATE tasks SET status = 'done', question_answer = ? WHERE id = ?").run(
-      JSON.stringify(answers),
-      question.id,
-    );
+    db.prepare(
+      "UPDATE tasks SET status = 'done', question_answer = ?, question_answer_comment = ? WHERE id = ?",
+    ).run(JSON.stringify(answers), comment ?? null, question.id);
     // the recommender is whoever registered the question — carried on the
     // answer event so per-agent acceptance rates need no join
     const registered = db
@@ -631,6 +642,7 @@ export function answerQuestion(
           recommendation_accepted: a === items[i]!.recommendation,
         })),
         recommended_by: registered?.worker_id ?? HUMAN_WORKER_ID,
+        ...(comment !== undefined && { comment }),
       },
       at: now,
     });
@@ -1271,6 +1283,9 @@ export interface SettledChildContext {
   /** A done question's bundle (issue #30), one per item, in item order. */
   items?: QuestionItem[];
   answer?: string[] | null;
+  /** The reject-reason steering channel (issue #40) — carried alongside
+   *  `answer` so a resumed parent reads why, not just what. */
+  comment?: string | null;
   origin_question?: { title: string; answer: string[] | null } | null;
 }
 
@@ -1313,6 +1328,7 @@ export function settledChildren(db: Db, parentId: string): SettledChildContext[]
         status: "done",
         items: child.question_items ?? [],
         answer: child.question_answer,
+        comment: child.question_answer_comment,
       };
     }
     return { title: child.title, status: "done", handoff_doc: child.handoff_doc };

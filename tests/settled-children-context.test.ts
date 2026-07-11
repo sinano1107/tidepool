@@ -52,6 +52,7 @@ it("get_current_task の children に、回答済み question 子タスクの it
         status: "done",
         items: escalation.questions,
         answer: ["b"],
+        comment: null,
       },
     ]);
   } finally {

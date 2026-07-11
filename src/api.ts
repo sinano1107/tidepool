@@ -87,6 +87,10 @@ const completeTaskSchema = z.object({
 // get a domain error, not a schema error, on a partial submission
 const answerSchema = z.object({
   answers: z.array(z.string().min(1)).min(1),
+  // the steering channel for a reject's reason (issue #40) — never required
+  // (silence is fine on approve, and a reject often needs no more than the
+  // option name), carried through verbatim onto the question_answered event
+  comment: z.string().min(1).optional(),
 });
 
 const cursorSchema = z.object({
@@ -413,6 +417,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.answers,
         clock.now(),
         session && ((taskId) => stageFrontInsert(db, session.id, taskId)),
+        parsed.data.comment,
       );
       if (wantsMerge) {
         appendEvent(db, {

@@ -38,6 +38,9 @@ export type EventPayload =
       kind: "question_answered";
       answers: Array<{ answer: string; recommendation_accepted: boolean }>;
       recommended_by: string;
+      // the reject-reason steering channel (issue #40) — one per submission,
+      // not per item; absent entirely (not null) when the answer carried none
+      comment?: string;
     }
   // a triage objection annotates one log entry (entry_id = event id); the
   // direction comment is mandatory — silence is approval, so the only explicit

@@ -36,6 +36,10 @@ export function openDb(path: string): Db {
       -- same shape, not a second one.
       question_items           TEXT,
       question_answer          TEXT,
+      -- the reject-reason steering channel (issue #40): optional, one per
+      -- submission (not per item) — recorded alongside question_answer so a
+      -- resumed parent's get_current_task can carry both
+      question_answer_comment  TEXT,
       -- system-internal only (ADR 0006): one of the (sole) item's options
       -- that, if answered, cancels the plan instead of the ordinary
       -- unblock-to-head path. Never set via MCP or the JSON API — only the
@@ -190,6 +194,7 @@ export function openDb(path: string): Db {
   for (const col of [
     "question_items",
     "question_answer",
+    "question_answer_comment",
     "question_cancel_option",
     "question_pending_child",
     "question_quarantine_workspace",

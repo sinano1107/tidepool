@@ -36,6 +36,7 @@ function makeTask(
     pr_number: null,
     question_items: null,
     question_answer: null,
+    question_answer_comment: null,
     question_cancel_option: null,
     question_pending_child: null,
     question_pending_merge_pr: null,
