@@ -329,7 +329,18 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Tas
  *  once. A `human`-assignee task is exempt regardless of type (issue #13):
  *  actionable follow-up belongs to a *new* task, not this doc, so a physical/
  *  approval task carries no agent session to hand off from — the doc stays
- *  fully optional, same as question/review. */
+ *  fully optional, same as question/review.
+ *
+ *  Layer 1 review (issue #15): a completing work task auto-generates a
+ *  read-only review child when either flag is set — `review_flag` is the
+ *  plain per-task opt-in (CONTEXT.md's Review flag); `risk_flag` forces one
+ *  regardless of parentage, root tasks included (CONTEXT.md's Risk flag
+ *  declares external, irreversible effect — the design vault's overview.md
+ *  states layer 1's opt-in as "via risk/review flag", not review_flag alone).
+ *  A decomposed child with neither flag defers to its parent's own
+ *  completion-time review (CONTEXT.md's Review flag: "子のレビューは既定で
+ *  親に委譲される"), same as a flagless root task's default of no review at
+ *  all. */
 export function completeTask(
   db: Db,
   task: Task,
@@ -367,6 +378,26 @@ export function completeTask(
       },
       at: now,
     });
+    if (task.type === "work" && (task.review_flag || task.risk_flag)) {
+      registerTask(
+        db,
+        {
+          type: "review",
+          title: `review: ${task.title}`,
+          purpose: `read-only review of "${task.title}"'s deliverable against its completion criteria`,
+          completion_criteria:
+            "findings are read-only — issues land as repair tasks for the original assignee",
+          parent_id: task.id,
+          // inherits the reviewed task's execution workspace, same as any
+          // other child (CONTEXT.md's Workspace) — a review must run where
+          // the deliverable actually lives, not wherever the board's default
+          // happens to point
+          workspace: task.workspace ?? undefined,
+        },
+        now,
+        workerId,
+      );
+    }
   })();
   return getTask(db, task.id)!;
 }
