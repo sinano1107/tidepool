@@ -10,7 +10,7 @@ import type { AuthorityProfile, RegistryCandidates } from "../src/registry.js";
 import { startServer } from "../src/server.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
-import { FakeClock, FakeGitHubClient, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
 
@@ -19,6 +19,7 @@ export interface Tidepool {
   clock: FakeClock;
   worker: ScriptedWorker;
   github: FakeGitHubClient;
+  push: FakePushClient;
   dir: string;
   /** Shut down the process only, keeping the SQLite file — for restart tests. */
   stopServer: () => Promise<void>;
@@ -65,6 +66,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const clock = new FakeClock();
   const worker = new ScriptedWorker();
   const github = new FakeGitHubClient();
+  const push = new FakePushClient();
   const server = await startServer({
     dbPath: join(dir, "board.sqlite"),
     port: 0,
@@ -79,6 +81,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     agentRegistered: options.agentRegistered,
     registryCandidates: options.registryCandidates,
     draftClient: options.draftClient,
+    push,
   });
   let stopped = false;
   const stopServer = async () => {
@@ -90,6 +93,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     clock,
     worker,
     github,
+    push,
     dir,
     stopServer,
     stop: async () => {

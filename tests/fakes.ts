@@ -1,6 +1,7 @@
 import type { Clock } from "../src/clock.js";
 import type { DraftClient, HandoffDraft, TaskDraft } from "../src/draft.js";
 import type { CiStatus, CreatePrInput, GitHubClient, PrRef, PrResult } from "../src/github.js";
+import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 
@@ -114,6 +115,27 @@ export class FakeGitHubClient implements GitHubClient {
    *  "success" so tests unrelated to the merge dial never need to script it. */
   scriptCiStatus(status: CiStatus): void {
     this.ciStatus = status;
+  }
+}
+
+/** Scripted stand-in at the PushClient seam (issue #14): records every send
+ *  in call order, no real network — the real WebPushClient talks to an
+ *  actual push service, an external API a test never touches directly. */
+export class FakePushClient implements PushClient {
+  readonly sent: Array<{ subscription: PushSubscription; payload: PushPayload }> = [];
+  private failingEndpoints = new Set<string>();
+
+  async send(subscription: PushSubscription, payload: PushPayload): Promise<void> {
+    if (this.failingEndpoints.has(subscription.endpoint)) {
+      throw new Error(`push service rejected ${subscription.endpoint} (simulated 410 Gone)`);
+    }
+    this.sent.push({ subscription, payload });
+  }
+
+  /** Simulates a dead/expired subscription (410/404) for one endpoint —
+   *  other endpoints keep succeeding. */
+  scriptFailure(endpoint: string): void {
+    this.failingEndpoints.add(endpoint);
   }
 }
 

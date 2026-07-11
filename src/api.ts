@@ -6,6 +6,8 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
+import { removePushSubscription, savePushSubscription } from "./push.js";
+import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
 import type { RegistryCandidates } from "./registry.js";
 import {
   answerQuestion,
@@ -81,6 +83,22 @@ const cursorSchema = z.object({
   last_read: z.number().int().nonnegative(),
 });
 
+// the standard browser PushSubscription.toJSON() shape (issue #14) —
+// expirationTime is never used, so it's accepted but dropped
+const pushSubscribeSchema = z.object({
+  endpoint: z.string().min(1),
+  keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
+});
+
+const pushUnsubscribeSchema = z.object({
+  endpoint: z.string().min(1),
+});
+
+const quietHoursSchema = z.object({
+  start: z.string().regex(HH_MM_PATTERN),
+  end: z.string().regex(HH_MM_PATTERN),
+});
+
 const objectionSchema = z.object({
   entry_id: z.number().int().positive(),
   comment: z.string().min(1),
@@ -150,6 +168,10 @@ export interface ApiRouterDeps {
    *  that second half can ever clear an agent quarantine (no registry
    *  configured at all). */
   agentRegistered?: (name: string) => boolean;
+  /** The public half of the board's VAPID keypair (issue #14) — the WebUI
+   *  needs this to call `pushManager.subscribe`. Absent → push is not
+   *  configured on this board at all. */
+  vapidPublicKey?: string;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -164,6 +186,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     draftClient,
     defaultAgentName,
     agentRegistered,
+    vapidPublicKey,
   } = deps;
   const router = Router();
   router.use(json());
@@ -491,6 +514,48 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     res.json({ cursor: advanceLogCursor(db, parsed.data.last_read) });
+  });
+
+  router.get("/push/vapid-public-key", (_req, res) => {
+    res.json({ publicKey: vapidPublicKey ?? null });
+  });
+
+  router.post("/push/subscribe", (req, res) => {
+    const parsed = pushSubscribeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    savePushSubscription(db, {
+      endpoint: parsed.data.endpoint,
+      p256dh: parsed.data.keys.p256dh,
+      auth: parsed.data.keys.auth,
+    });
+    res.status(201).json({ ok: true });
+  });
+
+  router.delete("/push/subscribe", (req, res) => {
+    const parsed = pushUnsubscribeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    removePushSubscription(db, parsed.data.endpoint);
+    res.json({ ok: true });
+  });
+
+  router.get("/settings/quiet-hours", (_req, res) => {
+    res.json(getQuietHours(db));
+  });
+
+  router.post("/settings/quiet-hours", (req, res) => {
+    const parsed = quietHoursSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    setQuietHours(db, parsed.data);
+    res.json(getQuietHours(db));
   });
 
   router.post("/triage/start", (_req, res) => {

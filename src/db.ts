@@ -130,6 +130,41 @@ export function openDb(path: string): Db {
       resets_at  TEXT
     );
 
+    -- Web Push subscriptions (issue #14): one row per installed PWA that
+    -- opted into push. endpoint is the browser's own dedup key (a fresh
+    -- subscribe from the same install replaces its old keys).
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      endpoint TEXT PRIMARY KEY,
+      p256dh   TEXT NOT NULL,
+      auth     TEXT NOT NULL
+    );
+
+    -- which question tasks have already reached the human via push (issue
+    -- #14), individually or folded into a morning digest — a row here means
+    -- "no longer pending notification", regardless of how it was delivered.
+    CREATE TABLE IF NOT EXISTS question_notifications (
+      task_id     TEXT PRIMARY KEY REFERENCES tasks(id),
+      notified_at TEXT NOT NULL
+    );
+
+    -- the morning digest's read position in the events table (issue #14) —
+    -- separate from log_cursor (the human's own read/unread position in the
+    -- decision-log UI): this one tracks what the digest has already reported.
+    CREATE TABLE IF NOT EXISTS digest_cursor (
+      id            INTEGER PRIMARY KEY CHECK (id = 1),
+      last_reported INTEGER NOT NULL
+    );
+    INSERT OR IGNORE INTO digest_cursor (id, last_reported) VALUES (1, 0);
+
+    -- quiet hours config (issue #14): one row, UTC wall-clock "HH:MM" bounds.
+    -- No row means never configured — callers fall back to the 23:00–07:00
+    -- default rather than reading this table directly.
+    CREATE TABLE IF NOT EXISTS quiet_hours (
+      id    INTEGER PRIMARY KEY CHECK (id = 1),
+      start TEXT NOT NULL,
+      end   TEXT NOT NULL
+    );
+
     -- the merge dial's auto_if_ci_green queue (issue #11): a completed
     -- low-risk task's just-opened PR, awaiting the CI poll to merge it
     -- unattended. Removed once resolved (merged, or converted to an

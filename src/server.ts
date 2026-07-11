@@ -9,6 +9,7 @@ import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
+import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
@@ -63,6 +64,13 @@ export interface ServerOptions {
    *  quarantine Confirmation question's clearance check (api.ts). Absent →
    *  only "no more todo tasks depend on it" can ever clear it. */
   agentRegistered?: (name: string) => boolean;
+  /** The Web Push-facing seam (issue #14): a question task's registration is
+   *  promoted to an immediate push through here, outside quiet hours. Absent
+   *  → no push is ever sent, questions simply accumulate unnotified. */
+  push?: PushClient;
+  /** The public half of the board's VAPID keypair (issue #14), exposed to the
+   *  WebUI via /api/push/vapid-public-key. Absent → the WebUI can't subscribe. */
+  vapidPublicKey?: string;
 }
 
 export interface TidepoolServer {
@@ -136,6 +144,15 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
           );
         }, 60 * 1000)
       : undefined;
+  // question push notifications (issue #14): a poll rather than a hook at
+  // every registerTask call site, same shape as the two polls above. Tracks
+  // the quiet-hours boundary itself so crossing it folds everything
+  // accumulated overnight into one morning digest instead of a push per
+  // question (createNotificationTick).
+  const notificationTick = createNotificationTick(db, options.push, options.clock.now());
+  const stopNotificationPoll = options.clock.setInterval(() => {
+    void notificationTick.run(options.clock.now());
+  }, 60 * 1000);
   app.use(
     "/api",
     createApiRouter({
@@ -149,6 +166,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
+      vapidPublicKey: options.vapidPublicKey,
     }),
   );
   app.use(
@@ -186,6 +204,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       new Promise((resolve, reject) => {
         stopTriageWatchdog();
         stopAutoMergePoll?.();
+        stopNotificationPoll();
         watchdog?.stop();
         scheduler.stop();
         listener.close((err) => (err ? reject(err) : resolve()));

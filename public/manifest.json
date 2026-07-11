@@ -1,0 +1,14 @@
+{
+  "name": "tidepool",
+  "short_name": "tidepool",
+  "description": "n=1 agent board — quiet hours, morning digest, single-question answers",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#e4eae7",
+  "theme_color": "#1d6a66",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

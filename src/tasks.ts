@@ -93,7 +93,7 @@ export interface PendingChildSpec extends TaskContent {
 
 /** The SQLite shape of a task: options/pending-child are JSON TEXT columns.
  *  The JSON stays at this boundary — domain code sees the parsed shape. */
-type TaskRow = Omit<Task, "question_options" | "question_pending_child"> & {
+export type TaskRow = Omit<Task, "question_options" | "question_pending_child"> & {
   question_options: string | null;
   question_pending_child: string | null;
 };

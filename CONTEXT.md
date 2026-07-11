@@ -154,3 +154,15 @@ work タスク完了時に必須の引き継ぎ文書。行動可能な情報は
 ## Swell / Condensation
 
 Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。
+
+## Quiet hours(静穏時間)
+
+question タスクの即時プッシュ通知を抑制する時間帯(issue #14)。既定 23:00–07:00、盤面設定として変更可能。判定は UTC の壁時計時刻で行い、既定のように開始が終了より後(23:00→07:00)の範囲は日付境界をまたいで判定される。quiet hours 中に登録された question は通知されず溜まり、明けた瞬間(quiet → not quiet の遷移)に Digest として1通にまとまる。Throttle / Pause と異なり、pickup など盤面の稼働そのものには一切触れない — 操作対象は人間への通知だけ。
+
+## Digest(朝のまとめ通知)
+
+quiet hours が明けた瞬間に一度だけ発火し、蓄積分を1通へ畳む push 通知(issue #14)。未通知の question 件数と、前回の digest 以降に増えた Decision log 件数を「質問N件、新規ログM件」として要約する — 通知の文面がそのまま朝のセッションの予算見積りになる。quiet hours 明け以外の通常時は question ごとに個別に即時通知され、digest へは畳まれない。
+
+## Push subscription(プッシュ購読)
+
+ホーム画面にインストールした PWA が Web Push を受け取るための購読情報(endpoint + 鍵)。quiet hours 外の question 登録・digest 発火のいずれも、登録済みの全 push subscription 宛てに送られる。購読は端末単位で、購読が1件もない(あるいは push 自体が未設定の)盤面では通知は一切発生しない。

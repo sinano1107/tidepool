@@ -5,6 +5,7 @@ import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
+import { type PushClient, type VapidConfig, WebPushClient } from "./push.js";
 import { loadRegistry, type AuthorityProfile, type RegistryCandidates } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
@@ -128,6 +129,23 @@ function draftClientFactory(): DraftClient | undefined {
   return new ClaudeDraftClient({ candidates: registryCandidates() });
 }
 
+/** Web Push (issue #14): all three VAPID env vars must be set together, or
+ *  push stays off — a partial configuration would silently drop every send.
+ *  The single source both pushClient() and the API's vapidPublicKey option
+ *  read from, so the "all three or none" gate is never checked twice. */
+function vapidConfig(): VapidConfig | undefined {
+  const subject = process.env.TIDEPOOL_VAPID_SUBJECT;
+  const publicKey = process.env.TIDEPOOL_VAPID_PUBLIC_KEY;
+  const privateKey = process.env.TIDEPOOL_VAPID_PRIVATE_KEY;
+  if (!subject || !publicKey || !privateKey) return undefined;
+  return { subject, publicKey, privateKey };
+}
+
+function pushClient(): PushClient | undefined {
+  const vapid = vapidConfig();
+  return vapid ? new WebPushClient(vapid) : undefined;
+}
+
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -140,5 +158,7 @@ const server = await startServer({
   agentRegistered: agentRegisteredChecker(),
   registryCandidates: registryCandidates(),
   draftClient: draftClientFactory(),
+  push: pushClient(),
+  vapidPublicKey: vapidConfig()?.publicKey,
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
