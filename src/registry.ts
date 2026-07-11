@@ -29,14 +29,25 @@ export interface AgentDefinition {
  *  converts to an approval question rather than registering (ADR 0002).
  *  `allowed_workspaces` (issue #11) is its spatial analogue: a decompose
  *  child explicitly targeting a workspace outside this list converts the
- *  same way. Absent means unrestricted (no board-configured profile to check
- *  against). `merge` (issue #11) is the authority dial over merging a task's
- *  PR — "merge is the start of external effect": `escalate` always asks a
- *  human first; `auto_if_ci_green` merges unattended once CI passes, but only
- *  for a task that carries no risk (a risky task always asks, regardless of
- *  the dial). Absent means no automatic merge decision at all — a PR opens
- *  and nothing more happens (today's pre-#11 baseline), same "absent is
- *  inert" shape as the other two fields. */
+ *  same way. A profile loaded from the registry (via `authorityProfileSchema`
+ *  below) always carries both fields explicitly — omission is a load error
+ *  (issue #41: "absent means unrestricted" was a silent footgun for registry
+ *  authors). Unrestricted must instead be spelled out with the wildcard
+ *  `"*"`, which `outsideAuthority` (tasks.ts) reads as "no restriction". The
+ *  fields stay optional on this TS type only because `AuthorityProfile`
+ *  values are also hand-built in code paths that never go through the
+ *  registry loader — the read-only reviewer floor (`REVIEWER_AUTHORITY_PROFILE`
+ *  in mcp.ts, ADR 0013) and per-task `resolveAuthority` overrides in tests —
+ *  where omission legitimately still means unrestricted; issue #41 is
+ *  registry-side profile hygiene only, not a change to that code-side shape.
+ *  `merge` (issue #11) is the authority dial over merging a task's PR —
+ *  "merge is the start of external effect": `escalate` always asks a human
+ *  first; `auto_if_ci_green` merges unattended once CI passes, but only for a
+ *  task that carries no risk (a risky task always asks, regardless of the
+ *  dial). Absent means no automatic merge decision at all — a PR opens and
+ *  nothing more happens (today's pre-#11 baseline), same "absent is inert"
+ *  shape as the other two fields once loaded from code rather than the
+ *  registry. */
 export interface AuthorityProfile {
   name: string;
   guidance: string;
@@ -104,7 +115,10 @@ function parseAgentFile(path: string): AgentDefinition {
 }
 
 // closed schema: an escalation-rights field cannot exist even by
-// misconfiguration — upward escalation is never restricted (issue #7)
+// misconfiguration — upward escalation is never restricted (issue #7).
+// assignable_to/allowed_workspaces are required, not optional: a registry
+// author must spell out "*" for unrestricted rather than get it by omission
+// (issue #41).
 const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
   assignable_to: z.array(z.string()),

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AUTHORITY_WILDCARD } from "../src/tasks.js";
 
 const AGENT_MD = `---
 name: deckhand
@@ -16,9 +17,9 @@ Work only through the tidepool MCP verbs.
 const AUTHORITY_YAML = `guidance: |
   Prefer reversible actions. Anything irreversible is outside your authority.
 assignable_to:
-  - "*"
+  - "${AUTHORITY_WILDCARD}"
 allowed_workspaces:
-  - "*"
+  - "${AUTHORITY_WILDCARD}"
 `;
 
 const WORKSPACES_YAML = `tidepool:

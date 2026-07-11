@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { AUTHORITY_WILDCARD } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -77,7 +78,7 @@ it("a child assigned within assignable_to registers directly, with no approval q
 
 it("assignable_to に明示 wildcard \"*\" があれば任意の assignee が無制限に振る舞う(issue #41)", async () => {
   t = await bootTidepool({
-    authority: { name: "standard", guidance: "", assignable_to: ["*"] },
+    authority: { name: "standard", guidance: "", assignable_to: [AUTHORITY_WILDCARD] },
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
@@ -105,6 +106,36 @@ it("assignable_to に明示 wildcard \"*\" があれば任意の assignee が無
   expect(child.type).toBe("work");
   expect(child.assignee).toBe("dba-specialist");
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
+});
+
+it("assignable_to が空リストなら、明示された assignee は何であれ承認 question に変換される(issue #41 AC3: 空リストは従来どおり)", async () => {
+  t = await bootTidepool({
+    authority: { name: "standard", guidance: "", assignable_to: [] },
+  });
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.baseUrl, parent.id);
+  const res: any = await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "the specialist agent should own this one",
+      children: [
+        {
+          title: "tune the database indexes",
+          purpose: "improve query latency",
+          completion_criteria: "p95 query latency under 100ms",
+          assignee: "dba-specialist",
+        },
+      ],
+    },
+  });
+  expect(res.isError ?? false).toBe(false);
+  await client.close();
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.find((x: any) => x.title === "tune the database indexes")).toBeUndefined();
+  const question = board.find((x: any) => x.type === "question" && x.parent_id === parent.id);
+  expect(question).toBeDefined();
 });
 
 async function decomposeOutOfBoundsAssignee(t: Tidepool, parentId: string) {
