@@ -1135,6 +1135,67 @@ export function getTask(db: Db, id: string): Task | undefined {
   return row && rowToTask(row);
 }
 
+/** issue #29's `get_current_task` shape for one settled (done/cancelled)
+ *  direct child — a done question's answer, a done work's handoff doc
+ *  verbatim (CONTEXT.md's Handoff doc: question/review carry none), or
+ *  (any type, cancelled) the abandon question that ended it. No summarizing
+ *  middle layer, extended here to every settled-child shape. */
+export interface SettledChildContext {
+  title: string;
+  status: "done" | "cancelled";
+  handoff_doc?: string | null;
+  options?: string[];
+  recommendation?: string | null;
+  answer?: string | null;
+  origin_question?: { title: string; answer: string | null } | null;
+}
+
+/** A cancelled task's one `task_cancelled` event names the abandon question
+ *  that ended the whole plan (ADR 0006) — a single hop back to it is the
+ *  entire "why" a resumed parent needs. */
+function cancelOriginQuestion(db: Db, taskId: string): Task | undefined {
+  const row = db
+    .prepare("SELECT payload FROM events WHERE task_id = ? AND kind = 'task_cancelled'")
+    .get(taskId) as { payload: string } | undefined;
+  if (!row) return undefined;
+  const { origin_question_id } = JSON.parse(row.payload) as { origin_question_id: string };
+  return getTask(db, origin_question_id);
+}
+
+/** Settled direct children only (CONTEXT.md: 供給範囲は直接の子まで) — a
+ *  todo/in_progress child is never returned (its parent isn't pickable to
+ *  ask in the first place; surfacing it would only invite interference with
+ *  a sibling still in flight). Registration order (sort_key), same order the
+ *  children joined the queue in. */
+export function settledChildren(db: Db, parentId: string): SettledChildContext[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM tasks WHERE parent_id = ? AND status IN ('done', 'cancelled')
+       ORDER BY sort_key`,
+    )
+    .all(parentId) as TaskRow[];
+  return rows.map(rowToTask).map((child): SettledChildContext => {
+    if (child.status === "cancelled") {
+      const origin = cancelOriginQuestion(db, child.id);
+      return {
+        title: child.title,
+        status: "cancelled",
+        origin_question: origin ? { title: origin.title, answer: origin.question_answer } : null,
+      };
+    }
+    if (child.type === "question") {
+      return {
+        title: child.title,
+        status: "done",
+        options: child.question_options ?? [],
+        recommendation: child.question_recommendation,
+        answer: child.question_answer,
+      };
+    }
+    return { title: child.title, status: "done", handoff_doc: child.handoff_doc };
+  });
+}
+
 /** The queue head the slot may take: lowest-sort_key todo that is
  *  agent-executable. Blocked is derived from parent/child alone — a task with
  *  an unfinished child never enters the slot — and questions never enter it

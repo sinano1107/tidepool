@@ -123,6 +123,21 @@ export function advanceLogCursor(db: Db, lastRead: number): number {
   return getLogCursor(db);
 }
 
+/** One task's own decision log (issue #29's review-context addendum): the
+ *  events table narrowed the same way `listLog` narrows the whole board, but
+ *  scoped to a single task_id — the primary resource a review's RCA reads
+ *  ("自分は何をどの順で判断したか"). No summarizing middle layer: every
+ *  human-facing entry, verbatim. */
+export function taskDecisionLog(db: Db, taskId: string): EventRow[] {
+  const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `SELECT * FROM events WHERE task_id = ? AND kind IN (${placeholders}) ORDER BY id`,
+    )
+    .all(taskId, ...HUMAN_FACING_KINDS) as Array<Omit<EventRow, "payload"> & { payload: string }>;
+  return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as EventPayload }));
+}
+
 export function listEvents(db: Db, taskId: string): EventRow[] {
   const rows = db
     .prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id")

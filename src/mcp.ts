@@ -4,6 +4,7 @@ import express, { Router } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { taskDecisionLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { AuthorityProfile } from "./registry.js";
 import type { Slot } from "./slot.js";
@@ -17,6 +18,7 @@ import {
   HUMAN_WORKER_ID,
   logDecision,
   recordPrOpened,
+  settledChildren,
   type Task,
 } from "./tasks.js";
 import {
@@ -217,7 +219,25 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async () =>
       runVerb(deps, attributedTaskId, (task) => {
         const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
-        return { ...taskContext(task), type: task.type, parent: parent && taskContext(parent) };
+        // a review task reads its parent (the reviewed task) in the reverse
+        // direction from every other seam here (issue #29's review-context
+        // addendum): the parent's own decision log and handoff doc, verbatim
+        // — the primary resource layer 2's RCA needs ("自分は何をどの順で
+        // 判断したか" has no other source than the reviewed session's own
+        // record).
+        const parentContext = parent && {
+          ...taskContext(parent),
+          ...(task.type === "review" && {
+            decision_log: taskDecisionLog(deps.db, parent.id),
+            handoff_doc: parent.handoff_doc,
+          }),
+        };
+        return {
+          ...taskContext(task),
+          type: task.type,
+          parent: parentContext,
+          children: settledChildren(deps.db, task.id),
+        };
       }),
   );
 
