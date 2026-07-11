@@ -234,6 +234,24 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).toContain("Prefer reversible actions");
   });
 
+  it("盤面教義(subagent/workflow は説明責任を分割しない労力の分割にのみ使う)を、agent や profile によらず system prompt に注入する(ADR 0010 / issue #31)", async () => {
+    const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
+    start("task-navigator", null, "navigator");
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain("Agent tool");
+    expect(systemPrompt).toContain("decompose");
+    // the doctrine is a fixed third part, not something profile guidance provides
+    expect(systemPrompt).not.toBe("You are Navigator, the specialist.");
+  });
+
+  it("Workflow ツールを spawn 時に無効化する(オーケストレーションは worker にカテゴリ禁止・ADR 0010 追補 / issue #31)", async () => {
+    const { start, calls } = await makeWorker();
+    start();
+    const args = calls[0]!.args;
+    expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Workflow");
+  });
+
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
     const { start, stdout, logDir } = await makeWorker();
     start("task-7");
@@ -311,6 +329,26 @@ describe("ClaudeCodeWorker", () => {
   it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する)", async () => {
     const registryDir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: super-fast\n---\nYou are Deckhand.\n`,
+    });
+    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+    expect(
+      () =>
+        new ClaudeCodeWorker({
+          db: openDb(":memory:"),
+          clock: new FakeClock(),
+          registryDir,
+          agent: "deckhand",
+          workspace: "tidepool",
+          mcpUrl: "http://127.0.0.1:4589/mcp",
+          logDir,
+          spawn: recordingSpawn().spawn,
+        }),
+    ).toThrow(/unknown effort level/);
+  });
+
+  it("effort: ultracode は未知の effort 値として reject される(CLI --effort の閉じた5値に無く、xhigh+workflow orchestration への迂回路にならない・issue #31)", async () => {
+    const registryDir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: ultracode\n---\nYou are Deckhand.\n`,
     });
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(

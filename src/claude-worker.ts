@@ -31,6 +31,27 @@ function assertKnownEffort(definition: AgentDefinition): void {
   }
 }
 
+// injected into every spawned session's system prompt (issue #31 / ADR
+// 0010), regardless of agent or profile — a board-wide doctrine copied into
+// each authority profile would drift, and "Agent tool"/"Workflow tool" are
+// vendor vocabulary the adapter translates the board's line into (ADR 0005)
+const BOARD_DOCTRINE = `## Board doctrine
+
+Work that needs independent completion criteria, separate authority, its own
+risk, or survival across sessions must not be routed to the Agent tool —
+that is delegation smuggled past the board. Register that split with the
+tidepool MCP's decompose instead.
+
+The Agent tool may only be used for labor-splitting that does not divide
+accountability (exploration, parallel research, mechanical edits): you carry
+full accountability for its output as the parent task. If another registry
+agent's capability is needed, use decompose with an assignee, not the Agent
+tool.
+
+The Workflow tool is off-limits in task sessions: a workflow script is a
+decompose plan that never reached the board. If you find yourself wanting to
+write one, register that split with the tidepool MCP's decompose instead.`;
+
 // always explicit: the CLI remembers the host's last model/effort choice,
 // and a flip in some unrelated directory must not leak into runs (ADR
 // 0005) — shared by every `claude` CLI spawn site so the pinning rule has
@@ -186,6 +207,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // enforced by the profile guidance and the board's domain verbs
         "--permission-mode",
         "auto",
+        // dynamic orchestration is a category ban for workers, not a dial
+        // (ADR 0010 addendum / issue #31): a workflow script is a decompose
+        // plan that never reached the board. Confirmed against the
+        // installed CLI (v2.1.207) that "Workflow" is the tool name exposed
+        // to a headless session
+        "--disallowedTools",
+        "Workflow",
         ...pinnedModelFlags(definition.model ?? "sonnet", definition.effort ?? "medium"),
         "--mcp-config",
         mcpConfigPath,
@@ -193,7 +221,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // who the agent is (registry definition body) and what its authority
         // sounds like (profile guidance prose), stitched at spawn time
         "--append-system-prompt",
-        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}`,
+        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}\n\n${BOARD_DOCTRINE}`,
       ],
       { cwd: workspace.path },
     );
