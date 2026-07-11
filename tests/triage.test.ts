@@ -293,3 +293,132 @@ it("commit bundles the objections into one repair task per objected task", async
   const repairB = repairs.find((x: any) => x.title.includes("work B"));
   expect(repairB.purpose).toContain("keep the old key name");
 });
+
+it("commit also generates a self RCA review as a child of the objected task, assigned to the worker who wrote the objected decision (issue #15, layer 2)", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "work A");
+  await t.clock.advance(HOUR); // A into the slot
+  const e1 = await loggedEntry(t, a.id, "picked the quick hack");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: e1.id,
+    comment: "the hack corrupts state — do it properly",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const selfReview = board.find(
+    (x: any) => x.type === "review" && x.parent_id === a.id && x.assignee === "fake-worker",
+  );
+  expect(selfReview).toBeDefined();
+  expect(selfReview.purpose).toContain("the hack corrupts state — do it properly");
+});
+
+it("two objected entries written by the same worker fold into one self RCA review, not two (issue #15, layer 2)", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "work A");
+  await t.clock.advance(HOUR); // A into the slot, worked by fake-worker throughout
+  const e1 = await loggedEntry(t, a.id, "picked the quick hack");
+  const e2 = await loggedEntry(t, a.id, "skipped the fixtures");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: e1.id,
+    comment: "the hack corrupts state — do it properly",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: e2.id,
+    comment: "bring the fixtures back",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const selfReviews = board.filter(
+    (x: any) => x.type === "review" && x.parent_id === a.id && x.assignee === "fake-worker",
+  );
+  expect(selfReviews).toHaveLength(1);
+  expect(selfReviews[0].purpose).toContain("the hack corrupts state — do it properly");
+  expect(selfReviews[0].purpose).toContain("bring the fixtures back");
+});
+
+it("an objection against a human-completed task's log entry generates no self RCA review (CONTEXT.md's Review: 最終監査者に自分を監査させる輪は作らない)", async () => {
+  t = await bootTidepool();
+  const humanTask = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title: "approve the vendor invoice",
+      purpose: "p",
+      completion_criteria: "c",
+      assignee: "human",
+    })
+  ).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${humanTask.id}/complete`, {});
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  const humanEntry = log.entries.find(
+    (e: any) => e.kind === "task_completed" && e.task_id === humanTask.id,
+  );
+  expect(humanEntry.worker_id).toBe("human");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: humanEntry.id,
+    comment: "this shouldn't have been approved without a second signature",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const selfReview = board.find(
+    (x: any) => x.type === "review" && x.parent_id === humanTask.id && x.assignee !== "auditor",
+  );
+  expect(selfReview).toBeUndefined();
+  // the independent auditor RCA still fires — it never depends on who wrote
+  // the objected entry (CONTEXT.md's Review: 独立レビュー)
+  const auditorReview = board.find(
+    (x: any) => x.type === "review" && x.parent_id === humanTask.id && x.assignee === "auditor",
+  );
+  expect(auditorReview).toBeDefined();
+  // the repair task still lands — objections still act, only self RCA is skipped
+  expect(board.some((x: any) => x.title === "repair: approve the vendor invoice")).toBe(true);
+});
+
+it("commit also generates an independent auditor RCA review as a child of the objected task, alongside the self RCA (issue #15, layer 2)", async () => {
+  t = await bootTidepool();
+  const a = await registerWork(t, "work A");
+  await t.clock.advance(HOUR); // A into the slot
+  const e1 = await loggedEntry(t, a.id, "picked the quick hack");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: e1.id,
+    comment: "the hack corrupts state — do it properly",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const reviews = board.filter((x: any) => x.type === "review" && x.parent_id === a.id);
+  expect(reviews).toHaveLength(2);
+  const auditorReview = reviews.find((x: any) => x.assignee === "auditor");
+  expect(auditorReview).toBeDefined();
+  expect(auditorReview.purpose).toContain("the hack corrupts state — do it properly");
+});
+
+it("the board's Auditor pointer is configurable, mirroring the default agent (issue #15, layer 2)", async () => {
+  t = await bootTidepool({ auditorName: "keeper-of-the-code" });
+  const a = await registerWork(t, "work A");
+  await t.clock.advance(HOUR); // A into the slot
+  const e1 = await loggedEntry(t, a.id, "picked the quick hack");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: e1.id,
+    comment: "the hack corrupts state — do it properly",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const auditorReview = board.find(
+    (x: any) => x.type === "review" && x.parent_id === a.id && x.assignee === "keeper-of-the-code",
+  );
+  expect(auditorReview).toBeDefined();
+});

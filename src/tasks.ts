@@ -11,6 +11,12 @@ export const HUMAN_WORKER_ID = "human";
  *  (issue #21) — a plain agent question always carries 2-4 choices. */
 export const BOARD_WORKER_ID = "tidepool";
 
+/** Fallback for the board's Auditor pointer (CONTEXT.md) when no
+ *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
+ *  はない" (ADR 0013's issue #15 grilling notes), so the literal lives here
+ *  rather than requiring every call site to supply one. */
+export const DEFAULT_AUDITOR_NAME = "auditor";
+
 export type TaskType = "work" | "question" | "review";
 /** `blocked` is deliberately absent: it is derived from unfinished children
  *  (CONTEXT.md), never stored. */

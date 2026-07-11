@@ -56,6 +56,9 @@ export interface BootOptions {
   /** The LLM draft seam (issue #12). Absent (the default) — same as no LLM
    *  configured, matching the "LLM outage" fallback path. */
   draftClient?: DraftClient;
+  /** The board's Auditor pointer (issue #15 layer 2). Absent → falls back to
+   *  `DEFAULT_AUDITOR_NAME` inside `commitTriage` itself. */
+  auditorName?: string;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -82,6 +85,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     registryCandidates: options.registryCandidates,
     draftClient: options.draftClient,
     push,
+    auditorName: options.auditorName,
   });
   let stopped = false;
   const stopServer = async () => {

@@ -172,6 +172,12 @@ export interface ApiRouterDeps {
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
   vapidPublicKey?: string;
+  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), threaded to
+   *  `commitTriage`'s RCA generation — same shape as `defaultAgentName` above,
+   *  but the Auditor pointer always resolves to a value (a missing config
+   *  falls back inside `commitTriage` itself, `DEFAULT_AUDITOR_NAME`) rather
+   *  than disabling a gate the way `defaultAgentName`'s absence does. */
+  auditorName?: string;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -187,6 +193,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     defaultAgentName,
     agentRegistered,
     vapidPublicKey,
+    auditorName,
   } = deps;
   const router = Router();
   router.use(json());
@@ -635,7 +642,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const session = commitTriage(db, clock.now(), parsed.data.scratchpad);
+      const session = commitTriage(db, clock.now(), parsed.data.scratchpad, auditorName);
       // committing re-opens pickup and is itself the "run now" trigger
       onQueueHeadChanged();
       res.json(session);

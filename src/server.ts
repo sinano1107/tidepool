@@ -71,6 +71,11 @@ export interface ServerOptions {
   /** The public half of the board's VAPID keypair (issue #14), exposed to the
    *  WebUI via /api/push/vapid-public-key. Absent → the WebUI can't subscribe. */
   vapidPublicKey?: string;
+  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2) — same
+   *  shape as the default agent (`worker.id` below), threaded to
+   *  `commitTriage`'s RCA generation. Absent → `commitTriage` falls back to
+   *  `DEFAULT_AUDITOR_NAME` itself (the pointer always resolves). */
+  auditorName?: string;
 }
 
 export interface TidepoolServer {
@@ -167,6 +172,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
       vapidPublicKey: options.vapidPublicKey,
+      auditorName: options.auditorName,
     }),
   );
   app.use(

@@ -8,7 +8,7 @@ import { GhCliClient } from "./github.js";
 import { type PushClient, type VapidConfig, WebPushClient } from "./push.js";
 import { loadRegistry, type AuthorityProfile, type RegistryCandidates } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
-import type { Task } from "./tasks.js";
+import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import { resolveExecutionWorkspace, type WorkspaceConfig } from "./workspace.js";
 
@@ -40,6 +40,9 @@ const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? "sandbox";
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
 // pre-set delegation to a different registry name overrides it per task
 const defaultAgentName = process.env.TIDEPOOL_AGENT ?? "deckhand";
+// issue #15 layer 2 / CONTEXT.md's Auditor: same shape as TIDEPOOL_AGENT
+// above, a pointer to the board's independent-review agent.
+const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
 
 /** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository
  *  (`npm run start:live` supplies the conventional one); setting it swaps the
@@ -160,5 +163,6 @@ const server = await startServer({
   draftClient: draftClientFactory(),
   push: pushClient(),
   vapidPublicKey: vapidConfig()?.publicKey,
+  auditorName,
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);

@@ -1,12 +1,14 @@
 import type { Db } from "./db.js";
 import { appendEvent, HUMAN_FACING_KINDS, type EventRow } from "./events.js";
 import {
+  DEFAULT_AUDITOR_NAME,
   getTask,
   HUMAN_WORKER_ID,
   listBoard,
   moveTask,
   registerTask,
   type BoardTask,
+  type Task,
 } from "./tasks.js";
 
 export class TriageError extends Error {}
@@ -109,9 +111,67 @@ export function raiseObjection(
   });
 }
 
+/** One RCA review, always a child of `objected` sharing its workspace
+ *  (CONTEXT.md: children inherit workspace), with the shared RCA discipline
+ *  baked into `completion_criteria` (issue #15 layer 2 grilling notes: output
+ *  is a diff, prose reflection is forbidden). `comments` land verbatim in
+ *  `purpose` — the RCA's only supplied context beyond what get_current_task
+ *  (issue #29) already carries. */
+function registerRcaReview(
+  db: Db,
+  objected: Task,
+  taskId: string,
+  spec: { title: string; purposeIntro: string; comments: string[]; assignee: string },
+  now: Date,
+): void {
+  registerTask(
+    db,
+    {
+      type: "review",
+      title: spec.title,
+      purpose: `${spec.purposeIntro}:\n` + spec.comments.map((c) => `- ${c}`).join("\n"),
+      completion_criteria:
+        "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
+      parent_id: taskId,
+      assignee: spec.assignee,
+      workspace: objected.workspace ?? undefined,
+    },
+    now,
+  );
+}
+
 /** One repair task per objected task: every direction comment raised against a
- *  task's log entries this session lands in a single work task's purpose. */
-function bundleObjections(db: Db, sessionId: number, now: Date): void {
+ *  task's log entries this session lands in a single work task's purpose.
+ *
+ *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
+ *  are generated as children of the objected task, same shape as layer 1's
+ *  completion review (workspace inheritance included):
+ *
+ *  - **self**, one per distinct worker who wrote an objected entry
+ *    (CONTEXT.md's Review — 当事者レビュー: "why did I make that call" only
+ *    the worker who actually wrote the entry can answer). `assignee` is
+ *    baked to that worker's id as a historical fact, not a live pointer
+ *    (CONTEXT.md's Review: "確定値であり、ポインタへの参照ではない") — a
+ *    human-written entry never spawns one (the final auditor cannot audit
+ *    itself).
+ *  - **auditor**, always exactly one per objected task regardless of who
+ *    wrote the objected entries — its distance from the original judgment is
+ *    the value (CONTEXT.md's Review: 独立レビュー), so it fires even when
+ *    every entry was human-written. `assignee` is a snapshot of the board's
+ *    Auditor pointer taken *now*, at commit time — not resolved fresh at
+ *    pickup the way an unset `assignee` (`defaultAgentName`'s own pattern,
+ *    ADR 0012) would be. That's a deliberate, narrower simplification: the
+ *    existing agent-quarantine gate (`agentQuarantinedSql`, `nextSlotTask`/
+ *    `listQueue`) reads `COALESCE(t.assignee, defaultAgentName)` and has no
+ *    concept of "the type of this task changes which pointer its unset
+ *    assignee falls back to" — leaving `assignee` unset here would silently
+ *    bypass that gate for a quarantined Auditor. Baking keeps quarantine
+ *    correct today; making the SQL gate (and claude-worker.ts's spawn
+ *    resolution, mcp.ts's attribution) type-aware so Auditor can become a
+ *    true live pointer — the way layer 1's completion review's own unset
+ *    `assignee` would then also benefit from — is tracked separately
+ *    (issue #42). */
+function bundleObjections(db: Db, sessionId: number, now: Date, auditorName?: string): void {
   const rows = db
     .prepare(
       `SELECT task_id, payload FROM events
@@ -120,9 +180,18 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
     )
     .all(sessionId) as Array<{ task_id: string; payload: string }>;
   const byTask = new Map<string, string[]>();
+  const byTaskWorker = new Map<string, Map<string, string[]>>();
   for (const row of rows) {
-    const { comment } = JSON.parse(row.payload) as { comment: string };
+    const { comment, entry_id } = JSON.parse(row.payload) as {
+      comment: string;
+      entry_id: number;
+    };
     byTask.set(row.task_id, [...(byTask.get(row.task_id) ?? []), comment]);
+    const entry = requireLogEntry(db, entry_id);
+    if (entry.worker_id === HUMAN_WORKER_ID) continue;
+    const byWorker = byTaskWorker.get(row.task_id) ?? new Map<string, string[]>();
+    byWorker.set(entry.worker_id, [...(byWorker.get(entry.worker_id) ?? []), comment]);
+    byTaskWorker.set(row.task_id, byWorker);
   }
   for (const [taskId, comments] of byTask) {
     const objected = getTask(db, taskId);
@@ -136,6 +205,32 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
           `objections raised against decisions of "${objected.title}":\n` +
           comments.map((c) => `- ${c}`).join("\n"),
         completion_criteria: "every objection direction above is addressed",
+      },
+      now,
+    );
+    for (const [workerId, workerComments] of byTaskWorker.get(taskId) ?? []) {
+      registerRcaReview(
+        db,
+        objected,
+        taskId,
+        {
+          title: `rca (self): ${objected.title}`,
+          purposeIntro: `objections raised against decisions ${workerId} made on "${objected.title}"`,
+          comments: workerComments,
+          assignee: workerId,
+        },
+        now,
+      );
+    }
+    registerRcaReview(
+      db,
+      objected,
+      taskId,
+      {
+        title: `rca (auditor): ${objected.title}`,
+        purposeIntro: `objections raised against decisions of "${objected.title}"`,
+        comments,
+        assignee: auditorName ?? DEFAULT_AUDITOR_NAME,
       },
       now,
     );
@@ -261,16 +356,20 @@ export function triagePreview(db: Db, sessionId: number): PreviewTask[] {
 }
 
 /** Close the open session and apply everything it staged in one transaction.
- *  The caller fires the immediate poll — pickup resumes only through it. */
+ *  The caller fires the immediate poll — pickup resumes only through it.
+ *  `auditorName` is the board's Auditor pointer (CONTEXT.md), threaded to
+ *  `bundleObjections`' RCA generation — same shape as `defaultAgentName`
+ *  elsewhere. */
 export function commitTriage(
   db: Db,
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
+  auditorName?: string,
 ): TriageSession {
   const open = activeTriageSession(db);
   if (!open) throw new TriageError("no open triage session to commit");
   db.transaction(() => {
-    bundleObjections(db, open.id, now);
+    bundleObjections(db, open.id, now, auditorName);
     applyScratchpad(db, open.id, scratchpad, now);
     // apply in reverse staging order so the first-staged task ends up on top
     for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
