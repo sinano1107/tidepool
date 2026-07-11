@@ -105,8 +105,16 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
 });
 
-it("review タスクの分解子を、レビュー対象タスクの assignee と異なる宛先にする割当は、承認 question に変換される(exemption はレビュー対象の実行者だけに限定される)", async () => {
-  t = await bootTidepool();
+const PERMISSIVE_AUDITOR_AUTHORITY: AuthorityProfile = {
+  name: "permissive-auditor",
+  guidance: "",
+  // no assignable_to — unrestricted, were it ever consulted
+};
+
+it("review タスクの分解子を、レビュー対象タスクの assignee と異なる宛先にする割当は、review 自身の assignee(auditor)が resolveAuthority で無制限の authority を持っていても承認 question に変換される(exemption はレビュー対象の実行者だけに限定され、resolveAuthority は type 上書きにより一切参照されない)", async () => {
+  t = await bootTidepool({
+    resolveAuthority: (assignee) => (assignee === "auditor" ? PERMISSIVE_AUDITOR_AUTHORITY : undefined),
+  });
   const reviewed = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "work",
