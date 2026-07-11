@@ -142,8 +142,13 @@ function mapData(board, log) {
       id: q.id, parent: q.parent_id,
       // a question has no assignee (it is answered here); show who it blocks
       agent: board.find((p) => p.id === q.parent_id)?.assignee ?? '—',
-      title: q.title, context: q.purpose,
-      options: (q.question_options ?? []).map((o) => ({ label: o, recommended: o === q.question_recommendation })),
+      context: q.purpose,
+      // 1-4 items, each with its own title/detail/options (issue #30) — a
+      // single-item bundle is the degenerate, most common case
+      items: (q.question_items ?? []).map((item) => ({
+        title: item.title, detail: item.detail,
+        options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
+      })),
     }));
   // newest first for the skim; unread = beyond the read cursor
   const logEntries = [...log.entries].reverse().map((e) => ({
@@ -263,8 +268,11 @@ function toQuestionCardShape(task, parentTask) {
   return {
     id: task.id, parent: task.parent_id,
     agent: parentTask?.assignee ?? '—',
-    title: task.title, context: task.purpose,
-    options: (task.question_options ?? []).map((o) => ({ label: o, recommended: o === task.question_recommendation })),
+    context: task.purpose,
+    items: (task.question_items ?? []).map((item) => ({
+      title: item.title, detail: item.detail,
+      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
+    })),
   };
 }
 
@@ -299,12 +307,12 @@ function QuestionDeepLinkView({ questionId, onDone }) {
     return () => { cancelled = true; };
   }, [questionId]);
 
-  const answer = async (option) => {
+  const answer = async (answers) => {
     if (busy) return; // guards the design component's button against a double-tap
     setBusy(true);
     setErr(null);
     try {
-      await api(`/api/tasks/${questionId}/answer`, { answer: option });
+      await api(`/api/tasks/${questionId}/answer`, { answers });
       onDone(rawTask);
     } catch (e) {
       setErr(String(e.message || e));
@@ -467,10 +475,12 @@ function App() {
     }
   }, [tab, dataLoaded]);
 
-  // S1 — one tap persists the answer; the unblocked parent is staged server-side
+  // S1 — the last tap in a bundle persists every item's answer atomically;
+  // the unblocked parent is staged server-side (issue #30: `a` is one answer
+  // per item, in item order)
   const answerNow = async (q, a) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answer: a });
+      await api(`/api/tasks/${q.id}/answer`, { answers: a });
     } catch (err) {
       say('danger', 'answer failed', String(err.message || err));
       throw err;

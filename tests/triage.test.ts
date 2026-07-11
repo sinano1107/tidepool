@@ -43,10 +43,8 @@ async function escalatedBoard(t: Tidepool) {
   await client.callTool({
     name: "escalate",
     arguments: {
-      title: "which way?",
       context: "fork in the road",
-      options: ["left", "right"],
-      recommendation: "left",
+      questions: [{ title: "which way?", options: ["left", "right"], recommendation: "left" }],
     },
   });
   await client.close();
@@ -62,14 +60,14 @@ it("an answer during triage persists at once but reaches the queue only at commi
   await api(t.baseUrl, "POST", "/api/triage/start");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "left",
+    answers: ["left"],
   });
   expect(res.status).toBe(200);
 
   // the answer itself is durable at once — abandoning the session cannot lose it
   const answered = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(answered.status).toBe("done");
-  expect(answered.question_answer).toBe("left");
+  expect(answered.question_answer).toEqual(["left"]);
 
   // but the unblocked parent has not jumped the queue yet
   const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
@@ -140,7 +138,7 @@ it("the S3 preview stages the queue with this session's front-inserts highlighte
   t = await bootTidepool();
   const { question } = await escalatedBoard(t);
   await api(t.baseUrl, "POST", "/api/triage/start");
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "left" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["left"] });
 
   const res = await api(t.baseUrl, "GET", "/api/triage");
   expect(res.status).toBe(200);
@@ -158,7 +156,7 @@ it("an abandoned session auto-commits after the timeout", async () => {
   t = await bootTidepool();
   const { question } = await escalatedBoard(t);
   await api(t.baseUrl, "POST", "/api/triage/start");
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "left" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["left"] });
 
   // walk away: the timeout commits what the session staged
   await t.clock.advance(TRIAGE_TIMEOUT);

@@ -37,8 +37,8 @@ it("decompose converts a child assigned outside allowed_workspaces into an appro
   // an approval question stands in its place instead
   const question = board.find((x: any) => x.type === "question" && x.parent_id === parent.id);
   expect(question).toBeDefined();
-  expect(question.question_options).toEqual(["approve", "reject"]);
-  expect(question.question_recommendation).toBe("approve");
+  expect(question.question_items[0].options).toEqual(["approve", "reject"]);
+  expect(question.question_items[0].recommendation).toBe("approve");
 
   // the parent is blocked on that question (derived from the unfinished child)
   expect(board.find((x: any) => x.id === parent.id).status).toBe("blocked");
@@ -168,7 +168,7 @@ it("approving a workspace-approval question registers the pending child with the
   const question = await decomposeOutOfBoundsWorkspace(t, parent.id);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "approve",
+    answers: ["approve"],
   });
   expect(answered.status).toBe(200);
 
@@ -195,7 +195,7 @@ it("rejecting a workspace-approval question leaves the child unregistered", asyn
   const question = await decomposeOutOfBoundsWorkspace(t, parent.id);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "reject",
+    answers: ["reject"],
   });
   expect(answered.status).toBe(200);
 

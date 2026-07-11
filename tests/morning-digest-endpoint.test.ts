@@ -18,7 +18,7 @@ it("quiet hours 中に登録された question は push されず、明けると
     title: "深夜に上がった質問",
     purpose: "quiet hours 中のテスト",
     completion_criteria: "n/a",
-    question: { options: ["yes", "no"], recommendation: "yes" },
+    question: [{ title: "深夜に上がった質問", options: ["yes", "no"], recommendation: "yes" }],
   });
 
   await t.clock.advance(60 * MIN); // 01:00 — まだ quiet hours 内、1分ポーリングが数回回る

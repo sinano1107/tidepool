@@ -155,11 +155,14 @@ it("question タスクの完了(回答)では PR が作られない", async () =
       title: "which approach?",
       purpose: "pick a direction",
       completion_criteria: "a human answer is recorded",
-      question: { options: ["a", "b"], recommendation: "a" },
+      question: [{ title: "which approach?", options: ["a", "b"], recommendation: "a" }],
     })
   ).json;
 
-  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/answer`, { answer: "a" });
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/answer`, {
+    answers: ["a"],
+  });
+  expect(answered.status).toBe(200);
 
   expect(t.github.requests).toHaveLength(0);
 });

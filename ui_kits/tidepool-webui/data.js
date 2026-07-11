@@ -5,43 +5,72 @@ const tpData = {
     { name: 'anemone', desc: 'review · read-only authority' },
     { name: 'hermit', desc: 'docs + registry edits' },
   ],
+  // each question task carries a shared `context` (its `purpose`) plus 1-4
+  // `items`, each with its own title / optional detail / options (issue
+  // #30) — a single-item bundle is the degenerate, most common case; tp-0148
+  // below shows the 2-item case the bundle exists for.
   questions: [
     {
       id: 'tp-0143', parent: 'tp-0141', agent: 'reef-crab',
-      title: 'Merge PR #58? CI green',
       context: 'registry loader — 4 files, all checks pass. Merge is outside my authority (merge: escalate).',
-      options: [
-        { label: 'Merge', recommended: true },
-        { label: 'Hold — I will look today' },
-        { label: 'Request changes via repair task' },
+      items: [
+        {
+          title: 'Merge PR #58? CI green',
+          options: [
+            { label: 'Merge', recommended: true },
+            { label: 'Hold — I will look today' },
+            { label: 'Request changes via repair task' },
+          ],
+        },
       ],
     },
     {
       id: 'tp-0148', parent: 'tp-0146', agent: 'anemone',
-      title: 'Schema: soft-delete or hard-delete cancelled tasks?',
-      context: 'events table is append-only either way; this only affects the tasks row.',
-      options: [
-        { label: 'Keep rows, status=cancelled', recommended: true },
-        { label: 'Hard delete' },
+      context: 'Two related schema calls came up together while reviewing tp-0146 — deciding them in one sitting avoids a second round-trip.',
+      items: [
+        {
+          title: 'Cancelled tasks: soft-delete or hard-delete?',
+          detail: 'events table is append-only either way; this only affects the tasks row.',
+          options: [
+            { label: 'Keep rows, status=cancelled', recommended: true },
+            { label: 'Hard delete' },
+          ],
+        },
+        {
+          title: 'Cancellation reason: free text or a fixed enum?',
+          detail: 'free text keeps abandon’s human note flexible; an enum needs a vocabulary decided up front.',
+          options: [
+            { label: 'Free text', recommended: true },
+            { label: 'Fixed enum' },
+          ],
+        },
       ],
     },
     {
       id: 'tp-0149', parent: null, agent: 'hermit',
-      title: 'Registry README: document probation model?',
       context: 'new-agent onboarding section. 2 paragraphs, no authority change.',
-      options: [
-        { label: 'Yes, write it', recommended: true },
-        { label: 'Skip for v1' },
+      items: [
+        {
+          title: 'Registry README: document probation model?',
+          options: [
+            { label: 'Yes, write it', recommended: true },
+            { label: 'Skip for v1' },
+          ],
+        },
       ],
     },
     {
       id: 'tp-0153', parent: 'tp-0146', agent: 'reef-crab', kind: 'approval',
-      title: 'Child task exceeds my risk — approve?',
       context: 'register_child_task: "Backfill events for migrated rows" carries a risk flag; parent tp-0146 does not. Held pending — converted server-side, no error returned.',
       note: 'approving raises tp-0146 risk (upward propagation)',
-      options: [
-        { label: 'Approve — raise parent risk', recommended: true },
-        { label: 'Reject — cancel the child' },
+      items: [
+        {
+          title: 'Child task exceeds my risk — approve?',
+          options: [
+            { label: 'Approve — raise parent risk', recommended: true },
+            { label: 'Reject — cancel the child' },
+          ],
+        },
       ],
     },
   ],
@@ -68,14 +97,27 @@ const tpData = {
     held: ['tp-0150'],
     question: 'tp-0154',
   },
-  // canned single-question flow — the deep-link target of a push notification
+  // canned single-question flow — the deep-link target of a push notification.
+  // 2 items, to demo the single-question view handling a bundle too.
   pushQuestion: {
     id: 'tp-0156', parent: 'tp-0150', agent: 'reef-crab',
-    title: 'Watchdog grace: 30s or 120s before SIGKILL?',
-    context: 'SIGTERM sent on timeout; how long to wait for the WIP commit before SIGKILL.',
-    options: [
-      { label: '120s — give the tree rule room', recommended: true },
-      { label: '30s' },
+    context: 'watchdog grace-period tuning — two related dials came up together.',
+    items: [
+      {
+        title: 'Watchdog grace: 30s or 120s before SIGKILL?',
+        detail: 'SIGTERM sent on timeout; how long to wait for the WIP commit before SIGKILL.',
+        options: [
+          { label: '120s — give the tree rule room', recommended: true },
+          { label: '30s' },
+        ],
+      },
+      {
+        title: 'Retries before auto-escalating to abandon?',
+        options: [
+          { label: '1 retry, then ask', recommended: true },
+          { label: '3 retries, then ask' },
+        ],
+      },
     ],
   },
   board: {

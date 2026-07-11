@@ -14,7 +14,13 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
         title: "agent navigator needs human attention",
         purpose: "unknown agent name at pickup",
         completion_criteria: "the agent is repaired by hand",
-        question: { options: ["repaired by hand"], recommendation: "repaired by hand" },
+        question: [
+          {
+            title: "agent navigator needs human attention",
+            options: ["repaired by hand"],
+            recommendation: "repaired by hand",
+          },
+        ],
         quarantine_agent: "navigator",
       },
       new Date(0),
@@ -33,7 +39,7 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
           title: "plain question",
           purpose: "p",
           completion_criteria: "c",
-          question: { options: ["only"], recommendation: "only" },
+          question: [{ title: "plain question", options: ["only"], recommendation: "only" }],
         },
         new Date(0),
       ),
@@ -50,7 +56,13 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
         title: "agent navigator needs human attention",
         purpose: "unknown agent name at pickup",
         completion_criteria: "the agent is repaired by hand",
-        question: { options: ["repaired by hand"], recommendation: "repaired by hand" },
+        question: [
+          {
+            title: "agent navigator needs human attention",
+            options: ["repaired by hand"],
+            recommendation: "repaired by hand",
+          },
+        ],
         quarantine_agent: "navigator",
       },
       new Date(0),
@@ -60,7 +72,7 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
     const { pickupResumed, question: answered } = answerQuestion(
       db,
       question,
-      "repaired by hand",
+      ["repaired by hand"],
       new Date(1),
     );
 

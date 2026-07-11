@@ -69,21 +69,19 @@ export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: 
     });
     return;
   }
+  const title = `agent ${agentName} needs human attention`;
   registerTask(
     db,
     {
       type: "question",
-      title: `agent ${agentName} needs human attention`,
+      title,
       purpose:
         `${causeMessage}. ` +
         "Tasks assigned to this agent stay out of the slot until it is repaired. " +
         "Answering confirms the repair — the board verifies before it resumes " +
         "pickup; any answer text is kept as a repair note.",
       completion_criteria: "the agent is repaired by hand",
-      question: {
-        options: ["repaired by hand"],
-        recommendation: "repaired by hand",
-      },
+      question: [{ title, options: ["repaired by hand"], recommendation: "repaired by hand" }],
       quarantine_agent: agentName,
     },
     now,

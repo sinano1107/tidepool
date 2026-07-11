@@ -396,15 +396,22 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Escalate a decision outside your authority (or an execution dead end): " +
-        "registers a question task with 2-4 options plus your recommendation, " +
-        "blocks the current task on it, and frees the slot.",
-      // the schema stays permissive: option-count and recommendation invariants
-      // are enforced inside the verb so callers get a domain error
+        "registers a question task carrying 1-4 question items (each 2-4 options plus " +
+        "a recommendation) sharing one context, blocks the current task on it, and " +
+        "frees the slot. A human answers every item in one atomic submission.",
+      // the schema stays permissive: item-count, option-count, and
+      // recommendation invariants are enforced inside the verb so callers get
+      // a domain error
       inputSchema: {
-        title: z.string().min(1),
         context: z.string().min(1),
-        options: z.array(z.string()),
-        recommendation: z.string(),
+        questions: z.array(
+          z.object({
+            title: z.string().min(1),
+            detail: z.string().min(1).optional(),
+            options: z.array(z.string()),
+            recommendation: z.string(),
+          }),
+        ),
       },
     },
     async (input) =>

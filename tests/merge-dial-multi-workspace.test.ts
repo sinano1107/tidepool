@@ -46,7 +46,7 @@ it("prod workspace のタスクの merge 回答は、CI チェックと merge �
 
   t.github.scriptCiStatus("success");
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "merge",
+    answers: ["merge"],
   });
   expect(res.status).toBe(200);
 

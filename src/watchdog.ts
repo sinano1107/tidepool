@@ -59,7 +59,6 @@ export function failTask(
     db,
     task,
     {
-      title,
       // the option label alone ("abandon") can't carry what it does, so the
       // consequence is spelled out here — this is the only human-visible
       // surface for it (ADR 0006's implementation note); it's declared via
@@ -70,8 +69,7 @@ export function failTask(
         `"abandon" discards the rest of this plan — this task's remaining ` +
         `work plus its parent's other unfinished children — and returns the ` +
         `parent to the queue head to replan.`,
-      options: ["retry", "abandon"],
-      recommendation: "retry",
+      questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
       cancel_option: "abandon",
     },
     BOARD_WORKER_ID,

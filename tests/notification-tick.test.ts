@@ -31,7 +31,7 @@ function registerQuestion(db: ReturnType<typeof openDb>, title: string, at: Date
       title,
       purpose: `purpose of ${title}`,
       completion_criteria: "n/a",
-      question: { options: ["yes", "no"], recommendation: "yes" },
+      question: [{ title, options: ["yes", "no"], recommendation: "yes" }],
     },
     at,
   );

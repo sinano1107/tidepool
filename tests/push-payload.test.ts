@@ -18,8 +18,9 @@ function questionTask(overrides: Partial<Task> = {}): Task {
     sort_key: 0,
     handoff_doc: null,
     pr_number: null,
-    question_options: ["approve", "reject"],
-    question_recommendation: "approve",
+    question_items: [
+      { title: "workspace を quarantine 解除していい?", options: ["approve", "reject"], recommendation: "approve" },
+    ],
     question_answer: null,
     question_cancel_option: null,
     question_pending_child: null,

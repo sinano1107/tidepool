@@ -34,8 +34,8 @@ it("decompose converts a child riskier than its parent into an approval question
   // an approval question stands in its place instead
   const question = board.find((x: any) => x.type === "question" && x.parent_id === parent.id);
   expect(question).toBeDefined();
-  expect(question.question_options).toEqual(["approve", "reject"]);
-  expect(question.question_recommendation).toBe("approve");
+  expect(question.question_items[0].options).toEqual(["approve", "reject"]);
+  expect(question.question_items[0].recommendation).toBe("approve");
 
   // the parent is blocked on that question (derived from the unfinished child)
   expect(board.find((x: any) => x.id === parent.id).status).toBe("blocked");
@@ -69,7 +69,7 @@ it("approving a risk-approval question registers the pending child and raises th
   const question = await decomposeRiskyChild(t, parent.id);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "approve",
+    answers: ["approve"],
   });
   expect(answered.status).toBe(200);
 
@@ -93,7 +93,7 @@ it("approving a risk-approval question records an auditable event on the parent'
   await t.clock.advance(HOUR);
   const question = await decomposeRiskyChild(t, parent.id);
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "approve" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["approve"] });
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${parent.id}/events`)).json;
   const raised = events.filter((e: any) => e.kind === "risk_flag_raised");
@@ -110,7 +110,7 @@ it("the child materialized on approval carries the same decision-log provenance 
   await t.clock.advance(HOUR);
   const question = await decomposeRiskyChild(t, parent.id);
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "approve" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["approve"] });
 
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   const decision = log.entries.find((e: any) => e.kind === "decision_logged");
@@ -130,7 +130,7 @@ it("rejecting a risk-approval question leaves the child unregistered and the par
   const question = await decomposeRiskyChild(t, parent.id);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "reject",
+    answers: ["reject"],
   });
   expect(answered.status).toBe(200);
 
@@ -172,7 +172,7 @@ it("approving a later, non-risk escalation once the parent is already risky does
 
   // first escalation: genuinely raises the parent from risk_flag=0 to 1
   const firstQuestion = await decomposeRiskyChild(t, parent.id);
-  await api(t.baseUrl, "POST", `/api/tasks/${firstQuestion.id}/answer`, { answer: "approve" });
+  await api(t.baseUrl, "POST", `/api/tasks/${firstQuestion.id}/answer`, { answers: ["approve"] });
   const firstChild = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.title === "migrate the prod table",
   );
@@ -206,7 +206,7 @@ it("approving a later, non-risk escalation once the parent is already risky does
     (x: any) => x.type === "question" && x.status === "todo" && x.parent_id === parent.id,
   );
 
-  await api(t.baseUrl, "POST", `/api/tasks/${secondQuestion.id}/answer`, { answer: "approve" });
+  await api(t.baseUrl, "POST", `/api/tasks/${secondQuestion.id}/answer`, { answers: ["approve"] });
 
   // only the first approval's propagation is on record — the second
   // approval found the parent already risky and raised nothing new

@@ -18,8 +18,8 @@ describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般
     expect(agentNeedsHuman(db, "navigator")).toBe(true);
     const question = listBoard(db).find((t) => t.type === "question");
     expect(question?.question_quarantine_agent).toBe("navigator");
-    expect(question?.question_options).toEqual(["repaired by hand"]);
-    expect(question?.question_recommendation).toBe("repaired by hand");
+    expect(question?.question_items?.[0]?.options).toEqual(["repaired by hand"]);
+    expect(question?.question_items?.[0]?.recommendation).toBe("repaired by hand");
   });
 
   it("同一 agent 名への2度目の quarantine は question を増やさず、既存 question に再発火の cause イベントを追記する", () => {

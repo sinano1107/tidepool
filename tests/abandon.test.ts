@@ -64,7 +64,7 @@ it("abandon の回答で計画ごと破棄される: 失敗タスクと兄弟が
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board1.find((x: any) => x.type === "question");
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "abandon" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"] });
 
   const board2 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board2.find((x: any) => x.id === failing.id).status).toBe("cancelled");
@@ -133,10 +133,10 @@ it("abandon のカスケードは done の兄弟には触れない(記録は劣�
 
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board1.find(
-    (x: any) => x.type === "question" && x.question_options?.includes("abandon"),
+    (x: any) => x.type === "question" && x.question_items?.[0]?.options?.includes("abandon"),
   );
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "abandon" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"] });
 
   const board2 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   // the cascade only ever touches unfinished descendants — a task that

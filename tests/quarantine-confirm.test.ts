@@ -44,8 +44,8 @@ it("tree rule 失敗時の question は1択の確認型(repaired by hand)であ�
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
-  expect(question.question_options).toEqual(["repaired by hand"]);
-  expect(question.question_recommendation).toBe("repaired by hand");
+  expect(question.question_items[0].options).toEqual(["repaired by hand"]);
+  expect(question.question_items[0].recommendation).toBe("repaired by hand");
 });
 
 // v1 has one board workspace and slot concurrency 1 (CONTEXT.md), so a
@@ -88,7 +88,7 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
 
   // 何も直さず「直した」と答える — .git はまだ壊れたまま
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "repaired by hand",
+    answers: ["repaired by hand"],
   });
   expect(res.status).toBe(409);
 
@@ -121,11 +121,11 @@ it("ツリーがクリーンだと確認されれば needs_human が解除され
 
   const answerText = "repaired: reinitialized git and committed the WIP by hand";
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: answerText,
+    answers: [answerText],
   });
   expect(res.status).toBe(200);
   expect(res.json.status).toBe("done");
-  expect(res.json.question_answer).toBe(answerText);
+  expect(res.json.question_answer).toEqual([answerText]);
 
   // pickup が即時再開し、止まっていたタスクが動く(clock を進めなくても良い)
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work", "stalled work"]);
@@ -154,10 +154,8 @@ it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由�
   const res: any = await client.callTool({
     name: "escalate",
     arguments: {
-      title: "one-option escalate attempt",
       context: "a plain agent question, not a quarantine confirmation",
-      options: ["only"],
-      recommendation: "only",
+      questions: [{ title: "one-option escalate attempt", options: ["only"], recommendation: "only" }],
     },
   });
   await client.close();

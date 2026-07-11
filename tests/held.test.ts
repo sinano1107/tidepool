@@ -26,7 +26,7 @@ it("祖先の未回答 question に held されたタスクは、回答される
       purpose: "a human wants steering input",
       completion_criteria: "answered",
       parent_id: parent.id,
-      question: { options: ["yes", "no"], recommendation: "yes" },
+      question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
     })
   ).json;
 
@@ -38,7 +38,7 @@ it("祖先の未回答 question に held されたタスクは、回答される
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "yes" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yes"] });
 
   const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(after.find((x: any) => x.id === child.id).status).toBe("todo");

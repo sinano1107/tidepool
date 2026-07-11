@@ -90,7 +90,7 @@ it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付�
   const question = list.find((x: any) => x.type === "question");
   expect(question).toBeDefined();
   expect(question.status).toBe("todo");
-  expect(question.question_options).toContain("retry");
+  expect(question.question_items[0].options).toContain("retry");
   // the human-facing text (not just a source comment) spells out what
   // abandon actually does, since the option label alone ("abandon") can't
   // carry that — ADR 0006's implementation note
@@ -123,7 +123,7 @@ it("failure question の「再実行」を選ぶと元タスクが先頭復帰�
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "retry" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
 
   // answered → parent returns to the queue head and is immediately re-picked up
   const after = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
@@ -151,7 +151,7 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "retry" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 
   // second run, from the retry's own pickup: hits the limit again and is
@@ -216,7 +216,7 @@ it("failure question が開いている間、失敗タスクの兄弟(計画の�
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["plan", "will fail"]);
 
   const question = board1.find((x: any) => x.type === "question");
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "retry" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
 
   // answered — held clears regardless of which option was chosen
   const board2 = (await api(t.baseUrl, "GET", "/api/tasks")).json;

@@ -69,10 +69,8 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
   const res: any = await client.callTool({
     name: "escalate",
     arguments: {
-      title: "which approach?",
       context: "two viable approaches, outside my authority",
-      options: ["a", "b"],
-      recommendation: "a",
+      questions: [{ title: "which approach?", options: ["a", "b"], recommendation: "a" }],
     },
   });
   expect(res.isError ?? false).toBe(false);
@@ -94,7 +92,7 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
   // WIP がそのまま作業ツリーに戻っている
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "a" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["a"] });
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, other.id, task.id]);
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
   expect(readFileSync(join(ws.path, "draft.txt"), "utf8")).toBe("work in flight\n");

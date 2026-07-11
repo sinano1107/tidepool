@@ -24,13 +24,11 @@ const MIN = 60 * 1000;
 const WORK_LIMIT = 90 * MIN;
 
 const escalation = {
-  title: "which provider?",
   context: "two viable providers, out of my authority",
-  options: ["a", "b"],
-  recommendation: "a",
+  questions: [{ title: "which provider?", options: ["a", "b"], recommendation: "a" }],
 };
 
-it("get_current_task の children に、回答済み question 子タスクの options/recommendation/answer が含まれる", async () => {
+it("get_current_task の children に、回答済み question 子タスクの items/answer が含まれる", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up
@@ -40,7 +38,7 @@ it("get_current_task の children に、回答済み question 子タスクの op
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "b" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["b"] });
 
   // answering with a free slot resumes the parent at once (escalate.test.ts's
   // own "answering unblocks the parent... picks it up at once" behavior)
@@ -50,11 +48,10 @@ it("get_current_task の children に、回答済み question 子タスクの op
     const payload = JSON.parse(result.content[0].text);
     expect(payload.children).toEqual([
       {
-        title: escalation.title,
+        title: escalation.questions[0]!.title,
         status: "done",
-        options: escalation.options,
-        recommendation: escalation.recommendation,
-        answer: "b",
+        items: escalation.questions,
+        answer: ["b"],
       },
     ]);
   } finally {
@@ -134,7 +131,7 @@ it("get_current_task の children に、cancelled 子タスクの発端 question
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board1.find((x: any) => x.type === "question");
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "abandon" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"] });
 
   // abandon resumes the plan (parent) at once — same free-slot pickup as the
   // question-answer path
@@ -147,12 +144,12 @@ it("get_current_task の children に、cancelled 子タスクの発端 question
     expect(failingChild).toEqual({
       title: "will fail",
       status: "cancelled",
-      origin_question: { title: question.title, answer: "abandon" },
+      origin_question: { title: question.title, answer: ["abandon"] },
     });
     expect(siblingChild).toEqual({
       title: "sibling",
       status: "cancelled",
-      origin_question: { title: question.title, answer: "abandon" },
+      origin_question: { title: question.title, answer: ["abandon"] },
     });
   } finally {
     await client.close();

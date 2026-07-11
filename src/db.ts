@@ -29,15 +29,17 @@ export function openDb(path: string): Db {
       -- no workspace/github configured, or nothing to hand off. Set once by
       -- recordPrOpened, never by the MCP layer directly.
       pr_number           INTEGER,
-      -- question-only fields: 2-4 choices (JSON array), the registrant's
-      -- recommendation, and the human's answer once given
-      question_options        TEXT,
-      question_recommendation TEXT,
-      question_answer         TEXT,
-      -- system-internal only (ADR 0006): one of question_options that, if
-      -- answered, cancels the plan instead of the ordinary unblock-to-head
-      -- path. Never set via MCP or the JSON API — only the watchdog's
-      -- failure-question registration sets it.
+      -- question-only fields (issue #30): 1-4 question items (JSON array of
+      -- {title, detail?, options, recommendation} — the common context lives
+      -- on purpose), and the human's answers once given, one per item, in
+      -- item order. A single-item question is the degenerate case of the
+      -- same shape, not a second one.
+      question_items           TEXT,
+      question_answer          TEXT,
+      -- system-internal only (ADR 0006): one of the (sole) item's options
+      -- that, if answered, cancels the plan instead of the ordinary
+      -- unblock-to-head path. Never set via MCP or the JSON API — only the
+      -- watchdog's failure-question registration sets it.
       question_cancel_option  TEXT,
       -- system-internal only (issue #11): a pending-child approval question's
       -- would-be child, JSON-encoded, materialized only if the human answers
@@ -186,8 +188,7 @@ export function openDb(path: string): Db {
     (c) => c.name,
   );
   for (const col of [
-    "question_options",
-    "question_recommendation",
+    "question_items",
     "question_answer",
     "question_cancel_option",
     "question_pending_child",

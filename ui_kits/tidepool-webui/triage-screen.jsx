@@ -19,31 +19,24 @@ function TpSegmentGauge({ total, filled }) {
   );
 }
 
-function TpQuestionCard({ q, answer, onAnswer, locked }) {
-  const { Card, Input, Button, AgentChip } = window.TidepoolDesignSystem_8a0ead;
+// One question item's option list — one-tap pick, or a free-text override.
+// Fires onChange(label) the instant a pick is made; TpQuestionCard above
+// decides when every item in the bundle has a pick and submits the whole
+// answer set atomically (issue #30) — this component only ever reports its
+// own item's value, never submits on its own.
+function TpQuestionItemPicker({ item, value, locked, onChange }) {
+  const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState('');
   return (
-    <Card style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{q.id}</span>
-        <AgentChip name={q.agent} size="sm" />
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{q.agent}</span>
-        {q.parent && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>blocks {q.parent}</span>}
-      </div>
-      {q.kind === 'approval' && (
-        <span style={{ display: 'inline-block', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--sun-4)', background: 'var(--sun-1)', borderRadius: 'var(--radius-full)', padding: '2px 10px', marginBottom: 6 }}>
-          out-of-authority → approval
-        </span>
-      )}
-      <div style={{ fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', marginBottom: 4 }}>{q.title}</div>
-      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: q.note ? 6 : 14 }}>{q.context}</div>
-      {q.note && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 14 }}>⚠ {q.note}</div>}
+    <div>
+      <div style={{ fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', marginBottom: item.detail ? 3 : 8 }}>{item.title}</div>
+      {item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8 }}>{item.detail}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {q.options.map((o) => {
-          const picked = answer === o.label;
+        {item.options.map((o) => {
+          const picked = value === o.label;
           return (
-            <button key={o.label} onClick={() => !locked && onAnswer(picked ? null : o.label)}
+            <button key={o.label} onClick={() => !locked && onChange(picked ? null : o.label)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
                 fontFamily: 'var(--font-ui)', fontSize: 'var(--text-sm)', fontWeight: picked ? 600 : 400,
@@ -61,15 +54,66 @@ function TpQuestionCard({ q, answer, onAnswer, locked }) {
             </button>
           );
         })}
-        {locked && answer && !q.options.some((o) => o.label === answer) && (
-          <div style={{ fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--tide-4)', borderRadius: 'var(--radius-full)', padding: '11px 18px', boxShadow: 'var(--shadow-primary)' }}>{answer}</div>
+        {locked && value && !item.options.some((o) => o.label === value) && (
+          <div style={{ fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--tide-4)', borderRadius: 'var(--radius-full)', padding: '11px 18px', boxShadow: 'var(--shadow-primary)' }}>{value}</div>
         )}
         {locked ? null : override
           ? <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
               <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText(e.target.value)} style={{ flex: 1 }} />
-              <Button variant="secondary" size="sm" disabled={!overrideText.trim()} onClick={() => onAnswer(overrideText.trim())}>Answer</Button>
+              <Button variant="secondary" size="sm" disabled={!overrideText.trim()} onClick={() => { onChange(overrideText.trim()); setOverride(false); setOverrideText(''); }}>Set</Button>
             </div>
           : <button onClick={() => setOverride(true)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', cursor: 'pointer', textAlign: 'left', padding: '2px 0' }}>override with free text…</button>}
+      </div>
+    </div>
+  );
+}
+
+// One question task's card: the shared context (its `purpose`) once, then
+// every item's picker (issue #30 — a single-item bundle is the degenerate,
+// most common case). The card owns its own in-progress picks and fires
+// onAnswer(answers) — one array entry per item, in item order — the instant
+// every item has a pick, submitting the whole bundle in one shot. This keeps
+// the existing one-tap ethos for the common single-item case (it fires on
+// that one tap) and generalizes it to a multi-item bundle (it fires on
+// whichever tap completes the set) — there is never a separate "submit"
+// button, and never a partial-answer state (CONTEXT.md's Question).
+function TpQuestionCard({ q, answer, onAnswer, locked }) {
+  const { Card, AgentChip } = window.TidepoolDesignSystem_8a0ead;
+  const items = q.items;
+  const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
+  // a server-confirmed answer (locked) always wins over in-progress local picks
+  React.useEffect(() => { if (answer) setDraft(answer); }, [answer]);
+  const setItemAnswer = (i, value) => {
+    const next = draft.slice();
+    next[i] = value;
+    setDraft(next);
+    if (next.every(Boolean)) onAnswer(next);
+  };
+  const answeredCount = draft.filter(Boolean).length;
+  return (
+    <Card style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{q.id}</span>
+        <AgentChip name={q.agent} size="sm" />
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{q.agent}</span>
+        {q.parent && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>blocks {q.parent}</span>}
+      </div>
+      {q.kind === 'approval' && (
+        <span style={{ display: 'inline-block', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--sun-4)', background: 'var(--sun-1)', borderRadius: 'var(--radius-full)', padding: '2px 10px', marginBottom: 6 }}>
+          out-of-authority → approval
+        </span>
+      )}
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: q.note ? 6 : 14 }}>{q.context}</div>
+      {q.note && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 14 }}>⚠ {q.note}</div>}
+      {items.length > 1 && !locked && (
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+          {answeredCount} of {items.length} answered — submits together once every item is
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {items.map((item, i) => (
+          <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)} />
+        ))}
       </div>
     </Card>
   );
@@ -365,4 +409,4 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   );
 }
 
-Object.assign(window, { TriageScreen, TpQuestionCard, TpWaterline, TpSegmentGauge });
+Object.assign(window, { TriageScreen, TpQuestionCard, TpQuestionItemPicker, TpWaterline, TpSegmentGauge });

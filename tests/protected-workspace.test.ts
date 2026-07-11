@@ -52,7 +52,7 @@ it("decompose converts a child targeting a protected workspace into an approval 
 
   const question = board.find((x: any) => x.type === "question" && x.parent_id === parent.id);
   expect(question).toBeDefined();
-  expect(question.question_options).toEqual(["approve", "reject"]);
+  expect(question.question_items[0].options).toEqual(["approve", "reject"]);
 });
 
 it("a child targeting a non-protected workspace registers directly even when isProtectedWorkspace is configured", async () => {
@@ -118,7 +118,7 @@ it("completing a low-risk task in a protected workspace under auto_if_ci_green a
     (x: any) => x.type === "question" && x.title.startsWith("merge PR"),
   );
   expect(mergeQuestion).toBeDefined();
-  expect(mergeQuestion.question_options).toEqual(["merge", "hold"]);
+  expect(mergeQuestion.question_items[0].options).toEqual(["merge", "hold"]);
 
   await t.clock.advance(MINUTE); // the auto-merge poll ticks; nothing was queued
   expect(t.github.merged).toEqual([]);

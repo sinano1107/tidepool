@@ -43,8 +43,8 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board.find((x: any) => x.type === "question" && x.parent_id === null);
   expect(question).toBeDefined();
-  expect(question.question_options).toEqual(["merge", "hold"]);
-  expect(question.question_recommendation).toBe("merge");
+  expect(question.question_items[0].options).toEqual(["merge", "hold"]);
+  expect(question.question_items[0].recommendation).toBe("merge");
 });
 
 it("completing a work task with no merge dial configured opens the PR without any merge-decision question (pre-#11 baseline)", async () => {
@@ -86,7 +86,7 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
   t.github.scriptCiStatus("success");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "merge",
+    answers: ["merge"],
   });
   expect(answered.status).toBe(200);
 
@@ -94,7 +94,7 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
 
   const answeredQuestion = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(answeredQuestion.status).toBe("done");
-  expect(answeredQuestion.question_answer).toBe("merge");
+  expect(answeredQuestion.question_answer).toEqual(["merge"]);
 });
 
 it("answering \"merge\" while CI is not green is rejected, and the question stays open to retry", async () => {
@@ -107,7 +107,7 @@ it("answering \"merge\" while CI is not green is rejected, and the question stay
   t.github.scriptCiStatus("pending");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "merge",
+    answers: ["merge"],
   });
   expect(answered.status).toBe(409);
 
@@ -126,7 +126,7 @@ it("answering \"hold\" resolves the question without checking CI or merging", as
   const { question } = await completeUnderEscalate(t);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "hold",
+    answers: ["hold"],
   });
   expect(answered.status).toBe(200);
 
@@ -190,8 +190,8 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board.find((x: any) => x.type === "question");
   expect(question).toBeDefined();
-  expect(question.question_options).toEqual(["merge", "hold"]);
-  expect(question.question_recommendation).toBe("hold");
+  expect(question.question_items[0].options).toEqual(["merge", "hold"]);
+  expect(question.question_items[0].recommendation).toBe("hold");
 });
 
 it("a risky task under auto_if_ci_green asks for merge approval immediately instead of queueing for auto-merge", async () => {
@@ -223,7 +223,7 @@ it("a risky task under auto_if_ci_green asks for merge approval immediately inst
   const riskQuestion = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question" && x.parent_id === parent.id,
   );
-  await api(t.baseUrl, "POST", `/api/tasks/${riskQuestion.id}/answer`, { answer: "approve" });
+  await api(t.baseUrl, "POST", `/api/tasks/${riskQuestion.id}/answer`, { answers: ["approve"] });
 
   await t.clock.advance(HOUR); // risky child picked up
   const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -239,7 +239,7 @@ it("a risky task under auto_if_ci_green asks for merge approval immediately inst
     (x: any) => x.type === "question" && x.title.startsWith("merge PR"),
   );
   expect(mergeQuestion).toBeDefined();
-  expect(mergeQuestion.question_options).toEqual(["merge", "hold"]);
+  expect(mergeQuestion.question_items[0].options).toEqual(["merge", "hold"]);
 
   await t.clock.advance(MINUTE); // the auto-merge poll ticks; nothing was queued
   expect(t.github.merged).toEqual([]);

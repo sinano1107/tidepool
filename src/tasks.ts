@@ -44,9 +44,11 @@ export interface Task {
    *  handoff-worthy change). Set once by recordPrOpened, never by the MCP
    *  layer directly. */
   pr_number: number | null;
-  question_options: string[] | null;
-  question_recommendation: string | null;
-  question_answer: string | null;
+  question_items: QuestionItem[] | null;
+  /** One answer per item, in item order — set only when every item has been
+   *  answered (issue #30): the submission is atomic, so a partial-answer
+   *  state is never stored. */
+  question_answer: string[] | null;
   /** System-internal only (ADR 0006) — never set via MCP or the JSON API. */
   question_cancel_option: string | null;
   /** System-internal only (issue #11): a pending-child approval question's
@@ -97,30 +99,36 @@ export interface PendingChildSpec extends TaskContent {
   workspace?: string;
 }
 
-/** The SQLite shape of a task: options/pending-child are JSON TEXT columns.
- *  The JSON stays at this boundary — domain code sees the parsed shape. */
-export type TaskRow = Omit<Task, "question_options" | "question_pending_child"> & {
-  question_options: string | null;
+/** The SQLite shape of a task: items/answer/pending-child are JSON TEXT
+ *  columns. The JSON stays at this boundary — domain code sees the parsed
+ *  shape. */
+export type TaskRow = Omit<Task, "question_items" | "question_answer" | "question_pending_child"> & {
+  question_items: string | null;
+  question_answer: string | null;
   question_pending_child: string | null;
 };
 
-function parseOptions(json: string | null): string[] | null {
-  return json === null ? null : JSON.parse(json);
-}
-
-function parsePendingChild(json: string | null): PendingChildSpec | null {
+function parseJson<T>(json: string | null): T | null {
   return json === null ? null : JSON.parse(json);
 }
 
 export function rowToTask(row: TaskRow): Task {
   return {
     ...row,
-    question_options: parseOptions(row.question_options),
-    question_pending_child: parsePendingChild(row.question_pending_child),
+    question_items: parseJson<QuestionItem[]>(row.question_items),
+    question_answer: parseJson<string[]>(row.question_answer),
+    question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
   };
 }
 
-export interface QuestionSpec {
+/** One question in a bundle (issue #30): a single-item bundle is the
+ *  degenerate case of the same shape (CONTEXT.md's Question), not a second
+ *  form. `detail` holds implications specific to this item — the shared
+ *  situation goes on the question task's `purpose` instead, so a triage
+ *  reader isn't re-reading the same context once per item. */
+export interface QuestionItem {
+  title: string;
+  detail?: string;
   options: string[];
   recommendation: string;
 }
@@ -138,7 +146,9 @@ export interface RegisterTaskInput extends TaskContent {
   /** Registers the task against a specific workspace (issue #11). Absent →
    *  inherits the parent's (or null at the root). */
   workspace?: string;
-  question?: QuestionSpec;
+  /** 1-4 question items (issue #30) — a single-item array is the degenerate
+   *  case, not a distinct shape. */
+  question?: QuestionItem[];
   /** System-internal only (ADR 0006): declares that answering the question
    *  with this exact option cancels the plan (see `cancelTask`) instead of
    *  taking the ordinary unblock-to-head path. Must be one of the question's
@@ -166,42 +176,50 @@ export interface RegisterTaskInput extends TaskContent {
   based_on_decision?: number;
 }
 
-/** Every question carries 2-4 options plus a recommendation among them,
- *  whichever door it enters by (escalate or the JSON API) — the answer view
- *  is one-tap first, free text only as an override. The degraded free-text-only
- *  question is reserved for the watchdog's auto-escalation safety valve (#17).
+/** Every question carries 1-4 items (issue #30), each with 2-4 options plus a
+ *  recommendation among them, whichever door it enters by (escalate or the
+ *  JSON API) — the answer view is one-tap first, free text only as an
+ *  override. The degraded free-text-only question is reserved for the
+ *  watchdog's auto-escalation safety valve (#17).
  *
- *  The lower bound relaxes to 1 only for an actual quarantine Confirmation
- *  question (issue #21, CONTEXT.md) — `quarantine_workspace` or (ADR 0012 /
- *  issue #36) `quarantine_agent` set, which only quarantineWorkspace /
- *  quarantineAgent themselves ever do: it asks for a completion confirmation,
- *  not a choice, and a fake second option would be filler with no effect of
- *  its own. This is deliberately keyed on those fields rather than the
- *  registering `workerId` (e.g. `=== BOARD_WORKER_ID`): a worker's id is
- *  operator-configured and could collide with BOARD_WORKER_ID by accident,
- *  which would otherwise let an ordinary agent question sneak past the 2-4
- *  floor. `quarantine_workspace`/`quarantine_agent` are never reachable from
- *  MCP or the JSON API (unlike an assignee/worker id), so this floor can't be
- *  gamed the same way — an agent's question is always a real 2-4-way choice. */
+ *  An item's option floor relaxes to 1 only for an actual quarantine
+ *  Confirmation question (issue #21, CONTEXT.md) — `quarantine_workspace` or
+ *  (ADR 0012 / issue #36) `quarantine_agent` set, which only
+ *  quarantineWorkspace / quarantineAgent themselves ever do: it asks for a
+ *  completion confirmation, not a choice, and a fake second option would be
+ *  filler with no effect of its own. This is deliberately keyed on those
+ *  fields rather than the registering `workerId` (e.g. `=== BOARD_WORKER_ID`):
+ *  a worker's id is operator-configured and could collide with
+ *  BOARD_WORKER_ID by accident, which would otherwise let an ordinary agent
+ *  question sneak past the 2-4 floor. `quarantine_workspace`/
+ *  `quarantine_agent` are never reachable from MCP or the JSON API (unlike an
+ *  assignee/worker id), so this floor can't be gamed the same way — an
+ *  agent's question is always a real 2-4-way choice. */
 function assertQuestionSpec(input: RegisterTaskInput): void {
   if (input.type !== "question") {
     if (input.question) throw new DomainError("only a question task carries options");
     if (input.cancel_option) throw new DomainError("only a question task carries a cancel option");
     return;
   }
-  const q = input.question;
+  const items = input.question;
+  if (!items || items.length < 1 || items.length > 4) {
+    throw new DomainError("a question carries 1 to 4 items");
+  }
   const minOptions =
     input.quarantine_workspace !== undefined || input.quarantine_agent !== undefined ? 1 : 2;
-  if (!q || q.options.length < minOptions || q.options.length > 4) {
-    throw new DomainError(`a question carries ${minOptions} to 4 options`);
-  }
-  if (!q.recommendation.trim() || !q.options.includes(q.recommendation)) {
-    throw new DomainError(
-      "a question carries the registrant's recommendation, one of its options",
-    );
+  for (const item of items) {
+    if (!item.title.trim()) throw new DomainError("a question item carries a title");
+    if (item.options.length < minOptions || item.options.length > 4) {
+      throw new DomainError(`a question item carries ${minOptions} to 4 options`);
+    }
+    if (!item.recommendation.trim() || !item.options.includes(item.recommendation)) {
+      throw new DomainError(
+        "a question item carries the registrant's recommendation, one of its options",
+      );
+    }
   }
   if (input.cancel_option !== undefined) {
-    if (!q.options.includes(input.cancel_option)) {
+    if (!items[0]!.options.includes(input.cancel_option)) {
       throw new DomainError("a cancel option must be one of the question's options");
     }
     // the abandon cascade (answerQuestion) walks up from the question's own
@@ -238,8 +256,7 @@ export function registerTask(
     sort_key: maxKey + 1,
     handoff_doc: null,
     pr_number: null,
-    question_options: input.question?.options ?? null,
-    question_recommendation: input.question?.recommendation ?? null,
+    question_items: input.question ?? null,
     question_answer: null,
     question_cancel_option: input.cancel_option ?? null,
     question_pending_child: input.pending_child ?? null,
@@ -252,17 +269,17 @@ export function registerTask(
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
-         question_options, question_recommendation, question_answer, question_cancel_option,
+         question_items, question_answer, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_quarantine_workspace,
          question_quarantine_agent, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
-         @question_options, @question_recommendation, @question_answer, @question_cancel_option,
+         @question_items, @question_answer, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_quarantine_workspace,
          @question_quarantine_agent, @created_at)`,
     ).run({
       ...task,
-      question_options: task.question_options && JSON.stringify(task.question_options),
+      question_items: task.question_items && JSON.stringify(task.question_items),
       question_pending_child:
         task.question_pending_child && JSON.stringify(task.question_pending_child),
     });
@@ -445,18 +462,26 @@ function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
   return next === undefined ? after.sort_key + 1 : (after.sort_key + next.sort_key) / 2;
 }
 
-export interface EscalateInput extends QuestionSpec {
-  title: string;
+export interface EscalateInput {
+  /** The shared situation behind every item in this bundle (issue #30) —
+   *  becomes the registered question task's `purpose`. */
   context: string;
+  /** 1-4 question items, whichever door escalate enters by. */
+  questions: QuestionItem[];
   /** System-internal only (ADR 0006) — absent from the MCP tool schema and
-   *  the JSON API; only the watchdog's failure-question path sets this. */
+   *  the JSON API; only the watchdog's failure-question path sets this.
+   *  Meaningful only for a single-item bundle (the item it targets). */
   cancel_option?: string;
 }
 
-/** Escalation: a question child carrying 2-4 choices and the registrant's
- *  recommendation (enforced at registration, like every question). The parent
- *  returns to `todo` (blocked is derived from the unfinished child, never
- *  stored) and the slot is freed by the caller. */
+/** Escalation: a question child carrying a bundle of 1-4 items, each with
+ *  2-4 choices and the registrant's recommendation (enforced at registration,
+ *  like every question) — a single-item bundle is the degenerate case of the
+ *  same shape (issue #30), not a distinct one. The parent returns to `todo`
+ *  (blocked is derived from the unfinished child, never stored) and the slot
+ *  is freed by the caller. The registered task's own `title` is the bundle's
+ *  first item's — for the common single-item case this is exactly the
+ *  question's own title, same as before the bundle existed. */
 export function escalateTask(
   db: Db,
   parent: Task,
@@ -470,11 +495,11 @@ export function escalateTask(
       db,
       {
         type: "question",
-        title: input.title,
+        title: input.questions[0]!.title,
         purpose: input.context,
         completion_criteria: "a human answer is recorded",
         parent_id: parent.id,
-        question: { options: input.options, recommendation: input.recommendation },
+        question: input.questions,
         cancel_option: input.cancel_option,
       },
       now,
@@ -531,16 +556,26 @@ export function cancelTask(
   })();
 }
 
-/** The human steering channel: answer a question from the WebUI. One tap on an
- *  option or a free-text override — either way a plain string. The question
- *  completes; only a parent this answer actually unblocks returns to the queue
- *  head (the caller fires the immediate poll on `parentUnblocked`).
+/** The human steering channel: answer a question from the WebUI. One answer
+ *  per item, in item order — the submission is atomic (issue #30): a length
+ *  mismatch is refused outright and nothing is persisted, so a partial-answer
+ *  state never exists. Each answer is either a one-tap option or a free-text
+ *  override, either way a plain string. The question completes only once
+ *  every item is answered; only a parent this answer actually unblocks
+ *  returns to the queue head (the caller fires the immediate poll on
+ *  `parentUnblocked`).
  *
  *  `stageUnblock` defers the head move: when given (an open triage session),
  *  the answer is just as durable but the unblocked parent is handed to the
  *  callback instead of moving — the queue only changes at triage commit.
  *
- *  Abandon (ADR 0006): when `answer` matches the question's declared
+ *  Every system-internal special case below (abandon, quarantine
+ *  confirmation, pending-child approval) is reachable only through a
+ *  length-1 question (CONTEXT.md's Confirmation question / ADR 0006), so each
+ *  reads `answers[0]` — the degenerate case of the same bundle shape, not a
+ *  second code path.
+ *
+ *  Abandon (ADR 0006): when the sole answer matches the question's declared
  *  `question_cancel_option` (system-internal, set only on the watchdog's
  *  failure questions), the failed task's plan is discarded instead of
  *  unblocked — every unfinished descendant of its parent (siblings included,
@@ -557,7 +592,7 @@ export function cancelTask(
 export function answerQuestion(
   db: Db,
   question: Task,
-  answer: string,
+  answers: string[],
   now: Date,
   stageUnblock?: (taskId: string) => void,
 ): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
@@ -567,11 +602,18 @@ export function answerQuestion(
   if (question.status !== "todo") {
     throw new DomainError(`a ${question.status} question cannot be answered`);
   }
+  const items = question.question_items!;
+  if (answers.length !== items.length) {
+    throw new DomainError(
+      `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
+    );
+  }
+  const answer = answers[0]!;
   let parentUnblocked = false;
   let pickupResumed = false;
   db.transaction(() => {
     db.prepare("UPDATE tasks SET status = 'done', question_answer = ? WHERE id = ?").run(
-      answer,
+      JSON.stringify(answers),
       question.id,
     );
     // the recommender is whoever registered the question — carried on the
@@ -584,8 +626,10 @@ export function answerQuestion(
       workerId: HUMAN_WORKER_ID,
       payload: {
         kind: "question_answered",
-        answer,
-        recommendation_accepted: answer === question.question_recommendation,
+        answers: answers.map((a, i) => ({
+          answer: a,
+          recommendation_accepted: a === items[i]!.recommendation,
+        })),
         recommended_by: registered?.worker_id ?? HUMAN_WORKER_ID,
       },
       at: now,
@@ -749,14 +793,15 @@ export function registerMergeQuestion(
   workerId: string,
   now: Date,
 ): void {
+  const title = `merge PR #${prNumber}: ${task.title}`;
   registerTask(
     db,
     {
       type: "question",
-      title: `merge PR #${prNumber}: ${task.title}`,
+      title,
       purpose,
       completion_criteria: "a human decides whether to merge",
-      question: { options: [...MERGE_QUESTION_OPTIONS], recommendation },
+      question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation }],
       pending_merge_pr: prNumber,
       // carries the originating work task's execution workspace (issue #26 /
       // ADR 0009), so the answer route's live CI check and the auto-merge
@@ -949,17 +994,20 @@ export function decomposeTask(
       // default fill-in, never itself a reason for a question
       const workspace = child.workspace ?? parent.workspace ?? undefined;
       if (reasons.length > 0) {
+        const questionTitle = `authorize child registration: ${child.title}`;
         registerTask(
           db,
           {
             type: "question",
-            title: `authorize child registration: ${child.title}`,
+            title: questionTitle,
             purpose:
               `"${child.title}" ${reasons.join("; ")} — outside ${workerId}'s authority to ` +
               `register unapproved. ${child.purpose}`,
             completion_criteria: "a human approves or rejects the child registration",
             parent_id: parent.id,
-            question: { options: [...PENDING_CHILD_OPTIONS], recommendation: "approve" },
+            question: [
+              { title: questionTitle, options: [...PENDING_CHILD_OPTIONS], recommendation: "approve" },
+            ],
             pending_child: {
               title: child.title,
               purpose: child.purpose,
@@ -1130,8 +1178,9 @@ export function listBoard(db: Db): BoardTask[] {
   const rows = boardRows(db, "");
   return rows.map((row) => ({
     ...row,
-    question_options: parseOptions(row.question_options),
-    question_pending_child: parsePendingChild(row.question_pending_child),
+    question_items: parseJson<QuestionItem[]>(row.question_items),
+    question_answer: parseJson<string[]>(row.question_answer),
+    question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
   }));
 }
 
@@ -1185,8 +1234,9 @@ export function listQueue(
     .filter((row) => row.assignee !== HUMAN_WORKER_ID)
     .map((row) => ({
       ...row,
-      question_options: parseOptions(row.question_options),
-      question_pending_child: parsePendingChild(row.question_pending_child),
+      question_items: parseJson<QuestionItem[]>(row.question_items),
+      question_answer: parseJson<string[]>(row.question_answer),
+      question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
     }));
 }
 
@@ -1218,10 +1268,10 @@ export interface SettledChildContext {
   title: string;
   status: "done" | "cancelled";
   handoff_doc?: string | null;
-  options?: string[];
-  recommendation?: string | null;
-  answer?: string | null;
-  origin_question?: { title: string; answer: string | null } | null;
+  /** A done question's bundle (issue #30), one per item, in item order. */
+  items?: QuestionItem[];
+  answer?: string[] | null;
+  origin_question?: { title: string; answer: string[] | null } | null;
 }
 
 /** A cancelled task's one `task_cancelled` event names the abandon question
@@ -1261,8 +1311,7 @@ export function settledChildren(db: Db, parentId: string): SettledChildContext[]
       return {
         title: child.title,
         status: "done",
-        options: child.question_options ?? [],
-        recommendation: child.question_recommendation,
+        items: child.question_items ?? [],
         answer: child.question_answer,
       };
     }

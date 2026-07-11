@@ -31,11 +31,12 @@ export type EventPayload =
   | { kind: "task_cancelled"; origin_question_id: string }
   // recommendation_accepted and recommended_by are first-class: per-agent
   // acceptance rates are a primary statistic, recorded at answer time so they
-  // never need a join back through task_registered
+  // never need a join back through task_registered. One entry per question
+  // item, in item order (issue #30) — acceptance is counted per item, not per
+  // submission, so "N of M answered per recommendation" stays expressible.
   | {
       kind: "question_answered";
-      answer: string;
-      recommendation_accepted: boolean;
+      answers: Array<{ answer: string; recommendation_accepted: boolean }>;
       recommended_by: string;
     }
   // a triage objection annotates one log entry (entry_id = event id); the

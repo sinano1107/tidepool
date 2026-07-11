@@ -12,7 +12,7 @@ function registerQuestion(db: ReturnType<typeof openDb>, title: string) {
       title,
       purpose: `purpose of ${title}`,
       completion_criteria: "n/a",
-      question: { options: ["yes", "no"], recommendation: "yes" },
+      question: [{ title, options: ["yes", "no"], recommendation: "yes" }],
     },
     new Date(0),
   );
@@ -57,7 +57,7 @@ describe("buildMorningDigest(issue #14): quiet hours 中に溜まった件数を
     const db = openDb(":memory:");
     const answered = registerQuestion(db, "回答済み");
     registerQuestion(db, "未回答");
-    answerQuestion(db, answered, "yes", new Date(0));
+    answerQuestion(db, answered, ["yes"], new Date(0));
 
     expect(buildMorningDigest(db).questionCount).toBe(1);
   });

@@ -60,7 +60,7 @@ it("非既定 workspace(prod)の quarantine は、ツリーがクリーンな状
   git(prod.path, "commit", "-m", "manual repair");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "repaired by hand",
+    answers: ["repaired by hand"],
   });
   expect(res.status).toBe(200);
   expect(res.json.status).toBe("done");

@@ -219,7 +219,8 @@ function App() {
   const commitTriage = (answers, objections, scratch = []) => {
     const unblocked = Object.entries(answers).filter(([, a]) => a).map(([qid]) => {
       const q = data.questions.find((x) => x.id === qid);
-      return q.parent ? { id: q.parent, title: q.title, assignee: q.agent, frontInserted: true, flash: true } : null;
+      const label = q.items.length > 1 ? `${q.items.length} questions answered` : q.items[0].title;
+      return q.parent ? { id: q.parent, title: label, assignee: q.agent, frontInserted: true, flash: true } : null;
     }).filter(Boolean);
     // an unblocked parent MOVES to the front — it may already sit (blocked) in the queue
     const remaining = data.queue.filter((x) => !unblocked.some((u) => u.id === x.id));

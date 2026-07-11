@@ -56,7 +56,7 @@ it("failure question で「再実行」を選んでも、計画の残りは canc
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question",
   );
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "retry" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
 
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   // nothing was cancelled anywhere on the board
@@ -99,10 +99,8 @@ it("cancel_option を持たない question に「abandon」という文字列を
   const res: any = await escalateClient.callTool({
     name: "escalate",
     arguments: {
-      title: "which way?",
       context: "ordinary agent escalation, not a watchdog failure",
-      options: ["retry", "abandon"],
-      recommendation: "retry",
+      questions: [{ title: "which way?", options: ["retry", "abandon"], recommendation: "retry" }],
     },
   });
   expect(res.isError ?? false).toBe(false);
@@ -111,9 +109,11 @@ it("cancel_option を持たない question に「abandon」という文字列を
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question" && x.parent_id === escalating.id,
   );
-  expect(question.question_options).toEqual(["retry", "abandon"]);
+  expect(question.question_items).toEqual([
+    { title: "which way?", options: ["retry", "abandon"], recommendation: "retry" },
+  ]);
 
-  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answer: "abandon" });
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"] });
 
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   // no cancel_option was declared on this question, so "abandon" is just an

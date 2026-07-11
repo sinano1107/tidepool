@@ -56,10 +56,17 @@ const registerTaskSchema = z.object({
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
-  // shape stays permissive: the 2-4-options + recommendation invariant is
-  // enforced in the domain so callers get a domain error
+  // shape stays permissive: the 1-4-item / 2-4-options + recommendation
+  // invariants are enforced in the domain so callers get a domain error
   question: z
-    .object({ options: z.array(z.string()), recommendation: z.string() })
+    .array(
+      z.object({
+        title: z.string().min(1),
+        detail: z.string().min(1).optional(),
+        options: z.array(z.string()),
+        recommendation: z.string(),
+      }),
+    )
     .optional(),
 });
 
@@ -75,8 +82,11 @@ const completeTaskSchema = z.object({
   handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
 });
 
+// one answer per question item, in item order (issue #30) — the domain
+// enforces the length match against the question's own item count so callers
+// get a domain error, not a schema error, on a partial submission
 const answerSchema = z.object({
-  answer: z.string().min(1),
+  answers: z.array(z.string().min(1)).min(1),
 });
 
 const cursorSchema = z.object({
@@ -322,7 +332,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // now — otherwise a stale approval could merge a build that has since
       // gone red, and once resolved the question offers no way to retry
       const mergePr = task.question_pending_merge_pr;
-      const wantsMerge = mergePr !== null && parsed.data.answer === "merge";
+      // a merge-decision question is always length-1 (CONTEXT.md's
+      // Confirmation question — this one carries a real 2-way choice, not a
+      // confirmation, but the bundle is still a single item)
+      const wantsMerge = mergePr !== null && parsed.data.answers[0] === "merge";
       if (wantsMerge) {
         if (!github) {
           throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
@@ -397,7 +410,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const { question, parentUnblocked, pickupResumed } = answerQuestion(
         db,
         task,
-        parsed.data.answer,
+        parsed.data.answers,
         clock.now(),
         session && ((taskId) => stageFrontInsert(db, session.id, taskId)),
       );

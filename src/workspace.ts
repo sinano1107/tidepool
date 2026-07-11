@@ -161,21 +161,19 @@ export function quarantineWorkspace(
     });
     return;
   }
+  const title = `workspace ${workspaceName} needs human attention`;
   registerTask(
     db,
     {
       type: "question",
-      title: `workspace ${workspaceName} needs human attention`,
+      title,
       purpose:
         `${causeMessage}. ` +
         "Tasks in this workspace stay out of the slot until it is repaired. " +
         "Answering confirms the repair — the board verifies the tree is " +
         "clean before it resumes pickup; any answer text is kept as a repair note.",
       completion_criteria: "the workspace is repaired by hand",
-      question: {
-        options: ["repaired by hand"],
-        recommendation: "repaired by hand",
-      },
+      question: [{ title, options: ["repaired by hand"], recommendation: "repaired by hand" }],
       quarantine_workspace: workspaceName,
     },
     now,

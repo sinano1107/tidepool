@@ -61,10 +61,10 @@ it("quarantine question への回答は、その agent 名宛ての todo がま�
 
   const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = before.find((x: any) => x.type === "question");
-  expect(question.question_options).toEqual(["repaired by hand"]);
+  expect(question.question_items[0].options).toEqual(["repaired by hand"]);
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: "repaired by hand",
+    answers: ["repaired by hand"],
   });
   expect(res.status).toBe(409);
 
@@ -91,11 +91,11 @@ it("その agent 名宛ての todo がもう存在しなければ、回答が受
 
   const answerText = "repaired: reassigned the pending task away from navigator";
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answer: answerText,
+    answers: [answerText],
   });
   expect(res.status).toBe(200);
   expect(res.json.status).toBe("done");
-  expect(res.json.question_answer).toBe(answerText);
+  expect(res.json.question_answer).toEqual([answerText]);
 
   // pickup resumed at once (no need to advance the clock) and took the queue
   // head — `delegated` registered first, so it's the one slot's single seat;
