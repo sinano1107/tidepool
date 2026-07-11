@@ -155,7 +155,7 @@ function pausedSlot(underlyingSlot) {
 }
 
 function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false, onTogglePause, onFront, onDoneHuman, onReorder }) {
-  const { Card, Button } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   // real deployments pass live slot content via data.slot; the canned states remain for the mock
   const underlyingSlot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const slot = paused ? pausedSlot(underlyingSlot) : underlyingSlot;
@@ -170,17 +170,9 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, minHeight: 30 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: slot.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
-        {/* real deployments only — the full id lives in the title tooltip, same truncation as QueueItem's id chip */}
+        {/* real deployments only */}
         {slot.taskId && (
-          <span
-            title={slot.taskId}
-            style={{
-              fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)',
-              color: 'var(--text-muted)', flexShrink: 0,
-              maxWidth: '9ch', whiteSpace: 'nowrap',
-              overflow: 'hidden', textOverflow: 'ellipsis',
-            }}
-          >{slot.taskId}</span>
+          <IdChip id={slot.taskId} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
         )}
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>{slot.meta}</span>

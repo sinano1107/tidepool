@@ -1,4 +1,5 @@
 import { AgentChip } from './AgentChip.jsx';
+import { IdChip } from './IdChip.jsx';
 import { RiskFlag } from './RiskFlag.jsx';
 
 export function QueueItem({ position, task = {}, skipped = false, frontInserted = false, flash = false, onFront, style }) {
@@ -21,15 +22,7 @@ export function QueueItem({ position, task = {}, skipped = false, frontInserted 
     >
       <span aria-hidden="true" style={{ color: 'var(--rock-3)', cursor: 'grab', fontSize: 14, lineHeight: 1, letterSpacing: '-2px' }}>⠿</span>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', background: frontInserted ? 'var(--surface-card)' : 'var(--tide-1)', borderRadius: 'var(--radius-full)', padding: '2px 8px', flexShrink: 0 }}>{position}</span>
-      <span
-        title={id}
-        style={{
-          fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)',
-          color: 'var(--text-muted)', flexShrink: 0,
-          maxWidth: '9ch', whiteSpace: 'nowrap',
-          overflow: 'hidden', textOverflow: 'ellipsis',
-        }}
-      >{id}</span>
+      <IdChip id={id} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
       <span style={{ flex: 1, fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-medium)', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
       {task.risk && <RiskFlag />}
       {skipped && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)' }}>skipped · resumes on reset</span>}

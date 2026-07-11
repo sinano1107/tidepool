@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"components/board/AgentChip.jsx"},{"name":"LogEntry","sourcePath":"components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"components/forms/Checkbox.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"Select","sourcePath":"components/forms/Select.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"},{"name":"Card","sourcePath":"components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"components/surfaces/Toast.jsx"}]} */
+/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"components/board/AgentChip.jsx"},{"name":"IdChip","sourcePath":"components/board/IdChip.jsx"},{"name":"LogEntry","sourcePath":"components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"components/forms/Checkbox.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"Select","sourcePath":"components/forms/Select.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"},{"name":"Card","sourcePath":"components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"components/surfaces/Toast.jsx"}]} */
 
 (() => {
 
@@ -132,6 +132,27 @@ function AgentChip({ name = "", human = false, size = "md", style }) {
 Object.assign(__ds_scope, { AgentChip });
 })(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/AgentChip.jsx", error: String((e && e.message) || e) }); }
 
+// components/board/IdChip.jsx
+try { (() => {
+function IdChip({ id, style }) {
+  return /* @__PURE__ */ React.createElement(
+    "span",
+    {
+      title: id,
+      style: {
+        maxWidth: "9ch",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        ...style
+      }
+    },
+    id
+  );
+}
+Object.assign(__ds_scope, { IdChip });
+})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/IdChip.jsx", error: String((e && e.message) || e) }); }
+
 // components/board/LogEntry.jsx
 try { (() => {
 const kindColors = {
@@ -202,23 +223,7 @@ function QueueItem({ position, task = {}, skipped = false, frontInserted = false
     },
     /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", style: { color: "var(--rock-3)", cursor: "grab", fontSize: 14, lineHeight: 1, letterSpacing: "-2px" } }, "\u283F"),
     /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", background: frontInserted ? "var(--surface-card)" : "var(--tide-1)", borderRadius: "var(--radius-full)", padding: "2px 8px", flexShrink: 0 } }, position),
-    /* @__PURE__ */ React.createElement(
-      "span",
-      {
-        title: id,
-        style: {
-          fontFamily: "var(--font-mono)",
-          fontSize: "var(--text-2xs)",
-          color: "var(--text-muted)",
-          flexShrink: 0,
-          maxWidth: "9ch",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis"
-        }
-      },
-      id
-    ),
+    /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }),
     /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
     task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null),
     skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, "skipped \xB7 resumes on reset"),
@@ -629,6 +634,8 @@ __ds_ns.Button = __ds_scope.Button;
 __ds_ns.IconButton = __ds_scope.IconButton;
 
 __ds_ns.AgentChip = __ds_scope.AgentChip;
+
+__ds_ns.IdChip = __ds_scope.IdChip;
 
 __ds_ns.LogEntry = __ds_scope.LogEntry;
 

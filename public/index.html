@@ -362,7 +362,7 @@ function QuestionDeepLinkView({ questionId, onDone }) {
 }
 
 function App() {
-  const { Toast, Button } = window.TidepoolDesignSystem_8a0ead;
+  const { Toast, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const [data, setData] = React.useState(null);
   const [tab, setTabRaw] = React.useState('triage');
   const [tabDir, setTabDir] = React.useState('right');
@@ -604,7 +604,7 @@ function App() {
         next
           ? (data.slot?.taskId
               ? <>
-                  <span title={data.slot.taskId} style={{ display: 'inline-block', maxWidth: '9ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{data.slot.taskId}</span>
+                  <IdChip id={data.slot.taskId} style={{ display: 'inline-block', verticalAlign: 'bottom' }} />
                   {' finishes · nothing new starts'}
                 </>
               : 'nothing starts until resumed')

@@ -20,6 +20,7 @@ const COMPONENTS = [
   ['Button', 'components/actions/Button.jsx'],
   ['IconButton', 'components/actions/IconButton.jsx'],
   ['AgentChip', 'components/board/AgentChip.jsx'],
+  ['IdChip', 'components/board/IdChip.jsx'],
   ['LogEntry', 'components/board/LogEntry.jsx'],
   ['QueueItem', 'components/board/QueueItem.jsx'],
   ['RiskFlag', 'components/board/RiskFlag.jsx'],
