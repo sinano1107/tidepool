@@ -1,5 +1,5 @@
 {
   "projectId": "8a0ead19-062f-4cea-9ffa-7bd7c545f8bc",
-  "shape": "mirror",
-  "note": "This repo is NOT a component-library source: the design system is authored in the Claude Design project itself, and the repo root holds a synced-down mirror (styles.css, tokens/, _ds_bundle.js, ui_kits/). Sync direction here is write-back only: push locally-edited ui_kits/tidepool-webui/** files up. Never run the converter against this repo."
+  "shape": "hybrid",
+  "note": "As of 2026-07-11 (issue #18) this repo holds the real component source under components/** (pulled from the Claude Design project) plus tokens/, styles.css, and the hand-authored ui_kits/tidepool-webui/**. _ds_bundle.js is built locally from components/** via `node scripts/build-ds-bundle.mjs` — not by the design-sync skill's own converter, which still must not be run against this repo (it expects a real npm package entry, which this repo doesn't have). Component fixes may be made here (edit components/**, rebuild, optionally push the changed file(s) up via DesignSync write_files) or in the Claude Design project (DesignSync write_files, then pull the changed file(s) down with DesignSync get_file and rebuild) — either way stays inside one session. ui_kits/tidepool-webui/** keeps its own separate rule: this repo is its only source, so sync stays write-back only (push local edits up after every kit change). See .design-sync/NOTES.md for the 2026-07-11 history."
 }
