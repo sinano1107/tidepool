@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTask, completeTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
+import { cancelTask, completeTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
 
 describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)", () => {
   it("全ステータス・type・親子関係が揃い、blocked は導出値、skipped は現れない", () => {
@@ -55,7 +55,9 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
     // AC1: 全ステータスが俯瞰できる
     expect(board.find((t) => t.id === running.id)?.status).toBe("in_progress");
     expect(board.find((t) => t.id === doneChild.id)?.status).toBe("done");
-    expect(board.find((t) => t.id === abandoned.id)?.status).toBe("cancelled");
+    // cancelled は即座に board から退く(issue #35) — 個別取得では引き続き見える
+    expect(board.some((t) => t.id === abandoned.id)).toBe(false);
+    expect(getTask(db, abandoned.id)?.status).toBe("cancelled");
 
     // AC2: type と親子関係が見える
     expect(board.find((t) => t.id === openChild.id)).toMatchObject({

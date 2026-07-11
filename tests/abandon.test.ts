@@ -67,8 +67,12 @@ it("abandon の回答で計画ごと破棄される: 失敗タスクと兄弟が
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["abandon"] });
 
   const board2 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board2.find((x: any) => x.id === failing.id).status).toBe("cancelled");
-  expect(board2.find((x: any) => x.id === sibling.id).status).toBe("cancelled");
+  // cancelled tasks retreat from the board immediately (issue #35) — still
+  // reachable individually via GET /tasks/:id
+  expect(board2.some((x: any) => x.id === failing.id)).toBe(false);
+  expect(board2.some((x: any) => x.id === sibling.id)).toBe(false);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failing.id}`)).json.status).toBe("cancelled");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${sibling.id}`)).json.status).toBe("cancelled");
   expect(board2.find((x: any) => x.id === question.id).status).toBe("done");
 
   const failEvents = (await api(t.baseUrl, "GET", `/api/tasks/${failing.id}/events`)).json;
@@ -142,8 +146,12 @@ it("abandon のカスケードは done の兄弟には触れない(記録は劣�
   // the cascade only ever touches unfinished descendants — a task that
   // already completed keeps its record exactly as it was
   expect(board2.find((x: any) => x.id === finished.id).status).toBe("done");
-  expect(board2.find((x: any) => x.id === failing.id).status).toBe("cancelled");
-  expect(board2.find((x: any) => x.id === sibling.id).status).toBe("cancelled");
+  // cancelled tasks retreat from the board immediately (issue #35) — still
+  // reachable individually via GET /tasks/:id
+  expect(board2.some((x: any) => x.id === failing.id)).toBe(false);
+  expect(board2.some((x: any) => x.id === sibling.id)).toBe(false);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failing.id}`)).json.status).toBe("cancelled");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${sibling.id}`)).json.status).toBe("cancelled");
 
   const finishedEvents = (await api(t.baseUrl, "GET", `/api/tasks/${finished.id}/events`)).json;
   expect(finishedEvents.some((e: any) => e.kind === "task_cancelled")).toBe(false);

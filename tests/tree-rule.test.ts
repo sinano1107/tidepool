@@ -115,8 +115,11 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   expect(res.isError ?? false).toBe(false); // 完了自体は成立している
   await client.close();
 
+  // task はルートに子を持たないまま done — ツリー全体が settled になり board からは
+  // 退くが、個別取得(GET /tasks/:id)では引き続き参照できる(issue #35)
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(list.find((x: any) => x.id === task.id).status).toBe("done");
 
   // 人間への question が生成されている(workspace 名で特定できる)
   const question = list.find((x: any) => x.type === "question");

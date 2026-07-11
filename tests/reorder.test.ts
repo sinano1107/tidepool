@@ -141,7 +141,11 @@ it("moving the head task down fires the poll for the new head", async () => {
 
 it("a non-todo task can be moved — board order is global — without firing a run-now", async () => {
   t = await bootTidepool();
-  const a = await registerWork(t, "a");
+  // review_flag keeps a's tree unsettled after completion (its auto-generated
+  // review child starts todo) — issue #35's board otherwise retreats a
+  // standalone done task the instant its whole tree settles, which would
+  // make it disappear from the list this test inspects
+  const a = await registerWork(t, "a", undefined, true);
   const b = await registerWork(t, "b");
   await t.clock.advance(HOUR); // a picked up
   const client = await mcpClient(t.baseUrl, a.id);
@@ -160,7 +164,10 @@ it("a non-todo task can be moved — board order is global — without firing a 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${b.id}`)).json.status).toBe("todo");
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(list.map((x: any) => x.id)).toEqual([a.id, b.id]);
+  expect(list.filter((x: any) => x.id === a.id || x.id === b.id).map((x: any) => x.id)).toEqual([
+    a.id,
+    b.id,
+  ]);
 });
 
 it("a todo task can be placed after a non-todo task", async () => {

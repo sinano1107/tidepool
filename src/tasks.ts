@@ -1132,6 +1132,32 @@ export function heldSql(idRef: string): string {
             (SELECT id FROM tasks WHERE type = 'question'))`;
 }
 
+/** Settled tree (CONTEXT.md's Board, issue #35): walks every tree down from
+ *  its root, tagging each task with that root's id and whether the task
+ *  itself is unsettled (not done/cancelled). A root's tree only fully
+ *  retreats from the board once none of its descendants are unsettled — a
+ *  root going `done` does not by itself qualify, since layer 1/2 review
+ *  children (`completeTask`'s auto-generated review, an objection's RCA
+ *  review) start `todo` under an already-`done` root (issue #35 comment). */
+const SETTLED_TREE_CTE = `
+  tree_status(id, root_id, unsettled) AS (
+    SELECT id, id, CASE WHEN status NOT IN ('done', 'cancelled') THEN 1 ELSE 0 END
+    FROM tasks WHERE parent_id IS NULL
+    UNION ALL
+    SELECT c.id, t.root_id, CASE WHEN c.status NOT IN ('done', 'cancelled') THEN 1 ELSE 0 END
+    FROM tasks c JOIN tree_status t ON c.parent_id = t.id
+  ),
+  unsettled_roots(root_id) AS (
+    SELECT DISTINCT root_id FROM tree_status WHERE unsettled = 1
+  )
+`;
+
+/** `idRef` is the SQL expression holding the candidate task's id. */
+export function settledTreeSql(idRef: string): string {
+  return `${idRef} IN (SELECT id FROM tree_status
+            WHERE root_id NOT IN (SELECT root_id FROM unsettled_roots))`;
+}
+
 export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
   const { blocked } = db
     .prepare(`SELECT ${unfinishedChildSql("?")} AS blocked`)
@@ -1171,13 +1197,15 @@ function boardRows(
 ): Array<Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" | "held" | "skipped" }> {
   return db
     .prepare(
-      `WITH RECURSIVE ${HELD_IDS_CTE}
+      `WITH RECURSIVE ${HELD_IDS_CTE}, ${SETTLED_TREE_CTE}
        SELECT *,
          CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
               WHEN status = 'todo' AND ${heldSql("tasks.id")} THEN 'held'
               ${extraCase}
               ELSE status END AS status
-       FROM tasks ORDER BY sort_key`,
+       FROM tasks
+       WHERE status <> 'cancelled' AND NOT ${settledTreeSql("tasks.id")}
+       ORDER BY sort_key`,
     )
     .all(...params) as Array<
     Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" | "held" | "skipped" }

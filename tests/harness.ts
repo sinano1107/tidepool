@@ -175,6 +175,7 @@ export async function registerWork(
   t: Tidepool,
   title: string,
   workspace?: string,
+  reviewFlag?: boolean,
 ): Promise<any> {
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
@@ -182,6 +183,7 @@ export async function registerWork(
     purpose: `purpose of ${title}`,
     completion_criteria: `criteria of ${title}`,
     ...(workspace !== undefined && { workspace }),
+    ...(reviewFlag !== undefined && { review_flag: reviewFlag }),
   });
   return res.json;
 }

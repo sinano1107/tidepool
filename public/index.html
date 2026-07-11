@@ -172,13 +172,14 @@ function mapData(board, log) {
     }));
   const openChildren = {};
   for (const t of board) {
-    if (t.parent_id && t.status !== 'done' && t.status !== 'cancelled') {
+    // cancelled never reaches here (server-side board filter, issue #35)
+    if (t.parent_id && t.status !== 'done') {
       openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
     }
   }
   const cols = { todo: [], in_progress: [], blocked: [], done: [] };
   for (const t of board) {
-    if (!cols[t.status]) continue; // cancelled stays off the board
+    if (!cols[t.status]) continue; // e.g. held/skipped have no column of their own
     cols[t.status].push({
       id: t.id, title: t.title, type: t.type,
       assignee: t.assignee ?? (t.type === 'question' ? 'you' : undefined),
