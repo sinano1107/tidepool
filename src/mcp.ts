@@ -137,11 +137,32 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
   return deps.defaultAgentName ?? HUMAN_WORKER_ID;
 }
 
-/** The authority governing this task: `resolveAuthority` read fresh against
- *  the task's own `assignee` when configured (ADR 0012 / issue #36), else the
- *  board's single fixed `authority` (pre-#36 shape, and still today's shape
- *  for a board with no registry-backed resolver at all). */
+/** The reviewer profile (ADR 0013 / issue #15 layer 2): read-only is a
+ *  property of the `review` task type, not of whoever executes it, so this
+ *  code constant overrides whatever authority profile the executing agent
+ *  would otherwise carry — the one place in the authority model where task
+ *  type overrides profile. A code constant, not a registry entry, so the
+ *  enforcement floor itself sits outside what Condensation's registry-edit
+ *  loop could ever propose a diff against. `allowed_workspaces: []` blocks
+ *  every explicit workspace target; `assignable_to: []` blocks every
+ *  explicit assignee except the one structural exception decomposeTask
+ *  carves out for a review's own repair children (the reviewed task's own
+ *  assignee — ADR 0013). */
+const REVIEWER_AUTHORITY_PROFILE: AuthorityProfile = {
+  name: "reviewer",
+  guidance: "You are reviewing read-only. Never fix directly — findings become repair tasks.",
+  assignable_to: [],
+  allowed_workspaces: [],
+};
+
+/** The authority governing this task: a `review` task always runs under the
+ *  fixed reviewer profile above (ADR 0013), regardless of who it's assigned
+ *  to. Otherwise `resolveAuthority` read fresh against the task's own
+ *  `assignee` when configured (ADR 0012 / issue #36), else the board's single
+ *  fixed `authority` (pre-#36 shape, and still today's shape for a board with
+ *  no registry-backed resolver at all). */
 function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | undefined {
+  if (task.type === "review") return REVIEWER_AUTHORITY_PROFILE;
   return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
 }
 

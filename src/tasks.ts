@@ -890,12 +890,22 @@ export function decomposeTask(
   const children: Task[] = [];
   db.transaction(() => {
     const decisionId = logDecision(db, parent, input.reason, workerId, now);
+    // A review's repair children may target the reviewed task's own executor
+    // regardless of the reviewer profile's assignable_to (ADR 0013: "宛先は
+    // レビュー対象の実行者" is always in-authority — it's part of what a
+    // review *is*, not a delegation the reviewer happens to hold).
+    const reviewedAssignee =
+      parent.type === "review" && parent.parent_id
+        ? (getTask(db, parent.parent_id)?.assignee ?? undefined)
+        : undefined;
     for (const child of input.children) {
       const reasons: string[] = [];
       if (child.risk_flag && !parent.risk_flag) {
         reasons.push("carries risk beyond the parent's declared risk");
       }
-      if (outsideAuthority(child.assignee, authority?.assignable_to)) {
+      const assigneeExempt =
+        reviewedAssignee !== undefined && child.assignee === reviewedAssignee;
+      if (!assigneeExempt && outsideAuthority(child.assignee, authority?.assignable_to)) {
         reasons.push(`assigns to "${child.assignee}", outside ${workerId}'s assignable_to`);
       }
       if (outsideAuthority(child.workspace, authority?.allowed_workspaces)) {
