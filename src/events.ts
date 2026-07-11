@@ -64,7 +64,26 @@ export type EventPayload =
   // ADR 0012 / issue #36: the agent-name generalization of workspace_reinstated
   // above — needs_human cleared for this agent name, resuming pickup for tasks
   // assigned to it
-  | { kind: "agent_reinstated"; agent: string };
+  | { kind: "agent_reinstated"; agent: string }
+  // issue #32: pairs with worker_spawned to close out a worker session
+  // (spawn~exit) — usage is null when the session ended without a final
+  // stream-json `result` event (e.g. watchdog kill); the event itself is
+  // always written, so a missing report never erases the session's cost.
+  // estimated_cost_usd mirrors the CLI's total_cost_usd verbatim, but named
+  // for the board's own vocabulary: under a subscription there is no real
+  // invoice, only this run-time API-equivalent estimate.
+  | {
+      kind: "worker_exited";
+      exit_code: number | null;
+      signal: string | null;
+      usage: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_tokens: number;
+        cache_creation_tokens: number;
+        estimated_cost_usd: number;
+      } | null;
+    };
 
 export type EventKind = EventPayload["kind"];
 

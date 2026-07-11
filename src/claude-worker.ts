@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, type EventPayload } from "./events.js";
 import { loadRegistry, type AgentDefinition, type Registry } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
@@ -16,7 +16,14 @@ export type SpawnFn = (
   command: string,
   args: string[],
   opts: { cwd: string },
-) => { stdout: NodeJS.ReadableStream; kill(signal: NodeJS.Signals): void };
+) => {
+  stdout: NodeJS.ReadableStream;
+  kill(signal: NodeJS.Signals): void;
+  /** issue #32: the adapter's own exit observation point (promoted out of
+   *  defaultSpawn's former console.error-only handler) — usage/cost recording
+   *  needs to happen here, at the process boundary, not buried in a fake. */
+  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+};
 
 // the CLI defines this as a closed 5-value set; unlike --model (an open,
 // ever-growing set of aliases/full names) it's safe and worth validating
@@ -58,6 +65,68 @@ write one, register that split with the tidepool MCP's decompose instead.`;
 // one shape, not one copy per call site
 export function pinnedModelFlags(model: string, effort: string): string[] {
   return ["--model", model, "--effort", effort];
+}
+
+type WorkerExitedUsage = Extract<EventPayload, { kind: "worker_exited" }>["usage"];
+
+/** The stream-json CLI's own final `result` event shape (vendor-specific,
+ *  hence kept private to this adapter — ADR 0005) — only the fields
+ *  worker_exited needs. */
+interface StreamResultEvent {
+  total_cost_usd: number;
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+  };
+}
+
+/** Fail-closed like the rest of this file's vendor-shape handling
+ *  (`checkUsage`'s try/catch, the quarantine-on-drift paths in `start()`): a
+ *  `result` line whose `usage`/`total_cost_usd` don't match the expected
+ *  shape is treated as no result at all, never cast through blind and left
+ *  to throw later inside a stdout "data" handler. */
+function isStreamResultEvent(value: unknown): value is StreamResultEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const { total_cost_usd, usage } = value as Record<string, unknown>;
+  if (typeof total_cost_usd !== "number") return false;
+  if (typeof usage !== "object" || usage === null) return false;
+  const { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens } =
+    usage as Record<string, unknown>;
+  return (
+    typeof input_tokens === "number" &&
+    typeof output_tokens === "number" &&
+    typeof cache_read_input_tokens === "number" &&
+    typeof cache_creation_input_tokens === "number"
+  );
+}
+
+function parseResultLine(line: string): StreamResultEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as { type?: unknown };
+    if (parsed.type !== "result") return null;
+    return isStreamResultEvent(parsed) ? parsed : null;
+  } catch {
+    // a line split mid-chunk or genuinely malformed output — the last
+    // *complete* result line already seen wins, so this just isn't one
+    return null;
+  }
+}
+
+/** Translates the CLI's vendor-shaped result event into the board's own
+ *  worker_exited usage vocabulary (ADR 0005 / issue #32): total_cost_usd
+ *  becomes estimated_cost_usd, no CLI field names leak past this point. */
+function toUsage(result: StreamResultEvent): WorkerExitedUsage {
+  return {
+    input_tokens: result.usage.input_tokens,
+    output_tokens: result.usage.output_tokens,
+    cache_read_tokens: result.usage.cache_read_input_tokens,
+    cache_creation_tokens: result.usage.cache_creation_input_tokens,
+    estimated_cost_usd: result.total_cost_usd,
+  };
 }
 
 export interface ClaudeWorkerOptions {
@@ -102,9 +171,9 @@ const defaultSpawn: SpawnFn = (command, args, opts) => {
   // whole board process; slot recovery for a dead session is the watchdog
   // slice (#9), so here we only keep the failure visible
   child.on("error", (err) => console.error(`[worker] failed to spawn ${command}:`, err));
-  child.on("exit", (code, signal) => {
-    if (code !== 0) console.error(`[worker] ${command} exited with ${signal ?? code}`);
-  });
+  // exit observation (worker_exited event) is the adapter's job now (issue
+  // #32) — child already exposes .on("exit", ...) structurally, nothing more
+  // to wire here
   return child;
 };
 
@@ -228,6 +297,19 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
     child.stdout.pipe(createWriteStream(join(this.logDir, `${task.id}.stream.jsonl`)));
+    // teed alongside the file write (issue #32): tracks the latest
+    // stream-json `result` line so worker_exited can report usage/cost at
+    // exit without re-reading the file back off disk
+    let lastResult: StreamResultEvent | null = null;
+    let buffered = "";
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      buffered += chunk.toString();
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? "";
+      for (const line of lines) {
+        lastResult = parseResultLine(line) ?? lastResult;
+      }
+    });
     this.running.set(task.id, child);
     appendEvent(this.options.db, {
       taskId: task.id,
@@ -241,6 +323,32 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         definition_version: definition.version,
       },
       at: this.options.clock.now(),
+    });
+    // usage is settled at process exit — after task_completed via MCP, not
+    // before (issue #32) — so kill/crash sessions still get a worker_exited
+    // with usage: null rather than losing the exit fact entirely
+    child.on("exit", (code, signal) => {
+      this.running.delete(task.id);
+      // the final stdout chunk may not end in "\n" (stream simply closes
+      // mid-line), which would otherwise strand the last result line in
+      // `buffered` forever and read as a false "missing usage" — same
+      // status as an actual kill, which it isn't
+      lastResult = parseResultLine(buffered) ?? lastResult;
+      // this diagnostic used to live in defaultSpawn (console.error only);
+      // promoted here alongside the worker_exited write so an operator
+      // tailing logs still sees a crash, not just the audit record (issue #32)
+      if (code !== 0) console.error(`[worker] claude exited with ${signal ?? code}`);
+      appendEvent(this.options.db, {
+        taskId: task.id,
+        workerId: agent.name,
+        payload: {
+          kind: "worker_exited",
+          exit_code: code,
+          signal,
+          usage: lastResult ? toUsage(lastResult) : null,
+        },
+        at: this.options.clock.now(),
+      });
     });
   }
 

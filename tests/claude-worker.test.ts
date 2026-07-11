@@ -78,11 +78,21 @@ function recordingSpawn() {
   const calls: SpawnCall[] = [];
   const stdout = new PassThrough();
   const killed: NodeJS.Signals[] = [];
+  const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
   const spawn: SpawnFn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd });
-    return { stdout, kill: (signal) => killed.push(signal) };
+    return {
+      stdout,
+      kill: (signal) => killed.push(signal),
+      on: (event, listener) => {
+        if (event === "exit") exitListeners.push(listener);
+      },
+    };
   };
-  return { calls, stdout, killed, spawn };
+  const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    for (const listener of exitListeners) listener(code, signal);
+  };
+  return { calls, stdout, killed, spawn, emitExit };
 }
 
 async function makeWorker(
@@ -479,6 +489,110 @@ describe("ClaudeCodeWorker", () => {
     await worker.checkUsage();
 
     expect(calls[0]!.args.join(" ")).toContain("--safe-mode");
+  });
+
+  it("正常終了したセッションは worker_exited イベントにトークン内訳と estimated_cost_usd を記録する(issue #32)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-usage");
+    stdout.write(
+      `${JSON.stringify({
+        type: "result",
+        result: "done",
+        total_cost_usd: 0.1234,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_read_input_tokens: 10,
+          cache_creation_input_tokens: 5,
+        },
+      })}\n`,
+    );
+    emitExit(0, null);
+    const exited = listEvents(db, "task-usage").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toEqual({
+      kind: "worker_exited",
+      exit_code: 0,
+      signal: null,
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_read_tokens: 10,
+        cache_creation_tokens: 5,
+        estimated_cost_usd: 0.1234,
+      },
+    });
+  });
+
+  it("最終チャンクが改行なしで終わっても、最後の result 行を usage として拾う(issue #32 code review: 偽の欠測を防ぐ)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-no-trailing-newline");
+    // no trailing "\n": the stream just closes mid-line, as a real process
+    // exit can — this line must not get stranded in the tee's buffer
+    stdout.write(
+      JSON.stringify({
+        type: "result",
+        result: "done",
+        total_cost_usd: 0.5,
+        usage: {
+          input_tokens: 1,
+          output_tokens: 2,
+          cache_read_input_tokens: 3,
+          cache_creation_input_tokens: 4,
+        },
+      }),
+    );
+    emitExit(0, null);
+    const exited = listEvents(db, "task-no-trailing-newline").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({
+      usage: {
+        input_tokens: 1,
+        output_tokens: 2,
+        cache_read_tokens: 3,
+        cache_creation_tokens: 4,
+        estimated_cost_usd: 0.5,
+      },
+    });
+  });
+
+  it("result 行の usage が期待した形と食い違えば、投げずに usage null として fail-closed する(issue #32 code review)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-malformed-usage");
+    stdout.write(
+      `${JSON.stringify({
+        type: "result",
+        result: "done",
+        total_cost_usd: 0.9,
+        usage: { input_tokens: 1 /* missing the other 3 fields */ },
+      })}\n`,
+    );
+    expect(() => emitExit(0, null)).not.toThrow();
+    const exited = listEvents(db, "task-malformed-usage").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ usage: null });
+  });
+
+  it("非ゼロ終了は worker_exited イベントに加えて console.error でも観測できる(issue #32 code review: defaultSpawn から失われた診断ログの復元)", async () => {
+    const { start, emitExit } = await makeWorker();
+    start("task-crashed");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      emitExit(1, null);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("claude exited with"));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("最終 result イベントが出ないまま終了したセッション(watchdog kill 等)は usage null で worker_exited を記録する(issue #32)", async () => {
+    const { start, emitExit, db } = await makeWorker();
+    start("task-killed");
+    emitExit(null, "SIGKILL");
+    const exited = listEvents(db, "task-killed").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toEqual({
+      kind: "worker_exited",
+      exit_code: null,
+      signal: "SIGKILL",
+      usage: null,
+    });
   });
 
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {
