@@ -1,5 +1,6 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { isPaused } from "./pause.js";
 import type { Slot } from "./slot.js";
 import { nextSlotTask, pickupTask, type Task } from "./tasks.js";
 import { reportThrottle } from "./throttle.js";
@@ -106,6 +107,9 @@ export function startScheduler(deps: {
     // triage pauses pickup: the human is re-steering the queue, so nothing
     // new enters the slot until the session commits (issue #6)
     if (activeTriageSession(db)) return true;
+    // the human's own explicit pause (issue #34): orthogonal to triage — a
+    // paused board still gates pickup after a triage commit
+    if (isPaused(db)) return true;
     // the gate is keyed on each candidate's own execution workspace (issue
     // #26 / ADR 0009) and assignee (ADR 0012 / issue #36), skipped in SQL by
     // nextSlotTask itself — a quarantined workspace or agent halts only its

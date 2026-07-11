@@ -131,7 +131,7 @@ function markFront(id) {
 }
 
 // Map the server board + decision log into the shape the kit screens consume.
-function mapData(board, log) {
+function mapData(board, log, paused) {
   const fmtTime = (iso) => {
     const d = new Date(iso);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -187,25 +187,29 @@ function mapData(board, log) {
     });
   }
   const running = board.find((t) => t.status === 'in_progress');
+  // taskId (real deployments only) lets the Queue screen's paused slot line
+  // name the task that's still finishing (CONTEXT.md's Pause: running tasks
+  // are never touched, only new pickup)
   const slot = running
-    ? { color: 'var(--tide-4)', line: `${running.id} · ${running.title}`, meta: running.assignee ?? '' }
-    : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1' };
+    ? { color: 'var(--tide-4)', line: `${running.id} · ${running.title}`, meta: running.assignee ?? '', taskId: running.id }
+    : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
   return {
     questions, log: logEntries, queue, board: cols,
     // empty until their domain slices exist: human tasks / agent registry /
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
-    slot, running: !!running,
+    slot, running: !!running, paused: !!paused,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
   };
 }
 
 async function fetchData() {
-  const [board, log] = await Promise.all([
+  const [board, log, pause] = await Promise.all([
     fetch('/api/tasks').then((r) => r.json()),
     fetch('/api/log').then((r) => r.json()),
+    fetch('/api/pause').then((r) => r.json()),
   ]);
-  return mapData(board, log);
+  return mapData(board, log, pause.paused);
 }
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
@@ -586,6 +590,25 @@ function App() {
     }
   };
 
+  // Pause (issue #34) — the human's own steering channel, never exposed via
+  // MCP. Resuming fires an immediate poll server-side; pausing fires nothing.
+  // The pause toast detail mirrors the queue slot line's own busy/free split
+  // (explorations/Pause Pickup.html's PausePickupApp.togglePause): a running
+  // task finishes before anything new starts, an empty slot just stays empty.
+  const togglePause = async () => {
+    const next = !data.paused;
+    try {
+      await api('/api/pause', { paused: next });
+      await refresh();
+      say(next ? 'info' : 'success', next ? 'pickup paused' : 'pickup resumed',
+        next
+          ? (data.slot?.taskId ? `${data.slot.taskId} finishes · nothing new starts` : 'nothing starts until resumed')
+          : 'immediate poll fired');
+    } catch (err) {
+      say('danger', 'pause toggle failed', String(err.message || err));
+    }
+  };
+
   const reorder = async (next, movedId, pos) => {
     try {
       const idx = next.findIndex((t) => t.id === movedId);
@@ -652,8 +675,8 @@ function App() {
       {wash && <TpTideWash label={wash.label} emoji={wash.emoji} duration={WASH_MS} />}
       <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 16px 10px', borderBottom: '1px solid var(--border-hairline)', position: 'sticky', top: 0, background: 'var(--surface-page)', zIndex: 10 }}>
         <span style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 22, color: 'var(--tide-5)' }}>tidepool</span>
-        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>
-          {data.questions.length} questions · {unreadCount} new log · queue {data.queue.length}
+        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: data.paused ? 'var(--rock-4)' : 'var(--text-muted)' }}>
+          {data.paused ? 'pickup paused · ' : ''}{data.questions.length} questions · {unreadCount} new log · queue {data.queue.length}
         </span>
       </header>
 
@@ -677,7 +700,7 @@ function App() {
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills as tasks come in.</div>
             </div>)}
         {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · ${t.type}`)} />}
-        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : 'free'} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
+        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : 'free'} paused={data.paused} onTogglePause={togglePause} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
         </div>
       </main>

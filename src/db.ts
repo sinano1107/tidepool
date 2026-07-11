@@ -136,6 +136,15 @@ export function openDb(path: string): Db {
       resets_at  TEXT
     );
 
+    -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
+    -- pickup — same one-row shape as throttle_state, but with no auto-resume
+    -- (CONTEXT.md's Pause: clearing it is purely manual). No row means never
+    -- paused.
+    CREATE TABLE IF NOT EXISTS pause_state (
+      id     INTEGER PRIMARY KEY CHECK (id = 1),
+      paused INTEGER NOT NULL
+    );
+
     -- Web Push subscriptions (issue #14): one row per installed PWA that
     -- opted into push. endpoint is the browser's own dedup key (a fresh
     -- subscribe from the same install replaces its old keys).

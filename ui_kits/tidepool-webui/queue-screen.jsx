@@ -137,24 +137,66 @@ const TP_SLOT_STATES = {
   limit: { color: 'var(--coral-4)', line: 'usage limit · nothing starts', meta: 'resumes 06:12 · immediate poll at reset' },
 };
 
-function QueueScreen({ data, slotState = 'busy', wsAlert = false, onFront, onDoneHuman, onReorder }) {
+// Pause (issue #34) is the fifth slot state, layered over whichever of the
+// four above is currently underneath — the same "environmental event freezes
+// pickup, running task finishes" shape as throttle's 'limit', but human-
+// triggered and manually cleared. `underlyingSlot.taskId` (real deployments
+// only — the canned mock states carry none) distinguishes the busy/free
+// phrasing.
+function pausedSlot(underlyingSlot) {
+  return {
+    color: 'var(--rock-4)',
+    line: underlyingSlot?.taskId
+      ? `pickup paused · ${underlyingSlot.taskId} finishes, nothing new starts`
+      : 'pickup paused — nothing starts until resumed',
+    meta: 'poll idle',
+  };
+}
+
+function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false, onTogglePause, onFront, onDoneHuman, onReorder }) {
   const { Card, Button } = window.TidepoolDesignSystem_8a0ead;
   // real deployments pass live slot content via data.slot; the canned states remain for the mock
-  const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
-  const throttled = slotState === 'limit';
+  const underlyingSlot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
+  const slot = paused ? pausedSlot(underlyingSlot) : underlyingSlot;
+  const throttled = !paused && slotState === 'limit';
   const alert = wsAlert ? data.workspaceAlert : null;
-  const queue = throttled ? data.queue.map((t) => ({ ...t, skipped: true })) : data.queue;
+  const queue = (paused || throttled) ? data.queue.map((t) => ({ ...t, skipped: true })) : data.queue;
+  React.useEffect(() => { lucide.createIcons(); });
   return (
     <div style={{ padding: '20px 16px' }}>
       <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Queue</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>FIFO · new tasks append · reorder never resets · concurrency=1</p>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, minHeight: 30 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: slot.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
-        <span style={{ fontSize: 'var(--text-sm)', color: slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
-        <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>{slot.meta}</span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>{slot.meta}</span>
+        {onTogglePause && (
+          <button onClick={onTogglePause} aria-pressed={paused}
+            aria-label={paused ? 'resume pickup' : 'pause pickup'}
+            title={paused ? 'resume pickup — fires an immediate poll' : 'pause pickup — running task finishes, nothing new starts'}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              width: 28, height: 28,
+              color: paused ? '#fff' : 'var(--tide-4)',
+              background: paused ? 'var(--tide-4)' : 'var(--surface-card)',
+              border: 'none', borderRadius: 'var(--radius-full)', padding: 0,
+              boxShadow: paused ? 'var(--shadow-primary)' : 'var(--shadow-card)', cursor: 'pointer',
+              transition: 'background 120ms var(--ease-tidal), color 120ms var(--ease-tidal)',
+            }}>
+            <span key={paused ? 'play' : 'pause'} style={{ display: 'inline-flex', width: 13, height: 13 }}>
+              <i data-lucide={paused ? 'play' : 'pause'} style={{ width: 13, height: 13 }}></i>
+            </span>
+          </button>
+        )}
       </div>
-      <div style={{ height: 2, background: slot.color, borderRadius: 1, marginBottom: 14 }}></div>
+      {/* waterline — dashed while paused: the tide level holds, nothing flows */}
+      <div style={{
+        height: 2, borderRadius: 1, marginBottom: 14,
+        background: paused
+          ? 'repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)'
+          : slot.color,
+      }}></div>
 
       {alert && (
         <Card style={{ background: 'var(--coral-1)', border: '1px solid var(--coral-2)', padding: '12px 14px', marginBottom: 14 }}>
@@ -168,7 +210,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, onFront, onDon
       )}
 
       <div style={{ marginBottom: 28 }}>
-        <TpQueueList tasks={queue} onReorder={onReorder} onFront={onFront} />
+        <TpQueueList tasks={queue} onReorder={onReorder} onFront={paused ? undefined : onFront} />
       </div>
 
       <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Your tasks</h2>

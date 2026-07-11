@@ -6,6 +6,7 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
+import { isPaused, setPaused } from "./pause.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
 import type { RegistryCandidates } from "./registry.js";
@@ -111,6 +112,13 @@ const pushUnsubscribeSchema = z.object({
 const quietHoursSchema = z.object({
   start: z.string().regex(HH_MM_PATTERN),
   end: z.string().regex(HH_MM_PATTERN),
+});
+
+// the human's own pause toggle (CONTEXT.md's Pause, issue #34) — never
+// exposed via MCP (the same human-steering-channel posture as answering and
+// reordering)
+const pauseSchema = z.object({
+  paused: z.boolean(),
 });
 
 const objectionSchema = z.object({
@@ -584,6 +592,24 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(getQuietHours(db));
   });
 
+  router.get("/pause", (_req, res) => {
+    res.json({ paused: isPaused(db) });
+  });
+
+  router.post("/pause", (req, res) => {
+    const parsed = pauseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    // resuming is the one explicit "run now" trigger pause carries
+    // (CONTEXT.md's Pause) — pausing itself fires nothing
+    const resuming = isPaused(db) && !parsed.data.paused;
+    setPaused(db, parsed.data.paused);
+    if (resuming) onQueueHeadChanged();
+    res.json({ paused: parsed.data.paused });
+  });
+
   router.post("/triage/start", (_req, res) => {
     res.status(201).json(startTriage(db, clock.now()));
   });
@@ -689,10 +715,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // the queue view (#10): unlike the board, a todo task pickup can't reach
-  // right now (Swell throttle) shows here as skipped
+  // right now — Swell throttle or the human's own Pause (issue #34), the
+  // same board-wide "nothing starts" shape — shows here as skipped
   router.get("/queue", (_req, res) => {
     res.json(
-      listQueue(db, isPickupBlocked(db, clock.now()), workspace?.name, defaultAgentName, auditorName),
+      listQueue(
+        db,
+        isPickupBlocked(db, clock.now()) || isPaused(db),
+        workspace?.name,
+        defaultAgentName,
+        auditorName,
+      ),
     );
   });
 
