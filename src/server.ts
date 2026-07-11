@@ -13,7 +13,7 @@ import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import { getTask } from "./tasks.js";
+import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
@@ -72,9 +72,12 @@ export interface ServerOptions {
    *  WebUI via /api/push/vapid-public-key. Absent → the WebUI can't subscribe. */
   vapidPublicKey?: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2) — same
-   *  shape as the default agent (`worker.id` below), threaded to
-   *  `commitTriage`'s RCA generation. Absent → `commitTriage` falls back to
-   *  `DEFAULT_AUDITOR_NAME` itself (the pointer always resolves). */
+   *  shape as the default agent (`worker.id` below): the fallback a `review`
+   *  task's unset `assignee` resolves to, at pickup (scheduler), spawn
+   *  (claude-worker.ts via `resolveExecutionAgent`), and MCP attribution
+   *  (mcp.ts) alike, in place of the default agent (issue #42). Absent →
+   *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset,
+   *  resolved once here rather than by each consumer separately. */
   auditorName?: string;
 }
 
@@ -106,6 +109,13 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   }
   const app = express();
   const worker = options.worker({ db, clock: options.clock });
+  // resolved here for this board's actual wiring, same as `worker.id` below
+  // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
+  // directly rather than through startServer (e.g. a unit test constructing
+  // McpDeps by hand) still carry their own `?? DEFAULT_AUDITOR_NAME` fallback
+  // (mcp.ts's attributedWorkerId, claude-worker.ts's start()) — same
+  // defense-in-depth `defaultAgentName ?? HUMAN_WORKER_ID` already relies on.
+  const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -113,6 +123,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     worker,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
+    auditorName,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
@@ -172,7 +183,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
       vapidPublicKey: options.vapidPublicKey,
-      auditorName: options.auditorName,
+      auditorName,
     }),
   );
   app.use(
@@ -187,6 +198,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       authority: options.authority,
       resolveAuthority: options.resolveAuthority,
       defaultAgentName: worker.id,
+      auditorName,
       agentRegistered: options.agentRegistered,
     }),
   );

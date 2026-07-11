@@ -173,10 +173,11 @@ export interface ApiRouterDeps {
    *  configured on this board at all. */
   vapidPublicKey?: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), threaded to
-   *  `commitTriage`'s RCA generation — same shape as `defaultAgentName` above,
-   *  but the Auditor pointer always resolves to a value (a missing config
-   *  falls back inside `commitTriage` itself, `DEFAULT_AUDITOR_NAME`) rather
-   *  than disabling a gate the way `defaultAgentName`'s absence does. */
+   *  `/api/queue`'s `skipped` display: a `review` task's unset assignee gates
+   *  on this pointer's quarantine instead of `defaultAgentName` (issue #42,
+   *  `listQueue`'s own `typeAwareDefaultAgentSql`). Same shape as
+   *  `defaultAgentName` above — absent, this gate is skipped for the review
+   *  rows that would have fallen back to it. */
   auditorName?: string;
 }
 
@@ -642,7 +643,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const session = commitTriage(db, clock.now(), parsed.data.scratchpad, auditorName);
+      const session = commitTriage(db, clock.now(), parsed.data.scratchpad);
       // committing re-opens pickup and is itself the "run now" trigger
       onQueueHeadChanged();
       res.json(session);
@@ -672,7 +673,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // the queue view (#10): unlike the board, a todo task pickup can't reach
   // right now (Swell throttle) shows here as skipped
   router.get("/queue", (_req, res) => {
-    res.json(listQueue(db, isPickupBlocked(db, clock.now()), workspace?.name, defaultAgentName));
+    res.json(
+      listQueue(db, isPickupBlocked(db, clock.now()), workspace?.name, defaultAgentName, auditorName),
+    );
   });
 
   router.get("/tasks/:id/events", (req, res) => {

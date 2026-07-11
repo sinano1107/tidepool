@@ -13,10 +13,15 @@ import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
-function makeTask(id = "task-1", workspace: string | null = null, assignee: string | null = "deckhand"): Task {
+function makeTask(
+  id = "task-1",
+  workspace: string | null = null,
+  assignee: string | null = "deckhand",
+  type: Task["type"] = "work",
+): Task {
   return {
     id,
-    type: "work",
+    type,
     status: "in_progress",
     assignee,
     workspace,
@@ -81,7 +86,10 @@ function recordingSpawn() {
   return { calls, stdout, killed, spawn };
 }
 
-async function makeWorker(registryFiles: Record<string, string> = {}) {
+async function makeWorker(
+  registryFiles: Record<string, string> = {},
+  extraOptions: Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]> = {},
+) {
   const registryDir = await makeRegistry(registryFiles);
   const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
   const db = openDb(":memory:");
@@ -95,14 +103,16 @@ async function makeWorker(registryFiles: Record<string, string> = {}) {
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
     spawn: recorder.spawn,
+    ...extraOptions,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */
   const start = (
     id?: string,
     workspace: string | null = null,
     assignee: string | null = "deckhand",
+    type: Task["type"] = "work",
   ): Task => {
-    const task = makeTask(id, workspace, assignee);
+    const task = makeTask(id, workspace, assignee, type);
     insertTask(db, task);
     worker.start(task);
     return task;
@@ -181,6 +191,21 @@ describe("ClaudeCodeWorker", () => {
     expect(agentNeedsHuman(db, "ghost")).toBe(true);
     const question = listBoard(db).find((t) => t.type === "question");
     expect(question?.question_quarantine_agent).toBe("ghost");
+  });
+
+  const KEEPER_MD = `---\nname: keeper\nversion: 1.0.0\nauthority: standard\n---\nYou are Keeper, the auditor.\n`;
+
+  it("review タイプかつ assignee が未指定なら、コンストラクタの既定 agent ではなく auditorName で spawn する(issue #42)", async () => {
+    const { start, calls } = await makeWorker(
+      { "agents/keeper.md": KEEPER_MD },
+      { auditorName: "keeper" },
+    );
+    start("task-review", null, null, "review");
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain("You are Keeper");
+    expect(systemPrompt).not.toContain("You are Deckhand");
   });
 
   it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {

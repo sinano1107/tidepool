@@ -6,7 +6,7 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import { loadRegistry, type AgentDefinition, type Registry } from "./registry.js";
-import type { Task } from "./tasks.js";
+import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import { resolveExecutionWorkspace, resolveOrQuarantine } from "./workspace.js";
 
@@ -46,6 +46,12 @@ export interface ClaudeWorkerOptions {
   registryDir: string;
   /** Agent name in the registry (`agents/<name>.md`). */
   agent: string;
+  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
+   *  as `agent` above — the fallback a `review` task's unset `assignee`
+   *  resolves to at spawn (issue #42), instead of `agent`. Absent →
+   *  `DEFAULT_AUDITOR_NAME` (the pointer always resolves — CONTEXT.md's
+   *  Auditor). */
+  auditorName?: string;
   /** Workspace name in the registry's workspaces.yaml — where tasks run. */
   workspace: string;
   /** The board's MCP endpoint, e.g. http://127.0.0.1:4589/mcp. */
@@ -137,9 +143,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       this.options.clock.now(),
     );
     if (!workspace) return;
+    // a review task's unset assignee resolves to the Auditor pointer, not
+    // this worker's configured default agent (issue #42 / CONTEXT.md's
+    // Auditor: independent review's value is its distance from the original
+    // judgment, so it must never fall back to the same agent that did the
+    // work) — every other type keeps resolving to `this.options.agent`.
+    const defaultAgentName =
+      task.type === "review" ? this.options.auditorName ?? DEFAULT_AUDITOR_NAME : this.options.agent;
     const agent = resolveAgentOrQuarantine(
       this.options.db,
-      (taskAssignee) => resolveExecutionAgent(registry, this.options.agent, taskAssignee),
+      (taskAssignee) => resolveExecutionAgent(registry, defaultAgentName, taskAssignee),
       task.assignee,
       this.options.clock.now(),
     );

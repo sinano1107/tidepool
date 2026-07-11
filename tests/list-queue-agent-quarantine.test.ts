@@ -50,4 +50,23 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
 
     expect(listQueue(db, false).find((t) => t.id === task.id)?.status).toBe("todo");
   });
+
+  it("review type かつ assignee 未設定のタスクは、defaultAgentName が健全でも auditorName の quarantine で skipped になる(issue #42)", () => {
+    const db = openDb(":memory:");
+    quarantineAgentRow(db, "auditor");
+    const review = registerTask(
+      db,
+      { type: "review", title: "independent rca", purpose: "p", completion_criteria: "c" },
+      new Date(0),
+    );
+    const work = registerTask(
+      db,
+      { type: "work", title: "inherits default agent", purpose: "p", completion_criteria: "c" },
+      new Date(1),
+    );
+
+    const queue = listQueue(db, false, undefined, "deckhand", "auditor");
+    expect(queue.find((t) => t.id === review.id)?.status).toBe("skipped");
+    expect(queue.find((t) => t.id === work.id)?.status).toBe("todo");
+  });
 });

@@ -982,6 +982,23 @@ export function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string)
             WHERE a.name = COALESCE(${taskAssigneeRef}, ${defaultRef}) AND a.needs_human = 1)`;
 }
 
+/** The type-aware fallback pointer behind `agentQuarantinedSql`'s `defaultRef`
+ *  (issue #42 / CONTEXT.md's Auditor): an unset assignee on a `review` task
+ *  resolves to the board's Auditor pointer, every other type to the board's
+ *  default agent — same COALESCE-based "unset = live reference" shape either
+ *  way (ADR 0011), just a different pointer depending on task type. Absent
+ *  the relevant pointer for a given row's type, that row's `defaultRef`
+ *  evaluates to NULL, which `agentQuarantinedSql`'s COALESCE/`=` already
+ *  treats as "no fallback, gate only an explicit assignee" — no separate
+ *  null-guard needed here. */
+export function typeAwareDefaultAgentSql(
+  taskTypeRef: string,
+  defaultAgentRef: string,
+  auditorRef: string,
+): string {
+  return `CASE WHEN ${taskTypeRef} = 'review' THEN ${auditorRef} ELSE ${defaultAgentRef} END`;
+}
+
 /** Held (CONTEXT.md, ADR 0006): while an ancestor carries an unanswered
  *  question, its subtree stays out of the slot — a freeze from above, unlike
  *  `blocked`'s freeze from below (an unfinished child). Two tiers of root:
@@ -1087,30 +1104,40 @@ export function listBoard(db: Db): BoardTask[] {
  *  throttle.ts. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
  *  gate (issue #26 / ADR 0009: `task.workspace ?? the board's default`) —
  *  absent, no workspace tracking exists and the gate is skipped entirely.
- *  `defaultAgentName` is the same gate over the agent-name generalization of
- *  quarantine (ADR 0012 / issue #36: `task.assignee ?? the board's default
- *  agent`) — absent, no agent tracking exists and this gate is skipped too.
- *  A `human`-assignee task never appears here at all (issue #13): it lives
- *  outside the execution queue entirely, in the your-tasks list
- *  (`listYourTasks`), not merely marked skipped within it. */
+ *  `defaultAgentName`/`auditorName` are the same gate over the agent-name
+ *  generalization of quarantine (ADR 0012 / issue #36: `task.assignee ?? the
+ *  board's default agent`), made type-aware (issue #42 / CONTEXT.md's
+ *  Auditor): a `review` task's unset assignee falls back to `auditorName`,
+ *  every other type to `defaultAgentName` — `nextSlotTask`'s own
+ *  `typeAwareDefaultAgentSql`, bound the same way via named `@auditorName`/
+ *  `@defaultAgentName` params (better-sqlite3 allows mixing named params into
+ *  an otherwise-positional statement) so the fragment can be spliced into the
+ *  query twice — the not-configured skip check, then inside
+ *  `agentQuarantinedSql` itself — without a second, positionally-paired copy
+ *  of the params to keep in sync by hand. Either pointer absent skips this
+ *  gate for the rows that would have fallen back to it. A `human`-assignee
+ *  task never appears here at all (issue #13): it lives outside the
+ *  execution queue entirely, in the your-tasks list (`listYourTasks`), not
+ *  merely marked skipped within it. */
 export function listQueue(
   db: Db,
   throttled: boolean,
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
+  auditorName?: string,
 ): BoardTask[] {
+  const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   const rows = boardRows(
     db,
     `WHEN status = 'todo' AND type <> 'question' AND (
        ? = 1 OR (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
-         OR (? IS NOT NULL AND ${agentQuarantinedSql("tasks.assignee", "?")})
+         OR (${fallback} IS NOT NULL AND ${agentQuarantinedSql("tasks.assignee", fallback)})
      ) THEN 'skipped'`,
     [
       throttled ? 1 : 0,
       defaultWorkspaceName ?? null,
       defaultWorkspaceName ?? null,
-      defaultAgentName ?? null,
-      defaultAgentName ?? null,
+      { defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null },
     ],
   );
   return rows
@@ -1220,12 +1247,21 @@ export function settledChildren(db: Db, parentId: string): SettledChildContext[]
  *  `defaultAgentName` is the same gate over the agent-name generalization of
  *  quarantine (ADR 0012 / issue #36: `task.assignee ?? the board's default
  *  agent`) — a resource-scoped halt, never the whole board. Absent (no agent
- *  registry tracking configured) skips this gate entirely too. */
+ *  registry tracking configured) skips this gate entirely too.
+ *
+ *  `auditorName` is the same gate, but for the fallback a `review` task's
+ *  unset `assignee` actually resolves to (issue #42 / CONTEXT.md's Auditor):
+ *  a review task never falls back to `defaultAgentName`, even when that
+ *  pointer is healthy — `typeAwareDefaultAgentSql` picks the pointer per row
+ *  by `t.type`. Absent, review tasks skip this gate too (same "not
+ *  configured" fallback as `defaultAgentName`). */
 export function nextSlotTask(
   db: Db,
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
+  auditorName?: string,
 ): Task | undefined {
+  const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
   const row = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
@@ -1239,15 +1275,13 @@ export function nextSlotTask(
            "t.workspace",
            "@defaultWorkspaceName",
          )})
-         AND (@defaultAgentName IS NULL OR NOT ${agentQuarantinedSql(
-           "t.assignee",
-           "@defaultAgentName",
-         )})
+         AND (${fallback} IS NULL OR NOT ${agentQuarantinedSql("t.assignee", fallback)})
        ORDER BY t.sort_key LIMIT 1`,
     )
     .get({
       defaultWorkspaceName: defaultWorkspaceName ?? null,
       defaultAgentName: defaultAgentName ?? null,
+      auditorName: auditorName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
     }) as TaskRow | undefined;
   return row && rowToTask(row);

@@ -90,8 +90,14 @@ export function startScheduler(deps: {
    *  ADR 0009), read fresh every call. Absent → every task runs in the
    *  board's single fixed `workspace` (pre-#26 behavior). */
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), the
+   *  fallback a `review` task's unset assignee resolves to instead of
+   *  `worker.id` (issue #42: `nextSlotTask`'s own type-aware gate). Absent →
+   *  that gate is skipped for review tasks, same as `worker.id`'s own
+   *  "no agent tracking" fallback. */
+  auditorName?: string;
 }): Scheduler {
-  const { db, clock, slot, worker, workspace, resolveWorkspace } = deps;
+  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName } = deps;
   let inFlight = false;
   const resetTimer = createResetTimer(clock, pollNow);
 
@@ -104,7 +110,7 @@ export function startScheduler(deps: {
     // #26 / ADR 0009) and assignee (ADR 0012 / issue #36), skipped in SQL by
     // nextSlotTask itself — a quarantined workspace or agent halts only its
     // own tasks, never the whole board.
-    return !nextSlotTask(db, workspace?.name, worker.id);
+    return !nextSlotTask(db, workspace?.name, worker.id, auditorName);
   }
 
   function pickup(task: Task): void {
@@ -150,7 +156,7 @@ export function startScheduler(deps: {
         if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
         return;
       }
-      const head = nextSlotTask(db, workspace?.name, worker.id);
+      const head = nextSlotTask(db, workspace?.name, worker.id, auditorName);
       if (!head) return;
       pickup(head);
     } finally {

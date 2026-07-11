@@ -369,13 +369,15 @@ it("an objection against a human-completed task's log entry generates no self RC
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const selfReview = board.find(
-    (x: any) => x.type === "review" && x.parent_id === humanTask.id && x.assignee !== "auditor",
+    (x: any) =>
+      x.type === "review" && x.parent_id === humanTask.id && x.title.startsWith("rca (self):"),
   );
   expect(selfReview).toBeUndefined();
   // the independent auditor RCA still fires — it never depends on who wrote
   // the objected entry (CONTEXT.md's Review: 独立レビュー)
   const auditorReview = board.find(
-    (x: any) => x.type === "review" && x.parent_id === humanTask.id && x.assignee === "auditor",
+    (x: any) =>
+      x.type === "review" && x.parent_id === humanTask.id && x.title.startsWith("rca (auditor):"),
   );
   expect(auditorReview).toBeDefined();
   // the repair task still lands — objections still act, only self RCA is skipped
@@ -398,12 +400,12 @@ it("commit also generates an independent auditor RCA review as a child of the ob
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const reviews = board.filter((x: any) => x.type === "review" && x.parent_id === a.id);
   expect(reviews).toHaveLength(2);
-  const auditorReview = reviews.find((x: any) => x.assignee === "auditor");
+  const auditorReview = reviews.find((x: any) => x.title.startsWith("rca (auditor):"));
   expect(auditorReview).toBeDefined();
   expect(auditorReview.purpose).toContain("the hack corrupts state — do it properly");
 });
 
-it("the board's Auditor pointer is configurable, mirroring the default agent (issue #15, layer 2)", async () => {
+it("the independent auditor RCA registers with assignee unset — a live Auditor reference, not baked at commit time (issue #42)", async () => {
   t = await bootTidepool({ auditorName: "keeper-of-the-code" });
   const a = await registerWork(t, "work A");
   await t.clock.advance(HOUR); // A into the slot
@@ -418,7 +420,11 @@ it("the board's Auditor pointer is configurable, mirroring the default agent (is
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const auditorReview = board.find(
-    (x: any) => x.type === "review" && x.parent_id === a.id && x.assignee === "keeper-of-the-code",
+    (x: any) => x.type === "review" && x.parent_id === a.id && x.title.startsWith("rca (auditor):"),
   );
   expect(auditorReview).toBeDefined();
+  // unset, not baked — resolved fresh at pickup/attribution the way an unset
+  // assignee always is (ADR 0011), not pinned to whichever name was live at
+  // commit time
+  expect(auditorReview.assignee).toBeNull();
 });

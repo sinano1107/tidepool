@@ -57,6 +57,7 @@ function workerFactory(): WorkerFactory {
       clock,
       registryDir,
       agent: defaultAgentName,
+      auditorName,
       workspace: workspaceName,
       mcpUrl: `http://127.0.0.1:${port}/mcp`,
       logDir,

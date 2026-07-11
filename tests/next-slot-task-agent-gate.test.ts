@@ -58,4 +58,23 @@ describe("nextSlotTask の per-task agent ゲート(ADR 0012 / issue #36)", () =
 
     expect(nextSlotTask(db)?.id).toBe(task.id);
   });
+
+  it("review type かつ assignee 未設定のタスクは、defaultAgentName が健全でも auditorName の quarantine で pickup を止める(issue #42)", () => {
+    const db = openDb(":memory:");
+    quarantineAgentRow(db, "auditor");
+    const review = registerTask(
+      db,
+      { type: "review", title: "independent rca", purpose: "p", completion_criteria: "c" },
+      new Date(0),
+    );
+    const work = registerTask(
+      db,
+      { type: "work", title: "inherits default agent", purpose: "p", completion_criteria: "c" },
+      new Date(1),
+    );
+
+    const head = nextSlotTask(db, undefined, "deckhand", "auditor");
+    expect(head?.id).toBe(work.id);
+    expect(head?.id).not.toBe(review.id);
+  });
 });

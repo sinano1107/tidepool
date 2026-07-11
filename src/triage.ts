@@ -1,7 +1,6 @@
 import type { Db } from "./db.js";
 import { appendEvent, HUMAN_FACING_KINDS, type EventRow } from "./events.js";
 import {
-  DEFAULT_AUDITOR_NAME,
   getTask,
   HUMAN_WORKER_ID,
   listBoard,
@@ -121,7 +120,7 @@ function registerRcaReview(
   db: Db,
   objected: Task,
   taskId: string,
-  spec: { title: string; purposeIntro: string; comments: string[]; assignee: string },
+  spec: { title: string; purposeIntro: string; comments: string[]; assignee?: string },
   now: Date,
 ): void {
   registerTask(
@@ -157,21 +156,16 @@ function registerRcaReview(
  *  - **auditor**, always exactly one per objected task regardless of who
  *    wrote the objected entries — its distance from the original judgment is
  *    the value (CONTEXT.md's Review: 独立レビュー), so it fires even when
- *    every entry was human-written. `assignee` is a snapshot of the board's
- *    Auditor pointer taken *now*, at commit time — not resolved fresh at
- *    pickup the way an unset `assignee` (`defaultAgentName`'s own pattern,
- *    ADR 0012) would be. That's a deliberate, narrower simplification: the
- *    existing agent-quarantine gate (`agentQuarantinedSql`, `nextSlotTask`/
- *    `listQueue`) reads `COALESCE(t.assignee, defaultAgentName)` and has no
- *    concept of "the type of this task changes which pointer its unset
- *    assignee falls back to" — leaving `assignee` unset here would silently
- *    bypass that gate for a quarantined Auditor. Baking keeps quarantine
- *    correct today; making the SQL gate (and claude-worker.ts's spawn
- *    resolution, mcp.ts's attribution) type-aware so Auditor can become a
- *    true live pointer — the way layer 1's completion review's own unset
- *    `assignee` would then also benefit from — is tracked separately
- *    (issue #42). */
-function bundleObjections(db: Db, sessionId: number, now: Date, auditorName?: string): void {
+ *    every entry was human-written. `assignee` is left unset, a live
+ *    reference to the board's Auditor pointer resolved fresh at pickup —
+ *    the same "unset = live reference" shape `defaultAgentName` itself uses
+ *    (ADR 0011), not a value baked here at commit time. This relies on the
+ *    agent-quarantine gate (`agentQuarantinedSql`, `nextSlotTask`/
+ *    `listQueue`), claude-worker.ts's spawn resolution, and mcp.ts's
+ *    attribution all being type-aware — a `review` task's unset `assignee`
+ *    falls back to the Auditor pointer, never `defaultAgentName` (issue #42).
+ */
+function bundleObjections(db: Db, sessionId: number, now: Date): void {
   const rows = db
     .prepare(
       `SELECT task_id, payload FROM events
@@ -230,7 +224,6 @@ function bundleObjections(db: Db, sessionId: number, now: Date, auditorName?: st
         title: `rca (auditor): ${objected.title}`,
         purposeIntro: `objections raised against decisions of "${objected.title}"`,
         comments,
-        assignee: auditorName ?? DEFAULT_AUDITOR_NAME,
       },
       now,
     );
@@ -356,20 +349,16 @@ export function triagePreview(db: Db, sessionId: number): PreviewTask[] {
 }
 
 /** Close the open session and apply everything it staged in one transaction.
- *  The caller fires the immediate poll — pickup resumes only through it.
- *  `auditorName` is the board's Auditor pointer (CONTEXT.md), threaded to
- *  `bundleObjections`' RCA generation — same shape as `defaultAgentName`
- *  elsewhere. */
+ *  The caller fires the immediate poll — pickup resumes only through it. */
 export function commitTriage(
   db: Db,
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
-  auditorName?: string,
 ): TriageSession {
   const open = activeTriageSession(db);
   if (!open) throw new TriageError("no open triage session to commit");
   db.transaction(() => {
-    bundleObjections(db, open.id, now, auditorName);
+    bundleObjections(db, open.id, now);
     applyScratchpad(db, open.id, scratchpad, now);
     // apply in reverse staging order so the first-staged task ends up on top
     for (const taskId of stagedFrontInserts(db, open.id).reverse()) {

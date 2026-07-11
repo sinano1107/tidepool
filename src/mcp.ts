@@ -11,6 +11,7 @@ import type { Slot } from "./slot.js";
 import {
   completeTask,
   decomposeTask,
+  DEFAULT_AUDITOR_NAME,
   DomainError,
   escalateTask,
   getTask,
@@ -60,6 +61,12 @@ export interface McpDeps {
    *  not to `HUMAN_WORKER_ID`. Absent → falls back to `HUMAN_WORKER_ID`, same
    *  as the pre-#36 shape for a board with no worker configured at all. */
   defaultAgentName?: string;
+  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
+   *  as `defaultAgentName` above — the fallback a `review` task's unset
+   *  `assignee` attributes to instead (issue #42), never `defaultAgentName`.
+   *  Absent → `DEFAULT_AUDITOR_NAME` (the pointer always resolves —
+   *  CONTEXT.md's Auditor). */
+  auditorName?: string;
   /** Whether an agent name is currently registered (ADR 0012 / issue #36),
    *  read fresh against the registry — used to reject a decompose child's
    *  unknown assignee outright (the registering agent's own mistake, same
@@ -120,9 +127,14 @@ async function openHandoffPr(
 
 /** Every MCP call is attributed to a real agent session (never human — that's
  *  the separate /answer route), so an unspecified (null) assignee resolves to
- *  the board's default agent, not `HUMAN_WORKER_ID` (ADR 0012 / issue #36). */
+ *  the board's default agent, not `HUMAN_WORKER_ID` (ADR 0012 / issue #36) —
+ *  made type-aware for `review` tasks (issue #42 / CONTEXT.md's Auditor): a
+ *  review task's unset assignee attributes to the Auditor pointer instead,
+ *  which — unlike `defaultAgentName` — always resolves to a value. */
 function attributedWorkerId(deps: McpDeps, task: Task): string {
-  return task.assignee ?? deps.defaultAgentName ?? HUMAN_WORKER_ID;
+  if (task.assignee) return task.assignee;
+  if (task.type === "review") return deps.auditorName ?? DEFAULT_AUDITOR_NAME;
+  return deps.defaultAgentName ?? HUMAN_WORKER_ID;
 }
 
 /** The authority governing this task: `resolveAuthority` read fresh against
