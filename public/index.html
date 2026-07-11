@@ -602,7 +602,12 @@ function App() {
       await refresh();
       say(next ? 'info' : 'success', next ? 'pickup paused' : 'pickup resumed',
         next
-          ? (data.slot?.taskId ? `${data.slot.taskId} finishes · nothing new starts` : 'nothing starts until resumed')
+          ? (data.slot?.taskId
+              ? <>
+                  <span title={data.slot.taskId} style={{ display: 'inline-block', maxWidth: '9ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{data.slot.taskId}</span>
+                  {' finishes · nothing new starts'}
+                </>
+              : 'nothing starts until resumed')
           : 'immediate poll fired');
     } catch (err) {
       say('danger', 'pause toggle failed', String(err.message || err));
