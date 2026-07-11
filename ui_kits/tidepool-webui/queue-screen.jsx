@@ -147,9 +147,10 @@ function pausedSlot(underlyingSlot) {
   return {
     color: 'var(--rock-4)',
     line: underlyingSlot?.taskId
-      ? `pickup paused · ${underlyingSlot.taskId} finishes, nothing new starts`
+      ? 'pickup paused · task finishes, nothing new starts'
       : 'pickup paused — nothing starts until resumed',
     meta: 'poll idle',
+    taskId: underlyingSlot?.taskId ?? null,
   };
 }
 
@@ -169,6 +170,18 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, minHeight: 30 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: slot.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
+        {/* real deployments only — the full id lives in the title tooltip, same truncation as QueueItem's id chip */}
+        {slot.taskId && (
+          <span
+            title={slot.taskId}
+            style={{
+              fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)',
+              color: 'var(--text-muted)', flexShrink: 0,
+              maxWidth: '9ch', whiteSpace: 'nowrap',
+              overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >{slot.taskId}</span>
+        )}
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>{slot.meta}</span>
         {onTogglePause && (

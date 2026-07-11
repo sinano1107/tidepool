@@ -187,11 +187,11 @@ function mapData(board, log, paused) {
     });
   }
   const running = board.find((t) => t.status === 'in_progress');
-  // taskId (real deployments only) lets the Queue screen's paused slot line
-  // name the task that's still finishing (CONTEXT.md's Pause: running tasks
-  // are never touched, only new pickup)
+  // taskId (real deployments only) is a full UUID — the Queue screen renders
+  // it as its own truncated chip (title tooltip carries the full value), so
+  // `line` stays free of raw ids for the busy and paused slot lines alike
   const slot = running
-    ? { color: 'var(--tide-4)', line: `${running.id} · ${running.title}`, meta: running.assignee ?? '', taskId: running.id }
+    ? { color: 'var(--tide-4)', line: running.title, meta: running.assignee ?? '', taskId: running.id }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
   return {
     questions, log: logEntries, queue, board: cols,
