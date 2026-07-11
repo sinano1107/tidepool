@@ -805,7 +805,11 @@ export function clearPendingAutoMerge(db: Db, taskId: string): void {
  *  that carries risk (never silently auto-merges a risky change, regardless
  *  of the dial); a low-risk task instead queues for the unattended CI poll
  *  (merge.ts). Anything else (no dial configured) takes no further action —
- *  today's pre-#11 baseline. */
+ *  today's pre-#11 baseline. A task executing against a protected workspace
+ *  (CONTEXT.md / ADR 0013) always asks, same as `escalate`, overriding
+ *  whatever dial (including none) the executing worker's profile carries —
+ *  "PR to a protected workspace always needs a human merge" is a
+ *  resource-side invariant, independent of the dial. */
 export function recordPrOpened(
   db: Db,
   task: Task,
@@ -813,6 +817,7 @@ export function recordPrOpened(
   workerId: string,
   now: Date,
   authority?: AuthorityContext,
+  isProtected?: boolean,
 ): void {
   db.transaction(() => {
     db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(prNumber, task.id);
@@ -822,12 +827,15 @@ export function recordPrOpened(
       payload: { kind: "pr_opened", pr_number: prNumber },
       at: now,
     });
-    if (authority?.merge === "escalate") {
+    if (isProtected || authority?.merge === "escalate") {
       registerMergeQuestion(
         db,
         task,
         prNumber,
-        `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`,
+        isProtected
+          ? `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
+            `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`
+          : `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`,
         "merge",
         workerId,
         now,
@@ -883,6 +891,13 @@ export function decomposeTask(
   workerId: string,
   now: Date,
   authority?: AuthorityContext,
+  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+   *  protected workspace / ADR 0013), resolved by the caller against the
+   *  registry. A protected target converts unconditionally, regardless of
+   *  the registering worker's `allowed_workspaces` — "changes to it always
+   *  need human approval" is a resource-side invariant independent of any
+   *  profile. Absent → no workspace is protected. */
+  isProtectedWorkspace?: (name: string) => boolean,
 ): Task[] {
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
@@ -912,6 +927,9 @@ export function decomposeTask(
         reasons.push(
           `targets workspace "${child.workspace}", outside ${workerId}'s allowed_workspaces`,
         );
+      }
+      if (child.workspace !== undefined && isProtectedWorkspace?.(child.workspace)) {
+        reasons.push(`targets protected workspace "${child.workspace}"`);
       }
       // an unstated workspace inherits the parent's (CONTEXT.md): it was
       // already authorized when the parent landed there, so this is a

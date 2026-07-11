@@ -113,6 +113,18 @@ function agentRegisteredChecker(): ((name: string) => boolean) | undefined {
   return (name) => name in loadRegistry(registryDir).agents;
 }
 
+/** Whether an explicitly named workspace is protected (issue #15 layer 2 /
+ *  ADR 0013), read fresh against the registry — a decompose child naming a
+ *  protected workspace converts to an approval question unconditionally
+ *  (mcp.ts), and a task executing against one always asks before merging its
+ *  PR (tasks.ts's recordPrOpened), regardless of the registering/executing
+ *  worker's authority profile. Without a registry, no workspace is ever
+ *  protected. */
+function protectedWorkspaceChecker(): ((name: string) => boolean) | undefined {
+  if (!registryDir) return undefined;
+  return (name) => loadRegistry(registryDir).workspaces[name]?.protected === true;
+}
+
 /** Assignee/workspace candidates for the registration screen (issue #12).
  *  Without a registry there's nothing to suggest from. */
 function registryCandidates(): RegistryCandidates | undefined {
@@ -160,6 +172,7 @@ const server = await startServer({
   github: new GhCliClient(),
   resolveAuthority: authorityResolver(),
   agentRegistered: agentRegisteredChecker(),
+  isProtectedWorkspace: protectedWorkspaceChecker(),
   registryCandidates: registryCandidates(),
   draftClient: draftClientFactory(),
   push: pushClient(),

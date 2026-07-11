@@ -79,6 +79,13 @@ export interface ServerOptions {
    *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset,
    *  resolved once here rather than by each consumer separately. */
   auditorName?: string;
+  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+   *  protected workspace / ADR 0013), read fresh against the registry by the
+   *  caller — a decompose child naming a protected workspace converts to an
+   *  approval question unconditionally (mcp.ts), regardless of the
+   *  registering worker's authority profile. Absent → no workspace is
+   *  protected. */
+  isProtectedWorkspace?: (name: string) => boolean;
 }
 
 export interface TidepoolServer {
@@ -200,6 +207,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,
+      isProtectedWorkspace: options.isProtectedWorkspace,
     }),
   );
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");

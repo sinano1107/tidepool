@@ -59,6 +59,9 @@ export interface BootOptions {
   /** The board's Auditor pointer (issue #15 layer 2). Absent → falls back to
    *  `DEFAULT_AUDITOR_NAME` inside `commitTriage` itself. */
   auditorName?: string;
+  /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
+   *  ADR 0013). Absent → no workspace is protected. */
+  isProtectedWorkspace?: (name: string) => boolean;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -86,6 +89,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     draftClient: options.draftClient,
     push,
     auditorName: options.auditorName,
+    isProtectedWorkspace: options.isProtectedWorkspace,
   });
   let stopped = false;
   const stopServer = async () => {

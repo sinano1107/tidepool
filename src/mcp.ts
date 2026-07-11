@@ -74,6 +74,13 @@ export interface McpDeps {
    *  configured, so any assignee name is accepted, same as the workspace
    *  check's fallback. */
   agentRegistered?: (name: string) => boolean;
+  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+   *  protected workspace / ADR 0013), read fresh against the registry — a
+   *  decompose child naming a protected workspace converts to an approval
+   *  question unconditionally, regardless of the registering worker's
+   *  authority profile (v1's only protected workspace is the registry
+   *  itself). Absent → no workspace is protected. */
+  isProtectedWorkspace?: (name: string) => boolean;
 }
 
 /** The protected branch every task branch is proposed onto — the same one
@@ -119,6 +126,7 @@ async function openHandoffPr(
       attributedWorkerId(deps, task),
       deps.clock.now(),
       attributedAuthority(deps, task),
+      deps.isProtectedWorkspace?.(workspace.name),
     );
   } catch (err) {
     console.error(`PR creation failed for task ${task.id}:`, err);
@@ -377,6 +385,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           workerId,
           now,
           attributedAuthority(deps, task),
+          deps.isProtectedWorkspace,
         );
         return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),

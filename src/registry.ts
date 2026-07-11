@@ -49,6 +49,12 @@ const workspaceEntrySchema = z.object({
   path: z.string(),
   repo: z.string().optional(),
   notes: z.string().optional(),
+  /** Protected workspace (issue #15 layer 2 / ADR 0013): a decompose child
+   *  targeting this workspace converts to an approval question unconditionally,
+   *  regardless of the registering worker's authority profile. v1's only use is
+   *  the registry itself — "changes to it always need human approval" is a
+   *  resource-side invariant, independent of any profile's allowed_workspaces. */
+  protected: z.boolean().optional(),
 });
 
 /** A workspace entry in `workspaces.yaml`: where tasks run (name → path on

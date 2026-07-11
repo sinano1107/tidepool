@@ -57,6 +57,15 @@ describe("loadRegistry", () => {
     expect(ws.notes).toContain("npm install");
   });
 
+  it("workspaces.yaml の protected は optional: あれば読み、省略時は undefined", async () => {
+    const withProtected = await makeRegistry({
+      "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\n  protected: true\n`,
+    });
+    expect(loadRegistry(withProtected).workspaces.tidepool!.protected).toBe(true);
+    const without = await makeRegistry();
+    expect(loadRegistry(without).workspaces.tidepool!.protected).toBeUndefined();
+  });
+
   it("使用中の clone の HEAD commit hash を持つ(どのバージョンの判断か、の来歴)", async () => {
     const dir = await makeRegistry();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir }).toString().trim();
