@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -13,8 +13,7 @@ it("quiet hours 中に登録された question は push されず、明けると
     keys: { p256dh: "k", auth: "a" },
   });
 
-  await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "question",
+  registerQuestion(t, {
     title: "深夜に上がった質問",
     purpose: "quiet hours 中のテスト",
     completion_criteria: "n/a",

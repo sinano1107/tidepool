@@ -4,10 +4,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Db } from "../src/db.js";
+import { openDb, type Db } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { AuthorityProfile, RegistryCandidates } from "../src/registry.js";
 import { startServer } from "../src/server.js";
+import { BOARD_WORKER_ID, registerTask, type RegisterTaskInput, type Task } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
@@ -192,6 +193,21 @@ export async function registerWork(
     ...(reviewFlag !== undefined && { review_flag: reviewFlag }),
   });
   return res.json;
+}
+
+/** Fabricates a question task directly against the board's own DB file,
+ *  mirroring how tidepool's internal callers (watchdog/quarantine/merge/
+ *  decompose) register one. The human-facing `/api/tasks` door refuses
+ *  `type: "question"` outright (issue #38), so tests that need a question
+ *  fixture go through this seam instead — a second connection to the same
+ *  SQLite file is safe under WAL (`openDb`'s own mode). */
+export function registerQuestion(t: Tidepool, input: Omit<RegisterTaskInput, "type">): Task {
+  const db = openDb(join(t.dir, "board.sqlite"));
+  try {
+    return registerTask(db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID);
+  } finally {
+    db.close();
+  }
 }
 
 /** The 6-field handoff doc, filled in with placeholder content — shared by

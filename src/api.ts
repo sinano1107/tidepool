@@ -47,8 +47,12 @@ import {
   TriageError,
 } from "./triage.js";
 
+// question は人間向け HTTP API の範囲外(issue #38) — question タスクは
+// MCP の escalate ツールか tidepool 内部経路(watchdog・quarantine・merge・
+// decompose)からしか生まれない。それらは registerTask を直接呼ぶため、
+// このスキーマでの絞り込みの影響を受けない。
 const registerTaskSchema = z.object({
-  type: z.enum(["work", "question", "review"]),
+  type: z.enum(["work", "review"]),
   title: z.string().min(1),
   purpose: z.string().min(1),
   completion_criteria: z.string().min(1),

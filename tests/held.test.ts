@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, registerQuestion, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -19,16 +19,13 @@ it("祖先の未回答 question に held されたタスクは、回答される
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   const child = await registerWork(t, "child", parent.id);
-  const question = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "question",
-      title: "unrelated decision",
-      purpose: "a human wants steering input",
-      completion_criteria: "answered",
-      parent_id: parent.id,
-      question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
-    })
-  ).json;
+  const question = registerQuestion(t, {
+    title: "unrelated decision",
+    purpose: "a human wants steering input",
+    completion_criteria: "answered",
+    parent_id: parent.id,
+    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
+  });
 
   // child has no unfinished children of its own — it would be plain 'todo'
   // (and pickable) without the held rule

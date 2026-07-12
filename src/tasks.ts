@@ -181,10 +181,12 @@ export interface RegisterTaskInput extends TaskContent {
 }
 
 /** Every question carries 1-4 items (issue #30), each with 2-4 options plus a
- *  recommendation among them, whichever door it enters by (escalate or the
- *  JSON API) — the answer view is one-tap first, free text only as an
- *  override. The degraded free-text-only question is reserved for the
- *  watchdog's auto-escalation safety valve (#17).
+ *  recommendation among them, whichever door it enters by (escalate, or a
+ *  tidepool-internal registerTask call — watchdog/quarantine/merge/decompose;
+ *  the JSON API refuses `type: "question"` outright, issue #38) — the answer
+ *  view is one-tap first, free text only as an override. The degraded
+ *  free-text-only question is reserved for the watchdog's auto-escalation
+ *  safety valve (#17).
  *
  *  An item's option floor relaxes to 1 only for an actual quarantine
  *  Confirmation question (issue #21, CONTEXT.md) — `quarantine_workspace` or

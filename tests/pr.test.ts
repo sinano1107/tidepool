@@ -9,6 +9,7 @@ import {
   HOUR,
   makeWorkspace,
   mcpClient,
+  registerQuestion,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -149,15 +150,12 @@ it("tree rule が失敗して workspace が quarantine された場合は PR が
 it("question タスクの完了(回答)では PR が作られない", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
-  const task = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "question",
-      title: "which approach?",
-      purpose: "pick a direction",
-      completion_criteria: "a human answer is recorded",
-      question: [{ title: "which approach?", options: ["a", "b"], recommendation: "a" }],
-    })
-  ).json;
+  const task = registerQuestion(t, {
+    title: "which approach?",
+    purpose: "pick a direction",
+    completion_criteria: "a human answer is recorded",
+    question: [{ title: "which approach?", options: ["a", "b"], recommendation: "a" }],
+  });
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/answer`, {
     answers: ["a"],

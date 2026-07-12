@@ -1,5 +1,13 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  HOUR,
+  mcpClient,
+  registerQuestion,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -213,29 +221,32 @@ it("a question answers exactly once, and only questions answer at all", async ()
   expect(onWork.status).toBe(409);
 });
 
-it("every question item carries 2-4 options and a recommendation, whichever door it enters by", async () => {
+// the HTTP JSON API refuses type: "question" outright (issue #38) — a
+// standalone question can only enter through escalate or tidepool's own
+// internal registration paths (watchdog/quarantine/merge/decompose), never
+// this door. See tests/register-question-rejected.test.ts for that.
+it("a standalone question registered through the internal door still carries 2-4 options and a recommendation", async () => {
   t = await bootTidepool();
   const base = {
-    type: "question",
     title: "standalone question",
     purpose: "a human wants steering input",
     completion_criteria: "answered",
   };
-  // no items at all, and an invalid spec, are both refused at registration
-  const bare = await api(t.baseUrl, "POST", "/api/tasks", base);
-  expect(bare.status).toBe(400);
-  const oneOption = await api(t.baseUrl, "POST", "/api/tasks", {
-    ...base,
-    question: [{ title: "standalone question", options: ["only"], recommendation: "only" }],
-  });
-  expect(oneOption.status).toBe(400);
+  // no items at all, and an invalid spec, are both refused at registration —
+  // same invariant as escalate's
+  expect(() => registerQuestion(t, base)).toThrow();
+  expect(() =>
+    registerQuestion(t, {
+      ...base,
+      question: [{ title: "standalone question", options: ["only"], recommendation: "only" }],
+    }),
+  ).toThrow();
 
-  const ok = await api(t.baseUrl, "POST", "/api/tasks", {
+  const ok = registerQuestion(t, {
     ...base,
     question: [{ title: "standalone question", options: ["yes", "no"], recommendation: "no" }],
   });
-  expect(ok.status).toBe(201);
-  const stored = (await api(t.baseUrl, "GET", `/api/tasks/${ok.json.id}`)).json;
+  const stored = (await api(t.baseUrl, "GET", `/api/tasks/${ok.id}`)).json;
   expect(stored.question_items).toEqual([
     { title: "standalone question", options: ["yes", "no"], recommendation: "no" },
   ]);
@@ -246,16 +257,13 @@ it("answering one of two open questions leaves the parent blocked; the last answ
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
   const q1 = await escalateFrom(t, parent.id);
-  const q2 = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "question",
-      title: "second question",
-      purpose: "another decision on the same parent",
-      completion_criteria: "answered",
-      parent_id: parent.id,
-      question: [{ title: "second question", options: ["yes", "no"], recommendation: "yes" }],
-    })
-  ).json;
+  const q2 = registerQuestion(t, {
+    title: "second question",
+    purpose: "another decision on the same parent",
+    completion_criteria: "answered",
+    parent_id: parent.id,
+    question: [{ title: "second question", options: ["yes", "no"], recommendation: "yes" }],
+  });
 
   await api(t.baseUrl, "POST", `/api/tasks/${q1.id}/answer`, { answers: ["clerk"] });
 
