@@ -44,7 +44,7 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     expect(t.worker.started.map((x) => x.id)).toEqual([inSandbox.id]);
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${inSandbox.id}`);
 
-    const c1 = await mcpClient(t.baseUrl, inSandbox.id);
+    const c1 = await mcpClient(t.mcpBaseUrl, inSandbox.id);
     await c1.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
     await c1.close();
 
@@ -57,7 +57,7 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     // break prod's tree rule so completing it quarantines only "prod"
     writeFileSync(join(prod.path, "junk.txt"), "uncommittable\n");
     await rm(join(prod.path, ".git"), { recursive: true, force: true });
-    const c2 = await mcpClient(t.baseUrl, inProd.id);
+    const c2 = await mcpClient(t.mcpBaseUrl, inProd.id);
     await c2.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
     await c2.close();
 

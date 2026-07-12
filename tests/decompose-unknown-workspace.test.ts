@@ -22,7 +22,7 @@ it("registry に存在しない workspace 名を指定した decompose の子は
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up
 
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {

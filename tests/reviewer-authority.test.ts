@@ -29,7 +29,7 @@ it("review タスクは実行 assignee 自身の authority profile がどれだ�
   ).json;
   await t.clock.advance(HOUR); // review picked up
 
-  const client = await mcpClient(t.baseUrl, review.id);
+  const client = await mcpClient(t.mcpBaseUrl, review.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -79,7 +79,7 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
   ).json;
   await t.clock.advance(HOUR); // review picked up
 
-  const client = await mcpClient(t.baseUrl, review.id);
+  const client = await mcpClient(t.mcpBaseUrl, review.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -136,7 +136,7 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
   ).json;
   await t.clock.advance(HOUR); // review picked up
 
-  const client = await mcpClient(t.baseUrl, review.id);
+  const client = await mcpClient(t.mcpBaseUrl, review.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {

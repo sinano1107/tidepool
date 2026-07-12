@@ -24,7 +24,7 @@ it("decompose queues the children at the tail, blocks the parent, and releases t
   t = await bootTidepool();
   const parent = await registerWork(t, "build the toolchain");
   await t.clock.advance(HOUR); // parent picked up into the slot
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({ name: "decompose", arguments: decomposition });
   expect(res.isError ?? false).toBe(false);
   await client.close();
@@ -53,7 +53,7 @@ it("decompose stamps each child with the registering worker and the decision it 
   t = await bootTidepool();
   const parent = await registerWork(t, "build the toolchain");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   await client.callTool({ name: "decompose", arguments: decomposition });
   await client.close();
 
@@ -79,7 +79,7 @@ it("decompose stamps each child with the registering worker and the decision it 
 
 /** Complete the slot task via MCP with a full work handoff. */
 async function completeVia(t: Tidepool, taskId: string, deliverables = "the code") {
-  const client = await mcpClient(t.baseUrl, taskId);
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: {
@@ -101,7 +101,7 @@ it("when every child is done the parent resumes and completes by decomposition",
   t = await bootTidepool();
   const parent = await registerWork(t, "build the toolchain");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   await client.callTool({ name: "decompose", arguments: decomposition });
   await client.close();
   const other = await registerWork(t, "unrelated work"); // queued behind the children
@@ -163,7 +163,7 @@ it("a completion flows through the log as its own kind, carrying the one-line ou
   t = await bootTidepool();
   const task = await registerWork(t, "build the parser");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({
     name: "log_decision",
     arguments: { line: "kept the grammar LL(1)" },
@@ -185,7 +185,7 @@ it("the log keeps a read cursor that only ever advances", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "build the parser");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "log_decision", arguments: { line: "first decision" } });
   await client.callTool({ name: "log_decision", arguments: { line: "second decision" } });
   await client.close();
@@ -208,7 +208,7 @@ it("the log is a filtered view of the event stream, not a copy in its own table"
   t = await bootTidepool();
   const task = await registerWork(t, "build the parser");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "log_decision", arguments: { line: "kept the grammar LL(1)" } });
   await client.close();
   await completeVia(t, task.id);
@@ -227,7 +227,7 @@ it("decompose refuses an empty child list and leaves the parent in the slot", as
   t = await bootTidepool();
   const parent = await registerWork(t, "build the toolchain");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: { reason: "no children at all", children: [] },
@@ -246,7 +246,7 @@ it("log_decision records a one-line decision that appears in the log view", asyn
   t = await bootTidepool();
   const task = await registerWork(t, "build the parser");
   await t.clock.advance(HOUR); // picked up into the slot
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "log_decision",
     arguments: { line: "chose recursive descent over a parser generator: no new build dep" },

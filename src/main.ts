@@ -34,6 +34,9 @@ class LoggingWorker implements WorkerAdapter {
 }
 
 const port = Number(process.env.PORT ?? 4589);
+// /mcp's own 127.0.0.1-only port (issue #37) — kept off `port` so
+// `tailscale serve <port>` never also publishes MCP tool calls
+const mcpPort = Number(process.env.MCP_PORT ?? port + 1);
 const registryDir = process.env.TIDEPOOL_REGISTRY;
 const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? "sandbox";
 // ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
@@ -59,7 +62,7 @@ function workerFactory(): WorkerFactory {
       agent: defaultAgentName,
       auditorName,
       workspace: workspaceName,
-      mcpUrl: `http://127.0.0.1:${port}/mcp`,
+      mcpUrl: `http://127.0.0.1:${mcpPort}/mcp`,
       logDir,
     });
 }
@@ -165,6 +168,7 @@ function pushClient(): PushClient | undefined {
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
+  mcpPort,
   clock: new SystemClock(),
   worker: workerFactory(),
   workspace: workspaceConfig(),
@@ -180,3 +184,4 @@ const server = await startServer({
   auditorName,
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
+console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

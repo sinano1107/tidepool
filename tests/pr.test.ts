@@ -35,7 +35,7 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },
@@ -58,7 +58,7 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
   const task = await registerWork(t, "write the report");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
 
@@ -85,7 +85,7 @@ it("PR 作成が失敗しても complete_task 自体は成立し、ツリーは�
 
   writeFileSync(join(ws.path, "notes.txt"), "shipped\n");
   t.github.scriptFailure(new Error("GitHub API is down"));
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },
@@ -114,7 +114,7 @@ it("review タスクの complete_task では PR が作られない", async () =>
   ).json;
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({ name: "complete_task", arguments: {} });
   expect(res.isError ?? false).toBe(false);
   await client.close();
@@ -131,7 +131,7 @@ it("tree rule が失敗して workspace が quarantine された場合は PR が
   // tree-rule.test.ts と同じ代役: リポジトリ自体を壊して WIP コミットを失敗させる
   writeFileSync(join(ws.path, "junk.txt"), "uncommittable\n");
   await rm(join(ws.path, ".git"), { recursive: true, force: true });
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },

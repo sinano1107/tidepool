@@ -16,7 +16,7 @@ it("get_current_task returns purpose and completion criteria over MCP", async ()
   ).json;
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     expect(result.isError ?? false).toBe(false);

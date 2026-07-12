@@ -11,7 +11,7 @@ it("decompose converts a child assigned outside allowed_workspaces into an appro
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up into the slot
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -50,7 +50,7 @@ it("a child targeting a workspace within allowed_workspaces registers directly, 
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -82,7 +82,7 @@ it("allowed_workspaces に明示 wildcard \"*\" があれば任意の workspace 
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -114,7 +114,7 @@ it("allowed_workspaces が空リストなら、明示された workspace は何�
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -139,7 +139,7 @@ it("allowed_workspaces が空リストなら、明示された workspace は何�
 });
 
 async function decomposeOutOfBoundsWorkspace(t: Tidepool, parentId: string) {
-  const client = await mcpClient(t.baseUrl, parentId);
+  const client = await mcpClient(t.mcpBaseUrl, parentId);
   await client.callTool({
     name: "decompose",
     arguments: {
@@ -210,7 +210,7 @@ it("a child with no workspace of its own inherits its parent's workspace, withou
   const root = await registerWork(t, "root");
   await t.clock.advance(HOUR); // root picked up
 
-  const rootClient = await mcpClient(t.baseUrl, root.id);
+  const rootClient = await mcpClient(t.mcpBaseUrl, root.id);
   await rootClient.callTool({
     name: "decompose",
     arguments: {
@@ -232,7 +232,7 @@ it("a child with no workspace of its own inherits its parent's workspace, withou
     (x: any) => x.title === "sandbox child",
   );
 
-  const childClient = await mcpClient(t.baseUrl, sandboxChild.id);
+  const childClient = await mcpClient(t.mcpBaseUrl, sandboxChild.id);
   const res: any = await childClient.callTool({
     name: "decompose",
     arguments: {

@@ -25,7 +25,7 @@ it("MCP calls not attributed to the current slot task are rejected", async () =>
   await t.clock.advance(HOUR); // first occupies the slot
 
   // attributed to a task that is NOT in the slot (e.g. a stale killed process)
-  const stale = await mcpClient(t.baseUrl, second.id);
+  const stale = await mcpClient(t.mcpBaseUrl, second.id);
   try {
     const got: any = await stale.callTool({ name: "get_current_task", arguments: {} });
     expect(got.isError).toBe(true);
@@ -40,7 +40,7 @@ it("MCP calls not attributed to the current slot task are rejected", async () =>
   }
 
   // bare /mcp (no ?task=) may not act as the slot worker
-  const bare = await mcpClient(t.baseUrl);
+  const bare = await mcpClient(t.mcpBaseUrl);
   try {
     const got: any = await bare.callTool({ name: "get_current_task", arguments: {} });
     expect(got.isError).toBe(true);

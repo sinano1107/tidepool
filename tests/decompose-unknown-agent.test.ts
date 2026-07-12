@@ -9,7 +9,7 @@ it("registry に存在しない agent 名を指定した decompose の子は、�
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up
 
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -42,7 +42,7 @@ it("registry に存在する agent 名を指定した decompose の子は、auth
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {

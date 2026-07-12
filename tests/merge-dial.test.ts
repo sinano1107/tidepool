@@ -27,7 +27,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },
@@ -53,7 +53,7 @@ it("completing a work task with no merge dial configured opens the PR without an
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
 
@@ -68,7 +68,7 @@ it("completing a work task with no merge dial configured opens the PR without an
 async function completeUnderEscalate(t: Tidepool) {
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
@@ -145,7 +145,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
 
@@ -179,7 +179,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
 
@@ -203,7 +203,7 @@ it("a risky task under auto_if_ci_green asks for merge approval immediately inst
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up
 
-  const parentClient = await mcpClient(t.baseUrl, parent.id);
+  const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await parentClient.callTool({
     name: "decompose",
     arguments: {
@@ -229,7 +229,7 @@ it("a risky task under auto_if_ci_green asks for merge approval immediately inst
   const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.title === "risky child",
   );
-  const childClient = await mcpClient(t.baseUrl, child.id);
+  const childClient = await mcpClient(t.mcpBaseUrl, child.id);
   await childClient.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await childClient.close();
 

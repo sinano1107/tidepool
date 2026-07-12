@@ -38,7 +38,7 @@ it("decompose は実行中タスク自身の assignee の authority を都度解
   t = await bootTidepool({ resolveAuthority });
   const parent = await registerAssigned(t, "deckhand's parent", "deckhand");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -67,7 +67,7 @@ it("navigator 宛てタスクは navigator 自身の authority(deckhand とは�
   t = await bootTidepool({ resolveAuthority });
   const parent = await registerAssigned(t, "navigator's parent", "navigator");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {

@@ -24,7 +24,7 @@ it("review タスクの get_current_task に、親(レビュー対象)の decisi
     })
   ).json;
   await t.clock.advance(HOUR); // reviewed task picked up
-  const client = await mcpClient(t.baseUrl, reviewed.id);
+  const client = await mcpClient(t.mcpBaseUrl, reviewed.id);
   await client.callTool({ name: "log_decision", arguments: { line: "kept the API surface small" } });
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -34,7 +34,7 @@ it("review タスクの get_current_task に、親(レビュー対象)の decisi
   expect(review.parent_id).toBe(reviewed.id);
 
   await t.clock.advance(HOUR); // review picked up
-  const reviewClient = await mcpClient(t.baseUrl, review.id);
+  const reviewClient = await mcpClient(t.mcpBaseUrl, review.id);
   try {
     const result: any = await reviewClient.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
@@ -65,7 +65,7 @@ it("review でない親コンテキストには decision log / handoff doc が�
   ).json;
   await t.clock.advance(HOUR); // child picked up (parent blocked)
 
-  const client = await mcpClient(t.baseUrl, child.id);
+  const client = await mcpClient(t.mcpBaseUrl, child.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);

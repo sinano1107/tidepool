@@ -39,7 +39,7 @@ it("abandon の回答で計画ごと破棄される: 失敗タスクと兄弟が
     })
   ).json;
   await t.clock.advance(HOUR); // plan picked up
-  const client = await mcpClient(t.baseUrl, plan.id);
+  const client = await mcpClient(t.mcpBaseUrl, plan.id);
   await client.callTool({
     name: "decompose",
     arguments: {
@@ -105,7 +105,7 @@ it("abandon のカスケードは done の兄弟には触れない(記録は劣�
     })
   ).json;
   await t.clock.advance(HOUR); // plan picked up
-  const decomposeClient = await mcpClient(t.baseUrl, plan.id);
+  const decomposeClient = await mcpClient(t.mcpBaseUrl, plan.id);
   await decomposeClient.callTool({
     name: "decompose",
     arguments: {
@@ -125,7 +125,7 @@ it("abandon のカスケードは done の兄弟には触れない(記録は劣�
   const sibling = board0.find((x: any) => x.title === "sibling 2");
 
   await t.clock.advance(HOUR); // "finishes early" picked up (lowest sort_key)
-  const completeClient = await mcpClient(t.baseUrl, finished.id);
+  const completeClient = await mcpClient(t.mcpBaseUrl, finished.id);
   await completeClient.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await completeClient.close();
   expect((await api(t.baseUrl, "GET", `/api/tasks/${finished.id}`)).json.status).toBe("done");

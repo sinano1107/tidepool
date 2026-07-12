@@ -16,7 +16,7 @@ it("review タスクの未設定 assignee での MCP 呼び出しは、既定 ag
   ).json;
   await t.clock.advance(HOUR); // picked up into the slot
 
-  const client = await mcpClient(t.baseUrl, review.id);
+  const client = await mcpClient(t.mcpBaseUrl, review.id);
   await client.callTool({ name: "log_decision", arguments: { line: "no repair needed" } });
   await client.close();
 

@@ -32,7 +32,7 @@ it("get_current_task の children に、回答済み question 子タスクの it
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up
-  const escalateClient = await mcpClient(t.baseUrl, parent.id);
+  const escalateClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await escalateClient.callTool({ name: "escalate", arguments: escalation });
   await escalateClient.close();
 
@@ -42,7 +42,7 @@ it("get_current_task の children に、回答済み question 子タスクの it
 
   // answering with a free slot resumes the parent at once (escalate.test.ts's
   // own "answering unblocks the parent... picks it up at once" behavior)
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
@@ -64,7 +64,7 @@ it("get_current_task の children に、完了済み work 子タスクの handof
   t = await bootTidepool();
   const parent = await registerWork(t, "toolchain");
   await t.clock.advance(HOUR); // parent picked up
-  const decomposeClient = await mcpClient(t.baseUrl, parent.id);
+  const decomposeClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await decomposeClient.callTool({
     name: "decompose",
     arguments: {
@@ -77,13 +77,13 @@ it("get_current_task の children に、完了済み work 子タスクの handof
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const child = list.find((x: any) => x.title === "lexer");
   await t.clock.advance(HOUR); // child picked up
-  const completeClient = await mcpClient(t.baseUrl, child.id);
+  const completeClient = await mcpClient(t.mcpBaseUrl, child.id);
   await completeClient.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await completeClient.close();
 
   // the sole child settled — the parent unblocks and resumes on the next tick
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
@@ -111,7 +111,7 @@ it("get_current_task の children に、cancelled 子タスクの発端 question
     })
   ).json;
   await t.clock.advance(HOUR); // plan picked up
-  const decomposeClient = await mcpClient(t.baseUrl, plan.id);
+  const decomposeClient = await mcpClient(t.mcpBaseUrl, plan.id);
   await decomposeClient.callTool({
     name: "decompose",
     arguments: {
@@ -136,7 +136,7 @@ it("get_current_task の children に、cancelled 子タスクの発端 question
 
   // abandon resumes the plan (parent) at once — same free-slot pickup as the
   // question-answer path
-  const client = await mcpClient(t.baseUrl, plan.id);
+  const client = await mcpClient(t.mcpBaseUrl, plan.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
@@ -173,7 +173,7 @@ it("get_current_task の children に、未決着(todo)の子タスクは含ま�
     parent_id: parent.id,
   });
 
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);

@@ -16,6 +16,10 @@ export { HOURLY as HOUR } from "../src/scheduler.js";
 
 export interface Tidepool {
   baseUrl: string;
+  /** `/mcp`'s own base URL (issue #37) — separate from `baseUrl` now that
+   *  `/mcp` lives on its own port, off the one `tailscale serve` would
+   *  publish. */
+  mcpBaseUrl: string;
   clock: FakeClock;
   worker: ScriptedWorker;
   github: FakeGitHubClient;
@@ -76,6 +80,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const server = await startServer({
     dbPath: join(dir, "board.sqlite"),
     port: 0,
+    mcpPort: 0,
     clock,
     worker: () => worker,
     workspace: options.workspace,
@@ -98,6 +103,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   };
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
+    mcpBaseUrl: `http://127.0.0.1:${server.mcpPort}`,
     clock,
     worker,
     github,

@@ -42,25 +42,12 @@ tailscale serve status
 公開インターネットへは一切露出しない(`tailscale funnel` は使わない)— tailnet
 所属そのものが認証になる(n=1 前提)。
 
-### 既知のギャップ: `/mcp` も同じポートに乗っている
-
-`tailscale serve` は指定したポートの Express アプリ全体(静的ファイル・`/api`・
-`/mcp`)をまとめて tailnet に公開する。tidepool の worker は常に
-`http://127.0.0.1:<port>/mcp` で自分自身に接続するため、tailnet 経由で `/mcp` に
-届く価値のあるトラフィックは本来存在しないが、現状のアーキテクチャ(1つの
-Express アプリ・1つのポート)では `/api` だけを選んで公開し `/mcp` を除外する
-手段が `tailscale serve` にはない。
-
-実害は tailnet に参加している他デバイス(この tailnet ではこのマシン自身の他に
-iPhone/Windows/Raspberry Pi)から `/mcp` の MCP ツールを直接叩けてしまうこと。
-tailnet 参加自体を信頼境界とする n=1 設計の範囲内ではあるが、issue #14 の受け入れ
-基準(「MCP エンドポイントが tailnet に露出していない」)を厳密には満たさない。
-
-正しい直し方は `/mcp` を `127.0.0.1` オンリーの別ポートへ分離し、`tailscale serve`
-が触れるポートを web/`/api`/静的ファイルだけにすることだが、これは
-`server.ts`・`main.ts`・大半の MCP 系テスト(`tests/mcp-*.test.ts` 他、`baseUrl` に
-`/mcp` をぶら下げている全テスト)に及ぶ変更になるため、この issue のセッションでは
-着手していない。ロールアウト前に別 issue として切り出すことを推奨する。
+`/mcp` はこのポートには乗っていない(issue #37)— `127.0.0.1` オンリーの別ポート
+(既定 `PORT + 1`、`MCP_PORT` 環境変数で変更可)で待ち受けており、`tailscale
+serve` が公開するポートを上記の1つ(web/`/api`/静的ファイル)だけにする限り、
+`/mcp` は tailnet から到達不能。tidepool の worker は常に
+`http://127.0.0.1:<mcpPort>/mcp` で自分自身に接続するため、tailnet 経由で `/mcp`
+に届く価値のあるトラフィックは元々存在しない。
 
 ## 4. iPhone のホーム画面にインストールする(Web Push の必須手順)
 

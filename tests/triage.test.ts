@@ -39,7 +39,7 @@ async function escalatedBoard(t: Tidepool) {
   await t.clock.advance(HOUR); // parent into the slot
   const other = await registerWork(t, "other work");
   await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   await client.callTool({
     name: "escalate",
     arguments: {
@@ -82,7 +82,7 @@ it("an answer during triage persists at once but reaches the queue only at commi
 
 /** Complete the slot task via MCP with a full work handoff. */
 async function completeVia(t: Tidepool, taskId: string) {
-  const client = await mcpClient(t.baseUrl, taskId);
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
   await client.callTool({
     name: "complete_task",
     arguments: {
@@ -101,7 +101,7 @@ async function completeVia(t: Tidepool, taskId: string) {
 
 /** Put one decision line in the log for `title` and return its entry. */
 async function loggedEntry(t: Tidepool, taskId: string, line: string) {
-  const client = await mcpClient(t.baseUrl, taskId);
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
   await client.callTool({ name: "log_decision", arguments: { line } });
   await client.close();
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;

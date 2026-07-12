@@ -31,7 +31,7 @@ async function triggerQuarantine(t: Tidepool, ws: WorkspaceConfig, title: string
   await t.clock.advance(HOUR);
   writeFileSync(join(ws.path, `${title.replace(/\s/g, "-")}.txt`), "uncommittable\n");
   await rm(join(ws.path, ".git"), { recursive: true, force: true });
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
   return task;
@@ -150,7 +150,7 @@ it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由�
   db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(BOARD_WORKER_ID, task.id);
   db.close();
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "escalate",
     arguments: {

@@ -31,7 +31,7 @@ it("failure question で「再実行」を選んでも、計画の残りは canc
     })
   ).json;
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, plan.id);
+  const client = await mcpClient(t.mcpBaseUrl, plan.id);
   await client.callTool({
     name: "decompose",
     arguments: {
@@ -77,7 +77,7 @@ it("cancel_option を持たない question に「abandon」という文字列を
     })
   ).json;
   await t.clock.advance(HOUR); // parent picked up
-  const decomposeClient = await mcpClient(t.baseUrl, parent.id);
+  const decomposeClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await decomposeClient.callTool({
     name: "decompose",
     arguments: {
@@ -95,7 +95,7 @@ it("cancel_option を持たない question に「abandon」という文字列を
   const sibling = board0.find((x: any) => x.title === "plain sibling");
 
   await t.clock.advance(HOUR); // "escalates" picked up
-  const escalateClient = await mcpClient(t.baseUrl, escalating.id);
+  const escalateClient = await mcpClient(t.mcpBaseUrl, escalating.id);
   const res: any = await escalateClient.callTool({
     name: "escalate",
     arguments: {

@@ -33,7 +33,7 @@ it("complete_task on a work task requires the 6-field handoff doc", async () => 
   ).json;
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, first.id);
+  const client = await mcpClient(t.mcpBaseUrl, first.id);
   try {
     // no handoff → refused, task stays in_progress
     const bare: any = await client.callTool({ name: "complete_task", arguments: {} });

@@ -31,7 +31,7 @@ it("a blocked parent is skipped and get_current_task exposes the parent context"
   expect(t.worker.started.map((x) => x.id)).toEqual([child.id]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("blocked");
 
-  const client = await mcpClient(t.baseUrl, child.id);
+  const client = await mcpClient(t.mcpBaseUrl, child.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);

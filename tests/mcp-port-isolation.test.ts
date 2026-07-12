@@ -1,0 +1,41 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { startServer, type TidepoolServer } from "../src/server.js";
+import { FakeClock, ScriptedWorker } from "./fakes.js";
+
+let server: TidepoolServer | undefined;
+let dir: string | undefined;
+afterEach(async () => {
+  await server?.stop();
+  server = undefined;
+  if (dir) await rm(dir, { recursive: true, force: true });
+  dir = undefined;
+});
+
+it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートでのみ待ち受ける(issue #37)", async () => {
+  dir = await mkdtemp(join(tmpdir(), "tidepool-mcp-port-"));
+  server = await startServer({
+    dbPath: join(dir, "board.sqlite"),
+    port: 0,
+    mcpPort: 0,
+    clock: new FakeClock(),
+    worker: () => new ScriptedWorker(),
+  });
+
+  const webRes = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  expect(webRes.status).toBe(404);
+
+  const client = new Client({ name: "tidepool-test", version: "0.0.0" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.mcpPort}/mcp`)),
+  );
+  await client.close();
+});

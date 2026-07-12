@@ -33,7 +33,7 @@ it("pause 中も実行中タスクは完走し、resume で即時 pickup が発�
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
 
   // the running task completes normally — pause never touches the slot
-  const client = await mcpClient(t.baseUrl, running.id);
+  const client = await mcpClient(t.mcpBaseUrl, running.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
 
@@ -83,7 +83,7 @@ it("pause 中の todo はキュービューで skipped として現れ、resume 
 
 it("pause は人間の操舵チャネル: MCP には一切公開されない", async () => {
   t = await bootTidepool();
-  const client = await mcpClient(t.baseUrl);
+  const client = await mcpClient(t.mcpBaseUrl);
   const { tools } = await client.listTools();
   const names = tools.map((x) => x.name);
   expect(names.filter((n) => /pause|resume/.test(n))).toEqual([]);

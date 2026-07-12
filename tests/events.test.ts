@@ -16,7 +16,7 @@ it("every state change is appended as a typed event, readable via the events API
   ).json;
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   try {
     await client.callTool({
       name: "complete_task",

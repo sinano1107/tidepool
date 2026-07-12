@@ -98,7 +98,7 @@ it("閾値超えの間も実行中タスクには決して触れない(常に完
   t.worker.scriptUsage(overThreshold(resetsAt));
 
   // the in-progress task completes normally — the threshold never touches it
-  const client = await mcpClient(t.baseUrl, first.id);
+  const client = await mcpClient(t.mcpBaseUrl, first.id);
   const done: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   expect(done.isError ?? false).toBe(false);
   await client.close();

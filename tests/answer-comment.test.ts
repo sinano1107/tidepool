@@ -16,7 +16,7 @@ const escalation = {
 };
 
 async function escalateFrom(t: Tidepool, parentId: string) {
-  const client = await mcpClient(t.baseUrl, parentId);
+  const client = await mcpClient(t.mcpBaseUrl, parentId);
   const res: any = await client.callTool({ name: "escalate", arguments: escalation });
   expect(res.isError ?? false).toBe(false);
   await client.close();
@@ -68,7 +68,7 @@ it("復帰した親の get_current_task に、reject 理由の comment が answe
   });
 
   // answering with a free slot resumes the parent at once
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);

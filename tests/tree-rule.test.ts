@@ -41,7 +41,7 @@ it("complete による解放で WIP コミットが強制され、ツリーが�
 
   // エージェントの善意に依存しない: ワーカーはコミットせず散らかしたまま完了する
   writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },
@@ -65,7 +65,7 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
 
   // 作業途中でエスカレーション — コミットしないまま slot を手放す
   writeFileSync(join(ws.path, "draft.txt"), "work in flight\n");
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "escalate",
     arguments: {
@@ -84,7 +84,7 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
   const other = await registerWork(t, "other work");
   await t.clock.advance(HOUR);
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${other.id}`);
-  const c2 = await mcpClient(t.baseUrl, other.id);
+  const c2 = await mcpClient(t.mcpBaseUrl, other.id);
   await c2.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await c2.close();
 
@@ -107,7 +107,7 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   // リポジトリ自体を壊して WIP コミットを失敗させる(コンフリクト等の代役)
   writeFileSync(join(ws.path, "junk.txt"), "uncommittable\n");
   await rm(join(ws.path, ".git"), { recursive: true, force: true });
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },
@@ -146,7 +146,7 @@ it("ワーカーが main に逃げていても WIP は main にコミットさ�
   // 規律を破るワーカー: セッション中に main へ checkout し、散らかしたまま完了する
   git(ws.path, "checkout", "main");
   writeFileSync(join(ws.path, "rogue.txt"), "must not land on main\n");
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },

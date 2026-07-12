@@ -34,7 +34,7 @@ it("prod workspace のタスクを complete すると、PR は sandbox ではな
   const task = await registerWork(t, "ship in prod", "prod");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
 

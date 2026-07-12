@@ -19,7 +19,7 @@ it("escalate registers one question task carrying every question item, blocks th
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up into the slot
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const twoQuestions = {
     context: escalation.context,
     questions: [
@@ -60,7 +60,7 @@ it("escalate refuses an item with fewer than 2 or more than 4 options, a recomme
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const invalidItemOverrides = [
     { options: ["only one"], recommendation: "only one" },
     { options: ["a", "b", "c", "d", "e"], recommendation: "a" },
@@ -104,7 +104,7 @@ it("escalate refuses an item with fewer than 2 or more than 4 options, a recomme
 
 /** Drive a task into the slot and escalate from it; returns the question. */
 async function escalateFrom(t: Tidepool, parentId: string) {
-  const client = await mcpClient(t.baseUrl, parentId);
+  const client = await mcpClient(t.mcpBaseUrl, parentId);
   const res: any = await client.callTool({ name: "escalate", arguments: escalation });
   expect(res.isError ?? false).toBe(false);
   await client.close();
@@ -273,7 +273,7 @@ it("answering a multi-item escalation is atomic: a partial submission is refused
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   await client.callTool({
     name: "escalate",
     arguments: {
@@ -329,7 +329,7 @@ it("answering a multi-item escalation is atomic: a partial submission is refused
 
 it("answering is a human steering channel: no MCP tool exposes it", async () => {
   t = await bootTidepool();
-  const client = await mcpClient(t.baseUrl);
+  const client = await mcpClient(t.mcpBaseUrl);
   const { tools } = await client.listTools();
   const names = tools.map((x) => x.name);
   expect(names).toContain("escalate");

@@ -19,7 +19,7 @@ it("a review task may attach a handoff, and it is stored rather than dropped", a
   ).json;
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   try {
     const result: any = await client.callTool({
       name: "complete_task",
@@ -47,7 +47,7 @@ for (const type of ["review"] as const) {
     ).json;
     await t.clock.advance(HOUR);
 
-    const client = await mcpClient(t.baseUrl, task.id);
+    const client = await mcpClient(t.mcpBaseUrl, task.id);
     try {
       const result: any = await client.callTool({ name: "complete_task", arguments: {} });
       expect(result.isError ?? false).toBe(false);

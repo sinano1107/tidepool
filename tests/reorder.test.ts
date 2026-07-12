@@ -86,7 +86,7 @@ it("a move is appended to the task's event log, attributed to the human worker",
 
 it("reordering is a human steering channel: no MCP tool exposes it", async () => {
   t = await bootTidepool();
-  const client = await mcpClient(t.baseUrl);
+  const client = await mcpClient(t.mcpBaseUrl);
   const { tools } = await client.listTools();
   const names = tools.map((x) => x.name);
   expect(names).not.toContain("move_task");
@@ -148,7 +148,7 @@ it("a non-todo task can be moved — board order is global — without firing a 
   const a = await registerWork(t, "a", undefined, true);
   const b = await registerWork(t, "b");
   await t.clock.advance(HOUR); // a picked up
-  const client = await mcpClient(t.baseUrl, a.id);
+  const client = await mcpClient(t.mcpBaseUrl, a.id);
   const done: any = await client.callTool({
     name: "complete_task",
     arguments: { handoff: fullHandoff },

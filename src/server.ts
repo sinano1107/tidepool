@@ -26,6 +26,10 @@ export type WorkerFactory = (deps: { db: Db; clock: Clock }) => WorkerAdapter;
 export interface ServerOptions {
   dbPath: string;
   port: number;
+  /** `/mcp`'s own port, always bound to 127.0.0.1 (issue #37): kept off
+   *  `port` so `tailscale serve` can publish web/`/api`/static files without
+   *  also exposing MCP tool calls to the rest of the tailnet. */
+  mcpPort: number;
   clock: Clock;
   worker: WorkerFactory;
   /** The board's workspace: a git checkout the branch discipline and the
@@ -90,6 +94,7 @@ export interface ServerOptions {
 
 export interface TidepoolServer {
   port: number;
+  mcpPort: number;
   stop: () => Promise<void>;
 }
 
@@ -193,7 +198,10 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       auditorName,
     }),
   );
-  app.use(
+  // its own app/port (issue #37): `/mcp` never shares `port`, so publishing
+  // `port` via `tailscale serve` can never also expose MCP tool calls
+  const mcpApp = express();
+  mcpApp.use(
     "/mcp",
     createMcpRouter({
       db,
@@ -223,9 +231,13 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const listener = await new Promise<import("node:http").Server>((resolve) => {
     const l = app.listen(options.port, "127.0.0.1", () => resolve(l));
   });
+  const mcpListener = await new Promise<import("node:http").Server>((resolve) => {
+    const l = mcpApp.listen(options.mcpPort, "127.0.0.1", () => resolve(l));
+  });
 
   return {
     port: (listener.address() as AddressInfo).port,
+    mcpPort: (mcpListener.address() as AddressInfo).port,
     stop: () =>
       new Promise((resolve, reject) => {
         stopTriageWatchdog();
@@ -233,7 +245,10 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         stopNotificationPoll();
         watchdog?.stop();
         scheduler.stop();
-        listener.close((err) => (err ? reject(err) : resolve()));
+        listener.close((err) => {
+          if (err) return reject(err);
+          mcpListener.close((err2) => (err2 ? reject(err2) : resolve()));
+        });
         db.close();
       }),
   };

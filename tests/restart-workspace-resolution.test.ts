@@ -45,6 +45,7 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
     server = await startServer({
       dbPath,
       port: 0,
+      mcpPort: 0,
       clock: new FakeClock(),
       worker: () => new ScriptedWorker(),
       workspace: sandbox,

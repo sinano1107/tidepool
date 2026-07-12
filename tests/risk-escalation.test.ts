@@ -8,7 +8,7 @@ it("decompose converts a child riskier than its parent into an approval question
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up into the slot
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -42,7 +42,7 @@ it("decompose converts a child riskier than its parent into an approval question
 });
 
 async function decomposeRiskyChild(t: Tidepool, parentId: string) {
-  const client = await mcpClient(t.baseUrl, parentId);
+  const client = await mcpClient(t.mcpBaseUrl, parentId);
   await client.callTool({
     name: "decompose",
     arguments: {
@@ -146,7 +146,7 @@ it("rejecting a risk-approval question leaves the child unregistered and the par
 
 /** Complete the slot task via MCP with a full work handoff. */
 async function completeVia(t: Tidepool, taskId: string) {
-  const client = await mcpClient(t.baseUrl, taskId);
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
   await client.callTool({
     name: "complete_task",
     arguments: {
@@ -185,7 +185,7 @@ it("approving a later, non-risk escalation once the parent is already risky does
   // second escalation on the now-already-risky parent: assignee-only (the
   // child itself declares risk, but the parent's risk was already raised by
   // the first approval — this approval propagates nothing new)
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   await client.callTool({
     name: "decompose",
     arguments: {

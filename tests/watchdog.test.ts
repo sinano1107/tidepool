@@ -184,7 +184,7 @@ it("failure question が開いている間、失敗タスクの兄弟(計画の�
     })
   ).json;
   await t.clock.advance(HOUR); // parent picked up
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   await client.callTool({
     name: "decompose",
     arguments: {

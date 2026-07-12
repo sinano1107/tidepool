@@ -26,7 +26,7 @@ it("decompose converts a child targeting a protected workspace into an approval 
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up into the slot
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -62,7 +62,7 @@ it("a child targeting a non-protected workspace registers directly even when isP
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -107,7 +107,7 @@ it("completing a low-risk task in a protected workspace under auto_if_ci_green a
   const task = await registerWork(t, "apply the approved diff", "registry");
   await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.baseUrl, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
 

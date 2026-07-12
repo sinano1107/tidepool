@@ -40,7 +40,7 @@ it("workspace が quarantine された間、その workspace の todo タスク�
   // break prod's tree rule so completing it quarantines "prod"
   writeFileSync(join(prod.path, "junk.txt"), "uncommittable\n");
   await rm(join(prod.path, ".git"), { recursive: true, force: true });
-  const client = await mcpClient(t.baseUrl, inProd.id);
+  const client = await mcpClient(t.mcpBaseUrl, inProd.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
 

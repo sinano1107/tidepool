@@ -11,7 +11,7 @@ it("decompose converts a child assigned outside assignable_to into an approval q
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up into the slot
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -50,7 +50,7 @@ it("a child assigned within assignable_to registers directly, with no approval q
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -82,7 +82,7 @@ it("assignable_to に明示 wildcard \"*\" があれば任意の assignee が無
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -114,7 +114,7 @@ it("assignable_to が空リストなら、明示された assignee は何であ�
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
-  const client = await mcpClient(t.baseUrl, parent.id);
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
   const res: any = await client.callTool({
     name: "decompose",
     arguments: {
@@ -139,7 +139,7 @@ it("assignable_to が空リストなら、明示された assignee は何であ�
 });
 
 async function decomposeOutOfBoundsAssignee(t: Tidepool, parentId: string) {
-  const client = await mcpClient(t.baseUrl, parentId);
+  const client = await mcpClient(t.mcpBaseUrl, parentId);
   await client.callTool({
     name: "decompose",
     arguments: {
