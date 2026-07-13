@@ -179,24 +179,28 @@ const LOG_READ_BATCH = 8;
 const NO_WORKSPACE_LABEL = 'no workspace';
 
 // Groups `data.log` by workspace, sorted groups-with-unread-first (most
-// recent unread first), then read-only groups (most recent entry first).
+// recent unread first), then fully-read groups (most recent entry first).
 // Within a group, entries are chronological (oldest first) — because the
 // read cursor is a single forward-only watermark, read entries are always
 // exactly the group's oldest-side prefix, so there is exactly one fold per
 // group (the caller decides how much of that prefix to reveal).
+//
+// Each entry is stamped with `chronoKey` (its sort order) and `sourceIndex`
+// (its position in the input array) — `logKey` below falls back to
+// `sourceIndex` for the standalone kit's mock data, which has no `id`.
 function groupLogEntries(entries) {
   const byWorkspace = new Map();
   entries.forEach((l, i) => {
     // real entries always carry an id (ascending = chronological); the
     // standalone kit's mock data doesn't, so its own (newest-first) array
     // order stands in instead
-    const withKeys = { ...l, __chrono: l.id != null ? l.id : -i, __i: i };
+    const withKeys = { ...l, chronoKey: l.id != null ? l.id : -i, sourceIndex: i };
     const key = l.workspace || '';
     if (!byWorkspace.has(key)) byWorkspace.set(key, []);
     byWorkspace.get(key).push(withKeys);
   });
   const groups = [...byWorkspace.entries()].map(([key, groupEntries]) => {
-    const sorted = groupEntries.slice().sort((a, b) => a.__chrono - b.__chrono);
+    const sorted = groupEntries.slice().sort((a, b) => a.chronoKey - b.chronoKey);
     const unreadEntries = sorted.filter((l) => l.unread);
     return {
       key,
@@ -204,8 +208,8 @@ function groupLogEntries(entries) {
       entries: sorted,
       unreadCount: unreadEntries.length,
       readCount: sorted.length - unreadEntries.length,
-      mostRecentUnread: unreadEntries.length ? Math.max(...unreadEntries.map((l) => l.__chrono)) : null,
-      mostRecent: Math.max(...sorted.map((l) => l.__chrono)),
+      mostRecentUnread: unreadEntries.length ? Math.max(...unreadEntries.map((l) => l.chronoKey)) : null,
+      mostRecent: Math.max(...sorted.map((l) => l.chronoKey)),
     };
   });
   groups.sort((a, b) => {
@@ -287,21 +291,24 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   // completion rows carry a handoff doc: tap unfolds it in place (the log's
   // link back to the deliverable) and the objection entry point moves inside
   // the expansion. decision rows keep tap = object.
-  // per-entry state is keyed by the entry's stable id (falling back to the
-  // entry's own original-array position for id-less mock data, stamped by
-  // groupLogEntries as __i) so a log refresh can't retarget an objection at
-  // a different line, and grouping/reordering can't either
-  const logKey = (entry) => (entry.id != null ? entry.id : entry.__i);
+  // per-entry state is keyed by the entry's stable id (falling back to
+  // `sourceIndex` for id-less mock data) so a log refresh can't retarget an
+  // objection at a different line, and grouping/reordering can't either.
+  // Only ever called on group-derived entries (groupLogEntries stamps
+  // `sourceIndex` on every entry it returns) — never on a raw `data.log` row.
+  const logKey = (entry) => (entry.id != null ? entry.id : entry.sourceIndex);
   // one fold per workspace group (issue #44): how many of a group's read
   // entries are revealed, keyed by group key, growing by LOG_READ_BATCH per
   // tap starting from the most recent (closest to the unread boundary) and
-  // working backward. Groups with zero unread stay hidden entirely until the
-  // section-wide "show read too" toggle flips — the one path to every record.
+  // working backward. A group with zero unread stays hidden entirely until
+  // the section-wide toggle below flips it into view — the one control that
+  // makes every workspace reachable; its own read entries still fold same as
+  // any other group's, one more tap away.
   const [revealedRead, setRevealedRead] = React.useState({});
-  const [showReadWorkspaces, setShowReadWorkspaces] = React.useState(false);
+  const [showFullyReadWorkspaces, setShowFullyReadWorkspaces] = React.useState(false);
   const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
-  const readOnlyGroups = allLogGroups.filter((g) => g.unreadCount === 0);
-  const logGroups = showReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
+  const fullyReadGroups = allLogGroups.filter((g) => g.unreadCount === 0);
+  const logGroups = showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
   // iOS Safari has no CSS overflow-anchor: revealing an older batch inserts
   // content above the reader's current position, which would otherwise jump
   // the viewport by the inserted height. Captured synchronously in the click
@@ -408,12 +415,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         };
         return (
           <div>
-            {readOnlyGroups.length > 0 && (
-              <button onClick={() => setShowReadWorkspaces((v) => !v)}
+            {fullyReadGroups.length > 0 && (
+              <button onClick={() => setShowFullyReadWorkspaces((v) => !v)}
                 style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px 10px', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                {showReadWorkspaces
-                  ? 'hide read-only workspaces'
-                  : `show ${readOnlyGroups.length} read-only workspace${readOnlyGroups.length > 1 ? 's' : ''} too`}
+                {showFullyReadWorkspaces
+                  ? 'hide fully-read workspaces'
+                  : `show ${fullyReadGroups.length} fully-read workspace${fullyReadGroups.length > 1 ? 's' : ''} too`}
               </button>
             )}
             <div ref={logListRef} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
