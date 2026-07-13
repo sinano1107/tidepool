@@ -1,0 +1,19 @@
+[Unit]
+Description=tidepool board (WebUI + /api + /mcp + scheduler)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=masaki
+Group=masaki
+WorkingDirectory=/opt/tidepool
+EnvironmentFile=/etc/default/tidepool
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
