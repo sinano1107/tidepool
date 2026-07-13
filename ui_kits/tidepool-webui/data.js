@@ -74,13 +74,17 @@ const tpData = {
       ],
     },
   ],
+  // workspace (issue #44): demos the log skim's grouping — 'tidepool' mixes
+  // unread and read, 'registry' is unread-only, 'sandbox' is read-only (only
+  // reachable through the log section's "show read-only workspaces" toggle)
   log: [
-    { time: '06:41', taskId: 'tp-0142', agent: 'reef-crab', kind: 'decision', text: 'used better-sqlite3 transactions for queue reorder — single writer, no locking needed', unread: true },
-    { time: '03:52', taskId: 'tp-0139', agent: 'anemone', kind: 'completion', text: 'criteria met — review of watchdog timer, findings → 1 repair task. handoff: PR #58', unread: true,
+    { time: '06:41', taskId: 'tp-0142', agent: 'reef-crab', kind: 'decision', text: 'used better-sqlite3 transactions for queue reorder — single writer, no locking needed', unread: true, workspace: 'tidepool' },
+    { time: '03:52', taskId: 'tp-0139', agent: 'anemone', kind: 'completion', text: 'criteria met — review of watchdog timer, findings → 1 repair task. handoff: PR #58', unread: true, workspace: 'registry',
       handoff: 'outcome vs criteria: review complete — 2 findings, 1 escalated to a repair task\ndeliverable location: PR #58 review comments\nkey decision refs: d-041\ndead ends: none\ncontext to resume: SIGKILL path of the watchdog timer is still unclear\nknown issues (no task): timer test is flaky on CI' },
-    { time: '02:07', taskId: 'tp-0141', agent: 'reef-crab', kind: 'decision', text: 'chose YAML over TOML for authority profiles — matches workspaces.yaml', unread: true },
-    { time: '01:30', taskId: 'tp-0141', agent: 'reef-crab', kind: 'escalation', text: 'escalated: merge PR #58 → question tp-0143', unread: true },
-    { time: '23:58', taskId: 'tp-0138', agent: 'hermit', kind: 'completion', text: 'criteria met — workspaces.yaml documented, branch task/tp-0138', unread: false },
+    { time: '02:07', taskId: 'tp-0141', agent: 'reef-crab', kind: 'decision', text: 'chose YAML over TOML for authority profiles — matches workspaces.yaml', unread: true, workspace: 'tidepool' },
+    { time: '01:30', taskId: 'tp-0141', agent: 'reef-crab', kind: 'escalation', text: 'escalated: merge PR #58 → question tp-0143', unread: true, workspace: 'tidepool' },
+    { time: '23:58', taskId: 'tp-0138', agent: 'hermit', kind: 'completion', text: 'criteria met — workspaces.yaml documented, branch task/tp-0138', unread: false, workspace: 'tidepool' },
+    { time: '20:15', taskId: 'tp-0130', agent: 'hermit', kind: 'decision', text: 'reused the existing S3 preview cache instead of adding a new endpoint', unread: false, workspace: 'sandbox' },
   ],
   queue: [
     { id: 'tp-0144', title: 'Write board schema DDL', assignee: 'reef-crab', workspace: 'tidepool' },

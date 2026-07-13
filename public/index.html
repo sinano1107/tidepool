@@ -153,13 +153,16 @@ function mapData(board, log, paused) {
         options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
       })),
     }));
-  // newest first for the skim; unread = beyond the read cursor
+  // newest first for the skim; unread = beyond the read cursor. workspace
+  // grouping/fold (issue #44) is pure view derivation the kit does itself
+  // from this flat, order-independent list — see triage-screen.jsx.
   const logEntries = [...log.entries].reverse().map((e) => ({
     id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
     kind: e.kind === 'task_completed' ? 'completion' : 'decision',
     text: e.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
     unread: e.id > log.cursor,
     handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
+    workspace: e.workspace ?? null,
   }));
   // the queue is the todo order the slot walks. derived-blocked rows keep
   // their sort_key position (the slot skips them until the children finish),

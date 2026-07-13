@@ -170,6 +170,51 @@ const TP_SCRATCH_KINDS = [
   { key: 'discard', label: 'discard' },
 ];
 
+// Decision log workspace grouping (issue #44): the API stays flat and only
+// annotates each entry with a resolved `workspace` name (null when neither
+// the task nor the board names one) — grouping, sort order, and the
+// read/unread fold are all client-side view derivation over that flat list,
+// re-run from scratch on every render (nothing about it is persisted).
+const LOG_READ_BATCH = 8;
+const NO_WORKSPACE_LABEL = 'no workspace';
+
+// Groups `data.log` by workspace, sorted groups-with-unread-first (most
+// recent unread first), then read-only groups (most recent entry first).
+// Within a group, entries are chronological (oldest first) — because the
+// read cursor is a single forward-only watermark, read entries are always
+// exactly the group's oldest-side prefix, so there is exactly one fold per
+// group (the caller decides how much of that prefix to reveal).
+function groupLogEntries(entries) {
+  const byWorkspace = new Map();
+  entries.forEach((l, i) => {
+    // real entries always carry an id (ascending = chronological); the
+    // standalone kit's mock data doesn't, so its own (newest-first) array
+    // order stands in instead
+    const withKeys = { ...l, __chrono: l.id != null ? l.id : -i, __i: i };
+    const key = l.workspace || '';
+    if (!byWorkspace.has(key)) byWorkspace.set(key, []);
+    byWorkspace.get(key).push(withKeys);
+  });
+  const groups = [...byWorkspace.entries()].map(([key, groupEntries]) => {
+    const sorted = groupEntries.slice().sort((a, b) => a.__chrono - b.__chrono);
+    const unreadEntries = sorted.filter((l) => l.unread);
+    return {
+      key,
+      label: key || NO_WORKSPACE_LABEL,
+      entries: sorted,
+      unreadCount: unreadEntries.length,
+      readCount: sorted.length - unreadEntries.length,
+      mostRecentUnread: unreadEntries.length ? Math.max(...unreadEntries.map((l) => l.__chrono)) : null,
+      mostRecent: Math.max(...sorted.map((l) => l.__chrono)),
+    };
+  });
+  groups.sort((a, b) => {
+    if ((a.unreadCount > 0) !== (b.unreadCount > 0)) return a.unreadCount > 0 ? -1 : 1;
+    return a.unreadCount > 0 ? b.mostRecentUnread - a.mostRecentUnread : b.mostRecent - a.mostRecent;
+  });
+  return groups;
+}
+
 // Live-mode props (all optional — absent, the screen runs standalone on mock
 // data): onAnswer / onObject / onScratchAdd persist immediately (中断安全),
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
@@ -243,9 +288,43 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   // link back to the deliverable) and the objection entry point moves inside
   // the expansion. decision rows keep tap = object.
   // per-entry state is keyed by the entry's stable id (falling back to the
-  // array index for id-less mock data) so a log refresh can't retarget an
-  // objection at a different line
-  const logKey = (entry, i) => (entry.id != null ? entry.id : i);
+  // entry's own original-array position for id-less mock data, stamped by
+  // groupLogEntries as __i) so a log refresh can't retarget an objection at
+  // a different line, and grouping/reordering can't either
+  const logKey = (entry) => (entry.id != null ? entry.id : entry.__i);
+  // one fold per workspace group (issue #44): how many of a group's read
+  // entries are revealed, keyed by group key, growing by LOG_READ_BATCH per
+  // tap starting from the most recent (closest to the unread boundary) and
+  // working backward. Groups with zero unread stay hidden entirely until the
+  // section-wide "show read too" toggle flips — the one path to every record.
+  const [revealedRead, setRevealedRead] = React.useState({});
+  const [showReadWorkspaces, setShowReadWorkspaces] = React.useState(false);
+  const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
+  const readOnlyGroups = allLogGroups.filter((g) => g.unreadCount === 0);
+  const logGroups = showReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
+  // iOS Safari has no CSS overflow-anchor: revealing an older batch inserts
+  // content above the reader's current position, which would otherwise jump
+  // the viewport by the inserted height. Captured synchronously in the click
+  // handler (before the reveal), applied in the same frame the reveal paints.
+  // `<main class="tp-scroll">` (index.html, both the live app and the
+  // standalone kit preview) is the actual scrolling element — this list's
+  // own div is just a layout container inside it.
+  const scrollContainer = () => logListRef.current && logListRef.current.closest('.tp-scroll');
+  const pendingScrollFix = React.useRef(null);
+  React.useLayoutEffect(() => {
+    const fix = pendingScrollFix.current;
+    pendingScrollFix.current = null;
+    const container = scrollContainer();
+    if (!fix || !container) return;
+    container.scrollTop = fix.scrollTop + (container.scrollHeight - fix.scrollHeight);
+  });
+  const expandRead = (groupKey) => {
+    const container = scrollContainer();
+    pendingScrollFix.current = container
+      ? { scrollTop: container.scrollTop, scrollHeight: container.scrollHeight }
+      : null;
+    setRevealedRead((prev) => ({ ...prev, [groupKey]: (prev[groupKey] || 0) + LOG_READ_BATCH }));
+  };
   const [handoffOpen, setHandoffOpen] = React.useState({});
   const handoffCache = React.useRef({});
   const toggleObjecting = (k) => { setObjecting(objecting === k ? null : k); setDraft(''); };
@@ -293,12 +372,13 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         </div>
       )}
 
-      {section === 1 && (
-        <div ref={logListRef} style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-          {data.log.map((l, i) => {
-            const k = logKey(l, i);
-            const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
-            return (
+      {section === 1 && (() => {
+        // renders one entry row + its handoff/objection expansion — shared by
+        // every group's revealed-read and unread rows below
+        const renderLogRow = (l) => {
+          const k = logKey(l);
+          const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
+          return (
             <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
               <LogEntry entry={{ ...l, objection: objections[k] }} active={objecting === k} onObject={() => (hasHandoff ? toggleHandoff(k, l) : toggleObjecting(k))} />
               {handoffOpen[k] && (
@@ -324,10 +404,47 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
                 </div>
               )}
             </div>
-            );
-          })}
-        </div>
-      )}
+          );
+        };
+        return (
+          <div>
+            {readOnlyGroups.length > 0 && (
+              <button onClick={() => setShowReadWorkspaces((v) => !v)}
+                style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px 10px', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {showReadWorkspaces
+                  ? 'hide read-only workspaces'
+                  : `show ${readOnlyGroups.length} read-only workspace${readOnlyGroups.length > 1 ? 's' : ''} too`}
+              </button>
+            )}
+            <div ref={logListRef} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {logGroups.map((g) => {
+                const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
+                const hiddenCount = g.readCount - revealed;
+                const visibleReadEntries = g.entries.slice(hiddenCount, g.readCount);
+                const unreadEntries = g.entries.slice(g.readCount);
+                return (
+                  <div key={g.key} style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '8px 12px', background: 'var(--surface-recessed)', borderBottom: '1px solid var(--border-hairline)' }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{g.label}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                        {g.unreadCount > 0 ? `${g.unreadCount} unread` : `${g.readCount} read`}
+                      </span>
+                    </div>
+                    {hiddenCount > 0 && (
+                      <button onClick={() => expandRead(g.key)}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', borderBottom: '1px solid var(--border-hairline)', cursor: 'pointer', padding: '8px 12px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                        {hiddenCount} more read decision{hiddenCount > 1 ? 's' : ''} — show
+                      </button>
+                    )}
+                    {visibleReadEntries.map(renderLogRow)}
+                    {unreadEntries.map(renderLogRow)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {section === 2 && (() => {
         const nObjections = Object.keys(objections).length;
