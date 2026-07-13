@@ -17,16 +17,31 @@ describe("loadRegistry", () => {
 
   it("frontmatter の model は optional: あれば読み、なければ undefined", async () => {
     const withModel = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nmodel: opus\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withModel).agents.deckhand!.model).toBe("opus");
     const without = await makeRegistry();
     expect(loadRegistry(without).agents.deckhand!.model).toBeUndefined();
   });
 
+  it("frontmatter の description は必須: 欠落は登録時にエラーになる(roster の1行を担う散文 — issue #43 / ADR 0014)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\n---\nYou are Deckhand.\n`,
+    });
+    expect(() => loadRegistry(dir)).toThrow(/description/i);
+  });
+
+  it("agent 定義の description を読み込む: roster の1行に載る散文(issue #43)", async () => {
+    const dir = await makeRegistry();
+    const registry = loadRegistry(dir);
+    expect(registry.agents.deckhand!.description).toBe(
+      "General work agent for the tidepool board",
+    );
+  });
+
   it("frontmatter の effort は optional: あれば読み、なければ undefined", async () => {
     const withEffort = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: high\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\neffort: high\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withEffort).agents.deckhand!.effort).toBe("high");
     const without = await makeRegistry();

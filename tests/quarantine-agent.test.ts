@@ -38,7 +38,13 @@ describe("resolveAgentOrQuarantine", () => {
     const db = openDb(":memory:");
     const resolved: ResolvedAgent = {
       name: "deckhand",
-      definition: { name: "deckhand", version: "0.0.1", authority: "standard", systemPrompt: "x" },
+      definition: {
+        name: "deckhand",
+        version: "0.0.1",
+        authority: "standard",
+        description: "d",
+        systemPrompt: "x",
+      },
       profile: { name: "standard", guidance: "g" },
     };
     const result = resolveAgentOrQuarantine(db, () => resolved, "deckhand", new Date(0));

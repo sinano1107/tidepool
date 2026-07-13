@@ -173,7 +173,7 @@ describe("ClaudeCodeWorker", () => {
     expect(question?.question_quarantine_workspace).toBe("ghost");
   });
 
-  const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\n---\nYou are Navigator, the specialist.\n`;
+  const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;
 
   it("task.assignee が指定されていれば、コンストラクタの agent より優先してそのエージェントとして spawn する(ADR 0012 / issue #36)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
@@ -203,7 +203,33 @@ describe("ClaudeCodeWorker", () => {
     expect(question?.question_quarantine_agent).toBe("ghost");
   });
 
-  const KEEPER_MD = `---\nname: keeper\nversion: 1.0.0\nauthority: standard\n---\nYou are Keeper, the auditor.\n`;
+  it("system prompt に roster を push する: assignable_to(既定は \"*\")を解決した registry 全体が「名前 — description」で並ぶ(issue #43 / ADR 0014)", async () => {
+    const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
+    start();
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain("## Roster");
+    expect(systemPrompt).toContain("navigator — Navigation specialist");
+    expect(systemPrompt).toContain("deckhand — General work agent for the tidepool board");
+  });
+
+  it("roster の human 行: assignable_to に human があれば固定の1行で描画する(issue #43 / ADR 0014)", async () => {
+    const { start, calls } = await makeWorker({
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - navigator\n  - human\nallowed_workspaces:\n  - "*"\n`,
+      "agents/navigator.md": NAVIGATOR_MD,
+    });
+    start();
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain("navigator — Navigation specialist");
+    expect(systemPrompt).toContain(
+      "human — delegate to a human — runs outside the slot, as a question task",
+    );
+    // 明示リストに無い deckhand 自身は roster に現れない
+    expect(systemPrompt).not.toContain("deckhand — General work agent");
+  });
+
+  const KEEPER_MD = `---\nname: keeper\nversion: 1.0.0\nauthority: standard\ndescription: Independent reviewer\n---\nYou are Keeper, the auditor.\n`;
 
   it("review タイプかつ assignee が未指定なら、コンストラクタの既定 agent ではなく auditorName で spawn する(issue #42)", async () => {
     const { start, calls } = await makeWorker(
@@ -318,7 +344,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("frontmatter に model があればそれを使う", async () => {
     const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nmodel: opus\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\nmodel: opus\n---\nYou are Deckhand.\n`,
     });
     start();
     expect(calls[0]!.args.join(" ")).toContain("--model opus");
@@ -332,7 +358,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("frontmatter に effort があればそれを使う", async () => {
     const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: high\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\neffort: high\n---\nYou are Deckhand.\n`,
     });
     start();
     expect(calls[0]!.args.join(" ")).toContain("--effort high");
@@ -340,7 +366,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する)", async () => {
     const registryDir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: super-fast\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\neffort: super-fast\n---\nYou are Deckhand.\n`,
     });
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(
@@ -360,7 +386,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("effort: ultracode は未知の effort 値として reject される(CLI --effort の閉じた5値に無く、xhigh+workflow orchestration への迂回路にならない・issue #31)", async () => {
     const registryDir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\neffort: ultracode\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\neffort: ultracode\n---\nYou are Deckhand.\n`,
     });
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(

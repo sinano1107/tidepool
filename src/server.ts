@@ -10,7 +10,7 @@ import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import type { AuthorityProfile, RegistryCandidates } from "./registry.js";
+import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
@@ -90,6 +90,10 @@ export interface ServerOptions {
    *  registering worker's authority profile. Absent → no workspace is
    *  protected. */
   isProtectedWorkspace?: (name: string) => boolean;
+  /** The pull half of the roster (issue #43 / ADR 0014), read fresh against
+   *  the registry by the caller — same pattern as `agentRegistered`. Absent
+   *  → no registry configured, so `list_agents` reports only `human`. */
+  listAgents?: () => RosterAgent[];
 }
 
 export interface TidepoolServer {
@@ -216,6 +220,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       auditorName,
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
+      listAgents: options.listAgents,
     }),
   );
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");

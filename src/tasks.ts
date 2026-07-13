@@ -1,9 +1,24 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
+import type { RosterAgent } from "./registry.js";
 
 /** Worker id attributed to bare (non ?task=) sessions, e.g. the JSON API. */
 export const HUMAN_WORKER_ID = "human";
+
+/** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
+ *  no registry definition, but CONTEXT.md's Roster still surfaces it as a
+ *  delegable worker. A single `RosterAgent` value, not a string and a
+ *  separately-built object — claude-worker.ts's push roster formats it into
+ *  a "name — description" line, mcp.ts's `list_agents` pull returns it
+ *  as-is, and both draw from this one source so they can't drift apart.
+ *  English, like every other value that reaches an agent's own system
+ *  prompt or tool output — Japanese in this file is for humans reading the
+ *  source (comments, ADRs), never for text an agent session consumes. */
+export const HUMAN_ROSTER_AGENT: RosterAgent = {
+  name: HUMAN_WORKER_ID,
+  description: "delegate to a human — runs outside the slot, as a question task",
+};
 
 /** Worker id the board acts under when it enforces its own rules (issue #8):
  *  the tree rule's failures are the board's to report, never pinned on the
@@ -940,6 +955,34 @@ function outsideAuthority(value: string | undefined, allowlist: string[] | undef
   );
 }
 
+/** The one assignee a review task's `assignable_to` can never restrict (ADR
+ *  0013): the reviewed task's own executor — a review's repair children may
+ *  always target them, since that's part of what a review *is*, not a
+ *  delegation the reviewer happens to hold. Exported so callers that need to
+ *  predict decomposeTask's own verdict (mcp.ts's `list_agents`, issue #43 /
+ *  ADR 0014) share this exact lookup rather than reimplementing it and
+ *  risking drift from decomposeTask's actual check below. */
+export function reviewedTaskAssignee(db: Db, task: Task): string | undefined {
+  return task.type === "review" && task.parent_id
+    ? (getTask(db, task.parent_id)?.assignee ?? undefined)
+    : undefined;
+}
+
+/** Whether assigning `name` from `task` would need a human approval question
+ *  rather than registering outright — the single source decomposeTask's own
+ *  per-child check below and mcp.ts's `list_agents` roster marking (issue
+ *  #43 / ADR 0014) both call, so the two can never diverge: the ADR 0013
+ *  reviewed-assignee exemption first, then the plain `assignable_to` check. */
+export function assigneeNeedsApproval(
+  db: Db,
+  task: Task,
+  name: string | undefined,
+  authority: AuthorityContext | undefined,
+): boolean {
+  if (name !== undefined && name === reviewedTaskAssignee(db, task)) return false;
+  return outsideAuthority(name, authority?.assignable_to);
+}
+
 /** Options fixed by the server for a pending-child approval question (issue
  *  #11) — not a caller-supplied QuestionSpec, so answerQuestion recognizes
  *  this exact pair rather than a free-form escalation. */
@@ -977,22 +1020,16 @@ export function decomposeTask(
   const children: Task[] = [];
   db.transaction(() => {
     const decisionId = logDecision(db, parent, input.reason, workerId, now);
-    // A review's repair children may target the reviewed task's own executor
-    // regardless of the reviewer profile's assignable_to (ADR 0013: "宛先は
-    // レビュー対象の実行者" is always in-authority — it's part of what a
-    // review *is*, not a delegation the reviewer happens to hold).
-    const reviewedAssignee =
-      parent.type === "review" && parent.parent_id
-        ? (getTask(db, parent.parent_id)?.assignee ?? undefined)
-        : undefined;
     for (const child of input.children) {
       const reasons: string[] = [];
       if (child.risk_flag && !parent.risk_flag) {
         reasons.push("carries risk beyond the parent's declared risk");
       }
-      const assigneeExempt =
-        reviewedAssignee !== undefined && child.assignee === reviewedAssignee;
-      if (!assigneeExempt && outsideAuthority(child.assignee, authority?.assignable_to)) {
+      // A review's repair children may target the reviewed task's own
+      // executor regardless of the reviewer profile's assignable_to (ADR
+      // 0013) — assigneeNeedsApproval carries that exemption, shared with
+      // mcp.ts's list_agents so the two can never diverge (issue #43).
+      if (assigneeNeedsApproval(db, parent, child.assignee, authority)) {
         reasons.push(`assigns to "${child.assignee}", outside ${workerId}'s assignable_to`);
       }
       if (outsideAuthority(child.workspace, authority?.allowed_workspaces)) {

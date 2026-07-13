@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb, type Db } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import type { AuthorityProfile, RegistryCandidates } from "../src/registry.js";
+import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "../src/registry.js";
 import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, registerTask, type RegisterTaskInput, type Task } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
@@ -67,6 +67,9 @@ export interface BootOptions {
   /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
    *  ADR 0013). Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean;
+  /** The pull half of the roster (issue #43 / ADR 0014). Absent → `list_agents`
+   *  reports only the fixed `human` line. */
+  listAgents?: () => RosterAgent[];
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -96,6 +99,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     push,
     auditorName: options.auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
+    listAgents: options.listAgents,
   });
   let stopped = false;
   const stopServer = async () => {

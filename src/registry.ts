@@ -11,6 +11,11 @@ export interface AgentDefinition {
   name: string;
   version: string;
   authority: string;
+  /** The one line of prose a roster entry shows a delegating agent (issue
+   *  #43 / ADR 0014): "when this agent is the right delegate", not a genre
+   *  label. Required — an agent registered without one has no way to be
+   *  picked from a roster, same hygiene as issue #41's assignable_to. */
+  description: string;
   /** Base-AI model for this agent (CONTEXT.md: agent = base AI + skills +
    *  instructions + authority profile). Absent → the adapter's default. */
   model?: string;
@@ -80,6 +85,18 @@ export interface Registry {
   workspaces: Record<string, WorkspaceEntry>;
 }
 
+/** One roster line's worth of an `AgentDefinition` (issue #43 / ADR 0014):
+ *  a delegating agent only ever needs the name and the "when to delegate
+ *  here" prose, never the vendor fields (`model`/`effort`, ADR 0005's line).
+ *  Named so the pull half's plumbing (McpDeps/ServerOptions/BootOptions,
+ *  each threading a registry → mcp.ts list of these) carries one shared
+ *  type instead of repeating the same anonymous `{ name; description }`
+ *  shape at every layer. */
+export interface RosterAgent {
+  name: string;
+  description: string;
+}
+
 /** Assignee/workspace name candidates for the registration screen (issue
  *  #12), resolved from the registry by the caller (main.ts) — the API/server
  *  layers never touch the filesystem/git registry loader themselves. */
@@ -91,6 +108,7 @@ export interface RegistryCandidates {
 const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
+  description: z.string(),
   model: z.string().optional(),
   effort: z.string().optional(),
 });
@@ -108,6 +126,7 @@ function parseAgentFile(path: string): AgentDefinition {
     name,
     version: meta.version,
     authority: meta.authority,
+    description: meta.description,
     model: meta.model,
     effort: meta.effort,
     systemPrompt: body.trim(),

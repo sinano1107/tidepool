@@ -6,7 +6,12 @@ import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
 import { type PushClient, type VapidConfig, WebPushClient } from "./push.js";
-import { loadRegistry, type AuthorityProfile, type RegistryCandidates } from "./registry.js";
+import {
+  loadRegistry,
+  type AuthorityProfile,
+  type RegistryCandidates,
+  type RosterAgent,
+} from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
@@ -128,6 +133,18 @@ function protectedWorkspaceChecker(): ((name: string) => boolean) | undefined {
   return (name) => loadRegistry(registryDir).workspaces[name]?.protected === true;
 }
 
+/** The pull half of the roster (issue #43 / ADR 0014), read fresh against the
+ *  registry — same pattern as agentRegisteredChecker. Without a registry
+ *  there's nothing to list beyond list_agents's own fixed `human` line. */
+function listAgentsResolver(): (() => RosterAgent[]) | undefined {
+  if (!registryDir) return undefined;
+  return () =>
+    Object.values(loadRegistry(registryDir).agents).map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+    }));
+}
+
 /** Assignee/workspace candidates for the registration screen (issue #12).
  *  Without a registry there's nothing to suggest from. */
 function registryCandidates(): RegistryCandidates | undefined {
@@ -177,6 +194,7 @@ const server = await startServer({
   resolveAuthority: authorityResolver(),
   agentRegistered: agentRegisteredChecker(),
   isProtectedWorkspace: protectedWorkspaceChecker(),
+  listAgents: listAgentsResolver(),
   registryCandidates: registryCandidates(),
   draftClient: draftClientFactory(),
   push: pushClient(),

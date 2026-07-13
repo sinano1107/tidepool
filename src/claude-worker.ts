@@ -5,8 +5,8 @@ import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
-import { loadRegistry, type AgentDefinition, type Registry } from "./registry.js";
-import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
+import { loadRegistry, type AgentDefinition, type Registry, type RosterAgent } from "./registry.js";
+import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import { resolveExecutionWorkspace, resolveOrQuarantine } from "./workspace.js";
 
@@ -58,6 +58,41 @@ tool.
 The Workflow tool is off-limits in task sessions: a workflow script is a
 decompose plan that never reached the board. If you find yourself wanting to
 write one, register that split with the tidepool MCP's decompose instead.`;
+
+/** One roster line's text (issue #43 / ADR 0014): "name — description",
+ *  shared by every entry — a registry agent's `AgentDefinition` or the
+ *  fixed `HUMAN_ROSTER_AGENT` alike, since both are `RosterAgent`s. */
+function rosterLine(agent: RosterAgent): string {
+  return `${agent.name} — ${agent.description}`;
+}
+
+/** Builds the push half of the roster (issue #43 / ADR 0014): the spawned
+ *  agent's own `assignable_to` resolved against the registry into
+ *  "name — description" lines, one per direct delegate. Cost is
+ *  proportional to the allowlist, not the registry — `*` expands to every
+ *  registry agent (an author's deliberate cost/permission tradeoff), and
+ *  `human` (never a registry agent) draws `HUMAN_ROSTER_AGENT` only when
+ *  explicitly listed. Absent/empty `assignable_to` → undefined (nothing to
+ *  push). Names drifted out of the registry are silently skipped, same
+ *  fail-closed spirit as the rest of this file's registry-drift handling. */
+function buildRoster(registry: Registry, assignableTo: string[] | undefined): string | undefined {
+  if (assignableTo === undefined || assignableTo.length === 0) return undefined;
+  const wildcard = assignableTo.includes(AUTHORITY_WILDCARD);
+  const explicitNames = assignableTo.filter((name) => name !== AUTHORITY_WILDCARD);
+  const agentNames = wildcard ? Object.keys(registry.agents) : explicitNames;
+  const agents: RosterAgent[] = agentNames
+    .map((name) => registry.agents[name])
+    .filter((agent): agent is AgentDefinition => agent !== undefined);
+  if (explicitNames.includes(HUMAN_ROSTER_AGENT.name)) agents.push(HUMAN_ROSTER_AGENT);
+  return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
+}
+
+/** Wraps a built roster (or nothing) as the trailing `## Roster` section of
+ *  the system prompt — its own heading (CONTEXT.md's Roster term) rather
+ *  than folded into `## Authority`, since it names delegates, not authority. */
+function rosterSection(roster: string | undefined): string {
+  return roster === undefined ? "" : `\n\n## Roster\n\n${roster}`;
+}
 
 // always explicit: the CLI remembers the host's last model/effort choice,
 // and a flip in some unrelated directory must not leak into runs (ADR
@@ -290,7 +325,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // who the agent is (registry definition body) and what its authority
         // sounds like (profile guidance prose), stitched at spawn time
         "--append-system-prompt",
-        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}\n\n${BOARD_DOCTRINE}`,
+        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}`,
       ],
       { cwd: workspace.path },
     );

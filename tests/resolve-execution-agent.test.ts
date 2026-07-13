@@ -8,7 +8,13 @@ function makeRegistry(agents: Record<string, { authority: string }>): Registry {
     agents: Object.fromEntries(
       Object.entries(agents).map(([name, a]) => [
         name,
-        { name, version: "0.0.1", authority: a.authority, systemPrompt: `You are ${name}.` },
+        {
+          name,
+          version: "0.0.1",
+          authority: a.authority,
+          description: `${name} agent`,
+          systemPrompt: `You are ${name}.`,
+        },
       ]),
     ),
     authority: {

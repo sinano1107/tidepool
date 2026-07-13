@@ -6,9 +6,10 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { taskDecisionLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
-import type { AuthorityProfile } from "./registry.js";
+import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import {
+  assigneeNeedsApproval,
   completeTask,
   decomposeTask,
   DEFAULT_AUDITOR_NAME,
@@ -16,6 +17,7 @@ import {
   escalateTask,
   getTask,
   HANDOFF_FIELDS,
+  HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
   logDecision,
   recordPrOpened,
@@ -81,6 +83,15 @@ export interface McpDeps {
    *  authority profile (v1's only protected workspace is the registry
    *  itself). Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean;
+  /** The pull half of the roster (issue #43 / ADR 0014): every registry
+   *  agent's name + description, read fresh against the registry every call
+   *  (same pattern as `agentRegistered`) — `list_agents` marks each one
+   *  direct/needs-approval against the caller's own `assignable_to` via the
+   *  same `assigneeNeedsApproval` decompose enforces, plus a fixed `human`
+   *  line (CONTEXT.md's Roster: human is delegable but carries no registry
+   *  definition). Absent → no registry configured, so `list_agents` reports
+   *  only the fixed `human` line. */
+  listAgents?: () => RosterAgent[];
 }
 
 /** The protected branch every task branch is proposed onto — the same one
@@ -283,6 +294,30 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   );
 
   server.registerTool(
+    "list_agents",
+    {
+      description:
+        "List every agent in the registry, plus human — the pull half of the roster. " +
+        "Your system prompt's own Roster section already lists who you can delegate to " +
+        "directly; call this only to see the full board, with each entry marked " +
+        '"direct" or "needs_approval" (converts to a human approval question).',
+    },
+    async () =>
+      runVerb(deps, attributedTaskId, (task) => {
+        const authority = attributedAuthority(deps, task);
+        const entries: RosterAgent[] = [...(deps.listAgents?.() ?? []), HUMAN_ROSTER_AGENT];
+        return {
+          agents: entries.map((entry) => ({
+            ...entry,
+            status: assigneeNeedsApproval(deps.db, task, entry.name, authority)
+              ? "needs_approval"
+              : "direct",
+          })),
+        };
+      }),
+  );
+
+  server.registerTool(
     "complete_task",
     {
       description:
@@ -339,7 +374,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             purpose: z.string().min(1),
             completion_criteria: z.string().min(1),
             risk_flag: z.boolean().optional(),
-            assignee: z.string().optional(),
+            assignee: z
+              .string()
+              .optional()
+              .describe(
+                "Who to delegate to. Your own system prompt's Roster section lists who " +
+                  "you can assign directly; call list_agents for the full board.",
+              ),
             workspace: z.string().optional(),
           }),
         ),
