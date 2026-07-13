@@ -20,6 +20,24 @@ it("実測の /usage 出力から session/week の使用率と reset 時刻を�
   });
 });
 
+it("カンマ区切り(履歴の少ないアカウントの実機フォーマット)かつ分が0でぴったり時刻の行もパースする(ラズパイ実機で観測: Mac(履歴豊富)は「at」区切り+分あり、Pi(新規ログイン直後)は「,」区切り+分省略)", () => {
+  const resultText =
+    "Current session: 32% used · resets Jul 13, 1:10pm (Asia/Tokyo)\n" +
+    "Current week (all models): 52% used · resets Jul 16, 1pm (Asia/Tokyo)\n";
+
+  const now = new Date("2026-07-12T00:00:00.000Z");
+  const snapshot = parseUsage(resultText, now);
+
+  expect(snapshot.session).toEqual({
+    percent: 32,
+    resetsAt: new Date("2026-07-13T04:10:00.000Z"),
+  });
+  expect(snapshot.week).toEqual({
+    percent: 52,
+    resetsAt: new Date("2026-07-16T04:00:00.000Z"),
+  });
+});
+
 it("30分単位のタイムゾーンオフセット(Asia/Kolkata, GMT+5:30)も分単位まで正確にパースする", () => {
   const resultText = "Current session: 40% used · resets Jul 9 at 8:15pm (Asia/Kolkata)\n";
   const now = new Date("2026-07-08T00:00:00.000Z");

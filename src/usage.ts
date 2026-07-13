@@ -11,8 +11,13 @@ export interface UsageSnapshot {
   week: UsageWindowSnapshot | null;
 }
 
+// The day/time separator and the minute component have both drifted across
+// installed CLI versions (observed: "resets Jul 9 at 5:59pm" vs. "resets Jul
+// 13, 1:10pm", and minutes dropped entirely on the hour — "Jul 16, 1pm").
+// Accept either separator and an optional minute rather than pin to one
+// snapshot of the CLI's rendering.
 const LINE_PATTERN =
-  /^Current (?<window>session|week \(all models\)): (?<percent>\d+)% used · resets (?<month>\w+) (?<day>\d+) at (?<hour>\d+):(?<minute>\d+)(?<meridiem>am|pm) \((?<tz>[^)]+)\)$/;
+  /^Current (?<window>session|week \(all models\)): (?<percent>\d+)% used · resets (?<month>\w+) (?<day>\d+)(?: at |, )(?<hour>\d+)(?::(?<minute>\d+))?(?<meridiem>am|pm) \((?<tz>[^)]+)\)$/;
 
 /** The reset half of a parsed `/usage` line — the month/day/hour/minute/tz
  *  fields that only ever travel together, bundled so parseResetsAt takes one
@@ -96,7 +101,9 @@ export function parseUsage(resultText: string, now: Date): UsageSnapshot {
           month: groups.month!,
           day: Number(groups.day),
           hour: to24Hour(Number(groups.hour), groups.meridiem as "am" | "pm"),
-          minute: Number(groups.minute),
+          // omitted on the hour ("Jul 16, 1pm") — the CLI drops ":00" rather
+          // than rendering it
+          minute: groups.minute === undefined ? 0 : Number(groups.minute),
           tz: groups.tz!,
         },
         now,
