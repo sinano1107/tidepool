@@ -14,7 +14,3 @@ Uses the canonical five-role label vocabulary (`needs-triage`, `needs-info`, `re
 ### Domain docs
 
 Single-context — one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
-
-### Deploy
-
-Deploying to the production Raspberry Pi (routine updates, first-time setup, troubleshooting a stuck board). See `.claude/skills/deploy-pi/SKILL.md`.

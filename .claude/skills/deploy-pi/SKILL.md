@@ -1,6 +1,7 @@
 ---
 name: deploy-pi
-description: Deploy tidepool code changes to its production Raspberry Pi (masaki@100.78.52.97, tailnet), verify the deploy, and troubleshoot a stuck deploy or a board that stops picking up tasks. Use when the user asks to deploy/redeploy/push tidepool to the Pi, to check the Pi's tidepool service, or reports the board isn't picking up tasks after a deploy.
+description: Deploy tidepool code changes to its production Raspberry Pi (masaki@100.78.52.97, tailnet), verify the deploy, and troubleshoot a stuck deploy or a board that stops picking up tasks. Invoke explicitly via /deploy-pi — do not self-trigger from conversational context (this skill takes real production actions: SSH, systemctl, git push).
+disable-model-invocation: true
 ---
 
 Deploys tidepool source (this repo) to its systemd-managed production instance on the Raspberry Pi. Covers the routine update-deploy path; first-time/new-Pi setup and troubleshooting are split into reference files (below) since they're needed rarely — read them only when the situation calls for it.
