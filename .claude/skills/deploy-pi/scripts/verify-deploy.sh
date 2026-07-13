@@ -26,6 +26,20 @@ check_service tidepool.service
 check_service context-vault-mcp.service
 check_service context-vault-auth.service
 
+# The class of failure this catches: `deploy-pi.sh` restarts the service
+# unconditionally, so a stale/unpushed source tree still passes every health
+# check below (the OLD code is healthy too) — this is the only check that
+# actually confirms the deployed commit is the one just worked on, not
+# whatever the Pi's clone happened to have last time someone pushed.
+local_head=$(git rev-parse HEAD)
+pi_head=$(ssh "$PI" "cd /mnt/ssd/tidepool && git rev-parse HEAD")
+log "commit: local HEAD=$local_head  Pi HEAD=$pi_head"
+if [[ "$local_head" != "$pi_head" ]]; then
+  fail "Pi is not on this machine's HEAD — were local commits pushed before deploying?"
+  fail "  git log origin/main..HEAD   (anything listed there hasn't been pushed)"
+  failed=1
+fi
+
 code=$(ssh "$PI" "curl -sk -o /dev/null -w '%{http_code}' $PUBLIC_URL/")
 log "GET  $PUBLIC_URL/ -> $code"
 [[ "$code" == "200" ]] || { fail "tidepool WebUI did not return 200"; failed=1; }

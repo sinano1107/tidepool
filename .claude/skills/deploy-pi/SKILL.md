@@ -21,6 +21,15 @@ Deploys tidepool source (this repo) to its systemd-managed production instance o
 
 The common case: source has changed, ship it.
 
+**Push first.** The Pi pulls from GitHub (`origin main`), never from this dev machine directly — a commit made locally (including by this session) is invisible to the Pi until it's actually pushed. This is easy to miss: `git status` on the dev machine says "up to date" relative to its own `origin/main` remote-tracking ref, which only updates on a `push` or `fetch`, so a forgotten push doesn't look like a problem locally. Confirm and push before touching the Pi:
+
+```bash
+git log origin/main..HEAD --oneline   # anything listed here hasn't been pushed yet
+git push origin main
+```
+
+Then deploy:
+
 ```bash
 ssh masaki@100.78.52.97 "cd /mnt/ssd/tidepool && git pull -q origin main && sudo bash scripts/deploy-pi.sh"
 ```
@@ -41,7 +50,7 @@ No service restart needed for a registry-only change — it's read fresh from di
 bash .claude/skills/deploy-pi/scripts/verify-deploy.sh
 ```
 
-Checks: `tidepool.service` + both context-vault services are `active`; WebUI/API respond 200 over the tailnet URL; `/mcp` and the WebUI/API port are still `127.0.0.1`-only (never `0.0.0.0` — that's how MCP tool calls would leak onto the tailnet); tailscale serve config is intact. Fails loud with the relevant `journalctl`/`ss` output on any mismatch.
+Checks: `tidepool.service` + both context-vault services are `active`; WebUI/API respond 200 over the tailnet URL; `/mcp` and the WebUI/API port are still `127.0.0.1`-only (never `0.0.0.0` — that's how MCP tool calls would leak onto the tailnet); tailscale serve config is intact; **`/mnt/ssd/tidepool`'s checked-out commit on the Pi matches this dev machine's local `HEAD`** (catches exactly the "looked healthy but was still running yesterday's code" failure — a service restart on unchanged/stale source passes every health check above while silently not shipping anything). Fails loud with the relevant `journalctl`/`ss`/`git log` output on any mismatch.
 
 If it's the first deploy since a meaningful behavior change (scheduler, registry, worker spawn), also run the smoke test:
 
