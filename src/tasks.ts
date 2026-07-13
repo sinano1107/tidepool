@@ -14,7 +14,10 @@ export const HUMAN_WORKER_ID = "human";
  *  as-is, and both draw from this one source so they can't drift apart.
  *  English, like every other value that reaches an agent's own system
  *  prompt or tool output — Japanese in this file is for humans reading the
- *  source (comments, ADRs), never for text an agent session consumes. */
+ *  source (comments, ADRs), never for text an agent session consumes.
+ *  This English rule covers scaffolding (board/agent-authored text) only;
+ *  human-authored payload (task titles, answers, objections, scratchpad)
+ *  stays in whatever language the human wrote — see ADR 0015. */
 export const HUMAN_ROSTER_AGENT: RosterAgent = {
   name: HUMAN_WORKER_ID,
   description: "delegate to a human — runs outside the slot, as a question task",
