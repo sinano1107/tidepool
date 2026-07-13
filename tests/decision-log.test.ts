@@ -213,13 +213,15 @@ it("the log is a filtered view of the event stream, not a copy in its own table"
   await client.close();
   await completeVia(t, task.id);
 
-  // the same records, byte for byte — same ids, same payloads, same timestamps
+  // the same records, byte for byte — same ids, same payloads, same
+  // timestamps; the log view additionally carries a resolved `workspace`
+  // annotation (issue #44) that the raw event view doesn't have
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
   const humanFacing = events.filter((e: any) =>
     ["decision_logged", "task_completed"].includes(e.kind),
   );
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
-  expect(log.entries).toEqual(humanFacing);
+  expect(log.entries.map(({ workspace, ...rest }: any) => rest)).toEqual(humanFacing);
   expect(humanFacing.length).toBeGreaterThan(0);
 });
 

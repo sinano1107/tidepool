@@ -124,11 +124,29 @@ export function appendEvent(
  *  the kinds a human skims (issue #5). Kinds join this list; no table is added. */
 export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed"] as const;
 
-export function listLog(db: Db): EventRow[] {
+/** A log entry annotated with its resolved workspace name (issue #44): the
+ *  event's own task's `workspace`, or the board's default when the task
+ *  carries none — resolved fresh at read time, never stamped onto the event
+ *  itself (same "resolved fresh every use, not pinned" reference semantics
+ *  as `resolveExecutionWorkspace`, ADR 0009). */
+export interface LogEntry extends EventRow {
+  workspace: string | null;
+}
+
+export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
+  // an inner join is safe here only because task_id is NOT NULL REFERENCES
+  // tasks(id) and tasks are never deleted (append-only) — no event can end
+  // up orphaned, so this can never silently drop a log entry
   const rows = db
-    .prepare(`SELECT * FROM events WHERE kind IN (${placeholders}) ORDER BY id`)
-    .all(...HUMAN_FACING_KINDS) as Array<Omit<EventRow, "payload"> & { payload: string }>;
+    .prepare(
+      `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace
+         FROM events JOIN tasks ON tasks.id = events.task_id
+        WHERE events.kind IN (${placeholders}) ORDER BY events.id`,
+    )
+    .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS) as Array<
+    Omit<EventRow, "payload"> & { payload: string; workspace: string | null }
+  >;
   return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as EventPayload }));
 }
 

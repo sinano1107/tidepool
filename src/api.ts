@@ -542,7 +542,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // the decision log: events narrowed to human-facing kinds, oldest first,
   // plus the human's read position
   router.get("/log", (_req, res) => {
-    res.json({ entries: listLog(db), cursor: getLogCursor(db) });
+    res.json({ entries: listLog(db, workspace?.name), cursor: getLogCursor(db) });
   });
 
   router.post("/log/cursor", (req, res) => {
