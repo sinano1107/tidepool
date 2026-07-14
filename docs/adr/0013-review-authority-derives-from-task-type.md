@@ -8,6 +8,8 @@ reviewer profile は registry の YAML ではなく**コード定数**とする�
 
 同じコード定数は `assignable_to: []` も持つ — 明示された assignee への子登録も既定ではすべて承認 question に変換される。ただし唯一の例外として、review の分解子(修理タスク)がレビュー対象タスク(review の `parent_id` の先)自身の assignee と同じ宛先を指定する場合だけは、この allowlist に関わらず常時許可される(issue #15 の出力経路の設計判断: 「宛先はレビュー対象の実行者 — この割当だけ assignable_to に依らず常時許可(レビューという行為の定義の一部)」)。修理の宛先を委任ではなくレビューという行為自体の一部とみなすための exemption であり、assignee の一致だけを見る — workspace や risk_flag の検査には一切影響しない。
 
+追記(2026-07-15 の grilling): reviewer profile というコード定数は authority の散文だけでなく **spawn 時のハーネスフラグの差も運ぶ**。review タスクの spawn は `--disallowedTools` に Edit / Write / NotebookEdit と Bash の書き込み系パターンを足し、書き込みをツール層で構造的に塞ぐ(現状の spawn は `--permission-mode auto` で日常操作を自己承認するため、散文だけでは read-only の構造保証がなかった)。読み取りの workspace 外逸脱はツール層では封じられない(`cat` は読み取りコマンド)— v1 は stream-json 監査ログ + meta-review が捕捉し(ADR 0010 の統治パターン)、OS サンドボックス(sandbox-exec / bwrap)による完全封じ込めは post-v1。「書けないが覗ける、覗けば残る」が v1 の線。
+
 Considered options:
 
 - **専用 reviewer エージェントを registry に立て、review タスクを全部そこへ割り当てる** — read-only の保証が割当の正しさに依存する。致命的なのは self RCA: self の実行者は定義上元のエージェントであり、この案では self review を read-only にする手段が存在しない。
