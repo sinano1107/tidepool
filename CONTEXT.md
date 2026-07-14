@@ -155,7 +155,7 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 ## Workspace(ワークスペース)
 
-タスクが実行される場所を指す第一級エンティティ(名前 → Pi 上のパス)。子タスクは親の workspace を既定で継承する。盤面は既定 workspace を1つ持ち、workspace を指定しないタスクは値を焼き込まれるのではなく、実行の瞬間にその時の既定へ解決される(既定への参照)。needs-human(quarantine 参照)は workspace 単位の状態。
+タスクが実行される場所を指す第一級エンティティ(名前 → ホスト上のパス)。パスはホスト固有の明示値、または盤面の規約(基点ディレクトリ + workspace 名)からの導出 — 導出が既定であり、registry のエントリはホスト非依存に保たれる(ADR 0018)。作成には3つの入口(既存チェックアウトの登録 / 既存 GitHub リポジトリの clone / 新規リポジトリの作成)があるが、いずれも同じ Workspace に帰着する — モードは作成時の事情であって Workspace の種類ではない(2026-07-14 の grilling、issue #57)。子タスクは親の workspace を既定で継承する。盤面は既定 workspace を1つ持ち、workspace を指定しないタスクは値を焼き込まれるのではなく、実行の瞬間にその時の既定へ解決される(既定への参照)。needs-human(quarantine 参照)は workspace 単位の状態。
 
 **保護 workspace(protected)**: 感度を資源側に張り付けるマーカー。保護 workspace を名指しする子登録は、登録者の権限に関係なく無条件で人間への承認 question に変換され、そこへの PR は merge ダイヤルに関係なく常に人間が merge する。「そこへの変更は常に人間承認」を profile 側の状態から独立させる不変条件。v1 の用途は registry 自身。
 
