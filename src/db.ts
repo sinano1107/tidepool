@@ -253,17 +253,58 @@ export function openDb(path: string): Db {
     notnull: number;
   }>;
   if (taskColInfo.find((c) => c.name === "title")?.notnull === 1) {
-    const allCols = taskColInfo.map((c) => c.name).join(", ");
+    const allCols = taskColInfo.map((c) => c.name);
+    // a prior crashed run of this same rebuild (e.g. mid-INSERT) can leave a
+    // stray, incomplete tasks_post_issue_49 behind since the statements
+    // below used to run outside a transaction — drop it before rebuilding.
+    // Idempotent regardless of how far a prior crashed attempt got, so it
+    // doesn't need to share a transaction with what follows.
+    db.exec(`DROP TABLE IF EXISTS tasks_post_issue_49;`);
     // Renaming `tasks` itself (rather than building the replacement under a
     // fresh name first) would make SQLite rewrite every other table's own
     // `REFERENCES tasks(id)` to follow it to the renamed-away table — left
     // dangling once that table is dropped. Building under a throwaway name
     // and renaming *that* into place at the end never triggers the rewrite,
     // since nothing references the throwaway name.
-    db.exec(TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE tasks_post_issue_49"));
-    db.exec(`INSERT INTO tasks_post_issue_49 (${allCols}) SELECT ${allCols} FROM tasks;`);
-    db.exec(`DROP TABLE tasks;`);
-    db.exec(`ALTER TABLE tasks_post_issue_49 RENAME TO tasks;`);
+    //
+    // foreign_keys stays ON (better-sqlite3's default) through this first
+    // transaction, so a dangling parent_id already sitting in old data fails
+    // loudly here instead of migrating across silently — parent_id's own
+    // `REFERENCES tasks(id)` on the new table still resolves to the old
+    // `tasks`, which hasn't been dropped yet, so the check is meaningful.
+    db.transaction(() => {
+      db.exec(TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE tasks_post_issue_49"));
+      // old boards may still carry issue #30's superseded question_options /
+      // question_recommendation columns (dropped from the schema when
+      // question_items replaced them, but never physically dropped from
+      // already-created tables — ADD COLUMN above is additive-only). Carry
+      // across only columns the new schema still knows about; this rebuild
+      // is the natural place to actually drop the dead ones.
+      const newCols = (
+        db.prepare("PRAGMA table_info(tasks_post_issue_49)").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      const carriedCols = allCols.filter((name) => newCols.includes(name)).join(", ");
+      db.exec(`INSERT INTO tasks_post_issue_49 (${carriedCols}) SELECT ${carriedCols} FROM tasks;`);
+    })();
+    // events/triage_front_inserts/etc. hold FK references to tasks(id) with
+    // no ON DELETE CASCADE; DROP TABLE tasks below issues an implicit DELETE
+    // FROM tasks that FK enforcement would reject outright. The pragma can
+    // only be flipped outside a transaction (SQLite no-ops it mid-BEGIN), so
+    // it's off for this second transaction alone — narrower than the first,
+    // which needed it ON for the parent_id check above. If the process dies
+    // between the two transactions, `tasks` is left with title NOT NULL
+    // still set, so the next openDb re-enters this whole block and the
+    // DROP-IF-EXISTS above clears the completed-but-now-stale copy before
+    // redoing both steps — no data loss, just repeated work.
+    db.pragma("foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        db.exec(`DROP TABLE tasks;`);
+        db.exec(`ALTER TABLE tasks_post_issue_49 RENAME TO tasks;`);
+      })();
+    } finally {
+      db.pragma("foreign_keys = ON");
+    }
   }
   // ADR 0008 superseded #10's throttle_state shape (state/utilization ->
   // throttled). Unlike the tasks columns above, this isn't an additive
