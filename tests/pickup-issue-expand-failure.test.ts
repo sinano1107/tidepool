@@ -60,6 +60,11 @@ it("issue参照の確定的失敗(not found / close 済み)では retry/abandon 
   expect(question).toBeDefined();
   expect(question.parent_id).toBe(task.id);
   expect(question.question_items[0].options).toEqual(["retry", "abandon"]);
+  // トップレベル(親なし)タスクの abandon 説明が「parent を replan に戻す」と
+  // 実際には起きないことを約束しない(answerQuestion の cancel 分岐は親なしなら
+  // 自タスクの subtree を cancel するだけ)
+  expect(question.purpose).not.toContain("returns the parent");
+  expect(question.purpose).toContain("cancels this task");
   // 質問(未完了の子)が答えられるまで blocked 表示になり、pickup 対象から外れる
   // (blocked が held に優先する既存の表示規則 — BoardTask の doc comment)
   expect(board.find((x: any) => x.id === task.id).status).toBe("blocked");

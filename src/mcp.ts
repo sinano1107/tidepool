@@ -271,7 +271,11 @@ function runReleasingVerb(
  *  completion_criteria are only the "#N" placeholder (rowToTask), so
  *  contentSourceFor resolves the real thing here. The workspace thunk stays
  *  lazy: an ordinary task's briefing must not trigger workspace resolution
- *  (resolveOrQuarantine can quarantine a name as a side effect). */
+ *  (resolveOrQuarantine can quarantine a name as a side effect). An issue
+ *  that dies *after* the scheduler's pickup gate passed (closed/deleted
+ *  mid-slot) makes expand() reject and surfaces as a plain tool error — the
+ *  worker can escalate itself, and the watchdog is the backstop; the
+ *  retry/abandon failure question belongs to the pickup gate alone. */
 async function taskContext(deps: McpDeps, task: Task) {
   const content = await contentSourceFor(task, deps.github, () => {
     const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);

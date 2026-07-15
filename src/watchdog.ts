@@ -37,6 +37,22 @@ function pickedUpAt(db: Db, taskId: string): number {
   return row ? new Date(row.created_at).getTime() : 0;
 }
 
+/** The consequence half of every failure question's context (ADR 0006's
+ *  implementation note: the option label alone can't carry what "abandon"
+ *  does, and this text is its only human-visible surface). Worded per shape:
+ *  with a parent, abandon discards the whole plan and returns the parent to
+ *  replan; parentless, there is no plan above to return to — answerQuestion's
+ *  cancel branch only cancels this task's own subtree. Shared by every
+ *  failure question (watchdog's failTask, the scheduler's issue pickup gate)
+ *  so the wording can't drift between them. */
+export function abandonConsequence(task: Pick<Task, "parent_id">): string {
+  return task.parent_id
+    ? `"abandon" discards the rest of this plan — this task's remaining ` +
+        `work plus its parent's other unfinished children — and returns the ` +
+        `parent to the queue head to replan.`
+    : `"abandon" cancels this task and its remaining work.`;
+}
+
 /** The failure escalation: a question child in tidepool's own name (the agent
  *  could not self-report), with a standing "retry" option — answering it runs
  *  through the ordinary unblock-to-head path, same as any other escalation. */
@@ -59,16 +75,13 @@ export function failTask(
     db,
     task,
     {
-      // the option label alone ("abandon") can't carry what it does, so the
-      // consequence is spelled out here — this is the only human-visible
-      // surface for it (ADR 0006's implementation note); it's declared via
-      // the system-internal cancel_option below, never exposed to agents.
+      // abandon's consequence is spelled out via abandonConsequence; it's
+      // declared via the system-internal cancel_option below, never exposed
+      // to agents.
       context:
         `${reason}\n\n` +
         `"retry" restarts this task from scratch at the queue head. ` +
-        `"abandon" discards the rest of this plan — this task's remaining ` +
-        `work plus its parent's other unfinished children — and returns the ` +
-        `parent to the queue head to replan.`,
+        abandonConsequence(task),
       questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
       cancel_option: "abandon",
     },

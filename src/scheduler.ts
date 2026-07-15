@@ -4,6 +4,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import { isPaused } from "./pause.js";
 import type { Slot } from "./slot.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
+import { abandonConsequence } from "./watchdog.js";
 import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
@@ -163,8 +164,10 @@ export function startScheduler(deps: {
    *  reference never wedges an in_progress task. A 一時的失敗 (network,
    *  GitHub outage) skips this pickup cycle — the same fail-closed
    *  environmental posture as the throttle, no human is called, the next
-   *  poll retries. Ordinary tasks pass straight through. */
-  async function issueExpandable(head: Task): Promise<boolean> {
+   *  poll retries. Ordinary tasks pass straight through. Returns whether the
+   *  pickup may proceed — a false from the gone-branch has already registered
+   *  the failure question as its side effect. */
+  async function issuePickupGate(head: Task): Promise<boolean> {
     if (head.github_issue_number == null || !github) return true;
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     // board-driven async workspace use: registry drift quarantines the name
@@ -191,9 +194,7 @@ export function startScheduler(deps: {
               `its content cannot be expanded for spawn.\n\n` +
               `"retry" re-reads the issue and restarts this task from the queue head — ` +
               `pick it after reopening or restoring the issue. ` +
-              `"abandon" discards the rest of this plan — this task's remaining ` +
-              `work plus its parent's other unfinished children — and returns the ` +
-              `parent to the queue head to replan.`,
+              abandonConsequence(head),
             questions: [
               {
                 title: `issue reference is gone: ${head.title}`,
@@ -226,7 +227,7 @@ export function startScheduler(deps: {
       }
       const head = nextSlotTask(db, workspace?.name, worker.id, auditorName);
       if (!head) return;
-      if (!(await issueExpandable(head))) return;
+      if (!(await issuePickupGate(head))) return;
       pickup(head);
     } finally {
       inFlight = false;

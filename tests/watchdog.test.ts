@@ -93,10 +93,13 @@ it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付�
   expect(question.question_items[0].options).toContain("retry");
   // the human-facing text (not just a source comment) spells out what
   // abandon actually does, since the option label alone ("abandon") can't
-  // carry that — ADR 0006's implementation note
+  // carry that — ADR 0006's implementation note. This task is parentless, so
+  // the consequence is its own subtree's cancel, never a parent replan
+  // (issue #49 のレビューで文言を実挙動に揃えた)
   expect(question.purpose).toMatch(/abandon/i);
-  expect(question.purpose).toMatch(/plan/i);
-  expect(question.purpose).toMatch(/replan|queue head/i);
+  expect(question.purpose).toMatch(/cancels this task/i);
+  expect(question.purpose).not.toMatch(/returns the parent/i);
+  expect(question.purpose).toMatch(/queue head/i);
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
