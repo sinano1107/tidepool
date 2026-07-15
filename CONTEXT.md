@@ -161,6 +161,8 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 展開の失敗は2種に分かれる: **一時的失敗**(ネットワーク・GitHub 障害)はそのサイクルの pickup を skip する環境事象(Throttle と同じ fail-closed、人間を呼ばない)。**確定的失敗**(not found、close 済み)は retry / abandon の failure question(Watchdog と同じ形 — 分岐は人間の30秒の回答)。
 
+UI の live 展開には鮮度があり、**issue_live_state**(live / stale / unavailable)が運ぶ: live は直近に取得した内容を表示中、stale は再取得に失敗して最後に成功した内容を表示中、unavailable は一度も取得に成功しておらず「#N」プレースホルダーしかない状態。便宜ビューの鮮度表示であって、正準の読み取り(spawn・登録ゲート)には現れない。
+
 完了の逆方向は GitHub ネイティブの機構に委ねる: issue 参照タスクの PR 本文には `Closes #N` が自動付与され、merge が issue を閉じる。PR を伴わない完了と cancel は issue に触れない(計画の破棄は盤面の事情であり、問題自体が消えたわけではない)。
 
 ## GitHub identity(GitHub 身元)
