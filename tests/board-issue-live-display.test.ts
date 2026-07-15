@@ -180,3 +180,31 @@ it("GET /api/queue と GET /api/tasks/:id もissue参照タスクをlive展開�
   expect(single.json.purpose).toBe("再現手順: ...");
   expect(single.json.issue_live_state).toBe("live");
 });
+
+it("同一issueへの並行リクエストはフェッチを共有し、GitHubへ二重に問い合わせない(issue #49 設計点6)", async () => {
+  t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
+
+  const db = openDb(join(t.dir, "board.sqlite"));
+  registerTask(
+    db,
+    { type: "work", workspace: "tidepool", github_issue_number: 49 },
+    t.clock.now(),
+  );
+  db.close();
+
+  t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "b", comments: [] });
+
+  // コールドキャッシュで /tasks と /queue のポーリングが同時に着火した状況。
+  // 1本目のフェッチをゲートで保留し、2本目のリクエストが確実に
+  // in-flight 中へ重なるようにする
+  let release!: () => void;
+  t.github.scriptIssueGate(new Promise((r) => (release = r)));
+  const p1 = api(t.baseUrl, "GET", "/api/tasks");
+  const p2 = api(t.baseUrl, "GET", "/api/queue");
+  await new Promise((r) => setTimeout(r, 50));
+  release();
+  const [board, queue] = await Promise.all([p1, p2]);
+  expect(board.status).toBe(200);
+  expect(queue.status).toBe(200);
+  expect(t.github.issueFetches.length).toBe(1);
+});

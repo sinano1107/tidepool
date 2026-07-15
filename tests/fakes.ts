@@ -98,6 +98,7 @@ export class FakeGitHubClient implements GitHubClient {
   readonly merged: PrRef[] = [];
   private failure: Error | null = null;
   private issueFailure: Error | null = null;
+  private issueGate: Promise<void> | null = null;
   private nextNumber = 1;
   private ciStatus: CiStatus = "success";
   private issues = new Map<number, Issue>();
@@ -120,6 +121,7 @@ export class FakeGitHubClient implements GitHubClient {
 
   async getIssue(ref: IssueRef): Promise<Issue> {
     this.issueFetches.push(ref);
+    if (this.issueGate) await this.issueGate;
     if (this.issueFailure) throw this.issueFailure;
     const issue = this.issues.get(ref.number);
     if (!issue) throw new Error(`no issue scripted for #${ref.number}`);
@@ -145,6 +147,13 @@ export class FakeGitHubClient implements GitHubClient {
    *  fetch failing mid-flight). Pass null to clear. */
   scriptIssueFailure(err: Error | null): void {
     this.issueFailure = err;
+  }
+
+  /** Holds every getIssue response until the given promise resolves (issue
+   *  #49 §6: keeping a fetch in flight so a test can overlap requests). The
+   *  call is still recorded in issueFetches immediately. */
+  scriptIssueGate(gate: Promise<void>): void {
+    this.issueGate = gate;
   }
 }
 

@@ -17,12 +17,16 @@ export type LiveBoardTask = BoardTask & { issue_live_state?: IssueLiveState };
  *  gate), so content up to a TTL old is fine. The fetch itself still goes
  *  through contentSourceFor — this class only decides *when* to fetch, never
  *  *what* a task's content source is. */
+const TTL_MS = 30_000;
+
 export class IssueContentCache {
   // keyed by workspace path + issue number — the same pair that identifies
   // the content (ADR 0016's workspace 焼き込み rationale)
   private readonly entries = new Map<string, { content: TaskContent; fetchedAt: number }>();
-
-  constructor(private readonly ttlMs: number = 30_000) {}
+  // one fetch per key at a time: overlapping polls (/tasks and /queue fire
+  // together, or several tasks reference the same issue) share the in-flight
+  // promise instead of each hitting GitHub
+  private readonly inFlight = new Map<string, Promise<TaskContent>>();
 
   async present(
     task: BoardTask,
@@ -37,11 +41,16 @@ export class IssueContentCache {
     if (path === undefined || !github) return { ...task, issue_live_state: "unavailable" };
     const key = `${path}#${task.github_issue_number}`;
     const cached = this.entries.get(key);
-    if (cached && now.getTime() - cached.fetchedAt < this.ttlMs) {
+    if (cached && now.getTime() - cached.fetchedAt < TTL_MS) {
       return { ...task, ...cached.content, issue_live_state: "live" };
     }
     try {
-      const content = await contentSourceFor(task, github, () => path).expand();
+      let fetch = this.inFlight.get(key);
+      if (!fetch) {
+        fetch = contentSourceFor(task, github, () => path).expand();
+        this.inFlight.set(key, fetch);
+      }
+      const content = await fetch;
       this.entries.set(key, { content, fetchedAt: now.getTime() });
       return { ...task, ...content, issue_live_state: "live" };
     } catch {
@@ -51,6 +60,8 @@ export class IssueContentCache {
       // never fetched: the row already carries the "#N" placeholder
       // (fillContentPlaceholder) — surface that it's all there is
       return { ...task, issue_live_state: "unavailable" };
+    } finally {
+      this.inFlight.delete(key);
     }
   }
 }

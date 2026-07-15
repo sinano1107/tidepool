@@ -717,10 +717,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // workspace resolution here never quarantines (resolveOrQuarantine is for
   // board-driven async work, not viewing) — an unresolvable name just leaves
   // the row unexpanded.
+  const displayResolver = buildWorkspaceResolver(resolveWorkspace, workspace);
   const displayWorkspacePath = (taskWorkspace: string | null) => (): string | undefined => {
-    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     try {
-      return resolve?.(taskWorkspace).path;
+      return displayResolver?.(taskWorkspace).path;
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) return undefined;
       throw err;
@@ -770,14 +770,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(404).json({ error: "task not found" });
       return;
     }
-    res.json(
-      await issueContent.present(
-        presentTask(db, task),
-        github,
-        displayWorkspacePath(task.workspace),
-        clock.now(),
-      ),
-    );
+    res.json((await presentLive([presentTask(db, task)]))[0]);
   });
 
   return router;
