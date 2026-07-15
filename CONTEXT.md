@@ -97,6 +97,10 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 
 タスクの assignee になれる主体。人間とエージェントの総称。エージェント = ベース AI + skills + instructions + authority profile。人間は全権限を持つ worker。
 
+## Skill allowlist(skill 許可リスト)
+
+agent 定義が宣言する、その agent が worker session 中に使ってよい skill の集合。Worker 定義の構成要素 skills の実装対応物。参照であって在庫の主張ではない — workspace に実在しない skill を許可していても不問(使えないのは単に無いから)。無制限は明示の「*」、全禁止は空リストで綴り、省略は不正 — 省略 = 無制限という footgun を作らない。由来単位のスコープ語を持つ: @workspace(その workspace の checkout が運ぶ skill 全部)と @host(ホスト環境が持ち込む skill 全部 — 盤面が管理しない物)。
+
 ## Assignee(アサイン先)
 
 タスクを実行する worker への割当。登録時は任意で、指定した場合は委譲先の要求として登録者の決裁権(assignable_to)に対して検査され、registry に解決できない名前は登録時に即拒否される。値は3通りに読まれる: **未指定 = その時の盤面の既定 agent への参照**(pickup の瞬間に解決され、値は焼き込まれない — Workspace の「既定への参照」と同型)、**エージェント名 = その agent として実行**(spawn の瞬間に registry から解決される)、**human = slot の外**(人間タスクとして並行する)。割当待ちという停止状態は存在しない — 未指定のタスクは assign を待たず既定へ流れる。
