@@ -99,16 +99,8 @@ export interface McpDeps {
  *  branch discipline (workspace.ts) forbids direct writes to. */
 const PR_BASE_BRANCH = "main";
 
-/** Work-task completion → PR (issue #19): by the time this runs, the tree
- *  rule has either stashed the work as a WIP commit on the task branch, or
- *  failed and quarantined the workspace (releaseWorkspace swallows that
- *  failure so the completion itself still stands) — in the latter case the
- *  task branch may carry none of the finished work, so no PR is attempted.
- *  Never entrusted to the worker, never lets a PR failure touch the
- *  completion that already landed — best-effort, logged and swallowed.
- *  question/review tasks carry no handoff doc and open no PR. */
-/** ADR 0016 設計点7: 完了の逆方向は GitHub ネイティブに委ねる — issue-backed task
- *  の PR body に `Closes #N` を追記し、merge が issue を閉じる。PR を伴わない
+/** 完了の逆方向は GitHub ネイティブに委ねる(issue #49, ADR 0016) — issue-backed
+ *  task の PR body に `Closes #N` を追記し、merge が issue を閉じる。PR を伴わない
  *  完了と cancel はこの経路自体を通らないので issue に触れない。 */
 function prBody(handoffDoc: string | null, githubIssueNumber: number | null): string {
   const doc = handoffDoc ?? "";
@@ -117,6 +109,14 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
   return doc ? `${doc}\n\n${closes}` : closes;
 }
 
+/** Work-task completion → PR (issue #19): by the time this runs, the tree
+ *  rule has either stashed the work as a WIP commit on the task branch, or
+ *  failed and quarantined the workspace (releaseWorkspace swallows that
+ *  failure so the completion itself still stands) — in the latter case the
+ *  task branch may carry none of the finished work, so no PR is attempted.
+ *  Never entrusted to the worker, never lets a PR failure touch the
+ *  completion that already landed — best-effort, logged and swallowed.
+ *  question/review tasks carry no handoff doc and open no PR. */
 async function openHandoffPr(
   deps: McpDeps,
   task: Task,
