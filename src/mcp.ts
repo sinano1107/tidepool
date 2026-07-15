@@ -20,6 +20,7 @@ import {
   HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
   logDecision,
+  contentSourceFor,
   recordPrOpened,
   settledChildren,
   type Task,
@@ -123,11 +124,15 @@ async function openHandoffPr(
   if (!workspace) return;
   if (workspaceNeedsHuman(deps.db, workspace.name)) return;
   try {
+    // an issue-backed task's stored title is only the "#N" placeholder
+    // (rowToTask) — the PR title is another of ADR 0016's real use-moments,
+    // so it resolves the live issue instead when there is one.
+    const { title } = await contentSourceFor(task, deps.github, () => workspace.path).expand();
     const pr = await deps.github.createPullRequest({
       path: workspace.path,
       branch: taskBranch(task.id),
       base: PR_BASE_BRANCH,
-      title: task.title,
+      title,
       body: handoffDoc ?? "",
     });
     recordPrOpened(
@@ -209,7 +214,7 @@ function resolveAttributedTask(
 
 /** The shape every agent verb shares: resolve attribution, run the domain
  *  verb, hand DomainError back as a tool error rather than a protocol one. */
-function runVerb(
+async function runVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
   verb: (task: Task) => unknown,
@@ -217,7 +222,7 @@ function runVerb(
   const resolved = resolveAttributedTask(deps, attributedTaskId);
   if ("error" in resolved) return toolError(resolved.error);
   try {
-    return toolResult(verb(resolved.task));
+    return toolResult(await verb(resolved.task));
   } catch (err) {
     if (err instanceof DomainError) return toolError(err.message);
     throw err;
@@ -251,13 +256,20 @@ function runReleasingVerb(
   });
 }
 
-function taskContext(task: Task) {
-  return {
-    id: task.id,
-    title: task.title,
-    purpose: task.purpose,
-    completion_criteria: task.completion_criteria,
-  };
+/** A task's own briefing (issue #49, ADR 0016): the "spawn" moment content is
+ *  live-resolved for — an issue-backed task's stored title/purpose/
+ *  completion_criteria are only the "#N" placeholder (rowToTask), so
+ *  contentSourceFor resolves the real thing here. The workspace thunk stays
+ *  lazy: an ordinary task's briefing must not trigger workspace resolution
+ *  (resolveOrQuarantine can quarantine a name as a side effect). */
+async function taskContext(deps: McpDeps, task: Task) {
+  const content = await contentSourceFor(task, deps.github, () => {
+    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+    const workspace =
+      resolve && resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+    return workspace ? workspace.path : undefined;
+  }).expand();
+  return { id: task.id, ...content };
 }
 
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
@@ -269,7 +281,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "get_current_task",
     { description: "Fetch the context of the task occupying the slot." },
     async () =>
-      runVerb(deps, attributedTaskId, (task) => {
+      runVerb(deps, attributedTaskId, async (task) => {
         const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
         // a review task reads its parent (the reviewed task) in the reverse
         // direction from every other seam here (issue #29's review-context
@@ -278,14 +290,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         // 判断したか" has no other source than the reviewed session's own
         // record).
         const parentContext = parent && {
-          ...taskContext(parent),
+          ...(await taskContext(deps, parent)),
           ...(task.type === "review" && {
             decision_log: taskDecisionLog(deps.db, parent.id),
             handoff_doc: parent.handoff_doc,
           }),
         };
         return {
-          ...taskContext(task),
+          ...(await taskContext(deps, task)),
           type: task.type,
           parent: parentContext,
           children: settledChildren(deps.db, task.id),

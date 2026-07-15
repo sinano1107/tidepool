@@ -23,6 +23,22 @@ export interface PrRef {
   number: number;
 }
 
+/** Which workspace checkout to run `gh` from, and which issue (issue #49) —
+ *  same shape as PrRef, one per resource. */
+export interface IssueRef {
+  path: string;
+  number: number;
+}
+
+/** An issue-backed task's live content (issue #49, CONTEXT.md): "issue" means
+ *  the title, body, and the full comment thread — every element a live
+ *  reference needs to derive title/purpose/completion_criteria from. */
+export interface Issue {
+  title: string;
+  body: string;
+  comments: string[];
+}
+
 /** The three-way state gh's per-check "bucket" aggregates to: any failing or
  *  cancelled check is a "failure", any still running is "pending", otherwise
  *  (including a PR with no checks configured at all) "success" — there is
@@ -40,6 +56,7 @@ export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   getCiStatus(ref: PrRef): Promise<CiStatus>;
   mergePullRequest(ref: PrRef): Promise<void>;
+  getIssue(ref: IssueRef): Promise<Issue>;
 }
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
@@ -106,5 +123,23 @@ export class GhCliClient implements GitHubClient {
       cwd: ref.path,
       stdio: ["ignore", "pipe", "pipe"],
     });
+  }
+
+  async getIssue(ref: IssueRef): Promise<Issue> {
+    const output = execFileSync(
+      "gh",
+      ["issue", "view", String(ref.number), "--json", "title,body,comments"],
+      { cwd: ref.path, stdio: ["ignore", "pipe", "pipe"] },
+    ).toString();
+    const parsed = JSON.parse(output) as {
+      title: string;
+      body: string;
+      comments: Array<{ body: string }>;
+    };
+    return {
+      title: parsed.title,
+      body: parsed.body,
+      comments: parsed.comments.map((c) => c.body),
+    };
   }
 }

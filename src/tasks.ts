@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
+import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { RosterAgent } from "./registry.js";
 
 /** Worker id attributed to bare (non ?task=) sessions, e.g. the JSON API. */
@@ -49,6 +50,14 @@ export interface Task {
    *  inherit the parent's (CONTEXT.md: workspace is first-class, children
    *  inherit by default). */
   workspace: string | null;
+  /** For an issue-backed task (issue #49, ADR 0016), these are never the
+   *  task's real content — real content is never snapshotted, only resolved
+   *  live from the referenced GitHub issue (`github_issue_number`) at each
+   *  use (spawn, UI display, PR title — see TaskContentSource). Until then,
+   *  rowToTask fills these with the same "#N" placeholder issue #49's own
+   *  spec calls for the UI to show before a first successful fetch, so every
+   *  synchronous reader (decision log, notifications, console messages)
+   *  keeps working without itself becoming async. */
   title: string;
   purpose: string;
   completion_criteria: string;
@@ -91,6 +100,10 @@ export interface Task {
    *  agent-name generalization of the workspace field above. Never set via
    *  MCP or the JSON API. */
   question_quarantine_agent: string | null;
+  /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
+   *  number this task is a live reference to, or null for an ordinary task.
+   *  `workspace` doubles as the repo half of the reference for such a task. */
+  github_issue_number: number | null;
   created_at: string;
 }
 
@@ -122,21 +135,60 @@ export interface PendingChildSpec extends TaskContent {
 }
 
 /** The SQLite shape of a task: items/answer/pending-child are JSON TEXT
- *  columns. The JSON stays at this boundary — domain code sees the parsed
- *  shape. */
-export type TaskRow = Omit<Task, "question_items" | "question_answer" | "question_pending_child"> & {
+ *  columns, and — unlike domain `Task` — the three content columns are
+ *  genuinely nullable (issue #49, ADR 0016): an issue-backed task's row
+ *  really has no stored content, only rowToTask fills the placeholder in for
+ *  domain code. The JSON parsing and the placeholder-fill both stay at this
+ *  boundary. */
+export type TaskRow = Omit<
+  Task,
+  "question_items" | "question_answer" | "question_pending_child" | "title" | "purpose" | "completion_criteria"
+> & {
   question_items: string | null;
   question_answer: string | null;
   question_pending_child: string | null;
+  title: string | null;
+  purpose: string | null;
+  completion_criteria: string | null;
 };
 
 function parseJson<T>(json: string | null): T | null {
   return json === null ? null : JSON.parse(json);
 }
 
-export function rowToTask(row: TaskRow): Task {
+/** The "#N" placeholder for an issue-backed task's unresolved content (issue
+ *  #49's own spec, §6: the UI shows this before its first successful fetch).
+ *  Every synchronous domain reader (decision log, notifications, console
+ *  messages) sees this instead of real content — only
+ *  TaskContentSource.expand(), called at the actual use-moments (spawn, UI
+ *  display, PR title), ever resolves the real title/purpose/completion_criteria. */
+function issueRefPlaceholder(githubIssueNumber: number): string {
+  return `#${githubIssueNumber}`;
+}
+
+/** The one shape every content-nullable row reader shares: fill an
+ *  issue-backed row's null title/purpose/completion_criteria with the
+ *  placeholder so domain code never sees a null. rowToTask, registerTask,
+ *  listBoard, and listQueue all need exactly this. */
+function fillContentPlaceholder<
+  T extends {
+    title: string | null;
+    purpose: string | null;
+    completion_criteria: string | null;
+    github_issue_number: number | null;
+  },
+>(row: T): T & { title: string; purpose: string; completion_criteria: string } {
   return {
     ...row,
+    title: row.title ?? issueRefPlaceholder(row.github_issue_number!),
+    purpose: row.purpose ?? issueRefPlaceholder(row.github_issue_number!),
+    completion_criteria: row.completion_criteria ?? issueRefPlaceholder(row.github_issue_number!),
+  };
+}
+
+export function rowToTask(row: TaskRow): Task {
+  return {
+    ...fillContentPlaceholder(row),
     question_items: parseJson<QuestionItem[]>(row.question_items),
     question_answer: parseJson<string[]>(row.question_answer),
     question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
@@ -155,7 +207,12 @@ export interface QuestionItem {
   recommendation: string;
 }
 
-export interface RegisterTaskInput extends TaskContent {
+/** RegisterTaskInput's content is the one place TaskContent's three fields
+ *  aren't all required (issue #49, ADR 0016): absent for an issue-backed
+ *  task (registerTask persists null; TaskContentSource resolves it live at
+ *  use time), required otherwise — enforced by assertGithubRef, not the
+ *  type system. */
+export interface RegisterTaskInput extends Partial<TaskContent> {
   type: TaskType;
   parent_id?: string;
   /** CONTEXT.md's risk flag — declares external effect at registration. */
@@ -196,6 +253,9 @@ export interface RegisterTaskInput extends TaskContent {
   quarantine_agent?: string;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
+  /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
+   *  number this task is a live reference to. Absent for an ordinary task. */
+  github_issue_number?: number;
 }
 
 /** Every question carries 1-4 items (issue #30), each with 2-4 options plus a
@@ -254,6 +314,110 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   }
 }
 
+/** ADR 0016: unlike an ordinary task's workspace — a reference resolved
+ *  fresh at every use (ADR 0009) — an issue-backed task's workspace is a
+ *  confirmed value, required at registration, because it's the repo half of
+ *  the identity of the issue it points at (a swapped default must never
+ *  silently repoint it at another repo's same-numbered issue). */
+function assertGithubRef(input: RegisterTaskInput): void {
+  if (input.github_issue_number !== undefined) {
+    if (!input.workspace) {
+      throw new DomainError("an issue-backed task requires a workspace at registration");
+    }
+    // exclusivity, not just a workspace requirement (ADR 0016: "盤面には参照
+    // だけを保存し、内容は使用の瞬間に展開する" — content is never
+    // snapshotted, so an issue-backed task must carry none of the three).
+    if (
+      input.title !== undefined ||
+      input.purpose !== undefined ||
+      input.completion_criteria !== undefined
+    ) {
+      throw new DomainError("an issue-backed task carries no stored content");
+    }
+  } else if (!input.title || !input.purpose || !input.completion_criteria) {
+    throw new DomainError(
+      "a task requires title, purpose, and completion_criteria unless it is issue-backed",
+    );
+  }
+}
+
+/** Derives an issue-backed task's three content fields from its live GitHub
+ *  issue (issue #49, ADR 0016): title and purpose come straight from the
+ *  issue's own title and body, completion_criteria is a fixed template
+ *  deferring to the issue body rather than a field the issue doesn't have —
+ *  none of the three is ever stored, this runs fresh at every use (spawn and
+ *  UI display). */
+export function deriveTaskContentFromIssue(issue: Issue): TaskContent {
+  return {
+    title: issue.title,
+    purpose: issue.body,
+    completion_criteria: "See the linked GitHub issue's body and comments for completion criteria.",
+  };
+}
+
+/** A task's content, resolved on demand (issue #49, ADR 0016's live 参照):
+ *  an ordinary task's content is already known and resolves at once; an
+ *  issue-backed task's expand() awaits a live GitHub fetch instead. Callers
+ *  must expand() *before* entering a db.transaction() — better-sqlite3's
+ *  transactions run synchronously and cannot await mid-flight.
+ *
+ *  Design notes for future revisits, not current obligations:
+ *  - This class is essentially a named wrapper around
+ *    `() => Promise<TaskContent>` — a plain function type plus two factory
+ *    functions would work identically. The class form is kept only for the
+ *    name's discoverability; if it ever accretes state or a third concern,
+ *    prefer flattening it back to functions over growing it.
+ *  - If reference kinds ever multiply beyond GitHub issues (a PR-backed or
+ *    external-ticket-backed task), reconsider modeling Task's content as a
+ *    discriminated union ({kind:"stored",...} | {kind:"issueRef",...})
+ *    instead of flat nullable columns + this resolver: the union makes
+ *    "reference and snapshotted content coexist" unrepresentable at the type
+ *    level (the exclusivity assertGithubRef/the DB CHECK enforce by hand
+ *    today), at the cost of forcing every one of the ~40 synchronous readers
+ *    to branch — a ripple judged not worth it at the current single-kind
+ *    scale (2026-07 review of issue #49). */
+export class TaskContentSource {
+  private constructor(private readonly resolve: () => Promise<TaskContent>) {}
+
+  static stored(content: TaskContent): TaskContentSource {
+    return new TaskContentSource(() => Promise.resolve(content));
+  }
+
+  static liveIssue(github: GitHubClient, ref: IssueRef): TaskContentSource {
+    return new TaskContentSource(async () => deriveTaskContentFromIssue(await github.getIssue(ref)));
+  }
+
+  expand(): Promise<TaskContent> {
+    return this.resolve();
+  }
+}
+
+/** The one branch point between a task's two content sources (issue #49):
+ *  every use-moment (spawn, UI display, PR title) goes through here instead
+ *  of checking `github_issue_number` itself, so a new use-moment can't
+ *  forget the issue-backed case and silently serve the "#N" placeholder.
+ *  `workspacePath` is a thunk because resolving a workspace has side effects
+ *  (resolveOrQuarantine can quarantine a name) — an ordinary task must never
+ *  trigger them, so it's only invoked on the issue-backed branch. Falling
+ *  back to the stored placeholder when GitHub or the workspace is
+ *  unavailable is interim behavior — ADR 0016's real failure taxonomy
+ *  (temporary → pickup skip, permanent → failure question) is later scope. */
+export function contentSourceFor(
+  task: Task,
+  github: GitHubClient | undefined,
+  workspacePath: () => string | undefined,
+): TaskContentSource {
+  const stored = TaskContentSource.stored({
+    title: task.title,
+    purpose: task.purpose,
+    completion_criteria: task.completion_criteria,
+  });
+  if (task.github_issue_number == null || !github) return stored;
+  const path = workspacePath();
+  if (path === undefined) return stored;
+  return TaskContentSource.liveIssue(github, { path, number: task.github_issue_number });
+}
+
 /** New tasks always join the queue tail: sort_key = max + 1. */
 export function registerTask(
   db: Db,
@@ -262,18 +426,29 @@ export function registerTask(
   workerId: string = HUMAN_WORKER_ID,
 ): Task {
   assertQuestionSpec(input);
+  assertGithubRef(input);
   const { maxKey } = db
     .prepare("SELECT COALESCE(MAX(sort_key), 0) AS maxKey FROM tasks")
     .get() as { maxKey: number };
+  // stored is nullable (issue #49); the in-memory Task returned to the
+  // caller never is — an issue-backed task gets the same "#N" placeholder
+  // rowToTask fills in on every later read, so registerTask's own return
+  // isn't a special case in what it hands back.
+  const content = fillContentPlaceholder({
+    title: input.title ?? null,
+    purpose: input.purpose ?? null,
+    completion_criteria: input.completion_criteria ?? null,
+    github_issue_number: input.github_issue_number ?? null,
+  });
   const task: Task = {
     id: randomUUID(),
     type: input.type,
     status: "todo",
     assignee: input.assignee ?? null,
     workspace: input.workspace ?? null,
-    title: input.title,
-    purpose: input.purpose,
-    completion_criteria: input.completion_criteria,
+    title: content.title,
+    purpose: content.purpose,
+    completion_criteria: content.completion_criteria,
     risk_flag: input.risk_flag ? 1 : 0,
     review_flag: input.review_flag ? 1 : 0,
     parent_id: input.parent_id ?? null,
@@ -288,6 +463,7 @@ export function registerTask(
     question_pending_merge_pr: input.pending_merge_pr ?? null,
     question_quarantine_workspace: input.quarantine_workspace ?? null,
     question_quarantine_agent: input.quarantine_agent ?? null,
+    github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
@@ -296,14 +472,21 @@ export function registerTask(
          risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_quarantine_workspace,
-         question_quarantine_agent, created_at)
+         question_quarantine_agent, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_quarantine_workspace,
-         @question_quarantine_agent, @created_at)`,
+         @question_quarantine_agent, @github_issue_number, @created_at)`,
     ).run({
       ...task,
+      // the stored row keeps title/purpose/completion_criteria genuinely
+      // null for an issue-backed task (ADR 0016: never snapshotted) — only
+      // `task`, the in-memory value handed back to the caller, carries the
+      // "#N" placeholder.
+      title: input.title ?? null,
+      purpose: input.purpose ?? null,
+      completion_criteria: input.completion_criteria ?? null,
       question_items: task.question_items && JSON.stringify(task.question_items),
       question_pending_child:
         task.question_pending_child && JSON.stringify(task.question_pending_child),
@@ -1259,7 +1442,7 @@ function boardRows(
 export function listBoard(db: Db): BoardTask[] {
   const rows = boardRows(db, "");
   return rows.map((row) => ({
-    ...row,
+    ...fillContentPlaceholder(row),
     question_items: parseJson<QuestionItem[]>(row.question_items),
     question_answer: parseJson<string[]>(row.question_answer),
     question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
@@ -1315,7 +1498,7 @@ export function listQueue(
   return rows
     .filter((row) => row.assignee !== HUMAN_WORKER_ID)
     .map((row) => ({
-      ...row,
+      ...fillContentPlaceholder(row),
       question_items: parseJson<QuestionItem[]>(row.question_items),
       question_answer: parseJson<string[]>(row.question_answer),
       question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),

@@ -1,6 +1,14 @@
 import type { Clock } from "../src/clock.js";
 import type { DraftClient, HandoffDraft, TaskDraft } from "../src/draft.js";
-import type { CiStatus, CreatePrInput, GitHubClient, PrRef, PrResult } from "../src/github.js";
+import type {
+  CiStatus,
+  CreatePrInput,
+  GitHubClient,
+  Issue,
+  IssueRef,
+  PrRef,
+  PrResult,
+} from "../src/github.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
@@ -90,6 +98,7 @@ export class FakeGitHubClient implements GitHubClient {
   private failure: Error | null = null;
   private nextNumber = 1;
   private ciStatus: CiStatus = "success";
+  private issues = new Map<number, Issue>();
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
@@ -107,6 +116,12 @@ export class FakeGitHubClient implements GitHubClient {
     this.merged.push(ref);
   }
 
+  async getIssue(ref: IssueRef): Promise<Issue> {
+    const issue = this.issues.get(ref.number);
+    if (!issue) throw new Error(`no issue scripted for #${ref.number}`);
+    return issue;
+  }
+
   scriptFailure(err: Error): void {
     this.failure = err;
   }
@@ -115,6 +130,11 @@ export class FakeGitHubClient implements GitHubClient {
    *  "success" so tests unrelated to the merge dial never need to script it. */
   scriptCiStatus(status: CiStatus): void {
     this.ciStatus = status;
+  }
+
+  /** Scripts what getIssue(ref) returns for a given issue number (issue #49). */
+  scriptIssue(number: number, issue: Issue): void {
+    this.issues.set(number, issue);
   }
 }
 

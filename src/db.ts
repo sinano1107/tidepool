@@ -2,11 +2,11 @@ import Database from "better-sqlite3";
 
 export type Db = Database.Database;
 
-export function openDb(path: string): Db {
-  const db = new Database(path);
-  db.pragma("journal_mode = WAL");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS tasks (
+// Shared between the fresh-board CREATE and the old-schema rebuild migration
+// below (title/purpose/completion_criteria's NOT NULL -> CHECK relaxation) so
+// the two can never drift apart.
+const TASKS_TABLE_DDL = `
+    CREATE TABLE tasks (
       id                  TEXT PRIMARY KEY,
       type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review')),
       -- 'blocked' is not a stored status: it is derived from unfinished children
@@ -17,9 +17,13 @@ export function openDb(path: string): Db {
       -- against the registry fresh at every use — pickup, release, watchdog,
       -- restart (issue #26 / ADR 0009) — never pinned to a path.
       workspace           TEXT,
-      title               TEXT NOT NULL,
-      purpose             TEXT NOT NULL,
-      completion_criteria TEXT NOT NULL,
+      -- null only for an issue-backed task (issue #49, ADR 0016): its content
+      -- is never snapshotted at registration, only resolved live from the
+      -- referenced GitHub issue at each use. The CHECK below enforces the
+      -- exclusive-or with github_issue_number below.
+      title               TEXT,
+      purpose             TEXT,
+      completion_criteria TEXT,
       risk_flag           INTEGER NOT NULL DEFAULT 0,
       review_flag         INTEGER NOT NULL DEFAULT 0,
       parent_id           TEXT REFERENCES tasks(id),
@@ -63,8 +67,30 @@ export function openDb(path: string): Db {
       -- quarantineAgent, the agent-name generalization of the workspace
       -- quarantine above. Never set via MCP or the JSON API.
       question_quarantine_agent TEXT,
-      created_at          TEXT NOT NULL
-    );
+      -- issue-backed task reference (issue #49, ADR 0016): the GitHub issue
+      -- number this task is a live reference to, or null for an ordinary
+      -- task. workspace (already above) doubles as the repo half of the
+      -- reference for such a task.
+      github_issue_number INTEGER,
+      created_at          TEXT NOT NULL,
+      -- exactly one content source, exclusively (issue #49, ADR 0016): an
+      -- ordinary task carries all three content fields and no
+      -- github_issue_number; an issue-backed task carries a
+      -- github_issue_number and none of the three — content is never
+      -- snapshotted alongside a live reference. Domain code
+      -- (assertGithubRef) rejects the same cases before they'd ever reach
+      -- this CHECK, but it stays as the DB's own backstop.
+      CHECK (
+        (github_issue_number IS NOT NULL AND title IS NULL AND purpose IS NULL AND completion_criteria IS NULL)
+        OR (github_issue_number IS NULL AND title IS NOT NULL AND purpose IS NOT NULL AND completion_criteria IS NOT NULL)
+      )
+    )`;
+
+export function openDb(path: string): Db {
+  const db = new Database(path);
+  db.pragma("journal_mode = WAL");
+  db.exec(`
+    ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
 
     CREATE TABLE IF NOT EXISTS events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,8 +238,32 @@ export function openDb(path: string): Db {
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }
-  for (const col of ["pr_number", "question_pending_merge_pr"]) {
+  for (const col of ["pr_number", "question_pending_merge_pr", "github_issue_number"]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
+  }
+  // issue #49 / ADR 0016: title/purpose/completion_criteria's NOT NULL needs
+  // relaxing (to CHECK-enforced instead) so an issue-backed task can carry
+  // none of the three — SQLite can't drop a column's NOT NULL via ALTER.
+  // Unlike throttle_state's drop-and-recreate below, this is real task
+  // history, so the table is rebuilt with every existing row carried across
+  // (the additive-column loop above already guarantees every column this
+  // rebuild names exists on the old table, however old it is).
+  const taskColInfo = db.prepare("PRAGMA table_info(tasks)").all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  if (taskColInfo.find((c) => c.name === "title")?.notnull === 1) {
+    const allCols = taskColInfo.map((c) => c.name).join(", ");
+    // Renaming `tasks` itself (rather than building the replacement under a
+    // fresh name first) would make SQLite rewrite every other table's own
+    // `REFERENCES tasks(id)` to follow it to the renamed-away table — left
+    // dangling once that table is dropped. Building under a throwaway name
+    // and renaming *that* into place at the end never triggers the rewrite,
+    // since nothing references the throwaway name.
+    db.exec(TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE tasks_post_issue_49"));
+    db.exec(`INSERT INTO tasks_post_issue_49 (${allCols}) SELECT ${allCols} FROM tasks;`);
+    db.exec(`DROP TABLE tasks;`);
+    db.exec(`ALTER TABLE tasks_post_issue_49 RENAME TO tasks;`);
   }
   // ADR 0008 superseded #10's throttle_state shape (state/utilization ->
   // throttled). Unlike the tasks columns above, this isn't an additive

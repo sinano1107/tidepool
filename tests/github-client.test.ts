@@ -129,6 +129,38 @@ it("getCiStatus は非ゼロ終了で stdout が全く無い場合、チェッ�
   expect(status).toBe("success");
 });
 
+/** Stands in for `gh issue view --json title,body,comments`: prints the
+ *  given JSON to stdout, same fake-at-the-process-boundary approach as
+ *  fakeGhChecks. */
+async function fakeGhIssueView(stdout: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const script = join(dir, "gh");
+  writeFileSync(script, `#!/bin/sh\nprintf '%s' '${stdout}'\n`);
+  chmodSync(script, 0o755);
+  return dir;
+}
+
+it("getIssue は title / body / 全コメントを返す", async () => {
+  const dir = await fakeGhIssueView(
+    JSON.stringify({
+      title: "ログイン画面のバグ",
+      body: "再現手順: ...",
+      comments: [{ body: "追加情報です" }, { body: "これも見てください" }],
+    }),
+  );
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const issue = await new GhCliClient().getIssue({ path: "/tmp", number: 49 });
+
+  expect(issue).toEqual({
+    title: "ログイン画面のバグ",
+    body: "再現手順: ...",
+    comments: ["追加情報です", "これも見てください"],
+  });
+});
+
 it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
   binPath = dir;
