@@ -155,6 +155,10 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 完了の逆方向は GitHub ネイティブの機構に委ねる: issue 参照タスクの PR 本文には `Closes #N` が自動付与され、merge が issue を閉じる。PR を伴わない完了と cancel は issue に触れない(計画の破棄は盤面の事情であり、問題自体が消えたわけではない)。
 
+## GitHub identity(GitHub 身元)
+
+盤面が GitHub に触れるときの単一の名義。tidepool 専用の machine user であり、盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義で行われる(ADR 0024)。**GitHub 上の名義は執行者を表し、判断の帰属は盤面の記録が正典** — 誰が merge を承認したかは question 回答と decision log が運び、GitHub のスレッドは「盤面が執行した」という事実を映す。人間の名義は、人間が GitHub 上で直接行った行為にのみ現れる。worker はいかなる GitHub credential も持たない — PR 昇格・issue 展開・merge はすべて盤面の執行であり、worker に GitHub への道は開かれない。アカウントが表すのは盤面そのものであって既定エージェントではない(Default agent 参照 — ポインタを差し替えても GitHub 名義は変わらない)。
+
 ## Registry(レジストリ)
 
 エージェント定義(`agents/<name>.md`)・authority profile・workspaces.yaml を収める、盤面本体とは別の git リポジトリ(commit hash = agent の厳密な版 — ADR 0001)。v1 唯一の保護 workspace。盤面が読むのは常に**コミット済み main の内容**であり、ワーキングツリーは決して読まれない(ADR 0020) — 人間の merge を通っていない内容が spawn に効く経路は構造的に存在しない。変更の正規経路は2本(agent 発 = registry-edit タスク → PR → 人間 merge、人間発 = WebUI → 盤面が main へ直接コミット)で、帯域外の手編集はコミットされない限り無効。
