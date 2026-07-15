@@ -231,3 +231,22 @@ it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   const invocations = await readFile(logPath, "utf8");
   expect(invocations).toContain("pr merge 7 --merge");
 });
+
+it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "$@" >> "${logPath}"\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  await new GhCliClient().addIssueComment(
+    { path: "/tmp", number: 49 },
+    "## Completion criteria\n- the login form submits cleanly",
+  );
+
+  const invocations = await readFile(logPath, "utf8");
+  expect(invocations).toContain("issue comment 49 --body");
+  expect(invocations).toContain("the login form submits cleanly");
+});

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defaultExec, pinnedModelFlags, type ExecFn } from "./claude-worker.js";
-import type { DraftClient, HandoffDraft, TaskDraft } from "./draft.js";
+import type { DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
+import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
 
@@ -14,6 +15,15 @@ const taskDraftSchema = z.object({
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
+});
+
+// mirrors IssueInspection (src/draft.ts): the gate verdict is untrusted
+// model output like every other response here — validated before the API
+// layer turns it into a 201/422
+const issueInspectionSchema = z.object({
+  ok: z.boolean(),
+  missing: z.string().min(1).optional(),
+  suggested_comment: z.string().min(1).optional(),
 });
 
 // mirrors HandoffDraft (src/draft.ts): every field optional — a human task's
@@ -51,6 +61,30 @@ function buildHandoffPrompt(dump: string): string {
     `prose) with these OPTIONAL string fields, filling in only what the dump actually covers: ${HANDOFF_FIELDS.join(", ")}. ` +
     "Never invent content for a field the dump doesn't cover — omit it instead.\n\n" +
     `Dump:\n${dump}`
+  );
+}
+
+/** The registration gate's question (issue #49 設計点4): can the board's
+ *  three content fields be derived from this issue as it stands? "Issue"
+ *  means the full thread — title + body + every comment (CONTEXT.md) — so a
+ *  human's clarifying comment posted after an earlier rejection counts on
+ *  the retry. A failing verdict must carry the drafted fix as an issue
+ *  comment, because that's the only place a fix may land (ADR 0016: GitHub
+ *  stays the sole source of truth). */
+function buildInspectionPrompt(issue: Issue): string {
+  return (
+    "You are the registration gate of a work-tracking board, inspecting a GitHub issue a human " +
+    "wants to register as an issue-backed task. The board derives three fields from the issue at " +
+    "every use: title (from the issue title), purpose (from the issue body), and completion " +
+    "criteria (the body and comments together must make it clear when the work is done). " +
+    "Judge whether all three can be derived from the issue as it stands. Respond with ONLY a " +
+    "single JSON object (no markdown fences, no prose) with these fields: " +
+    '"ok" (boolean, required); when ok is false also include "missing" (string — what cannot be ' +
+    'derived and why) and "suggested_comment" (string — a markdown comment that, once posted to ' +
+    "the issue, would fill the gap).\n\n" +
+    `Issue title:\n${issue.title}\n\n` +
+    `Issue body:\n${issue.body}\n\n` +
+    `Comments:\n${issue.comments.length > 0 ? issue.comments.join("\n---\n") : "(none)"}`
   );
 }
 
@@ -98,6 +132,11 @@ export class ClaudeDraftClient implements DraftClient {
   async draftHandoff(dump: string): Promise<HandoffDraft> {
     const result = await this.runDraftPrompt(buildHandoffPrompt(dump));
     return handoffDraftSchema.parse(extractJson(result));
+  }
+
+  async inspectIssue(issue: Issue): Promise<IssueInspection> {
+    const result = await this.runDraftPrompt(buildInspectionPrompt(issue));
+    return issueInspectionSchema.parse(extractJson(result));
   }
 
   /** The one-shot `claude -p` call both draftTask and draftHandoff share —

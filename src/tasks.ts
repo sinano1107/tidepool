@@ -321,6 +321,11 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
  *  silently repoint it at another repo's same-numbered issue). */
 function assertGithubRef(input: RegisterTaskInput): void {
   if (input.github_issue_number !== undefined) {
+    // CONTEXT.md defines the issue-backed task as a *work* task (issue #49
+    // 設計点8) — the restriction is the definition's, not any one door's
+    if (input.type !== "work") {
+      throw new DomainError("an issue-backed task must be a work task");
+    }
     if (!input.workspace) {
       throw new DomainError("an issue-backed task requires a workspace at registration");
     }

@@ -73,6 +73,11 @@ export interface GitHubClient {
   getCiStatus(ref: PrRef): Promise<CiStatus>;
   mergePullRequest(ref: PrRef): Promise<void>;
   getIssue(ref: IssueRef): Promise<Issue>;
+  /** Appends a comment to the referenced issue — the write half of issue
+   *  #49's registration gate: a human-approved suggestion lands on the
+   *  issue (GitHub stays the sole source of truth, ADR 0016), never on the
+   *  board. */
+  addIssueComment(ref: IssueRef, body: string): Promise<void>;
 }
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
@@ -169,5 +174,12 @@ export class GhCliClient implements GitHubClient {
       body: parsed.body,
       comments: parsed.comments.map((c) => c.body),
     };
+  }
+
+  async addIssueComment(ref: IssueRef, body: string): Promise<void> {
+    execFileSync("gh", ["issue", "comment", String(ref.number), "--body", body], {
+      cwd: ref.path,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   }
 }

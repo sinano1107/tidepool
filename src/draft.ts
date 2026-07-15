@@ -1,3 +1,4 @@
+import type { Issue } from "./github.js";
 import type { HandoffDoc } from "./tasks.js";
 
 /** Structured fields an LLM drafts from a free-text brain dump (issue #12).
@@ -22,11 +23,24 @@ export interface TaskDraft {
  *  caller (HANDOFF_FIELDS minus this object's keys), not by the client. */
 export type HandoffDraft = Partial<HandoffDoc>;
 
-/** The LLM-facing seam (issue #12, extended by #13): everything vendor-
- *  specific (which model, how the prompt is built, how JSON is extracted
- *  from its output) stays behind these calls, same shape as
+/** The registration gate's verdict (issue #49 設計点4): can title / purpose /
+ *  completion_criteria be derived from this issue? A failing verdict carries
+ *  what's missing plus a drafted issue comment that would fill the gap —
+ *  surfaced in the UI for the human to approve, never posted to GitHub
+ *  without that approval (the board holds no content of its own; the fix
+ *  lands as an issue comment, ADR 0016). */
+export interface IssueInspection {
+  ok: boolean;
+  missing?: string;
+  suggested_comment?: string;
+}
+
+/** The LLM-facing seam (issue #12, extended by #13 and #49): everything
+ *  vendor-specific (which model, how the prompt is built, how JSON is
+ *  extracted from its output) stays behind these calls, same shape as
  *  GitHubClient/WorkerAdapter. */
 export interface DraftClient {
   draftTask(dump: string): Promise<TaskDraft>;
   draftHandoff(dump: string): Promise<HandoffDraft>;
+  inspectIssue(issue: Issue): Promise<IssueInspection>;
 }

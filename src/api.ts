@@ -5,7 +5,7 @@ import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
-import type { GitHubClient } from "./github.js";
+import { type GitHubClient, IssueGoneError } from "./github.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { isPaused, setPaused } from "./pause.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
@@ -55,9 +55,16 @@ import {
 // このスキーマでの絞り込みの影響を受けない。
 const registerTaskSchema = z.object({
   type: z.enum(["work", "review"]),
-  title: z.string().min(1),
-  purpose: z.string().min(1),
-  completion_criteria: z.string().min(1),
+  // the three content fields are optional at the schema so the issue-backed
+  // form (issue #49: a github_issue_number instead of content) can omit
+  // them — the same permissive-shape posture as `question` below: the
+  // content/reference exclusivity, the workspace requirement, and the
+  // work-only rule all live in the domain (assertGithubRef), so callers get
+  // a domain error either way
+  title: z.string().min(1).optional(),
+  purpose: z.string().min(1).optional(),
+  completion_criteria: z.string().min(1).optional(),
+  github_issue_number: z.number().int().positive().optional(),
   parent_id: z.string().optional(),
   assignee: z.string().optional(),
   workspace: z.string().optional(),
@@ -79,6 +86,15 @@ const registerTaskSchema = z.object({
 
 const draftTaskSchema = z.object({
   dump: z.string().min(1),
+});
+
+// the approval half of the registration gate (issue #49 設計点4): posting
+// the AI-suggested comment is the human's own click in the UI — the board
+// never posts a suggestion on its own
+const issueCommentSchema = z.object({
+  workspace: z.string().min(1),
+  github_issue_number: z.number().int().positive(),
+  body: z.string().min(1),
 });
 
 const moveTaskSchema = z.object({
@@ -229,7 +245,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // one cache per router = per process (the API is booted once per board)
   const issueContent = new IssueContentCache();
 
-  router.post("/tasks", (req, res) => {
+  router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
@@ -268,6 +284,56 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ) {
         throw new DomainError(`unknown agent: ${parsed.data.assignee}`);
       }
+      // the registration gate (issue #49 設計点4): an issue-backed
+      // registration is the human's own synchronous request (ADR 0009) —
+      // verify the referenced issue exists and is open before anything is
+      // stored, failing fast instead of quarantining or registering a task
+      // whose reference is already dead. Boards without a GitHub seam or
+      // workspace tracking skip the gate entirely (the check is one-time,
+      // never an invariant — ADR 0016).
+      if (parsed.data.github_issue_number !== undefined && github && parsed.data.workspace) {
+        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+        if (resolve) {
+          let issue;
+          try {
+            issue = await github.getIssue({
+              // resolve cannot throw here: the workspace-known check above
+              // already resolved this same name
+              path: resolve(parsed.data.workspace).path,
+              number: parsed.data.github_issue_number,
+            });
+          } catch (err) {
+            if (err instanceof IssueGoneError) throw new DomainError(err.message);
+            // 一時的失敗: retryable, so neither 4xx nor a placeholder
+            // registration — the human tries again when GitHub is back
+            res.status(502).json({ error: "could not fetch the referenced issue" });
+            return;
+          }
+          // the LLM half of the gate: can the three content fields be
+          // derived from this issue? A failing verdict carries the drafted
+          // fix (an issue comment) for the UI to show — posting it is the
+          // human's approval, never this endpoint's (issue #49 設計点4)
+          if (draftClient) {
+            let inspection;
+            try {
+              inspection = await draftClient.inspectIssue(issue);
+            } catch {
+              // same posture as /tasks/draft: an unreachable LLM is a 503,
+              // and the gate stays fail-fast rather than waving the task in
+              res.status(503).json({ error: "LLM inspection failed" });
+              return;
+            }
+            if (!inspection.ok) {
+              res.status(422).json({
+                error: "the referenced issue fails the registration gate",
+                missing: inspection.missing,
+                suggested_comment: inspection.suggested_comment,
+              });
+              return;
+            }
+          }
+        }
+      }
       res.status(201).json(registerTask(db, parsed.data, clock.now()));
     } catch (err) {
       if (err instanceof DomainError) {
@@ -276,6 +342,44 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
       throw err;
     }
+  });
+
+  // Appends a human-approved comment to a GitHub issue (issue #49 設計点4:
+  // 不足サジェスト → UI 提示 → 人間が承認 → issue にコメント追記). The
+  // gate's fix lands on the issue, never on the board (ADR 0016: GitHub
+  // stays the sole source of truth) — after this, the UI re-POSTs /tasks
+  // and the gate re-reads the issue including the new comment.
+  router.post("/issue-comments", async (req, res) => {
+    const parsed = issueCommentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    if (!github || !resolve) {
+      res.status(503).json({ error: "GitHub or workspace tracking not configured" });
+      return;
+    }
+    let path: string;
+    try {
+      // the human's own synchronous request — an unknown name fails fast
+      // with a 400 (ADR 0009), same as registration's workspace check
+      path = resolve(parsed.data.workspace).path;
+    } catch (err) {
+      if (!(err instanceof UnknownWorkspaceError)) throw err;
+      res.status(400).json({ error: `unknown workspace: ${parsed.data.workspace}` });
+      return;
+    }
+    try {
+      await github.addIssueComment(
+        { path, number: parsed.data.github_issue_number },
+        parsed.data.body,
+      );
+    } catch {
+      res.status(502).json({ error: "could not post the comment to the issue" });
+      return;
+    }
+    res.status(201).json({});
   });
 
   router.post("/tasks/draft", async (req, res) => {

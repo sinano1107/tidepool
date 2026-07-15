@@ -142,4 +142,50 @@ describe("ClaudeDraftClient", () => {
 
     expect(calls[0]!.join(" ")).toContain("--safe-mode");
   });
+
+  it("inspectIssue は issue 全体(title/本文/コメント)をプロンプトに入れ、CLI の応答から IssueInspection を返す(issue #49 設計点4)", async () => {
+    const verdict = JSON.stringify({
+      ok: false,
+      missing: "completion criteria cannot be derived",
+      suggested_comment: "## Completion criteria\n- the login form submits cleanly",
+    });
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({ result: verdict });
+      },
+    });
+
+    const inspection = await client.inspectIssue({
+      title: "曖昧なメモ",
+      body: "なんとかする",
+      comments: ["補足です"],
+    });
+
+    expect(inspection).toEqual({
+      ok: false,
+      missing: "completion criteria cannot be derived",
+      suggested_comment: "## Completion criteria\n- the login form submits cleanly",
+    });
+    // 「issue」= タイトル + 本文 + 全コメント(CONTEXT.md)を検査対象に渡す
+    const prompt = calls[0]![1]!;
+    expect(prompt).toContain("曖昧なメモ");
+    expect(prompt).toContain("なんとかする");
+    expect(prompt).toContain("補足です");
+  });
+
+  it("inspectIssue: 合格応答は ok:true だけで通り、JSON でない応答は reject する", async () => {
+    const pass = new ClaudeDraftClient({
+      exec: async () => JSON.stringify({ result: JSON.stringify({ ok: true }) }),
+    });
+    await expect(pass.inspectIssue({ title: "t", body: "b", comments: [] })).resolves.toEqual({
+      ok: true,
+    });
+
+    const garbage = new ClaudeDraftClient({
+      exec: async () => JSON.stringify({ result: "not json at all" }),
+    });
+    await expect(garbage.inspectIssue({ title: "t", body: "b", comments: [] })).rejects.toThrow();
+  });
 });

@@ -91,7 +91,12 @@ async function api(path, body) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(typeof err.error === 'string' ? err.error : res.statusText);
+    const e = new Error(typeof err.error === 'string' ? err.error : res.statusText);
+    // the registration gate's 422 (issue #49) carries structure beyond the
+    // message (missing / suggested_comment) — keep it for the caller
+    e.status = res.status;
+    e.detail = err;
+    throw e;
   }
   return res.json();
 }
@@ -252,33 +257,92 @@ function TpTideWash({ label, emoji, duration = 1250 }) {
 
 // Registration — the plain form from the kit, wired to POST /api/tasks.
 // The brain-dump → LLM-draft flow arrives with the agent runtime.
+// The issue-backed source (issue #49): the board stores only a reference
+// (workspace + issue number) and the registration gate may reject with a
+// suggested issue comment — shown inline here for the human to approve
+// (posting it is the approval; the board never posts on its own).
 function RegisterScreen({ onRegister }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [source, setSource] = React.useState('manual');
   const [type, setType] = React.useState('work');
   const [title, setTitle] = React.useState('');
   const [purpose, setPurpose] = React.useState('');
   const [criteria, setCriteria] = React.useState('');
+  const [workspace, setWorkspace] = React.useState('');
+  const [issueNumber, setIssueNumber] = React.useState('');
+  const [gate, setGate] = React.useState(null); // { missing, suggested_comment }
   const [busy, setBusy] = React.useState(false);
-  const ok = title.trim() && purpose.trim() && criteria.trim();
+  const issueMode = source === 'github issue';
+  const ok = issueMode
+    ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim())
+    : title.trim() && purpose.trim() && criteria.trim();
+  const fields = () =>
+    issueMode
+      ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()) }
+      : { type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim() };
   const submit = async () => {
     setBusy(true);
+    setGate(null);
     try {
-      await onRegister({ type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim() });
+      await onRegister(fields());
       setType('work'); setTitle(''); setPurpose(''); setCriteria('');
-    } catch { /* the toast already reported it; keep the fields */ }
+      setWorkspace(''); setIssueNumber('');
+    } catch (err) {
+      // a gate rejection carries the fix; anything else the toast reported
+      if (err.status === 422 && err.detail) setGate(err.detail);
+    }
     setBusy(false);
+  };
+  const approveComment = async () => {
+    setBusy(true);
+    try {
+      await api('/api/issue-comments', {
+        workspace: workspace.trim(),
+        github_issue_number: Number(issueNumber.trim()),
+        body: gate.suggested_comment,
+      });
+    } catch {
+      setBusy(false);
+      return; // posting failed — keep the gate view so the human can retry
+    }
+    setBusy(false);
+    // the comment is now part of the issue thread, so the gate re-reads it
+    await submit();
   };
   return (
     <div style={{ padding: '20px 16px' }}>
       <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Register</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>plain form — the LLM drafting flow arrives with the agent runtime</p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
-        <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
-        <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value)} />
+        <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => { setSource(e.target.value); setGate(null); }} />
+        {issueMode ? (
+          <React.Fragment>
+            <Input label="Workspace" value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="the repo half of the issue's identity — fixed at registration" />
+            <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
+            <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
+            <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value)} />
+          </React.Fragment>
+        )}
         <Button variant="primary" size="lg" full disabled={!ok || busy} onClick={submit}>Register — appends to queue tail</Button>
       </Card>
+      {gate && (
+        <Card style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14, borderColor: 'var(--coral-3, var(--rock-3))' }}>
+          <div style={{ fontWeight: 600 }}>the issue fails the registration gate</div>
+          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>{gate.missing}</div>
+          {gate.suggested_comment && (
+            <React.Fragment>
+              <div style={{ fontSize: 'var(--text-sm)' }}>suggested comment — posting it to the issue is your approval:</div>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', background: 'var(--surface-sunken, rgba(0,0,0,0.06))', borderRadius: 8, padding: 10, margin: 0 }}>{gate.suggested_comment}</pre>
+              <Button variant="primary" full disabled={busy} onClick={approveComment}>Approve — post to issue &amp; retry</Button>
+            </React.Fragment>
+          )}
+        </Card>
+      )}
     </div>
   );
 }
@@ -662,7 +726,9 @@ function App() {
         say('info', 'registered — appended to queue tail', t.id);
       });
     } catch (err) {
-      say('danger', 'registration failed', String(err.message || err));
+      // a gate rejection (422, issue #49) renders inline in the register
+      // screen — a toast would bury the suggested comment it carries
+      if (err.status !== 422) say('danger', 'registration failed', String(err.message || err));
       throw err;
     }
   };

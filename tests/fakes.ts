@@ -1,5 +1,5 @@
 import type { Clock } from "../src/clock.js";
-import type { DraftClient, HandoffDraft, TaskDraft } from "../src/draft.js";
+import type { DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "../src/draft.js";
 import type {
   CiStatus,
   CreatePrInput,
@@ -94,6 +94,7 @@ export class ScriptedWorker implements WorkerAdapter {
 export class FakeGitHubClient implements GitHubClient {
   readonly requests: CreatePrInput[] = [];
   readonly issueFetches: IssueRef[] = [];
+  readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
   readonly ciChecks: PrRef[] = [];
   readonly merged: PrRef[] = [];
   private failure: Error | null = null;
@@ -136,6 +137,10 @@ export class FakeGitHubClient implements GitHubClient {
    *  "success" so tests unrelated to the merge dial never need to script it. */
   scriptCiStatus(status: CiStatus): void {
     this.ciStatus = status;
+  }
+
+  async addIssueComment(ref: IssueRef, body: string): Promise<void> {
+    this.issueComments.push({ ref, body });
   }
 
   /** Scripts what getIssue(ref) returns for a given issue number (issue #49). */
@@ -184,6 +189,7 @@ export class FakePushClient implements PushClient {
 export class FakeDraftClient implements DraftClient {
   readonly dumps: string[] = [];
   readonly handoffDumps: string[] = [];
+  readonly inspected: Issue[] = [];
   private response: TaskDraft = {
     title: "drafted title",
     purpose: "drafted purpose",
@@ -192,6 +198,9 @@ export class FakeDraftClient implements DraftClient {
   private handoffResponse: HandoffDraft = {};
   private failure: Error | null = null;
   private handoffFailure: Error | null = null;
+  // default pass, so tests unrelated to the gate never need to script it
+  private inspection: IssueInspection = { ok: true };
+  private inspectionFailure: Error | null = null;
 
   async draftTask(dump: string): Promise<TaskDraft> {
     this.dumps.push(dump);
@@ -205,12 +214,28 @@ export class FakeDraftClient implements DraftClient {
     return this.handoffResponse;
   }
 
+  async inspectIssue(issue: Issue): Promise<IssueInspection> {
+    this.inspected.push(issue);
+    if (this.inspectionFailure) throw this.inspectionFailure;
+    return this.inspection;
+  }
+
   scriptDraft(draft: TaskDraft): void {
     this.response = draft;
   }
 
   scriptHandoffDraft(draft: HandoffDraft): void {
     this.handoffResponse = draft;
+  }
+
+  /** Scripts the registration gate's verdict (issue #49 設計点4). */
+  scriptInspection(inspection: IssueInspection): void {
+    this.inspection = inspection;
+    this.inspectionFailure = null;
+  }
+
+  scriptInspectionFailure(err: Error): void {
+    this.inspectionFailure = err;
   }
 
   scriptFailure(err: Error): void {
