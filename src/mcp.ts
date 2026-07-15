@@ -107,6 +107,16 @@ const PR_BASE_BRANCH = "main";
  *  Never entrusted to the worker, never lets a PR failure touch the
  *  completion that already landed — best-effort, logged and swallowed.
  *  question/review tasks carry no handoff doc and open no PR. */
+/** ADR 0016 設計点7: 完了の逆方向は GitHub ネイティブに委ねる — issue-backed task
+ *  の PR body に `Closes #N` を追記し、merge が issue を閉じる。PR を伴わない
+ *  完了と cancel はこの経路自体を通らないので issue に触れない。 */
+function prBody(handoffDoc: string | null, githubIssueNumber: number | null): string {
+  const doc = handoffDoc ?? "";
+  if (githubIssueNumber == null) return doc;
+  const closes = `Closes #${githubIssueNumber}`;
+  return doc ? `${doc}\n\n${closes}` : closes;
+}
+
 async function openHandoffPr(
   deps: McpDeps,
   task: Task,
@@ -133,7 +143,7 @@ async function openHandoffPr(
       branch: taskBranch(task.id),
       base: PR_BASE_BRANCH,
       title,
-      body: handoffDoc ?? "",
+      body: prBody(handoffDoc, task.github_issue_number),
     });
     recordPrOpened(
       deps.db,
