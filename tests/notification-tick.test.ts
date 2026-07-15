@@ -58,8 +58,8 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     await tick.run(SEVEN_AM); // quiet hours just ended: one digest push
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
-      title: "おはようございます",
-      body: "質問2件、新規ログ1件",
+      title: "Good morning",
+      body: "2 questions · 1 new log entries",
       url: "/",
     });
     void q2;

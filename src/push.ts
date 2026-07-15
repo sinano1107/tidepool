@@ -136,7 +136,7 @@ export interface MorningDigest {
 export function buildMorningDigest(db: Db): MorningDigest {
   const questionCount = listUnnotifiedQuestions(db).length;
   const logCount = countLogEntriesSince(db, getDigestCursor(db));
-  return { questionCount, logCount, text: `質問${questionCount}件、新規ログ${logCount}件` };
+  return { questionCount, logCount, text: `${questionCount} questions · ${logCount} new log entries` };
 }
 
 /** Marks every currently-pending question notified and advances the digest
@@ -156,7 +156,7 @@ export function recordDigestSent(db: Db, now: Date): void {
 async function fireMorningDigest(db: Db, push: PushClient, now: Date): Promise<void> {
   const digest = buildMorningDigest(db);
   if (digest.questionCount === 0 && digest.logCount === 0) return;
-  const payload: PushPayload = { title: "おはようございます", body: digest.text, url: "/" };
+  const payload: PushPayload = { title: "Good morning", body: digest.text, url: "/" };
   for (const subscription of listPushSubscriptions(db)) await sendOrLog(push, subscription, payload);
   recordDigestSent(db, now);
 }

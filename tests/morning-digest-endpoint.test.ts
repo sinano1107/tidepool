@@ -25,6 +25,6 @@ it("quiet hours 中に登録された question は push されず、明けると
 
   await t.clock.advance(6 * 60 * MIN); // 07:00 到達 — quiet hours が明ける
   expect(t.push.sent).toHaveLength(1);
-  expect(t.push.sent[0]?.payload.title).toBe("おはようございます");
-  expect(t.push.sent[0]?.payload.body).toContain("質問1件");
+  expect(t.push.sent[0]?.payload.title).toBe("Good morning");
+  expect(t.push.sent[0]?.payload.body).toContain("1 questions");
 });

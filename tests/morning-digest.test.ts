@@ -39,7 +39,7 @@ describe("buildMorningDigest(issue #14): quiet hours 中に溜まった件数を
     expect(buildMorningDigest(db)).toEqual({
       questionCount: 2,
       logCount: 3,
-      text: "質問2件、新規ログ3件",
+      text: "2 questions · 3 new log entries",
     });
   });
 
@@ -50,7 +50,7 @@ describe("buildMorningDigest(issue #14): quiet hours 中に溜まった件数を
 
     recordDigestSent(db, new Date(0));
 
-    expect(buildMorningDigest(db)).toEqual({ questionCount: 0, logCount: 0, text: "質問0件、新規ログ0件" });
+    expect(buildMorningDigest(db)).toEqual({ questionCount: 0, logCount: 0, text: "0 questions · 0 new log entries" });
   });
 
   it("digest が発火する前にボードで直接回答済みの question は件数に数えない(code review 指摘)", () => {
