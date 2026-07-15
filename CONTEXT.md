@@ -127,11 +127,11 @@ agent が委譲判断の材料として受け取る worker の一覧。各行は
 
 ## Branch discipline(ブランチ規律)
 
-workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上で行われ、main への直接書き込みは全エージェントの権限外として構造的に禁止される、という規律。pickup 時に Tidepool がブランチを作成・checkout し(既存ブランチへの復帰は checkout のみ)、slot-release tree rule と対になって main を保護する。
+workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上で行われ、保護ブランチへの直接書き込みは全エージェントの権限外として構造的に禁止される、という規律。保護ブランチは workspace ごとに registry で指定され(省略時 main)、1つで3役を兼ねる — タスクブランチの fork 元、PR の base、直接書き込み禁止の対象。参照であって fork 事実ではなく、使用の瞬間に毎回 registry から読まれる(ADR 0023)。pickup 時に Tidepool がブランチを作成・checkout し(既存ブランチへの復帰は checkout のみ)、slot-release tree rule と対になって保護ブランチを守る。
 
 ## Quarantine(隔離)
 
-実行に必要な資源が実行不能と判明したときの封じ込め。資源は2種: **workspace**(契機は slot-release tree rule 自体の失敗 — コンフリクトや破損など — と、registry に存在しない workspace 名への遭遇)と **agent 名**(契機は pickup 時に assignee が registry に解決できないこと)。該当資源が needs-human とマークされ、その資源に依存するタスクの pickup が停止し(資源単位の状態 — 他の資源のタスクは流れ続ける)、修理を求める確認型 question が生成される(同じ資源に未回答のものが既にあれば重ねない — 1資源につき確認は最大1枚)。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず検証してから受理する: workspace は「registry に存在し、かつツリーがクリーン」、agent 名は「registry に復活している、またはその名前宛ての未着手タスクがもう存在しない」(まだ壊れていれば回答は拒否され、question は開いたまま)。
+実行に必要な資源が実行不能と判明したときの封じ込め。資源は2種: **workspace**(契機は slot-release tree rule 自体の失敗 — コンフリクトや破損など — と、registry に存在しない workspace 名への遭遇、そして pickup 時にタスクブランチを用意できないこと — 存在しない保護ブランチなど)と **agent 名**(契機は pickup 時に assignee が registry に解決できないこと)。該当資源が needs-human とマークされ、その資源に依存するタスクの pickup が停止し(資源単位の状態 — 他の資源のタスクは流れ続ける)、修理を求める確認型 question が生成される(同じ資源に未回答のものが既にあれば重ねない — 1資源につき確認は最大1枚)。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず検証してから受理する: workspace は「registry に存在し、かつツリーがクリーン」、agent 名は「registry に復活している、またはその名前宛ての未着手タスクがもう存在しない」(まだ壊れていれば回答は拒否され、question は開いたまま)。
 
 ## Question(質問)
 
