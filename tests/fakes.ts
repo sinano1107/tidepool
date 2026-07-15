@@ -93,9 +93,11 @@ export class ScriptedWorker implements WorkerAdapter {
  *  without touching a real GitHub API. */
 export class FakeGitHubClient implements GitHubClient {
   readonly requests: CreatePrInput[] = [];
+  readonly issueFetches: IssueRef[] = [];
   readonly ciChecks: PrRef[] = [];
   readonly merged: PrRef[] = [];
   private failure: Error | null = null;
+  private issueFailure: Error | null = null;
   private nextNumber = 1;
   private ciStatus: CiStatus = "success";
   private issues = new Map<number, Issue>();
@@ -117,6 +119,8 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {
+    this.issueFetches.push(ref);
+    if (this.issueFailure) throw this.issueFailure;
     const issue = this.issues.get(ref.number);
     if (!issue) throw new Error(`no issue scripted for #${ref.number}`);
     return issue;
@@ -135,6 +139,12 @@ export class FakeGitHubClient implements GitHubClient {
   /** Scripts what getIssue(ref) returns for a given issue number (issue #49). */
   scriptIssue(number: number, issue: Issue): void {
     this.issues.set(number, issue);
+  }
+
+  /** Makes every getIssue call throw from here on (issue #49 §6: a live
+   *  fetch failing mid-flight). Pass null to clear. */
+  scriptIssueFailure(err: Error | null): void {
+    this.issueFailure = err;
   }
 }
 

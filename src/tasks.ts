@@ -403,7 +403,7 @@ export class TaskContentSource {
  *  unavailable is interim behavior — ADR 0016's real failure taxonomy
  *  (temporary → pickup skip, permanent → failure question) is later scope. */
 export function contentSourceFor(
-  task: Task,
+  task: Pick<Task, "title" | "purpose" | "completion_criteria" | "github_issue_number">,
   github: GitHubClient | undefined,
   workspacePath: () => string | undefined,
 ): TaskContentSource {

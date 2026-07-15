@@ -6,12 +6,14 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
+import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { isPaused, setPaused } from "./pause.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
 import type { RegistryCandidates } from "./registry.js";
 import {
   answerQuestion,
+  type BoardTask,
   completeTask,
   DomainError,
   getTask,
@@ -224,6 +226,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   } = deps;
   const router = Router();
   router.use(json());
+  // one cache per router = per process (the API is booted once per board)
+  const issueContent = new IssueContentCache();
 
   router.post("/tasks", (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
@@ -708,8 +712,29 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(registryCandidates ?? { assignees: [], workspaces: [] });
   });
 
-  router.get("/tasks", (_req, res) => {
-    res.json(listBoard(db));
+  // UI display is one of ADR 0016's use-moments: issue-backed rows expand
+  // live through the short-TTL cache. A GET must stay side-effect-free, so
+  // workspace resolution here never quarantines (resolveOrQuarantine is for
+  // board-driven async work, not viewing) — an unresolvable name just leaves
+  // the row unexpanded.
+  const displayWorkspacePath = (taskWorkspace: string | null) => (): string | undefined => {
+    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    try {
+      return resolve?.(taskWorkspace).path;
+    } catch (err) {
+      if (err instanceof UnknownWorkspaceError) return undefined;
+      throw err;
+    }
+  };
+  const presentLive = (tasks: BoardTask[]): Promise<LiveBoardTask[]> =>
+    Promise.all(
+      tasks.map((task) =>
+        issueContent.present(task, github, displayWorkspacePath(task.workspace), clock.now()),
+      ),
+    );
+
+  router.get("/tasks", async (_req, res) => {
+    res.json(await presentLive(listBoard(db)));
   });
 
   // the persistent your-tasks list (issue #13): every unsettled human-
@@ -721,14 +746,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // the queue view (#10): unlike the board, a todo task pickup can't reach
   // right now — Swell throttle or the human's own Pause (issue #34), the
   // same board-wide "nothing starts" shape — shows here as skipped
-  router.get("/queue", (_req, res) => {
+  router.get("/queue", async (_req, res) => {
     res.json(
-      listQueue(
-        db,
-        isPickupBlocked(db, clock.now()) || isPaused(db),
-        workspace?.name,
-        defaultAgentName,
-        auditorName,
+      await presentLive(
+        listQueue(
+          db,
+          isPickupBlocked(db, clock.now()) || isPaused(db),
+          workspace?.name,
+          defaultAgentName,
+          auditorName,
+        ),
       ),
     );
   });
@@ -737,13 +764,20 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(listEvents(db, req.params.id));
   });
 
-  router.get("/tasks/:id", (req, res) => {
+  router.get("/tasks/:id", async (req, res) => {
     const task = getTask(db, req.params.id);
     if (!task) {
       res.status(404).json({ error: "task not found" });
       return;
     }
-    res.json(presentTask(db, task));
+    res.json(
+      await issueContent.present(
+        presentTask(db, task),
+        github,
+        displayWorkspacePath(task.workspace),
+        clock.now(),
+      ),
+    );
   });
 
   return router;

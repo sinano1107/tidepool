@@ -133,6 +133,16 @@ function markFront(id) {
   setTimeout(() => RECENT_FRONTS.delete(id), 4000);
 }
 
+// An issue-backed task's title, live-expanded server-side (issue #49, ADR
+// 0016's UI use-moment), carries issue_live_state: suffix the title so
+// cached-but-old (stale) and never-fetched (unavailable) are visible at a
+// glance. Ordinary tasks have no issue_live_state and pass through as-is.
+function liveTitle(t) {
+  if (t.issue_live_state === 'stale') return `${t.title} (out of sync)`;
+  if (t.issue_live_state === 'unavailable') return `${t.title} (unavailable)`;
+  return t.title;
+}
+
 // Map the server board + decision log into the shape the kit screens consume.
 function mapData(board, log, paused) {
   const fmtTime = (iso) => {
@@ -172,7 +182,7 @@ function mapData(board, log, paused) {
   const queue = board
     .filter((t) => (t.status === 'todo' || t.status === 'blocked') && t.type !== 'question')
     .map((t) => ({
-      id: t.id, title: t.title, assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
+      id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked',
       frontInserted: RECENT_FRONTS.has(t.id), flash: RECENT_FRONTS.has(t.id),
     }));
@@ -187,7 +197,7 @@ function mapData(board, log, paused) {
   for (const t of board) {
     if (!cols[t.status]) continue; // e.g. held/skipped have no column of their own
     cols[t.status].push({
-      id: t.id, title: t.title, type: t.type,
+      id: t.id, title: liveTitle(t), type: t.type,
       assignee: t.assignee ?? (t.type === 'question' ? 'you' : undefined),
       human: t.type === 'question', risk: !!t.risk_flag, children: openChildren[t.id],
     });
@@ -197,7 +207,7 @@ function mapData(board, log, paused) {
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike
   const slot = running
-    ? { color: 'var(--tide-4)', line: running.title, meta: running.assignee ?? '', taskId: running.id }
+    ? { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
   return {
     questions, log: logEntries, queue, board: cols,
@@ -536,7 +546,7 @@ function App() {
     if (!res.ok) throw new Error(res.statusText);
     const { queue } = await res.json();
     return (queue ?? []).map((t) => ({
-      id: t.id, title: t.title, assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
+      id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked', frontInserted: t.front_inserted,
     }));
   };
