@@ -400,8 +400,10 @@ export class TaskContentSource {
  *  (resolveOrQuarantine can quarantine a name) — an ordinary task must never
  *  trigger them, so it's only invoked on the issue-backed branch. Falling
  *  back to the stored placeholder when GitHub or the workspace is
- *  unavailable is interim behavior — ADR 0016's real failure taxonomy
- *  (temporary → pickup skip, permanent → failure question) is later scope. */
+ *  unavailable keeps a seam-less board working; ADR 0016's failure taxonomy
+ *  is layered on by the callers that need it — the scheduler's pickup gate
+ *  (temporary → cycle skip, IssueGoneError → failure question) and the UI's
+ *  stale/unavailable cache (issue-view.ts). */
 export function contentSourceFor(
   task: Pick<Task, "title" | "purpose" | "completion_criteria" | "github_issue_number">,
   github: GitHubClient | undefined,

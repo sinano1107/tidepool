@@ -140,6 +140,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     auditorName,
+    github: options.github,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger

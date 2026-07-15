@@ -45,6 +45,22 @@ export interface Issue {
  *  nothing left to block on. */
 export type CiStatus = "pending" | "success" | "failure";
 
+/** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
+ *  reference, as part of getIssue's contract: the referenced issue is gone
+ *  for good — deleted/never existed (`not_found`) or already closed
+ *  (`closed`). Callers route this to the retry/abandon failure question;
+ *  every other getIssue error is 一時的 (temporary — network, GitHub outage)
+ *  and passes through untyped, handled as a pickup-cycle skip instead. */
+export class IssueGoneError extends Error {
+  constructor(
+    ref: IssueRef,
+    readonly reason: "not_found" | "closed",
+  ) {
+    super(`issue #${ref.number} is gone (${reason})`);
+    this.name = "IssueGoneError";
+  }
+}
+
 /** The GitHub-facing seam (issue #19): promoting a task branch's work to a PR
  *  is never entrusted to the worker, only to tidepool itself — this is what
  *  it calls through. An external API is a system boundary (mocking.md):
@@ -126,16 +142,28 @@ export class GhCliClient implements GitHubClient {
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {
-    const output = execFileSync(
-      "gh",
-      ["issue", "view", String(ref.number), "--json", "title,body,comments"],
-      { cwd: ref.path, stdio: ["ignore", "pipe", "pipe"] },
-    ).toString();
+    let output: string;
+    try {
+      output = execFileSync(
+        "gh",
+        ["issue", "view", String(ref.number), "--json", "title,body,comments,state"],
+        { cwd: ref.path, stdio: ["ignore", "pipe", "pipe"] },
+      ).toString();
+    } catch (err) {
+      // gh's not-found failure ("GraphQL: Could not resolve to an issue or
+      // pull request …") is the only permanent one at this surface — every
+      // other non-zero exit (network, auth, outage) stays untyped/temporary
+      const stderr = (err as { stderr?: Buffer | string }).stderr?.toString() ?? "";
+      if (/could not resolve/i.test(stderr)) throw new IssueGoneError(ref, "not_found");
+      throw err;
+    }
     const parsed = JSON.parse(output) as {
       title: string;
       body: string;
       comments: Array<{ body: string }>;
+      state: string;
     };
+    if (parsed.state === "CLOSED") throw new IssueGoneError(ref, "closed");
     return {
       title: parsed.title,
       body: parsed.body,

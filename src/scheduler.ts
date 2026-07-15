@@ -1,8 +1,9 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { type GitHubClient, IssueGoneError } from "./github.js";
 import { isPaused } from "./pause.js";
 import type { Slot } from "./slot.js";
-import { nextSlotTask, pickupTask, type Task } from "./tasks.js";
+import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
 import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
+  BOARD_WORKER_ID,
   buildWorkspaceResolver,
   ensureTaskBranch,
   resolveOrQuarantine,
@@ -97,8 +99,14 @@ export function startScheduler(deps: {
    *  that gate is skipped for review tasks, same as `worker.id`'s own
    *  "no agent tracking" fallback. */
   auditorName?: string;
+  /** The GitHub seam, for the issue-backed pickup gate (issue #49 / ADR
+   *  0016's failure taxonomy): an issue-backed head's content is expanded
+   *  before pickup, so an expansion failure never wedges a picked-up task.
+   *  Absent → the gate is skipped and issue-backed tasks spawn with their
+   *  "#N" placeholder (a board with no GitHub seam at all). */
+  github?: GitHubClient;
 }): Scheduler {
-  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName } = deps;
+  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName, github } = deps;
   let inFlight = false;
   const resetTimer = createResetTimer(clock, pollNow);
 
@@ -150,6 +158,62 @@ export function startScheduler(deps: {
     }
   }
 
+  /** The issue-backed pickup gate (issue #49 §5 / ADR 0016): an issue-backed
+   *  head's content is expanded *before* pickupTask, so a dead or unreachable
+   *  reference never wedges an in_progress task. A 一時的失敗 (network,
+   *  GitHub outage) skips this pickup cycle — the same fail-closed
+   *  environmental posture as the throttle, no human is called, the next
+   *  poll retries. Ordinary tasks pass straight through. */
+  async function issueExpandable(head: Task): Promise<boolean> {
+    if (head.github_issue_number == null || !github) return true;
+    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    // board-driven async workspace use: registry drift quarantines the name
+    // (ADR 0009) and its own pickup gate skips this task from the next poll
+    const resolved = resolve && resolveOrQuarantine(db, resolve, head.workspace, clock.now());
+    if (resolve && !resolved) return false;
+    try {
+      await contentSourceFor(head, github, () => resolved?.path).expand();
+      return true;
+    } catch (err) {
+      if (err instanceof IssueGoneError) {
+        // 確定的失敗 (ADR 0016): the reference is dead for good, not this
+        // cycle's weather — the same watchdog-shaped retry/abandon question
+        // as failTask, minus the workspace release (nothing was acquired
+        // yet). The unanswered question holds the task out of nextSlotTask,
+        // so the gate never re-fires for it until a human answers.
+        escalateTask(
+          db,
+          head,
+          {
+            context:
+              `the GitHub issue this task references is gone ` +
+              `(${err.reason === "closed" ? "already closed" : "not found"}) — ` +
+              `its content cannot be expanded for spawn.\n\n` +
+              `"retry" re-reads the issue and restarts this task from the queue head — ` +
+              `pick it after reopening or restoring the issue. ` +
+              `"abandon" discards the rest of this plan — this task's remaining ` +
+              `work plus its parent's other unfinished children — and returns the ` +
+              `parent to the queue head to replan.`,
+            questions: [
+              {
+                title: `issue reference is gone: ${head.title}`,
+                options: ["retry", "abandon"],
+                recommendation: "retry",
+              },
+            ],
+            cancel_option: "abandon",
+          },
+          BOARD_WORKER_ID,
+          clock.now(),
+        );
+        return false;
+      }
+      // 一時的失敗: fail-closed, no human — the next poll retries
+      console.error(`[scheduler] issue expansion failed for ${head.id}, skipping this cycle:`, err);
+      return false;
+    }
+  }
+
   async function poll(): Promise<void> {
     if (inFlight) return;
     if (pickupBlocked()) return;
@@ -162,6 +226,7 @@ export function startScheduler(deps: {
       }
       const head = nextSlotTask(db, workspace?.name, worker.id, auditorName);
       if (!head) return;
+      if (!(await issueExpandable(head))) return;
       pickup(head);
     } finally {
       inFlight = false;

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { GhCliClient } from "../src/github.js";
+import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { git } from "./harness.js";
 
 let repoPath: string | undefined;
@@ -159,6 +159,62 @@ it("getIssue は title / body / 全コメントを返す", async () => {
     body: "再現手順: ...",
     comments: ["追加情報です", "これも見てください"],
   });
+});
+
+it("getIssue は close 済み issue に対して IssueGoneError(closed) を投げる(issue #49 設計点5: 確定的失敗)", async () => {
+  const dir = await fakeGhIssueView(
+    JSON.stringify({
+      title: "解決済みのバグ",
+      body: "もう直っている",
+      comments: [],
+      state: "CLOSED",
+    }),
+  );
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const err = await new GhCliClient()
+    .getIssue({ path: "/tmp", number: 49 })
+    .then(() => null)
+    .catch((e: unknown) => e);
+  expect(err).toBeInstanceOf(IssueGoneError);
+  expect((err as IssueGoneError).reason).toBe("closed");
+});
+
+/** Stands in for a failing `gh issue view`: writes the given stderr and
+ *  exits 1, the process-boundary shape of both a not-found issue and an
+ *  outage — the classifier has only this surface to tell them apart. */
+async function fakeGhIssueViewFailure(stderr: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const script = join(dir, "gh");
+  writeFileSync(script, `#!/bin/sh\necho '${stderr}' >&2\nexit 1\n`);
+  chmodSync(script, 0o755);
+  return dir;
+}
+
+it("getIssue は存在しない issue に対して IssueGoneError(not_found) を投げ、その他の失敗は素通しする(issue #49 設計点5)", async () => {
+  const dir = await fakeGhIssueViewFailure(
+    "GraphQL: Could not resolve to an issue or pull request with the number of 9999. (repository.issue)",
+  );
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const notFound = await new GhCliClient()
+    .getIssue({ path: "/tmp", number: 9999 })
+    .then(() => null)
+    .catch((e: unknown) => e);
+  expect(notFound).toBeInstanceOf(IssueGoneError);
+  expect((notFound as IssueGoneError).reason).toBe("not_found");
+
+  // ネットワーク断など、それ以外の失敗は分類せずそのまま伝播する(一時的失敗)
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho 'error connecting to api.github.com' >&2\nexit 1\n`);
+  const outage = await new GhCliClient()
+    .getIssue({ path: "/tmp", number: 49 })
+    .then(() => null)
+    .catch((e: unknown) => e);
+  expect(outage).not.toBeInstanceOf(IssueGoneError);
+  expect(outage).toBeInstanceOf(Error);
 });
 
 it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
