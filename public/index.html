@@ -280,25 +280,35 @@ function RegisterScreen({ onRegister }) {
     issueMode
       ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()) }
       : { type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim() };
-  const submit = async () => {
+  const submitFields = async (f) => {
     setBusy(true);
     setGate(null);
     try {
-      await onRegister(fields());
+      await onRegister(f);
       setType('work'); setTitle(''); setPurpose(''); setCriteria('');
       setWorkspace(''); setIssueNumber('');
     } catch (err) {
-      // a gate rejection carries the fix; anything else the toast reported
-      if (err.status === 422 && err.detail) setGate(err.detail);
+      // a gate rejection carries the fix; anything else the toast reported.
+      // The inspected reference is burned into the gate state so a later
+      // edit of the form fields can't repoint the approved comment (or the
+      // retry) at a different issue than the one that was inspected.
+      if (err.status === 422 && err.detail) {
+        setGate({
+          ...err.detail,
+          workspace: f.workspace,
+          github_issue_number: f.github_issue_number,
+        });
+      }
     }
     setBusy(false);
   };
+  const submit = () => submitFields(fields());
   const approveComment = async () => {
     setBusy(true);
     try {
       await api('/api/issue-comments', {
-        workspace: workspace.trim(),
-        github_issue_number: Number(issueNumber.trim()),
+        workspace: gate.workspace,
+        github_issue_number: gate.github_issue_number,
         body: gate.suggested_comment,
       });
     } catch {
@@ -306,8 +316,13 @@ function RegisterScreen({ onRegister }) {
       return; // posting failed — keep the gate view so the human can retry
     }
     setBusy(false);
-    // the comment is now part of the issue thread, so the gate re-reads it
-    await submit();
+    // the comment is now part of the issue thread — re-register the same
+    // inspected reference so the gate re-reads it, comment included
+    await submitFields({
+      type: 'work',
+      workspace: gate.workspace,
+      github_issue_number: gate.github_issue_number,
+    });
   };
   return (
     <div style={{ padding: '20px 16px' }}>

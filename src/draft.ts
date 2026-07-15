@@ -24,16 +24,16 @@ export interface TaskDraft {
 export type HandoffDraft = Partial<HandoffDoc>;
 
 /** The registration gate's verdict (issue #49 設計点4): can title / purpose /
- *  completion_criteria be derived from this issue? A failing verdict carries
- *  what's missing plus a drafted issue comment that would fill the gap —
- *  surfaced in the UI for the human to approve, never posted to GitHub
- *  without that approval (the board holds no content of its own; the fix
- *  lands as an issue comment, ADR 0016). */
-export interface IssueInspection {
-  ok: boolean;
-  missing?: string;
-  suggested_comment?: string;
-}
+ *  completion_criteria be derived from this issue? A failing verdict always
+ *  carries what's missing plus a drafted issue comment that would fill the
+ *  gap — the union makes a suggestion-less rejection unrepresentable, since
+ *  the UI's whole rejection flow (提示 → 承認 → issue にコメント追記) hangs
+ *  off those two fields. The comment is surfaced for the human to approve,
+ *  never posted to GitHub without that approval (the board holds no content
+ *  of its own; the fix lands as an issue comment, ADR 0016). */
+export type IssueInspection =
+  | { ok: true }
+  | { ok: false; missing: string; suggested_comment: string };
 
 /** The LLM-facing seam (issue #12, extended by #13 and #49): everything
  *  vendor-specific (which model, how the prompt is built, how JSON is

@@ -188,4 +188,21 @@ describe("ClaudeDraftClient", () => {
     });
     await expect(garbage.inspectIssue({ title: "t", body: "b", comments: [] })).rejects.toThrow();
   });
+
+  it("inspectIssue: ok:false なのに missing / suggested_comment を欠く応答は reject する(不合格は必ずサジェストを運ぶ — issue #49 設計点4)", async () => {
+    const missingFields = new ClaudeDraftClient({
+      exec: async () => JSON.stringify({ result: JSON.stringify({ ok: false }) }),
+    });
+    await expect(
+      missingFields.inspectIssue({ title: "t", body: "b", comments: [] }),
+    ).rejects.toThrow();
+
+    const missingComment = new ClaudeDraftClient({
+      exec: async () =>
+        JSON.stringify({ result: JSON.stringify({ ok: false, missing: "no criteria" }) }),
+    });
+    await expect(
+      missingComment.inspectIssue({ title: "t", body: "b", comments: [] }),
+    ).rejects.toThrow();
+  });
 });

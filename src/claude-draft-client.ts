@@ -19,12 +19,17 @@ const taskDraftSchema = z.object({
 
 // mirrors IssueInspection (src/draft.ts): the gate verdict is untrusted
 // model output like every other response here — validated before the API
-// layer turns it into a 201/422
-const issueInspectionSchema = z.object({
-  ok: z.boolean(),
-  missing: z.string().min(1).optional(),
-  suggested_comment: z.string().min(1).optional(),
-});
+// layer turns it into a 201/422. A rejection without missing/
+// suggested_comment is malformed output (the UI's approve flow hangs off
+// both), so it rejects here → the gate's 503, same as any garbled response.
+const issueInspectionSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }),
+  z.object({
+    ok: z.literal(false),
+    missing: z.string().min(1),
+    suggested_comment: z.string().min(1),
+  }),
+]);
 
 // mirrors HandoffDraft (src/draft.ts): every field optional — a human task's
 // handoff doc is never enforced (issue #13), unlike taskDraftSchema's
