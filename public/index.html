@@ -453,6 +453,14 @@ function RegisterScreen({ onRegister }) {
   );
 }
 
+// One toast shape for every registry commit outcome (create and edit share
+// it): push failure is a warning, never an error — the local clone is what
+// the board reads (issue #57).
+function sayCommitResult(say, pushed, msg, name) {
+  say(pushed ? 'success' : 'warn', msg,
+    pushed ? name : `${name} · push failed — the local clone is what the board reads, the next push catches up`);
+}
+
 // One workspace's row on the settings surface (issue #57 phase 3): notes and
 // protected are the only editable fields — path/repo/branch re-point the
 // entry at a different checkout, which stays a manual registry edit.
@@ -465,8 +473,7 @@ function WorkspaceCard({ ws, say, onChanged }) {
     setBusy(true);
     try {
       const { pushed } = await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, 'PATCH');
-      say(pushed ? 'success' : 'warn', doneMsg,
-        pushed ? ws.name : `${ws.name} · push failed — the local clone is updated, the next push catches up`);
+      sayCommitResult(say, pushed, doneMsg, ws.name);
       await onChanged();
     } catch (err) {
       say('danger', 'workspace update failed', String(err.message || err));
@@ -494,7 +501,7 @@ function WorkspaceCard({ ws, say, onChanged }) {
       )}
       {ws.registrySelf && (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-          the board's own registry clone — protection stays on, however hard you press
+          the board's own registry clone — protection stays on
         </div>
       )}
       <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
@@ -530,11 +537,16 @@ function SettingsScreen({ say }) {
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
   const [unavailable, setUnavailable] = React.useState(false); // 503 — no registry configured
   const load = async () => {
-    const res = await fetch('/api/workspaces');
-    if (!res.ok) { setUnavailable(true); setWorkspaces([]); return; }
-    setWorkspaces(await res.json());
+    try {
+      setWorkspaces(await api('/api/workspaces', undefined, 'GET'));
+    } catch {
+      // 503 (no registry configured) and transport failures read the same:
+      // there is nothing to administer from here
+      setUnavailable(true);
+      setWorkspaces([]);
+    }
   };
-  React.useEffect(() => { load().catch(() => { setUnavailable(true); setWorkspaces([]); }); }, []);
+  React.useEffect(() => { load(); }, []);
 
   const [mode, setMode] = React.useState('clone');
   const [name, setName] = React.useState('');
@@ -557,8 +569,7 @@ function SettingsScreen({ say }) {
         ...(notes.trim() ? { notes: notes.trim() } : {}),
         ...(prot ? { protected: true } : {}),
       });
-      say(pushed ? 'success' : 'warn', 'workspace added — committed to the registry',
-        pushed ? name.trim() : `${name.trim()} · push failed — the local clone is what the board reads, the next push catches up`);
+      sayCommitResult(say, pushed, 'workspace added — committed to the registry', name.trim());
       setName(''); setRepo(''); setPath(''); setNotes(''); setProt(false);
       await load();
     } catch (err) {

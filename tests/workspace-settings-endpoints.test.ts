@@ -12,10 +12,12 @@ afterEach(() => t?.stop());
 
 it("GET /api/workspaces は設定面向けの一覧ビューを返す(issue #57 フェーズ3)", async () => {
   t = await bootTidepool({
-    listWorkspaces: () => [
-      { name: "registry", path: "/srv/registry", protected: true, registrySelf: true },
-      { name: "lagoon", repo: "https://github.com/example/lagoon.git", registrySelf: false },
-    ],
+    workspaceAdmin: {
+      list: () => [
+        { name: "registry", path: "/srv/registry", protected: true, registrySelf: true },
+        { name: "lagoon", repo: "https://github.com/example/lagoon.git", registrySelf: false },
+      ],
+    },
   });
 
   const res = await api(t.baseUrl, "GET", "/api/workspaces");
@@ -35,9 +37,11 @@ it("GET /api/workspaces は registry 未設定なら 503", async () => {
 it("PATCH /api/workspaces/:name は URL の名前と body を updateWorkspace へ渡し、200 で pushed を返す", async () => {
   const calls: UpdateWorkspaceInput[] = [];
   t = await bootTidepool({
-    updateWorkspace: async (input) => {
-      calls.push(input);
-      return { pushed: true };
+    workspaceAdmin: {
+      update: async (input) => {
+        calls.push(input);
+        return { pushed: true };
+      },
     },
   });
 
@@ -53,8 +57,10 @@ it("PATCH /api/workspaces/:name は URL の名前と body を updateWorkspace �
 
 it("confirm なしの protected 解除は 409 + confirm_required — UI はこれを見て確認 Dialog に進む", async () => {
   t = await bootTidepool({
-    updateWorkspace: async () => {
-      throw new UnprotectNeedsConfirmationError("lagoon");
+    workspaceAdmin: {
+      update: async () => {
+        throw new UnprotectNeedsConfirmationError("lagoon");
+      },
     },
   });
 
@@ -66,8 +72,10 @@ it("confirm なしの protected 解除は 409 + confirm_required — UI はこ�
 
 it("盤面自身の registry エントリの解除は 403(confirm があっても)", async () => {
   t = await bootTidepool({
-    updateWorkspace: async () => {
-      throw new RegistrySelfUnprotectError("registry");
+    workspaceAdmin: {
+      update: async () => {
+        throw new RegistrySelfUnprotectError("registry");
+      },
     },
   });
 
@@ -81,8 +89,10 @@ it("盤面自身の registry エントリの解除は 403(confirm があって�
 
 it("registry に居ない名前は 404", async () => {
   t = await bootTidepool({
-    updateWorkspace: async () => {
-      throw new UnknownWorkspaceError("ghost");
+    workspaceAdmin: {
+      update: async () => {
+        throw new UnknownWorkspaceError("ghost");
+      },
     },
   });
 

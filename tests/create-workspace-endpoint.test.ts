@@ -9,9 +9,11 @@ afterEach(() => t?.stop());
 it("POST /api/workspaces は検証済み入力を createWorkspace オーケストレーションへ渡し、201 で pushed を返す(issue #57)", async () => {
   const calls: CreateWorkspaceInput[] = [];
   t = await bootTidepool({
-    createWorkspace: async (input) => {
-      calls.push(input);
-      return { pushed: true };
+    workspaceAdmin: {
+      create: async (input) => {
+        calls.push(input);
+        return { pushed: true };
+      },
     },
   });
 
@@ -49,9 +51,11 @@ it("createWorkspace が未設定(registry なしの盤面)なら 503 を返す",
 it("スキーマ違反(clone モードに repo なし)は 400 で、オーケストレーションを呼ばない", async () => {
   const calls: CreateWorkspaceInput[] = [];
   t = await bootTidepool({
-    createWorkspace: async (input) => {
-      calls.push(input);
-      return { pushed: true };
+    workspaceAdmin: {
+      create: async (input) => {
+        calls.push(input);
+        return { pushed: true };
+      },
     },
   });
 
@@ -63,8 +67,10 @@ it("スキーマ違反(clone モードに repo なし)は 400 で、オーケス
 
 it("名前検証違反(InvalidWorkspaceNameError)は 400 でメッセージを返す", async () => {
   t = await bootTidepool({
-    createWorkspace: async () => {
-      throw new InvalidWorkspaceNameError("lagoon", "a workspace with this name already exists");
+    workspaceAdmin: {
+      create: async () => {
+        throw new InvalidWorkspaceNameError("lagoon", "a workspace with this name already exists");
+      },
     },
   });
 
@@ -79,8 +85,10 @@ it("名前検証違反(InvalidWorkspaceNameError)は 400 でメッセージを�
 
 it("registry クローンが busy(RegistryCloneBusyError)なら 409 — リトライは冪等なので後で叩き直せばよい", async () => {
   t = await bootTidepool({
-    createWorkspace: async () => {
-      throw new RegistryCloneBusyError("/registry", "HEAD is on 'task/x', not 'main'");
+    workspaceAdmin: {
+      create: async () => {
+        throw new RegistryCloneBusyError("/registry", "HEAD is on 'task/x', not 'main'");
+      },
     },
   });
 
@@ -94,8 +102,10 @@ it("registry クローンが busy(RegistryCloneBusyError)なら 409 — リト�
 
 it("その他の外部失敗(clone 失敗など)は 502", async () => {
   t = await bootTidepool({
-    createWorkspace: async () => {
-      throw new Error("git clone exited 128");
+    workspaceAdmin: {
+      create: async () => {
+        throw new Error("git clone exited 128");
+      },
     },
   });
 

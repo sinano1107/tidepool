@@ -36,12 +36,10 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 import {
-  type CreateWorkspaceFn,
   RegistryCloneBusyError,
   RegistrySelfUnprotectError,
   UnprotectNeedsConfirmationError,
-  type UpdateWorkspaceInput,
-  type WorkspaceView,
+  type WorkspaceAdmin,
 } from "./workspace-create.js";
 import {
   activeTriageSession,
@@ -254,17 +252,12 @@ export interface ApiRouterDeps {
    *  `defaultAgentName` above — absent, this gate is skipped for the review
    *  rows that would have fallen back to it. */
   auditorName?: string;
-  /** The workspace-creation orchestration (issue #57 phase 2), threaded in by
-   *  main.ts with its registry clone / base dir / GitHub deps already bound —
-   *  the API layer never touches the registry clone itself. Absent → no
-   *  registry configured, so POST /workspaces reports 503. */
-  createWorkspace?: CreateWorkspaceFn;
-  /** The settings surface's workspace list (issue #57 phase 3), read fresh
-   *  against the registry per call — same absent-means-503 shape as
-   *  `createWorkspace`. */
-  listWorkspaces?: () => WorkspaceView[];
-  /** The edit half (issue #57 phase 3): notes / protected only. */
-  updateWorkspace?: (input: UpdateWorkspaceInput) => Promise<{ pushed: boolean }>;
+  /** The settings surface's workspace verbs (issue #57), threaded in by
+   *  main.ts with the registry clone / base dir / GitHub deps already bound —
+   *  the API layer never touches the registry clone itself. Absent (or a verb
+   *  absent — tests fake them singly) → not configured, the route reports
+   *  503. */
+  workspaceAdmin?: Partial<WorkspaceAdmin>;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -281,9 +274,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     agentRegistered,
     vapidPublicKey,
     auditorName,
-    createWorkspace,
-    listWorkspaces,
-    updateWorkspace,
+    workspaceAdmin,
   } = deps;
   const router = Router();
   router.use(json());
@@ -433,12 +424,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    if (!createWorkspace) {
+    if (!workspaceAdmin?.create) {
       res.status(503).json({ error: "workspace creation not configured" });
       return;
     }
     try {
-      res.status(201).json(await createWorkspace(parsed.data));
+      res.status(201).json(await workspaceAdmin.create(parsed.data));
     } catch (err) {
       // the human's own synchronous request fails fast (ADR 0009): a bad name
       // is the caller's 400; a busy registry clone is a 409 the idempotent
@@ -455,11 +446,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/workspaces", (_req, res) => {
-    if (!listWorkspaces) {
+    if (!workspaceAdmin?.list) {
       res.status(503).json({ error: "workspace settings not configured" });
       return;
     }
-    res.json(listWorkspaces());
+    res.json(workspaceAdmin.list());
   });
 
   router.patch("/workspaces/:name", async (req, res) => {
@@ -468,18 +459,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    if (!updateWorkspace) {
+    if (!workspaceAdmin?.update) {
       res.status(503).json({ error: "workspace settings not configured" });
       return;
     }
     try {
-      res.json(await updateWorkspace({ name: req.params.name, ...parsed.data }));
+      res.json(await workspaceAdmin.update({ name: req.params.name, ...parsed.data }));
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
         res.status(404).json({ error: err.message });
       } else if (err instanceof UnprotectNeedsConfirmationError) {
-        // machine-readable flag: the UI branches to its confirmation dialog
-        // on this, then resubmits with confirm: true (issue #57 / #55's shape)
+        // machine-readable flag (issue #57 / #55's shape). The WebUI never
+        // takes this path — it confirms up front and sends confirm: true in
+        // one request; this 409 is the floor for direct API callers
         res.status(409).json({ error: err.message, confirm_required: true });
       } else if (err instanceof RegistrySelfUnprotectError) {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)

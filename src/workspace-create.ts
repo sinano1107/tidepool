@@ -41,12 +41,15 @@ export type CreateWorkspaceInput = {
     }
 );
 
-export interface CreateWorkspaceDeps {
-  /** The board's registry clone — where the new entry is committed. */
+/** What every workspace-admin verb needs: which registry clone to commit to,
+ *  and the base directory path-omitting entries derive from (ADR 0018) —
+ *  both threaded in by the composition root, never read from env here. */
+export interface WorkspaceAdminDeps {
   registryDir: string;
-  /** resolveWorkspacesBaseDir's output (ADR 0018), threaded in by the
-   *  composition root — never read from env here. */
   workspacesBaseDir: string;
+}
+
+export interface CreateWorkspaceDeps extends WorkspaceAdminDeps {
   github: GitHubClient;
 }
 
@@ -74,17 +77,26 @@ function assertRegistryCloneReady(registryDir: string): void {
   }
 }
 
-export interface CreateWorkspaceResult {
+/** What every registry-writing verb (create, update) reports back. */
+export interface RegistryCommitResult {
   /** The registry commit reached the remote. False is non-fatal (issue #57):
    *  the board reads its local clone, so the entry already works — the push
    *  catches up with the next successful one. */
   pushed: boolean;
 }
 
-/** The orchestration as its consumers see it (api.ts / server.ts): the
- *  composition root binds the deps here once, everyone downstream gets one
- *  callback. */
-export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>;
+export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<RegistryCommitResult>;
+export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<RegistryCommitResult>;
+
+/** The settings surface's workspace verbs as one bundle (issue #57): they
+ *  exist together or not at all (a registry is configured, or none is), so
+ *  the composition root binds them once and the layers in between thread one
+ *  dep, not three. */
+export interface WorkspaceAdmin {
+  create: CreateWorkspaceFn;
+  list: () => WorkspaceView[];
+  update: UpdateWorkspaceFn;
+}
 
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
@@ -92,7 +104,7 @@ export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<CreateW
 export async function createWorkspace(
   input: CreateWorkspaceInput,
   deps: CreateWorkspaceDeps,
-): Promise<CreateWorkspaceResult> {
+): Promise<RegistryCommitResult> {
   assertRegistryCloneReady(deps.registryDir);
   const registry = loadRegistry(deps.registryDir);
   assertValidWorkspaceName(registry, input.name);
@@ -118,11 +130,6 @@ export interface UpdateWorkspaceInput {
   notes?: string;
   protected?: boolean;
   confirm?: boolean;
-}
-
-export interface UpdateWorkspaceDeps {
-  registryDir: string;
-  workspacesBaseDir: string;
 }
 
 /** Removing protection was requested without the confirmation step (issue
@@ -164,7 +171,7 @@ function safeRealpath(path: string): string {
 function resolvesToRegistryClone(
   entry: WorkspaceEntry,
   name: string,
-  deps: UpdateWorkspaceDeps,
+  deps: WorkspaceAdminDeps,
 ): boolean {
   const path = entry.path ?? join(deps.workspacesBaseDir, name);
   return safeRealpath(path) === safeRealpath(deps.registryDir);
@@ -172,8 +179,8 @@ function resolvesToRegistryClone(
 
 export async function updateWorkspace(
   input: UpdateWorkspaceInput,
-  deps: UpdateWorkspaceDeps,
-): Promise<CreateWorkspaceResult> {
+  deps: WorkspaceAdminDeps,
+): Promise<RegistryCommitResult> {
   assertRegistryCloneReady(deps.registryDir);
   const registry = loadRegistry(deps.registryDir);
   const entry = ownEntry(registry.workspaces, input.name);
@@ -188,8 +195,10 @@ export async function updateWorkspace(
       next.protected = true;
     } else {
       // the self-refusal outranks confirmation — checked first so a confirmed
-      // request gets the honest "never here", not another confirm loop
-      if (entry.protected === true && resolvesToRegistryClone(entry, input.name, deps)) {
+      // request gets the honest "never here", not another confirm loop. It
+      // also ignores the entry's current flag: the floor must not depend on
+      // the very state it protects
+      if (resolvesToRegistryClone(entry, input.name, deps)) {
         throw new RegistrySelfUnprotectError(input.name);
       }
       if (entry.protected === true && input.confirm !== true) {
@@ -248,7 +257,7 @@ export interface WorkspaceView extends WorkspaceEntry {
   registrySelf: boolean;
 }
 
-export function listWorkspaceViews(deps: UpdateWorkspaceDeps): WorkspaceView[] {
+export function listWorkspaceViews(deps: WorkspaceAdminDeps): WorkspaceView[] {
   const registry = loadRegistry(deps.registryDir);
   return Object.entries(registry.workspaces).map(([name, entry]) => ({
     ...entry,
@@ -290,5 +299,9 @@ function commitWorkspaceEntry(
   doc.set(name, entry);
   writeFileSync(file, doc.toString());
   git(registryDir, "add", "workspaces.yaml");
-  git(registryDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
+  // a no-change edit (the same notes resubmitted) is a successful no-op, not
+  // a "nothing to commit" git failure surfacing as a 502
+  if (git(registryDir, "status", "--porcelain") !== "") {
+    git(registryDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
+  }
 }

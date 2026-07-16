@@ -23,11 +23,9 @@ import {
 } from "./workspace.js";
 import {
   createWorkspace,
-  type CreateWorkspaceFn,
   listWorkspaceViews,
   updateWorkspace,
-  type UpdateWorkspaceInput,
-  type WorkspaceView,
+  type WorkspaceAdmin,
 } from "./workspace-create.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
@@ -203,28 +201,18 @@ function pushClient(): PushClient | undefined {
 
 const github = new GhCliClient();
 
-/** The workspace-creation orchestration (issue #57 phase 2), bound to this
- *  board's registry clone, base dir (ADR 0018) and GitHub client here at the
- *  composition root — the API layer only ever sees the finished callback.
- *  Without a registry there is nowhere to register a workspace. */
-function createWorkspaceOrchestration(): CreateWorkspaceFn | undefined {
+/** The settings surface's workspace verbs (issue #57), bound to this board's
+ *  registry clone, base dir (ADR 0018) and GitHub client here at the
+ *  composition root — the API layer only ever sees the finished callbacks.
+ *  Without a registry there is nowhere to administer workspaces at all. */
+function workspaceAdmin(): WorkspaceAdmin | undefined {
   if (!registryDir) return undefined;
-  return (input) =>
-    createWorkspace(input, { registryDir, workspacesBaseDir: workspacesDir, github });
-}
-
-/** The settings surface's list/edit halves (issue #57 phase 3), bound to the
- *  same registry clone and base dir as the creation orchestration above. */
-function listWorkspacesResolver(): (() => WorkspaceView[]) | undefined {
-  if (!registryDir) return undefined;
-  return () => listWorkspaceViews({ registryDir, workspacesBaseDir: workspacesDir });
-}
-
-function updateWorkspaceOrchestration():
-  | ((input: UpdateWorkspaceInput) => Promise<{ pushed: boolean }>)
-  | undefined {
-  if (!registryDir) return undefined;
-  return (input) => updateWorkspace(input, { registryDir, workspacesBaseDir: workspacesDir });
+  const deps = { registryDir, workspacesBaseDir: workspacesDir };
+  return {
+    create: (input) => createWorkspace(input, { ...deps, github }),
+    list: () => listWorkspaceViews(deps),
+    update: (input) => updateWorkspace(input, deps),
+  };
 }
 
 const server = await startServer({
@@ -236,9 +224,7 @@ const server = await startServer({
   workspace: workspaceConfig(),
   resolveWorkspace: workspaceResolver(),
   github,
-  createWorkspace: createWorkspaceOrchestration(),
-  listWorkspaces: listWorkspacesResolver(),
-  updateWorkspace: updateWorkspaceOrchestration(),
+  workspaceAdmin: workspaceAdmin(),
   resolveAuthority: authorityResolver(),
   agentRegistered: agentRegisteredChecker(),
   isProtectedWorkspace: protectedWorkspaceChecker(),

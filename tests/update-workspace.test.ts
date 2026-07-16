@@ -94,6 +94,21 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     });
   });
 
+  it("変更ゼロの更新(同値の notes)は失敗にならず、コミットも積まない(/code-review 指摘: no-op PATCH が 502 に見える穴)", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    // fixture の tidepool エントリは notes を既に持つ — 同じ値を送る
+    const result = await updateWorkspace(
+      { name: "tidepool", notes: "run npm install before first use" },
+      deps,
+    );
+
+    expect(result.pushed).toBe(false);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
   it("盤面自身の registry クローンを指すエントリの解除は confirm があっても拒否される(ADR 0013: 自己防衛をワンクリック圏内に置かない)", async () => {
     const registryDir = await makeMainRegistry();
     // 自分自身を workspace として登録している(v1 の実運用と同じ形)
@@ -112,6 +127,24 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
       updateWorkspace({ name: "registry", protected: false, confirm: true }, deps),
     ).rejects.toThrow(RegistrySelfUnprotectError);
     expect(loadRegistry(registryDir).workspaces.registry?.protected).toBe(true);
+  });
+
+  it("いま未保護でも registry 自身への protected: false は拒否される — 床が現在のフラグ値に依存しない(/code-review 指摘)", async () => {
+    const registryDir = await makeMainRegistry();
+    await writeFile(
+      join(registryDir, "workspaces.yaml"),
+      `registry:\n  path: ${registryDir}\n`,
+    );
+    execFileSync(
+      "git",
+      ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-am", "self"],
+      { cwd: registryDir },
+    );
+    const deps = await makeDeps(registryDir);
+
+    await expect(
+      updateWorkspace({ name: "registry", protected: false, confirm: true }, deps),
+    ).rejects.toThrow(RegistrySelfUnprotectError);
   });
 });
 
