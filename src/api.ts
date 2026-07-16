@@ -35,8 +35,8 @@ import {
   verifyWorkspaceClean,
   type WorkspaceConfig,
 } from "./workspace.js";
+import { RegistryCloneBusyError } from "./registry-write.js";
 import {
-  RegistryCloneBusyError,
   RegistrySelfUnprotectError,
   UnprotectNeedsConfirmationError,
   type WorkspaceAdmin,

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
-import { createWorkspace, RegistryCloneBusyError } from "../src/workspace-create.js";
+import { RegistryCloneBusyError } from "../src/registry-write.js";
+import { createWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 

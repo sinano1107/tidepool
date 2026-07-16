@@ -134,7 +134,7 @@ export interface RegistryCandidates {
  *  emoji, trailing text, or an emoji outside Twemoji's coverage all fail
  *  this the same way (fewer/more entities, or entity indices short of the
  *  full length). */
-function isSingleTwemojiGrapheme(value: string): boolean {
+export function isSingleTwemojiGrapheme(value: string): boolean {
   const entities = parseTwemoji(value);
   if (entities.length !== 1) return false;
   const [entity] = entities;
@@ -202,15 +202,19 @@ function parseAuthorityFile(path: string): AuthorityProfile {
   };
 }
 
-/** Issue #68 / ADR 0018: the charset a workspace name must stay inside to be
- *  safe as both a directory name (regulation-derived `path`) and a GitHub
- *  repository name (clone / new-repo creation modes, phase 2). */
-const WORKSPACE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
+/** Issue #68 / ADR 0018: the charset a registry-entry name (workspace or
+ *  agent, issue #70) must stay inside to be safe as a directory name
+ *  (regulation-derived `path`), a GitHub repository name (clone / new-repo
+ *  creation modes), and the file name `agents/<name>.md`. */
+const REGISTRY_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
 /** `.` and `..` pass the charset above but are reserved by every filesystem
- *  (self / parent directory) — a workspace named either would derive a path
+ *  (self / parent directory) — an entry named either would derive a path
  *  that escapes its intended base directory. */
-const RESERVED_WORKSPACE_NAMES = new Set([".", ".."]);
+const RESERVED_REGISTRY_NAMES = new Set([".", ".."]);
+
+const NAME_CHARSET_REASON =
+  "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'";
 
 /** A candidate workspace name fails the entry gate the creation modes
  *  (issue #57 phase 2) will use: reused inside an existing registry, or
@@ -221,6 +225,7 @@ export class InvalidWorkspaceNameError extends Error {
     reason: string,
   ) {
     super(`invalid workspace name "${workspaceName}": ${reason}`);
+    this.name = "InvalidWorkspaceNameError";
   }
 }
 
@@ -229,14 +234,37 @@ export class InvalidWorkspaceNameError extends Error {
  *  register it. Checks uniqueness against `registry` and the shared charset —
  *  safe for both a directory name and a GitHub repository name. */
 export function assertValidWorkspaceName(registry: Registry, name: string): void {
-  if (RESERVED_WORKSPACE_NAMES.has(name) || !WORKSPACE_NAME_PATTERN.test(name)) {
-    throw new InvalidWorkspaceNameError(
-      name,
-      "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'",
-    );
+  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
+    throw new InvalidWorkspaceNameError(name, NAME_CHARSET_REASON);
   }
   if (Object.hasOwn(registry.workspaces, name)) {
     throw new InvalidWorkspaceNameError(name, "a workspace with this name already exists");
+  }
+}
+
+/** A candidate agent name fails the entry gate the WebUI's agent-creation
+ *  verb (issue #70) uses: reused inside an existing registry, or outside the
+ *  charset a file name `agents/<name>.md` safely accepts. */
+export class InvalidAgentNameError extends Error {
+  constructor(
+    public readonly agentName: string,
+    reason: string,
+  ) {
+    super(`invalid agent name "${agentName}": ${reason}`);
+    this.name = "InvalidAgentNameError";
+  }
+}
+
+/** Pure entry-gate validation for a new agent name (issue #70), the agent
+ *  twin of assertValidWorkspaceName above: same charset (safe as the file
+ *  name `agents/<name>.md`), same reserved names, uniqueness against the
+ *  registry's agents. */
+export function assertValidAgentName(registry: Registry, name: string): void {
+  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
+    throw new InvalidAgentNameError(name, NAME_CHARSET_REASON);
+  }
+  if (Object.hasOwn(registry.agents, name)) {
+    throw new InvalidAgentNameError(name, "an agent with this name already exists");
   }
 }
 

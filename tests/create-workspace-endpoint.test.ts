@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { InvalidWorkspaceNameError } from "../src/registry.js";
-import { type CreateWorkspaceInput, RegistryCloneBusyError } from "../src/workspace-create.js";
+import { RegistryCloneBusyError } from "../src/registry-write.js";
+import type { CreateWorkspaceInput } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
