@@ -11,7 +11,11 @@ import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, registerTask, type RegisterTaskInput, type Task } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
-import type { CreateWorkspaceFn } from "../src/workspace-create.js";
+import type {
+  CreateWorkspaceFn,
+  UpdateWorkspaceInput,
+  WorkspaceView,
+} from "../src/workspace-create.js";
 import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
@@ -75,6 +79,10 @@ export interface BootOptions {
    *  this callback seam in endpoint tests; the orchestration itself has its
    *  own real-git coverage (tests/create-workspace.test.ts). */
   createWorkspace?: CreateWorkspaceFn;
+  /** The settings surface's list/edit halves (issue #57 phase 3) — faked at
+   *  the same callback seam as createWorkspace. */
+  listWorkspaces?: () => WorkspaceView[];
+  updateWorkspace?: (input: UpdateWorkspaceInput) => Promise<{ pushed: boolean }>;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -106,6 +114,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     isProtectedWorkspace: options.isProtectedWorkspace,
     listAgents: options.listAgents,
     createWorkspace: options.createWorkspace,
+    listWorkspaces: options.listWorkspaces,
+    updateWorkspace: options.updateWorkspace,
   });
   let stopped = false;
   const stopServer = async () => {

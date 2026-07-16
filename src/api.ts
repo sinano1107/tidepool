@@ -35,7 +35,14 @@ import {
   verifyWorkspaceClean,
   type WorkspaceConfig,
 } from "./workspace.js";
-import { type CreateWorkspaceFn, RegistryCloneBusyError } from "./workspace-create.js";
+import {
+  type CreateWorkspaceFn,
+  RegistryCloneBusyError,
+  RegistrySelfUnprotectError,
+  UnprotectNeedsConfirmationError,
+  type UpdateWorkspaceInput,
+  type WorkspaceView,
+} from "./workspace-create.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -112,6 +119,14 @@ const createWorkspaceSchema = z.discriminatedUnion("mode", [
   createWorkspaceCommon.extend({ mode: z.literal("clone"), repo: z.string().min(1) }),
   createWorkspaceCommon.extend({ mode: z.literal("create") }),
 ]);
+
+// notes allows "" here (unlike creation's min(1)): the empty string is the
+// edit form's way of removing the field (UpdateWorkspaceInput's contract)
+const updateWorkspaceSchema = z.object({
+  notes: z.string().optional(),
+  protected: z.boolean().optional(),
+  confirm: z.boolean().optional(),
+});
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
@@ -244,6 +259,12 @@ export interface ApiRouterDeps {
    *  the API layer never touches the registry clone itself. Absent → no
    *  registry configured, so POST /workspaces reports 503. */
   createWorkspace?: CreateWorkspaceFn;
+  /** The settings surface's workspace list (issue #57 phase 3), read fresh
+   *  against the registry per call — same absent-means-503 shape as
+   *  `createWorkspace`. */
+  listWorkspaces?: () => WorkspaceView[];
+  /** The edit half (issue #57 phase 3): notes / protected only. */
+  updateWorkspace?: (input: UpdateWorkspaceInput) => Promise<{ pushed: boolean }>;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -261,6 +282,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     vapidPublicKey,
     auditorName,
     createWorkspace,
+    listWorkspaces,
+    updateWorkspace,
   } = deps;
   const router = Router();
   router.use(json());
@@ -423,6 +446,44 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // and the retry reuses whatever orphan it left behind (issue #57)
       if (err instanceof InvalidWorkspaceNameError) {
         res.status(400).json({ error: err.message });
+      } else if (err instanceof RegistryCloneBusyError) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+
+  router.get("/workspaces", (_req, res) => {
+    if (!listWorkspaces) {
+      res.status(503).json({ error: "workspace settings not configured" });
+      return;
+    }
+    res.json(listWorkspaces());
+  });
+
+  router.patch("/workspaces/:name", async (req, res) => {
+    const parsed = updateWorkspaceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!updateWorkspace) {
+      res.status(503).json({ error: "workspace settings not configured" });
+      return;
+    }
+    try {
+      res.json(await updateWorkspace({ name: req.params.name, ...parsed.data }));
+    } catch (err) {
+      if (err instanceof UnknownWorkspaceError) {
+        res.status(404).json({ error: err.message });
+      } else if (err instanceof UnprotectNeedsConfirmationError) {
+        // machine-readable flag: the UI branches to its confirmation dialog
+        // on this, then resubmits with confirm: true (issue #57 / #55's shape)
+        res.status(409).json({ error: err.message, confirm_required: true });
+      } else if (err instanceof RegistrySelfUnprotectError) {
+        // 403, not 409: no resubmission can ever make this pass (ADR 0013)
+        res.status(403).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
         res.status(409).json({ error: err.message });
       } else {

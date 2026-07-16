@@ -21,7 +21,14 @@ import {
   resolveWorkspacesBaseDir,
   type WorkspaceConfig,
 } from "./workspace.js";
-import { createWorkspace, type CreateWorkspaceFn } from "./workspace-create.js";
+import {
+  createWorkspace,
+  type CreateWorkspaceFn,
+  listWorkspaceViews,
+  updateWorkspace,
+  type UpdateWorkspaceInput,
+  type WorkspaceView,
+} from "./workspace-create.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -206,6 +213,20 @@ function createWorkspaceOrchestration(): CreateWorkspaceFn | undefined {
     createWorkspace(input, { registryDir, workspacesBaseDir: workspacesDir, github });
 }
 
+/** The settings surface's list/edit halves (issue #57 phase 3), bound to the
+ *  same registry clone and base dir as the creation orchestration above. */
+function listWorkspacesResolver(): (() => WorkspaceView[]) | undefined {
+  if (!registryDir) return undefined;
+  return () => listWorkspaceViews({ registryDir, workspacesBaseDir: workspacesDir });
+}
+
+function updateWorkspaceOrchestration():
+  | ((input: UpdateWorkspaceInput) => Promise<{ pushed: boolean }>)
+  | undefined {
+  if (!registryDir) return undefined;
+  return (input) => updateWorkspace(input, { registryDir, workspacesBaseDir: workspacesDir });
+}
+
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -216,6 +237,8 @@ const server = await startServer({
   resolveWorkspace: workspaceResolver(),
   github,
   createWorkspace: createWorkspaceOrchestration(),
+  listWorkspaces: listWorkspacesResolver(),
+  updateWorkspace: updateWorkspaceOrchestration(),
   resolveAuthority: authorityResolver(),
   agentRegistered: agentRegisteredChecker(),
   isProtectedWorkspace: protectedWorkspaceChecker(),

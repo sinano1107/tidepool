@@ -13,7 +13,11 @@ import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import type { CreateWorkspaceFn } from "./workspace-create.js";
+import type {
+  CreateWorkspaceFn,
+  UpdateWorkspaceInput,
+  WorkspaceView,
+} from "./workspace-create.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -99,6 +103,10 @@ export interface ServerOptions {
    *  registry clone / base dir / GitHub client by main.ts. Absent → no
    *  registry configured; POST /api/workspaces reports 503. */
   createWorkspace?: CreateWorkspaceFn;
+  /** The settings surface's workspace list and edit half (issue #57 phase 3)
+   *  — same binding shape as `createWorkspace`. */
+  listWorkspaces?: () => WorkspaceView[];
+  updateWorkspace?: (input: UpdateWorkspaceInput) => Promise<{ pushed: boolean }>;
 }
 
 export interface TidepoolServer {
@@ -207,6 +215,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       createWorkspace: options.createWorkspace,
+      listWorkspaces: options.listWorkspaces,
+      updateWorkspace: options.updateWorkspace,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

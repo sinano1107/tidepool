@@ -1,9 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 import type { GitHubClient } from "./github.js";
-import { assertValidWorkspaceName, loadRegistry, type WorkspaceEntry } from "./registry.js";
-import { git, TIDEPOOL_GIT_IDENTITY } from "./workspace.js";
+import {
+  assertValidWorkspaceName,
+  loadRegistry,
+  ownEntry,
+  type WorkspaceEntry,
+} from "./registry.js";
+import { git, TIDEPOOL_GIT_IDENTITY, UnknownWorkspaceError } from "./workspace.js";
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
  *  resulting Workspace — the mode is a circumstance of creation, not a kind
@@ -94,7 +99,113 @@ export async function createWorkspace(
   const entry = await buildEntry(input, deps);
   if (input.notes !== undefined) entry.notes = input.notes;
   if (input.protected) entry.protected = true;
-  commitWorkspaceEntry(deps.registryDir, input.name, entry);
+  commitWorkspaceEntry(
+    deps.registryDir,
+    input.name,
+    entry,
+    `add workspace ${input.name} via WebUI`,
+  );
+  return { pushed: pushRegistry(deps.registryDir) };
+}
+
+/** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
+ *  `notes` and `protected` are editable — changing `path`/`repo`/`branch`
+ *  re-points the entry at a different real checkout, which stays a manual
+ *  edit (the registry is a git repository). */
+export interface UpdateWorkspaceInput {
+  name: string;
+  /** Provided → set; empty string → remove the field. */
+  notes?: string;
+  protected?: boolean;
+  confirm?: boolean;
+}
+
+export interface UpdateWorkspaceDeps {
+  registryDir: string;
+  workspacesBaseDir: string;
+}
+
+/** Removing protection was requested without the confirmation step (issue
+ *  #57, same shape as #55): adding `protected` is frictionless because it
+ *  only moves in the safe direction — removal is the one edit that widens
+ *  what agents can do, so it never happens on a single unconfirmed click. */
+export class UnprotectNeedsConfirmationError extends Error {
+  constructor(name: string) {
+    super(`removing protection from workspace "${name}" requires confirmation`);
+    this.name = "UnprotectNeedsConfirmationError";
+  }
+}
+
+/** The one unprotect no confirmation can buy (issue #57 / ADR 0013): the
+ *  entry pointing at the board's own registry clone. "Changes to the registry
+ *  always need human approval" is the floor everything else stands on —
+ *  removing it must never be within one click's (or one curl's) reach. */
+export class RegistrySelfUnprotectError extends Error {
+  constructor(name: string) {
+    super(
+      `workspace "${name}" is the board's own registry clone — its protection cannot be removed here`,
+    );
+    this.name = "RegistrySelfUnprotectError";
+  }
+}
+
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/** Whether the entry's checkout is the board's own registry clone — compared
+ *  by realpath so a symlinked temp dir or mount point can't split the two
+ *  spellings of the same directory. A path-omitting entry compares by its
+ *  convention-derived location (ADR 0018). */
+function resolvesToRegistryClone(
+  entry: WorkspaceEntry,
+  name: string,
+  deps: UpdateWorkspaceDeps,
+): boolean {
+  const path = entry.path ?? join(deps.workspacesBaseDir, name);
+  return safeRealpath(path) === safeRealpath(deps.registryDir);
+}
+
+export async function updateWorkspace(
+  input: UpdateWorkspaceInput,
+  deps: UpdateWorkspaceDeps,
+): Promise<CreateWorkspaceResult> {
+  assertRegistryCloneReady(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir);
+  const entry = ownEntry(registry.workspaces, input.name);
+  if (!entry) throw new UnknownWorkspaceError(input.name);
+  const next: WorkspaceEntry = { ...entry };
+  if (input.notes !== undefined) {
+    if (input.notes === "") delete next.notes;
+    else next.notes = input.notes;
+  }
+  if (input.protected !== undefined) {
+    if (input.protected) {
+      next.protected = true;
+    } else {
+      // the self-refusal outranks confirmation — checked first so a confirmed
+      // request gets the honest "never here", not another confirm loop
+      if (entry.protected === true && resolvesToRegistryClone(entry, input.name, deps)) {
+        throw new RegistrySelfUnprotectError(input.name);
+      }
+      if (entry.protected === true && input.confirm !== true) {
+        throw new UnprotectNeedsConfirmationError(input.name);
+      }
+      // absence is the canonical "not protected" — mirrors creation, which
+      // never writes `protected: false`
+      delete next.protected;
+    }
+  }
+  commitWorkspaceEntry(
+    deps.registryDir,
+    input.name,
+    next,
+    `update workspace ${input.name} via WebUI`,
+  );
   return { pushed: pushRegistry(deps.registryDir) };
 }
 
@@ -128,6 +239,24 @@ function cloneAndDescribe(name: string, repo: string, deps: CreateWorkspaceDeps)
   return defaultBranch === "main" ? { repo } : { repo, branch: defaultBranch };
 }
 
+/** One workspace entry as the settings surface shows it (issue #57 phase 3):
+ *  the entry's own fields plus which name it is and whether it is the board's
+ *  own registry clone — the one whose protection the UI never offers to
+ *  remove (updateWorkspace enforces the same floor server-side). */
+export interface WorkspaceView extends WorkspaceEntry {
+  name: string;
+  registrySelf: boolean;
+}
+
+export function listWorkspaceViews(deps: UpdateWorkspaceDeps): WorkspaceView[] {
+  const registry = loadRegistry(deps.registryDir);
+  return Object.entries(registry.workspaces).map(([name, entry]) => ({
+    ...entry,
+    name,
+    registrySelf: resolvesToRegistryClone(entry, name, deps),
+  }));
+}
+
 /** Best-effort push of the registry commit (issue #57: push failure is a
  *  warning, never a rollback — the local clone is what the board reads). */
 function pushRegistry(registryDir: string): boolean {
@@ -144,7 +273,12 @@ function pushRegistry(registryDir: string): boolean {
  *  identity (ADR 0020: a WebUI-initiated registry change is the human's
  *  explicit act — the board commits it to local main directly). The yaml
  *  Document API keeps the hand-edited file's comments and formatting. */
-function commitWorkspaceEntry(registryDir: string, name: string, entry: WorkspaceEntry): void {
+function commitWorkspaceEntry(
+  registryDir: string,
+  name: string,
+  entry: WorkspaceEntry,
+  message: string,
+): void {
   // re-checked here, not just at the entrance: the external steps in between
   // (clone, repository creation) are slow, and a registry-edit task moving
   // the clone's HEAD meanwhile must not get the board's commit on its branch.
@@ -156,5 +290,5 @@ function commitWorkspaceEntry(registryDir: string, name: string, entry: Workspac
   doc.set(name, entry);
   writeFileSync(file, doc.toString());
   git(registryDir, "add", "workspaces.yaml");
-  git(registryDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", `add workspace ${name} via WebUI`);
+  git(registryDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
 }
