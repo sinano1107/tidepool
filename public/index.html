@@ -279,7 +279,7 @@ function RegisterScreen({ onRegister }) {
   // its own field so a redraft never has to fight stale content-field values
   const [dump, setDump] = React.useState('');
   const [drafted, setDrafted] = React.useState(false);
-  const [plain, setPlain] = React.useState(false);
+  const [plainFormActive, setPlainFormActive] = React.useState(false);
   const [draftBusy, setDraftBusy] = React.useState(false);
   // registry-sourced assignee/workspace candidates (issue #12/#65) — fetched
   // once per screen visit; RegisterScreen remounts fresh each tab entry (the
@@ -305,7 +305,7 @@ function RegisterScreen({ onRegister }) {
           ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
         };
   const resetContent = () => {
-    setDump(''); setDrafted(false); setPlain(false);
+    setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
     setAssignee(''); setWorkspace(''); setIssueNumber('');
     setRisk(false); setReview(false);
@@ -365,23 +365,28 @@ function RegisterScreen({ onRegister }) {
       // the draft client is unset or unreachable (always a 503 — api.ts's
       // own posture) — never blocks registration, only drops to the plain
       // form with blank fields (issue #12 AC3 / issue #65 AC3)
-      setPlain(true);
+      setPlainFormActive(true);
     }
     setDraftBusy(false);
   };
-  const togglePlainForm = () => { const next = !plain; resetContent(); setPlain(next); };
-  const assigneeOptions = [
-    { value: '', label: '(default agent)' },
-    ...candidates.assignees.map((a) => ({ value: a, label: a })),
+  const togglePlainForm = () => {
+    const next = !plainFormActive;
+    resetContent();
+    setPlainFormActive(next);
+  };
+  // prepends a "choose one"/default placeholder to a registry-candidate list
+  const withPlaceholder = (value, label, names) => [
+    { value, label },
+    ...names.map((n) => ({ value: n, label: n })),
   ];
-  const workspaceNameOptions = candidates.workspaces.map((w) => ({ value: w, label: w }));
+  const assigneeOptions = withPlaceholder('', '(default agent)', candidates.assignees);
   // manual content's workspace is optional (unset → the board's default at
   // execution time); an issue reference's workspace is required — it fixes
   // *which* issue the reference means (CONTEXT.md), so its placeholder reads
   // as a prompt to choose, never as an implicit default
-  const workspaceOptions = [{ value: '', label: '(default workspace)' }, ...workspaceNameOptions];
-  const issueWorkspaceOptions = [{ value: '', label: 'select workspace…' }, ...workspaceNameOptions];
-  const primaryAction = issueMode || plain || drafted
+  const workspaceOptions = withPlaceholder('', '(default workspace)', candidates.workspaces);
+  const issueWorkspaceOptions = withPlaceholder('', 'select workspace…', candidates.workspaces);
+  const primaryAction = issueMode || plainFormActive || drafted
     ? { label: 'Register — appends to queue tail', disabled: !ok || busy, onClick: submit }
     : { label: draftBusy ? 'Drafting…' : 'Draft fields', disabled: !dump.trim() || draftBusy, onClick: draftFields };
   return (
@@ -390,7 +395,7 @@ function RegisterScreen({ onRegister }) {
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
         {issueMode
           ? "reference a GitHub issue — its title/purpose/completion criteria stay live on GitHub"
-          : plain
+          : plainFormActive
             ? 'the LLM is unreachable — fill the fields yourself'
             : 'dump it — the LLM drafts the fields, you confirm'}
       </p>
@@ -402,10 +407,10 @@ function RegisterScreen({ onRegister }) {
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
           </React.Fragment>
         )}
-        {!issueMode && !plain && !drafted && (
+        {!issueMode && !plainFormActive && !drafted && (
           <Input multiline rows={4} placeholder="what needs doing, in your own words — sloppy is fine here, sloppy completion criteria are not" value={dump} onChange={(e) => setDump(e.target.value)} />
         )}
-        {!issueMode && (plain || drafted) && (
+        {!issueMode && (plainFormActive || drafted) && (
           <React.Fragment>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: drafted ? 'var(--tide-4)' : 'var(--sun-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               {drafted ? 'drafted — edit freely' : 'plain form — same fields, no draft'}
@@ -427,7 +432,7 @@ function RegisterScreen({ onRegister }) {
       {!issueMode && (
         <button onClick={togglePlainForm}
           style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '10px 0 0', display: 'block' }}>
-          {plain ? '← back to brain dump' : 'LLM unavailable? use the plain form'}
+          {plainFormActive ? '← back to brain dump' : 'LLM unavailable? use the plain form'}
         </button>
       )}
       {gate && (
