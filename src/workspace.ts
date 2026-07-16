@@ -68,7 +68,9 @@ export function resolveExecutionWorkspace(
   workspacesBaseDir: string,
 ): WorkspaceConfig {
   const name = taskWorkspace ?? defaultWorkspaceName;
-  const entry = registry.workspaces[name];
+  // Object.hasOwn guard, not bare bracket access: a name like "toString"
+  // would hit Object.prototype and dodge the fail-closed guarantee (issue #69)
+  const entry = Object.hasOwn(registry.workspaces, name) ? registry.workspaces[name] : undefined;
   if (!entry) throw new UnknownWorkspaceError(name);
   // the "main" default lives solely in protectedBranch — entry.branch passes
   // through as-is (possibly absent) rather than getting normalized here too

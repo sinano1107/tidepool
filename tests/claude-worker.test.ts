@@ -230,6 +230,16 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain("deckhand — General work agent");
   });
 
+  it("assignable_to の Object.prototype 由来のキー(toString 等)は drift と同じく黙ってスキップされ roster に混入しない(issue #69)", async () => {
+    const { start, calls } = await makeWorker({
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - toString\nallowed_workspaces:\n  - "*"\n`,
+    });
+    start();
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).not.toContain("## Roster");
+  });
+
   const KEEPER_MD = `---\nname: keeper\nversion: 1.0.0\nauthority: standard\ndescription: Independent reviewer\n---\nYou are Keeper, the auditor.\n`;
 
   it("review タイプかつ assignee が未指定なら、コンストラクタの既定 agent ではなく auditorName で spawn する(issue #42)", async () => {

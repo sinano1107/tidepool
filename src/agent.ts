@@ -32,9 +32,13 @@ export function resolveExecutionAgent(
   taskAssignee: string | null,
 ): ResolvedAgent {
   const name = taskAssignee ?? defaultAgentName;
-  const definition = registry.agents[name];
+  // Object.hasOwn guards, not bare bracket access: a name like "toString"
+  // would hit Object.prototype and dodge the fail-closed guarantee (issue #69)
+  const definition = Object.hasOwn(registry.agents, name) ? registry.agents[name] : undefined;
   if (!definition) throw new UnknownAgentError(name);
-  const profile = registry.authority[definition.authority];
+  const profile = Object.hasOwn(registry.authority, definition.authority)
+    ? registry.authority[definition.authority]
+    : undefined;
   if (!profile) throw new Error(`unknown authority profile: ${definition.authority}`);
   return { name, definition, profile };
 }

@@ -85,7 +85,9 @@ function buildRoster(registry: Registry, assignableTo: string[] | undefined): st
   const explicitNames = assignableTo.filter((name) => name !== AUTHORITY_WILDCARD);
   const agentNames = wildcard ? Object.keys(registry.agents) : explicitNames;
   const agents: RosterAgent[] = agentNames
-    .map((name) => registry.agents[name])
+    // Object.hasOwn guard, not bare bracket access: a listed name like
+    // "toString" would hit Object.prototype instead of drift-skipping (issue #69)
+    .map((name) => (Object.hasOwn(registry.agents, name) ? registry.agents[name] : undefined))
     .filter((agent): agent is AgentDefinition => agent !== undefined);
   if (explicitNames.includes(HUMAN_ROSTER_AGENT.name)) agents.push(HUMAN_ROSTER_AGENT);
   return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;

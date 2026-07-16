@@ -75,6 +75,13 @@ describe("resolveExecutionWorkspace", () => {
     }
   });
 
+  it("Object.prototype 由来のキー(toString 等)は未登録名として UnknownWorkspaceError を投げる(issue #69)", () => {
+    const registry = makeRegistry({ sandbox: { path: "/home/pi/work/sandbox" } });
+    expect(() => resolveExecutionWorkspace(registry, "sandbox", "toString", BASE_DIR)).toThrow(
+      UnknownWorkspaceError,
+    );
+  });
+
   it("path 省略エントリは <TIDEPOOL_WORKSPACES_DIR>/<name> に解決時導出される(ADR 0018)", () => {
     const registry = makeRegistry({ sandbox: {} });
     const resolved = resolveExecutionWorkspace(registry, "sandbox", null, BASE_DIR);
