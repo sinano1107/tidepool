@@ -81,11 +81,12 @@ const tabs = [
   { key: 'board', label: 'Board', icon: 'columns-3' },
   { key: 'queue', label: 'Queue', icon: 'list-ordered' },
   { key: 'register', label: 'Register', icon: 'plus' },
+  { key: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
-async function api(path, body) {
+async function api(path, body, method = 'POST') {
   const res = await fetch(path, {
-    method: 'POST',
+    method,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -446,6 +447,176 @@ function RegisterScreen({ onRegister }) {
               <Button variant="primary" full disabled={busy} onClick={approveComment}>Approve — post to issue &amp; retry</Button>
             </React.Fragment>
           )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// One workspace's row on the settings surface (issue #57 phase 3): notes and
+// protected are the only editable fields — path/repo/branch re-point the
+// entry at a different checkout, which stays a manual registry edit.
+function WorkspaceCard({ ws, say, onChanged }) {
+  const { Button, Card, Input, Switch, Dialog, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const [notes, setNotes] = React.useState(ws.notes ?? '');
+  const [busy, setBusy] = React.useState(false);
+  const [confirming, setConfirming] = React.useState(false);
+  const patch = async (body, doneMsg) => {
+    setBusy(true);
+    try {
+      const { pushed } = await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, 'PATCH');
+      say(pushed ? 'success' : 'warn', doneMsg,
+        pushed ? ws.name : `${ws.name} · push failed — the local clone is updated, the next push catches up`);
+      await onChanged();
+    } catch (err) {
+      say('danger', 'workspace update failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const notesDirty = notes.trim() !== (ws.notes ?? '');
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{ws.name}</span>
+        {ws.registrySelf && <Tag color="tide" mono>registry</Tag>}
+        {ws.protected && <Tag color="sun">protected</Tag>}
+        <div style={{ marginLeft: 'auto' }}>
+          {/* the board's own registry clone never offers the off position —
+              the server refuses it too (ADR 0013), this just keeps the UI honest */}
+          <Switch label="protected" checked={!!ws.protected} disabled={busy || (ws.registrySelf && !!ws.protected)}
+            onChange={(next) => { if (next) patch({ protected: true }, 'protection added — no confirmation needed for the safe direction'); else setConfirming(true); }} />
+        </div>
+      </div>
+      {(ws.repo || ws.path) && (
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
+          {ws.repo ?? ws.path}{ws.branch ? ` · ${ws.branch}` : ''}
+        </div>
+      )}
+      {ws.registrySelf && (
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          the board's own registry clone — protection stays on, however hard you press
+        </div>
+      )}
+      <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
+        placeholder="setup hints for humans — e.g. run npm install before first use" />
+      {notesDirty && (
+        <Button variant="secondary" disabled={busy} onClick={() => patch({ notes: notes.trim() }, 'notes updated')}>
+          Save notes — commits to the registry
+        </Button>
+      )}
+      <Dialog open={confirming} title="Remove protection?" onClose={() => setConfirming(false)}
+        footer={
+          <React.Fragment>
+            <Button variant="secondary" onClick={() => setConfirming(false)}>Keep protection</Button>
+            <Button variant="danger" onClick={() => { setConfirming(false); patch({ protected: false, confirm: true }, 'protection removed'); }}>
+              Remove protection
+            </Button>
+          </React.Fragment>
+        }>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
+          Tasks targeting <b>{ws.name}</b> will stop converting to approval questions,
+          and its PRs will follow the merge dial without waiting for you.
+        </p>
+      </Dialog>
+    </Card>
+  );
+}
+
+// Settings — the board's admin surface (issue #57 phase 3). One tab, one
+// section per resource: workspaces now; agents (#54), authority profiles
+// (#55), quiet hours (#64) and display language (#46) join as later sections.
+function SettingsScreen({ say }) {
+  const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
+  const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
+  const [unavailable, setUnavailable] = React.useState(false); // 503 — no registry configured
+  const load = async () => {
+    const res = await fetch('/api/workspaces');
+    if (!res.ok) { setUnavailable(true); setWorkspaces([]); return; }
+    setWorkspaces(await res.json());
+  };
+  React.useEffect(() => { load().catch(() => { setUnavailable(true); setWorkspaces([]); }); }, []);
+
+  const [mode, setMode] = React.useState('clone');
+  const [name, setName] = React.useState('');
+  const [repo, setRepo] = React.useState('');
+  const [path, setPath] = React.useState('');
+  const [notes, setNotes] = React.useState('');
+  const [prot, setProt] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  // mirror of the server's name gate, for the disabled state only — the
+  // server's assertValidWorkspaceName stays the authority
+  const nameOk = /^[A-Za-z0-9._-]+$/.test(name.trim()) && !['.', '..'].includes(name.trim());
+  const ok = nameOk && (mode === 'clone' ? !!repo.trim() : mode === 'register' ? !!path.trim() : true);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const { pushed } = await api('/api/workspaces', {
+        mode, name: name.trim(),
+        ...(mode === 'clone' ? { repo: repo.trim() } : {}),
+        ...(mode === 'register' ? { path: path.trim() } : {}),
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
+        ...(prot ? { protected: true } : {}),
+      });
+      say(pushed ? 'success' : 'warn', 'workspace added — committed to the registry',
+        pushed ? name.trim() : `${name.trim()} · push failed — the local clone is what the board reads, the next push catches up`);
+      setName(''); setRepo(''); setPath(''); setNotes(''); setProt(false);
+      await load();
+    } catch (err) {
+      // creation is idempotent server-side — a failed attempt leaves only
+      // orphans the registry never saw, so "just press it again" is honest
+      say('danger', 'workspace creation failed — safe to retry as-is', String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const modeOptions = [
+    { value: 'clone', label: 'clone a repository' },
+    { value: 'create', label: 'create a new private repository' },
+    { value: 'register', label: 'register an existing path' },
+  ];
+  const modeHint = {
+    clone: 'clones into the workspaces directory — the entry stays host-independent',
+    create: 'creates a private GitHub repo named after the workspace, then clones it',
+    register: 'points at a checkout already on this host — the one mode that records a path',
+  }[mode];
+  return (
+    <div style={{ padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div>
+        <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Settings</h1>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
+          workspaces — where tasks run
+        </p>
+      </div>
+      {unavailable && (
+        <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          no registry configured on this board — workspace settings need one
+        </Card>
+      )}
+      {(workspaces ?? []).map((ws) => (
+        <WorkspaceCard key={ws.name} ws={ws} say={say} onChanged={load} />
+      ))}
+      {!unavailable && workspaces && (
+        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            add a workspace
+          </span>
+          <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode(e.target.value)} />
+          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{modeHint}</p>
+          <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="letters, digits, - _ . — safe as a directory and a repo name" />
+          {mode === 'clone' && (
+            <Input label="Repository" value={repo} onChange={(e) => setRepo(e.target.value)}
+              placeholder="anything git clone accepts — recorded on the entry" />
+          )}
+          {mode === 'register' && (
+            <Input label="Path" value={path} onChange={(e) => setPath(e.target.value)}
+              placeholder="an existing checkout on this host" />
+          )}
+          <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
+            placeholder="setup hints for humans — optional" />
+          <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
+          <Button variant="primary" size="lg" full disabled={!ok || busy} onClick={submit}>
+            {busy ? 'Working…' : 'Add workspace — commits to the registry'}
+          </Button>
         </Card>
       )}
     </div>
@@ -894,6 +1065,7 @@ function App() {
         {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · ${t.type}`)} />}
         {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : 'free'} paused={data.paused} onTogglePause={togglePause} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
+        {tab === 'settings' && <SettingsScreen say={say} />}
         </div>
       </main>
 
