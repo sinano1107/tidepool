@@ -15,6 +15,7 @@ async function main() {
   const t = await bootTidepool({
     workspace: { name: "demo", path: "/tmp/tidepool-preview-workspace" },
     draftClient: draft,
+    registryCandidates: { assignees: [], workspaces: ["demo"] },
   });
   process.on("SIGINT", async () => {
     await t.stop();
