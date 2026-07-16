@@ -8,7 +8,8 @@
     "start": "tsx src/main.ts",
     "start:live": "TIDEPOOL_REGISTRY=$HOME/tidepool-registry tsx src/main.ts",
     "typecheck": "tsc --noEmit",
-    "build:ds-bundle": "node scripts/build-ds-bundle.mjs"
+    "build:ds-bundle": "node scripts/build-ds-bundle.mjs",
+    "preview:issue-states": "tsx scripts/preview-issue-states.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
