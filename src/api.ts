@@ -1,6 +1,11 @@
 import { Router, json } from "express";
 import { z } from "zod";
 import { UnknownAgentError, verifyAgentRepaired } from "./agent.js";
+import {
+  type AgentAdmin,
+  InvalidAgentIconError,
+  UnknownAuthorityProfileError,
+} from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -15,11 +20,6 @@ import {
   InvalidWorkspaceNameError,
   type RegistryCandidates,
 } from "./registry.js";
-import {
-  InvalidAgentIconError,
-  UnknownAuthorityProfileError,
-  type AgentAdmin,
-} from "./agent-create.js";
 import {
   answerQuestion,
   type BoardTask,
@@ -546,12 +546,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
+  // the settings surface's one-round-trip GET (issue #71): bundles the
+  // edit-form list with the authority select's candidates here at the route
+  // layer — `AgentAdmin.list` itself keeps phase 1's shape (issue #70)
   router.get("/agents", (_req, res) => {
     if (!agentAdmin?.list) {
       res.status(503).json({ error: "agent settings not configured" });
       return;
     }
-    res.json(agentAdmin.list());
+    res.json({
+      agents: agentAdmin.list(),
+      authorityProfiles: agentAdmin.authorityProfiles?.() ?? [],
+    });
   });
 
   router.patch("/agents/:name", async (req, res) => {

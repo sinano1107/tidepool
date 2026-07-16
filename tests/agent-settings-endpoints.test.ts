@@ -14,21 +14,19 @@ afterEach(() => t?.stop());
 it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往復で返す(issue #71)", async () => {
   t = await bootTidepool({
     agentAdmin: {
-      list: () => ({
-        agents: [
-          {
-            name: "tako",
-            version: "1",
-            authority: "standard",
-            description: "General agent",
-            icon: "🐙",
-            model: undefined,
-            effort: undefined,
-            systemPrompt: "You are Tako.",
-          },
-        ],
-        authorityProfiles: ["standard", "restricted"],
-      }),
+      list: () => [
+        {
+          name: "tako",
+          version: "1",
+          authority: "standard",
+          description: "General agent",
+          icon: "🐙",
+          model: undefined,
+          effort: undefined,
+          systemPrompt: "You are Tako.",
+        },
+      ],
+      authorityProfiles: () => ["standard", "restricted"],
     },
   });
 

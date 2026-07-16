@@ -132,32 +132,26 @@ function sameEffectiveFields(existing: AgentDefinition, input: UpdateAgentInput)
  *  field, so the view must carry every field. */
 export type AgentView = AgentDefinition;
 
-/** GET /api/agents's whole response (issue #71): the edit-form list plus the
- *  authority select's candidates — the registry's existing profile names —
- *  bundled in one round trip rather than a second request. */
-export interface AgentSettingsView {
-  agents: AgentView[];
-  authorityProfiles: string[];
-}
-
-export function listAgentSettings(deps: AgentAdminDeps): AgentSettingsView {
-  const registry = loadRegistry(deps.registryDir);
-  return {
-    agents: Object.values(registry.agents),
-    authorityProfiles: Object.keys(registry.authority),
-  };
+export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
+  return Object.values(loadRegistry(deps.registryDir).agents);
 }
 
 export type CreateAgentFn = (input: CreateAgentInput) => Promise<RegistryCommitResult>;
 export type UpdateAgentFn = (input: UpdateAgentInput) => Promise<RegistryCommitResult>;
 
 /** The settings surface's agent verbs as one bundle, WorkspaceAdmin's twin
- *  (issue #70 / #71): they exist together or not at all (a registry is
- *  configured, or none is), so the composition root binds them once. */
+ *  (issue #70): they exist together or not at all (a registry is configured,
+ *  or none is), so the composition root binds them once. */
 export interface AgentAdmin {
   create: CreateAgentFn;
-  list: () => AgentSettingsView;
+  list: () => AgentView[];
   update: UpdateAgentFn;
+  /** The authority select's candidates — the registry's existing profile
+   *  names (issue #71) — a sibling of `list`, not a reshape of it: GET
+   *  /api/agents bundles the two into one round trip at the route layer, but
+   *  `list` itself keeps phase 1's shape (issue #70) since nothing about
+   *  exposing it over HTTP requires changing what it returns. */
+  authorityProfiles: () => string[];
 }
 
 function assertKnownAuthority(registry: Registry, profileName: string): void {

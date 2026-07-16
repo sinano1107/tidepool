@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
+import { createAgent, listAgentViews, updateAgent, type AgentAdmin } from "./agent-create.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
@@ -27,7 +28,6 @@ import {
   updateWorkspace,
   type WorkspaceAdmin,
 } from "./workspace-create.js";
-import { createAgent, listAgentSettings, updateAgent, type AgentAdmin } from "./agent-create.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -230,8 +230,11 @@ function agentAdmin(): AgentAdmin | undefined {
   const deps = { registryDir };
   return {
     create: (input) => createAgent(input, deps),
-    list: () => listAgentSettings(deps),
+    list: () => listAgentViews(deps),
     update: (input) => updateAgent(input, deps),
+    // registry-global, not per-agent (issue #71) — read directly here, same
+    // posture as registryCandidates()/agentRegisteredChecker() above
+    authorityProfiles: () => Object.keys(loadRegistry(registryDir).authority),
   };
 }
 
