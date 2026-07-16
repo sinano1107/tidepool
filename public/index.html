@@ -67,8 +67,8 @@
 <body>
 <div id="root"></div>
 <!-- triage/board/queue come straight from the design-synced kit (single
-     source, no copies); register stays a local plain form until the LLM-draft
-     flow and its backend fields (assignee, risk) exist -->
+     source, no copies); register stays a local component (its dump → draft →
+     edit flow, issue #65, is specific to this screen and not part of the kit) -->
 <script type="text/babel" src="/kit/queue-screen.jsx"></script>
 <script type="text/babel" src="/kit/triage-screen.jsx"></script>
 <script type="text/babel" src="/kit/single-question-view.jsx"></script>
@@ -255,23 +255,39 @@ function TpTideWash({ label, emoji, duration = 1250 }) {
   );
 }
 
-// Registration — the plain form from the kit, wired to POST /api/tasks.
-// The brain-dump → LLM-draft flow arrives with the agent runtime.
-// The issue-backed source (issue #49): the board stores only a reference
+// Registration — wired to POST /api/tasks. Two content sources:
+// manual (this screen's own brain-dump → LLM-draft → edit flow, issue #65)
+// and the issue-backed source (issue #49): the board stores only a reference
 // (workspace + issue number) and the registration gate may reject with a
 // suggested issue comment — shown inline here for the human to approve
 // (posting it is the approval; the board never posts on its own).
 function RegisterScreen({ onRegister }) {
-  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const [source, setSource] = React.useState('manual');
   const [type, setType] = React.useState('work');
   const [title, setTitle] = React.useState('');
   const [purpose, setPurpose] = React.useState('');
   const [criteria, setCriteria] = React.useState('');
+  const [assignee, setAssignee] = React.useState('');
   const [workspace, setWorkspace] = React.useState('');
+  const [risk, setRisk] = React.useState(false);
+  const [review, setReview] = React.useState(false);
   const [issueNumber, setIssueNumber] = React.useState('');
   const [gate, setGate] = React.useState(null); // { missing, suggested_comment }
   const [busy, setBusy] = React.useState(false);
+  // brain dump → LLM draft (issue #12, wired here by issue #65): dump stays
+  // its own field so a redraft never has to fight stale content-field values
+  const [dump, setDump] = React.useState('');
+  const [drafted, setDrafted] = React.useState(false);
+  const [plain, setPlain] = React.useState(false);
+  const [draftBusy, setDraftBusy] = React.useState(false);
+  // registry-sourced assignee/workspace candidates (issue #12/#65) — fetched
+  // once per screen visit; RegisterScreen remounts fresh each tab entry (the
+  // shell's key={tab}), so this never goes stale within a sitting
+  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
+  React.useEffect(() => {
+    fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
+  }, []);
   const issueMode = source === 'github issue';
   const ok = issueMode
     ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim())
@@ -279,14 +295,27 @@ function RegisterScreen({ onRegister }) {
   const fields = () =>
     issueMode
       ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()) }
-      : { type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim() };
+      : {
+          type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim(),
+          risk_flag: risk, review_flag: review,
+          // unset assignee/workspace resolve to the board's defaults at
+          // execution time (CONTEXT.md) — omit rather than send '' so an
+          // unknown-workspace 400 never fires on a field the human left blank
+          ...(assignee ? { assignee } : {}),
+          ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
+        };
+  const resetContent = () => {
+    setDump(''); setDrafted(false); setPlain(false);
+    setType('work'); setTitle(''); setPurpose(''); setCriteria('');
+    setAssignee(''); setWorkspace(''); setIssueNumber('');
+    setRisk(false); setReview(false);
+  };
   const submitFields = async (f) => {
     setBusy(true);
     setGate(null);
     try {
       await onRegister(f);
-      setType('work'); setTitle(''); setPurpose(''); setCriteria('');
-      setWorkspace(''); setIssueNumber('');
+      resetContent();
     } catch (err) {
       // a gate rejection carries the fix; anything else the toast reported.
       // The inspected reference is burned into the gate state so a later
@@ -324,27 +353,83 @@ function RegisterScreen({ onRegister }) {
       github_issue_number: gate.github_issue_number,
     });
   };
+  const draftFields = async () => {
+    setDraftBusy(true);
+    try {
+      const d = await api('/api/tasks/draft', { dump: dump.trim() });
+      setTitle(d.title); setPurpose(d.purpose); setCriteria(d.completion_criteria);
+      setAssignee(d.assignee ?? ''); setWorkspace(d.workspace ?? '');
+      setRisk(!!d.risk_flag); setReview(!!d.review_flag);
+      setDrafted(true);
+    } catch {
+      // the draft client is unset or unreachable (always a 503 — api.ts's
+      // own posture) — never blocks registration, only drops to the plain
+      // form with blank fields (issue #12 AC3 / issue #65 AC3)
+      setPlain(true);
+    }
+    setDraftBusy(false);
+  };
+  const togglePlainForm = () => { const next = !plain; resetContent(); setPlain(next); };
+  const assigneeOptions = [
+    { value: '', label: '(default agent)' },
+    ...candidates.assignees.map((a) => ({ value: a, label: a })),
+  ];
+  const workspaceNameOptions = candidates.workspaces.map((w) => ({ value: w, label: w }));
+  // manual content's workspace is optional (unset → the board's default at
+  // execution time); an issue reference's workspace is required — it fixes
+  // *which* issue the reference means (CONTEXT.md), so its placeholder reads
+  // as a prompt to choose, never as an implicit default
+  const workspaceOptions = [{ value: '', label: '(default workspace)' }, ...workspaceNameOptions];
+  const issueWorkspaceOptions = [{ value: '', label: 'select workspace…' }, ...workspaceNameOptions];
+  const primaryAction = issueMode || plain || drafted
+    ? { label: 'Register — appends to queue tail', disabled: !ok || busy, onClick: submit }
+    : { label: draftBusy ? 'Drafting…' : 'Draft fields', disabled: !dump.trim() || draftBusy, onClick: draftFields };
   return (
     <div style={{ padding: '20px 16px' }}>
       <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Register</h1>
-      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>plain form — the LLM drafting flow arrives with the agent runtime</p>
+      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+        {issueMode
+          ? "reference a GitHub issue — its title/purpose/completion criteria stay live on GitHub"
+          : plain
+            ? 'the LLM is unreachable — fill the fields yourself'
+            : 'dump it — the LLM drafts the fields, you confirm'}
+      </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => { setSource(e.target.value); setGate(null); }} />
-        {issueMode ? (
+        {issueMode && (
           <React.Fragment>
-            <Input label="Workspace" value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="the repo half of the issue's identity — fixed at registration" />
+            <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
           </React.Fragment>
-        ) : (
+        )}
+        {!issueMode && !plain && !drafted && (
+          <Input multiline rows={4} placeholder="what needs doing, in your own words — sloppy is fine here, sloppy completion criteria are not" value={dump} onChange={(e) => setDump(e.target.value)} />
+        )}
+        {!issueMode && (plain || drafted) && (
           <React.Fragment>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: drafted ? 'var(--tide-4)' : 'var(--sun-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              {drafted ? 'drafted — edit freely' : 'plain form — same fields, no draft'}
+            </span>
             <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
             <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
             <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
             <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value)} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />
+              <Select label="Workspace" options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+            </div>
+            <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />
+            <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
           </React.Fragment>
         )}
-        <Button variant="primary" size="lg" full disabled={!ok || busy} onClick={submit}>Register — appends to queue tail</Button>
+        <Button variant="primary" size="lg" full disabled={primaryAction.disabled} onClick={primaryAction.onClick}>{primaryAction.label}</Button>
       </Card>
+      {!issueMode && (
+        <button onClick={togglePlainForm}
+          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '10px 0 0', display: 'block' }}>
+          {plain ? '← back to brain dump' : 'LLM unavailable? use the plain form'}
+        </button>
+      )}
       {gate && (
         <Card style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14, borderColor: 'var(--coral-3, var(--rock-3))' }}>
           <div style={{ fontWeight: 600 }}>the issue fails the registration gate</div>
