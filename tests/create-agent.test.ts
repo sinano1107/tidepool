@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createAgent,
   InvalidAgentIconError,
-  listAgentViews,
+  listAgentSettings,
   UnknownAuthorityProfileError,
 } from "../src/agent-create.js";
 import { RegistryCloneBusyError } from "../src/registry-write.js";
@@ -219,18 +219,18 @@ describe("createAgent: icon 検証(ADR 0026 — loadRegistry を壊す書き込�
   );
 });
 
-describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
-  it("registry の全エージェントを systemPrompt 含む全フィールドで返す", async () => {
+describe("listAgentSettings: 設定面向けの一覧(issue #70 / #71)", () => {
+  it("registry の全エージェントを systemPrompt 含む全フィールドで、authority プロファイル名一覧を添えて返す", async () => {
     const registryDir = await makeMainRegistry();
     await createAgent(
       { name: "tako", authority: "standard", description: "General agent", icon: "🐙", systemPrompt: "You are Tako." },
       { registryDir },
     );
 
-    const views = listAgentViews({ registryDir });
+    const settings = listAgentSettings({ registryDir });
 
-    expect(views.map((v) => v.name).sort()).toEqual(["deckhand", "tako"]);
-    expect(views.find((v) => v.name === "tako")).toEqual({
+    expect(settings.agents.map((v) => v.name).sort()).toEqual(["deckhand", "tako"]);
+    expect(settings.agents.find((v) => v.name === "tako")).toEqual({
       name: "tako",
       version: "1",
       authority: "standard",
@@ -240,5 +240,6 @@ describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
       effort: undefined,
       systemPrompt: "You are Tako.",
     });
+    expect(settings.authorityProfiles).toEqual(["standard"]);
   });
 });

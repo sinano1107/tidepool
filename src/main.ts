@@ -27,6 +27,7 @@ import {
   updateWorkspace,
   type WorkspaceAdmin,
 } from "./workspace-create.js";
+import { createAgent, listAgentSettings, updateAgent, type AgentAdmin } from "./agent-create.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -220,6 +221,20 @@ function workspaceAdmin(): WorkspaceAdmin | undefined {
   };
 }
 
+/** The settings surface's agent verbs (issue #71), workspaceAdmin's twin:
+ *  bound to this board's registry clone here at the composition root — the
+ *  API layer only ever sees the finished callbacks. Without a registry there
+ *  is nowhere to administer agents at all. */
+function agentAdmin(): AgentAdmin | undefined {
+  if (!registryDir) return undefined;
+  const deps = { registryDir };
+  return {
+    create: (input) => createAgent(input, deps),
+    list: () => listAgentSettings(deps),
+    update: (input) => updateAgent(input, deps),
+  };
+}
+
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -230,6 +245,7 @@ const server = await startServer({
   resolveWorkspace: workspaceResolver(),
   github,
   workspaceAdmin: workspaceAdmin(),
+  agentAdmin: agentAdmin(),
   resolveAuthority: authorityResolver(),
   agentRegistered: agentRegisteredChecker(),
   isProtectedWorkspace: protectedWorkspaceChecker(),

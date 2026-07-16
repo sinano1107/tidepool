@@ -1,6 +1,6 @@
 import { Router, json } from "express";
 import { z } from "zod";
-import { verifyAgentRepaired } from "./agent.js";
+import { UnknownAgentError, verifyAgentRepaired } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -10,7 +10,16 @@ import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { isPaused, setPaused } from "./pause.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
-import { InvalidWorkspaceNameError, type RegistryCandidates } from "./registry.js";
+import {
+  InvalidAgentNameError,
+  InvalidWorkspaceNameError,
+  type RegistryCandidates,
+} from "./registry.js";
+import {
+  InvalidAgentIconError,
+  UnknownAuthorityProfileError,
+  type AgentAdmin,
+} from "./agent-create.js";
 import {
   answerQuestion,
   type BoardTask,
@@ -125,6 +134,23 @@ const updateWorkspaceSchema = z.object({
   protected: z.boolean().optional(),
   confirm: z.boolean().optional(),
 });
+
+// the shape mirrors CreateAgentInput directly; name/authority validity and
+// icon shape live in the domain (assertValidAgentName / assertKnownAuthority
+// / assertValidIcon) so callers get a domain error, not a schema error
+const createAgentSchema = z.object({
+  name: z.string().min(1),
+  authority: z.string().min(1),
+  description: z.string().min(1),
+  icon: z.string().optional(),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+  systemPrompt: z.string().min(1),
+});
+
+// the edit form resubmits every field but `name`, which comes from the URL
+// (issue #71, same split as updateWorkspaceSchema)
+const updateAgentSchema = createAgentSchema.omit({ name: true });
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
@@ -258,6 +284,11 @@ export interface ApiRouterDeps {
    *  absent — tests fake them singly) → not configured, the route reports
    *  503. */
   workspaceAdmin?: Partial<WorkspaceAdmin>;
+  /** The settings surface's agent verbs (issue #71), workspaceAdmin's twin —
+   *  threaded in by main.ts with the registry clone already bound. Absent (or
+   *  a verb absent — tests fake them singly) → not configured, the route
+   *  reports 503. */
+  agentAdmin?: Partial<AgentAdmin>;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -275,6 +306,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
+    agentAdmin,
   } = deps;
   const router = Router();
   router.use(json());
@@ -476,6 +508,69 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (err instanceof RegistrySelfUnprotectError) {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)
         res.status(403).json({ error: err.message });
+      } else if (err instanceof RegistryCloneBusyError) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+
+  router.post("/agents", async (req, res) => {
+    const parsed = createAgentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!agentAdmin?.create) {
+      res.status(503).json({ error: "agent creation not configured" });
+      return;
+    }
+    try {
+      res.status(201).json(await agentAdmin.create(parsed.data));
+    } catch (err) {
+      // same posture as /workspaces' create: the human's own synchronous
+      // request fails fast on a bad input (400), a busy registry clone is a
+      // 409 the idempotent flow retries later, anything else is 502
+      if (
+        err instanceof InvalidAgentNameError ||
+        err instanceof UnknownAuthorityProfileError ||
+        err instanceof InvalidAgentIconError
+      ) {
+        res.status(400).json({ error: err.message });
+      } else if (err instanceof RegistryCloneBusyError) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+
+  router.get("/agents", (_req, res) => {
+    if (!agentAdmin?.list) {
+      res.status(503).json({ error: "agent settings not configured" });
+      return;
+    }
+    res.json(agentAdmin.list());
+  });
+
+  router.patch("/agents/:name", async (req, res) => {
+    const parsed = updateAgentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!agentAdmin?.update) {
+      res.status(503).json({ error: "agent settings not configured" });
+      return;
+    }
+    try {
+      res.json(await agentAdmin.update({ name: req.params.name, ...parsed.data }));
+    } catch (err) {
+      if (err instanceof UnknownAgentError) {
+        res.status(404).json({ error: err.message });
+      } else if (err instanceof UnknownAuthorityProfileError || err instanceof InvalidAgentIconError) {
+        res.status(400).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
         res.status(409).json({ error: err.message });
       } else {

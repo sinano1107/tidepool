@@ -14,6 +14,7 @@ import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./regist
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import type { WorkspaceAdmin } from "./workspace-create.js";
+import type { AgentAdmin } from "./agent-create.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -99,6 +100,10 @@ export interface ServerOptions {
    *  registry clone / base dir / GitHub client by main.ts. Absent → no
    *  registry configured; the /api/workspaces routes report 503. */
   workspaceAdmin?: Partial<WorkspaceAdmin>;
+  /** The settings surface's agent verbs (issue #71), workspaceAdmin's twin —
+   *  bound to the registry clone by main.ts. Absent → no registry configured;
+   *  the /api/agents routes report 503. */
+  agentAdmin?: Partial<AgentAdmin>;
 }
 
 export interface TidepoolServer {
@@ -207,6 +212,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin: options.workspaceAdmin,
+      agentAdmin: options.agentAdmin,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

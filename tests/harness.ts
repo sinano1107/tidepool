@@ -12,6 +12,7 @@ import { BOARD_WORKER_ID, registerTask, type RegisterTaskInput, type Task } from
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
+import type { AgentAdmin } from "../src/agent-create.js";
 import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
@@ -76,6 +77,11 @@ export interface BootOptions {
    *  itself has its own real-git coverage (tests/create-workspace.test.ts,
    *  tests/update-workspace.test.ts). */
   workspaceAdmin?: Partial<WorkspaceAdmin>;
+  /** The settings surface's agent verbs (issue #71), workspaceAdmin's twin —
+   *  endpoint tests fake the one verb they exercise; the orchestration
+   *  itself has its own coverage (tests/create-agent.test.ts,
+   *  tests/update-agent.test.ts). */
+  agentAdmin?: Partial<AgentAdmin>;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -107,6 +113,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     isProtectedWorkspace: options.isProtectedWorkspace,
     listAgents: options.listAgents,
     workspaceAdmin: options.workspaceAdmin,
+    agentAdmin: options.agentAdmin,
   });
   let stopped = false;
   const stopServer = async () => {
