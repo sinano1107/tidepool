@@ -150,30 +150,38 @@ function liveTitle(t) {
 }
 
 // Map the server board + decision log into the shape the kit screens consume.
-function mapData(board, log, paused) {
+// `icons` is the registry's assignee name → icon map (issue #52's
+// GET /api/registry/candidates); a name absent from it renders with
+// AgentChip's initials fallback.
+function mapData(board, log, paused, icons = {}) {
   const fmtTime = (iso) => {
     const d = new Date(iso);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   };
   const questions = board
     .filter((t) => t.status === 'todo' && t.type === 'question')
-    .map((q) => ({
-      id: q.id, parent: q.parent_id,
+    .map((q) => {
       // a question has no assignee (it is answered here); show who it blocks
-      agent: board.find((p) => p.id === q.parent_id)?.assignee ?? '—',
-      context: q.purpose,
-      // 1-4 items, each with its own title/detail/options (issue #30) — a
-      // single-item bundle is the degenerate, most common case
-      items: (q.question_items ?? []).map((item) => ({
-        title: item.title, detail: item.detail,
-        options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
-      })),
-    }));
+      const parentAssignee = board.find((p) => p.id === q.parent_id)?.assignee;
+      return {
+        id: q.id, parent: q.parent_id,
+        agent: parentAssignee ?? '—',
+        agentIcon: parentAssignee ? icons[parentAssignee] : undefined,
+        context: q.purpose,
+        // 1-4 items, each with its own title/detail/options (issue #30) — a
+        // single-item bundle is the degenerate, most common case
+        items: (q.question_items ?? []).map((item) => ({
+          title: item.title, detail: item.detail,
+          options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
+        })),
+      };
+    });
   // newest first for the skim; unread = beyond the read cursor. workspace
   // grouping/fold (issue #44) is pure view derivation the kit does itself
   // from this flat, order-independent list — see triage-screen.jsx.
   const logEntries = [...log.entries].reverse().map((e) => ({
     id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
+    agentIcon: icons[e.worker_id],
     kind: e.kind === 'task_completed' ? 'completion' : 'decision',
     text: e.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
     unread: e.id > log.cursor,
@@ -188,7 +196,8 @@ function mapData(board, log, paused) {
   const queue = board
     .filter((t) => (t.status === 'todo' || t.status === 'blocked') && t.type !== 'question')
     .map((t) => ({
-      id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
+      id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
+      assigneeIcon: t.assignee ? icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked',
       frontInserted: RECENT_FRONTS.has(t.id), flash: RECENT_FRONTS.has(t.id),
     }));
@@ -205,6 +214,7 @@ function mapData(board, log, paused) {
     cols[t.status].push({
       id: t.id, title: liveTitle(t), type: t.type,
       assignee: t.assignee ?? (t.type === 'question' ? 'you' : undefined),
+      assigneeIcon: t.assignee ? icons[t.assignee] : undefined,
       human: t.type === 'question', risk: !!t.risk_flag, children: openChildren[t.id],
     });
   }
@@ -216,7 +226,7 @@ function mapData(board, log, paused) {
     ? { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
   return {
-    questions, log: logEntries, queue, board: cols,
+    questions, log: logEntries, queue, board: cols, icons,
     // empty until their domain slices exist: human tasks / agent registry /
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
@@ -226,12 +236,13 @@ function mapData(board, log, paused) {
 }
 
 async function fetchData() {
-  const [board, log, pause] = await Promise.all([
+  const [board, log, pause, candidates] = await Promise.all([
     fetch('/api/tasks').then((r) => r.json()),
     fetch('/api/log').then((r) => r.json()),
     fetch('/api/pause').then((r) => r.json()),
+    fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
   ]);
-  return mapData(board, log, pause.paused);
+  return mapData(board, log, pause.paused, candidates.icons);
 }
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
@@ -897,7 +908,8 @@ function App() {
     if (!res.ok) throw new Error(res.statusText);
     const { queue } = await res.json();
     return (queue ?? []).map((t) => ({
-      id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined, risk: !!t.risk_flag,
+      id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
+      assigneeIcon: t.assignee ? data.icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked', frontInserted: t.front_inserted,
     }));
   };

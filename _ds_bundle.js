@@ -106,13 +106,17 @@ Object.assign(__ds_scope, { IconButton });
 // components/board/AgentChip.jsx
 try { (() => {
 const chipPalette = ["var(--tide-3)", "var(--sun-3)", "var(--coral-3)", "var(--grass-3)", "var(--rock-5)"];
-const speciesIcons = { "reef-crab": "\u{1F980}", "anemone": "\u{1FAB8}", "hermit": "\u{1F41A}" };
-function AgentChip({ name = "", human = false, size = "md", style }) {
+function isSingleGrapheme(value) {
+  if (!value) return false;
+  const segments = [...new Intl.Segmenter().segment(value)];
+  return segments.length === 1 && segments[0].segment === value;
+}
+function AgentChip({ name = "", icon, human = false, size = "md", style }) {
   const px = size === "sm" ? 20 : 26;
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = hash * 31 + name.charCodeAt(i) | 0;
-  const species = human ? "\u{1F9CD}" : speciesIcons[name];
-  const bg = species ? "var(--tide-1)" : chipPalette[Math.abs(hash) % chipPalette.length];
+  const glyph = human ? "\u{1F9CD}" : isSingleGrapheme(icon) ? icon : void 0;
+  const bg = glyph ? "var(--tide-1)" : chipPalette[Math.abs(hash) % chipPalette.length];
   const initials = name.split(/[-_ ]/).map((w) => w[0]).join("").slice(0, 2);
   return /* @__PURE__ */ React.createElement("span", { title: human ? "you" : name, style: { display: "inline-flex", alignItems: "center", gap: 6, ...style } }, /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", style: {
     width: px,
@@ -124,10 +128,10 @@ function AgentChip({ name = "", human = false, size = "md", style }) {
     alignItems: "center",
     justifyContent: "center",
     fontFamily: "var(--font-mono)",
-    fontSize: species ? px * 0.58 : px * 0.42,
+    fontSize: glyph ? px * 0.58 : px * 0.42,
     fontWeight: 500,
     flexShrink: 0
-  } }, species || initials), size !== "sm" && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, human ? "you" : name));
+  } }, glyph || initials), size !== "sm" && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, human ? "you" : name));
 }
 Object.assign(__ds_scope, { AgentChip });
 })(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/AgentChip.jsx", error: String((e && e.message) || e) }); }
@@ -162,7 +166,7 @@ const kindColors = {
   objection: "var(--coral-4)"
 };
 function LogEntry({ entry = {}, onObject, active = false, style }) {
-  const { time, taskId, agent, kind = "decision", text, objection, unread = false } = entry;
+  const { time, taskId, agent, agentIcon, kind = "decision", text, objection, unread = false } = entry;
   const completion = kind === "completion";
   const clickable = !!onObject && !objection;
   return /* @__PURE__ */ React.createElement(
@@ -192,7 +196,7 @@ function LogEntry({ entry = {}, onObject, active = false, style }) {
       }
     },
     /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", paddingTop: 2, flexShrink: 0 } }, time),
-    /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, size: "sm", style: { paddingTop: 1 } }),
+    /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, size: "sm", style: { paddingTop: 1 } }),
     /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginRight: 6 } }, taskId), completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text), objection && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, padding: "6px 10px", background: "var(--coral-1)", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, "objection: ", objection)),
     active && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", paddingTop: 3, flexShrink: 0 } }, "objecting\u2026")
   );
@@ -203,7 +207,7 @@ Object.assign(__ds_scope, { LogEntry });
 // components/board/QueueItem.jsx
 try { (() => {
 function QueueItem({ position, task = {}, skipped = false, frontInserted = false, flash = false, onFront, style }) {
-  const { id, title, assignee } = task;
+  const { id, title, assignee, assigneeIcon } = task;
   return /* @__PURE__ */ React.createElement(
     "div",
     {
@@ -228,7 +232,7 @@ function QueueItem({ position, task = {}, skipped = false, frontInserted = false
     task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null),
     skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, "skipped \xB7 resumes on reset"),
     frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"),
-    /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, size: "sm" }),
+    /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }),
     onFront && !skipped && /* @__PURE__ */ React.createElement(
       "button",
       {
@@ -306,7 +310,7 @@ Object.assign(__ds_scope, { StatusBadge });
 // components/board/TaskCard.jsx
 try { (() => {
 function TaskCard({ task = {}, onClick, style }) {
-  const { id, title, status = "todo", type = "work", assignee, human = false, risk = false, children: childCount = 0 } = task;
+  const { id, title, status = "todo", type = "work", assignee, assigneeIcon, human = false, risk = false, children: childCount = 0 } = task;
   const [hover, setHover] = React.useState(false);
   const cancelled = status === "cancelled";
   return /* @__PURE__ */ React.createElement(
@@ -335,7 +339,7 @@ function TaskCard({ task = {}, onClick, style }) {
       marginBottom: 10,
       lineHeight: "var(--leading-tight)"
     } }, title),
-    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", rowGap: 6, minWidth: 0 } }, /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, human, size: "sm" }), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flexShrink: 1 } }, human ? "you" : assignee), childCount > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)", whiteSpace: "nowrap" } }, childCount, " open child", childCount > 1 ? "ren" : ""), /* @__PURE__ */ React.createElement(__ds_scope.StatusBadge, { status, style: { marginLeft: "auto" } }))
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", rowGap: 6, minWidth: 0 } }, /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, human, size: "sm" }), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flexShrink: 1 } }, human ? "you" : assignee), childCount > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)", whiteSpace: "nowrap" } }, childCount, " open child", childCount > 1 ? "ren" : ""), /* @__PURE__ */ React.createElement(__ds_scope.StatusBadge, { status, style: { marginLeft: "auto" } }))
   );
 }
 Object.assign(__ds_scope, { TaskCard });

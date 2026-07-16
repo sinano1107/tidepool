@@ -4,7 +4,7 @@ import { RiskFlag } from './RiskFlag.jsx';
 import { AgentChip } from './AgentChip.jsx';
 
 export function TaskCard({ task = {}, onClick, style }) {
-  const { id, title, status = 'todo', type = 'work', assignee, human = false, risk = false, children: childCount = 0 } = task;
+  const { id, title, status = 'todo', type = 'work', assignee, assigneeIcon, human = false, risk = false, children: childCount = 0 } = task;
   const [hover, setHover] = React.useState(false);
   const cancelled = status === 'cancelled';
   return (
@@ -35,7 +35,7 @@ export function TaskCard({ task = {}, onClick, style }) {
         marginBottom: 10, lineHeight: 'var(--leading-tight)',
       }}>{title}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', rowGap: 6, minWidth: 0 }}>
-        <AgentChip name={assignee} human={human} size="sm" />
+        <AgentChip name={assignee} icon={assigneeIcon} human={human} size="sm" />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>{human ? 'you' : assignee}</span>
         {childCount > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--sun-4)', whiteSpace: 'nowrap' }}>{childCount} open child{childCount > 1 ? 'ren' : ''}</span>}
         <StatusBadge status={status} style={{ marginLeft: 'auto' }} />

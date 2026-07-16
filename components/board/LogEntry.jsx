@@ -8,7 +8,7 @@ const kindColors = {
 };
 
 export function LogEntry({ entry = {}, onObject, active = false, style }) {
-  const { time, taskId, agent, kind = 'decision', text, objection, unread = false } = entry;
+  const { time, taskId, agent, agentIcon, kind = 'decision', text, objection, unread = false } = entry;
   const completion = kind === 'completion';
   const clickable = !!onObject && !objection;
   return (
@@ -30,7 +30,7 @@ export function LogEntry({ entry = {}, onObject, active = false, style }) {
       }}
     >
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', paddingTop: 2, flexShrink: 0 }}>{time}</span>
-      <AgentChip name={agent} size="sm" style={{ paddingTop: 1 }} />
+      <AgentChip name={agent} icon={agentIcon} size="sm" style={{ paddingTop: 1 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 'var(--text-sm)', color: kindColors[kind], lineHeight: 'var(--leading-normal)' }}>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginRight: 6 }}>{taskId}</span>

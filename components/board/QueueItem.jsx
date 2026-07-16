@@ -3,7 +3,7 @@ import { IdChip } from './IdChip.jsx';
 import { RiskFlag } from './RiskFlag.jsx';
 
 export function QueueItem({ position, task = {}, skipped = false, frontInserted = false, flash = false, onFront, style }) {
-  const { id, title, assignee } = task;
+  const { id, title, assignee, assigneeIcon } = task;
   // hover styling lives in CSS (.tp-queue-item) — JS mouseenter state gets stuck
   // when rows are reordered under a stationary pointer.
   return (
@@ -27,7 +27,7 @@ export function QueueItem({ position, task = {}, skipped = false, frontInserted 
       {task.risk && <RiskFlag />}
       {skipped && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)' }}>skipped · resumes on reset</span>}
       {frontInserted && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)' }}>front-inserted</span>}
-      <AgentChip name={assignee} size="sm" />
+      <AgentChip name={assignee} icon={assigneeIcon} size="sm" />
       {onFront && !skipped && (
         <button
           className="tp-queue-front-btn"

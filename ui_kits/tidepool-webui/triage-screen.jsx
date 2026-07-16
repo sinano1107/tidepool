@@ -94,7 +94,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked }) {
     <Card style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{q.id}</span>
-        <AgentChip name={q.agent} size="sm" />
+        <AgentChip name={q.agent} icon={q.agentIcon} size="sm" />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{q.agent}</span>
         {q.parent && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>blocks {q.parent}</span>}
       </div>
@@ -502,7 +502,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         const pending = Object.entries(answers).filter(([, a]) => a)
           .map(([qid]) => data.questions.find((x) => x.id === qid))
           .filter((q) => q.parent)
-          .map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, frontInserted: true }));
+          .map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, assigneeIcon: q.agentIcon, frontInserted: true }));
         if (nObjections > 0) {
           pending.push({ id: 'tp-0151', title: `repair task — ${nObjections} objection${nObjections > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true });
         }

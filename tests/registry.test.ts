@@ -96,6 +96,39 @@ describe("loadRegistry", () => {
     expect(loadRegistry(without).agents.deckhand!.effort).toBeUndefined();
   });
 
+  it("frontmatter の icon は optional: あれば読み、なければ undefined", async () => {
+    const withIcon = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(withIcon).agents.deckhand!.icon).toBe("\u{1F419}");
+    const without = await makeRegistry();
+    expect(loadRegistry(without).agents.deckhand!.icon).toBeUndefined();
+  });
+
+  it("frontmatter の icon が複数文字(絵文字2つ)の場合は登録時にエラーになる(ADR 0026: 単一グラフェム制約)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\u{1F980}\n---\nYou are Deckhand.\n`,
+    });
+    expect(() => loadRegistry(dir)).toThrow(/icon/i);
+  });
+
+  it("frontmatter の icon が絵文字以外の文字の場合は登録時にエラーになる", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: a\n---\nYou are Deckhand.\n`,
+    });
+    expect(() => loadRegistry(dir)).toThrow(/icon/i);
+  });
+
+  it("frontmatter の icon が Twemoji 収録範囲外の絵文字の場合は登録時にエラーになる(ADR 0026)", async () => {
+    // U+1FADD (radish, Unicode 16.0) — not yet in @twemoji/parser's coverage
+    // as of the pinned version; tracks the dependency's coverage table by
+    // design (ADR 0026: validation must reject what the renderer can't show).
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: \u{1FADD}\n---\nYou are Deckhand.\n`,
+    });
+    expect(() => loadRegistry(dir)).toThrow(/icon/i);
+  });
+
   it("authority プロファイルを読み込む: guidance の prose が取れる", async () => {
     const dir = await makeRegistry();
     const registry = loadRegistry(dir);

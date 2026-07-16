@@ -9,7 +9,7 @@ it("without a configured registry, candidates are empty rather than an error", a
 
   const res = await api(t.baseUrl, "GET", "/api/registry/candidates");
   expect(res.status).toBe(200);
-  expect(res.json).toEqual({ assignees: [], workspaces: [] });
+  expect(res.json).toEqual({ assignees: [], workspaces: [], icons: {} });
 });
 
 it("returns the configured assignee and workspace candidates", async () => {
@@ -17,6 +17,7 @@ it("returns the configured assignee and workspace candidates", async () => {
     registryCandidates: {
       assignees: ["deckhand", "reef-crab", "human"],
       workspaces: ["tidepool", "sandbox"],
+      icons: {},
     },
   });
 
@@ -25,5 +26,20 @@ it("returns the configured assignee and workspace candidates", async () => {
   expect(res.json).toEqual({
     assignees: ["deckhand", "reef-crab", "human"],
     workspaces: ["tidepool", "sandbox"],
+    icons: {},
   });
+});
+
+it("returns the configured icon for agents that have one, omitting agents without one (issue #52: AgentChip falls back to initials when absent)", async () => {
+  t = await bootTidepool({
+    registryCandidates: {
+      assignees: ["deckhand", "tako", "human"],
+      workspaces: ["tidepool"],
+      icons: { tako: "🐙" },
+    },
+  });
+
+  const res = await api(t.baseUrl, "GET", "/api/registry/candidates");
+  expect(res.status).toBe(200);
+  expect(res.json.icons).toEqual({ tako: "🐙" });
 });

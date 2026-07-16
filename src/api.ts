@@ -915,7 +915,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/registry/candidates", (_req, res) => {
-    res.json(registryCandidates ?? { assignees: [], workspaces: [] });
+    res.json(registryCandidates ?? { assignees: [], workspaces: [], icons: {} });
   });
 
   // UI display is one of ADR 0016's use-moments: issue-backed rows expand

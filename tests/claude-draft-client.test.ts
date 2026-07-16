@@ -75,7 +75,11 @@ describe("ClaudeDraftClient", () => {
   it("RegistryCandidates が渡されている場合、プロンプトに assignee/workspace 候補名が埋め込まれる", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
-      candidates: { assignees: ["reef-crab", "deckhand"], workspaces: ["tidepool", "sandbox"] },
+      candidates: {
+        assignees: ["reef-crab", "deckhand"],
+        workspaces: ["tidepool", "sandbox"],
+        icons: {},
+      },
       exec: async (_command, args) => {
         calls.push(args);
         return JSON.stringify({

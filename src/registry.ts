@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
@@ -24,6 +25,12 @@ export interface AgentDefinition {
    *  is vendor knowledge that belongs to the adapter, not this registry
    *  (ADR 0005). */
   effort?: string;
+  /** Visual identity emoji for this agent (issue #52), shown by the board
+   *  UI's AgentChip. Absent → the UI falls back to hashed initials. Loader
+   *  checks only structural validity — a single Twemoji-covered grapheme
+   *  (ADR 0026) — never semantics ("prefer sea creatures" stays a registry
+   *  README convention, unenforceable by schema). */
+  icon?: string;
   systemPrompt: string;
 }
 
@@ -116,6 +123,22 @@ export interface RosterAgent {
 export interface RegistryCandidates {
   assignees: string[];
   workspaces: string[];
+  /** Assignee name → icon (issue #52), for agents that have one configured.
+   *  An assignee absent from this map has no icon — the board UI's
+   *  AgentChip falls back to hashed initials for it. */
+  icons: Record<string, string>;
+}
+
+/** ADR 0026: an agent icon must be a single Twemoji-covered emoji grapheme —
+ *  parsing it must yield exactly one entity spanning the whole string. Two
+ *  emoji, trailing text, or an emoji outside Twemoji's coverage all fail
+ *  this the same way (fewer/more entities, or entity indices short of the
+ *  full length). */
+function isSingleTwemojiGrapheme(value: string): boolean {
+  const entities = parseTwemoji(value);
+  if (entities.length !== 1) return false;
+  const [entity] = entities;
+  return entity!.indices[0] === 0 && entity!.indices[1] === value.length;
 }
 
 const agentFrontmatterSchema = z.looseObject({
@@ -124,6 +147,12 @@ const agentFrontmatterSchema = z.looseObject({
   description: z.string(),
   model: z.string().optional(),
   effort: z.string().optional(),
+  icon: z
+    .string()
+    .refine(isSingleTwemojiGrapheme, {
+      message: "icon must be a single Twemoji-covered emoji grapheme",
+    })
+    .optional(),
 });
 
 function parseAgentFile(path: string): AgentDefinition {
@@ -142,6 +171,7 @@ function parseAgentFile(path: string): AgentDefinition {
     description: meta.description,
     model: meta.model,
     effort: meta.effort,
+    icon: meta.icon,
     systemPrompt: body.trim(),
   };
 }

@@ -167,9 +167,14 @@ function listAgentsResolver(): (() => RosterAgent[]) | undefined {
 function registryCandidates(): RegistryCandidates | undefined {
   if (!registryDir) return undefined;
   const registry = loadRegistry(registryDir);
+  const icons: Record<string, string> = {};
+  for (const agent of Object.values(registry.agents)) {
+    if (agent.icon !== undefined) icons[agent.name] = agent.icon;
+  }
   return {
     assignees: [...Object.keys(registry.agents), "human"],
     workspaces: Object.keys(registry.workspaces),
+    icons,
   };
 }
 
