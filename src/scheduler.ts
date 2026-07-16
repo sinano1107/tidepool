@@ -143,10 +143,12 @@ export function startScheduler(deps: {
       // posture as a failed start below, until the watchdog or a human acts
       if (!resolved) return;
       // a branch discipline gap (issue #27: the workspace's configured
-      // branch doesn't exist in this checkout) is a resource problem, not a
-      // worker-start problem — it quarantines the workspace itself, same as
-      // registry drift above, rather than wedging in the slot for the
-      // watchdog to time out
+      // branch doesn't exist in this checkout) is a resource problem, same
+      // as registry drift above — this task still stays wedged in the slot
+      // for the watchdog (the picked task itself isn't the failure), but the
+      // *workspace* is quarantined immediately rather than surfacing only as
+      // a console.error, so a human sees an actionable repair question and
+      // no other task aimed at this workspace gets picked up meanwhile
       try {
         ensureTaskBranch(resolved, picked.id);
       } catch (err) {

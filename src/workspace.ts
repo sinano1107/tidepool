@@ -56,7 +56,9 @@ export function resolveExecutionWorkspace(
   const name = taskWorkspace ?? defaultWorkspaceName;
   const entry = registry.workspaces[name];
   if (!entry) throw new UnknownWorkspaceError(name);
-  return { name, path: entry.path, branch: entry.branch ?? MAIN_BRANCH };
+  // the "main" default lives solely in protectedBranch — entry.branch passes
+  // through as-is (possibly absent) rather than getting normalized here too
+  return { name, path: entry.path, branch: entry.branch };
 }
 
 export function taskBranch(taskId: string): string {
