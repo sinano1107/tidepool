@@ -8,6 +8,7 @@ import type {
   IssueRef,
   PrRef,
   PrResult,
+  Repository,
 } from "../src/github.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
@@ -171,6 +172,37 @@ export class FakeGitHubClient implements GitHubClient {
    *  call is still recorded in issueFetches immediately. */
   scriptIssueGate(gate: Promise<void>): void {
     this.issueGate = gate;
+  }
+
+  readonly createdRepositories: string[] = [];
+  private repositories = new Map<string, Repository>();
+  private nextRepositoryUrl: string | null = null;
+
+  async getRepository(name: string): Promise<Repository | null> {
+    return this.repositories.get(name) ?? null;
+  }
+
+  async createRepository(name: string): Promise<Repository> {
+    this.createdRepositories.push(name);
+    if (this.nextRepositoryUrl === null) {
+      throw new Error(`no repository url scripted for createRepository(${name})`);
+    }
+    const repository = { url: this.nextRepositoryUrl };
+    this.repositories.set(name, repository);
+    return repository;
+  }
+
+  /** Scripts an already-existing repository (issue #57: the create mode's
+   *  idempotent-retry probe finds it and reuses it instead of creating). */
+  scriptRepository(name: string, url: string): void {
+    this.repositories.set(name, { url });
+  }
+
+  /** Scripts what the next createRepository call returns as the new repo's
+   *  clone URL (issue #57) — in tests, a local fixture repo standing in for
+   *  the private repository gh just created with its initial commit. */
+  scriptNextRepositoryUrl(url: string): void {
+    this.nextRepositoryUrl = url;
   }
 }
 

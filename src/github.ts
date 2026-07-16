@@ -78,6 +78,21 @@ export interface GitHubClient {
    *  issue (GitHub stays the sole source of truth, ADR 0016), never on the
    *  board. */
   addIssueComment(ref: IssueRef, body: string): Promise<void>;
+  /** Looks a repository up by bare name under the authenticated account —
+   *  the create mode's idempotent-retry probe (issue #57): an existing
+   *  same-name repository is a completed step to reuse, not a conflict.
+   *  Null means "no such repository"; every other failure stays untyped. */
+  getRepository(name: string): Promise<Repository | null>;
+  /** Creates a private repository named `name` under the authenticated
+   *  account, WITH an initial commit (issue #57): an empty repository has no
+   *  default branch, and branch discipline would die on the first pickup. */
+  createRepository(name: string): Promise<Repository>;
+}
+
+/** A GitHub repository as the workspace-creation modes see it (issue #57):
+ *  just its clone URL — recorded on the entry as `repo` provenance. */
+export interface Repository {
+  url: string;
 }
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
@@ -181,5 +196,35 @@ export class GhCliClient implements GitHubClient {
       cwd: ref.path,
       stdio: ["ignore", "pipe", "pipe"],
     });
+  }
+
+  async getRepository(name: string): Promise<Repository | null> {
+    // a bare <name> defaults to the authenticating user, same resolution as
+    // `gh repo create` documents for its OWNER/ omission
+    let output: string;
+    try {
+      output = execFileSync("gh", ["repo", "view", name, "--json", "url"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      }).toString();
+    } catch (err) {
+      // not-found is the probe's negative answer, not a failure; every other
+      // non-zero exit (network, auth) propagates untyped — same split as
+      // getIssue's
+      const stderr = (err as { stderr?: Buffer | string }).stderr?.toString() ?? "";
+      if (/could not resolve/i.test(stderr)) return null;
+      throw err;
+    }
+    return { url: (JSON.parse(output) as { url: string }).url };
+  }
+
+  async createRepository(name: string): Promise<Repository> {
+    // --add-readme is what makes the initial commit exist (issue #57: an
+    // empty repository has no default branch); gh prints the new repo's URL
+    const url = execFileSync("gh", ["repo", "create", name, "--private", "--add-readme"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+      .toString()
+      .trim();
+    return { url };
   }
 }
