@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end smoke test: registers a real work task, forces immediate pickup
 # (registration alone does NOT trigger the scheduler — see
-# references/troubleshooting.md), waits for deckhand to run it via the real
+# references/troubleshooting.md), waits for the default agent (tako) to run it via the real
 # `claude` CLI, and prints the handoff doc. Costs one real agent session.
 #
 # The task can't be deleted afterward (events table is append-only by DB
