@@ -47,7 +47,7 @@ No service restart needed for a registry-only change — it's read fresh from di
 ## After every deploy: verify
 
 ```bash
-bash .claude/skills/deploy-pi/scripts/verify-deploy.sh
+bash .agents/skills/deploy-pi/scripts/verify-deploy.sh
 ```
 
 Checks: `tidepool.service` + both context-vault services are `active`; WebUI/API respond 200 over the tailnet URL; `/mcp` and the WebUI/API port are still `127.0.0.1`-only (never `0.0.0.0` — that's how MCP tool calls would leak onto the tailnet); tailscale serve config is intact; **`/mnt/ssd/tidepool`'s checked-out commit on the Pi matches this dev machine's local `HEAD`** (catches exactly the "looked healthy but was still running yesterday's code" failure — a service restart on unchanged/stale source passes every health check above while silently not shipping anything). Fails loud with the relevant `journalctl`/`ss`/`git log` output on any mismatch.
@@ -55,7 +55,7 @@ Checks: `tidepool.service` + both context-vault services are `active`; WebUI/API
 If it's the first deploy since a meaningful behavior change (scheduler, registry, worker spawn), also run the smoke test:
 
 ```bash
-bash .claude/skills/deploy-pi/scripts/smoke-test.sh
+bash .agents/skills/deploy-pi/scripts/smoke-test.sh
 ```
 
 Registers a real `work` task, forces immediate pickup (task registration alone does **not** trigger pickup — see troubleshooting.md's polling note), waits for `deckhand` to run it end-to-end via the real `claude` CLI, and prints the handoff doc. Takes ~30-60s and costs one real agent session — skip it for routine deploys that don't touch scheduler/registry/worker code.
