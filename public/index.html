@@ -540,8 +540,111 @@ function WorkspaceCard({ ws, say, onChanged }) {
   );
 }
 
+// Default icon picker rows (issue #72): sea life first, then land animals —
+// the fixed order is the worldview convention (CONTEXT.md's "tidepool
+// dweller" naming), not cosmetic, so it must never be reordered or trimmed.
+const AGENT_ICON_SEA = ['🐙', '🦀', '🦐', '🦞', '🦑', '🦪', '🐚', '🐡', '🐠', '🐟', '🐬', '🐳', '🦈', '🦭', '🐢', '🪼', '🪸'];
+const AGENT_ICON_LAND = ['🦦', '🐕', '🐈', '🦊', '🐻', '🐼', '🐨', '🦁', '🐯', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🦉', '🦅', '🐴', '🦋', '🐝'];
+
+// A grid of the default icons plus a free-input escape hatch (issue #72's AC:
+// "加えて任意の絵文字の自由入力欄") — #52's loader already enforces the
+// single-Twemoji-grapheme shape server-side, so this stays a plain text
+// field rather than duplicating that check in the browser.
+function AgentIconPicker({ value, onChange }) {
+  const { Input } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        Icon
+      </span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {[...AGENT_ICON_SEA, ...AGENT_ICON_LAND].map((emoji) => (
+          <button key={emoji} type="button" onClick={() => onChange(emoji)}
+            style={{
+              width: 32, height: 32, padding: 0, borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: 16,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: value === emoji ? '2px solid var(--tide-4)' : '1px solid var(--rock-3)',
+              background: value === emoji ? 'var(--tide-1)' : 'none',
+            }}>
+            {emoji}
+          </button>
+        ))}
+      </div>
+      <Input label="Custom icon" value={value ?? ''} onChange={(e) => onChange(e.target.value)}
+        placeholder="paste any single emoji, or pick one above" />
+    </div>
+  );
+}
+
+// One agent's row on the settings surface (issue #72), WorkspaceCard's twin:
+// every field the edit form resubmits (agent-create.ts's UpdateAgentInput)
+// prefilled from the GET /api/agents list, `name` shown via AgentChip only —
+// renaming isn't offered here at all (it's the file name, parent issue #54).
+function AgentCard({ agent, authorityProfiles, say, onChanged }) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
+  const [icon, setIcon] = React.useState(agent.icon ?? '');
+  const [description, setDescription] = React.useState(agent.description);
+  const [systemPrompt, setSystemPrompt] = React.useState(agent.systemPrompt ?? '');
+  const [authority, setAuthority] = React.useState(agent.authority);
+  const [model, setModel] = React.useState(agent.model ?? '');
+  const [effort, setEffort] = React.useState(agent.effort ?? '');
+  const [busy, setBusy] = React.useState(false);
+
+  const dirty =
+    icon !== (agent.icon ?? '') ||
+    description.trim() !== agent.description ||
+    systemPrompt !== (agent.systemPrompt ?? '') ||
+    authority !== agent.authority ||
+    model.trim() !== (agent.model ?? '') ||
+    effort.trim() !== (agent.effort ?? '');
+  const ok = !!description.trim() && !!authority;
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const { pushed } = await api(`/api/agents/${encodeURIComponent(agent.name)}`, {
+        authority,
+        description: description.trim(),
+        icon: icon.trim() || undefined,
+        model: model.trim() || undefined,
+        effort: effort.trim() || undefined,
+        // an empty specialty is the canonical form for a plain agent (ADR
+        // 0017) but the schema wants min(1) — a lone space satisfies it and
+        // trims back to "" on write (agent-create.ts's serializeAgentFile)
+        systemPrompt: systemPrompt.length ? systemPrompt : ' ',
+      }, 'PATCH');
+      sayCommitResult(say, pushed, 'agent updated — committed to the registry', agent.name);
+      await onChanged();
+    } catch (err) {
+      say('danger', 'agent update failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <AgentChip name={agent.name} icon={icon} />
+      <AgentIconPicker value={icon} onChange={setIcon} />
+      <Input label="Description" value={description} onChange={(e) => setDescription(e.target.value)} />
+      <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
+        multiline rows={4} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Select label="Authority" options={authorityProfiles} value={authority} onChange={(e) => setAuthority(e.target.value)} />
+        <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
+      </div>
+      <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
+      {dirty && (
+        <Button variant="secondary" disabled={busy || !ok} onClick={save}>
+          Save changes — commits to the registry
+        </Button>
+      )}
+    </Card>
+  );
+}
+
 // Settings — the board's admin surface (issue #57 phase 3). One tab, one
-// section per resource: workspaces now; agents (#54), authority profiles
+// section per resource: workspaces and agents (#72) now; authority profiles
 // (#55), quiet hours (#64) and display language (#46) join as later sections.
 function SettingsScreen({ say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -558,6 +661,62 @@ function SettingsScreen({ say }) {
     }
   };
   React.useEffect(() => { load(); }, []);
+
+  const [agents, setAgents] = React.useState(null); // null → still loading
+  const [authorityProfiles, setAuthorityProfiles] = React.useState([]);
+  const [agentsUnavailable, setAgentsUnavailable] = React.useState(false);
+  const loadAgents = async () => {
+    try {
+      const res = await api('/api/agents', undefined, 'GET');
+      setAgents(res.agents);
+      setAuthorityProfiles(res.authorityProfiles);
+    } catch {
+      setAgentsUnavailable(true);
+      setAgents([]);
+    }
+  };
+  React.useEffect(() => { loadAgents(); }, []);
+
+  const [newAgentName, setNewAgentName] = React.useState('');
+  const [newAgentIcon, setNewAgentIcon] = React.useState('');
+  const [newAgentDescription, setNewAgentDescription] = React.useState('');
+  const [newAgentPrompt, setNewAgentPrompt] = React.useState('');
+  const [newAgentAuthority, setNewAgentAuthority] = React.useState('');
+  const [newAgentModel, setNewAgentModel] = React.useState('');
+  const [newAgentEffort, setNewAgentEffort] = React.useState('');
+  const [agentBusy, setAgentBusy] = React.useState(false);
+  // same charset gate as the workspace name field above — the server's
+  // assertValidAgentName stays the authority, this only drives the button
+  const newAgentNameOk = /^[A-Za-z0-9._-]+$/.test(newAgentName.trim()) && !['.', '..'].includes(newAgentName.trim());
+  const newAgentOk = newAgentNameOk && !!newAgentDescription.trim() && !!newAgentAuthority;
+  const authorityCreateOptions = [
+    { value: '', label: 'select authority…' },
+    ...authorityProfiles.map((n) => ({ value: n, label: n })),
+  ];
+  const submitAgent = async () => {
+    setAgentBusy(true);
+    try {
+      const { pushed } = await api('/api/agents', {
+        name: newAgentName.trim(),
+        authority: newAgentAuthority,
+        description: newAgentDescription.trim(),
+        icon: newAgentIcon.trim() || undefined,
+        model: newAgentModel.trim() || undefined,
+        effort: newAgentEffort.trim() || undefined,
+        // an empty specialty is the canonical form (ADR 0017) — see the
+        // matching comment on AgentCard.save
+        systemPrompt: newAgentPrompt.length ? newAgentPrompt : ' ',
+      });
+      sayCommitResult(say, pushed, 'agent added — committed to the registry', newAgentName.trim());
+      setNewAgentName(''); setNewAgentIcon(''); setNewAgentDescription('');
+      setNewAgentPrompt(''); setNewAgentAuthority(''); setNewAgentModel(''); setNewAgentEffort('');
+      await loadAgents();
+    } catch (err) {
+      // creation is idempotent server-side, same posture as workspace creation
+      say('danger', 'agent creation failed — safe to retry as-is', String(err.message || err));
+    }
+    setAgentBusy(false);
+  };
 
   const [mode, setMode] = React.useState('clone');
   const [name, setName] = React.useState('');
@@ -638,6 +797,42 @@ function SettingsScreen({ say }) {
           <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
           <Button variant="primary" size="lg" full disabled={!ok || busy} onClick={submit}>
             {busy ? 'Working…' : 'Add workspace — commits to the registry'}
+          </Button>
+        </Card>
+      )}
+      <div style={{ marginTop: 8 }}>
+        <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Agents</h2>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
+          who does the work
+        </p>
+      </div>
+      {agentsUnavailable && (
+        <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          no registry configured on this board — agent settings need one
+        </Card>
+      )}
+      {(agents ?? []).map((agent) => (
+        <AgentCard key={agent.name} agent={agent} authorityProfiles={authorityProfiles} say={say} onChanged={loadAgents} />
+      ))}
+      {!agentsUnavailable && agents && (
+        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            add an agent
+          </span>
+          <Input label="Name" value={newAgentName} onChange={(e) => setNewAgentName(e.target.value)}
+            placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
+          <AgentIconPicker value={newAgentIcon} onChange={setNewAgentIcon} />
+          <Input label="Description" value={newAgentDescription} onChange={(e) => setNewAgentDescription(e.target.value)}
+            placeholder="when a delegating agent should pick this one" />
+          <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
+            multiline rows={4} value={newAgentPrompt} onChange={(e) => setNewAgentPrompt(e.target.value)} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Select label="Authority" options={authorityCreateOptions} value={newAgentAuthority} onChange={(e) => setNewAgentAuthority(e.target.value)} />
+            <Input label="Model" value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)} placeholder="adapter default if empty" />
+          </div>
+          <Input label="Effort" value={newAgentEffort} onChange={(e) => setNewAgentEffort(e.target.value)} placeholder="adapter default if empty" />
+          <Button variant="primary" size="lg" full disabled={!newAgentOk || agentBusy} onClick={submitAgent}>
+            {agentBusy ? 'Working…' : 'Add agent — commits to the registry'}
           </Button>
         </Card>
       )}
