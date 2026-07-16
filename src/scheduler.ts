@@ -18,6 +18,7 @@ import {
   BOARD_WORKER_ID,
   buildWorkspaceResolver,
   ensureTaskBranch,
+  quarantineWorkspace,
   resolveOrQuarantine,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -141,8 +142,18 @@ export function startScheduler(deps: {
       // thrown error — the task stays wedged in the slot, same deliberate
       // posture as a failed start below, until the watchdog or a human acts
       if (!resolved) return;
+      // a branch discipline gap (issue #27: the workspace's configured
+      // branch doesn't exist in this checkout) is a resource problem, not a
+      // worker-start problem — it quarantines the workspace itself, same as
+      // registry drift above, rather than wedging in the slot for the
+      // watchdog to time out
       try {
         ensureTaskBranch(resolved, picked.id);
+      } catch (err) {
+        quarantineWorkspace(db, resolved.name, err, clock.now());
+        return;
+      }
+      try {
         worker.start(picked);
       } catch (err) {
         console.error(`[scheduler] worker failed to start ${picked.id}:`, err);

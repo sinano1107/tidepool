@@ -95,6 +95,15 @@ describe("loadRegistry", () => {
     expect(loadRegistry(without).workspaces.tidepool!.protected).toBeUndefined();
   });
 
+  it("workspaces.yaml の branch は optional: あれば読み、省略時は undefined(issue #27)", async () => {
+    const withBranch = await makeRegistry({
+      "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\n  branch: master\n`,
+    });
+    expect(loadRegistry(withBranch).workspaces.tidepool!.branch).toBe("master");
+    const without = await makeRegistry();
+    expect(loadRegistry(without).workspaces.tidepool!.branch).toBeUndefined();
+  });
+
   it("使用中の clone の HEAD commit hash を持つ(どのバージョンの判断か、の来歴)", async () => {
     const dir = await makeRegistry();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir }).toString().trim();

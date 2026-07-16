@@ -71,6 +71,12 @@ const workspaceEntrySchema = z.object({
    *  the registry itself — "changes to it always need human approval" is a
    *  resource-side invariant, independent of any profile's allowed_workspaces. */
   protected: z.boolean().optional(),
+  /** The protected branch this workspace's tasks fork from and PR onto
+   *  (issue #27 / ADR 0023): task-branch fork point, PR base, and direct-
+   *  write-ban target, all one field. Absent → "main". A reference, not a
+   *  pinned fork fact — resolved fresh against the registry at every use
+   *  moment (ensureTaskBranch, PR open), never baked into a task row. */
+  branch: z.string().optional(),
 });
 
 /** A workspace entry in `workspaces.yaml`: where tasks run (name → path on

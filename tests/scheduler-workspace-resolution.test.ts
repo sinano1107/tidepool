@@ -82,4 +82,39 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
 
     scheduler.stop();
   });
+
+  it("workspace の branch がその checkout に存在しないとき、pickup 時に workspace が quarantine され、worker には渡らない(issue #27)", async () => {
+    const prod = await makeWorkspace(dirs, "prod");
+    const registry: Record<string, WorkspaceConfig> = {
+      prod: { ...prod, branch: "no-such-branch" },
+    };
+    const db = openDb(":memory:");
+    const clock = new FakeClock();
+    const worker = new ScriptedWorker();
+    const slot = new Slot();
+    const scheduler = startScheduler({
+      db,
+      clock,
+      slot,
+      worker,
+      workspace: prod,
+      resolveWorkspace: (name) => {
+        const ws = registry[name ?? "prod"];
+        if (!ws) throw new UnknownWorkspaceError(name ?? "prod");
+        return ws;
+      },
+    });
+
+    registerTask(
+      db,
+      { type: "work", title: "dangling branch", purpose: "p", completion_criteria: "c", workspace: "prod" },
+      clock.now(),
+    );
+    await clock.advance(HOURLY);
+
+    expect(worker.started).toEqual([]);
+    expect(workspaceNeedsHuman(db, "prod")).toBe(true);
+
+    scheduler.stop();
+  });
 });

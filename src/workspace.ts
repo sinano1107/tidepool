@@ -12,10 +12,22 @@ export { BOARD_WORKER_ID } from "./tasks.js";
 export interface WorkspaceConfig {
   name: string;
   path: string;
+  /** The protected branch (issue #27 / ADR 0023): task-branch fork point,
+   *  PR base, and direct-write-ban target, all one field. Absent → "main" —
+   *  the pre-#27 shape for a `WorkspaceConfig` built outside the registry
+   *  (main.ts's fixed single-workspace fallback, test fixtures). */
+  branch?: string;
 }
 
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
+
+/** ADR 0023: `branch` is a reference resolved fresh at every use, same
+ *  posture as `resolveExecutionWorkspace` itself — never pinned to what a
+ *  task branch actually forked from. */
+export function protectedBranch(workspace: WorkspaceConfig): string {
+  return workspace.branch ?? MAIN_BRANCH;
+}
 
 function git(cwd: string, ...args: string[]): string {
   // stderr captured, not inherited: git narrates checkouts on stderr and the
@@ -44,7 +56,7 @@ export function resolveExecutionWorkspace(
   const name = taskWorkspace ?? defaultWorkspaceName;
   const entry = registry.workspaces[name];
   if (!entry) throw new UnknownWorkspaceError(name);
-  return { name, path: entry.path };
+  return { name, path: entry.path, branch: entry.branch ?? MAIN_BRANCH };
 }
 
 export function taskBranch(taskId: string): string {
@@ -59,7 +71,7 @@ export function ensureTaskBranch(workspace: WorkspaceConfig, taskId: string): vo
   try {
     git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
   } catch {
-    git(workspace.path, "branch", branch, MAIN_BRANCH);
+    git(workspace.path, "branch", branch, protectedBranch(workspace));
   }
   git(workspace.path, "checkout", branch);
 }

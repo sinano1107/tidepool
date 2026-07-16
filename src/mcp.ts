@@ -27,6 +27,7 @@ import {
 } from "./tasks.js";
 import {
   buildWorkspaceResolver,
+  protectedBranch,
   releaseWorkspace,
   resolveOrQuarantine,
   taskBranch,
@@ -95,10 +96,6 @@ export interface McpDeps {
   listAgents?: () => RosterAgent[];
 }
 
-/** The protected branch every task branch is proposed onto — the same one
- *  branch discipline (workspace.ts) forbids direct writes to. */
-const PR_BASE_BRANCH = "main";
-
 /** 完了の逆方向は GitHub ネイティブに委ねる(issue #49, ADR 0016) — issue-backed
  *  task の PR body に `Closes #N` を追記し、merge が issue を閉じる。PR を伴わない
  *  完了と cancel はこの経路自体を通らないので issue に触れない。 */
@@ -141,7 +138,7 @@ async function openHandoffPr(
     const pr = await deps.github.createPullRequest({
       path: workspace.path,
       branch: taskBranch(task.id),
-      base: PR_BASE_BRANCH,
+      base: protectedBranch(workspace),
       title,
       body: prBody(handoffDoc, task.github_issue_number),
     });
