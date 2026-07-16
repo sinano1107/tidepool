@@ -60,7 +60,7 @@ const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_D
 // ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
 // pre-set delegation to a different registry name overrides it per task
-const defaultAgentName = process.env.TIDEPOOL_AGENT ?? "deckhand";
+const defaultAgentName = process.env.TIDEPOOL_AGENT ?? "tako";
 // issue #15 layer 2 / CONTEXT.md's Auditor: same shape as TIDEPOOL_AGENT
 // above, a pointer to the board's independent-review agent.
 const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;

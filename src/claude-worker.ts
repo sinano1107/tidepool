@@ -69,6 +69,26 @@ The Workflow tool is off-limits in task sessions: a workflow script is a
 decompose plan that never reached the board. If you find yourself wanting to
 write one, register that split with the tidepool MCP's decompose instead.`;
 
+// ADR 0017: the worker protocol (rules of the road for a board worker) is a
+// board-wide doctrine, so it lives here and is injected into every session —
+// not copied into each agent definition, where it would drift the same way
+// BOARD_DOCTRINE would. Only the cross-cutting posture lives here: the MCP
+// tool descriptions already carry each verb's semantics, and "call
+// get_current_task first" already rides the `-p` prompt below — re-listing
+// either here would just relocate the drift ADR 0017 removes. The canonical
+// default agent is therefore an empty-body definition (tako) — it carries no
+// specialty prose, and this section supplies the protocol every worker shares.
+const WORKER_PROTOCOL = `## Rules of the road
+
+Do the work in the current working directory. It is the task's workspace.
+
+The tidepool MCP verbs are your only channel back to the board. Invent no side
+channels: no direct edits to the board, no unrecorded decisions. If it is not
+in an MCP verb, it did not happen.
+
+Escalating is never wrong; guessing outside your authority is. When a decision
+is outside your authority or you hit a dead end, escalate rather than guess.`;
+
 /** One roster line's text (issue #43 / ADR 0014): "name — description",
  *  shared by every entry — a registry agent's `AgentDefinition` or the
  *  fixed `HUMAN_ROSTER_AGENT` alike, since both are `RosterAgent`s. */
@@ -344,7 +364,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // who the agent is (registry definition body) and what its authority
         // sounds like (profile guidance prose), stitched at spawn time
         "--append-system-prompt",
-        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}`,
+        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}`,
       ],
       { cwd: workspace.path },
     );

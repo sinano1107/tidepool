@@ -63,6 +63,19 @@ describe("loadRegistry", () => {
     expect(agent.systemPrompt).not.toContain("version:");
   });
 
+  it("本文が空の agent 定義(frontmatter のみ)を許容し、systemPrompt が空文字になる(ADR 0017: 既定エージェントの正規形は本文が空 — issue #51)", async () => {
+    // the canonical default agent (tako) carries no specialty prose; the
+    // worker protocol is injected code-side. The closing `---` needs a
+    // trailing newline for parseAgentFile's frontmatter regex to match — an
+    // empty body is `---\n` with nothing after it.
+    const dir = await makeRegistry({
+      "agents/tako.md": `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nicon: \u{1F419}\n---\n`,
+    });
+    const registry = loadRegistry(dir);
+    expect(registry.agents.tako!.systemPrompt).toBe("");
+    expect(registry.agents.tako!.icon).toBe("\u{1F419}");
+  });
+
   it("frontmatter の model は optional: あれば読み、なければ undefined", async () => {
     const withModel = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,

@@ -294,6 +294,28 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).toContain("Workflow tool");
   });
 
+  // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules
+  // of the road)は盤面がコード側で全ワーカーに注入する。本文が空の正規形エージェント
+  // (tako)でも、cwd=workspace・side channel 禁止・escalate をためらわない posture が
+  // system prompt に現れることを固定する。verb の意味論は MCP description 側にあり、
+  // ここには重複させない(issue #51)。
+  const TAKO_MD = `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nicon: \u{1F419}\n---\n`;
+
+  it("本文が空の既定エージェントでも、ワーカープロトコル(rules of the road)を system prompt に注入する(ADR 0017 / issue #51)", async () => {
+    const { start, calls } = await makeWorker({ "agents/tako.md": TAKO_MD });
+    start("task-tako", null, "tako");
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    // cwd = the task's workspace
+    expect(systemPrompt).toContain("current working directory");
+    // no side channels — everything flows through the MCP verbs
+    expect(systemPrompt).toContain("did not happen");
+    // escalate posture (deckhand 本文が運んでいた rules of the road)
+    expect(systemPrompt).toContain("Escalating is never wrong");
+    // verb の意味論は description 側に一本化: WORKER_PROTOCOL に verb 名を複写しない
+    expect(systemPrompt).not.toContain("get_current_task");
+  });
+
   it("Workflow ツールを spawn 時に無効化する(オーケストレーションは worker にカテゴリ禁止・ADR 0010 追補 / issue #31)", async () => {
     const { start, calls } = await makeWorker();
     start();
