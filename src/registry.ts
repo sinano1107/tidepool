@@ -172,6 +172,44 @@ function parseAuthorityFile(path: string): AuthorityProfile {
   };
 }
 
+/** Issue #68 / ADR 0018: the charset a workspace name must stay inside to be
+ *  safe as both a directory name (regulation-derived `path`) and a GitHub
+ *  repository name (clone / new-repo creation modes, phase 2). */
+const WORKSPACE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/** `.` and `..` pass the charset above but are reserved by every filesystem
+ *  (self / parent directory) — a workspace named either would derive a path
+ *  that escapes its intended base directory. */
+const RESERVED_WORKSPACE_NAMES = new Set([".", ".."]);
+
+/** A candidate workspace name fails the entry gate the creation modes
+ *  (issue #57 phase 2) will use: reused inside an existing registry, or
+ *  outside the charset both a directory name and a GitHub repo name accept. */
+export class InvalidWorkspaceNameError extends Error {
+  constructor(
+    public readonly workspaceName: string,
+    reason: string,
+  ) {
+    super(`invalid workspace name "${workspaceName}": ${reason}`);
+  }
+}
+
+/** Pure entry-gate validation for a new workspace name (issue #68), ahead of
+ *  the orchestration (clone / new-repo creation, phase 2) that will actually
+ *  register it. Checks uniqueness against `registry` and the shared charset —
+ *  safe for both a directory name and a GitHub repository name. */
+export function assertValidWorkspaceName(registry: Registry, name: string): void {
+  if (RESERVED_WORKSPACE_NAMES.has(name) || !WORKSPACE_NAME_PATTERN.test(name)) {
+    throw new InvalidWorkspaceNameError(
+      name,
+      "must contain only letters, digits, '-', '_', '.' and not be '.' or '..'",
+    );
+  }
+  if (Object.hasOwn(registry.workspaces, name)) {
+    throw new InvalidWorkspaceNameError(name, "a workspace with this name already exists");
+  }
+}
+
 export function loadRegistry(dir: string): Registry {
   const agents: Record<string, AgentDefinition> = {};
   for (const file of readdirSync(join(dir, "agents"))) {

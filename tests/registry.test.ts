@@ -1,7 +1,55 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { loadRegistry } from "../src/registry.js";
+import {
+  assertValidWorkspaceName,
+  InvalidWorkspaceNameError,
+  loadRegistry,
+  type Registry,
+} from "../src/registry.js";
 import { makeRegistry } from "./registry-fixture.js";
+
+function makeMinimalRegistry(workspaceNames: string[]): Registry {
+  return {
+    commit: "0".repeat(40),
+    agents: {},
+    authority: {},
+    workspaces: Object.fromEntries(workspaceNames.map((name) => [name, { path: `/tmp/${name}` }])),
+  };
+}
+
+describe("assertValidWorkspaceName", () => {
+  it("英数字・-・_・. のみからなる未使用の名前は通す(例外を投げない)", () => {
+    const registry = makeMinimalRegistry(["sandbox"]);
+    expect(() => assertValidWorkspaceName(registry, "my-new_workspace.v2")).not.toThrow();
+  });
+
+  it("registry に既存の名前と衝突する名前は拒否する", () => {
+    const registry = makeMinimalRegistry(["sandbox"]);
+    expect(() => assertValidWorkspaceName(registry, "sandbox")).toThrow(InvalidWorkspaceNameError);
+  });
+
+  it("Object.prototype 由来の名前(toString など)は実際に登録されていなければ通す", () => {
+    const registry = makeMinimalRegistry([]);
+    expect(() => assertValidWorkspaceName(registry, "toString")).not.toThrow();
+    expect(() => assertValidWorkspaceName(registry, "constructor")).not.toThrow();
+  });
+
+  it("英数字・-・_・. 以外の文字を含む名前は拒否する", () => {
+    const registry = makeMinimalRegistry([]);
+    expect(() => assertValidWorkspaceName(registry, "my workspace")).toThrow(
+      InvalidWorkspaceNameError,
+    );
+    expect(() => assertValidWorkspaceName(registry, "my/workspace")).toThrow(
+      InvalidWorkspaceNameError,
+    );
+  });
+
+  it(". と .. はディレクトリ名として特別な意味を持つため予約名として拒否する", () => {
+    const registry = makeMinimalRegistry([]);
+    expect(() => assertValidWorkspaceName(registry, ".")).toThrow(InvalidWorkspaceNameError);
+    expect(() => assertValidWorkspaceName(registry, "..")).toThrow(InvalidWorkspaceNameError);
+  });
+});
 
 describe("loadRegistry", () => {
   it("agent 定義を読み込む: frontmatter の version と authority 参照、本文がシステムプロンプト", async () => {
