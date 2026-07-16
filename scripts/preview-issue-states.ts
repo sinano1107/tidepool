@@ -2,6 +2,12 @@
  *  FakeGitHubClient/FakeDraftClientで本物のGitHubに触れずに以下を再現する:
  *   - issue_live_state: live / stale / unavailable (盤面のタイトル表示)
  *   - 登録ゲート(422)の拒否画面(サジェストコメント付き)
+ *   - 登録ゲートを通過して普通に登録できる正常系
+ *
+ *  #102だけをscriptIssueFailureFor で恒久的に失敗させる(#101はキャッシュTTL切れ後の
+ *  再取得で普通にliveへ戻る/#103は一度もscriptIssueしていないので常に失敗する)。
+ *  グローバルなscriptIssueFailureは使わない — 全issue番号を巻き込んでしまい、
+ *  #104/#105の登録デモも一緒に壊れるため(以前の実装のバグ)。
  *
  *  使い方: npm run preview:issue-states
  *  出たURLをブラウザで開く。Ctrl-Cで終了(一時DBも併せて削除される)。 */
@@ -42,13 +48,13 @@ async function main() {
 
   db.close();
 
-  // stale化: 一旦GETで取得成功させてキャッシュを温めてから、失敗させてTTLを進める
+  // stale化: 一旦GETで取得成功させてキャッシュを温めてから、#102だけ失敗させてTTLを進める
   await fetch(`${t.baseUrl}/api/tasks`);
-  t.github.scriptIssueFailure(new Error("GitHub is down (simulated)"));
+  t.github.scriptIssueFailureFor(102, new Error("GitHub is down (simulated)"));
   await t.clock.advance(30_000);
 
   // 3) unavailable: 一度も取得成功していない issue #103
-  // (#103 も getIssue が常に失敗するよう↑のscriptIssueFailureが効いている)
+  // (#103 は scriptIssue していないので getIssue が常に "no issue scripted" で失敗する)
   const db2 = openDb(`${t.dir}/board.sqlite`);
   registerTask(db2, { type: "work", workspace: "demo", github_issue_number: 103 }, t.clock.now());
   db2.close();
@@ -61,12 +67,21 @@ async function main() {
     body: "",
     comments: [],
   });
-  draft.scriptInspection({
+  draft.scriptInspectionForTitle("improve perf", {
     ok: false,
     missing: "title / purpose / completion_criteria をこのissueの本文・コメントから起こせません",
     suggested_comment:
       "@here このissueをtidepoolのタスクとして登録するには、次の情報を本文かコメントに追記してください:\n" +
       "- 目的(なぜやるか)\n- 完了条件(何をもって完了とするか)",
+  });
+
+  // 5) 正常系: issue #105 は本文に目的/完了条件が揃っているので、登録ゲートを
+  // 素通りしてそのまま登録できる(inspectionのデフォルトはok:trueなので、
+  // #104用のscriptInspectionForTitleとは無関係にそのまま通る)。
+  t.github.scriptIssue(105, {
+    title: "ダークモード切り替えを追加する",
+    body: "目的: 夜間でも画面がまぶしくならないようにする\n完了条件: 設定画面にトグルがあり、切り替えるとテーマが変わる",
+    comments: [],
   });
 
   console.log("---");
@@ -75,6 +90,9 @@ async function main() {
   console.log("stale      : issue #102 (out of sync 表示)");
   console.log("unavailable: issue #103 (#103 プレースホルダー表示)");
   console.log("登録ゲート拒否(422): 登録画面で workspace=demo, issue番号=104 を入力して登録を試す");
+  console.log("登録ゲート通過(201) : 登録画面で workspace=demo, issue番号=105 を入力して登録を試す");
+  console.log("---");
+  console.log("上記以外のissue番号はscriptしていないため、常に「issueの取得に失敗しました」を返す");
   console.log("---");
   console.log("Ctrl-C で終了");
 }

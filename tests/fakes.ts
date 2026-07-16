@@ -99,6 +99,7 @@ export class FakeGitHubClient implements GitHubClient {
   readonly merged: PrRef[] = [];
   private failure: Error | null = null;
   private issueFailure: Error | null = null;
+  private issueFailures = new Map<number, Error>();
   private issueGate: Promise<void> | null = null;
   private nextNumber = 1;
   private ciStatus: CiStatus = "success";
@@ -123,6 +124,8 @@ export class FakeGitHubClient implements GitHubClient {
   async getIssue(ref: IssueRef): Promise<Issue> {
     this.issueFetches.push(ref);
     if (this.issueGate) await this.issueGate;
+    const perNumberFailure = this.issueFailures.get(ref.number);
+    if (perNumberFailure) throw perNumberFailure;
     if (this.issueFailure) throw this.issueFailure;
     const issue = this.issues.get(ref.number);
     if (!issue) throw new Error(`no issue scripted for #${ref.number}`);
@@ -152,6 +155,15 @@ export class FakeGitHubClient implements GitHubClient {
    *  fetch failing mid-flight). Pass null to clear. */
   scriptIssueFailure(err: Error | null): void {
     this.issueFailure = err;
+  }
+
+  /** Makes getIssue throw for one specific issue number only, leaving every
+   *  other number unaffected — for scenarios needing more than one live
+   *  outcome at once (e.g. the issue-states preview script: #102 stuck
+   *  failing while #104 still succeeds). Pass null to clear. */
+  scriptIssueFailureFor(number: number, err: Error | null): void {
+    if (err) this.issueFailures.set(number, err);
+    else this.issueFailures.delete(number);
   }
 
   /** Holds every getIssue response until the given promise resolves (issue
@@ -200,6 +212,7 @@ export class FakeDraftClient implements DraftClient {
   private handoffFailure: Error | null = null;
   // default pass, so tests unrelated to the gate never need to script it
   private inspection: IssueInspection = { ok: true };
+  private inspectionByTitle = new Map<string, IssueInspection>();
   private inspectionFailure: Error | null = null;
 
   async draftTask(dump: string): Promise<TaskDraft> {
@@ -217,7 +230,7 @@ export class FakeDraftClient implements DraftClient {
   async inspectIssue(issue: Issue): Promise<IssueInspection> {
     this.inspected.push(issue);
     if (this.inspectionFailure) throw this.inspectionFailure;
-    return this.inspection;
+    return this.inspectionByTitle.get(issue.title) ?? this.inspection;
   }
 
   scriptDraft(draft: TaskDraft): void {
@@ -232,6 +245,15 @@ export class FakeDraftClient implements DraftClient {
   scriptInspection(inspection: IssueInspection): void {
     this.inspection = inspection;
     this.inspectionFailure = null;
+  }
+
+  /** Scripts the gate's verdict for one specific issue (matched by title),
+   *  overriding the blanket scriptInspection default for that issue only —
+   *  Issue carries no number (github.ts's Issue), so title is the seam's
+   *  natural key. Lets a scenario show more than one verdict at once (e.g.
+   *  the issue-states preview script: one issue rejected, another passing). */
+  scriptInspectionForTitle(title: string, inspection: IssueInspection): void {
+    this.inspectionByTitle.set(title, inspection);
   }
 
   scriptInspectionFailure(err: Error): void {
