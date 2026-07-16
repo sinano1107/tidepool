@@ -11,6 +11,7 @@ import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, registerTask, type RegisterTaskInput, type Task } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
+import type { CreateWorkspaceInput, CreateWorkspaceResult } from "../src/workspace-create.js";
 import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
@@ -70,6 +71,10 @@ export interface BootOptions {
   /** The pull half of the roster (issue #43 / ADR 0014). Absent → `list_agents`
    *  reports only the fixed `human` line. */
   listAgents?: () => RosterAgent[];
+  /** The workspace-creation orchestration (issue #57 phase 2) — faked at
+   *  this callback seam in endpoint tests; the orchestration itself has its
+   *  own real-git coverage (tests/create-workspace.test.ts). */
+  createWorkspace?: (input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -100,6 +105,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     auditorName: options.auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
     listAgents: options.listAgents,
+    createWorkspace: options.createWorkspace,
   });
   let stopped = false;
   const stopServer = async () => {

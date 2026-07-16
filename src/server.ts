@@ -13,6 +13,7 @@ import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
+import type { CreateWorkspaceInput, CreateWorkspaceResult } from "./workspace-create.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -94,6 +95,10 @@ export interface ServerOptions {
    *  the registry by the caller — same pattern as `agentRegistered`. Absent
    *  → no registry configured, so `list_agents` reports only `human`. */
   listAgents?: () => RosterAgent[];
+  /** The workspace-creation orchestration (issue #57 phase 2), bound to the
+   *  registry clone / base dir / GitHub client by main.ts. Absent → no
+   *  registry configured; POST /api/workspaces reports 503. */
+  createWorkspace?: (input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>;
 }
 
 export interface TidepoolServer {
@@ -201,6 +206,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentRegistered: options.agentRegistered,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
+      createWorkspace: options.createWorkspace,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

@@ -20,6 +20,11 @@ import {
   resolveWorkspacesBaseDir,
   type WorkspaceConfig,
 } from "./workspace.js";
+import {
+  createWorkspace,
+  type CreateWorkspaceInput,
+  type CreateWorkspaceResult,
+} from "./workspace-create.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -123,7 +128,9 @@ function authorityResolver(): ((assignee: string | null) => AuthorityProfile | u
  *  "back" — only "no more todo tasks depend on it" can clear it. */
 function agentRegisteredChecker(): ((name: string) => boolean) | undefined {
   if (!registryDir) return undefined;
-  return (name) => name in loadRegistry(registryDir).agents;
+  // Object.hasOwn, not `in`: `in` walks the prototype chain, so a name like
+  // "toString" would clear an agent quarantine without any repair (issue #69)
+  return (name) => Object.hasOwn(loadRegistry(registryDir).agents, name);
 }
 
 /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
@@ -187,6 +194,20 @@ function pushClient(): PushClient | undefined {
   return vapid ? new WebPushClient(vapid) : undefined;
 }
 
+const github = new GhCliClient();
+
+/** The workspace-creation orchestration (issue #57 phase 2), bound to this
+ *  board's registry clone, base dir (ADR 0018) and GitHub client here at the
+ *  composition root — the API layer only ever sees the finished callback.
+ *  Without a registry there is nowhere to register a workspace. */
+function createWorkspaceOrchestration():
+  | ((input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>)
+  | undefined {
+  if (!registryDir) return undefined;
+  return (input) =>
+    createWorkspace(input, { registryDir, workspacesBaseDir: workspacesDir, github });
+}
+
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -195,7 +216,8 @@ const server = await startServer({
   worker: workerFactory(),
   workspace: workspaceConfig(),
   resolveWorkspace: workspaceResolver(),
-  github: new GhCliClient(),
+  github,
+  createWorkspace: createWorkspaceOrchestration(),
   resolveAuthority: authorityResolver(),
   agentRegistered: agentRegisteredChecker(),
   isProtectedWorkspace: protectedWorkspaceChecker(),

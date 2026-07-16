@@ -10,7 +10,7 @@ import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { isPaused, setPaused } from "./pause.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
-import type { RegistryCandidates } from "./registry.js";
+import { InvalidWorkspaceNameError, type RegistryCandidates } from "./registry.js";
 import {
   answerQuestion,
   type BoardTask,
@@ -35,6 +35,11 @@ import {
   verifyWorkspaceClean,
   type WorkspaceConfig,
 } from "./workspace.js";
+import {
+  type CreateWorkspaceInput,
+  type CreateWorkspaceResult,
+  RegistryCloneBusyError,
+} from "./workspace-create.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -96,6 +101,33 @@ const issueCommentSchema = z.object({
   github_issue_number: z.number().int().positive(),
   body: z.string().min(1),
 });
+
+// the shape stays close to CreateWorkspaceInput itself; the name rules
+// (charset, uniqueness) live in the domain (assertValidWorkspaceName) so
+// callers get a domain error, not a schema error, on a bad name — this file's
+// usual split
+const createWorkspaceSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("register"),
+    name: z.string().min(1),
+    path: z.string().min(1),
+    notes: z.string().min(1).optional(),
+    protected: z.boolean().optional(),
+  }),
+  z.object({
+    mode: z.literal("clone"),
+    name: z.string().min(1),
+    repo: z.string().min(1),
+    notes: z.string().min(1).optional(),
+    protected: z.boolean().optional(),
+  }),
+  z.object({
+    mode: z.literal("create"),
+    name: z.string().min(1),
+    notes: z.string().min(1).optional(),
+    protected: z.boolean().optional(),
+  }),
+]);
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
@@ -223,6 +255,11 @@ export interface ApiRouterDeps {
    *  `defaultAgentName` above — absent, this gate is skipped for the review
    *  rows that would have fallen back to it. */
   auditorName?: string;
+  /** The workspace-creation orchestration (issue #57 phase 2), threaded in by
+   *  main.ts with its registry clone / base dir / GitHub deps already bound —
+   *  the API layer never touches the registry clone itself. Absent → no
+   *  registry configured, so POST /workspaces reports 503. */
+  createWorkspace?: (input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -239,6 +276,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     agentRegistered,
     vapidPublicKey,
     auditorName,
+    createWorkspace,
   } = deps;
   const router = Router();
   router.use(json());
@@ -380,6 +418,33 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     res.status(201).json({});
+  });
+
+  router.post("/workspaces", async (req, res) => {
+    const parsed = createWorkspaceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!createWorkspace) {
+      res.status(503).json({ error: "workspace creation not configured" });
+      return;
+    }
+    try {
+      res.status(201).json(await createWorkspace(parsed.data));
+    } catch (err) {
+      // the human's own synchronous request fails fast (ADR 0009): a bad name
+      // is the caller's 400; a busy registry clone is a 409 the idempotent
+      // flow retries later; anything else is an external step failing — 502,
+      // and the retry reuses whatever orphan it left behind (issue #57)
+      if (err instanceof InvalidWorkspaceNameError) {
+        res.status(400).json({ error: err.message });
+      } else if (err instanceof RegistryCloneBusyError) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
   });
 
   router.post("/tasks/draft", async (req, res) => {
