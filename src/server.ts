@@ -13,7 +13,7 @@ import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import type { CreateWorkspaceInput, CreateWorkspaceResult } from "./workspace-create.js";
+import type { CreateWorkspaceFn } from "./workspace-create.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -98,7 +98,7 @@ export interface ServerOptions {
   /** The workspace-creation orchestration (issue #57 phase 2), bound to the
    *  registry clone / base dir / GitHub client by main.ts. Absent → no
    *  registry configured; POST /api/workspaces reports 503. */
-  createWorkspace?: (input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>;
+  createWorkspace?: CreateWorkspaceFn;
 }
 
 export interface TidepoolServer {

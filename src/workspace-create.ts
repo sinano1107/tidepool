@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 import type { GitHubClient } from "./github.js";
 import { assertValidWorkspaceName, loadRegistry, type WorkspaceEntry } from "./registry.js";
+import { git, TIDEPOOL_GIT_IDENTITY } from "./workspace.js";
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
  *  resulting Workspace — the mode is a circumstance of creation, not a kind
@@ -45,12 +45,6 @@ export interface CreateWorkspaceDeps {
   github: GitHubClient;
 }
 
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
-    .toString()
-    .trim();
-}
-
 /** The registry clone can't take the board's direct-to-main commit right now
  *  (ADR 0020): HEAD is off main (a registry-edit task branch is checked out)
  *  or the tree is dirty. Fail-fast and let the human retry — the creation
@@ -82,6 +76,11 @@ export interface CreateWorkspaceResult {
   pushed: boolean;
 }
 
+/** The orchestration as its consumers see it (api.ts / server.ts): the
+ *  composition root binds the deps here once, everyone downstream gets one
+ *  callback. */
+export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>;
+
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
@@ -108,15 +107,15 @@ async function buildEntry(
   deps: CreateWorkspaceDeps,
 ): Promise<WorkspaceEntry> {
   if (input.mode === "register") return { path: input.path };
-  if (input.mode === "clone") return cloneMode(input.name, input.repo, deps);
+  if (input.mode === "clone") return cloneAndDescribe(input.name, input.repo, deps);
   const existing = await deps.github.getRepository(input.name);
   const repository = existing ?? (await deps.github.createRepository(input.name));
-  return cloneMode(input.name, repository.url, deps);
+  return cloneAndDescribe(input.name, repository.url, deps);
 }
 
 /** The clone mode's external half: a checkout at the convention-derived
  *  location (ADR 0018 — the entry never records the path). */
-function cloneMode(name: string, repo: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
+function cloneAndDescribe(name: string, repo: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
   const dir = join(deps.workspacesBaseDir, name);
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it
@@ -135,7 +134,8 @@ function pushRegistry(registryDir: string): boolean {
   try {
     git(registryDir, "push", "origin", "main");
     return true;
-  } catch {
+  } catch (err) {
+    console.warn("[workspace-create] registry push failed (non-fatal):", err);
     return false;
   }
 }
@@ -145,19 +145,16 @@ function pushRegistry(registryDir: string): boolean {
  *  explicit act — the board commits it to local main directly). The yaml
  *  Document API keeps the hand-edited file's comments and formatting. */
 function commitWorkspaceEntry(registryDir: string, name: string, entry: WorkspaceEntry): void {
+  // re-checked here, not just at the entrance: the external steps in between
+  // (clone, repository creation) are slow, and a registry-edit task moving
+  // the clone's HEAD meanwhile must not get the board's commit on its branch.
+  // This same guarantee (on main + clean) is also what lets the write below
+  // read the working tree without violating ADR 0020's committed-main rule.
+  assertRegistryCloneReady(registryDir);
   const file = join(registryDir, "workspaces.yaml");
   const doc = parseDocument(readFileSync(file, "utf8"));
   doc.set(name, entry);
   writeFileSync(file, doc.toString());
   git(registryDir, "add", "workspaces.yaml");
-  git(
-    registryDir,
-    "-c",
-    "user.name=tidepool",
-    "-c",
-    "user.email=tidepool@board",
-    "commit",
-    "-m",
-    `add workspace ${name} via WebUI`,
-  );
+  git(registryDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", `add workspace ${name} via WebUI`);
 }

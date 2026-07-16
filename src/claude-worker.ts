@@ -5,7 +5,13 @@ import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
-import { loadRegistry, type AgentDefinition, type Registry, type RosterAgent } from "./registry.js";
+import {
+  loadRegistry,
+  ownEntry,
+  type AgentDefinition,
+  type Registry,
+  type RosterAgent,
+} from "./registry.js";
 import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
@@ -85,9 +91,7 @@ function buildRoster(registry: Registry, assignableTo: string[] | undefined): st
   const explicitNames = assignableTo.filter((name) => name !== AUTHORITY_WILDCARD);
   const agentNames = wildcard ? Object.keys(registry.agents) : explicitNames;
   const agents: RosterAgent[] = agentNames
-    // Object.hasOwn guard, not bare bracket access: a listed name like
-    // "toString" would hit Object.prototype instead of drift-skipping (issue #69)
-    .map((name) => (Object.hasOwn(registry.agents, name) ? registry.agents[name] : undefined))
+    .map((name) => ownEntry(registry.agents, name))
     .filter((agent): agent is AgentDefinition => agent !== undefined);
   if (explicitNames.includes(HUMAN_ROSTER_AGENT.name)) agents.push(HUMAN_ROSTER_AGENT);
   return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;

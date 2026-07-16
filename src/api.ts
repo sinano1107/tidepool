@@ -35,11 +35,7 @@ import {
   verifyWorkspaceClean,
   type WorkspaceConfig,
 } from "./workspace.js";
-import {
-  type CreateWorkspaceInput,
-  type CreateWorkspaceResult,
-  RegistryCloneBusyError,
-} from "./workspace-create.js";
+import { type CreateWorkspaceFn, RegistryCloneBusyError } from "./workspace-create.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -106,27 +102,15 @@ const issueCommentSchema = z.object({
 // (charset, uniqueness) live in the domain (assertValidWorkspaceName) so
 // callers get a domain error, not a schema error, on a bad name — this file's
 // usual split
+const createWorkspaceCommon = z.object({
+  name: z.string().min(1),
+  notes: z.string().min(1).optional(),
+  protected: z.boolean().optional(),
+});
 const createWorkspaceSchema = z.discriminatedUnion("mode", [
-  z.object({
-    mode: z.literal("register"),
-    name: z.string().min(1),
-    path: z.string().min(1),
-    notes: z.string().min(1).optional(),
-    protected: z.boolean().optional(),
-  }),
-  z.object({
-    mode: z.literal("clone"),
-    name: z.string().min(1),
-    repo: z.string().min(1),
-    notes: z.string().min(1).optional(),
-    protected: z.boolean().optional(),
-  }),
-  z.object({
-    mode: z.literal("create"),
-    name: z.string().min(1),
-    notes: z.string().min(1).optional(),
-    protected: z.boolean().optional(),
-  }),
+  createWorkspaceCommon.extend({ mode: z.literal("register"), path: z.string().min(1) }),
+  createWorkspaceCommon.extend({ mode: z.literal("clone"), repo: z.string().min(1) }),
+  createWorkspaceCommon.extend({ mode: z.literal("create") }),
 ]);
 
 const moveTaskSchema = z.object({
@@ -259,7 +243,7 @@ export interface ApiRouterDeps {
    *  main.ts with its registry clone / base dir / GitHub deps already bound —
    *  the API layer never touches the registry clone itself. Absent → no
    *  registry configured, so POST /workspaces reports 503. */
-  createWorkspace?: (input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>;
+  createWorkspace?: CreateWorkspaceFn;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {

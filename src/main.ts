@@ -8,6 +8,7 @@ import { GhCliClient } from "./github.js";
 import { type PushClient, type VapidConfig, WebPushClient } from "./push.js";
 import {
   loadRegistry,
+  ownEntry,
   type AuthorityProfile,
   type RegistryCandidates,
   type RosterAgent,
@@ -20,11 +21,7 @@ import {
   resolveWorkspacesBaseDir,
   type WorkspaceConfig,
 } from "./workspace.js";
-import {
-  createWorkspace,
-  type CreateWorkspaceInput,
-  type CreateWorkspaceResult,
-} from "./workspace-create.js";
+import { createWorkspace, type CreateWorkspaceFn } from "./workspace-create.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -128,9 +125,9 @@ function authorityResolver(): ((assignee: string | null) => AuthorityProfile | u
  *  "back" — only "no more todo tasks depend on it" can clear it. */
 function agentRegisteredChecker(): ((name: string) => boolean) | undefined {
   if (!registryDir) return undefined;
-  // Object.hasOwn, not `in`: `in` walks the prototype chain, so a name like
+  // ownEntry, not `in`: `in` walks the prototype chain, so a name like
   // "toString" would clear an agent quarantine without any repair (issue #69)
-  return (name) => Object.hasOwn(loadRegistry(registryDir).agents, name);
+  return (name) => ownEntry(loadRegistry(registryDir).agents, name) !== undefined;
 }
 
 /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
@@ -142,7 +139,10 @@ function agentRegisteredChecker(): ((name: string) => boolean) | undefined {
  *  protected. */
 function protectedWorkspaceChecker(): ((name: string) => boolean) | undefined {
   if (!registryDir) return undefined;
-  return (name) => loadRegistry(registryDir).workspaces[name]?.protected === true;
+  // ownEntry for consistency with issue #69's sweep — a prototype hit would
+  // already answer "not protected", but bare bracket access on registry
+  // records is the exact pattern the sweep exists to remove
+  return (name) => ownEntry(loadRegistry(registryDir).workspaces, name)?.protected === true;
 }
 
 /** The pull half of the roster (issue #43 / ADR 0014), read fresh against the
@@ -200,9 +200,7 @@ const github = new GhCliClient();
  *  board's registry clone, base dir (ADR 0018) and GitHub client here at the
  *  composition root — the API layer only ever sees the finished callback.
  *  Without a registry there is nowhere to register a workspace. */
-function createWorkspaceOrchestration():
-  | ((input: CreateWorkspaceInput) => Promise<CreateWorkspaceResult>)
-  | undefined {
+function createWorkspaceOrchestration(): CreateWorkspaceFn | undefined {
   if (!registryDir) return undefined;
   return (input) =>
     createWorkspace(input, { registryDir, workspacesBaseDir: workspacesDir, github });

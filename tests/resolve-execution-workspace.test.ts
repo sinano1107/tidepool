@@ -82,6 +82,12 @@ describe("resolveExecutionWorkspace", () => {
     );
   });
 
+  it("本当に toString という名前で登録された workspace は従来どおり解決される(issue #69: false positive を起こさない)", () => {
+    const registry = makeRegistry({ toString: { path: "/home/pi/work/toString" } });
+    const resolved = resolveExecutionWorkspace(registry, "toString", null, BASE_DIR);
+    expect(resolved).toEqual({ name: "toString", path: "/home/pi/work/toString" });
+  });
+
   it("path 省略エントリは <TIDEPOOL_WORKSPACES_DIR>/<name> に解決時導出される(ADR 0018)", () => {
     const registry = makeRegistry({ sandbox: {} });
     const resolved = resolveExecutionWorkspace(registry, "sandbox", null, BASE_DIR);

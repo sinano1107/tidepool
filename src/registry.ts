@@ -210,6 +210,15 @@ export function assertValidWorkspaceName(registry: Registry, name: string): void
   }
 }
 
+/** Bracket access with an Object.hasOwn guard (issue #69): registry records
+ *  are plain objects, so a key like "toString" would otherwise hit
+ *  Object.prototype and dodge the fail-closed unknown-name guarantees (ADR
+ *  0009 / 0012). Every registry-record lookup by untrusted name goes through
+ *  here — the guarantee lives in one place. */
+export function ownEntry<T>(record: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 export function loadRegistry(dir: string): Registry {
   const agents: Record<string, AgentDefinition> = {};
   for (const file of readdirSync(join(dir, "agents"))) {

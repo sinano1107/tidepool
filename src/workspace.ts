@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import type { Registry } from "./registry.js";
+import { ownEntry, type Registry } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
@@ -40,9 +40,21 @@ export function protectedBranch(workspace: WorkspaceConfig): string {
   return workspace.branch ?? MAIN_BRANCH;
 }
 
-function git(cwd: string, ...args: string[]): string {
-  // stderr captured, not inherited: git narrates checkouts on stderr and the
-  // board's console is not the place for it
+/** The board's own git identity: the author on the tree rule's WIP commits
+ *  (releaseTree) and on the registry commits the WebUI flows make (issue #57,
+ *  workspace-create.ts) — one authorship for everything tidepool itself
+ *  commits. */
+export const TIDEPOOL_GIT_IDENTITY = [
+  "-c",
+  "user.name=tidepool",
+  "-c",
+  "user.email=tidepool@board",
+] as const;
+
+/** Shared by every board-driven git call (here and workspace-create.ts).
+ *  stderr captured, not inherited: git narrates checkouts on stderr and the
+ *  board's console is not the place for it. */
+export function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
     .toString()
     .trim();
@@ -68,9 +80,7 @@ export function resolveExecutionWorkspace(
   workspacesBaseDir: string,
 ): WorkspaceConfig {
   const name = taskWorkspace ?? defaultWorkspaceName;
-  // Object.hasOwn guard, not bare bracket access: a name like "toString"
-  // would hit Object.prototype and dodge the fail-closed guarantee (issue #69)
-  const entry = Object.hasOwn(registry.workspaces, name) ? registry.workspaces[name] : undefined;
+  const entry = ownEntry(registry.workspaces, name);
   if (!entry) throw new UnknownWorkspaceError(name);
   // the "main" default lives solely in protectedBranch — entry.branch passes
   // through as-is (possibly absent) rather than getting normalized here too
@@ -112,16 +122,7 @@ export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
   }
   git(workspace.path, "add", "-A");
   if (git(workspace.path, "status", "--porcelain") !== "") {
-    git(
-      workspace.path,
-      "-c",
-      "user.name=tidepool",
-      "-c",
-      "user.email=tidepool@board",
-      "commit",
-      "-m",
-      `WIP: task ${taskId}`,
-    );
+    git(workspace.path, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", `WIP: task ${taskId}`);
   }
   if (git(workspace.path, "status", "--porcelain") !== "") {
     throw new Error(`workspace ${workspace.name} still dirty after WIP commit`);

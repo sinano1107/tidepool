@@ -1,6 +1,6 @@
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import type { AgentDefinition, AuthorityProfile, Registry } from "./registry.js";
+import { ownEntry, type AgentDefinition, type AuthorityProfile, type Registry } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 /** An assignee (or the board's default) resolved against the registry —
@@ -32,13 +32,9 @@ export function resolveExecutionAgent(
   taskAssignee: string | null,
 ): ResolvedAgent {
   const name = taskAssignee ?? defaultAgentName;
-  // Object.hasOwn guards, not bare bracket access: a name like "toString"
-  // would hit Object.prototype and dodge the fail-closed guarantee (issue #69)
-  const definition = Object.hasOwn(registry.agents, name) ? registry.agents[name] : undefined;
+  const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
-  const profile = Object.hasOwn(registry.authority, definition.authority)
-    ? registry.authority[definition.authority]
-    : undefined;
+  const profile = ownEntry(registry.authority, definition.authority);
   if (!profile) throw new Error(`unknown authority profile: ${definition.authority}`);
   return { name, definition, profile };
 }
