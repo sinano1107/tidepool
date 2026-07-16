@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import type { Registry } from "./registry.js";
@@ -21,6 +23,15 @@ export interface WorkspaceConfig {
 
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
+
+/** ADR 0018: the base directory a workspace entry's path derives from when
+ *  the entry omits `path`. `configured` is `TIDEPOOL_WORKSPACES_DIR` as read
+ *  by the caller (env access stays at the board's config edge, not here) —
+ *  absent → `~/tidepool-workspaces` (the Pi's systemd unit sets
+ *  `/mnt/ssd/tidepool-workspaces` explicitly). */
+export function resolveWorkspacesBaseDir(configured: string | undefined): string {
+  return configured ?? join(homedir(), "tidepool-workspaces");
+}
 
 /** ADR 0023: `branch` is a reference resolved fresh at every use, same
  *  posture as `resolveExecutionWorkspace` itself — never pinned to what a
@@ -47,18 +58,22 @@ export class UnknownWorkspaceError extends Error {
 
 /** ADR 0009: `task.workspace` is a reference to a registry name, resolved
  *  fresh against the registry every time it's used, never pinned to a path.
- *  Null inherits the board's default (CONTEXT.md's Workspace). */
+ *  Null inherits the board's default (CONTEXT.md's Workspace). `workspacesBaseDir`
+ *  is `resolveWorkspacesBaseDir`'s output, threaded in rather than read from
+ *  env here (ADR 0018) — this stays a pure function of its arguments. */
 export function resolveExecutionWorkspace(
   registry: Registry,
   defaultWorkspaceName: string,
   taskWorkspace: string | null,
+  workspacesBaseDir: string,
 ): WorkspaceConfig {
   const name = taskWorkspace ?? defaultWorkspaceName;
   const entry = registry.workspaces[name];
   if (!entry) throw new UnknownWorkspaceError(name);
   // the "main" default lives solely in protectedBranch — entry.branch passes
   // through as-is (possibly absent) rather than getting normalized here too
-  return { name, path: entry.path, branch: entry.branch };
+  const path = entry.path ?? join(workspacesBaseDir, name);
+  return { name, path, branch: entry.branch };
 }
 
 export function taskBranch(taskId: string): string {

@@ -15,7 +15,11 @@ import {
 import { startServer, type WorkerFactory } from "./server.js";
 import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import { resolveExecutionWorkspace, type WorkspaceConfig } from "./workspace.js";
+import {
+  resolveExecutionWorkspace,
+  resolveWorkspacesBaseDir,
+  type WorkspaceConfig,
+} from "./workspace.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -44,6 +48,8 @@ const port = Number(process.env.PORT ?? 4589);
 const mcpPort = Number(process.env.MCP_PORT ?? port + 1);
 const registryDir = process.env.TIDEPOOL_REGISTRY;
 const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? "sandbox";
+// ADR 0018: base directory a path-omitting workspace entry derives from.
+const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_DIR);
 // ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
 // pre-set delegation to a different registry name overrides it per task
@@ -67,6 +73,7 @@ function workerFactory(): WorkerFactory {
       agent: defaultAgentName,
       auditorName,
       workspace: workspaceName,
+      workspacesDir,
       mcpUrl: `http://127.0.0.1:${mcpPort}/mcp`,
       logDir,
     });
@@ -76,9 +83,7 @@ function workerFactory(): WorkerFactory {
  *  the same registry entry the worker runs in, resolved to its path. */
 function workspaceConfig(): WorkspaceConfig | undefined {
   if (!registryDir) return undefined;
-  const entry = loadRegistry(registryDir).workspaces[workspaceName];
-  if (!entry) throw new Error(`unknown workspace: ${workspaceName}`);
-  return { name: workspaceName, path: entry.path };
+  return resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, null, workspacesDir);
 }
 
 /** Resolves any task's execution workspace against the registry (issue #26 /
@@ -88,7 +93,7 @@ function workspaceConfig(): WorkspaceConfig | undefined {
 function workspaceResolver(): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
   if (!registryDir) return undefined;
   return (taskWorkspace) =>
-    resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace);
+    resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace, workspacesDir);
 }
 
 /** Resolves the executing task's own agent's authority profile (ADR 0012 /

@@ -62,7 +62,14 @@ export interface AuthorityProfile {
 }
 
 const workspaceEntrySchema = z.object({
-  path: z.string(),
+  /** Absent → regulation-derived at resolution time (ADR 0018): base
+   *  directory (`TIDEPOOL_WORKSPACES_DIR`) + workspace name, computed at
+   *  `resolveExecutionWorkspace` (workspace.ts), never baked in here. Entries
+   *  the board writes itself (clone / new-repo creation modes) stay host-
+   *  independent this way — a push from one host's clone can't commit the
+   *  other host's absolute path. Explicit `path` stays for hand-placed
+   *  checkouts (the registry itself, existing-path registration mode). */
+  path: z.string().optional(),
   repo: z.string().optional(),
   notes: z.string().optional(),
   /** Protected workspace (issue #15 layer 2 / ADR 0013): a decompose child

@@ -104,6 +104,14 @@ describe("loadRegistry", () => {
     expect(loadRegistry(without).workspaces.tidepool!.branch).toBeUndefined();
   });
 
+  it("workspaces.yaml の path は optional: 省略しても読み込みエラーにならず undefined になる(ADR 0018)", async () => {
+    const dir = await makeRegistry({
+      "workspaces.yaml": `sandbox:\n  notes: created by the board\n`,
+    });
+    const registry = loadRegistry(dir);
+    expect(registry.workspaces.sandbox!.path).toBeUndefined();
+  });
+
   it("使用中の clone の HEAD commit hash を持つ(どのバージョンの判断か、の来歴)", async () => {
     const dir = await makeRegistry();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir }).toString().trim();

@@ -8,7 +8,11 @@ import { appendEvent, type EventPayload } from "./events.js";
 import { loadRegistry, type AgentDefinition, type Registry, type RosterAgent } from "./registry.js";
 import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import { resolveExecutionWorkspace, resolveOrQuarantine } from "./workspace.js";
+import {
+  resolveExecutionWorkspace,
+  resolveOrQuarantine,
+  resolveWorkspacesBaseDir,
+} from "./workspace.js";
 
 /** The process boundary the adapter is tested at: everything vendor-specific
  *  (the claude CLI, its flags) flows through this one call. */
@@ -179,6 +183,10 @@ export interface ClaudeWorkerOptions {
   auditorName?: string;
   /** Workspace name in the registry's workspaces.yaml — where tasks run. */
   workspace: string;
+  /** ADR 0018: base directory a workspace entry's path derives from when the
+   *  entry omits `path`. Absent → `resolveWorkspacesBaseDir`'s own fallback
+   *  (`~/tidepool-workspaces`). */
+  workspacesDir?: string;
   /** The board's MCP endpoint, e.g. http://127.0.0.1:4589/mcp. */
   mcpUrl: string;
   /** Where stream-json transcripts and spawn-time MCP configs land. */
@@ -226,6 +234,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   /** Live child processes by task id, for the watchdog's kill() (#9). A
    *  finished process removes itself so a stale entry never outlives it. */
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
+  /** ADR 0018: resolved once at construction, same "config edge" posture as
+   *  the rest of `options` — env access itself stays in main.ts. */
+  private readonly workspacesDir: string;
 
   constructor(options: ClaudeWorkerOptions) {
     this.id = options.agent;
@@ -233,6 +244,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.spawn = options.spawn ?? defaultSpawn;
     this.exec = options.exec ?? defaultExec;
     this.logDir = resolve(options.logDir);
+    this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
     this.validateDefaults(loadRegistry(options.registryDir));
@@ -245,7 +257,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  task.assignee) happens fresh in `start()` below (issue #26 / ADR 0009,
    *  ADR 0012 / issue #36) — drift there quarantines instead of throwing. */
   private validateDefaults(registry: Registry): void {
-    resolveExecutionWorkspace(registry, this.options.workspace, null);
+    resolveExecutionWorkspace(registry, this.options.workspace, null, this.workspacesDir);
     const agent = resolveExecutionAgent(registry, this.options.agent, null);
     assertKnownEffort(agent.definition);
   }
@@ -263,7 +275,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // ordinarily catches this before start() is ever called.
     const workspace = resolveOrQuarantine(
       this.options.db,
-      (taskWorkspace) => resolveExecutionWorkspace(registry, this.options.workspace, taskWorkspace),
+      (taskWorkspace) =>
+        resolveExecutionWorkspace(registry, this.options.workspace, taskWorkspace, this.workspacesDir),
       task.workspace,
       this.options.clock.now(),
     );

@@ -1,13 +1,28 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Registry } from "../src/registry.js";
 import {
   protectedBranch,
   resolveExecutionWorkspace,
+  resolveWorkspacesBaseDir,
   UnknownWorkspaceError,
 } from "../src/workspace.js";
 
+describe("resolveWorkspacesBaseDir", () => {
+  it("TIDEPOOL_WORKSPACES_DIR が未設定なら ~/tidepool-workspaces を返す(ADR 0018)", () => {
+    expect(resolveWorkspacesBaseDir(undefined)).toBe(join(homedir(), "tidepool-workspaces"));
+  });
+
+  it("TIDEPOOL_WORKSPACES_DIR が設定されていればその値をそのまま返す", () => {
+    expect(resolveWorkspacesBaseDir("/mnt/ssd/tidepool-workspaces")).toBe(
+      "/mnt/ssd/tidepool-workspaces",
+    );
+  });
+});
+
 function makeRegistry(
-  workspaces: Record<string, { path: string; branch?: string }>,
+  workspaces: Record<string, { path?: string; branch?: string }>,
 ): Registry {
   return {
     commit: "0".repeat(40),
@@ -17,13 +32,15 @@ function makeRegistry(
   };
 }
 
+const BASE_DIR = "/home/pi/tidepool-workspaces";
+
 describe("resolveExecutionWorkspace", () => {
   it("task.workspace が null のとき、盤面既定の workspace 名で解決する", () => {
     const registry = makeRegistry({
       sandbox: { path: "/home/pi/work/sandbox" },
       prod: { path: "/home/pi/work/prod" },
     });
-    const resolved = resolveExecutionWorkspace(registry, "sandbox", null);
+    const resolved = resolveExecutionWorkspace(registry, "sandbox", null, BASE_DIR);
     expect(resolved).toEqual({ name: "sandbox", path: "/home/pi/work/sandbox" });
   });
 
@@ -32,7 +49,7 @@ describe("resolveExecutionWorkspace", () => {
       sandbox: { path: "/home/pi/work/sandbox" },
       prod: { path: "/home/pi/work/prod" },
     });
-    const resolved = resolveExecutionWorkspace(registry, "sandbox", "prod");
+    const resolved = resolveExecutionWorkspace(registry, "sandbox", "prod", BASE_DIR);
     expect(resolved).toEqual({ name: "prod", path: "/home/pi/work/prod" });
   });
 
@@ -40,22 +57,28 @@ describe("resolveExecutionWorkspace", () => {
     const registry = makeRegistry({
       sandbox: { path: "/home/pi/work/sandbox", branch: "master" },
     });
-    const resolved = resolveExecutionWorkspace(registry, "sandbox", null);
+    const resolved = resolveExecutionWorkspace(registry, "sandbox", null, BASE_DIR);
     expect(resolved).toEqual({ name: "sandbox", path: "/home/pi/work/sandbox", branch: "master" });
   });
 
   it("registry に存在しない workspace 名は UnknownWorkspaceError を投げる", () => {
     const registry = makeRegistry({ sandbox: { path: "/home/pi/work/sandbox" } });
-    expect(() => resolveExecutionWorkspace(registry, "sandbox", "no-such-workspace")).toThrow(
-      UnknownWorkspaceError,
-    );
+    expect(() =>
+      resolveExecutionWorkspace(registry, "sandbox", "no-such-workspace", BASE_DIR),
+    ).toThrow(UnknownWorkspaceError);
     try {
-      resolveExecutionWorkspace(registry, "sandbox", "no-such-workspace");
+      resolveExecutionWorkspace(registry, "sandbox", "no-such-workspace", BASE_DIR);
       expect.unreachable();
     } catch (err) {
       expect(err).toBeInstanceOf(UnknownWorkspaceError);
       expect((err as UnknownWorkspaceError).workspaceName).toBe("no-such-workspace");
     }
+  });
+
+  it("path 省略エントリは <TIDEPOOL_WORKSPACES_DIR>/<name> に解決時導出される(ADR 0018)", () => {
+    const registry = makeRegistry({ sandbox: {} });
+    const resolved = resolveExecutionWorkspace(registry, "sandbox", null, BASE_DIR);
+    expect(resolved).toEqual({ name: "sandbox", path: `${BASE_DIR}/sandbox` });
   });
 });
 
