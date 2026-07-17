@@ -226,6 +226,7 @@ function mapData(board, log, pause, icons = {}) {
   // usage itself could not be observed, not merely "over threshold" — the
   // slot must say so rather than showing a bogus/absent resume time
   const throttleFailClosed = throttled && !throttle.resetsAt;
+  const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resetsAt) : null;
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -234,9 +235,12 @@ function mapData(board, log, pause, icons = {}) {
   const slot = running
     ? { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
     : throttled
-    ? throttleFailClosed
-      ? { color: 'var(--coral-4)', line: 'usage check unavailable · nothing starts', meta: 'fail-closed — check usage check logs', taskId: null }
-      : { color: 'var(--coral-4)', line: 'usage limit · nothing starts', meta: `resumes ${fmtTime(throttle.resetsAt)}`, taskId: null }
+    ? {
+        color: 'var(--coral-4)', taskId: null,
+        ...(throttleFailClosed
+          ? { line: 'usage check unavailable · nothing starts', meta: 'fail-closed — check usage check logs' }
+          : { line: 'usage limit · nothing starts', meta: `resumes ${throttleResumesAt}` }),
+      }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
   return {
     questions, log: logEntries, queue, board: cols, icons,
@@ -244,8 +248,7 @@ function mapData(board, log, pause, icons = {}) {
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
     slot, running: !!running, paused: !!paused,
-    throttled, throttleFailClosed,
-    throttleResumesAt: throttled && !throttleFailClosed ? fmtTime(throttle.resetsAt) : null,
+    throttled, throttleFailClosed, throttleResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
   };
 }
