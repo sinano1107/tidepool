@@ -2,7 +2,7 @@ import { AgentChip } from './AgentChip.jsx';
 import { IdChip } from './IdChip.jsx';
 import { RiskFlag } from './RiskFlag.jsx';
 
-export function QueueItem({ position, task = {}, skipped = false, frontInserted = false, flash = false, onFront, style }) {
+export function QueueItem({ position, task = {}, skipped = false, skipReason = 'resumes on reset', frontInserted = false, flash = false, onFront, style }) {
   const { id, title, assignee, assigneeIcon } = task;
   // hover styling lives in CSS (.tp-queue-item) — JS mouseenter state gets stuck
   // when rows are reordered under a stationary pointer.
@@ -25,7 +25,7 @@ export function QueueItem({ position, task = {}, skipped = false, frontInserted 
       <IdChip id={id} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
       <span style={{ flex: 1, fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-medium)', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
       {task.risk && <RiskFlag />}
-      {skipped && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)' }}>skipped · resumes on reset</span>}
+      {skipped && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)' }}>skipped · {skipReason}</span>}
       {frontInserted && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)' }}>front-inserted</span>}
       <AgentChip name={assignee} icon={assigneeIcon} size="sm" />
       {onFront && !skipped && (

@@ -206,7 +206,7 @@ Object.assign(__ds_scope, { LogEntry });
 
 // components/board/QueueItem.jsx
 try { (() => {
-function QueueItem({ position, task = {}, skipped = false, frontInserted = false, flash = false, onFront, style }) {
+function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes on reset", frontInserted = false, flash = false, onFront, style }) {
   const { id, title, assignee, assigneeIcon } = task;
   return /* @__PURE__ */ React.createElement(
     "div",
@@ -230,7 +230,7 @@ function QueueItem({ position, task = {}, skipped = false, frontInserted = false
     /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }),
     /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
     task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null),
-    skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, "skipped \xB7 resumes on reset"),
+    skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, "skipped \xB7 ", skipReason),
     frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"),
     /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }),
     onFront && !skipped && /* @__PURE__ */ React.createElement(

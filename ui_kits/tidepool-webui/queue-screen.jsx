@@ -2,7 +2,7 @@
 
 // Reorderable queue list — pointer-driven drag & drop with tidal FLIP animations.
 // Reused by QueueScreen and the triage queue-check step.
-function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, gap = 6 }) {
+function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, gap = 6 }) {
   const { QueueItem } = window.TidepoolDesignSystem_8a0ead;
   const itemEls = React.useRef(new Map());
   const lastTops = React.useRef(new Map());
@@ -121,7 +121,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, gap = 6 }) {
           }}
         >
           {/* the head row keeps "↑ front" too: front on the head is the explicit immediate-poll trigger (run now) */}
-          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} onFront={onFront ? () => onFront(t.id) : undefined} />
+          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} skipReason={skipReason} frontInserted={t.frontInserted} flash={t.flash} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>
@@ -160,6 +160,18 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
   const underlyingSlot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const slot = paused ? pausedSlot(underlyingSlot) : underlyingSlot;
   const throttled = !paused && slotState === 'limit';
+  // the generic "skipped · resumes on reset" row label lied for pause (a
+  // human resumes it, not a reset) and for fail-closed throttle (no known
+  // reset time to begin with) — issue #82 / #79's lesson about not
+  // papering over an unobservable state applies to the row, not just the
+  // slot line above it.
+  const skipReason = paused
+    ? 'pickup paused'
+    : data.throttleFailClosed
+    ? 'usage check unavailable'
+    : data.throttleResumesAt
+    ? `resumes ${data.throttleResumesAt}`
+    : 'resumes on reset';
   const alert = wsAlert ? data.workspaceAlert : null;
   const queue = (paused || throttled) ? data.queue.map((t) => ({ ...t, skipped: true })) : data.queue;
   React.useEffect(() => { lucide.createIcons(); });
@@ -215,7 +227,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
       )}
 
       <div style={{ marginBottom: 28 }}>
-        <TpQueueList tasks={queue} onReorder={onReorder} onFront={paused ? undefined : onFront} />
+        <TpQueueList tasks={queue} onReorder={onReorder} onFront={paused ? undefined : onFront} skipReason={skipReason} />
       </div>
 
       <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Your tasks</h2>
