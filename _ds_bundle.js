@@ -233,9 +233,11 @@ function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes
     skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, "skipped \xB7 ", skipReason),
     frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"),
     /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }),
-    onFront && !skipped && // the head row's button is "run now" (tide, immediate-poll trigger);
-    // every other row is pure reordering — a distinct neutral color so the
-    // two meanings are never visually interchangeable
+    onFront && !skipped && // the head row's button is "run now" (tide fill, immediate-poll
+    // trigger); every other row is pure reordering — same tide hue so
+    // both read as "the queue action," but outlined instead of filled
+    // so it never reads as disabled (unlike a neutral/rock treatment,
+    // which this design system's own tokens reserve for that)
     /* @__PURE__ */ React.createElement(
       "button",
       {
@@ -245,9 +247,9 @@ function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes
         style: {
           fontFamily: "var(--font-ui)",
           fontSize: "var(--text-xs)",
-          color: isHead ? "var(--tide-4)" : "var(--rock-4)",
-          background: isHead ? "var(--tide-1)" : "var(--rock-1)",
-          border: "none",
+          color: "var(--tide-4)",
+          background: isHead ? "var(--tide-1)" : "transparent",
+          border: isHead ? "none" : "1px solid var(--tide-3)",
           borderRadius: "var(--radius-full)",
           padding: "4px 10px",
           cursor: "pointer",

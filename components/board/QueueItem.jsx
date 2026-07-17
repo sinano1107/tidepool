@@ -29,15 +29,18 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason = '
       {frontInserted && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)' }}>front-inserted</span>}
       <AgentChip name={assignee} icon={assigneeIcon} size="sm" />
       {onFront && !skipped && (
-        // the head row's button is "run now" (tide, immediate-poll trigger);
-        // every other row is pure reordering — a distinct neutral color so the
-        // two meanings are never visually interchangeable
+        // the head row's button is "run now" (tide fill, immediate-poll
+        // trigger); every other row is pure reordering — same tide hue so
+        // both read as "the queue action," but outlined instead of filled
+        // so it never reads as disabled (unlike a neutral/rock treatment,
+        // which this design system's own tokens reserve for that)
         <button
           className={isHead ? 'tp-queue-front-btn' : 'tp-queue-promote-btn'}
           onClick={onFront} title={isHead ? 'Run now — fires an immediate pickup poll' : 'Move to front — reorders only; press again once it is head to run it now'}
           style={{
-            fontFamily: 'var(--font-ui)', fontSize: 'var(--text-xs)', color: isHead ? 'var(--tide-4)' : 'var(--rock-4)',
-            background: isHead ? 'var(--tide-1)' : 'var(--rock-1)', border: 'none',
+            fontFamily: 'var(--font-ui)', fontSize: 'var(--text-xs)', color: 'var(--tide-4)',
+            background: isHead ? 'var(--tide-1)' : 'transparent',
+            border: isHead ? 'none' : '1px solid var(--tide-3)',
             borderRadius: 'var(--radius-full)', padding: '4px 10px', cursor: 'pointer', flexShrink: 0,
           }}
         >↑</button>
