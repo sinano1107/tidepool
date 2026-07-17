@@ -1463,17 +1463,22 @@ function App() {
     });
   };
 
-  // "Run now" IS a move to the head — the one reorder verb, no separate path.
-  // The move itself always succeeds (it's just a reorder); whether the
-  // immediate poll can actually pick anything up is a separate question the
-  // toast must answer honestly (#79's lesson, ADR 0028) rather than always
-  // claiming success.
+  // One endpoint, two meanings the server itself distinguishes (issue #82
+  // follow-up): a todo already at the head, moved to the head again, is an
+  // explicit "run now" (immediate-poll trigger); promoting a different task
+  // is pure reordering and fires nothing on its own. The button's color
+  // already told the human which one they clicked (queue-screen.jsx); the
+  // toast just has to describe honestly what actually happened rather than
+  // always claiming success (#79's lesson, ADR 0028).
   const moveFront = async (id) => {
+    const wasHead = data.queue[0]?.id === id;
     try {
       await api(`/api/tasks/${id}/move`, { after: null });
       markFront(id);
       const fresh = await refresh();
-      if (fresh.paused) {
+      if (!wasHead) {
+        say('info', 'moved to front', 'reordered only — press ↑ again to run it now');
+      } else if (fresh.paused) {
         say('warn', 'moved to front — pickup is paused', 'resume to run it');
       } else if (fresh.throttled) {
         say('warn', 'moved to front — pickup blocked',

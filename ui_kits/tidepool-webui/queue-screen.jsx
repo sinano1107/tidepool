@@ -120,8 +120,9 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, gap
             opacity: t.blocked ? 0.55 : undefined,
           }}
         >
-          {/* the head row keeps "↑ front" too: front on the head is the explicit immediate-poll trigger (run now) */}
-          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} skipReason={skipReason} frontInserted={t.frontInserted} flash={t.flash} onFront={onFront ? () => onFront(t.id) : undefined} />
+          {/* only the head row's button is "run now" (an immediate-poll trigger, issue #82 follow-up)
+             — every other row's button is pure reordering, color-coded distinctly so the two never look alike */}
+          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} skipReason={skipReason} frontInserted={t.frontInserted} flash={t.flash} isHead={baseIndex + i === 0} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>

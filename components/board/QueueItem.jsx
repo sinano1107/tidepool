@@ -2,7 +2,7 @@ import { AgentChip } from './AgentChip.jsx';
 import { IdChip } from './IdChip.jsx';
 import { RiskFlag } from './RiskFlag.jsx';
 
-export function QueueItem({ position, task = {}, skipped = false, skipReason = 'resumes on reset', frontInserted = false, flash = false, onFront, style }) {
+export function QueueItem({ position, task = {}, skipped = false, skipReason = 'resumes on reset', frontInserted = false, flash = false, isHead = false, onFront, style }) {
   const { id, title, assignee, assigneeIcon } = task;
   // hover styling lives in CSS (.tp-queue-item) — JS mouseenter state gets stuck
   // when rows are reordered under a stationary pointer.
@@ -29,12 +29,15 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason = '
       {frontInserted && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)' }}>front-inserted</span>}
       <AgentChip name={assignee} icon={assigneeIcon} size="sm" />
       {onFront && !skipped && (
+        // the head row's button is "run now" (tide, immediate-poll trigger);
+        // every other row is pure reordering — a distinct neutral color so the
+        // two meanings are never visually interchangeable
         <button
-          className="tp-queue-front-btn"
-          onClick={onFront} title="Move to front"
+          className={isHead ? 'tp-queue-front-btn' : 'tp-queue-promote-btn'}
+          onClick={onFront} title={isHead ? 'Run now — fires an immediate pickup poll' : 'Move to front — reorders only; press again once it is head to run it now'}
           style={{
-            fontFamily: 'var(--font-ui)', fontSize: 'var(--text-xs)', color: 'var(--tide-4)',
-            background: 'var(--tide-1)', border: 'none',
+            fontFamily: 'var(--font-ui)', fontSize: 'var(--text-xs)', color: isHead ? 'var(--tide-4)' : 'var(--rock-4)',
+            background: isHead ? 'var(--tide-1)' : 'var(--rock-1)', border: 'none',
             borderRadius: 'var(--radius-full)', padding: '4px 10px', cursor: 'pointer', flexShrink: 0,
           }}
         >↑</button>

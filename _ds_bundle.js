@@ -206,7 +206,7 @@ Object.assign(__ds_scope, { LogEntry });
 
 // components/board/QueueItem.jsx
 try { (() => {
-function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes on reset", frontInserted = false, flash = false, onFront, style }) {
+function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes on reset", frontInserted = false, flash = false, isHead = false, onFront, style }) {
   const { id, title, assignee, assigneeIcon } = task;
   return /* @__PURE__ */ React.createElement(
     "div",
@@ -233,17 +233,20 @@ function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes
     skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, "skipped \xB7 ", skipReason),
     frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"),
     /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }),
-    onFront && !skipped && /* @__PURE__ */ React.createElement(
+    onFront && !skipped && // the head row's button is "run now" (tide, immediate-poll trigger);
+    // every other row is pure reordering — a distinct neutral color so the
+    // two meanings are never visually interchangeable
+    /* @__PURE__ */ React.createElement(
       "button",
       {
-        className: "tp-queue-front-btn",
+        className: isHead ? "tp-queue-front-btn" : "tp-queue-promote-btn",
         onClick: onFront,
-        title: "Move to front",
+        title: isHead ? "Run now \u2014 fires an immediate pickup poll" : "Move to front \u2014 reorders only; press again once it is head to run it now",
         style: {
           fontFamily: "var(--font-ui)",
           fontSize: "var(--text-xs)",
-          color: "var(--tide-4)",
-          background: "var(--tide-1)",
+          color: isHead ? "var(--tide-4)" : "var(--rock-4)",
+          background: isHead ? "var(--tide-1)" : "var(--rock-1)",
           border: "none",
           borderRadius: "var(--radius-full)",
           padding: "4px 10px",

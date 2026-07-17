@@ -94,15 +94,29 @@ it("reordering is a human steering channel: no MCP tool exposes it", async () =>
   await client.close();
 });
 
-it("moving a task to the head triggers an immediate poll: the new head is picked up without a tick", async () => {
+it("promoting a non-head task to the head reorders it without firing an immediate poll", async () => {
   t = await bootTidepool();
   await registerWork(t, "a");
   const b = await registerWork(t, "b");
 
-  // slot is free, but no hourly tick has fired yet
-  expect(t.worker.started).toEqual([]);
+  // slot is free, but promoting b is pure reordering — it wasn't already at
+  // the head, so this isn't "run now" (issue #82 follow-up)
   await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null });
+  expect(t.worker.started).toEqual([]);
 
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
+});
+
+it("a promoted task can then be run now once it is the head", async () => {
+  t = await bootTidepool();
+  await registerWork(t, "a");
+  const b = await registerWork(t, "b");
+
+  await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null }); // promote only
+  expect(t.worker.started).toEqual([]);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null }); // b is now head: run now
   expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${b.id}`)).json.status).toBe("in_progress");
 });
@@ -130,12 +144,15 @@ it("run-now on the task already at the head still fires the immediate poll", asy
   expect(t.worker.started.map((x) => x.id)).toEqual([a.id]);
 });
 
-it("moving the head task down fires the poll for the new head", async () => {
+it("moving the head task down does not fire an immediate poll for the new head", async () => {
   t = await bootTidepool();
   const a = await registerWork(t, "a");
   const b = await registerWork(t, "b");
 
   await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, { after: b.id });
+  expect(t.worker.started).toEqual([]);
+
+  await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
 });
 

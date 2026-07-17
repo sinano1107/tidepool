@@ -746,10 +746,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     const headBefore = queueHeadId(db);
     const moved = moveTask(db, task, after, clock.now());
-    // a todo moved to the top is "run now" — an explicit immediate-poll
-    // trigger even when it already sat at the head; a non-todo move is a
-    // display move and can never change the todo queue head
-    if ((after === null && moved.status === "todo") || queueHeadId(db) !== headBefore) {
+    // "run now" is specifically a todo already at the head, moved to the
+    // head again — an explicit immediate-poll trigger (issue #82 follow-up).
+    // Promoting a *different* task to the head is pure reordering: it
+    // never itself forces a pickup attempt, waiting instead for the next
+    // natural trigger (the running task finishing, or the hourly tick) —
+    // otherwise every reorder, drag included, would silently double as a
+    // pickup request.
+    if (after === null && moved.status === "todo" && headBefore === task.id) {
       onQueueHeadChanged();
     }
     res.json(moved);
