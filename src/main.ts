@@ -274,7 +274,9 @@ const server = await startServer({
   agentRegistered: agentRegisteredChecker(),
   isProtectedWorkspace: protectedWorkspaceChecker(),
   listAgents: listAgentsResolver(),
-  registryCandidates: registryCandidates(),
+  // pass the provider itself, not a boot-time snapshot: the register screen's
+  // candidates must reflect agents/workspaces created live through settings
+  registryCandidates: registryCandidates,
   draftClient: draftClientFactory(),
   push: pushClient(),
   vapidPublicKey: vapidConfig()?.publicKey,

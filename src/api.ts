@@ -289,8 +289,11 @@ export interface ApiRouterDeps {
   /** Assignee/workspace name candidates for the registration screen (issue
    *  #12), resolved from the agent registry by the caller (main.ts) — the
    *  API layer never touches the filesystem/git registry loader itself.
-   *  Absent → no registry configured, so no candidates to suggest. */
-  registryCandidates?: RegistryCandidates;
+   *  A provider, not a snapshot: it is called per request so an agent or
+   *  workspace created through the settings surface (issue #72/#57) shows up
+   *  on the register screen without a server restart. Absent → no registry
+   *  configured, so no candidates to suggest. */
+  registryCandidates?: () => RegistryCandidates | undefined;
   /** The LLM draft seam (issue #12). Absent → /tasks/draft reports the LLM
    *  as unreachable. */
   draftClient?: DraftClient;
@@ -1128,7 +1131,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/registry/candidates", (_req, res) => {
-    res.json(registryCandidates ?? { assignees: [], workspaces: [], icons: {} });
+    res.json(registryCandidates?.() ?? { assignees: [], workspaces: [], icons: {} });
   });
 
   // UI display is one of ADR 0016's use-moments: issue-backed rows expand

@@ -59,8 +59,10 @@ export interface BootOptions {
    *  registration and only "no more todo tasks depend on it" can clear a
    *  quarantine. */
   agentRegistered?: (name: string) => boolean;
-  /** Assignee/workspace candidates for the registration screen (issue #12). */
-  registryCandidates?: RegistryCandidates;
+  /** Assignee/workspace candidates for the registration screen (issue #12).
+   *  A static snapshot (the common case) or a per-request provider — the
+   *  latter lets a test prove the endpoint re-reads each call (issue #78). */
+  registryCandidates?: RegistryCandidates | (() => RegistryCandidates | undefined);
   /** The LLM draft seam (issue #12). Absent (the default) — same as no LLM
    *  configured, matching the "LLM outage" fallback path. */
   draftClient?: DraftClient;
@@ -89,6 +91,16 @@ export interface BootOptions {
   profileAdmin?: Partial<ProfileAdmin>;
 }
 
+/** The server wants a per-request candidates provider; a test may pass one
+ *  directly (to prove re-reads) or a plain snapshot for convenience. */
+function normalizeCandidates(
+  candidates: BootOptions["registryCandidates"],
+): (() => RegistryCandidates | undefined) | undefined {
+  if (typeof candidates === "function") return candidates;
+  if (candidates === undefined) return undefined;
+  return () => candidates;
+}
+
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
  *  The worker and the GitHubClient are swapped for scripted fakes, at the
  *  WorkerAdapter and GitHubClient seams. */
@@ -111,7 +123,9 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     agentRegistered: options.agentRegistered,
-    registryCandidates: options.registryCandidates,
+    // the server takes a per-request provider now; a test may pass one
+    // directly, otherwise wrap the static snapshot
+    registryCandidates: normalizeCandidates(options.registryCandidates),
     draftClient: options.draftClient,
     push,
     auditorName: options.auditorName,

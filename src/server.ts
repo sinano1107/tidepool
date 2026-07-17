@@ -60,9 +60,10 @@ export interface ServerOptions {
    *  fixed `authority` above, which every task shared regardless of who it
    *  was actually assigned to. Absent → falls back to `authority`. */
   resolveAuthority?: (assignee: string | null) => AuthorityProfile | undefined;
-  /** Assignee/workspace candidates for the registration screen (issue #12).
-   *  Absent → no registry configured, so the WebUI gets no suggestions. */
-  registryCandidates?: RegistryCandidates;
+  /** Assignee/workspace candidates for the registration screen (issue #12) —
+   *  a provider called per request so settings-surface creations surface
+   *  without a restart. Absent → no registry configured, no suggestions. */
+  registryCandidates?: () => RegistryCandidates | undefined;
   /** The LLM draft seam (issue #12). Absent → the draft endpoint reports the
    *  LLM as unreachable, and the WebUI falls back to the plain form. */
   draftClient?: DraftClient;
