@@ -512,7 +512,10 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           <div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {pending.map((t, i) => <QueueItem key={t.id} position={i + 1} task={t} frontInserted />)}
-              <TpQueueList tasks={previewQueue} baseIndex={pending.length} onReorder={onReorderQueue} onFront={onFront} />
+              {/* headId is the true queue head, not previewQueue[0] — pending's front-inserts sit
+                 above this list, so previewQueue[0] can still be the actual head even though it
+                 isn't rendered at this list's own index 0 (issue #82 follow-up) */}
+              <TpQueueList tasks={previewQueue} baseIndex={pending.length} onReorder={onReorderQueue} onFront={onFront} headId={data.queue[0]?.id} />
             </div>
             {scratchPanel}
           </div>
