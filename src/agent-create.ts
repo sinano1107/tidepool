@@ -7,6 +7,7 @@ import {
   isSingleTwemojiGrapheme,
   loadRegistry,
   ownEntry,
+  UnknownAuthorityProfileError,
   type AgentDefinition,
   type Registry,
 } from "./registry.js";
@@ -33,13 +34,11 @@ export interface CreateAgentInput {
 
 /** The input names an authority profile absent from the registry (issue #70,
  *  parent #54: the WebUI only offers picking an existing profile — a typo'd
- *  or stale name must not produce an agent no worker could ever spawn as). */
-export class UnknownAuthorityProfileError extends Error {
-  constructor(public readonly profileName: string) {
-    super(`unknown authority profile: ${profileName}`);
-    this.name = "UnknownAuthorityProfileError";
-  }
-}
+ *  or stale name must not produce an agent no worker could ever spawn as).
+ *  Defined in registry.js (issue #76): the same "no such profile" condition
+ *  is also thrown by profile-create.ts's updateProfile, re-exported here so
+ *  existing imports of this module keep working. */
+export { UnknownAuthorityProfileError };
 
 /** The input's icon fails ADR 0026's structural check (a single
  *  Twemoji-covered emoji grapheme). Caught at the entrance, not left to the

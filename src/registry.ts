@@ -181,12 +181,24 @@ function parseAgentFile(path: string): AgentDefinition {
 // assignable_to/allowed_workspaces are required, not optional: a registry
 // author must spell out "*" for unrestricted rather than get it by omission
 // (issue #41).
-const authorityProfileSchema = z.strictObject({
+export const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
   assignable_to: z.array(z.string()),
   allowed_workspaces: z.array(z.string()),
   merge: z.enum(["escalate", "auto_if_ci_green"]).optional(),
 });
+
+/** No authority profile in the registry carries this name — thrown both when
+ *  an agent's `authority` field references one that doesn't exist
+ *  (agent-create.ts) and when editing a profile by a name the registry
+ *  doesn't have (profile-create.ts, issue #76): the same "profile absent"
+ *  condition, one class. */
+export class UnknownAuthorityProfileError extends Error {
+  constructor(public readonly profileName: string) {
+    super(`unknown authority profile: ${profileName}`);
+    this.name = "UnknownAuthorityProfileError";
+  }
+}
 
 const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 
@@ -265,6 +277,33 @@ export function assertValidAgentName(registry: Registry, name: string): void {
   }
   if (Object.hasOwn(registry.agents, name)) {
     throw new InvalidAgentNameError(name, "an agent with this name already exists");
+  }
+}
+
+/** A candidate authority profile name fails the entry gate the WebUI's
+ *  profile-creation verb (issue #76) uses: reused inside an existing
+ *  registry, or outside the charset a file name `authority/<name>.yaml`
+ *  safely accepts. */
+export class InvalidAuthorityProfileNameError extends Error {
+  constructor(
+    public readonly profileName: string,
+    reason: string,
+  ) {
+    super(`invalid authority profile name "${profileName}": ${reason}`);
+    this.name = "InvalidAuthorityProfileNameError";
+  }
+}
+
+/** Pure entry-gate validation for a new authority profile name (issue #76),
+ *  the third twin of assertValidWorkspaceName/assertValidAgentName: same
+ *  charset (safe as the file name `authority/<name>.yaml`), same reserved
+ *  names, uniqueness against the registry's profiles. */
+export function assertValidAuthorityProfileName(registry: Registry, name: string): void {
+  if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
+    throw new InvalidAuthorityProfileNameError(name, NAME_CHARSET_REASON);
+  }
+  if (Object.hasOwn(registry.authority, name)) {
+    throw new InvalidAuthorityProfileNameError(name, "an authority profile with this name already exists");
   }
 }
 
