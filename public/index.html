@@ -472,11 +472,21 @@ function sayCommitResult(say, pushed, msg, name) {
     pushed ? name : `${name} · push failed — the local clone is what the board reads, the next push catches up`);
 }
 
+// Every board dialog must portal to <body>: the DS Dialog is position:fixed,
+// but a transformed ancestor (the tab-transition wrapper's animation) re-bases
+// "fixed" onto the full scrollable page instead of the viewport, parking the
+// dialog at the page middle. Rendering outside the app subtree pins it back to
+// the viewport. One wrapper so the workaround (and its reason) lives once.
+function PortalDialog(props) {
+  const { Dialog } = window.TidepoolDesignSystem_8a0ead;
+  return ReactDOM.createPortal(<Dialog {...props} />, document.body);
+}
+
 // One workspace's row on the settings surface (issue #57 phase 3): notes and
 // protected are the only editable fields — path/repo/branch re-point the
 // entry at a different checkout, which stays a manual registry edit.
 function WorkspaceCard({ ws, say, onChanged }) {
-  const { Button, Card, Input, Switch, Dialog, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   const [notes, setNotes] = React.useState(ws.notes ?? '');
   const [busy, setBusy] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);
@@ -522,26 +532,20 @@ function WorkspaceCard({ ws, say, onChanged }) {
           Save notes — commits to the registry
         </Button>
       )}
-      {/* portal to <body>: a transformed tab-transition ancestor otherwise
-          re-bases this fixed dialog onto the full page height (same fix as
-          useProfileSave's dialog) */}
-      {ReactDOM.createPortal(
-        <Dialog open={confirming} title="Remove protection?" onClose={() => setConfirming(false)}
-          footer={
-            <React.Fragment>
-              <Button variant="secondary" onClick={() => setConfirming(false)}>Keep protection</Button>
-              <Button variant="danger" onClick={() => { setConfirming(false); patch({ protected: false, confirm: true }, 'protection removed'); }}>
-                Remove protection
-              </Button>
-            </React.Fragment>
-          }>
-          <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
-            Tasks targeting <b>{ws.name}</b> will stop converting to approval questions,
-            and its PRs will follow the merge dial without waiting for you.
-          </p>
-        </Dialog>,
-        document.body,
-      )}
+      <PortalDialog open={confirming} title="Remove protection?" onClose={() => setConfirming(false)}
+        footer={
+          <React.Fragment>
+            <Button variant="secondary" onClick={() => setConfirming(false)}>Keep protection</Button>
+            <Button variant="danger" onClick={() => { setConfirming(false); patch({ protected: false, confirm: true }, 'protection removed'); }}>
+              Remove protection
+            </Button>
+          </React.Fragment>
+        }>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
+          Tasks targeting <b>{ws.name}</b> will stop converting to approval questions,
+          and its PRs will follow the merge dial without waiting for you.
+        </p>
+      </PortalDialog>
     </Card>
   );
 }
@@ -699,10 +703,14 @@ function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
 // workspace it named) — the picker only constrains what you can newly add.
 function ProfileListInput({ label, hint, candidates, wildcardHint, values, onChange }) {
   const { Select, Tag } = window.TidepoolDesignSystem_8a0ead;
+  // the wildcard is an addable option too — the placeholder must count it, or
+  // it reads "no more to add" while `*` still sits selectable below
+  const addable = candidates.filter((c) => !values.includes(c));
+  const wildcardAddable = !values.includes('*');
   const options = [
-    { value: '', label: candidates.some((c) => !values.includes(c)) ? 'add…' : 'no more to add' },
-    ...candidates.filter((c) => !values.includes(c)).map((c) => ({ value: c, label: c })),
-    ...(values.includes('*') ? [] : [{ value: '*', label: `* — ${wildcardHint}` }]),
+    { value: '', label: addable.length || wildcardAddable ? 'add…' : 'no more to add' },
+    ...addable.map((c) => ({ value: c, label: c })),
+    ...(wildcardAddable ? [{ value: '*', label: `* — ${wildcardHint}` }] : []),
   ];
   const pick = (e) => { if (e.target.value) onChange([...values, e.target.value]); };
   return (
@@ -760,7 +768,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
 // pre-judgment of danger — the 409 is the only trigger. Returns the busy flag,
 // the save entrypoint, and the dialog element the caller renders inline.
 function useProfileSave(say, onDone) {
-  const { Button, Dialog } = window.TidepoolDesignSystem_8a0ead;
+  const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null); // { reasons, resend } | null while safe
   const save = async (path, method, body, verb, name) => {
@@ -785,13 +793,8 @@ function useProfileSave(say, onDone) {
     };
     await attempt(false);
   };
-  // Portal to <body>: the DS Dialog is position:fixed, but a transformed
-  // ancestor (the tab-transition wrapper's animation) turns "fixed" into
-  // "relative to that ancestor", which parked the dialog at the middle of the
-  // whole scrollable page instead of the viewport. Rendering outside the
-  // settings subtree pins it back to the viewport.
-  const dialog = ReactDOM.createPortal(
-    <Dialog open={!!confirm} title="Save a profile with broad power?" onClose={() => setConfirm(null)}
+  const dialog = (
+    <PortalDialog open={!!confirm} title="Save a profile with broad power?" onClose={() => setConfirm(null)}
       footer={
         <React.Fragment>
           <Button variant="secondary" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
@@ -806,8 +809,7 @@ function useProfileSave(say, onDone) {
           <li key={r}>{DANGEROUS_REASON_LABEL[r] ?? r}</li>
         ))}
       </ul>
-    </Dialog>,
-    document.body,
+    </PortalDialog>
   );
   return { busy, save, dialog };
 }
