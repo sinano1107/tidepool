@@ -142,3 +142,27 @@ it("throttled の間、todo タスクはキュービュー(/api/queue)では ski
     "skipped",
   );
 });
+
+it("throttled 中は GET /api/pause が throttle 状態(resets_at あり)を運ぶ(issue #82)", async () => {
+  t = await bootTidepool();
+  await registerWork(t, "long haul");
+
+  const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
+  t.worker.scriptUsage(overThreshold(resetsAt));
+  await t.clock.advance(HOUR); // drives one poll so the observation is persisted
+
+  const res = await api(t.baseUrl, "GET", "/api/pause");
+  expect(res.json.throttle.throttled).toBe(true);
+  expect(typeof res.json.throttle.resetsAt).toBe("string");
+});
+
+it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・resetsAt=null を運ぶ — fail-closed の可視化(issue #82)", async () => {
+  t = await bootTidepool();
+  await registerWork(t, "long haul");
+
+  t.worker.scriptUsage(null); // simulates a checkUsage failure
+  await t.clock.advance(HOUR);
+
+  const res = await api(t.baseUrl, "GET", "/api/pause");
+  expect(res.json.throttle).toEqual({ throttled: true, resetsAt: null });
+});

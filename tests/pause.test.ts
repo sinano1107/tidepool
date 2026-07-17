@@ -98,7 +98,10 @@ it("pause 状態はサーバー再起動を跨いで維持される", async () =
   await t.stopServer();
   t = await bootTidepool({ dir: t.dir });
 
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json).toEqual({ paused: true });
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json).toEqual({
+    paused: true,
+    throttle: { throttled: false, resetsAt: null },
+  });
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
 

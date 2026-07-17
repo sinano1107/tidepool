@@ -40,7 +40,7 @@ import {
   registerTask,
   type Task,
 } from "./tasks.js";
-import { isPickupBlocked } from "./throttle.js";
+import { getThrottleState, isPickupBlocked } from "./throttle.js";
 import {
   buildWorkspaceResolver,
   UnknownWorkspaceError,
@@ -1023,7 +1023,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/pause", (_req, res) => {
-    res.json({ paused: isPaused(db) });
+    res.json({ paused: isPaused(db), throttle: getThrottleState(db) });
   });
 
   router.post("/pause", (req, res) => {

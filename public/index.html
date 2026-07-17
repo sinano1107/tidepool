@@ -153,7 +153,9 @@ function liveTitle(t) {
 // `icons` is the registry's assignee name → icon map (issue #52's
 // GET /api/registry/candidates); a name absent from it renders with
 // AgentChip's initials fallback.
-function mapData(board, log, paused, icons = {}) {
+function mapData(board, log, pause, icons = {}) {
+  const paused = pause.paused;
+  const throttle = pause.throttle;
   const fmtTime = (iso) => {
     const d = new Date(iso);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -219,11 +221,22 @@ function mapData(board, log, paused, icons = {}) {
     });
   }
   const running = board.find((t) => t.status === 'in_progress');
+  const throttled = !!throttle?.throttled;
+  // resets_at null while throttled is the fail-closed case (#79's lesson):
+  // usage itself could not be observed, not merely "over threshold" — the
+  // slot must say so rather than showing a bogus/absent resume time
+  const throttleFailClosed = throttled && !throttle.resetsAt;
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
-  // `line` stays free of raw ids for the busy and paused slot lines alike
+  // `line` stays free of raw ids for the busy and paused slot lines alike.
+  // a running task always wins the slot line — throttle_state only refreshes
+  // at pickup-decision time, so mid-run it may already be stale.
   const slot = running
     ? { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
+    : throttled
+    ? throttleFailClosed
+      ? { color: 'var(--coral-4)', line: 'usage check unavailable · nothing starts', meta: 'fail-closed — check usage check logs', taskId: null }
+      : { color: 'var(--coral-4)', line: 'usage limit · nothing starts', meta: `resumes ${fmtTime(throttle.resetsAt)}`, taskId: null }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
   return {
     questions, log: logEntries, queue, board: cols, icons,
@@ -231,6 +244,8 @@ function mapData(board, log, paused, icons = {}) {
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
     slot, running: !!running, paused: !!paused,
+    throttled, throttleFailClosed,
+    throttleResumesAt: throttled && !throttleFailClosed ? fmtTime(throttle.resetsAt) : null,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
   };
 }
@@ -242,7 +257,7 @@ async function fetchData() {
     fetch('/api/pause').then((r) => r.json()),
     fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
   ]);
-  return mapData(board, log, pause.paused, candidates.icons);
+  return mapData(board, log, pause, candidates.icons);
 }
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
@@ -1329,6 +1344,7 @@ function App() {
     setData((d) => (tab === 'triage' && d
       ? { ...fresh, questions: d.questions, log: d.log, lastLogId: d.lastLogId }
       : fresh));
+    return fresh;
   };
 
   // The triage session (issue #6): entering the skim opens it server-side —
@@ -1445,12 +1461,25 @@ function App() {
   };
 
   // "Run now" IS a move to the head — the one reorder verb, no separate path.
+  // The move itself always succeeds (it's just a reorder); whether the
+  // immediate poll can actually pick anything up is a separate question the
+  // toast must answer honestly (#79's lesson, ADR 0028) rather than always
+  // claiming success.
   const moveFront = async (id) => {
     try {
       await api(`/api/tasks/${id}/move`, { after: null });
       markFront(id);
-      await refresh();
-      say('success', 'moved to front — immediate poll fired', id);
+      const fresh = await refresh();
+      if (fresh.paused) {
+        say('warn', 'moved to front — pickup is paused', 'resume to run it');
+      } else if (fresh.throttled) {
+        say('warn', 'moved to front — pickup blocked',
+          fresh.throttleFailClosed
+            ? 'usage check unavailable — nothing starts until a fresh reading arrives'
+            : `usage limit · resumes ${fresh.throttleResumesAt}`);
+      } else {
+        say('success', 'moved to front — immediate poll fired', id);
+      }
     } catch (err) {
       say('danger', 'move failed', String(err.message || err));
     }
@@ -1573,7 +1602,7 @@ function App() {
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills as tasks come in.</div>
             </div>)}
         {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · ${t.type}`)} />}
-        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : 'free'} paused={data.paused} onTogglePause={togglePause} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
+        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
         {tab === 'settings' && <SettingsScreen say={say} />}
         </div>

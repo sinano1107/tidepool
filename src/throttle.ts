@@ -31,3 +31,17 @@ export function isPickupBlocked(db: Db, now: Date): boolean {
   if (!row.resets_at) return true;
   return now.getTime() < new Date(row.resets_at).getTime();
 }
+
+export interface ThrottleState {
+  throttled: boolean;
+  resetsAt: string | null;
+}
+
+/** Raw throttle_state for display (issue #82): unlike isPickupBlocked, this
+ *  doesn't resolve a passed resets_at back to false — the human sees the last
+ *  reported state as-is until the next poll refreshes it. */
+export function getThrottleState(db: Db): ThrottleState {
+  const row = readThrottleState(db);
+  if (!row) return { throttled: false, resetsAt: null };
+  return { throttled: !!row.throttled, resetsAt: row.resets_at };
+}
