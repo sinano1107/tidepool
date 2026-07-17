@@ -40,6 +40,8 @@ Both need an **interactive browser login** — cannot be done non-interactively 
 
 **After `gh auth login` succeeds, run `gh auth setup-git` too** — without it, `git push`/`pull` over HTTPS still fails even though `gh` itself is authenticated (the credential helper isn't wired into git's config until this runs).
 
+**Also trust the board's own cwd once, interactively** (issue #81 / ADR-0028): the hourly usage throttle scrapes `/usage` from an *interactive* `claude --safe-mode` session run in `/opt/tidepool`, and the interactive TUI shows a folder-trust gate ("Is this a project you trust?") plus one-time onboarding modals that block the input prompt until dismissed. Once, as masaki: `ssh $PI`, then `cd /opt/tidepool && claude`, accept "Yes, I trust this folder", dismiss any what's-new/onboarding modal, and quit. This persists in `~/.claude.json` (`projects["/opt/tidepool"].hasTrustDialogAccepted: true`, home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`). Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry. (A dismissed what's-new can re-appear after a `claude` update; same one-time fix.)
+
 ## 5. systemd unit + secrets
 
 The unit (`systemd/tidepool.service`) is committed in this repo and installed by `scripts/deploy-pi.sh`. `/etc/default/tidepool` (the `EnvironmentFile`) is **not** in git — create it by hand on first setup:

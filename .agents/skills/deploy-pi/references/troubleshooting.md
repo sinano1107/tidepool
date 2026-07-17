@@ -16,13 +16,32 @@ console.log(db.prepare('select * from throttle_state').all());
 
 If it shows `{ throttled: 1, resets_at: null }`, the Swell usage-limit gate (ADR-0008, `src/usage.ts`) is permanently fail-closed. This happens **silently** — `checkThrottle` swallows any parse failure into `{session: null, week: null}` → `evaluateThrottle` → `throttled: true, resetsAt: null`, with no exception and no log line. `isPickupBlocked` (the throttle read) is a display-only helper (`api.ts`) — the scheduler's own gate in `src/scheduler.ts` doesn't consult it, so this state doesn't even show up as an obvious "board is paused" signal anywhere in the UI logic; it just quietly never picks anything up again until a fresh `/usage` call parses cleanly.
 
-Root cause seen once already (fixed 2026-07-13, but the failure mode can recur if the CLI's output format drifts again): `claude -p "/usage"`'s rendered text is **not stable across accounts**. An account with rich usage history renders `resets Jul 9 at 5:59pm`; a freshly-authenticated account with zero history on that device renders `resets Jul 13, 1:10pm` (comma instead of "at", and minutes dropped entirely when exactly on the hour — `Jul 16, 1pm`). `src/usage.ts`'s `LINE_PATTERN` regex was only ever tested against the first form. If you hit this again with an already-updated `usage.ts`, the format has drifted a third way — reproduce with:
+Root cause is always the same shape: `checkUsage` (`src/claude-worker.ts`) hands `parseUsage` (`src/usage.ts`) something it can't read, so the snapshot comes back `{session: null, week: null}`. Since issue #81 / ADR-0028, `checkUsage` **no longer runs `claude -p "/usage"`** (that path is broken on current CLIs — `-p` treats `/usage` as a prompt string, not a slash command). It now drives an **interactive** `claude --safe-mode` session over a PTY (node-pty): waits for the input placeholder, sends `/usage`, scrapes the rendered panel, tears the session down (Ctrl-C×2 + SIGKILL). That adds several interactive-only ways to fail-close silently, all with the same `{throttled:1, resets_at:null}` symptom:
+
+- **A startup modal is blocking the prompt.** After a `claude` update, a new "What's new"/onboarding modal — or, on a fresh/re-cloned board cwd, the folder-trust gate ("Is this a project you trust?") — sits in front of the input box, so the `Try "` placeholder marker never appears and `checkUsage` times out → null. Fix once, interactively, as masaki: `ssh masaki@100.78.52.97`, then `cd /opt/tidepool && claude` — dismiss the modal / accept "Yes, I trust this folder", then quit. Trust persists in `~/.claude.json` (`projects["/opt/tidepool"].hasTrustDialogAccepted`, home-side, survives redeploy); a dismissed what's-new persists until the next CLI update.
+- **The renderer regressed.** `checkUsage` forces the fullscreen renderer (`--settings` with `{"tui":"fullscreen"}`) because the classic renderer lays panel words out with cursor-move escapes, not spaces — after ANSI stripping it collapses to `Currentsession 50%used` and `parseUsage` can't read it. If a future CLI ignores that setting or changes the fullscreen layout, the panel stops parsing. Check a raw capture (below): are the panel words space-separated?
+- **The prompt marker was localized.** `PROMPT_READY_MARKER = 'Try "'` (in `claude-worker.ts`) assumes the English input placeholder. `--safe-mode` currently disables the board's `language: japanese` setting so it stays English — but if a CLI update localizes the placeholder even under safe-mode, the marker never matches → timeout.
+- **The panel text format drifted** (the original 2026-07-13 cause, now `parseUsage`/#80's concern): `resets Jul 9 at 5:59pm` vs `resets Jul 13, 1:10pm` vs `Jul 16, 1pm` (comma instead of "at", minutes dropped on the hour). Diff the captured panel against `LINE_PATTERN` / the fixtures in `tests/usage.test.ts`.
+
+Reproduce by running the **deployed** `checkUsage` directly — same code, same cwd/user/registry as the scheduler, no agent session spent:
 
 ```bash
-ssh masaki@100.78.52.97 "cd /opt/tidepool && claude -p '/usage' --output-format json --model haiku --max-turns 1 --max-budget-usd 0.01 --safe-mode"
+ssh masaki@100.78.52.97 'cat > /opt/tidepool/_cu.mjs <<"EOF"
+import { mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
+import { ClaudeCodeWorker } from "./src/claude-worker.ts"; import { openDb } from "./src/db.ts";
+import { SystemClock } from "./src/clock.ts"; import { parseUsage } from "./src/usage.ts";
+const w = new ClaudeCodeWorker({ db: openDb(":memory:"), clock: new SystemClock(),
+  registryDir: "/mnt/ssd/tidepool-registry", agent: "tako", workspace: "sandbox",
+  mcpUrl: "http://127.0.0.1:4589/mcp", logDir: mkdtempSync(join(tmpdir(),"cu-")) });
+const raw = await w.checkUsage();
+console.log("raw null?", raw === null);
+if (raw) { console.log(JSON.stringify(parseUsage(raw, new Date()))); console.log(raw); }
+process.exit(0);
+EOF
+cd /opt/tidepool && node --import tsx _cu.mjs; rm -f /opt/tidepool/_cu.mjs'
 ```
 
-...and diff the `result` field's `resets ...` lines against `LINE_PATTERN` in `src/usage.ts` / the fixtures in `tests/usage.test.ts`.
+`raw null? true` → the scrape itself failed (modal / marker / timeout — one of the first three causes); inspect the printed raw to see which. `raw` non-null but `parseUsage` returns nulls → a renderer or format-drift problem (last two causes). It must run in `/opt/tidepool` (the trusted, service cwd) — the `cd` above handles that.
 
 To recover once the code is fixed and deployed: nothing extra needed, the very next pickup attempt (task registration + `POST /tasks/:id/move {"after":null}` to force it — see below) runs `checkThrottle` fresh and updates `throttle_state`.
 
