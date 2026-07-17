@@ -1,6 +1,12 @@
 import { mkdirSync } from "node:fs";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import { createAgent, listAgentViews, updateAgent, type AgentAdmin } from "./agent-create.js";
+import {
+  createProfile,
+  listProfileViews,
+  updateProfile,
+  type ProfileAdmin,
+} from "./profile-create.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
@@ -238,6 +244,20 @@ function agentAdmin(): AgentAdmin | undefined {
   };
 }
 
+/** The settings surface's profile verbs (issue #77), agentAdmin's twin: bound
+ *  to this board's registry clone here at the composition root. The API layer
+ *  runs the confirmation gate; these verbs only persist. Without a registry
+ *  there is nowhere to administer profiles at all. */
+function profileAdmin(): ProfileAdmin | undefined {
+  if (!registryDir) return undefined;
+  const deps = { registryDir };
+  return {
+    create: (input) => createProfile(input, deps),
+    list: () => listProfileViews(deps),
+    update: (input) => updateProfile(input, deps),
+  };
+}
+
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
   port,
@@ -249,6 +269,7 @@ const server = await startServer({
   github,
   workspaceAdmin: workspaceAdmin(),
   agentAdmin: agentAdmin(),
+  profileAdmin: profileAdmin(),
   resolveAuthority: authorityResolver(),
   agentRegistered: agentRegisteredChecker(),
   isProtectedWorkspace: protectedWorkspaceChecker(),

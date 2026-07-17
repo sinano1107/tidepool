@@ -1,4 +1,4 @@
-import { Router, json } from "express";
+import { type Response, Router, json } from "express";
 import { z } from "zod";
 import { UnknownAgentError, verifyAgentRepaired } from "./agent.js";
 import {
@@ -16,10 +16,13 @@ import { isPaused, setPaused } from "./pause.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
 import {
+  authorityProfileSchema,
   InvalidAgentNameError,
+  InvalidAuthorityProfileNameError,
   InvalidWorkspaceNameError,
   type RegistryCandidates,
 } from "./registry.js";
+import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import {
   answerQuestion,
   type BoardTask,
@@ -151,6 +154,43 @@ const createAgentSchema = z.object({
 // the edit form resubmits every field but `name`, which comes from the URL
 // (issue #71, same split as updateWorkspaceSchema)
 const updateAgentSchema = createAgentSchema.omit({ name: true });
+
+// the profile save payload (issue #77): every authority-profile field, reused
+// straight from the registry's own schema so the two never drift, plus `name`
+// (picks the file) and `confirmDangerous` — a request-envelope flag, not a
+// profile field, so it is stripped before the value reaches the domain verb.
+// The strictObject stays strict through .extend(), so an unknown key is a 400.
+const createProfileSchema = authorityProfileSchema.extend({
+  name: z.string().min(1),
+  confirmDangerous: z.boolean().optional(),
+});
+
+// edit resubmits every field but `name` (from the URL), same split as agents;
+// confirmDangerous rides along because a dangerous value can enter on edit too
+const updateProfileSchema = createProfileSchema.omit({ name: true });
+
+/** The #77 confirmation contract, enforced at the server boundary (ADR 0027):
+ *  a save payload carrying any dangerous value (issue #76's `dangerousValues`)
+ *  must also carry `confirmDangerous: true`. Without it, 409 with the stable
+ *  reason codes phase 3's dialog reads directly — a body distinct from the
+ *  busy-clone 409 by its `confirm_required` flag (same shape as the unprotect
+ *  409). Returns true once it has sent the 409, so the caller returns without
+ *  saving; the check is a pure function of the payload, so create and edit
+ *  share it. */
+function rejectUnconfirmedDanger(
+  res: Response,
+  profile: Parameters<typeof dangerousValues>[0],
+  confirmDangerous: boolean | undefined,
+): boolean {
+  const reasons = dangerousValues(profile);
+  if (reasons.length === 0 || confirmDangerous) return false;
+  res.status(409).json({
+    error: "profile contains dangerous values; resubmit with confirmDangerous: true",
+    confirm_required: true,
+    dangerous_values: reasons,
+  });
+  return true;
+}
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
@@ -289,6 +329,13 @@ export interface ApiRouterDeps {
    *  a verb absent — tests fake them singly) → not configured, the route
    *  reports 503. */
   agentAdmin?: Partial<AgentAdmin>;
+  /** The settings surface's profile verbs (issue #77), agentAdmin's twin —
+   *  threaded in by main.ts with the registry clone already bound. The route
+   *  layer runs the real `dangerousValues` gate on top of these (ADR 0027:
+   *  the confirmation contract is fixed at the server boundary). Absent (or a
+   *  verb absent — tests fake them singly) → not configured, the route reports
+   *  503. */
+  profileAdmin?: Partial<ProfileAdmin>;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -307,6 +354,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     auditorName,
     workspaceAdmin,
     agentAdmin,
+    profileAdmin,
   } = deps;
   const router = Router();
   router.use(json());
@@ -577,6 +625,70 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         res.status(404).json({ error: err.message });
       } else if (err instanceof UnknownAuthorityProfileError || err instanceof InvalidAgentIconError) {
         res.status(400).json({ error: err.message });
+      } else if (err instanceof RegistryCloneBusyError) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+
+  router.post("/profiles", async (req, res) => {
+    const parsed = createProfileSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!profileAdmin?.create) {
+      res.status(503).json({ error: "profile settings not configured" });
+      return;
+    }
+    // confirmDangerous is a request-envelope flag (issue #77), never a profile
+    // field — strip it before the value reaches the domain verb
+    const { confirmDangerous, ...profile } = parsed.data;
+    if (rejectUnconfirmedDanger(res, profile, confirmDangerous)) return;
+    try {
+      res.status(201).json(await profileAdmin.create(profile));
+    } catch (err) {
+      if (err instanceof InvalidAuthorityProfileNameError) {
+        res.status(400).json({ error: err.message });
+      } else if (err instanceof RegistryCloneBusyError) {
+        res.status(409).json({ error: err.message });
+      } else {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+
+  // GET returns the full profile (every edit-form field) — the /agents route's
+  // twin, but with no `authorityProfiles` candidate list to bundle (profiles
+  // have no candidates of their own; the select over them lives on /agents)
+  router.get("/profiles", (_req, res) => {
+    if (!profileAdmin?.list) {
+      res.status(503).json({ error: "profile settings not configured" });
+      return;
+    }
+    res.json({ profiles: profileAdmin.list() });
+  });
+
+  router.patch("/profiles/:name", async (req, res) => {
+    const parsed = updateProfileSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!profileAdmin?.update) {
+      res.status(503).json({ error: "profile settings not configured" });
+      return;
+    }
+    const { confirmDangerous, ...fields } = parsed.data;
+    const profile = { name: req.params.name, ...fields };
+    if (rejectUnconfirmedDanger(res, profile, confirmDangerous)) return;
+    try {
+      res.json(await profileAdmin.update(profile));
+    } catch (err) {
+      if (err instanceof UnknownAuthorityProfileError) {
+        res.status(404).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
         res.status(409).json({ error: err.message });
       } else {

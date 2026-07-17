@@ -13,6 +13,7 @@ import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import type { AgentAdmin } from "../src/agent-create.js";
+import type { ProfileAdmin } from "../src/profile-create.js";
 import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
@@ -82,6 +83,10 @@ export interface BootOptions {
    *  itself has its own coverage (tests/create-agent.test.ts,
    *  tests/update-agent.test.ts). */
   agentAdmin?: Partial<AgentAdmin>;
+  /** The settings surface's profile verbs (issue #77), agentAdmin's twin —
+   *  endpoint tests fake the one verb they exercise; the orchestration itself
+   *  has its own coverage (tests/create-profile.test.ts). */
+  profileAdmin?: Partial<ProfileAdmin>;
 }
 
 /** Boot the whole monolith in-process: temp SQLite, real HTTP on an ephemeral port.
@@ -114,6 +119,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     listAgents: options.listAgents,
     workspaceAdmin: options.workspaceAdmin,
     agentAdmin: options.agentAdmin,
+    profileAdmin: options.profileAdmin,
   });
   let stopped = false;
   const stopServer = async () => {
