@@ -50,8 +50,8 @@ class LoggingWorker implements WorkerAdapter {
    *  this placeholder cannot actually perform. */
   async checkUsage(): Promise<string | null> {
     return (
-      "Current session: 0% used · resets Jan 1 at 12:00am (UTC)\n" +
-      "Current week (all models): 0% used · resets Jan 1 at 12:00am (UTC)\n"
+      "Current session\n0% used\nResets 12:00am (UTC)\n" +
+      "Current week (all models)\n0% used\nResets Jan 1 at 12:00am (UTC)\n"
     );
   }
 }

@@ -15,10 +15,12 @@ import type { Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 
 /** A reading well under the default threshold — the harness default so tests
- *  unrelated to throttling never need to script usage themselves. */
-const NOT_THROTTLED_USAGE_TEXT =
-  "Current session: 0% used · resets Jan 1 at 12:00am (UTC)\n" +
-  "Current week (all models): 0% used · resets Jan 1 at 12:00am (UTC)\n";
+ *  unrelated to throttling never need to script usage themselves. Exported
+ *  so other hand-rolled WorkerAdapter fakes (e.g. worker-failure.test.ts)
+ *  don't each carry their own copy of the panel text. */
+export const NOT_THROTTLED_USAGE_TEXT =
+  "Current session\n0% used\nResets 12:00am (UTC)\n" +
+  "Current week (all models)\n0% used\nResets Jan 1 at 12:00am (UTC)\n";
 
 interface ScheduledInterval {
   fn: () => void;

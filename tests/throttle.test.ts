@@ -17,28 +17,34 @@ afterEach(async () => {
 const MIN = 60 * 1000;
 
 const NOT_THROTTLED =
-  "Current session: 5% used · resets Jan 1 at 12:00am (UTC)\n" +
-  "Current week (all models): 5% used · resets Jan 1 at 12:00am (UTC)\n";
+  "Current session\n5% used\nResets 12:00am (UTC)\n" +
+  "Current week (all models)\n5% used\nResets Jan 1 at 12:00am (UTC)\n";
 
 function overThreshold(resetsAt: Date): string {
-  // both lines present (real /usage output always has both) — only session
+  // both lines present (real /usage panel always has both) — only session
   // crosses the threshold, week stays a well-observed 5%
   return (
-    `Current session: 85% used · resets ${formatUsageDate(resetsAt)} (UTC)\n` +
-    `Current week (all models): 5% used · resets ${formatUsageDate(resetsAt)} (UTC)\n`
+    `Current session\n85% used\nResets ${formatSessionResetTime(resetsAt)} (UTC)\n` +
+    `Current week (all models)\n5% used\nResets ${formatUsageDate(resetsAt)} (UTC)\n`
   );
 }
 
-/** Renders a Date the way `/usage` renders resets: no year, English month,
- *  12-hour clock, e.g. "Jul 9 at 5:59pm". */
-function formatUsageDate(d: Date): string {
-  const month = d.toLocaleString("en-US", { timeZone: "UTC", month: "short" });
-  const day = d.toLocaleString("en-US", { timeZone: "UTC", day: "numeric" });
+/** Renders a Date the way the /usage panel renders the session window's
+ *  reset (ADR 0028): no date, 12-hour clock, e.g. "5:59pm". */
+function formatSessionResetTime(d: Date): string {
   let hour = Number(d.toLocaleString("en-US", { timeZone: "UTC", hour: "numeric", hour12: false }));
   const minute = d.toLocaleString("en-US", { timeZone: "UTC", minute: "2-digit" });
   const meridiem = hour >= 12 ? "pm" : "am";
   hour = hour % 12 === 0 ? 12 : hour % 12;
-  return `${month} ${day} at ${hour}:${minute.padStart(2, "0")}${meridiem}`;
+  return `${hour}:${minute.padStart(2, "0")}${meridiem}`;
+}
+
+/** Renders a Date the way the /usage panel renders the week window's reset:
+ *  no year, English month, 12-hour clock, e.g. "Jul 9 at 5:59pm". */
+function formatUsageDate(d: Date): string {
+  const month = d.toLocaleString("en-US", { timeZone: "UTC", month: "short" });
+  const day = d.toLocaleString("en-US", { timeZone: "UTC", day: "numeric" });
+  return `${month} ${day} at ${formatSessionResetTime(d)}`;
 }
 
 it("session が閾値以上だと新規 pickup が resets_at まで skip され、resets_at 到達で(hourly tick を待たず)再開する", async () => {
