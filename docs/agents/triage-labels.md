@@ -25,3 +25,11 @@ Orthogonal to the five roles above: a `ready-for-agent` issue additionally carri
 | `priority:low`    | Ops and UX — not a prerequisite for agent-driven development   |
 
 Same colon-namespaced shape as `model:*` (e.g. `model:opus`, which pins the model an issue's worker should run on).
+
+## Environment labels
+
+| Label       | Meaning                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `env:cloud` | The task completes end-to-end — implementation **and** verification — inside a cloud Claude Code session (isolated container, repo clone, `claude` CLI available). |
+
+Absent means completion needs something outside the cloud container: hardware the container cannot reach (ssh to the Pi over Tailscale, #83), human-performed acceptance (browser E2E per ADR 0027, e.g. #55/#78), real external accounts or ops (machine-user setup, #50), or verification that can only be observed in a browser UI (#47). An issue whose agent portion is cloud-workable but whose acceptance is human-performed does **not** qualify — the label promises the whole loop closes in the cloud.
