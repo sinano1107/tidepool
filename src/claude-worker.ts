@@ -1,5 +1,6 @@
 import { execFile, spawn as nodeSpawn } from "node:child_process";
 import { createWriteStream, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
@@ -218,12 +219,15 @@ export interface ClaudeWorkerOptions {
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
   spawn?: SpawnFn;
-  exec?: ExecFn;
+  /** issue #81 / ADR 0028: the PTY boundary checkUsage scrapes /usage at.
+   *  Injected so the scrape orchestration runs without a real PTY in tests. */
+  pty?: PtyFn;
 }
 
 /** Request/response process boundary for one-shot CLI calls (unlike the
- *  streaming SpawnFn above) — used by checkUsage's `/usage` JIT poll
- *  (ADR 0008, measured 663ms, $0, no model call). */
+ *  streaming SpawnFn above) — the claude-draft-client's JIT draft poll runs
+ *  through it (ADR 0008). checkUsage moved off this to the PTY boundary below
+ *  (issue #81 / ADR 0028), since `/usage` only renders under a TTY. */
 export type ExecFn = (command: string, args: string[]) => Promise<string>;
 
 export const defaultExec: ExecFn = (command, args) =>
@@ -233,6 +237,100 @@ export const defaultExec: ExecFn = (command, args) =>
       else resolve(stdout);
     });
   });
+
+/** The interactive-TUI process boundary checkUsage scrapes at (issue #81 /
+ *  ADR 0028): a PTY, so `claude`'s /usage panel renders as it would under a
+ *  real terminal. Everything vendor-specific (node-pty, the interactive CLI
+ *  flags) flows through this one call — faked in tests so the scrape
+ *  orchestration runs without a real PTY (ADR 0027). */
+export type PtyProcess = {
+  onData(listener: (data: string) => void): void;
+  /** Bytes to the CLI's stdin: a submitted line ends in ENTER; shutdown is
+   *  CTRL_C sent twice. */
+  write(data: string): void;
+  kill(signal?: string): void;
+  onExit(listener: () => void): void;
+};
+
+export type PtyFn = (
+  command: string,
+  args: string[],
+  opts: { cwd: string; cols: number; rows: number },
+) => PtyProcess;
+
+// ADR 0028 empirical parameters. The scrape orchestration (checkUsage below)
+// is unit-tested against a fake PTY, but these literal values are not — they
+// were tuned by driving the real interactive CLI on both macOS (2.1.212) and
+// the production Pi board (2.1.207), 2026-07-17. Re-confirm on a fresh host.
+//
+// Wait for this before sending /usage (never a fixed sleep): the input box
+// shows a rotating `Try "…"` placeholder once it is drawn. Unlike the mode
+// footer ("? for shortcuts" vs "shift+tab to cycle", which differs by the
+// host's permission mode) or the safe-mode banner (which renders too early,
+// before the box accepts input), the placeholder is common to every host and
+// marks the prompt itself. Matched space-insensitively (see `squash`).
+export const PROMPT_READY_MARKER = 'Try "';
+// The interactive input box silently drops a slash command typed the instant
+// it renders, so we let it settle before sending /usage. This is not a blind
+// startup sleep — the prompt marker above is still the gate; this is the box's
+// input-init window, found empirically (2000ms was the reliable floor on
+// macOS; 2500 also cleared the slower Pi with margin).
+const USAGE_PROMPT_SETTLE_MS = 2_500;
+// The /usage panel is captured once both header lines have rendered; these
+// double as the acceptance-criteria markers (Current session / Current week).
+const PANEL_MARKERS = ["Current session", "Current week"];
+// Once the panel's headers appear, each row's % and reset line can still
+// arrive in a later chunk (the panel renders top-to-bottom over several
+// writes). Wait for the render to go quiet before capturing so a chunk
+// boundary can't split a number off the header we keyed on. Comfortably
+// shorter than the gap before the panel re-renders with its usage breakdown,
+// so we capture the first complete render, not the breakdown.
+const PANEL_QUIET_MS = 500;
+// Fail closed if the panel has not rendered within this budget (measured
+// end-to-end ~3.4s on macOS, ~7s on the Pi, so 15s is generous headroom).
+const USAGE_TIMEOUT_MS = 15_000;
+// Wide enough that "Current session …" never wraps at 80 columns (ADR 0028).
+const PTY_COLS = 200;
+const PTY_ROWS = 50;
+// stdin control bytes: submit a line, and Ctrl-C (sent twice for a clean
+// interactive shutdown).
+const ENTER = "\r";
+const CTRL_C = "\x03";
+
+// Force the fullscreen TUI renderer regardless of the host's own setting: the
+// classic renderer lays words out with cursor-position moves rather than
+// spaces, so once ANSI is stripped the panel collapses to "Currentsession
+// 36%used" and parseUsage (#80) can't read it. The fullscreen renderer emits
+// real spaces, keeping the raw parseable. Passed via --settings, which is
+// honored even under --safe-mode (verified on the Pi board). This is the one
+// piece of state checkUsage pins rather than inheriting from the host.
+const USAGE_TUI_SETTINGS = JSON.stringify({ tui: "fullscreen" });
+
+// Strip ANSI/OSC escapes and all whitespace. The CLI positions words with
+// cursor-move escapes, not spaces, so a marker like "Current session" is never
+// a contiguous substring of the raw stream; matching against this squashed
+// view ("Currentsession") is robust across renderers and terminal widths. The
+// captured raw is still returned verbatim — this view is only for matching.
+function squash(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[@-_][0-9;?]*[A-Za-z]?/g, "")
+    .replace(/\x1b[=>78]/g, "")
+    .replace(/\s+/g, "");
+}
+
+/** Space-insensitive (but case-sensitive) substring match against the squashed
+ *  PTY stream. Case matters on purpose: `PROMPT_READY_MARKER` squashes to
+ *  `Try"`, and keeping the capital T is what stops it matching a squashed
+ *  `Retry "…"` (`…etry"…`). A spurious match would only fail closed anyway —
+ *  parseUsage (#80) returns null on a capture that isn't a real panel. */
+function seen(buffer: string, marker: string): boolean {
+  return squash(buffer).includes(squash(marker));
+}
+
+function hasUsagePanel(buffer: string): boolean {
+  return PANEL_MARKERS.every((marker) => seen(buffer, marker));
+}
 
 const defaultSpawn: SpawnFn = (command, args, opts) => {
   const child = nodeSpawn(command, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "inherit"] });
@@ -246,6 +344,30 @@ const defaultSpawn: SpawnFn = (command, args, opts) => {
   return child;
 };
 
+const nodeRequire = createRequire(import.meta.url);
+
+/** The real PTY boundary (issue #81 / ADR 0028): node-pty renders the
+ *  interactive /usage panel under a TTY. node-pty is a native module and the
+ *  only real-PTY path — kept out of automated tests (ADR 0027) and required
+ *  lazily so the fake-injected suite never needs it built. */
+const defaultPty: PtyFn = (command, args, opts) => {
+  // node-pty's IPty already satisfies PtyProcess (onData/onExit/write/kill);
+  // the seam exists to isolate the require, not to re-wrap identical methods.
+  const nodePty = nodeRequire("node-pty") as {
+    spawn(
+      file: string,
+      args: string[],
+      options: { cwd: string; cols: number; rows: number; name: string },
+    ): PtyProcess;
+  };
+  return nodePty.spawn(command, args, {
+    cwd: opts.cwd,
+    cols: opts.cols,
+    rows: opts.rows,
+    name: "xterm-256color",
+  });
+};
+
 /** The real WorkerAdapter: spawns a headless Claude Code session per task.
  *  Vendor knowledge (spawn recipe, stream-json, agent definition format) stays
  *  inside this module — the board only sees the WorkerAdapter seam. */
@@ -253,7 +375,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   readonly id: string;
   private readonly options: ClaudeWorkerOptions;
   private readonly spawn: SpawnFn;
-  private readonly exec: ExecFn;
+  private readonly pty: PtyFn;
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
    *  paths against its own cwd (the workspace), not against the board. */
   private readonly logDir: string;
@@ -268,7 +390,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.id = options.agent;
     this.options = options;
     this.spawn = options.spawn ?? defaultSpawn;
-    this.exec = options.exec ?? defaultExec;
+    this.pty = options.pty ?? defaultPty;
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
@@ -430,38 +552,87 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.running.get(taskId)?.kill(signal);
   }
 
-  /** --model/--max-turns/--max-budget-usd are a hard ceiling against a
-   *  runaway session, not an expected path: ADR 0008 measured this call at
-   *  $0 with zero model turns, but a misbehaving CLI must fail loud (and
-   *  cheap) rather than run away — checkUsage() then just sees it as a
-   *  failure and reports null (fail-closed). Confirmed against the installed
-   *  CLI (v2.1.205) and the CLI reference: --max-turns exists but is omitted
-   *  from --help. */
+  /** Scrapes the interactive /usage panel over a PTY (issue #81 / ADR 0028).
+   *  The panel renders only under a TTY, and only the interactive session
+   *  keeps the OAuth subscription auth that draws the % figures (`--bare`
+   *  drops to API billing and the panel disappears). Runs in the board's own
+   *  cwd (unlike start(), which pins cwd to the task's workspace) with
+   *  --safe-mode so the board repo's CLAUDE.md/skills/MCP never leak into the
+   *  probe. Auth/tokens are never touched — refresh is left to the CLI's own
+   *  startup (ADR 0028's core constraint). Returns the captured raw text
+   *  verbatim; ANSI stripping and extraction are parseUsage's job (#80). Any
+   *  failure — spawn error, early exit, or timeout — resolves null so the
+   *  scheduler fails closed, and the session is always torn down (Ctrl-C×2
+   *  then kill) so no orphan is left behind. `--settings` pins the fullscreen
+   *  renderer (see USAGE_TUI_SETTINGS) so the panel stays parseable regardless
+   *  of the host's own TUI setting.
+   *
+   *  The old exec probe carried an ADR 0005 runaway *cost* ceiling
+   *  (--model haiku/--max-turns/--max-budget-usd). That's gone: the
+   *  interactive /usage panel makes no model call under subscription auth, so
+   *  there is no cost to cap — runaway is bounded instead by time
+   *  (USAGE_TIMEOUT_MS → SIGKILL). */
   async checkUsage(): Promise<string | null> {
+    let session: PtyProcess;
     try {
-      const stdout = await this.exec("claude", [
-        "-p",
-        "/usage",
-        "--output-format",
-        "json",
-        "--model",
-        "haiku",
-        "--max-turns",
-        "1",
-        "--max-budget-usd",
-        "0.01",
-        // this call runs with the board's own cwd (unlike start(), which
-        // pins cwd to the task's workspace) — --safe-mode keeps the board
-        // repo's own CLAUDE.md/skills/MCP config from leaking into a trivial
-        // /usage ping. Auth/model/tools/permissions are unaffected (unlike
-        // --bare, which would force API-key-only auth)
-        "--safe-mode",
-      ]);
-      const parsed: unknown = JSON.parse(stdout);
-      const result = (parsed as { result?: unknown }).result;
-      return typeof result === "string" ? result : null;
+      const settingsPath = join(this.logDir, "usage-tui-settings.json");
+      writeFileSync(settingsPath, USAGE_TUI_SETTINGS);
+      session = this.pty("claude", ["--safe-mode", "--settings", settingsPath], {
+        cwd: process.cwd(),
+        cols: PTY_COLS,
+        rows: PTY_ROWS,
+      });
     } catch {
       return null;
     }
+
+    return new Promise<string | null>((resolve) => {
+      let buffer = "";
+      let promptSeen = false;
+      let settled = false;
+      let settleTimer: ReturnType<typeof setTimeout> | undefined;
+      let panelTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = (result: string | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(settleTimer);
+        clearTimeout(panelTimer);
+        try {
+          // Ctrl-C×2 nudges the interactive session to exit cleanly, then
+          // SIGKILL as the backstop so a CLI that catches/ignores the default
+          // hangup can never orphan (ADR 0028's "no orphan" is the hard
+          // acceptance criterion, so make it uncatchable rather than trust the
+          // TUI's signal handling).
+          session.write(CTRL_C + CTRL_C);
+          session.kill("SIGKILL");
+        } catch {
+          // already gone (e.g. finishing from onExit) — nothing left to do
+        }
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => finish(null), USAGE_TIMEOUT_MS);
+
+      session.onExit(() => finish(hasUsagePanel(buffer) ? buffer : null));
+
+      session.onData((data) => {
+        buffer += data;
+        // pattern-wait for the prompt (never a fixed sleep), then let the box
+        // settle before sending /usage once — a command typed the instant the
+        // box renders is dropped (ADR 0028).
+        if (!promptSeen && seen(buffer, PROMPT_READY_MARKER)) {
+          promptSeen = true;
+          settleTimer = setTimeout(() => session.write(`/usage${ENTER}`), USAGE_PROMPT_SETTLE_MS);
+        }
+        if (hasUsagePanel(buffer)) {
+          // capture once the panel stops rendering (debounce), so a chunk
+          // boundary can't strand a %/reset row we haven't buffered yet
+          clearTimeout(panelTimer);
+          panelTimer = setTimeout(() => finish(buffer), PANEL_QUIET_MS);
+        }
+      });
+    });
   }
 }

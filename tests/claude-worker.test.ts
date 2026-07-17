@@ -1,11 +1,17 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
-import { ClaudeCodeWorker, type SpawnFn } from "../src/claude-worker.js";
+import {
+  ClaudeCodeWorker,
+  PROMPT_READY_MARKER,
+  type PtyFn,
+  type SpawnFn,
+} from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { listBoard, type Task } from "../src/tasks.js";
@@ -95,6 +101,59 @@ function recordingSpawn() {
     for (const listener of exitListeners) listener(code, signal);
   };
   return { calls, stdout, killed, spawn, emitExit };
+}
+
+/** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
+ *  drives data emission and process exit, and reads back the spawn recipe,
+ *  what checkUsage wrote to stdin, and how many times it killed the session. */
+function recordingPty() {
+  const calls: Array<{ command: string; args: string[]; cwd: string; cols: number }> = [];
+  const writes: string[] = [];
+  const kills: Array<string | undefined> = [];
+  let dataListener: ((data: string) => void) | undefined;
+  let exitListener: (() => void) | undefined;
+  const pty: PtyFn = (command, args, opts) => {
+    calls.push({ command, args, cwd: opts.cwd, cols: opts.cols });
+    return {
+      onData: (listener) => {
+        dataListener = listener;
+      },
+      write: (data) => {
+        writes.push(data);
+      },
+      kill: (signal) => {
+        kills.push(signal);
+      },
+      onExit: (listener) => {
+        exitListener = listener;
+      },
+    };
+  };
+  return {
+    pty,
+    calls,
+    writes,
+    kills,
+    emitData: (data: string) => dataListener?.(data),
+    emitExit: () => exitListener?.(),
+  };
+}
+
+/** A worker wired to a fake PTY, for the checkUsage scrape tests. */
+async function makeUsageWorker(pty: PtyFn) {
+  const registryDir = await makeRegistry();
+  const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
+  return new ClaudeCodeWorker({
+    db: openDb(":memory:"),
+    clock: new FakeClock(),
+    registryDir,
+    agent: "deckhand",
+    workspace: "tidepool",
+    mcpUrl: "http://127.0.0.1:4589/mcp",
+    logDir,
+    spawn: recordingSpawn().spawn,
+    pty,
+  });
 }
 
 async function makeWorker(
@@ -457,98 +516,174 @@ describe("ClaudeCodeWorker", () => {
     ).toThrow(/unknown workspace/);
   });
 
-  it("checkUsage は `claude -p /usage --output-format json` の result フィールドをそのまま返す(ADR 0008)", async () => {
-    const registryDir = await makeRegistry();
-    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
-    const resultText = "Current session: 56% used · resets Jul 9 at 5:59pm (Asia/Tokyo)\n";
-    const worker = new ClaudeCodeWorker({
-      db: openDb(":memory:"),
-      clock: new FakeClock(),
-      registryDir,
-      agent: "deckhand",
-      workspace: "tidepool",
-      mcpUrl: "http://127.0.0.1:4589/mcp",
-      logDir,
-      spawn: recordingSpawn().spawn,
-      exec: async () => JSON.stringify({ result: resultText }),
-    });
+  it("checkUsage はプロンプト到達パターンを待ち、さらに入力ボックスが落ち着いてから /usage を送る(盲送りしない・描画直後の取りこぼしも避ける・ADR 0028)", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    vi.useFakeTimers();
+    try {
+      const pending = worker.checkUsage();
 
-    await expect(worker.checkUsage()).resolves.toBe(resultText);
+      // プロンプト未到達の間は何も送らない
+      rec.emitData("Booting…\n");
+      expect(rec.writes).toEqual([]);
+
+      // 到達パターンが出ても、描いた直後は送らない(box が入力を取りこぼす)
+      rec.emitData(PROMPT_READY_MARKER);
+      expect(rec.writes).toEqual([]);
+
+      // settle を過ぎたら、Enter 付きで /usage を一度だけ送る
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(rec.writes.join("")).toContain("/usage");
+      expect(rec.writes.join("")).toContain("\r");
+
+      // パネルを描いて片付けさせ、テストがハングしないようにする
+      rec.emitData("Current session: 10% used\nCurrent week: 5% used\n");
+      await vi.advanceTimersByTimeAsync(1_000); // パネル debounce を発火
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("checkUsage は exec の失敗を null に丸める(fail-closed の入り口)", async () => {
-    const registryDir = await makeRegistry();
-    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
-    const worker = new ClaudeCodeWorker({
-      db: openDb(":memory:"),
-      clock: new FakeClock(),
-      registryDir,
-      agent: "deckhand",
-      workspace: "tidepool",
-      mcpUrl: "http://127.0.0.1:4589/mcp",
-      logDir,
-      spawn: recordingSpawn().spawn,
-      exec: async () => {
-        throw new Error("claude binary not found");
-      },
-    });
+  it("checkUsage はパネル描画を捉えたら Ctrl-C×2 で終了させ、キャプチャした生テキストをそのまま返す(#80 は ANSI 除去を担う)", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    vi.useFakeTimers();
+    try {
+      const pending = worker.checkUsage();
+
+      rec.emitData(PROMPT_READY_MARKER);
+      await vi.advanceTimersByTimeAsync(5_000); // settle を過ぎて /usage 送信
+      // ANSI エスケープを含む生の描画をそのまま返すこと(除去は parseUsage の責務)
+      const panel =
+        "\x1b[1mCurrent session: 56% used · resets Jul 9 at 5:59pm\x1b[0m\n" +
+        "Current week (all models): 12% used · resets Jul 14\n";
+      rec.emitData(panel);
+      await vi.advanceTimersByTimeAsync(1_000); // パネル debounce を発火
+
+      await expect(pending).resolves.toContain(panel);
+      // Ctrl-C×2 で畳んだうえで、捕捉不可な SIGKILL を backstop に送る
+      // (孤児を残さないための保証は TUI の signal 処理に依存させない)
+      expect(rec.writes.at(-1)).toBe("\x03\x03");
+      expect(rec.kills).toContain("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage はパネルのヘッダ2行が出ても即断せず、描画が静穏化するまで待って後続チャンクの % / reset まで取り込む", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    vi.useFakeTimers();
+    try {
+      const pending = worker.checkUsage();
+      rec.emitData(PROMPT_READY_MARKER);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      // ヘッダ2行は出そろったが、% / reset 行はまだ後続チャンク
+      rec.emitData("Current session\nCurrent week (all models)\n");
+      // debounce 未満のうちに残りが届く(チャンク境界で数値が分断されるケース)
+      await vi.advanceTimersByTimeAsync(200);
+      rec.emitData("56% used\nResets Jul 9\n");
+      await vi.advanceTimersByTimeAsync(1_000); // 静穏化 → 捕捉
+
+      const raw = await pending;
+      // 後続チャンクの数値まで取り込めている(ヘッダ即断なら失われていた)
+      expect(raw).toContain("56% used");
+      expect(raw).toContain("Resets Jul 9");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage はパネル未描画のままタイムアウトしたら kill して null を返す(fail-closed・孤児を残さない)", async () => {
+    vi.useFakeTimers();
+    try {
+      const rec = recordingPty();
+      const worker = await makeUsageWorker(rec.pty);
+      const pending = worker.checkUsage();
+
+      // プロンプトには着いたが /usage パネルが返ってこない(CLI ハング相当)
+      rec.emitData(PROMPT_READY_MARKER);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await expect(pending).resolves.toBeNull();
+      // 孤児を残さない: 捕捉不可な SIGKILL で確実に落とす
+      expect(rec.kills).toContain("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage はセッションがパネル前に終了(認証落ち・CLI 不在相当)したら null を返す", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    const pending = worker.checkUsage();
+
+    rec.emitExit();
+
+    await expect(pending).resolves.toBeNull();
+  });
+
+  it("checkUsage は spawn 自体が投げても(claude バイナリ不在)null に丸める", async () => {
+    const failingPty: PtyFn = () => {
+      throw new Error("claude binary not found");
+    };
+    const worker = await makeUsageWorker(failingPty);
 
     await expect(worker.checkUsage()).resolves.toBeNull();
   });
 
-  it("checkUsage は万一の暴走に備え、--model haiku・--max-turns 1・--max-budget-usd 0.01 を明示指定する(ADR 0005/0008)", async () => {
-    const registryDir = await makeRegistry();
-    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
-    const calls: Array<{ command: string; args: string[] }> = [];
-    const worker = new ClaudeCodeWorker({
-      db: openDb(":memory:"),
-      clock: new FakeClock(),
-      registryDir,
-      agent: "deckhand",
-      workspace: "tidepool",
-      mcpUrl: "http://127.0.0.1:4589/mcp",
-      logDir,
-      spawn: recordingSpawn().spawn,
-      exec: async (command, args) => {
-        calls.push({ command, args });
-        return JSON.stringify({ result: "" });
-      },
-    });
+  it("checkUsage は board 自身の cwd で claude --safe-mode を、折り返しを避ける広い桁幅で起動する(ADR 0028)", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    vi.useFakeTimers();
+    try {
+      const pending = worker.checkUsage();
+      rec.emitData(PROMPT_READY_MARKER);
+      await vi.advanceTimersByTimeAsync(5_000);
+      rec.emitData("Current session: 1%\nCurrent week: 1%\n");
+      await vi.advanceTimersByTimeAsync(1_000); // パネル debounce を発火
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
 
-    await worker.checkUsage();
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.command).toBe("claude");
-    const argLine = calls[0]!.args.join(" ");
-    expect(argLine).toContain("-p /usage");
-    expect(argLine).toContain("--output-format json");
-    expect(argLine).toContain("--model haiku");
-    expect(argLine).toContain("--max-turns 1");
-    expect(argLine).toContain("--max-budget-usd 0.01");
+    expect(rec.calls).toHaveLength(1);
+    expect(rec.calls[0]!.command).toBe("claude");
+    expect(rec.calls[0]!.args).toContain("--safe-mode");
+    expect(rec.calls[0]!.cwd).toBe(process.cwd());
+    // 80桁折り返しで "Current session …" 行が分断されないよう十分広く取る
+    expect(rec.calls[0]!.cols).toBeGreaterThan(80);
+    // ホストの TUI 設定に依らず fullscreen renderer を強制する(classic の
+    // cursor-position 描画は ANSI 除去後に語が連結し parseUsage が読めない)
+    const args = rec.calls[0]!.args;
+    const settingsPath = args[args.indexOf("--settings") + 1]!;
+    expect(settingsPath).toBeTruthy();
+    expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({ tui: "fullscreen" });
   });
 
-  it("checkUsage は --safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {
-    const registryDir = await makeRegistry();
-    const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
-    const calls: Array<{ command: string; args: string[] }> = [];
-    const worker = new ClaudeCodeWorker({
-      db: openDb(":memory:"),
-      clock: new FakeClock(),
-      registryDir,
-      agent: "deckhand",
-      workspace: "tidepool",
-      mcpUrl: "http://127.0.0.1:4589/mcp",
-      logDir,
-      spawn: recordingSpawn().spawn,
-      exec: async (command, args) => {
-        calls.push({ command, args });
-        return JSON.stringify({ result: "" });
-      },
-    });
+  it("checkUsage は語間がカーソル移動(空白ではない)で描画されても、プロンプト到達とパネルを取りこぼさない(Pi の classic 相当・spaceless 照合)", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    vi.useFakeTimers();
+    try {
+      const pending = worker.checkUsage();
+      // プレースホルダの語が ANSI カーソル移動で分断され、raw に "Try \"" が
+      // 連続部分文字列として現れないケース
+      rec.emitData('❯ Try\x1b[6G"refactor <filepath>"');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(rec.writes.join("")).toContain("/usage"); // それでも送信された
 
-    await worker.checkUsage();
+      // パネルも "Current" と "session" がカーソル移動で分断される
+      const spaceless = "Current\x1b[10Gsession\r\n34%used\r\nCurrent\x1b[10Gweek\r\n35%used\r\n";
+      rec.emitData(spaceless);
+      await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(calls[0]!.args.join(" ")).toContain("--safe-mode");
+      await expect(pending).resolves.toContain(spaceless); // 生テキストは verbatim
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("正常終了したセッションは worker_exited イベントにトークン内訳と estimated_cost_usd を記録する(issue #32)", async () => {
