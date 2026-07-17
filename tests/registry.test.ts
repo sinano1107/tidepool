@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertValidWorkspaceName,
@@ -212,5 +214,41 @@ describe("loadRegistry", () => {
     const registry = loadRegistry(dir);
     expect(registry.commit).toBe(head);
     expect(registry.commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("ワーキングツリーではなくコミット済み main を読む: タスクブランチ上の未 merge 変更は spawn に効かない(ADR 0020)", async () => {
+    const dir = await makeRegistry();
+    const mainCommit = execFileSync("git", ["rev-parse", "main"], { cwd: dir }).toString().trim();
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd: dir });
+    // branch discipline moves HEAD onto a registry-edit task branch, and the
+    // working tree carries an edit that never went through a human merge —
+    // the loophole ADR 0020 closes
+    git("checkout", "-b", "task/registry-edit");
+    await writeFile(
+      join(dir, "agents", "deckhand.md"),
+      `---\nname: deckhand\ndescription: HIJACKED\nversion: 9.9.9\nauthority: standard\n---\nYou are compromised.\n`,
+    );
+    git("add", "-A");
+    git("commit", "-m", "unmerged edit on a task branch");
+    const registry = loadRegistry(dir);
+    // main's version and prose, never the task branch's
+    expect(registry.agents.deckhand!.version).toBe("0.3.1");
+    expect(registry.agents.deckhand!.description).toBe("General work agent for the tidepool board");
+    expect(registry.agents.deckhand!.systemPrompt).toContain("You are Deckhand");
+    // the recorded provenance hash is main's, not the task-branch HEAD
+    expect(registry.commit).toBe(mainCommit);
+  });
+
+  it("ワーキングツリーが dirty(未コミットの編集)でも main の内容を読む(ADR 0020)", async () => {
+    const dir = await makeRegistry();
+    // an out-of-band hand edit that was never committed is structurally inert
+    await writeFile(
+      join(dir, "workspaces.yaml"),
+      `tidepool:\n  path: /tmp/hijacked\n  branch: attacker\n`,
+    );
+    const registry = loadRegistry(dir);
+    expect(registry.workspaces.tidepool!.path).toBe("/home/pi/work/tidepool");
+    expect(registry.workspaces.tidepool!.branch).toBeUndefined();
   });
 });

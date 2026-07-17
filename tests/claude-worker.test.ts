@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -13,7 +13,7 @@ import {
   type SpawnFn,
 } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
-import { listEvents } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
@@ -792,7 +792,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {
     const { start, db, registryDir } = await makeWorker();
-    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: registryDir })
+    const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
       .toString()
       .trim();
     start("task-9");
@@ -801,7 +801,113 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned!.worker_id).toBe("deckhand");
     expect(spawned!.payload).toMatchObject({
       kind: "worker_spawned",
-      registry_commit: head,
+      registry_commit: main,
+      definition_version: "0.3.1",
+    });
+  });
+
+  it("当事者レビュー(self RCA)の spawn には、記録 hash 時点の agent 定義本文を証拠として注入する(ADR 0020 part 4)", async () => {
+    const { worker, calls, db, registryDir } = await makeWorker();
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
+        cwd: registryDir,
+      })
+        .toString()
+        .trim();
+    // the version deckhand actually ran the objected task under
+    const oldHash = git("rev-parse", "main");
+    // main advances: the definition is refined after the objected call. The RCA
+    // still runs on the current definition (ADR 0019), but must read the 当時版
+    // as evidence — so current body and 当時版 body must be distinguishable.
+    await writeFile(
+      join(registryDir, "agents", "deckhand.md"),
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\n---\nYou are Deckhand, REFINED after the objected call.\n`,
+    );
+    git("add", "-A");
+    git("commit", "-m", "refine deckhand");
+
+    // the objected (parent) task, carrying deckhand's worker_spawned record
+    const objected = makeTask("objected-1", null, "deckhand", "work");
+    insertTask(db, objected);
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: {
+        kind: "worker_spawned",
+        registry_commit: oldHash,
+        definition_version: "0.3.1",
+      },
+      at: new FakeClock().now(),
+    });
+
+    // self RCA: concrete assignee = the historical worker, parent = objected
+    const rca: Task = { ...makeTask("rca-1", null, "deckhand", "review"), parent_id: "objected-1" };
+    insertTask(db, rca);
+    worker.start(rca);
+
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    // executes as the current definition (ADR 0019: repair is not a re-enactment)
+    expect(prompt).toContain("REFINED after the objected call");
+    // and the 当時版 body is injected as evidence for the "why did I decide" read
+    expect(prompt).toContain("the tidepool board's general work agent");
+  });
+
+  it("独立レビュー(assignee 未設定)の spawn には当時版定義を注入しない: 当事者レビューのみ(ADR 0020 part 4)", async () => {
+    // an auditor agent so the unset-assignee review resolves and spawns
+    const { worker, calls, db, registryDir } = await makeWorker(
+      {
+        "agents/auditor.md": `---\nname: auditor\ndescription: Independent reviewer\nversion: 1.0.0\nauthority: standard\n---\nYou are the Auditor.\n`,
+      },
+      { auditorName: "auditor" },
+    );
+    const oldHash = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
+      .toString()
+      .trim();
+    const objected = makeTask("objected-2", null, "deckhand", "work");
+    insertTask(db, objected);
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1" },
+      at: new FakeClock().now(),
+    });
+    // independent review: unset assignee → resolves to the Auditor pointer
+    const audit: Task = { ...makeTask("audit-1", null, null, "review"), parent_id: "objected-2" };
+    insertTask(db, audit);
+    worker.start(audit);
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain("You are the Auditor");
+    // no deckhand definition body injected — the auditor's value is distance
+    expect(prompt).not.toContain("general work agent");
+  });
+
+  it("registry チェックアウトがタスクブランチ上にあっても、記録する commit hash と版は main のもの(ADR 0020 part 3)", async () => {
+    const { start, db, registryDir } = await makeWorker();
+    const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
+      .toString()
+      .trim();
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
+        cwd: registryDir,
+      });
+    // branch discipline has the registry clone sitting on a registry-edit task
+    // branch with an unmerged definition bump — must not leak into the record
+    git("checkout", "-b", "task/bump");
+    await writeFile(
+      join(registryDir, "agents", "deckhand.md"),
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 9.9.9\nauthority: standard\n---\nYou are Deckhand.\n`,
+    );
+    git("add", "-A");
+    git("commit", "-m", "unmerged bump");
+    start("task-branch-spawn");
+    const spawned = listEvents(db, "task-branch-spawn").find((e) => e.kind === "worker_spawned");
+    expect(spawned!.payload).toMatchObject({
+      kind: "worker_spawned",
+      registry_commit: main,
       definition_version: "0.3.1",
     });
   });
