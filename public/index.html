@@ -522,20 +522,26 @@ function WorkspaceCard({ ws, say, onChanged }) {
           Save notes — commits to the registry
         </Button>
       )}
-      <Dialog open={confirming} title="Remove protection?" onClose={() => setConfirming(false)}
-        footer={
-          <React.Fragment>
-            <Button variant="secondary" onClick={() => setConfirming(false)}>Keep protection</Button>
-            <Button variant="danger" onClick={() => { setConfirming(false); patch({ protected: false, confirm: true }, 'protection removed'); }}>
-              Remove protection
-            </Button>
-          </React.Fragment>
-        }>
-        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
-          Tasks targeting <b>{ws.name}</b> will stop converting to approval questions,
-          and its PRs will follow the merge dial without waiting for you.
-        </p>
-      </Dialog>
+      {/* portal to <body>: a transformed tab-transition ancestor otherwise
+          re-bases this fixed dialog onto the full page height (same fix as
+          useProfileSave's dialog) */}
+      {ReactDOM.createPortal(
+        <Dialog open={confirming} title="Remove protection?" onClose={() => setConfirming(false)}
+          footer={
+            <React.Fragment>
+              <Button variant="secondary" onClick={() => setConfirming(false)}>Keep protection</Button>
+              <Button variant="danger" onClick={() => { setConfirming(false); patch({ protected: false, confirm: true }, 'protection removed'); }}>
+                Remove protection
+              </Button>
+            </React.Fragment>
+          }>
+          <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
+            Tasks targeting <b>{ws.name}</b> will stop converting to approval questions,
+            and its PRs will follow the merge dial without waiting for you.
+          </p>
+        </Dialog>,
+        document.body,
+      )}
     </Card>
   );
 }
@@ -643,9 +649,215 @@ function AgentCard({ agent, authorityProfiles, say, onChanged }) {
   );
 }
 
+// The server's machine reason codes (issue #77's dangerousValues) rendered as
+// prose for the confirmation dialog (issue #78). The board never decides on its
+// own what counts as dangerous — it only translates the codes the 409 hands
+// back, so the danger definition stays single-sourced on the server (ADR 0027).
+const DANGEROUS_REASON_LABEL = {
+  merge_auto_if_ci_green:
+    'Merge is auto_if_ci_green — a PR under this authority merges unattended once CI is green, with no human in the loop.',
+  assignable_to_wildcard:
+    'Assignable-to carries the wildcard "*" — an agent with this authority may delegate to any agent.',
+  allowed_workspaces_wildcard:
+    'Allowed-workspaces carries the wildcard "*" — this authority reaches every workspace on the board.',
+};
+
+// The merge dial (registry.ts): absent means no automatic merge decision, so an
+// unset value is the safe default. auto_if_ci_green is the dangerous one.
+const MERGE_OPTIONS = [
+  { value: '', label: 'no automatic merge decision (default)' },
+  { value: 'escalate', label: 'escalate — always ask a human before merging' },
+  { value: 'auto_if_ci_green', label: 'auto_if_ci_green — merge unattended once CI is green' },
+];
+
+// Order-sensitive content equality — the profile save payload's arrays compare
+// by contents, not reference (mirrors profile-create.ts's sameStringArray so
+// the edit card's dirty flag and the server's no-op detection agree).
+function sameStrings(a, b) {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+// The four profile fields as the API wants them: arrays always present (the
+// registry schema requires them), merge omitted when unset so a round-trip
+// leaves it undefined rather than sending an invalid empty enum.
+function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
+  return {
+    guidance,
+    assignable_to: assignableTo,
+    allowed_workspaces: allowedWorkspaces,
+    merge: merge || undefined,
+  };
+}
+
+// A list field for a profile's assignable_to / allowed_workspaces (issue #78):
+// picks from the registry's existing agents / workspaces rather than free text,
+// so a value can't be a typo for a name that doesn't exist. Selected entries
+// render as removable Tags; the wildcard "*" rides as its own option — it is
+// exactly what the server flags as dangerous, so it stays selectable and the
+// judgment is left to the save-time dialog. Values already on the profile are
+// shown even when absent from `candidates` (an entry can outlive the agent or
+// workspace it named) — the picker only constrains what you can newly add.
+function ProfileListInput({ label, hint, candidates, wildcardHint, values, onChange }) {
+  const { Select, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const options = [
+    { value: '', label: candidates.some((c) => !values.includes(c)) ? 'add…' : 'no more to add' },
+    ...candidates.filter((c) => !values.includes(c)).map((c) => ({ value: c, label: c })),
+    ...(values.includes('*') ? [] : [{ value: '*', label: `* — ${wildcardHint}` }]),
+  ];
+  const pick = (e) => { if (e.target.value) onChange([...values, e.target.value]); };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        {label}
+      </span>
+      {hint && <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{hint}</p>}
+      {values.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {values.map((v) => (
+            <button key={v} type="button" title="remove" onClick={() => onChange(values.filter((x) => x !== v))}
+              style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+              <Tag color={v === '*' ? 'sun' : 'tide'} mono>{v} ✕</Tag>
+            </button>
+          ))}
+        </div>
+      )}
+      {/* value is pinned to '' so the control always shows the placeholder and
+          snaps back after each pick — it is an add-picker, not a bound field */}
+      <Select value="" options={options} onChange={pick} />
+    </div>
+  );
+}
+
+// The four editable profile fields, shared by the edit card and the create
+// form so the two never drift (the profile analogue of the duplication the
+// agent card and its create form carry field-by-field).
+function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assignableTo, setAssignableTo, allowedWorkspaces, setAllowedWorkspaces, merge, setMerge }) {
+  const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <React.Fragment>
+      <Input label="Guidance — prose injected into the agent's system prompt at spawn"
+        multiline rows={4} value={guidance} onChange={(e) => setGuidance(e.target.value)}
+        placeholder="how an agent carrying this authority should act" />
+      <ProfileListInput label="Assignable to"
+        hint={'who this authority may delegate to — a registered agent or the human, or "*" for any (confirmed on save)'}
+        candidates={agentNames.includes('human') ? agentNames : [...agentNames, 'human']}
+        wildcardHint="any agent"
+        values={assignableTo} onChange={setAssignableTo} />
+      <ProfileListInput label="Allowed workspaces"
+        hint={'which workspaces this authority may act in — pick a registered workspace, or "*" for every one (confirmed on save)'}
+        candidates={workspaceNames} wildcardHint="every workspace"
+        values={allowedWorkspaces} onChange={setAllowedWorkspaces} />
+      <Select label="Merge authority" options={MERGE_OPTIONS} value={merge} onChange={(e) => setMerge(e.target.value)} />
+    </React.Fragment>
+  );
+}
+
+// The two-phase dangerous-value save (issue #78, #55 phase 3), shared by create
+// and edit. The first attempt omits confirmDangerous; when the payload grants
+// broad power the server answers 409 confirm_required with the machine reason
+// codes (issue #77). We surface those in a dialog and, once the human accepts,
+// resend the very same body with confirmDangerous: true. The board makes no
+// pre-judgment of danger — the 409 is the only trigger. Returns the busy flag,
+// the save entrypoint, and the dialog element the caller renders inline.
+function useProfileSave(say, onDone) {
+  const { Button, Dialog } = window.TidepoolDesignSystem_8a0ead;
+  const [busy, setBusy] = React.useState(false);
+  const [confirm, setConfirm] = React.useState(null); // { reasons, resend } | null while safe
+  const save = async (path, method, body, verb, name) => {
+    const attempt = async (confirmDangerous) => {
+      setBusy(true);
+      try {
+        const { pushed } = await api(path, confirmDangerous ? { ...body, confirmDangerous: true } : body, method);
+        setConfirm(null);
+        sayCommitResult(say, pushed, `profile ${verb} — committed to the registry`, name);
+        await onDone();
+      } catch (err) {
+        // the #77 confirmation 409 is distinguished from a busy-clone 409 by its
+        // confirm_required flag — only the former opens the dialog for a resend
+        if (err.status === 409 && err.detail?.confirm_required) {
+          setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
+        } else {
+          setConfirm(null);
+          say('danger', `profile ${verb} failed`, String(err.message || err));
+        }
+      }
+      setBusy(false);
+    };
+    await attempt(false);
+  };
+  // Portal to <body>: the DS Dialog is position:fixed, but a transformed
+  // ancestor (the tab-transition wrapper's animation) turns "fixed" into
+  // "relative to that ancestor", which parked the dialog at the middle of the
+  // whole scrollable page instead of the viewport. Rendering outside the
+  // settings subtree pins it back to the viewport.
+  const dialog = ReactDOM.createPortal(
+    <Dialog open={!!confirm} title="Save a profile with broad power?" onClose={() => setConfirm(null)}
+      footer={
+        <React.Fragment>
+          <Button variant="secondary" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
+          <Button variant="danger" disabled={busy} onClick={() => confirm && confirm.resend()}>Save anyway</Button>
+        </React.Fragment>
+      }>
+      <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>
+        This profile grants broad power. Review before saving:
+      </p>
+      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {(confirm?.reasons ?? []).map((r) => (
+          <li key={r}>{DANGEROUS_REASON_LABEL[r] ?? r}</li>
+        ))}
+      </ul>
+    </Dialog>,
+    document.body,
+  );
+  return { busy, save, dialog };
+}
+
+// One authority profile's row on the settings surface (issue #78), AgentCard's
+// twin: the four editable fields prefilled from GET /api/profiles, `name` shown
+// read-only — it is the file name (authority/<name>.yaml), not renameable here,
+// same as agents. No delete: an agent referencing this profile would break at
+// spawn (parent issue #55).
+function ProfileCard({ profile, agentNames, workspaceNames, say, onChanged }) {
+  const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
+  const [guidance, setGuidance] = React.useState(profile.guidance ?? '');
+  const [assignableTo, setAssignableTo] = React.useState(profile.assignable_to ?? []);
+  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState(profile.allowed_workspaces ?? []);
+  const [merge, setMerge] = React.useState(profile.merge ?? '');
+  const { busy, save, dialog } = useProfileSave(say, onChanged);
+
+  const dirty =
+    guidance !== (profile.guidance ?? '') ||
+    !sameStrings(assignableTo, profile.assignable_to ?? []) ||
+    !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []) ||
+    (merge || '') !== (profile.merge ?? '');
+
+  const submit = () => save(
+    `/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH',
+    profileBody(guidance, assignableTo, allowedWorkspaces, merge), 'updated', profile.name,
+  );
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{profile.name}</span>
+      <ProfileFields
+        agentNames={agentNames} workspaceNames={workspaceNames}
+        guidance={guidance} setGuidance={setGuidance}
+        assignableTo={assignableTo} setAssignableTo={setAssignableTo}
+        allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
+        merge={merge} setMerge={setMerge} />
+      {dirty && (
+        <Button variant="secondary" disabled={busy} onClick={submit}>
+          Save changes — commits to the registry
+        </Button>
+      )}
+      {dialog}
+    </Card>
+  );
+}
+
 // Settings — the board's admin surface (issue #57 phase 3). One tab, one
-// section per resource: workspaces and agents (#72) now; authority profiles
-// (#55), quiet hours (#64) and display language (#46) join as later sections.
+// section per resource: workspaces, agents (#72) and authority profiles (#55)
+// now; quiet hours (#64) and display language (#46) join as later sections.
 function SettingsScreen({ say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
@@ -676,6 +888,29 @@ function SettingsScreen({ say }) {
     }
   };
   React.useEffect(() => { loadAgents(); }, []);
+
+  const [profiles, setProfiles] = React.useState(null); // null → still loading
+  const [profilesUnavailable, setProfilesUnavailable] = React.useState(false);
+  const loadProfiles = async () => {
+    try {
+      const res = await api('/api/profiles', undefined, 'GET');
+      setProfiles(res.profiles);
+    } catch {
+      setProfilesUnavailable(true);
+      setProfiles([]);
+    }
+  };
+  React.useEffect(() => { loadProfiles(); }, []);
+  // a created or edited profile must reach the agent Authority dropdown too —
+  // that list rides on GET /api/agents (a separate load), so a profile change
+  // refreshes both, else the #55 completion path (create profile → referencing
+  // agent can spawn) needs a manual page reload
+  const refreshAfterProfile = async () => { await loadProfiles(); await loadAgents(); };
+  // the profile pickers offer the registry's current agents / workspaces so an
+  // assignable_to / allowed_workspaces entry can't name something that doesn't
+  // exist — the same lists the cards above already render, reused here
+  const agentNames = (agents ?? []).map((a) => a.name);
+  const workspaceNames = (workspaces ?? []).map((w) => w.name);
 
   const [newAgentName, setNewAgentName] = React.useState('');
   const [newAgentIcon, setNewAgentIcon] = React.useState('');
@@ -717,6 +952,27 @@ function SettingsScreen({ say }) {
     }
     setAgentBusy(false);
   };
+
+  const [newProfileName, setNewProfileName] = React.useState('');
+  const [newGuidance, setNewGuidance] = React.useState('');
+  const [newAssignableTo, setNewAssignableTo] = React.useState([]);
+  const [newAllowedWorkspaces, setNewAllowedWorkspaces] = React.useState([]);
+  const [newMerge, setNewMerge] = React.useState('');
+  const { busy: profileCreateBusy, save: saveProfileCreate, dialog: profileCreateDialog } =
+    useProfileSave(say, async () => {
+      setNewProfileName(''); setNewGuidance(''); setNewAssignableTo([]);
+      setNewAllowedWorkspaces([]); setNewMerge('');
+      await refreshAfterProfile();
+    });
+  // mirror of the server's REGISTRY_NAME_PATTERN gate, drives the button only —
+  // assertValidAuthorityProfileName stays the authority (same as agents above)
+  const newProfileNameOk =
+    /^[A-Za-z0-9._-]+$/.test(newProfileName.trim()) && !['.', '..'].includes(newProfileName.trim());
+  const submitProfile = () => saveProfileCreate(
+    '/api/profiles', 'POST',
+    { name: newProfileName.trim(), ...profileBody(newGuidance, newAssignableTo, newAllowedWorkspaces, newMerge) },
+    'created', newProfileName.trim(),
+  );
 
   const [mode, setMode] = React.useState('clone');
   const [name, setName] = React.useState('');
@@ -836,6 +1092,40 @@ function SettingsScreen({ say }) {
           </Button>
         </Card>
       )}
+      <div style={{ marginTop: 8 }}>
+        <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Authority Profiles</h2>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
+          what the work is allowed to do
+        </p>
+      </div>
+      {profilesUnavailable && (
+        <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          no registry configured on this board — authority profiles need one
+        </Card>
+      )}
+      {(profiles ?? []).map((p) => (
+        <ProfileCard key={p.name} profile={p} agentNames={agentNames} workspaceNames={workspaceNames}
+          say={say} onChanged={refreshAfterProfile} />
+      ))}
+      {!profilesUnavailable && profiles && (
+        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            add an authority profile
+          </span>
+          <Input label="Name" value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)}
+            placeholder="letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later" />
+          <ProfileFields
+            agentNames={agentNames} workspaceNames={workspaceNames}
+            guidance={newGuidance} setGuidance={setNewGuidance}
+            assignableTo={newAssignableTo} setAssignableTo={setNewAssignableTo}
+            allowedWorkspaces={newAllowedWorkspaces} setAllowedWorkspaces={setNewAllowedWorkspaces}
+            merge={newMerge} setMerge={setNewMerge} />
+          <Button variant="primary" size="lg" full disabled={!newProfileNameOk || profileCreateBusy} onClick={submitProfile}>
+            {profileCreateBusy ? 'Working…' : 'Add authority profile — commits to the registry'}
+          </Button>
+        </Card>
+      )}
+      {profileCreateDialog}
     </div>
   );
 }
