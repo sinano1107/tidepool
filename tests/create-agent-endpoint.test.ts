@@ -78,6 +78,37 @@ it("スキーマ違反(systemPrompt なし)は 400 で、オーケストレー�
   expect(calls).toEqual([]);
 });
 
+it("systemPrompt が空文字は 201(ADR 0017: 空 specialty は正規形、issue #75)", async () => {
+  const calls: CreateAgentInput[] = [];
+  t = await bootTidepool({
+    agentAdmin: {
+      create: async (input) => {
+        calls.push(input);
+        return { pushed: true };
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "POST", "/api/agents", {
+    name: "tako",
+    authority: "standard",
+    skills: ["*"],
+    description: "General agent",
+    systemPrompt: "",
+  });
+
+  expect(res.status).toBe(201);
+  expect(calls).toEqual([
+    {
+      name: "tako",
+      authority: "standard",
+      skills: ["*"],
+      description: "General agent",
+      systemPrompt: "",
+    },
+  ]);
+});
+
 it("名前検証違反(InvalidAgentNameError)は 400 でメッセージを返す", async () => {
   t = await bootTidepool({
     agentAdmin: {

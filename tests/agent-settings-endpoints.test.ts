@@ -88,6 +88,36 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
   ]);
 });
 
+it("systemPrompt が空文字は 200(ADR 0017: 空 specialty は正規形、issue #75)", async () => {
+  const calls: UpdateAgentInput[] = [];
+  t = await bootTidepool({
+    agentAdmin: {
+      update: async (input) => {
+        calls.push(input);
+        return { pushed: true };
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
+    authority: "standard",
+    skills: ["*"],
+    description: "Updated description",
+    systemPrompt: "",
+  });
+
+  expect(res.status).toBe(200);
+  expect(calls).toEqual([
+    {
+      name: "tako",
+      authority: "standard",
+      skills: ["*"],
+      description: "Updated description",
+      systemPrompt: "",
+    },
+  ]);
+});
+
 it("編集対象の未知 name(UnknownAgentError)は 404", async () => {
   t = await bootTidepool({
     agentAdmin: {
