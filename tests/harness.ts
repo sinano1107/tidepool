@@ -1,19 +1,19 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDb, type Db } from "../src/db.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { AgentAdmin } from "../src/agent-create.js";
+import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
+import type { ProfileAdmin } from "../src/profile-create.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "../src/registry.js";
 import { startServer } from "../src/server.js";
-import { BOARD_WORKER_ID, registerTask, type RegisterTaskInput, type Task } from "../src/tasks.js";
+import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
-import type { AgentAdmin } from "../src/agent-create.js";
-import type { ProfileAdmin } from "../src/profile-create.js";
 import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";

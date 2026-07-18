@@ -11,16 +11,16 @@ import type { Slot } from "./slot.js";
 import {
   assigneeNeedsApproval,
   completeTask,
-  decomposeTask,
+  contentSourceFor,
   DEFAULT_AUDITOR_NAME,
   DomainError,
+  decomposeTask,
   escalateTask,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
   logDecision,
-  contentSourceFor,
   recordPrOpened,
   settledChildren,
   type Task,
@@ -32,8 +32,8 @@ import {
   resolveOrQuarantine,
   taskBranch,
   UnknownWorkspaceError,
-  workspaceNeedsHuman,
   type WorkspaceConfig,
+  workspaceNeedsHuman,
 } from "./workspace.js";
 
 export interface McpDeps {

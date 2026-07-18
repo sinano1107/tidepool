@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
-import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
+import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, ScriptedWorker } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 

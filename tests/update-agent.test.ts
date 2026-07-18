@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
 import { UnknownAgentError } from "../src/agent.js";
+import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
 import { loadRegistry } from "../src/registry.js";
 import { makeRegistry } from "./registry-fixture.js";
 

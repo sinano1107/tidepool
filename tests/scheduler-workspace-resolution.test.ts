@@ -1,10 +1,10 @@
 import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { startScheduler, HOURLY } from "../src/scheduler.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
-import { UnknownWorkspaceError, workspaceNeedsHuman, type WorkspaceConfig } from "../src/workspace.js";
+import { UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, ScriptedWorker } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 

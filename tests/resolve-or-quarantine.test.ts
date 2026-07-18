@@ -4,8 +4,8 @@ import { listBoard } from "../src/tasks.js";
 import {
   resolveOrQuarantine,
   UnknownWorkspaceError,
-  workspaceNeedsHuman,
   type WorkspaceConfig,
+  workspaceNeedsHuman,
 } from "../src/workspace.js";
 
 describe("resolveOrQuarantine", () => {

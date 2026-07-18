@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { openDb, type Db } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { loadRegistry } from "../src/registry.js";
 import { guardRegistryDefaultBranch, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";

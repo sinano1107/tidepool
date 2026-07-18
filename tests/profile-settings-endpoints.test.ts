@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
+import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { InvalidAuthorityProfileNameError, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryCloneBusyError } from "../src/registry-write.js";
-import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;

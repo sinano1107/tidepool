@@ -1,12 +1,12 @@
 import type { Db } from "./db.js";
-import { appendEvent, HUMAN_FACING_KINDS, type EventRow } from "./events.js";
+import { appendEvent, type EventRow, HUMAN_FACING_KINDS } from "./events.js";
 import {
+  type BoardTask,
   getTask,
   HUMAN_WORKER_ID,
   listBoard,
   moveTask,
   registerTask,
-  type BoardTask,
   type Task,
 } from "./tasks.js";
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createNotificationTick, savePushSubscription, type PushClient, type PushPayload, type PushSubscription } from "../src/push.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
+import { createNotificationTick, type PushClient, type PushPayload, type PushSubscription, savePushSubscription } from "../src/push.js";
 import { registerTask } from "../src/tasks.js";
 import { FakePushClient } from "./fakes.js";
 

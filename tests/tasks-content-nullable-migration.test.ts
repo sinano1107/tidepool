@@ -1,7 +1,7 @@
-import Database from "better-sqlite3";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { getTask, registerTask } from "../src/tasks.js";

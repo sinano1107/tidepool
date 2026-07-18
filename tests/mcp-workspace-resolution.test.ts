@@ -1,10 +1,10 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import express from "express";
+import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { createMcpRouter } from "../src/mcp.js";
 import { Slot } from "../src/slot.js";

@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createProfile, listProfileViews } from "../src/profile-create.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
 import { InvalidAuthorityProfileNameError, loadRegistry } from "../src/registry.js";
+import { RegistryCloneBusyError } from "../src/registry-write.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {

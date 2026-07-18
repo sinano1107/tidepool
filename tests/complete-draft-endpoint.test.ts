@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
 import { FakeDraftClient } from "./fakes.js";
+import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());

@@ -1,6 +1,6 @@
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { ownEntry, type AgentDefinition, type AuthorityProfile, type Registry } from "./registry.js";
+import { type AgentDefinition, type AuthorityProfile, ownEntry, type Registry } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 /** An assignee (or the board's default) resolved against the registry —
