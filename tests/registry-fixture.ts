@@ -50,7 +50,10 @@ export async function makeRegistry(
       ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
       { cwd: dir },
     );
-  git("init");
+  // ADR 0020: the board reads the registry from committed `main`, so the
+  // fixture's default branch must be `main` (git's own default is still
+  // `master` on the pinned version).
+  git("init", "-b", "main");
   git("add", "-A");
   git("commit", "-m", "registry fixture");
   return dir;

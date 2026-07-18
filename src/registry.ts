@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -155,14 +154,78 @@ const agentFrontmatterSchema = z.looseObject({
     .optional(),
 });
 
-function parseAgentFile(path: string): AgentDefinition {
-  const name = basename(path, ".md");
-  const raw = readFileSync(path, "utf8");
+/** ADR 0020: the branch the board reads the registry from is a code constant,
+ *  not registry data. "Which branch do we trust to read from" is part of the
+ *  protected-workspace floor (same shape as ADR 0013's reviewer floor); putting
+ *  it in the data it guards (workspaces.yaml's branch field, issue #27) would be
+ *  self-referential and break bootstrap. The working tree is never read — branch
+ *  discipline moves the checkout's HEAD onto a registry-edit task branch, so a
+ *  working-tree read would let unmerged content take effect on spawn. */
+export const REGISTRY_BRANCH = "main";
+
+// stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
+// missing ref on stderr, and the board's console is not the place for it — the
+// message still rides the thrown error for callers that want it (agentBodyAtCommit
+// swallows it by design).
+const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
+
+/** Read one committed file's content at `ref` — `git show ref:path`. The board
+ *  reads the registry from the committed branch, never the working tree. */
+function gitShowFile(dir: string, ref: string, path: string): string {
+  return execFileSync("git", ["show", `${ref}:${path}`], { cwd: dir, stdio: GIT_STDIO }).toString();
+}
+
+/** The paths of the entries directly under `subdir` at `ref` (e.g.
+ *  `agents/deckhand.md`). A missing directory yields no entries — the same
+ *  "absent is empty, not an error" shape `readdirSync` had on a present-but-
+ *  empty directory. */
+function gitListDir(dir: string, ref: string, subdir: string): string[] {
+  const out = execFileSync("git", ["ls-tree", "--name-only", ref, `${subdir}/`], {
+    cwd: dir,
+    stdio: GIT_STDIO,
+  })
+    .toString()
+    .trim();
+  return out === "" ? [] : out.split("\n");
+}
+
+/** Split a `---\nfrontmatter\n---\nbody` document into its two halves, or null
+ *  when the frontmatter fence is absent. One regex shared by the agent-file
+ *  parser and the historical-body read (ADR 0020 part 4), so the split is
+ *  spelled once. */
+function splitFrontmatter(raw: string): { frontmatter: string; body: string } | null {
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  const [, frontmatter, body] = match ?? [];
-  if (frontmatter === undefined || body === undefined) {
+  return match ? { frontmatter: match[1]!, body: match[2]! } : null;
+}
+
+/** The system-prompt body of an agent definition as it stood at a given commit
+ *  (ADR 0020 part 4) — `git show <commit>:agents/<name>.md` with the frontmatter
+ *  stripped. Best-effort: returns undefined when the commit or file is gone
+ *  (e.g. a kill left no worker_spawned hash, or the definition post-dates it) or
+ *  the file has no parseable body, so a self-RCA spawn degrades to no injected
+ *  evidence rather than failing the spawn. Deliberately does not run the full
+ *  frontmatter schema — an older, differently-shaped definition is still valid
+ *  evidence for "why did I decide", and this read must not reject it. */
+export function agentBodyAtCommit(
+  dir: string,
+  commit: string,
+  agentName: string,
+): string | undefined {
+  let raw: string;
+  try {
+    raw = gitShowFile(dir, commit, `agents/${agentName}.md`);
+  } catch {
+    return undefined;
+  }
+  return splitFrontmatter(raw)?.body.trim();
+}
+
+function parseAgentFile(name: string, raw: string): AgentDefinition {
+  const split = splitFrontmatter(raw);
+  if (!split) {
     throw new Error(`agent ${name}: missing frontmatter`);
   }
+  const { frontmatter, body } = split;
   const meta = agentFrontmatterSchema.parse(parseYaml(frontmatter));
   return {
     name,
@@ -202,9 +265,8 @@ export class UnknownAuthorityProfileError extends Error {
 
 const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 
-function parseAuthorityFile(path: string): AuthorityProfile {
-  const name = basename(path, ".yaml");
-  const profile = authorityProfileSchema.parse(parseYaml(readFileSync(path, "utf8")));
+function parseAuthorityFile(name: string, raw: string): AuthorityProfile {
+  const profile = authorityProfileSchema.parse(parseYaml(raw));
   return {
     name,
     guidance: profile.guidance,
@@ -316,22 +378,27 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
+/** Load the registry from committed `main` (ADR 0020) — never the working tree.
+ *  Every read (agent definitions, authority profiles, workspaces.yaml) and the
+ *  provenance `commit` come from the same ref, so the recorded hash and the
+ *  content actually read agree by construction (no dirty flag needed). */
 export function loadRegistry(dir: string): Registry {
+  const ref = REGISTRY_BRANCH;
   const agents: Record<string, AgentDefinition> = {};
-  for (const file of readdirSync(join(dir, "agents"))) {
-    if (!file.endsWith(".md")) continue;
-    const agent = parseAgentFile(join(dir, "agents", file));
+  for (const path of gitListDir(dir, ref, "agents")) {
+    if (!path.endsWith(".md")) continue;
+    const agent = parseAgentFile(basename(path, ".md"), gitShowFile(dir, ref, path));
     agents[agent.name] = agent;
   }
   const authority: Record<string, AuthorityProfile> = {};
-  for (const file of readdirSync(join(dir, "authority"))) {
-    if (!file.endsWith(".yaml")) continue;
-    const profile = parseAuthorityFile(join(dir, "authority", file));
+  for (const path of gitListDir(dir, ref, "authority")) {
+    if (!path.endsWith(".yaml")) continue;
+    const profile = parseAuthorityFile(basename(path, ".yaml"), gitShowFile(dir, ref, path));
     authority[profile.name] = profile;
   }
-  const workspaces = workspacesSchema.parse(
-    parseYaml(readFileSync(join(dir, "workspaces.yaml"), "utf8")),
-  );
-  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir }).toString().trim();
+  const workspaces = workspacesSchema.parse(parseYaml(gitShowFile(dir, ref, "workspaces.yaml")));
+  const commit = execFileSync("git", ["rev-parse", ref], { cwd: dir, stdio: GIT_STDIO })
+    .toString()
+    .trim();
   return { commit, agents, authority, workspaces };
 }

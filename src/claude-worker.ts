@@ -5,8 +5,9 @@ import { join, resolve } from "node:path";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload } from "./events.js";
+import { appendEvent, listEvents, type EventPayload } from "./events.js";
 import {
+  agentBodyAtCommit,
   loadRegistry,
   ownEntry,
   type AgentDefinition,
@@ -16,6 +17,7 @@ import {
 import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
+  guardRegistryDefaultBranch,
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
@@ -410,9 +412,73 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     assertKnownEffort(agent.definition);
   }
 
+  /** ADR 0020 part 4: a party review (self RCA) is a review task with a
+   *  concrete assignee — the historical worker, baked as a fact (CONTEXT.md's
+   *  Review: "self = 確定値") — hanging off the objected task (parent). Its
+   *  evidence is the agent definition as it stood *when the objected decision
+   *  was made*: the `worker_spawned` session (the strict agent version, ADR
+   *  0001) that was live when the objected log entry was written, read from the
+   *  committed registry at that hash. Anchoring on the objected entry — not
+   *  simply the latest spawn — is what keeps a later escalation-return re-spawn
+   *  under a refined definition from being mistaken for the 当時版 (the whole
+   *  point of "当時版, not 洗練後の現在版"). Independent reviews (unset assignee →
+   *  the Auditor pointer, issue #42) get no such injection: their value is
+   *  distance from the judgment, not the 原本. Best-effort — a missing record
+   *  (a kill left no hash) or an unreachable commit degrades to no evidence,
+   *  never a failed spawn. The review still executes under the current
+   *  definition (ADR 0019): this only adds evidence, not the reviewer's identity. */
+  private historicalDefinitionSection(task: Task): string {
+    if (task.type !== "review" || task.assignee === null || task.parent_id === null) return "";
+    const events = listEvents(this.options.db, task.parent_id);
+    const byId = new Map(events.map((e) => [e.id, e]));
+    // the objected log entries this worker wrote (each objection_raised annotates
+    // one entry on this same task), earliest first — the anchor is the first
+    // questioned decision of theirs
+    const anchorEntryId = events
+      .filter((e) => e.kind === "objection_raised")
+      .map((e) => (e.payload as Extract<EventPayload, { kind: "objection_raised" }>).entry_id)
+      .filter((entryId) => byId.get(entryId)?.worker_id === task.assignee)
+      .sort((a, b) => a - b)[0];
+    if (anchorEntryId === undefined) return "";
+    // the worker_spawned session that was live when that entry was written: the
+    // latest such spawn by this worker at or before the anchor
+    const spawned = events
+      .filter(
+        (e) => e.kind === "worker_spawned" && e.worker_id === task.assignee && e.id <= anchorEntryId,
+      )
+      .at(-1);
+    if (!spawned) return "";
+    const { registry_commit } = spawned.payload as Extract<
+      EventPayload,
+      { kind: "worker_spawned" }
+    >;
+    const body = agentBodyAtCommit(this.options.registryDir, registry_commit, task.assignee);
+    if (body === undefined) return "";
+    return (
+      "\n\n## Definition under review (as it stood when you ran the objected task)\n\n" +
+      "This is your agent definition recorded at the commit you were spawned from — " +
+      "the version that shaped the decision now under review. Read it as evidence for " +
+      '"why did I make that call". You nonetheless carry out this review under your ' +
+      "current definition (ADR 0019: repair is not a re-enactment).\n\n---\n\n" +
+      body
+    );
+  }
+
   start(task: Task): void {
     // loaded per pickup so a registry update takes effect on the next task
     const registry = loadRegistry(this.options.registryDir);
+    // ADR 0020 part 2: `main` is read as a code constant, so verify it is still
+    // the clone's real default branch (origin/HEAD) — a mismatch drops the
+    // registry workspace into quarantine rather than silently trusting a
+    // branch that isn't the default. A side check: the current (non-registry)
+    // task keeps its slot regardless, same posture as the drift checks below.
+    guardRegistryDefaultBranch(
+      this.options.db,
+      registry,
+      this.options.registryDir,
+      this.workspacesDir,
+      this.options.clock.now(),
+    );
     // task.workspace (issue #26 / ADR 0009) and task.assignee (ADR 0012 /
     // issue #36) both take precedence over this worker's configured
     // defaults — resolved fresh against the registry every pickup, never
@@ -484,9 +550,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         mcpConfigPath,
         "--strict-mcp-config",
         // who the agent is (registry definition body) and what its authority
-        // sounds like (profile guidance prose), stitched at spawn time
+        // sounds like (profile guidance prose), stitched at spawn time. A party
+        // review (self RCA) additionally carries the 当時版 definition as
+        // evidence (ADR 0020 part 4), appended last.
         "--append-system-prompt",
-        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}`,
+        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}${this.historicalDefinitionSection(task)}`,
       ],
       { cwd: workspace.path },
     );

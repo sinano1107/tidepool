@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { ownEntry, type Registry } from "./registry.js";
+import { ownEntry, REGISTRY_BRANCH, type Registry, type WorkspaceEntry } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
@@ -210,6 +211,78 @@ export function quarantineWorkspace(
     },
     now,
     BOARD_WORKER_ID,
+  );
+}
+
+export function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/** Whether a workspace entry's checkout is the board's own registry clone,
+ *  compared by realpath so a symlinked temp dir or mount point can't split the
+ *  two spellings of the same directory. A path-omitting entry compares by its
+ *  convention-derived location (ADR 0018). Shared by the self-unprotect floor
+ *  (workspace-create.ts) and the default-branch guard below. */
+export function resolvesToRegistryClone(
+  entry: WorkspaceEntry,
+  name: string,
+  registryDir: string,
+  workspacesBaseDir: string,
+): boolean {
+  const path = entry.path ?? join(workspacesBaseDir, name);
+  return safeRealpath(path) === safeRealpath(registryDir);
+}
+
+/** The registry clone is itself a tracked workspace (a protected entry whose
+ *  path resolves to the clone). Undefined when the clone isn't a tracked
+ *  workspace at all — nothing to quarantine. */
+function registryWorkspaceName(
+  registry: Registry,
+  registryDir: string,
+  workspacesBaseDir: string,
+): string | undefined {
+  for (const [name, entry] of Object.entries(registry.workspaces)) {
+    if (resolvesToRegistryClone(entry, name, registryDir, workspacesBaseDir)) return name;
+  }
+  return undefined;
+}
+
+/** ADR 0020 part 2: `main` is the code-constant branch the board reads the
+ *  registry from, but it must still be the repository's real default branch.
+ *  When the clone's `origin/HEAD` (git's native notion of the default branch)
+ *  no longer resolves to `origin/main`, reading `main` would silently read a
+ *  branch that isn't the default — the "quietly reads a stale/wrong value"
+ *  trap the ADR rejects. Detect it and drop the registry workspace into the
+ *  existing quarantine so a human repairs the clone before any spawn trusts
+ *  `main`. A clone with no `origin/HEAD` at all (no remote configured — a
+ *  purely local board) is not a mismatch: there is no remote default to
+ *  disagree with, so it passes untouched. */
+export function guardRegistryDefaultBranch(
+  db: Db,
+  registry: Registry,
+  registryDir: string,
+  workspacesBaseDir: string,
+  now: Date,
+): void {
+  let target: string;
+  try {
+    target = git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD");
+  } catch {
+    return; // no origin/HEAD — no remote default to disagree with
+  }
+  const expected = `refs/remotes/origin/${REGISTRY_BRANCH}`;
+  if (target === expected) return;
+  const name = registryWorkspaceName(registry, registryDir, workspacesBaseDir);
+  if (!name) return; // the registry clone isn't a tracked workspace — nothing to quarantine
+  quarantineWorkspace(
+    db,
+    name,
+    new Error(`registry default branch is '${target}', not '${expected}'`),
+    now,
   );
 }
 
