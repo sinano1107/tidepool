@@ -173,7 +173,11 @@ export function computeSkillDenials(
 // コマンド(cat/ls/grep 等)は対象外 — v1 はツール層での完全なサンドボックス化
 // を狙わず、ADR 0013 が明示した「書けないが覗ける、覗けば残る」の線を守る。
 // パターン形式(`Bash(<prefix>*)`)はインストール済み CLI の --help(2.1.214)
-// の例("Bash(git *) Edit")で確認済み。
+// の例("Bash(git *) Edit")で確認済み。この配列を編集したら
+// tests/review-tool-denials.test.ts の arrayContaining リストも手で合わせる
+// こと — テスト側はこの配列を import せず独立した literal で書いている
+// (tdd スキルの「期待値は独立した情報源から」の線: import して比較すると
+// コードが計算する通りに期待値も計算するトートロジーになる)。
 const REVIEW_BASH_WRITE_DENIALS = [
   "Bash(git commit*)",
   "Bash(git push*)",
