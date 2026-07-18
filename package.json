@@ -8,6 +8,8 @@
     "start": "tsx src/main.ts",
     "start:live": "TIDEPOOL_REGISTRY=$HOME/tidepool-registry tsx src/main.ts",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
     "build:ds-bundle": "node scripts/build-ds-bundle.mjs",
     "preview:issue-states": "tsx scripts/preview-issue-states.ts"
   },
@@ -22,6 +24,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.6",
     "@types/node": "^26.1.0",

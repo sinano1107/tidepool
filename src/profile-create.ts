@@ -3,12 +3,12 @@ import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import type { z } from "zod";
 import {
+  type AuthorityProfile,
   assertValidAuthorityProfileName,
   authorityProfileSchema,
   loadRegistry,
   ownEntry,
   UnknownAuthorityProfileError,
-  type AuthorityProfile,
 } from "./registry.js";
 import {
   assertRegistryCloneReady,

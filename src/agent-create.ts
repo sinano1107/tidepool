@@ -3,13 +3,13 @@ import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
 import {
+  type AgentDefinition,
   assertValidAgentName,
   isSingleTwemojiGrapheme,
   loadRegistry,
   ownEntry,
-  UnknownAuthorityProfileError,
-  type AgentDefinition,
   type Registry,
+  UnknownAuthorityProfileError,
 } from "./registry.js";
 import {
   assertRegistryCloneReady,

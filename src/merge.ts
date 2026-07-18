@@ -1,5 +1,5 @@
-import { appendEvent } from "./events.js";
 import type { Db } from "./db.js";
+import { appendEvent } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import {
   clearPendingAutoMerge,

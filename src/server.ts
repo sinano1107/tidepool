@@ -2,6 +2,7 @@ import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import type { AgentAdmin } from "./agent-create.js";
 import { createApiRouter } from "./api.js";
 import type { Clock } from "./clock.js";
 import { type Db, openDb } from "./db.js";
@@ -9,18 +10,17 @@ import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
 import { createMcpRouter } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
+import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import type { WorkspaceAdmin } from "./workspace-create.js";
-import type { AgentAdmin } from "./agent-create.js";
-import type { ProfileAdmin } from "./profile-create.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
+import type { WorkspaceAdmin } from "./workspace-create.js";
 
 /** The real adapter needs the board's own db and clock, which are created in
  *  here — so the worker arrives as a factory fed with them. */

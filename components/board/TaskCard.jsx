@@ -1,7 +1,7 @@
+import { AgentChip } from './AgentChip.jsx';
+import { RiskFlag } from './RiskFlag.jsx';
 import { StatusBadge } from './StatusBadge.jsx';
 import { TypeBadge } from './TypeBadge.jsx';
-import { RiskFlag } from './RiskFlag.jsx';
-import { AgentChip } from './AgentChip.jsx';
 
 export function TaskCard({ task = {}, onClick, style }) {
   const { id, title, status = 'todo', type = 'work', assignee, assigneeIcon, human = false, risk = false, children: childCount = 0 } = task;

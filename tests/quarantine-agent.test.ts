@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import {
   agentNeedsHuman,
   quarantineAgent,
+  type ResolvedAgent,
   resolveAgentOrQuarantine,
   UnknownAgentError,
   verifyAgentRepaired,
-  type ResolvedAgent,
 } from "../src/agent.js";
+import { openDb } from "../src/db.js";
 import { listBoard } from "../src/tasks.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {

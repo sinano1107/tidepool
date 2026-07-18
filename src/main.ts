@@ -1,22 +1,22 @@
 import { mkdirSync } from "node:fs";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
-import { createAgent, listAgentViews, updateAgent, type AgentAdmin } from "./agent-create.js";
-import {
-  createProfile,
-  listProfileViews,
-  updateProfile,
-  type ProfileAdmin,
-} from "./profile-create.js";
+import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
+import {
+  createProfile,
+  listProfileViews,
+  type ProfileAdmin,
+  updateProfile,
+} from "./profile-create.js";
 import { type PushClient, type VapidConfig, WebPushClient } from "./push.js";
 import {
+  type AuthorityProfile,
   loadRegistry,
   ownEntry,
-  type AuthorityProfile,
   type RegistryCandidates,
   type RosterAgent,
 } from "./registry.js";

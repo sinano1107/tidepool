@@ -2,8 +2,8 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
-import { registerTask } from "../src/tasks.js";
 import type { Task } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, NOT_THROTTLED_USAGE_TEXT } from "./fakes.js";
 

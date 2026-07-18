@@ -1,4 +1,4 @@
-import { type Response, Router, json } from "express";
+import { json, type Response, Router } from "express";
 import { z } from "zod";
 import { UnknownAgentError, verifyAgentRepaired } from "./agent.js";
 import {
@@ -13,6 +13,7 @@ import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { isPaused, setPaused } from "./pause.js";
+import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
 import {
@@ -22,7 +23,7 @@ import {
   InvalidWorkspaceNameError,
   type RegistryCandidates,
 } from "./registry.js";
-import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
+import { RegistryCloneBusyError } from "./registry-write.js";
 import {
   answerQuestion,
   type BoardTask,
@@ -30,8 +31,8 @@ import {
   DomainError,
   getTask,
   HANDOFF_FIELDS,
-  hasUnfinishedChildren,
   HUMAN_WORKER_ID,
+  hasUnfinishedChildren,
   listBoard,
   listQueue,
   listYourTasks,
@@ -42,18 +43,6 @@ import {
 } from "./tasks.js";
 import { getThrottleState, isPickupBlocked } from "./throttle.js";
 import {
-  buildWorkspaceResolver,
-  UnknownWorkspaceError,
-  verifyWorkspaceClean,
-  type WorkspaceConfig,
-} from "./workspace.js";
-import { RegistryCloneBusyError } from "./registry-write.js";
-import {
-  RegistrySelfUnprotectError,
-  UnprotectNeedsConfirmationError,
-  type WorkspaceAdmin,
-} from "./workspace-create.js";
-import {
   activeTriageSession,
   addScratchpadLine,
   commitTriage,
@@ -62,10 +51,21 @@ import {
   recordDisplayedEntries,
   stageFrontInsert,
   startTriage,
+  TriageError,
   triageActivity,
   triagePreview,
-  TriageError,
 } from "./triage.js";
+import {
+  buildWorkspaceResolver,
+  UnknownWorkspaceError,
+  verifyWorkspaceClean,
+  type WorkspaceConfig,
+} from "./workspace.js";
+import {
+  RegistrySelfUnprotectError,
+  UnprotectNeedsConfirmationError,
+  type WorkspaceAdmin,
+} from "./workspace-create.js";
 
 // question は人間向け HTTP API の範囲外(issue #38) — question タスクは
 // MCP の escalate ツールか tidepool 内部経路(watchdog・quarantine・merge・

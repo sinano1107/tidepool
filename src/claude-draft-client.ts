@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defaultExec, pinnedModelFlags, type ExecFn } from "./claude-worker.js";
+import { defaultExec, type ExecFn, pinnedModelFlags } from "./claude-worker.js";
 import type { DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";

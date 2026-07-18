@@ -5,12 +5,12 @@ import { join, resolve } from "node:path";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { appendEvent, listEvents, type EventPayload } from "./events.js";
+import { appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
+  type AgentDefinition,
   agentBodyAtCommit,
   loadRegistry,
   ownEntry,
-  type AgentDefinition,
   type Registry,
   type RosterAgent,
 } from "./registry.js";

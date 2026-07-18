@@ -4,7 +4,6 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import { isPaused } from "./pause.js";
 import type { Slot } from "./slot.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
-import { abandonConsequence } from "./watchdog.js";
 import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
@@ -13,6 +12,7 @@ import {
   type ThrottleDecision,
   type UsageSnapshot,
 } from "./usage.js";
+import { abandonConsequence } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
   BOARD_WORKER_ID,

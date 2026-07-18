@@ -10,8 +10,8 @@ import {
   listAgentViews,
   UnknownAuthorityProfileError,
 } from "../src/agent-create.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
 import { InvalidAgentNameError, loadRegistry } from "../src/registry.js";
+import { RegistryCloneBusyError } from "../src/registry-write.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {

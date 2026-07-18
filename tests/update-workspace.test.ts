@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeFile } from "node:fs/promises";
 import { loadRegistry } from "../src/registry.js";
 import {
   listWorkspaceViews,

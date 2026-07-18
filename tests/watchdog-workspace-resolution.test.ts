@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { getTask, pickupTask, registerTask } from "../src/tasks.js";
