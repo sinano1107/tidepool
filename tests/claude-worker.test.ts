@@ -203,10 +203,13 @@ function recordingEnumerator(result: string[] | null) {
   return { calls, enumerateSkills };
 }
 
-/** The `--disallowedTools` value a spawn used, split into its space-separated
- *  tokens (Workflow + any Skill(...) denies). */
+/** The `--disallowedTools` value a spawn used, split into its comma-separated
+ *  tokens (Workflow + any Skill(...) denies + any review Bash(...) denies).
+ *  Comma, not space, is the separator the production code joins with (issue
+ *  #59): a `Bash(git push*)` token carries an internal space, so a
+ *  space-separated join would misdivide that one entry into two. */
 function disallowedTools(args: string[]): string[] {
-  return args[args.indexOf("--disallowedTools") + 1]!.split(" ");
+  return args[args.indexOf("--disallowedTools") + 1]!.split(",");
 }
 
 describe("ClaudeCodeWorker", () => {
@@ -399,6 +402,38 @@ describe("ClaudeCodeWorker", () => {
     start();
     const args = calls[0]!.args;
     expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Workflow");
+  });
+
+  // ADR 0013 追記(issue #59): read-only は review という task type の性質
+  // であって実行エージェントの性質ではない(self RCA を含む)——ので、review
+  // タスクの spawn は誰が assignee でも Edit/Write/NotebookEdit と Bash の
+  // 書き込み系パターンを --disallowedTools に足す。
+  it("review タスクの spawn は Edit / Write / NotebookEdit と Bash の書き込み系パターンを deny する(ADR 0013 追記 / issue #59)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-review-deny", null, "deckhand", "review");
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toContain("Workflow");
+    expect(deny).toContain("Edit");
+    expect(deny).toContain("Write");
+    expect(deny).toContain("NotebookEdit");
+    expect(deny).toContain("Bash(git push*)");
+    expect(deny).toContain("Bash(rm*)");
+  });
+
+  it("self RCA(review タスクの assignee がレビュー対象の実行者そのもの)でも書き込み deny は外れない(ADR 0013: read-only は行為の性質であって行為者の性質ではない)", async () => {
+    const { start, calls } = await makeWorker();
+    // deckhand 自身が review タスクの assignee — self review でも例外なし
+    start("task-self-rca", null, "deckhand", "review");
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toContain("Edit");
+    expect(deny).toContain("Write");
+  });
+
+  it("work タスクの spawn には影響しない(deny は Workflow のみ)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-work-no-deny", null, "deckhand", "work");
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toEqual(["Workflow"]);
   });
 
   // issue #56 / ADR 0025: skill access is the agent's frontmatter allowlist,

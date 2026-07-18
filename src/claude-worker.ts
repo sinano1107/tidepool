@@ -169,6 +169,48 @@ export function computeSkillDenials(
   );
 }
 
+// ADR 0013 追記(issue #59): review の書き込み系 Bash パターン。読み取り
+// コマンド(cat/ls/grep 等)は対象外 — v1 はツール層での完全なサンドボックス化
+// を狙わず、ADR 0013 が明示した「書けないが覗ける、覗けば残る」の線を守る。
+// パターン形式(`Bash(<prefix>*)`)はインストール済み CLI の --help(2.1.214)
+// の例("Bash(git *) Edit")で確認済み。この配列を編集したら
+// tests/review-tool-denials.test.ts の arrayContaining リストも手で合わせる
+// こと — テスト側はこの配列を import せず独立した literal で書いている
+// (tdd スキルの「期待値は独立した情報源から」の線: import して比較すると
+// コードが計算する通りに期待値も計算するトートロジーになる)。
+const REVIEW_BASH_WRITE_DENIALS = [
+  "Bash(git commit*)",
+  "Bash(git push*)",
+  "Bash(git add*)",
+  "Bash(git merge*)",
+  "Bash(git rebase*)",
+  "Bash(git reset*)",
+  "Bash(rm*)",
+  "Bash(mv*)",
+  "Bash(cp*)",
+  "Bash(mkdir*)",
+  "Bash(touch*)",
+  "Bash(sed -i*)",
+  "Bash(tee*)",
+  "Bash(chmod*)",
+  "Bash(chown*)",
+];
+
+/** review タスクの harness deny(ADR 0013 追記 / issue #59): read-only は
+ *  review という task type の性質であって実行エージェントの性質ではない
+ *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
+ *  従来の reviewer profile(mcp.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
+ *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
+ *  ここはその追記が狙う CLI ツール層の強制 — 両方とも「task type が profile を
+ *  上書きする」という ADR 0013 の同じ原則の別レイヤーでの実装。issue #56 の
+ *  computeSkillDenials と同じ「組み立ては純関数、配線は launch() 側」という
+ *  分離だが、CLI 側の列挙が要らない(Edit/Write/NotebookEdit とパターンは
+ *  task.type だけで決まる固定集合)ぶん同期・ping 不要。*/
+export function reviewToolDenials(taskType: Task["type"]): string[] {
+  if (taskType !== "review") return [];
+  return ["Edit", "Write", "NotebookEdit", ...REVIEW_BASH_WRITE_DENIALS];
+}
+
 // always explicit: the CLI remembers the host's last model/effort choice,
 // and a flip in some unrelated directory must not leak into runs (ADR
 // 0005) — shared by every `claude` CLI spawn site so the pinning rule has
@@ -742,7 +784,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 3: per-skill deny is the only enforcement primitive) ride the same flag,
     // one Skill(name) token each. Confirmed against the installed CLI that both
     // "Workflow" and "Skill(名前)" are the tool names a headless session honors.
-    const disallowedTools = ["Workflow", ...enforcement.deny.map((s) => `Skill(${s})`)].join(" ");
+    // review タスクの harness deny(ADR 0013 追記 / issue #59)も同じ
+    // --disallowedTools に折り込む — task.type だけで決まるので誰の assignee
+    // でも(self RCA も含め)外れない。comma 区切り(CLI は comma/space どちらも
+    // 受け付ける、--help): "Bash(git push*)" のように内部に space を含む
+    // トークンを space 区切りで畳むと1トークンが誤分割される。
+    const disallowedTools = [
+      "Workflow",
+      ...enforcement.deny.map((s) => `Skill(${s})`),
+      ...reviewToolDenials(task.type),
+    ].join(",");
     const child = this.spawn(
       "claude",
       [
