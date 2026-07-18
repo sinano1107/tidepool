@@ -410,6 +410,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
                   "you can assign directly; call list_agents for the full board.",
               ),
             workspace: z.string().optional(),
+            review_flag: z
+              .boolean()
+              .optional()
+              .describe(
+                "Opt this child into an independent review of its deliverable on completion. " +
+                  "No authority check applies — declaring it is never out of scope.",
+              ),
           }),
         ),
       },

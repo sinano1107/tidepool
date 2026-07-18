@@ -132,6 +132,12 @@ export interface PendingChildSpec extends TaskContent {
   /** The workspace originally requested at decompose time, honored as-is on
    *  materialization regardless of which reason(s) triggered this question. */
   workspace?: string;
+  /** The review flag originally requested at decompose time, honored as-is
+   *  on materialization regardless of which reason(s) triggered this
+   *  question (ADR 0021: the flag itself never triggers a question, but a
+   *  child converted for another reason — risk/assignee/workspace — must not
+   *  lose it in transit). */
+  review_flag?: boolean;
 }
 
 /** The SQLite shape of a task: items/answer/pending-child are JSON TEXT
@@ -982,6 +988,12 @@ export interface ChildSpec extends TaskContent {
    *  worker's authority profile's `allowed_workspaces`, this too converts to
    *  an approval question (issue #11). Absent → inherits the parent's. */
   workspace?: string;
+  /** Opts this child into on-completion review (layer 1), same as
+   *  RegisterTaskInput's own field — the registrant declares it, human or
+   *  agent, with no authority check either way (ADR 0021: review flag opt-in
+   *  sits outside the authority checks above, unlike risk_flag/assignee/
+   *  workspace). */
+  review_flag?: boolean;
 }
 
 /** The registering worker's authority, resolved by the caller (the MCP layer)
@@ -1259,6 +1271,7 @@ export function decomposeTask(
               risk_flag: child.risk_flag,
               assignee: child.assignee,
               workspace,
+              review_flag: child.review_flag,
               based_on_decision: decisionId,
             },
             based_on_decision: decisionId,
