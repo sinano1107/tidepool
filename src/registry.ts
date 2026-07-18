@@ -30,6 +30,18 @@ export interface AgentDefinition {
    *  (ADR 0026) — never semantics ("prefer sea creatures" stays a registry
    *  README convention, unenforceable by schema). */
   icon?: string;
+  /** Skill allowlist (issue #56 / ADR 0025): the skills this agent may use in
+   *  a worker session — the implementation counterpart of the `skills` in
+   *  CONTEXT.md's Worker definition (agent = base AI + skills + instructions +
+   *  authority profile). Required — omission is a load error (省略=無制限 の
+   *  footgun is refused, issue #41's line); unrestricted is the explicit sole
+   *  `["*"]`, all-denied is the empty list. The loader validates only the
+   *  grammar of the vocabulary (`assertValidSkillAllowlist`), never the
+   *  inventory — an allowlist is a reference, not a claim of stock (ADR 0023):
+   *  a plugin-name typo or a workspace-absent individual name is inert, since
+   *  an agent crosses many workspaces. Enforcement (the complement deny) lives
+   *  in the adapter (ADR 0005). */
+  skills: string[];
   systemPrompt: string;
 }
 
@@ -140,6 +152,67 @@ export function isSingleTwemojiGrapheme(value: string): boolean {
   return entity!.indices[0] === 0 && entity!.indices[1] === value.length;
 }
 
+/** The skill allowlist's unrestricted spelling (issue #56 / ADR 0025): the
+ *  sole `["*"]` means every resolved skill is allowed (no deny, no ping).
+ *  A domain sibling of `AUTHORITY_WILDCARD` (tasks.ts) — the same glyph, a
+ *  different axis (専門性 vs 権限), kept apart so the skill grammar owns its
+ *  own vocabulary. */
+export const SKILL_WILDCARD = "*";
+
+/** The origin-scope words of the skill allowlist (issue #56 / ADR 0025): a
+ *  closed `{@workspace, @host}` set, not a `名前:*` glob — `@workspace:*`
+ *  would be grammatically indistinguishable from "a plugin literally named
+ *  workspace", so scope typos would become undetectable. Any other `@`-prefixed
+ *  entry is a typo and rejected. */
+export const SKILL_SCOPES = new Set(["@workspace", "@host"]);
+
+/** A `名前:*` plugin glob (ADR 0025): a non-empty plugin name with no `*`/`@`
+ *  of its own, then a literal `:*`. Together with the bare `SKILL_WILDCARD`
+ *  these are the only two shapes a `*` may appear in. */
+const PLUGIN_GLOB_PATTERN = /^[^*@:]+:\*$/;
+
+/** An agent's `skills` frontmatter breaks ADR 0025's allowlist grammar. The
+ *  entrance-guard twin of InvalidAgentIconError (agent-create.ts): thrown by
+ *  the loader and re-checked before a WebUI write so a malformed allowlist
+ *  can't brick the next `loadRegistry`. */
+export class InvalidSkillAllowlistError extends Error {
+  constructor(public readonly entry: string, reason: string) {
+    super(`invalid skill allowlist entry "${entry}": ${reason}`);
+    this.name = "InvalidSkillAllowlistError";
+  }
+}
+
+/** Grammar-only validation of a skill allowlist (issue #56 / ADR 0025) — never
+ *  inventory: an allowlist is a reference, not a claim of stock (ADR 0023), so
+ *  a plugin-name typo or a workspace-absent individual name is inert, checked
+ *  only for shape. The vocabulary is five forms: the sole `"*"` (unrestricted,
+ *  valid only alone), the `@workspace`/`@host` scope words, a `名前:*` plugin
+ *  glob, and an exact individual name (`skill` or `plugin:skill`). A `*` may
+ *  appear only as the bare wildcard or a glob suffix; a bare `[]` (all-denied)
+ *  is valid. */
+export function assertValidSkillAllowlist(skills: string[]): void {
+  for (const entry of skills) {
+    if (entry === SKILL_WILDCARD) {
+      if (skills.length !== 1) {
+        throw new InvalidSkillAllowlistError(entry, 'the "*" wildcard must be the only entry');
+      }
+      continue;
+    }
+    if (entry.startsWith("@")) {
+      if (!SKILL_SCOPES.has(entry)) {
+        throw new InvalidSkillAllowlistError(entry, "unknown scope (only @workspace / @host)");
+      }
+      continue;
+    }
+    if (entry.includes("*") && !PLUGIN_GLOB_PATTERN.test(entry)) {
+      throw new InvalidSkillAllowlistError(entry, 'a "*" may appear only as "*" alone or a "名前:*" glob');
+    }
+    if (entry === "") {
+      throw new InvalidSkillAllowlistError(entry, "empty skill name");
+    }
+  }
+}
+
 const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
@@ -152,6 +225,7 @@ const agentFrontmatterSchema = z.looseObject({
       message: "icon must be a single Twemoji-covered emoji grapheme",
     })
     .optional(),
+  skills: z.array(z.string()),
 });
 
 /** ADR 0020: the branch the board reads the registry from is a code constant,
@@ -227,6 +301,9 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
   }
   const { frontmatter, body } = split;
   const meta = agentFrontmatterSchema.parse(parseYaml(frontmatter));
+  // grammar-only (ADR 0025): the schema guarantees `skills` is a string array;
+  // this rejects malformed vocabulary before the definition is trusted.
+  assertValidSkillAllowlist(meta.skills);
   return {
     name,
     version: meta.version,
@@ -235,6 +312,7 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     model: meta.model,
     effort: meta.effort,
     icon: meta.icon,
+    skills: meta.skills,
     systemPrompt: body.trim(),
   };
 }

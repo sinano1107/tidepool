@@ -22,6 +22,7 @@ it("POST /api/agents は検証済み入力を createAgent オーケストレー�
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "standard",
+    skills: ["*"],
     description: "General agent",
     icon: "🐙",
     systemPrompt: "You are Tako.",
@@ -33,6 +34,7 @@ it("POST /api/agents は検証済み入力を createAgent オーケストレー�
     {
       name: "tako",
       authority: "standard",
+      skills: ["*"],
       description: "General agent",
       icon: "🐙",
       systemPrompt: "You are Tako.",
@@ -46,6 +48,7 @@ it("createAgent が未設定(registry なしの盤面)なら 503 を返す", asy
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "standard",
+    skills: ["*"],
     description: "General agent",
     systemPrompt: "You are Tako.",
   });
@@ -67,6 +70,7 @@ it("スキーマ違反(systemPrompt なし)は 400 で、オーケストレー�
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "standard",
+    skills: ["*"],
     description: "General agent",
   });
 
@@ -86,6 +90,7 @@ it("名前検証違反(InvalidAgentNameError)は 400 でメッセージを返す
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "standard",
+    skills: ["*"],
     description: "General agent",
     systemPrompt: "You are Tako.",
   });
@@ -106,6 +111,7 @@ it("未知 authority(UnknownAuthorityProfileError)は 400 でメッセージを�
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "ghost",
+    skills: ["*"],
     description: "General agent",
     systemPrompt: "You are Tako.",
   });
@@ -126,6 +132,7 @@ it("不正 icon(InvalidAgentIconError)は 400 でメッセージを返す", asyn
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "standard",
+    skills: ["*"],
     description: "General agent",
     icon: "ab",
     systemPrompt: "You are Tako.",
@@ -147,6 +154,7 @@ it("registry クローンが busy(RegistryCloneBusyError)なら 409 — リト�
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "standard",
+    skills: ["*"],
     description: "General agent",
     systemPrompt: "You are Tako.",
   });
@@ -166,6 +174,7 @@ it("その他の外部失敗は 502", async () => {
   const res = await api(t.baseUrl, "POST", "/api/agents", {
     name: "tako",
     authority: "standard",
+    skills: ["*"],
     description: "General agent",
     systemPrompt: "You are Tako.",
   });

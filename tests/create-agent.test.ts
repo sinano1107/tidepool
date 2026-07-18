@@ -10,7 +10,7 @@ import {
   listAgentViews,
   UnknownAuthorityProfileError,
 } from "../src/agent-create.js";
-import { InvalidAgentNameError, loadRegistry } from "../src/registry.js";
+import { InvalidAgentNameError, InvalidSkillAllowlistError, loadRegistry } from "../src/registry.js";
 import { RegistryCloneBusyError } from "../src/registry-write.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -40,6 +40,7 @@ describe("createAgent: 正常系(issue #70)", () => {
         icon: "🐙",
         model: "claude-sonnet-5",
         effort: "high",
+        skills: ["@workspace"],
         systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
       },
       { registryDir },
@@ -55,6 +56,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       icon: "🐙",
       model: "claude-sonnet-5",
       effort: "high",
+      skills: ["@workspace"],
       systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
     });
     // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する
@@ -71,6 +73,7 @@ describe("createAgent: 正常系(issue #70)", () => {
         name: "hermit",
         authority: "standard",
         description: "Minimal agent",
+        skills: ["*"],
         systemPrompt: "You are Hermit.",
       },
       { registryDir },
@@ -89,6 +92,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       icon: undefined,
       model: undefined,
       effort: undefined,
+      skills: ["*"],
       systemPrompt: "You are Hermit.",
     });
   });
@@ -98,6 +102,7 @@ describe("createAgent: name 検証(issue #70 — assertValidWorkspaceName と同
   const base = {
     authority: "standard",
     description: "d",
+    skills: ["*"],
     systemPrompt: "p",
   };
 
@@ -134,7 +139,7 @@ describe("createAgent: authority 検証(issue #70 — 既存プロファイル�
 
     await expect(
       createAgent(
-        { name: "tako", authority: "no-such-profile", description: "d", systemPrompt: "p" },
+        { name: "tako", authority: "no-such-profile", description: "d", skills: ["*"], systemPrompt: "p" },
         { registryDir },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
@@ -143,7 +148,7 @@ describe("createAgent: authority 検証(issue #70 — 既存プロファイル�
 });
 
 describe("createAgent: registry コミットの前提条件(ADR 0020 — workspace 側と共有の検査)", () => {
-  const input = { name: "tako", authority: "standard", description: "d", systemPrompt: "p" };
+  const input = { name: "tako", authority: "standard", description: "d", skills: ["*"], systemPrompt: "p" };
 
   it("registry クローンの HEAD が main 以外(registry-edit タスクのブランチ移動中)なら RegistryCloneBusyError で失敗し、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
@@ -166,7 +171,7 @@ describe("createAgent: registry コミットの前提条件(ADR 0020 — workspa
 });
 
 describe("createAgent: registry への push(issue #70 — ベストエフォート)", () => {
-  const input = { name: "tako", authority: "standard", description: "d", systemPrompt: "p" };
+  const input = { name: "tako", authority: "standard", description: "d", skills: ["*"], systemPrompt: "p" };
 
   it("origin リモートがあれば registry コミットが push され、pushed: true", async () => {
     const registryDir = await makeMainRegistry();
@@ -208,7 +213,7 @@ describe("createAgent: icon 検証(ADR 0026 — loadRegistry を壊す書き込�
 
       await expect(
         createAgent(
-          { name: "tako", authority: "standard", description: "d", icon, systemPrompt: "p" },
+          { name: "tako", authority: "standard", description: "d", icon, skills: ["*"], systemPrompt: "p" },
           { registryDir },
         ),
       ).rejects.toThrow(InvalidAgentIconError);
@@ -219,11 +224,31 @@ describe("createAgent: icon 検証(ADR 0026 — loadRegistry を壊す書き込�
   );
 });
 
+describe("createAgent: skills 検証(ADR 0025 — loadRegistry を壊す許可リストを入口で拒否)", () => {
+  it.each([[["*", "code-review"]], [["@world"]], [["foo*"]]])(
+    "文法違反の skills %j は InvalidSkillAllowlistError で拒否され、registry は読める状態のまま",
+    async (skills) => {
+      const registryDir = await makeMainRegistry();
+      const before = git(registryDir, "rev-parse", "HEAD");
+
+      await expect(
+        createAgent(
+          { name: "tako", authority: "standard", description: "d", skills, systemPrompt: "p" },
+          { registryDir },
+        ),
+      ).rejects.toThrow(InvalidSkillAllowlistError);
+      expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+      // 不正 allowlist が書き込まれていれば loadRegistry ごと落ちる — それが起きていない
+      expect(loadRegistry(registryDir).agents.tako).toBeUndefined();
+    },
+  );
+});
+
 describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
   it("registry の全エージェントを systemPrompt 含む全フィールドで返す", async () => {
     const registryDir = await makeMainRegistry();
     await createAgent(
-      { name: "tako", authority: "standard", description: "General agent", icon: "🐙", systemPrompt: "You are Tako." },
+      { name: "tako", authority: "standard", description: "General agent", icon: "🐙", skills: ["*"], systemPrompt: "You are Tako." },
       { registryDir },
     );
 
@@ -238,6 +263,7 @@ describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
       icon: "🐙",
       model: undefined,
       effort: undefined,
+      skills: ["*"],
       systemPrompt: "You are Tako.",
     });
   });

@@ -13,6 +13,7 @@ function makeRegistry(agents: Record<string, { authority: string }>): Registry {
           version: "0.0.1",
           authority: a.authority,
           description: `${name} agent`,
+          skills: ["*"],
           systemPrompt: `You are ${name}.`,
         },
       ]),

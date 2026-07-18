@@ -5,6 +5,7 @@ import { UnknownAgentError } from "./agent.js";
 import {
   type AgentDefinition,
   assertValidAgentName,
+  assertValidSkillAllowlist,
   isSingleTwemojiGrapheme,
   loadRegistry,
   ownEntry,
@@ -29,6 +30,12 @@ export interface CreateAgentInput {
   icon?: string;
   model?: string;
   effort?: string;
+  /** The skill allowlist (issue #56 / ADR 0025), threaded through wholesale
+   *  like every other field: `skills` is a required frontmatter field, so a
+   *  file the verb writes without it would fail the next `loadRegistry`. The
+   *  WebUI's skill picker that fills this in is issue #54; the verb only has
+   *  to carry the value through. */
+  skills: string[];
   systemPrompt: string;
 }
 
@@ -78,6 +85,7 @@ export async function createAgent(
   assertValidAgentName(registry, input.name);
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
+  assertValidSkillAllowlist(input.skills);
   commitAgentFile(deps.registryDir, { ...input, version: "1" }, `create agent ${input.name} via WebUI`);
   return { pushed: pushRegistry(deps.registryDir) };
 }
@@ -100,6 +108,7 @@ export async function updateAgent(
   if (!existing) throw new UnknownAgentError(input.name);
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
+  assertValidSkillAllowlist(input.skills);
   // no-change 編集はコミットなしの成功(workspace-create.ts の porcelain
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
   // 存在せず、実効フィールドが同じ再送で刻印だけ進めない
@@ -122,8 +131,16 @@ function sameEffectiveFields(existing: AgentDefinition, input: UpdateAgentInput)
     existing.icon === input.icon &&
     existing.model === input.model &&
     existing.effort === input.effort &&
+    sameSkills(existing.skills, input.skills) &&
     existing.systemPrompt === input.systemPrompt.trim()
   );
+}
+
+/** Order-sensitive list equality for the skill allowlist: the file is
+ *  rewritten wholesale, so a reordering is a real edit worth a version bump
+ *  (nothing downstream treats the allowlist as an unordered set). */
+function sameSkills(existing: string[], input: string[]): boolean {
+  return existing.length === input.length && existing.every((s, i) => s === input[i]);
 }
 
 /** One agent as the settings surface's edit form needs it (issue #70):
@@ -174,10 +191,13 @@ function bumpVersion(version: string): string {
  *  fields are omitted, not serialized as null — round-trip keeps them
  *  undefined. */
 function serializeAgentFile(definition: AgentDefinition): string {
-  const meta: Record<string, string> = {
+  const meta: Record<string, string | string[]> = {
     version: definition.version,
     authority: definition.authority,
     description: definition.description,
+    // required (ADR 0025): always written, even the empty list — a file
+    // without it fails the next loadRegistry
+    skills: definition.skills,
   };
   if (definition.icon !== undefined) meta.icon = definition.icon;
   if (definition.model !== undefined) meta.model = definition.model;

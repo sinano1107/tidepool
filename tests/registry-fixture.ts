@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SKILL_WILDCARD } from "../src/registry.js";
 import { AUTHORITY_WILDCARD } from "../src/tasks.js";
 
 const AGENT_MD = `---
@@ -9,6 +10,8 @@ name: deckhand
 description: General work agent for the tidepool board
 version: 0.3.1
 authority: standard
+skills:
+  - "${SKILL_WILDCARD}"
 ---
 You are Deckhand, the tidepool board's general work agent.
 Work only through the tidepool MCP verbs.

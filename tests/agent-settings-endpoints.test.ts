@@ -19,6 +19,7 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
           name: "tako",
           version: "1",
           authority: "standard",
+          skills: ["*"],
           description: "General agent",
           icon: "🐙",
           model: undefined,
@@ -39,6 +40,7 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
         name: "tako",
         version: "1",
         authority: "standard",
+        skills: ["*"],
         description: "General agent",
         icon: "🐙",
         model: undefined,
@@ -68,6 +70,7 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    skills: ["*"],
     description: "Updated description",
     systemPrompt: "You are Tako, updated.",
   });
@@ -78,6 +81,7 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
     {
       name: "tako",
       authority: "standard",
+      skills: ["*"],
       description: "Updated description",
       systemPrompt: "You are Tako, updated.",
     },
@@ -95,6 +99,7 @@ it("編集対象の未知 name(UnknownAgentError)は 404", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/ghost", {
     authority: "standard",
+    skills: ["*"],
     description: "d",
     systemPrompt: "p",
   });
@@ -113,6 +118,7 @@ it("未知 authority(UnknownAuthorityProfileError)は 400", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "ghost",
+    skills: ["*"],
     description: "d",
     systemPrompt: "p",
   });
@@ -131,6 +137,7 @@ it("不正 icon(InvalidAgentIconError)は 400", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    skills: ["*"],
     description: "d",
     icon: "ab",
     systemPrompt: "p",
@@ -150,6 +157,7 @@ it("registry クローンが busy(RegistryCloneBusyError)なら 409", async () =
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    skills: ["*"],
     description: "d",
     systemPrompt: "p",
   });
@@ -168,6 +176,7 @@ it("その他の外部失敗は 502", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    skills: ["*"],
     description: "d",
     systemPrompt: "p",
   });
