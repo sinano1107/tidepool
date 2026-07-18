@@ -163,10 +163,16 @@ const agentFrontmatterSchema = z.looseObject({
  *  working-tree read would let unmerged content take effect on spawn. */
 export const REGISTRY_BRANCH = "main";
 
+// stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
+// missing ref on stderr, and the board's console is not the place for it — the
+// message still rides the thrown error for callers that want it (agentBodyAtCommit
+// swallows it by design).
+const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
+
 /** Read one committed file's content at `ref` — `git show ref:path`. The board
  *  reads the registry from the committed branch, never the working tree. */
 function gitShowFile(dir: string, ref: string, path: string): string {
-  return execFileSync("git", ["show", `${ref}:${path}`], { cwd: dir }).toString();
+  return execFileSync("git", ["show", `${ref}:${path}`], { cwd: dir, stdio: GIT_STDIO }).toString();
 }
 
 /** The paths of the entries directly under `subdir` at `ref` (e.g.
@@ -174,10 +180,22 @@ function gitShowFile(dir: string, ref: string, path: string): string {
  *  "absent is empty, not an error" shape `readdirSync` had on a present-but-
  *  empty directory. */
 function gitListDir(dir: string, ref: string, subdir: string): string[] {
-  const out = execFileSync("git", ["ls-tree", "--name-only", ref, `${subdir}/`], { cwd: dir })
+  const out = execFileSync("git", ["ls-tree", "--name-only", ref, `${subdir}/`], {
+    cwd: dir,
+    stdio: GIT_STDIO,
+  })
     .toString()
     .trim();
   return out === "" ? [] : out.split("\n");
+}
+
+/** Split a `---\nfrontmatter\n---\nbody` document into its two halves, or null
+ *  when the frontmatter fence is absent. One regex shared by the agent-file
+ *  parser and the historical-body read (ADR 0020 part 4), so the split is
+ *  spelled once. */
+function splitFrontmatter(raw: string): { frontmatter: string; body: string } | null {
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  return match ? { frontmatter: match[1]!, body: match[2]! } : null;
 }
 
 /** The system-prompt body of an agent definition as it stood at a given commit
@@ -199,16 +217,15 @@ export function agentBodyAtCommit(
   } catch {
     return undefined;
   }
-  const body = raw.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/)?.[1];
-  return body === undefined ? undefined : body.trim();
+  return splitFrontmatter(raw)?.body.trim();
 }
 
 function parseAgentFile(name: string, raw: string): AgentDefinition {
-  const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  const [, frontmatter, body] = match ?? [];
-  if (frontmatter === undefined || body === undefined) {
+  const split = splitFrontmatter(raw);
+  if (!split) {
     throw new Error(`agent ${name}: missing frontmatter`);
   }
+  const { frontmatter, body } = split;
   const meta = agentFrontmatterSchema.parse(parseYaml(frontmatter));
   return {
     name,
@@ -380,6 +397,8 @@ export function loadRegistry(dir: string): Registry {
     authority[profile.name] = profile;
   }
   const workspaces = workspacesSchema.parse(parseYaml(gitShowFile(dir, ref, "workspaces.yaml")));
-  const commit = execFileSync("git", ["rev-parse", ref], { cwd: dir }).toString().trim();
+  const commit = execFileSync("git", ["rev-parse", ref], { cwd: dir, stdio: GIT_STDIO })
+    .toString()
+    .trim();
   return { commit, agents, authority, workspaces };
 }

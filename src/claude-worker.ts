@@ -415,19 +415,37 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   /** ADR 0020 part 4: a party review (self RCA) is a review task with a
    *  concrete assignee — the historical worker, baked as a fact (CONTEXT.md's
    *  Review: "self = 確定値") — hanging off the objected task (parent). Its
-   *  evidence is the agent definition as it stood when that worker ran the
-   *  objected task, found from that worker's `worker_spawned` record on the
-   *  parent (the strict agent version, ADR 0001) and read from the committed
-   *  registry at that hash. Independent reviews (unset assignee → the Auditor
-   *  pointer, issue #42) get no such injection: their value is distance from
-   *  the judgment, not the 原本. Best-effort — a missing record (a kill left no
-   *  hash) or an unreachable commit degrades to no evidence, never a failed
-   *  spawn. The review still executes under the current definition (ADR 0019):
-   *  this only adds evidence, it does not replace the reviewer's identity. */
+   *  evidence is the agent definition as it stood *when the objected decision
+   *  was made*: the `worker_spawned` session (the strict agent version, ADR
+   *  0001) that was live when the objected log entry was written, read from the
+   *  committed registry at that hash. Anchoring on the objected entry — not
+   *  simply the latest spawn — is what keeps a later escalation-return re-spawn
+   *  under a refined definition from being mistaken for the 当時版 (the whole
+   *  point of "当時版, not 洗練後の現在版"). Independent reviews (unset assignee →
+   *  the Auditor pointer, issue #42) get no such injection: their value is
+   *  distance from the judgment, not the 原本. Best-effort — a missing record
+   *  (a kill left no hash) or an unreachable commit degrades to no evidence,
+   *  never a failed spawn. The review still executes under the current
+   *  definition (ADR 0019): this only adds evidence, not the reviewer's identity. */
   private historicalDefinitionSection(task: Task): string {
     if (task.type !== "review" || task.assignee === null || task.parent_id === null) return "";
-    const spawned = listEvents(this.options.db, task.parent_id)
-      .filter((e) => e.kind === "worker_spawned" && e.worker_id === task.assignee)
+    const events = listEvents(this.options.db, task.parent_id);
+    const byId = new Map(events.map((e) => [e.id, e]));
+    // the objected log entries this worker wrote (each objection_raised annotates
+    // one entry on this same task), earliest first — the anchor is the first
+    // questioned decision of theirs
+    const anchorEntryId = events
+      .filter((e) => e.kind === "objection_raised")
+      .map((e) => (e.payload as Extract<EventPayload, { kind: "objection_raised" }>).entry_id)
+      .filter((entryId) => byId.get(entryId)?.worker_id === task.assignee)
+      .sort((a, b) => a - b)[0];
+    if (anchorEntryId === undefined) return "";
+    // the worker_spawned session that was live when that entry was written: the
+    // latest such spawn by this worker at or before the anchor
+    const spawned = events
+      .filter(
+        (e) => e.kind === "worker_spawned" && e.worker_id === task.assignee && e.id <= anchorEntryId,
+      )
       .at(-1);
     if (!spawned) return "";
     const { registry_commit } = spawned.payload as Extract<

@@ -826,7 +826,8 @@ describe("ClaudeCodeWorker", () => {
     git("add", "-A");
     git("commit", "-m", "refine deckhand");
 
-    // the objected (parent) task, carrying deckhand's worker_spawned record
+    // the objected (parent) task, carrying deckhand's worker_spawned record and
+    // the objected decision + the triage objection that anchors the RCA
     const objected = makeTask("objected-1", null, "deckhand", "work");
     insertTask(db, objected);
     appendEvent(db, {
@@ -837,6 +838,18 @@ describe("ClaudeCodeWorker", () => {
         registry_commit: oldHash,
         definition_version: "0.3.1",
       },
+      at: new FakeClock().now(),
+    });
+    const decisionId = appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "decision_logged", line: "chose approach X" },
+      at: new FakeClock().now(),
+    });
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "human",
+      payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
       at: new FakeClock().now(),
     });
 
@@ -851,6 +864,65 @@ describe("ClaudeCodeWorker", () => {
     // executes as the current definition (ADR 0019: repair is not a re-enactment)
     expect(prompt).toContain("REFINED after the objected call");
     // and the 当時版 body is injected as evidence for the "why did I decide" read
+    expect(prompt).toContain("the tidepool board's general work agent");
+  });
+
+  it("同一 worker が objected task を複数回 spawn した場合、objected 判断時の session の版を注入し、後の再 spawn の版は使わない(ADR 0020 part 4)", async () => {
+    const { worker, calls, db, registryDir } = await makeWorker();
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
+        cwd: registryDir,
+      })
+        .toString()
+        .trim();
+    // v1: the version live when the objected decision was made (fixture body)
+    const v1Hash = git("rev-parse", "main");
+    const objected = makeTask("objected-3", null, "deckhand", "work");
+    insertTask(db, objected);
+    // spawn 1 (v1) → objected decision → objection, all in that first session
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1" },
+      at: new FakeClock().now(),
+    });
+    const decisionId = appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "decision_logged", line: "chose approach X" },
+      at: new FakeClock().now(),
+    });
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "human",
+      payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
+      at: new FakeClock().now(),
+    });
+    // main advances and deckhand is refined; a LATER re-spawn (escalation return)
+    // runs the objected task again under v2 — must not be mistaken for 当時版
+    await writeFile(
+      join(registryDir, "agents", "deckhand.md"),
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\n---\nYou are Deckhand, REFINED v2.\n`,
+    );
+    git("add", "-A");
+    git("commit", "-m", "refine deckhand");
+    const v2Hash = git("rev-parse", "main");
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0" },
+      at: new FakeClock().now(),
+    });
+
+    const rca: Task = { ...makeTask("rca-3", null, "deckhand", "review"), parent_id: "objected-3" };
+    insertTask(db, rca);
+    worker.start(rca);
+
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    // the injected 当時版 evidence is v1 (the objected session), not the later v2
+    // re-spawn — `.at(-1)` would have wrongly picked v2
     expect(prompt).toContain("the tidepool board's general work agent");
   });
 

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { ownEntry, REGISTRY_BRANCH, type Registry } from "./registry.js";
+import { ownEntry, REGISTRY_BRANCH, type Registry, type WorkspaceEntry } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
@@ -214,7 +214,7 @@ export function quarantineWorkspace(
   );
 }
 
-function safeRealpath(path: string): string {
+export function safeRealpath(path: string): string {
   try {
     return realpathSync(path);
   } catch {
@@ -222,20 +222,31 @@ function safeRealpath(path: string): string {
   }
 }
 
+/** Whether a workspace entry's checkout is the board's own registry clone,
+ *  compared by realpath so a symlinked temp dir or mount point can't split the
+ *  two spellings of the same directory. A path-omitting entry compares by its
+ *  convention-derived location (ADR 0018). Shared by the self-unprotect floor
+ *  (workspace-create.ts) and the default-branch guard below. */
+export function resolvesToRegistryClone(
+  entry: WorkspaceEntry,
+  name: string,
+  registryDir: string,
+  workspacesBaseDir: string,
+): boolean {
+  const path = entry.path ?? join(workspacesBaseDir, name);
+  return safeRealpath(path) === safeRealpath(registryDir);
+}
+
 /** The registry clone is itself a tracked workspace (a protected entry whose
- *  path resolves to the clone); found by realpath so a symlinked temp dir or
- *  mount point can't split the two spellings of the same directory (same
- *  comparison as workspace-create.ts's `resolvesToRegistryClone`). Undefined
- *  when the clone isn't a tracked workspace at all — nothing to quarantine. */
+ *  path resolves to the clone). Undefined when the clone isn't a tracked
+ *  workspace at all — nothing to quarantine. */
 function registryWorkspaceName(
   registry: Registry,
   registryDir: string,
   workspacesBaseDir: string,
 ): string | undefined {
-  const target = safeRealpath(registryDir);
   for (const [name, entry] of Object.entries(registry.workspaces)) {
-    const path = entry.path ?? join(workspacesBaseDir, name);
-    if (safeRealpath(path) === target) return name;
+    if (resolvesToRegistryClone(entry, name, registryDir, workspacesBaseDir)) return name;
   }
   return undefined;
 }

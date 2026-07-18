@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 import type { GitHubClient } from "./github.js";
@@ -13,7 +13,12 @@ import {
   pushRegistry,
   type RegistryCommitResult,
 } from "./registry-write.js";
-import { git, TIDEPOOL_GIT_IDENTITY, UnknownWorkspaceError } from "./workspace.js";
+import {
+  git,
+  resolvesToRegistryClone,
+  TIDEPOOL_GIT_IDENTITY,
+  UnknownWorkspaceError,
+} from "./workspace.js";
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
  *  resulting Workspace — the mode is a circumstance of creation, not a kind
@@ -129,26 +134,6 @@ export class RegistrySelfUnprotectError extends Error {
   }
 }
 
-function safeRealpath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
-}
-
-/** Whether the entry's checkout is the board's own registry clone — compared
- *  by realpath so a symlinked temp dir or mount point can't split the two
- *  spellings of the same directory. A path-omitting entry compares by its
- *  convention-derived location (ADR 0018). */
-function resolvesToRegistryClone(
-  entry: WorkspaceEntry,
-  name: string,
-  deps: WorkspaceAdminDeps,
-): boolean {
-  const path = entry.path ?? join(deps.workspacesBaseDir, name);
-  return safeRealpath(path) === safeRealpath(deps.registryDir);
-}
 
 export async function updateWorkspace(
   input: UpdateWorkspaceInput,
@@ -171,7 +156,7 @@ export async function updateWorkspace(
       // request gets the honest "never here", not another confirm loop. It
       // also ignores the entry's current flag: the floor must not depend on
       // the very state it protects
-      if (resolvesToRegistryClone(entry, input.name, deps)) {
+      if (resolvesToRegistryClone(entry, input.name, deps.registryDir, deps.workspacesBaseDir)) {
         throw new RegistrySelfUnprotectError(input.name);
       }
       if (entry.protected === true && input.confirm !== true) {
@@ -235,7 +220,7 @@ export function listWorkspaceViews(deps: WorkspaceAdminDeps): WorkspaceView[] {
   return Object.entries(registry.workspaces).map(([name, entry]) => ({
     ...entry,
     name,
-    registrySelf: resolvesToRegistryClone(entry, name, deps),
+    registrySelf: resolvesToRegistryClone(entry, name, deps.registryDir, deps.workspacesBaseDir),
   }));
 }
 
