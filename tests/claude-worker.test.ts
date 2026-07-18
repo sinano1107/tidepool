@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import {
   ClaudeCodeWorker,
+  type EnumerateSkillsFn,
   PROMPT_READY_MARKER,
   type PtyFn,
   type SpawnFn,
@@ -188,6 +189,24 @@ async function makeWorker(
     return task;
   };
   return { worker, start, logDir, db, registryDir, ...recorder };
+}
+
+/** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
+ *  records the cwd it was probed at and returns a scripted full skill set (or
+ *  null to simulate a probe failure). */
+function recordingEnumerator(result: string[] | null) {
+  const calls: string[] = [];
+  const enumerateSkills: EnumerateSkillsFn = async (cwd) => {
+    calls.push(cwd);
+    return result;
+  };
+  return { calls, enumerateSkills };
+}
+
+/** The `--disallowedTools` value a spawn used, split into its space-separated
+ *  tokens (Workflow + any Skill(...) denies). */
+function disallowedTools(args: string[]): string[] {
+  return args[args.indexOf("--disallowedTools") + 1]!.split(" ");
 }
 
 describe("ClaudeCodeWorker", () => {
@@ -380,6 +399,92 @@ describe("ClaudeCodeWorker", () => {
     start();
     const args = calls[0]!.args;
     expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Workflow");
+  });
+
+  // issue #56 / ADR 0025: skill access is the agent's frontmatter allowlist,
+  // enforced at spawn as the complement deny of the CLI-enumerated full set.
+  const skilledMd = (skillsYaml: string) =>
+    `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`;
+
+  it("skills が ['*'] の agent は列挙 ping を呼ばず、skill deny も付けない(Workflow のみ・ADR 0025 point 5)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd"]);
+    const { start, calls } = await makeWorker({}, { enumerateSkills: rec.enumerateSkills });
+    start();
+    expect(calls).toHaveLength(1);
+    expect(rec.calls).toEqual([]); // '*' はゼロトークン ping すら不要
+    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow"]);
+    expect(calls[0]!.args).not.toContain("--disable-slash-commands");
+  });
+
+  it("skills が空リストの agent は列挙 ping を呼ばず --disable-slash-commands 一発で全禁止する(ADR 0025 point 5)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd"]);
+    const { start, calls } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  []\n") },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start();
+    expect(calls).toHaveLength(1);
+    expect(rec.calls).toEqual([]);
+    expect(calls[0]!.args).toContain("--disable-slash-commands");
+  });
+
+  it("有限の許可リストは列挙 ping の全集合から許可の補集合を Skill(名前) で deny する(ADR 0025 point 3)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd", "grilling"]);
+    const { start, calls } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start();
+    // ping はタスクの workspace cwd で走る
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(rec.calls).toEqual(["/home/pi/work/tidepool"]);
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toContain("Workflow");
+    expect(deny).toContain("Skill(tdd)");
+    expect(deny).toContain("Skill(grilling)");
+    // 許可した skill は deny されない
+    expect(deny).not.toContain("Skill(code-review)");
+  });
+
+  it("@workspace は checkout の .claude/skills 走査との差分でホスト由来(user + plugin)だけを deny する(ADR 0025)", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
+    await mkdir(join(wsDir, ".claude", "skills", "code-review"), { recursive: true });
+    const rec = recordingEnumerator(["tdd", "code-review", "plug:deploy", "user-skill"]);
+    const { start, calls } = await makeWorker(
+      {
+        "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+        "agents/deckhand.md": skilledMd('  - "@workspace"\n'),
+      },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const deny = disallowedTools(calls[0]!.args);
+    // checkout が運ぶ skill は許可、ホスト由来は deny
+    expect(deny).toContain("Skill(plug:deploy)");
+    expect(deny).toContain("Skill(user-skill)");
+    expect(deny).not.toContain("Skill(tdd)");
+    expect(deny).not.toContain("Skill(code-review)");
+  });
+
+  it("列挙 ping が失敗(null)したら spawn 失敗として扱い、deny 未解決のまま spawn しない(fail-open にしない・ADR 0025 point 6)", async () => {
+    const rec = recordingEnumerator(null);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { start, calls } = await makeWorker(
+        { "agents/deckhand.md": skilledMd("  - code-review\n") },
+        { enumerateSkills: rec.enumerateSkills },
+      );
+      start("task-ping-fail");
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1));
+      // 列挙は試みたが、その失敗で子プロセスは起動しない
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(calls).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("skill enumeration failed"));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
