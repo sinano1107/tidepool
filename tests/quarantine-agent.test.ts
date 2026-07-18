@@ -43,6 +43,7 @@ describe("resolveAgentOrQuarantine", () => {
         version: "0.0.1",
         authority: "standard",
         description: "d",
+        skills: ["*"],
         systemPrompt: "x",
       },
       profile: { name: "standard", guidance: "g" },

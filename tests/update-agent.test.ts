@@ -28,6 +28,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
         authority: "standard",
         description: "Rewritten description",
         icon: "🦀",
+        skills: ["@workspace"],
         systemPrompt: "You are Deckhand, rewritten.",
       },
       { registryDir },
@@ -42,6 +43,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       icon: "🦀",
       model: undefined,
       effort: undefined,
+      skills: ["@workspace"],
       systemPrompt: "You are Deckhand, rewritten.",
     });
     expect(git(registryDir, "status", "--porcelain")).toBe("");
@@ -51,11 +53,11 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
   it("非 semver の単一数値でも刻める(3 → 4)", async () => {
     const registryDir = await makeMainRegistry({
-      "agents/crab.md": "---\nversion: 3\nauthority: standard\ndescription: d\n---\np\n",
+      "agents/crab.md": "---\nversion: 3\nauthority: standard\nskills:\n  - '*'\ndescription: d\n---\np\n",
     });
 
     await updateAgent(
-      { name: "crab", authority: "standard", description: "d2", systemPrompt: "p" },
+      { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
       { registryDir },
     );
 
@@ -64,11 +66,11 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
   it("数値セグメントが一つもない version は 1 に振り直す — 刻印は常に前へ進む", async () => {
     const registryDir = await makeMainRegistry({
-      "agents/crab.md": "---\nversion: beta\nauthority: standard\ndescription: d\n---\np\n",
+      "agents/crab.md": "---\nversion: beta\nauthority: standard\nskills:\n  - '*'\ndescription: d\n---\np\n",
     });
 
     await updateAgent(
-      { name: "crab", authority: "standard", description: "d2", systemPrompt: "p" },
+      { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
       { registryDir },
     );
 
@@ -84,6 +86,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
       name: "deckhand",
       authority: "standard",
       description: "General work agent for the tidepool board",
+      skills: ["*"],
       systemPrompt:
         "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.",
     };
@@ -104,6 +107,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         name: "deckhand",
         authority: "standard",
         description: "General work agent for the tidepool board",
+        skills: ["*"],
         systemPrompt:
           "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.\n",
       },
@@ -122,7 +126,7 @@ describe("updateAgent: authority 検証(issue #70 — 編集でも既存プロ�
 
     await expect(
       updateAgent(
-        { name: "deckhand", authority: "no-such-profile", description: "d", systemPrompt: "p" },
+        { name: "deckhand", authority: "no-such-profile", description: "d", skills: ["*"], systemPrompt: "p" },
         { registryDir },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
@@ -137,7 +141,7 @@ describe("updateAgent: 存在しないエージェント(issue #70 — 編集は
 
     await expect(
       updateAgent(
-        { name: "ghost", authority: "standard", description: "d", systemPrompt: "p" },
+        { name: "ghost", authority: "standard", description: "d", skills: ["*"], systemPrompt: "p" },
         { registryDir },
       ),
     ).rejects.toThrow(UnknownAgentError);

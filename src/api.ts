@@ -20,6 +20,7 @@ import {
   authorityProfileSchema,
   InvalidAgentNameError,
   InvalidAuthorityProfileNameError,
+  InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   type RegistryCandidates,
 } from "./registry.js";
@@ -148,6 +149,12 @@ const createAgentSchema = z.object({
   icon: z.string().optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
+  // skill allowlist (issue #56 / ADR 0025): required — the array shape only;
+  // the vocabulary grammar (assertValidSkillAllowlist) and inventory-agnostic
+  // treatment live in the domain, so callers get a domain error, not a schema
+  // one, same as name/authority/icon above. The WebUI's picker that fills this
+  // in is issue #54.
+  skills: z.array(z.string()),
   systemPrompt: z.string().min(1),
 });
 
@@ -586,7 +593,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (
         err instanceof InvalidAgentNameError ||
         err instanceof UnknownAuthorityProfileError ||
-        err instanceof InvalidAgentIconError
+        err instanceof InvalidAgentIconError ||
+        err instanceof InvalidSkillAllowlistError
       ) {
         res.status(400).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
@@ -626,7 +634,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } catch (err) {
       if (err instanceof UnknownAgentError) {
         res.status(404).json({ error: err.message });
-      } else if (err instanceof UnknownAuthorityProfileError || err instanceof InvalidAgentIconError) {
+      } else if (
+        err instanceof UnknownAuthorityProfileError ||
+        err instanceof InvalidAgentIconError ||
+        err instanceof InvalidSkillAllowlistError
+      ) {
         res.status(400).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
         res.status(409).json({ error: err.message });

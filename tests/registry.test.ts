@@ -71,7 +71,7 @@ describe("loadRegistry", () => {
     // trailing newline for parseAgentFile's frontmatter regex to match — an
     // empty body is `---\n` with nothing after it.
     const dir = await makeRegistry({
-      "agents/tako.md": `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nicon: \u{1F419}\n---\n`,
+      "agents/tako.md": `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nskills:\n  - "*"\nicon: \u{1F419}\n---\n`,
     });
     const registry = loadRegistry(dir);
     expect(registry.agents.tako!.systemPrompt).toBe("");
@@ -80,7 +80,7 @@ describe("loadRegistry", () => {
 
   it("frontmatter の model は optional: あれば読み、なければ undefined", async () => {
     const withModel = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withModel).agents.deckhand!.model).toBe("opus");
     const without = await makeRegistry();
@@ -89,7 +89,7 @@ describe("loadRegistry", () => {
 
   it("frontmatter の description は必須: 欠落は登録時にエラーになる(roster の1行を担う散文 — issue #43 / ADR 0014)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir)).toThrow(/description/i);
   });
@@ -104,7 +104,7 @@ describe("loadRegistry", () => {
 
   it("frontmatter の effort は optional: あれば読み、なければ undefined", async () => {
     const withEffort = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\neffort: high\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\neffort: high\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withEffort).agents.deckhand!.effort).toBe("high");
     const without = await makeRegistry();
@@ -113,7 +113,7 @@ describe("loadRegistry", () => {
 
   it("frontmatter の icon は optional: あれば読み、なければ undefined", async () => {
     const withIcon = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withIcon).agents.deckhand!.icon).toBe("\u{1F419}");
     const without = await makeRegistry();
@@ -122,14 +122,14 @@ describe("loadRegistry", () => {
 
   it("frontmatter の icon が複数文字(絵文字2つ)の場合は登録時にエラーになる(ADR 0026: 単一グラフェム制約)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\u{1F980}\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\u{1F980}\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir)).toThrow(/icon/i);
   });
 
   it("frontmatter の icon が絵文字以外の文字の場合は登録時にエラーになる", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: a\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: a\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir)).toThrow(/icon/i);
   });
@@ -139,9 +139,65 @@ describe("loadRegistry", () => {
     // as of the pinned version; tracks the dependency's coverage table by
     // design (ADR 0026: validation must reject what the renderer can't show).
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nicon: \u{1FADD}\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1FADD}\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir)).toThrow(/icon/i);
+  });
+
+  it("frontmatter の skills 許可リストを読み込む(CONTEXT.md: エージェント = ベース AI + skills + ...・issue #56 / ADR 0025)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nskills:\n  - "@workspace"\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(dir).agents.deckhand!.skills).toEqual(["@workspace"]);
+  });
+
+  it("frontmatter の skills は必須: 欠落は登録時にエラーになる(省略=無制限のフットガンを作らない・issue #41 の線 / ADR 0025)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\n---\nYou are Deckhand.\n`,
+    });
+    expect(() => loadRegistry(dir)).toThrow(/skills/i);
+  });
+
+  /** A deckhand definition whose `skills` frontmatter is the given YAML block —
+   *  keeps the grammar tests to their one varying part. */
+  const withSkills = (skillsYaml: string) =>
+    makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`,
+    });
+
+  it("skills の '*' は単独時のみ有効: 他の語と併記されるとエラー(glob は '*' 単独と '名前:*' の2形だけ・ADR 0025)", async () => {
+    const dir = await withSkills(`  - "*"\n  - code-review\n`);
+    expect(() => loadRegistry(dir)).toThrow(/skill/i);
+  });
+
+  it("skills の @ スコープ語は {@workspace, @host} の閉集合: 実在しないスコープ語はエラー(語の typo を検出する・ADR 0025)", async () => {
+    const good = await withSkills(`  - "@workspace"\n  - "@host"\n`);
+    expect(loadRegistry(good).agents.deckhand!.skills).toEqual(["@workspace", "@host"]);
+    const typo = await withSkills(`  - "@wrokspace"\n`);
+    expect(() => loadRegistry(typo)).toThrow(/skill/i);
+  });
+
+  it("skills の glob は '名前:*' の形のみ: 'foo*' や '*bar' のような部分 glob はエラー(ADR 0025)", async () => {
+    const pluginGlob = await withSkills(`  - "myplugin:*"\n`);
+    expect(loadRegistry(pluginGlob).agents.deckhand!.skills).toEqual(["myplugin:*"]);
+    for (const bad of ["foo*", "*bar", "pre*fix"]) {
+      const dir = await withSkills(`  - "${bad}"\n`);
+      expect(() => loadRegistry(dir)).toThrow(/skill/i);
+    }
+  });
+
+  it("skills の個別名・plugin:skill・実在しない参照は在庫非依存で通る(許可リストは参照であって在庫の主張ではない・ADR 0023 の線)", async () => {
+    const dir = await withSkills(`  - code-review\n  - "myplugin:deploy"\n  - does-not-exist-anywhere\n`);
+    expect(loadRegistry(dir).agents.deckhand!.skills).toEqual([
+      "code-review",
+      "myplugin:deploy",
+      "does-not-exist-anywhere",
+    ]);
+  });
+
+  it("skills の空リストは全禁止として有効(ADR 0025: 全禁止は空リストで綴る)", async () => {
+    const dir = await withSkills(`  []\n`);
+    expect(loadRegistry(dir).agents.deckhand!.skills).toEqual([]);
   });
 
   it("authority プロファイルを読み込む: guidance の prose が取れる", async () => {
@@ -227,7 +283,7 @@ describe("loadRegistry", () => {
     git("checkout", "-b", "task/registry-edit");
     await writeFile(
       join(dir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: HIJACKED\nversion: 9.9.9\nauthority: standard\n---\nYou are compromised.\n`,
+      `---\nname: deckhand\ndescription: HIJACKED\nversion: 9.9.9\nauthority: standard\nskills:\n  - "*"\n---\nYou are compromised.\n`,
     );
     git("add", "-A");
     git("commit", "-m", "unmerged edit on a task branch");

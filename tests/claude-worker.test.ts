@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import {
   ClaudeCodeWorker,
+  type EnumerateSkillsFn,
   PROMPT_READY_MARKER,
   type PtyFn,
   type SpawnFn,
@@ -190,6 +191,24 @@ async function makeWorker(
   return { worker, start, logDir, db, registryDir, ...recorder };
 }
 
+/** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
+ *  records the cwd it was probed at and returns a scripted full skill set (or
+ *  null to simulate a probe failure). */
+function recordingEnumerator(result: string[] | null) {
+  const calls: string[] = [];
+  const enumerateSkills: EnumerateSkillsFn = async (cwd) => {
+    calls.push(cwd);
+    return result;
+  };
+  return { calls, enumerateSkills };
+}
+
+/** The `--disallowedTools` value a spawn used, split into its space-separated
+ *  tokens (Workflow + any Skill(...) denies). */
+function disallowedTools(args: string[]): string[] {
+  return args[args.indexOf("--disallowedTools") + 1]!.split(" ");
+}
+
 describe("ClaudeCodeWorker", () => {
   it("タスクの workspace を cwd に、stream-json 出力のヘッドレス Claude Code を起動する", async () => {
     const { start, calls } = await makeWorker();
@@ -233,7 +252,7 @@ describe("ClaudeCodeWorker", () => {
     expect(question?.question_quarantine_workspace).toBe("ghost");
   });
 
-  const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;
+  const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\nskills:\n  - "*"\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;
 
   it("task.assignee が指定されていれば、コンストラクタの agent より優先してそのエージェントとして spawn する(ADR 0012 / issue #36)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
@@ -299,7 +318,7 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain("## Roster");
   });
 
-  const KEEPER_MD = `---\nname: keeper\nversion: 1.0.0\nauthority: standard\ndescription: Independent reviewer\n---\nYou are Keeper, the auditor.\n`;
+  const KEEPER_MD = `---\nname: keeper\nversion: 1.0.0\nauthority: standard\nskills:\n  - "*"\ndescription: Independent reviewer\n---\nYou are Keeper, the auditor.\n`;
 
   it("review タイプかつ assignee が未指定なら、コンストラクタの既定 agent ではなく auditorName で spawn する(issue #42)", async () => {
     const { start, calls } = await makeWorker(
@@ -358,7 +377,7 @@ describe("ClaudeCodeWorker", () => {
   // (tako)でも、cwd=workspace・side channel 禁止・escalate をためらわない posture が
   // system prompt に現れることを固定する。verb の意味論は MCP description 側にあり、
   // ここには重複させない(issue #51)。
-  const TAKO_MD = `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nicon: \u{1F419}\n---\n`;
+  const TAKO_MD = `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nskills:\n  - "*"\nicon: \u{1F419}\n---\n`;
 
   it("本文が空の既定エージェントでも、ワーカープロトコル(rules of the road)を system prompt に注入する(ADR 0017 / issue #51)", async () => {
     const { start, calls } = await makeWorker({ "agents/tako.md": TAKO_MD });
@@ -380,6 +399,92 @@ describe("ClaudeCodeWorker", () => {
     start();
     const args = calls[0]!.args;
     expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Workflow");
+  });
+
+  // issue #56 / ADR 0025: skill access is the agent's frontmatter allowlist,
+  // enforced at spawn as the complement deny of the CLI-enumerated full set.
+  const skilledMd = (skillsYaml: string) =>
+    `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`;
+
+  it("skills が ['*'] の agent は列挙 ping を呼ばず、skill deny も付けない(Workflow のみ・ADR 0025 point 5)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd"]);
+    const { start, calls } = await makeWorker({}, { enumerateSkills: rec.enumerateSkills });
+    start();
+    expect(calls).toHaveLength(1);
+    expect(rec.calls).toEqual([]); // '*' はゼロトークン ping すら不要
+    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow"]);
+    expect(calls[0]!.args).not.toContain("--disable-slash-commands");
+  });
+
+  it("skills が空リストの agent は列挙 ping を呼ばず --disable-slash-commands 一発で全禁止する(ADR 0025 point 5)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd"]);
+    const { start, calls } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  []\n") },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start();
+    expect(calls).toHaveLength(1);
+    expect(rec.calls).toEqual([]);
+    expect(calls[0]!.args).toContain("--disable-slash-commands");
+  });
+
+  it("有限の許可リストは列挙 ping の全集合から許可の補集合を Skill(名前) で deny する(ADR 0025 point 3)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd", "grilling"]);
+    const { start, calls } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start();
+    // ping はタスクの workspace cwd で走る
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(rec.calls).toEqual(["/home/pi/work/tidepool"]);
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toContain("Workflow");
+    expect(deny).toContain("Skill(tdd)");
+    expect(deny).toContain("Skill(grilling)");
+    // 許可した skill は deny されない
+    expect(deny).not.toContain("Skill(code-review)");
+  });
+
+  it("@workspace は checkout の .claude/skills 走査との差分でホスト由来(user + plugin)だけを deny する(ADR 0025)", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
+    await mkdir(join(wsDir, ".claude", "skills", "code-review"), { recursive: true });
+    const rec = recordingEnumerator(["tdd", "code-review", "plug:deploy", "user-skill"]);
+    const { start, calls } = await makeWorker(
+      {
+        "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+        "agents/deckhand.md": skilledMd('  - "@workspace"\n'),
+      },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const deny = disallowedTools(calls[0]!.args);
+    // checkout が運ぶ skill は許可、ホスト由来は deny
+    expect(deny).toContain("Skill(plug:deploy)");
+    expect(deny).toContain("Skill(user-skill)");
+    expect(deny).not.toContain("Skill(tdd)");
+    expect(deny).not.toContain("Skill(code-review)");
+  });
+
+  it("列挙 ping が失敗(null)したら spawn 失敗として扱い、deny 未解決のまま spawn しない(fail-open にしない・ADR 0025 point 6)", async () => {
+    const rec = recordingEnumerator(null);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { start, calls } = await makeWorker(
+        { "agents/deckhand.md": skilledMd("  - code-review\n") },
+        { enumerateSkills: rec.enumerateSkills },
+      );
+      start("task-ping-fail");
+      await vi.waitFor(() => expect(rec.calls).toHaveLength(1));
+      // 列挙は試みたが、その失敗で子プロセスは起動しない
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(calls).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("skill enumeration failed"));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
@@ -436,7 +541,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("frontmatter に model があればそれを使う", async () => {
     const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\nmodel: opus\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent\nmodel: opus\n---\nYou are Deckhand.\n`,
     });
     start();
     expect(calls[0]!.args.join(" ")).toContain("--model opus");
@@ -450,7 +555,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("frontmatter に effort があればそれを使う", async () => {
     const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\neffort: high\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent\neffort: high\n---\nYou are Deckhand.\n`,
     });
     start();
     expect(calls[0]!.args.join(" ")).toContain("--effort high");
@@ -458,7 +563,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する)", async () => {
     const registryDir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\neffort: super-fast\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent\neffort: super-fast\n---\nYou are Deckhand.\n`,
     });
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(
@@ -478,7 +583,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("effort: ultracode は未知の effort 値として reject される(CLI --effort の閉じた5値に無く、xhigh+workflow orchestration への迂回路にならない・issue #31)", async () => {
     const registryDir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent\neffort: ultracode\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent\neffort: ultracode\n---\nYou are Deckhand.\n`,
     });
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(
@@ -821,7 +926,7 @@ describe("ClaudeCodeWorker", () => {
     // as evidence — so current body and 当時版 body must be distinguishable.
     await writeFile(
       join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\n---\nYou are Deckhand, REFINED after the objected call.\n`,
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED after the objected call.\n`,
     );
     git("add", "-A");
     git("commit", "-m", "refine deckhand");
@@ -902,7 +1007,7 @@ describe("ClaudeCodeWorker", () => {
     // runs the objected task again under v2 — must not be mistaken for 当時版
     await writeFile(
       join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\n---\nYou are Deckhand, REFINED v2.\n`,
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED v2.\n`,
     );
     git("add", "-A");
     git("commit", "-m", "refine deckhand");
@@ -930,7 +1035,7 @@ describe("ClaudeCodeWorker", () => {
     // an auditor agent so the unset-assignee review resolves and spawns
     const { worker, calls, db, registryDir } = await makeWorker(
       {
-        "agents/auditor.md": `---\nname: auditor\ndescription: Independent reviewer\nversion: 1.0.0\nauthority: standard\n---\nYou are the Auditor.\n`,
+        "agents/auditor.md": `---\nname: auditor\ndescription: Independent reviewer\nversion: 1.0.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are the Auditor.\n`,
       },
       { auditorName: "auditor" },
     );
@@ -971,7 +1076,7 @@ describe("ClaudeCodeWorker", () => {
     git("checkout", "-b", "task/bump");
     await writeFile(
       join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 9.9.9\nauthority: standard\n---\nYou are Deckhand.\n`,
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 9.9.9\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand.\n`,
     );
     git("add", "-A");
     git("commit", "-m", "unmerged bump");
