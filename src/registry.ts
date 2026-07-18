@@ -171,6 +171,15 @@ export const SKILL_SCOPES = new Set(["@workspace", "@host"]);
  *  these are the only two shapes a `*` may appear in. */
 const PLUGIN_GLOB_PATTERN = /^[^*@:]+:\*$/;
 
+/** Is this allowlist entry a `名前:*` plugin glob? (issue #56 / ADR 0025) One
+ *  definition of the glob shape, shared by the loader's grammar check here and
+ *  the adapter's match (claude-worker.ts) so the two can't drift — the adapter
+ *  only ever sees validated entries, so it strips the trailing `*` for prefix
+ *  matching once this says yes. */
+export function isPluginGlob(entry: string): boolean {
+  return PLUGIN_GLOB_PATTERN.test(entry);
+}
+
 /** An agent's `skills` frontmatter breaks ADR 0025's allowlist grammar. The
  *  entrance-guard twin of InvalidAgentIconError (agent-create.ts): thrown by
  *  the loader and re-checked before a WebUI write so a malformed allowlist
@@ -204,7 +213,7 @@ export function assertValidSkillAllowlist(skills: string[]): void {
       }
       continue;
     }
-    if (entry.includes("*") && !PLUGIN_GLOB_PATTERN.test(entry)) {
+    if (entry.includes("*") && !isPluginGlob(entry)) {
       throw new InvalidSkillAllowlistError(entry, 'a "*" may appear only as "*" alone or a "名前:*" glob');
     }
     if (entry === "") {

@@ -9,6 +9,7 @@ import { appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
   type AgentDefinition,
   agentBodyAtCommit,
+  isPluginGlob,
   loadRegistry,
   ownEntry,
   type Registry,
@@ -140,7 +141,10 @@ function skillPermitted(entry: string, skill: string, workspaceSkills: Set<strin
   if (entry === SKILL_WILDCARD) return true;
   if (entry === "@workspace") return workspaceSkills.has(skill);
   if (entry === "@host") return !workspaceSkills.has(skill);
-  if (entry.endsWith(":*")) return skill.startsWith(entry.slice(0, -1)); // "plug:*" → "plug:"
+  // entries are already grammar-validated (registry.ts), so a glob is a
+  // well-formed "名前:*" — strip the trailing "*" and prefix-match ("plug:*" →
+  // "plug:"). isPluginGlob is the one shared definition of that shape.
+  if (isPluginGlob(entry)) return skill.startsWith(entry.slice(0, -1));
   return entry === skill;
 }
 
@@ -681,11 +685,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     }
     void this.enumerateSkills(workspace.path).then((enumerated) => {
       if (enumerated === null) {
-        // spawn failure, routed to the existing failure system: the task keeps
-        // the slot for the watchdog, the same deliberate wedge as a failed
-        // start. Deliberately not degraded into a --disable-slash-commands
-        // spawn, which would silently drop the equipment the agent was promised
-        // and make the failure unobservable (ADR 0025 point 6).
+        // spawn failure with no fail-open (ADR 0025 point 6): the deny list
+        // could not be resolved, so no session starts and the allowlist is
+        // never bypassed. No child means no worker_exited to record; the task
+        // keeps the slot with no process, and the watchdog reclaims it at its
+        // per-type time limit into tidepool's failure question (the retry
+        // path) — the same failure system every kill routes to, entered
+        // without a running process to kill. Deliberately NOT degraded into a
+        // --disable-slash-commands spawn: that would silently drop the
+        // equipment the agent was promised and make the failure unobservable.
         console.error(
           `[worker] skill enumeration failed for task ${task.id}; not spawning ` +
             "(deny list unresolved, no fail-open — ADR 0025)",
