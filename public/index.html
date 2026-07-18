@@ -637,10 +637,7 @@ function AgentCard({ agent, authorityProfiles, say, onChanged }) {
         icon: icon.trim() || undefined,
         model: model.trim() || undefined,
         effort: effort.trim() || undefined,
-        // an empty specialty is the canonical form for a plain agent (ADR
-        // 0017) but the schema wants min(1) — a lone space satisfies it and
-        // trims back to "" on write (agent-create.ts's serializeAgentFile)
-        systemPrompt: systemPrompt.length ? systemPrompt : ' ',
+        systemPrompt,
       }, 'PATCH');
       sayCommitResult(say, pushed, 'agent updated — committed to the registry', agent.name);
       await onChanged();
@@ -958,9 +955,7 @@ function SettingsScreen({ say }) {
         icon: newAgentIcon.trim() || undefined,
         model: newAgentModel.trim() || undefined,
         effort: newAgentEffort.trim() || undefined,
-        // an empty specialty is the canonical form (ADR 0017) — see the
-        // matching comment on AgentCard.save
-        systemPrompt: newAgentPrompt.length ? newAgentPrompt : ' ',
+        systemPrompt: newAgentPrompt,
       });
       sayCommitResult(say, pushed, 'agent added — committed to the registry', newAgentName.trim());
       setNewAgentName(''); setNewAgentIcon(''); setNewAgentDescription('');

@@ -155,7 +155,9 @@ const createAgentSchema = z.object({
   // one, same as name/authority/icon above. The WebUI's picker that fills this
   // in is issue #54.
   skills: z.array(z.string()),
-  systemPrompt: z.string().min(1),
+  // no min(1): ADR 0017's empty-specialty default agent has an empty body,
+  // and the empty string is that regular form, not a missing value (issue #75)
+  systemPrompt: z.string(),
 });
 
 // the edit form resubmits every field but `name`, which comes from the URL
