@@ -46,8 +46,9 @@ export function isQuietHours(db: Db, now: Date): boolean {
   const startMin = minutesSinceMidnight(start);
   const endMin = minutesSinceMidnight(end);
   const offsetMinutes = offsetMinutesEastOfUtc(tz, now);
-  const nowMin =
-    (((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMinutes) % 1440) + 1440) % 1440;
+  // + 2 days before the mod keeps the sum positive for any real-world tz
+  // offset (-12:00..+14:00) without a second modulo pass.
+  const nowMin = (now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMinutes + 2 * 1440) % 1440;
   if (startMin <= endMin) return nowMin >= startMin && nowMin < endMin;
   return nowMin >= startMin || nowMin < endMin;
 }
