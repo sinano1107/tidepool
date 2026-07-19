@@ -15,7 +15,7 @@ import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { isPaused, setPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
-import { getQuietHours, HH_MM_PATTERN, setQuietHours } from "./quiet-hours.js";
+import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
 import {
   authorityProfileSchema,
   InvalidAgentNameError,
@@ -239,6 +239,26 @@ const quietHoursSchema = z.object({
   start: z.string().regex(HH_MM_PATTERN),
   end: z.string().regex(HH_MM_PATTERN),
 });
+
+// the board timezone (issue #63 / ADR 0022) — a separate sender from
+// quiet-hours' start/end: this one is auto-reported by the browser at PWA
+// launch, not human-configured, so it gets its own endpoint rather than
+// riding along with POST /settings/quiet-hours.
+const timezoneSchema = z.object({
+  tz: z.string().min(1),
+});
+
+/** IANA name existence check: an unknown zone throws inside the
+ *  Intl.DateTimeFormat constructor itself (issue #63) — no separate
+ *  allowlist to keep in sync with the runtime's own tz database. */
+function isValidTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // the human's own pause toggle (CONTEXT.md's Pause, issue #34) — never
 // exposed via MCP (the same human-steering-channel posture as answering and
@@ -1038,6 +1058,24 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     setQuietHours(db, parsed.data);
     res.json(getQuietHours(db));
+  });
+
+  router.get("/settings/timezone", (_req, res) => {
+    res.json({ tz: getQuietHours(db).tz });
+  });
+
+  router.post("/settings/timezone", (req, res) => {
+    const parsed = timezoneSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!isValidTimezone(parsed.data.tz)) {
+      res.status(400).json({ error: `unknown timezone: ${parsed.data.tz}` });
+      return;
+    }
+    setBoardTimezone(db, parsed.data.tz);
+    res.json({ tz: getQuietHours(db).tz });
   });
 
   router.get("/pause", (_req, res) => {

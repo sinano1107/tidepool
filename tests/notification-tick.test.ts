@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { createNotificationTick, type PushClient, type PushPayload, type PushSubscription, savePushSubscription } from "../src/push.js";
+import { setBoardTimezone } from "../src/quiet-hours.js";
 import { registerTask } from "../src/tasks.js";
 import { FakePushClient } from "./fakes.js";
 
@@ -37,9 +38,15 @@ function registerQuestion(db: ReturnType<typeof openDb>, title: string, at: Date
   );
 }
 
-const MIDNIGHT = new Date(Date.UTC(2026, 0, 1, 0, 0));
-const SEVEN_AM = new Date(Date.UTC(2026, 0, 1, 7, 0)); // quiet hours ちょうど明ける瞬間
-const NOON = new Date(Date.UTC(2026, 0, 1, 12, 0));
+// 既定の quiet hours は tz(既定 Asia/Tokyo)の壁時計で判定される(issue #63) —
+// このヘルパーは JST の意図した時刻を UTC の瞬間に変換する。
+function jst(year: number, month: number, day: number, hour: number, minute = 0): Date {
+  return new Date(Date.UTC(year, month, day, hour, minute) - 9 * 60 * 60 * 1000);
+}
+
+const MIDNIGHT = jst(2026, 0, 1, 0, 0);
+const SEVEN_AM = jst(2026, 0, 1, 7, 0); // quiet hours ちょうど明ける瞬間(JST)
+const NOON = jst(2026, 0, 1, 12, 0);
 
 describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ通知", () => {
   it("quiet hours 中に溜まった question とログは push されず、明けた瞬間に1通のまとめ通知にまとまる", async () => {
@@ -110,5 +117,31 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     await firstRun;
 
     expect(push.sent).toHaveLength(1); // digest は1通だけ
+  });
+
+  it("tz の変更で同じ瞬間が quiet → not quiet に転じても、digest 発火はそのまま起きる(issue #63)", async () => {
+    const db = openDb(":memory:");
+    savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
+    const push = new FakePushClient();
+    // 既定 tz(Asia/Tokyo)では MIDNIGHT(JST 0:00)は quiet hours 内
+    const tick = createNotificationTick(db, push, MIDNIGHT);
+    registerQuestion(db, "深夜の質問", MIDNIGHT);
+
+    await tick.run(MIDNIGHT); // still quiet: nothing sent
+    expect(push.sent).toEqual([]);
+
+    // 時刻はそのまま、tz だけ変える — MIDNIGHT の UTC 瞬間は Etc/UTC の壁時計では
+    // 15:00 で、quiet hours 外になる。wasQuietHours が前 tick の状態を tz 非依存に
+    // 覚えている一方、次の isQuietHours 呼び出しは新しい tz で評価されるので、
+    // 「時計が進んだのではなく tz が変わった」だけの遷移でも正しく検出されるはず。
+    setBoardTimezone(db, "Etc/UTC");
+    await tick.run(MIDNIGHT);
+
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]?.payload).toEqual({
+      title: "Good morning",
+      body: "1 questions · 0 new log entries",
+      url: "/",
+    });
   });
 });

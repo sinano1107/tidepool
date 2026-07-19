@@ -1268,6 +1268,17 @@ function App() {
     });
   }, []);
 
+  // board timezone auto-report (issue #63 / ADR 0022): the browser is the
+  // one source of truth for the human's wall clock — report it at launch
+  // and only write back when it actually differs, so a stationary board
+  // never sends a redundant POST on every load.
+  React.useEffect(() => {
+    fetch('/api/settings/timezone').then((r) => r.json()).then(({ tz }) => {
+      const observed = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (observed && observed !== tz) return api('/api/settings/timezone', { tz: observed });
+    }).catch(() => {});
+  }, []);
+
   const enableNotifications = async () => {
     try {
       const permission = await Notification.requestPermission();

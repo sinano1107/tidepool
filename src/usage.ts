@@ -1,3 +1,5 @@
+import { offsetMinutesEastOfUtc } from "./tz.js";
+
 /** A single window's utilization as observed via the interactive TUI's
  *  `/usage` panel (ADR 0028). `resetsAt` is always a full instant: session
  *  renders a dateless wall-clock time ("Resets 1:30pm") rounded to the
@@ -67,21 +69,6 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
  *  construction. */
 function resolveTz(rawTz: string | undefined): string {
   return rawTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
-
-/** Minutes east of UTC for `tz` at the instant `now` (DST-aware). `longOffset`
- *  always renders `GMT±HH:MM` (or bare `GMT` for UTC) — unlike `shortOffset`,
- *  which drops `:MM` for whole-hour zones, this never truncates a half-hour
- *  zone like Asia/Kolkata (GMT+5:30). */
-function offsetMinutesEastOfUtc(tz: string, now: Date): number {
-  const label = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "longOffset" })
-    .formatToParts(now)
-    .find((p) => p.type === "timeZoneName")!.value; // "GMT+05:30" / "GMT-04:00" / "GMT"
-  const match = /GMT([+-])(\d{2}):(\d{2})/.exec(label);
-  if (!match) return 0;
-  const [, sign, hours, minutes] = match;
-  const magnitude = Number(hours) * 60 + Number(minutes);
-  return sign === "-" ? -magnitude : magnitude;
 }
 
 /** Builds the UTC instant for `time` on the given (year, month 1-based, day)

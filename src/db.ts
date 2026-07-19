@@ -197,13 +197,17 @@ export function openDb(path: string): Db {
     );
     INSERT OR IGNORE INTO digest_cursor (id, last_reported) VALUES (1, 0);
 
-    -- quiet hours config (issue #14): one row, UTC wall-clock "HH:MM" bounds.
+    -- quiet hours config (issue #14): one row, "HH:MM" bounds read against
+    -- tz's wall clock (issue #63 / ADR 0022) — tz is the one board timezone
+    -- (CONTEXT.md's Timezone), not a quiet-hours-specific setting; it lives
+    -- here because quiet hours is the one feature that reads it today.
     -- No row means never configured — callers fall back to the 23:00–07:00
-    -- default rather than reading this table directly.
+    -- Asia/Tokyo default rather than reading this table directly.
     CREATE TABLE IF NOT EXISTS quiet_hours (
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       start TEXT NOT NULL,
-      end   TEXT NOT NULL
+      end   TEXT NOT NULL,
+      tz    TEXT NOT NULL DEFAULT 'Asia/Tokyo'
     );
 
     -- the merge dial's auto_if_ci_green queue (issue #11): a completed
@@ -305,6 +309,16 @@ export function openDb(path: string): Db {
     } finally {
       db.pragma("foreign_keys = ON");
     }
+  }
+  // boards created before issue #63 / ADR 0022's board timezone get tz added
+  // in place, defaulting to Asia/Tokyo — existing start/end rows keep their
+  // HH:MM values (they were entered assuming JST, so a default of Asia/Tokyo
+  // makes them mean what they always meant).
+  const quietHoursCols = (
+    db.prepare("PRAGMA table_info(quiet_hours)").all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (!quietHoursCols.includes("tz")) {
+    db.exec(`ALTER TABLE quiet_hours ADD COLUMN tz TEXT NOT NULL DEFAULT 'Asia/Tokyo'`);
   }
   // ADR 0008 superseded #10's throttle_state shape (state/utilization ->
   // throttled). Unlike the tasks columns above, this isn't an additive
