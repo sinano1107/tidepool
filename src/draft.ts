@@ -40,7 +40,10 @@ export type IssueInspection =
  *  extracted from its output) stays behind these calls, same shape as
  *  GitHubClient/WorkerAdapter. */
 export interface DraftClient {
-  draftTask(dump: string): Promise<TaskDraft>;
-  draftHandoff(dump: string): Promise<HandoffDraft>;
+  /** language: the board's display language (issue #46), read fresh by the
+   *  caller at each use — steers only the connective prose the model adds,
+   *  never the fragments carried over from the dump. */
+  draftTask(dump: string, language: string): Promise<TaskDraft>;
+  draftHandoff(dump: string, language: string): Promise<HandoffDraft>;
   inspectIssue(issue: Issue): Promise<IssueInspection>;
 }

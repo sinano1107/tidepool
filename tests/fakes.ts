@@ -249,13 +249,13 @@ export class FakeDraftClient implements DraftClient {
   private inspectionByTitle = new Map<string, IssueInspection>();
   private inspectionFailure: Error | null = null;
 
-  async draftTask(dump: string): Promise<TaskDraft> {
+  async draftTask(dump: string, _language: string): Promise<TaskDraft> {
     this.dumps.push(dump);
     if (this.failure) throw this.failure;
     return this.response;
   }
 
-  async draftHandoff(dump: string): Promise<HandoffDraft> {
+  async draftHandoff(dump: string, _language: string): Promise<HandoffDraft> {
     this.handoffDumps.push(dump);
     if (this.handoffFailure) throw this.handoffFailure;
     return this.handoffResponse;

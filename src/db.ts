@@ -210,6 +210,16 @@ export function openDb(path: string): Db {
       tz    TEXT NOT NULL DEFAULT 'Asia/Tokyo'
     );
 
+    -- the one board display language (issue #46): read by two consumers —
+    -- the draft prompt's language instruction (this issue) and, later, a
+    -- separate display-time-translation feature (not implemented here).
+    -- Named after that shared role, not after either consumer, so neither
+    -- reads a name that implies it belongs to the other.
+    CREATE TABLE IF NOT EXISTS display_language (
+      id       INTEGER PRIMARY KEY CHECK (id = 1),
+      language TEXT NOT NULL DEFAULT 'Japanese'
+    );
+
     -- the merge dial's auto_if_ci_green queue (issue #11): a completed
     -- low-risk task's just-opened PR, awaiting the CI poll to merge it
     -- unattended. Removed once resolved (merged, or converted to an

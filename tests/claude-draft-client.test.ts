@@ -16,7 +16,7 @@ describe("ClaudeDraftClient", () => {
     });
 
     await expect(
-      client.draftTask("set up the greenhouse sensor, sloppy is fine here"),
+      client.draftTask("set up the greenhouse sensor, sloppy is fine here", "English"),
     ).resolves.toEqual({
       title: "set up the greenhouse sensor",
       purpose: "know soil moisture without walking out",
@@ -40,7 +40,7 @@ describe("ClaudeDraftClient", () => {
         }),
     });
 
-    await expect(client.draftTask("set up the greenhouse sensor")).resolves.toEqual({
+    await expect(client.draftTask("set up the greenhouse sensor", "English")).resolves.toEqual({
       title: "set up the greenhouse sensor",
       purpose: "know soil moisture without walking out",
       completion_criteria: "dashboard shows a live moisture reading",
@@ -52,7 +52,7 @@ describe("ClaudeDraftClient", () => {
       exec: async () => JSON.stringify({ result: "sure, here's your task: not actually JSON" }),
     });
 
-    await expect(client.draftTask("set up the greenhouse sensor")).rejects.toThrow();
+    await expect(client.draftTask("set up the greenhouse sensor", "English")).rejects.toThrow();
   });
 
   it("エンベロープに result フィールド(文字列)が無い場合、draftTask は reject する", async () => {
@@ -60,7 +60,7 @@ describe("ClaudeDraftClient", () => {
       exec: async () => JSON.stringify({ result: 123 }),
     });
 
-    await expect(client.draftTask("set up the greenhouse sensor")).rejects.toThrow();
+    await expect(client.draftTask("set up the greenhouse sensor", "English")).rejects.toThrow();
   });
 
   it("必須フィールド(title/purpose/completion_criteria)が欠けている場合、draftTask は reject する", async () => {
@@ -69,7 +69,7 @@ describe("ClaudeDraftClient", () => {
         JSON.stringify({ result: JSON.stringify({ title: "set up the greenhouse sensor" }) }),
     });
 
-    await expect(client.draftTask("set up the greenhouse sensor")).rejects.toThrow();
+    await expect(client.draftTask("set up the greenhouse sensor", "English")).rejects.toThrow();
   });
 
   it("RegistryCandidates が渡されている場合、プロンプトに assignee/workspace 候補名が埋め込まれる", async () => {
@@ -88,13 +88,51 @@ describe("ClaudeDraftClient", () => {
       },
     });
 
-    await client.draftTask("set up the greenhouse sensor");
+    await client.draftTask("set up the greenhouse sensor", "English");
 
     const prompt = calls[0]!.join(" ");
     expect(prompt).toContain("reef-crab");
     expect(prompt).toContain("deckhand");
     expect(prompt).toContain("tidepool");
     expect(prompt).toContain("sandbox");
+  });
+
+  it("draftTask: プロンプトにフラグメント保存 + 指定言語での散文指示が注入される(issue #46)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+        });
+      },
+    });
+
+    await client.draftTask("set up the greenhouse sensor", "Japanese");
+
+    const prompt = calls[0]!.join(" ");
+    expect(prompt).toContain(
+      "Preserve the language of the dump: keep each fragment in the language it was written in — " +
+        "English technical terms, quoted error messages, and criteria stay exactly as given. Any " +
+        "connective prose you add yourself, write in Japanese.",
+    );
+  });
+
+  it("draftTask: 言語設定を変えるとプロンプトに注入される言語名も変わる", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+        });
+      },
+    });
+
+    await client.draftTask("set up the greenhouse sensor", "French");
+
+    const prompt = calls[0]!.join(" ");
+    expect(prompt).toContain("connective prose you add yourself, write in French.");
   });
 
   it("--model/--effort を明示指定する(ADR 0005: ホストの直前の選択に依存しない)", async () => {
@@ -108,7 +146,7 @@ describe("ClaudeDraftClient", () => {
       },
     });
 
-    await client.draftTask("set up the greenhouse sensor");
+    await client.draftTask("set up the greenhouse sensor", "English");
 
     const argLine = calls[0]!.join(" ");
     expect(argLine).toContain("--model sonnet");
@@ -126,7 +164,7 @@ describe("ClaudeDraftClient", () => {
       },
     });
 
-    await client.draftTask("set up the greenhouse sensor");
+    await client.draftTask("set up the greenhouse sensor", "English");
 
     expect(calls[0]!.join(" ")).toContain("--max-turns 1");
   });
@@ -142,7 +180,7 @@ describe("ClaudeDraftClient", () => {
       },
     });
 
-    await client.draftTask("set up the greenhouse sensor");
+    await client.draftTask("set up the greenhouse sensor", "English");
 
     expect(calls[0]!.join(" ")).toContain("--safe-mode");
   });
