@@ -216,6 +216,37 @@ it("scratchpad lines are shared during triage and triaged at commit", async () =
   expect(board.some((x: any) => x.title === "just grumbling")).toBe(false);
 });
 
+it("a scratchpad line dispositioned register is consumed and lands as a pending dump, not a task (issue #61)", async () => {
+  t = await bootTidepool();
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  const line = (
+    await api(t.baseUrl, "POST", "/api/triage/scratchpad", {
+      line: "the retry policy needs a real writeup",
+    })
+  ).json;
+
+  await api(t.baseUrl, "POST", "/api/triage/commit", {
+    scratchpad: [{ id: line.id, disposition: "register" }],
+  });
+
+  // consumed off the scratchpad — the next session does not adopt it
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad).toEqual([]);
+
+  // never became a task
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.some((x: any) => x.title === "the retry policy needs a real writeup")).toBe(false);
+
+  // instead it is a pending dump, durable across restart
+  const dumps = (await api(t.baseUrl, "GET", "/api/pending-dumps")).json;
+  expect(dumps.map((d: any) => d.line)).toEqual(["the retry policy needs a real writeup"]);
+
+  await t.stopServer();
+  t = await bootTidepool({ dir: t.dir });
+  const afterRestart = (await api(t.baseUrl, "GET", "/api/pending-dumps")).json;
+  expect(afterRestart.map((d: any) => d.line)).toEqual(["the retry policy needs a real writeup"]);
+});
+
 it("undisposed scratchpad lines survive an auto-commit into the next session", async () => {
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/triage/start");

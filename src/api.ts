@@ -48,6 +48,8 @@ import {
   activeTriageSession,
   addScratchpadLine,
   commitTriage,
+  consumePendingDump,
+  listPendingDumps,
   listScratchpad,
   raiseObjection,
   recordDisplayedEntries,
@@ -286,6 +288,13 @@ const scratchpadSchema = z.object({
   line: z.string().min(1),
 });
 
+// z.coerce: route params always arrive as strings — coercing here keeps the
+// numeric-id validation on the same zod/treeifyError footing as every body
+// schema in this file, rather than a hand-rolled Number() check.
+const pendingDumpIdParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+});
+
 const displayedSchema = z.object({
   entry_ids: z.array(z.number().int().positive()).min(1),
 });
@@ -295,7 +304,7 @@ const commitSchema = z.object({
     .array(
       z.object({
         id: z.number().int().positive(),
-        disposition: z.enum(["meta_review", "task", "discard"]),
+        disposition: z.enum(["meta_review", "task", "register", "discard"]),
       }),
     )
     .default([]),
@@ -1208,6 +1217,24 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
       throw err;
     }
+  });
+
+  // Register's pending-dump queue (issue #61): populated by the triage
+  // commit's `register` disposition, consumed by DELETE below — either after
+  // a task is registered from the line (client-driven) or an explicit
+  // discard. No PATCH/update: a pending dump is either still waiting or gone.
+  router.get("/pending-dumps", (_req, res) => {
+    res.json(listPendingDumps(db));
+  });
+
+  router.delete("/pending-dumps/:id", (req, res) => {
+    const parsed = pendingDumpIdParamSchema.safeParse(req.params);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    consumePendingDump(db, parsed.data.id);
+    res.json({ ok: true });
   });
 
   router.get("/registry/candidates", (_req, res) => {
