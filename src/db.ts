@@ -215,6 +215,8 @@ export function openDb(path: string): Db {
     -- separate display-time-translation feature (not implemented here).
     -- Named after that shared role, not after either consumer, so neither
     -- reads a name that implies it belongs to the other.
+    -- No row means never configured — callers fall back to the Japanese
+    -- default rather than reading this table directly.
     CREATE TABLE IF NOT EXISTS display_language (
       id       INTEGER PRIMARY KEY CHECK (id = 1),
       language TEXT NOT NULL DEFAULT 'Japanese'
