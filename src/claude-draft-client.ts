@@ -38,10 +38,25 @@ const handoffDraftSchema = z.object(
   Object.fromEntries(HANDOFF_FIELDS.map((f) => [f, z.string().min(1).optional()])),
 ) as z.ZodType<HandoffDraft>;
 
+/** The language-preservation instruction (issue #46 / ADR 0015): fragment-
+ *  level preservation rather than "answer in the dump's language" — a dump
+ *  that mixes prose in one language with English technical terms and quoted
+ *  errors makes "the dump's language" ambiguous, and a blanket translate-
+ *  everything instruction would wrongly translate quoted errors and
+ *  verbatim completion criteria. Only the connective prose the model adds
+ *  itself is steered toward the board's display language. */
+function languageInstruction(language: string): string {
+  return (
+    "Preserve the language of the dump: keep each fragment in the language it was written in — " +
+    "English technical terms, quoted error messages, and criteria stay exactly as given. Any " +
+    `connective prose you add yourself, write in ${language}.`
+  );
+}
+
 /** Instructs the model to answer with JSON only, and — when a registry is
  *  configured (issue #25) — steers assignee/workspace toward known names so
  *  a drafted response is likely to pass registration unmodified. */
-function buildPrompt(dump: string, candidates?: RegistryCandidates): string {
+function buildPrompt(dump: string, language: string, candidates?: RegistryCandidates): string {
   const instructions =
     "You are drafting a task registration from a free-text brain dump for a work-tracking board. " +
     "Respond with ONLY a single JSON object (no markdown fences, no prose) with these fields: " +
@@ -52,19 +67,22 @@ function buildPrompt(dump: string, candidates?: RegistryCandidates): string {
       `Known workspaces: ${candidates.workspaces.join(", ")}. ` +
       "When suggesting assignee/workspace, only propose names from these lists."
     : "";
-  return [instructions, candidateGuidance, `Brain dump:\n${dump}`].filter(Boolean).join("\n\n");
+  return [instructions, candidateGuidance, languageInstruction(language), `Brain dump:\n${dump}`]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 /** Instructs the model to answer with a partial 6-field handoff doc from a
  *  free-text/voice dump (issue #13). Every field is optional — a human task's
  *  doc is never enforced, so a dump that only covers some fields drafts a
  *  partial answer rather than one padded with invented content. */
-function buildHandoffPrompt(dump: string): string {
+function buildHandoffPrompt(dump: string, language: string): string {
   return (
     "You are drafting a task-completion handoff doc from a free-text or voice-transcribed dump " +
     "for a work-tracking board. Respond with ONLY a single JSON object (no markdown fences, no " +
     `prose) with these OPTIONAL string fields, filling in only what the dump actually covers: ${HANDOFF_FIELDS.join(", ")}. ` +
     "Never invent content for a field the dump doesn't cover — omit it instead.\n\n" +
+    `${languageInstruction(language)}\n\n` +
     `Dump:\n${dump}`
   );
 }
@@ -129,13 +147,13 @@ export class ClaudeDraftClient implements DraftClient {
     this.exec = options.exec ?? defaultExec;
   }
 
-  async draftTask(dump: string): Promise<TaskDraft> {
-    const result = await this.runDraftPrompt(buildPrompt(dump, this.candidates));
+  async draftTask(dump: string, language: string): Promise<TaskDraft> {
+    const result = await this.runDraftPrompt(buildPrompt(dump, language, this.candidates));
     return taskDraftSchema.parse(extractJson(result)) as TaskDraft;
   }
 
-  async draftHandoff(dump: string): Promise<HandoffDraft> {
-    const result = await this.runDraftPrompt(buildHandoffPrompt(dump));
+  async draftHandoff(dump: string, language: string): Promise<HandoffDraft> {
+    const result = await this.runDraftPrompt(buildHandoffPrompt(dump, language));
     return handoffDraftSchema.parse(extractJson(result));
   }
 

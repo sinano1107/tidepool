@@ -234,7 +234,9 @@ export class FakePushClient implements PushClient {
  *  an LLM outage without touching a real model. */
 export class FakeDraftClient implements DraftClient {
   readonly dumps: string[] = [];
+  readonly languages: string[] = [];
   readonly handoffDumps: string[] = [];
+  readonly handoffLanguages: string[] = [];
   readonly inspected: Issue[] = [];
   private response: TaskDraft = {
     title: "drafted title",
@@ -249,14 +251,16 @@ export class FakeDraftClient implements DraftClient {
   private inspectionByTitle = new Map<string, IssueInspection>();
   private inspectionFailure: Error | null = null;
 
-  async draftTask(dump: string): Promise<TaskDraft> {
+  async draftTask(dump: string, language: string): Promise<TaskDraft> {
     this.dumps.push(dump);
+    this.languages.push(language);
     if (this.failure) throw this.failure;
     return this.response;
   }
 
-  async draftHandoff(dump: string): Promise<HandoffDraft> {
+  async draftHandoff(dump: string, language: string): Promise<HandoffDraft> {
     this.handoffDumps.push(dump);
+    this.handoffLanguages.push(language);
     if (this.handoffFailure) throw this.handoffFailure;
     return this.handoffResponse;
   }

@@ -13,7 +13,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
     });
 
     await expect(
-      client.draftHandoff("mounted the sensor on the north wall, used the spare bracket"),
+      client.draftHandoff("mounted the sensor on the north wall, used the spare bracket", "English"),
     ).resolves.toEqual({
       outcome: "sensor mounted and reading",
       deliverables: "greenhouse, north wall",
@@ -26,6 +26,25 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
       exec: async () => JSON.stringify({ result: "not actually JSON" }),
     });
 
-    await expect(client.draftHandoff("mounted the sensor")).rejects.toThrow();
+    await expect(client.draftHandoff("mounted the sensor", "English")).rejects.toThrow();
+  });
+
+  it("プロンプトにフラグメント保存 + 指定言語での散文指示が注入される(issue #46)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({ result: JSON.stringify({ outcome: "done" }) });
+      },
+    });
+
+    await client.draftHandoff("mounted the sensor", "Japanese");
+
+    const prompt = calls[0]!.join(" ");
+    expect(prompt).toContain(
+      "Preserve the language of the dump: keep each fragment in the language it was written in — " +
+        "English technical terms, quoted error messages, and criteria stay exactly as given. Any " +
+        "connective prose you add yourself, write in Japanese.",
+    );
   });
 });

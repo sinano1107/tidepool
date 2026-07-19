@@ -8,6 +8,7 @@ import {
 } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { getDisplayLanguage, setDisplayLanguage } from "./display-language.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
@@ -246,6 +247,15 @@ const quietHoursSchema = z.object({
 // riding along with POST /settings/quiet-hours.
 const timezoneSchema = z.object({
   tz: z.string().min(1),
+});
+
+// the board display language (issue #46): one setting read by both this
+// issue's draft-prompt language instruction and a later display-time-
+// translation feature — validated only as a non-empty string, since it
+// names a language for a model prompt, not a value checked against a fixed
+// list.
+const displayLanguageSchema = z.object({
+  language: z.string().min(1),
 });
 
 /** IANA name existence check: an unknown zone throws inside the
@@ -745,7 +755,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const draft = await draftClient.draftTask(parsed.data.dump);
+      const draft = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db));
       res.json(draft);
     } catch (err) {
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx
@@ -993,7 +1003,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const draft = await draftClient.draftHandoff(parsed.data.dump);
+      const draft = await draftClient.draftHandoff(parsed.data.dump, getDisplayLanguage(db));
       const missing = HANDOFF_FIELDS.filter((f) => !draft[f]?.trim());
       res.json({ ...draft, missing });
     } catch (err) {
@@ -1076,6 +1086,20 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     setBoardTimezone(db, parsed.data.tz);
     res.json({ tz: getQuietHours(db).tz });
+  });
+
+  router.get("/settings/display-language", (_req, res) => {
+    res.json({ language: getDisplayLanguage(db) });
+  });
+
+  router.post("/settings/display-language", (req, res) => {
+    const parsed = displayLanguageSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    setDisplayLanguage(db, parsed.data.language);
+    res.json({ language: getDisplayLanguage(db) });
   });
 
   router.get("/pause", (_req, res) => {
