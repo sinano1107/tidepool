@@ -46,7 +46,8 @@ describe("pollNotifications(issue #14): quiet hours 外の question を即時通
     registerQuestion(db, "深夜の質問");
     const push = new FakePushClient();
 
-    const midnight = new Date(Date.UTC(2026, 0, 1, 0, 0)); // 既定 quiet hours (23:00–07:00) 内
+    // 既定 quiet hours (23:00–07:00, Asia/Tokyo) 内 — JST 0:00 は UTC 前日 15:00
+    const midnight = new Date(Date.UTC(2025, 11, 31, 15, 0));
     await pollNotifications({ db, push }, midnight);
 
     expect(push.sent).toEqual([]);

@@ -7,7 +7,11 @@ afterEach(() => t?.stop());
 const MIN = 60 * 1000;
 
 it("quiet hours 中に登録された question は push されず、明けると1通のまとめ通知が届く(注入クロック)", async () => {
-  t = await bootTidepool(); // FakeClock は epoch(00:00 UTC)開始 = 既定 quiet hours 内
+  t = await bootTidepool(); // FakeClock は epoch(00:00 UTC)開始
+  // 既定 tz は Asia/Tokyo なので epoch(UTC 00:00)は JST 09:00 で quiet hours 外 —
+  // この統合テストは「epoch = quiet hours 内」という前提で組まれているので、tz を
+  // Etc/UTC に合わせて epoch が既定の 23:00–07:00 quiet hours 内になるようにする。
+  await api(t.baseUrl, "POST", "/api/settings/timezone", { tz: "Etc/UTC" });
   await api(t.baseUrl, "POST", "/api/push/subscribe", {
     endpoint: "https://push.example/abc",
     keys: { p256dh: "k", auth: "a" },
