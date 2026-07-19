@@ -162,11 +162,13 @@ function TpScratchpad({ lines, onAdd, onRemove }) {
   );
 }
 
-// keys are the domain's disposition vocabulary (task / meta_review / discard)
-// so no translation layer sits between the screen and the commit API
+// keys are the domain's disposition vocabulary (task / meta_review /
+// register / discard, issue #61) so no translation layer sits between the
+// screen and the commit API
 const TP_SCRATCH_KINDS = [
   { key: 'task', label: 'task' },
   { key: 'meta_review', label: 'meta-review' },
+  { key: 'register', label: 'register' },
   { key: 'discard', label: 'discard' },
 ];
 

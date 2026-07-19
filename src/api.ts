@@ -48,6 +48,8 @@ import {
   activeTriageSession,
   addScratchpadLine,
   commitTriage,
+  consumePendingDump,
+  listPendingDumps,
   listScratchpad,
   raiseObjection,
   recordDisplayedEntries,
@@ -295,7 +297,7 @@ const commitSchema = z.object({
     .array(
       z.object({
         id: z.number().int().positive(),
-        disposition: z.enum(["meta_review", "task", "discard"]),
+        disposition: z.enum(["meta_review", "task", "register", "discard"]),
       }),
     )
     .default([]),
@@ -1208,6 +1210,24 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
       throw err;
     }
+  });
+
+  // Register's pending-dump queue (issue #61): populated by the triage
+  // commit's `register` disposition, consumed by DELETE below — either after
+  // a task is registered from the line (client-driven) or an explicit
+  // discard. No PATCH/update: a pending dump is either still waiting or gone.
+  router.get("/pending-dumps", (_req, res) => {
+    res.json(listPendingDumps(db));
+  });
+
+  router.delete("/pending-dumps/:id", (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "invalid pending dump id" });
+      return;
+    }
+    consumePendingDump(db, id);
+    res.json({ ok: true });
   });
 
   router.get("/registry/candidates", (_req, res) => {

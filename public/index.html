@@ -318,6 +318,29 @@ function RegisterScreen({ onRegister }) {
   React.useEffect(() => {
     fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
   }, []);
+  // pending dumps (issue #61) — triage's `register` disposition lands here.
+  // Picking one flows its line into the brain dump the same as typing it by
+  // hand; the row itself is consumed only by a successful registration built
+  // from it, or an explicit discard — never by merely selecting or backing out.
+  const [pendingDumps, setPendingDumps] = React.useState([]);
+  const [selectedDumpId, setSelectedDumpId] = React.useState(null);
+  const refreshPendingDumps = () =>
+    fetch('/api/pending-dumps').then((r) => r.json()).then(setPendingDumps).catch(() => {});
+  React.useEffect(() => { refreshPendingDumps(); }, []);
+  const pickPendingDump = (d) => {
+    resetContent();
+    setSelectedDumpId(d.id);
+    setDump(d.line);
+  };
+  const discardPendingDump = async (id) => {
+    if (id === selectedDumpId) { setSelectedDumpId(null); }
+    try {
+      await api(`/api/pending-dumps/${id}`, {}, 'DELETE');
+    } catch {
+      return;
+    }
+    refreshPendingDumps();
+  };
   const issueMode = source === 'github issue';
   const ok = issueMode
     ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim())
@@ -339,12 +362,22 @@ function RegisterScreen({ onRegister }) {
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
     setAssignee(''); setWorkspace(''); setIssueNumber('');
     setRisk(false); setReview(false);
+    // backing out of a pending dump's content leaves the row itself alone —
+    // it is unconsumed and stays listed, pickable again later
+    setSelectedDumpId(null);
   };
   const submitFields = async (f) => {
     setBusy(true);
     setGate(null);
     try {
       await onRegister(f);
+      // the pending dump this registration was built from is consumed the
+      // moment registration succeeds — same delete an explicit discard uses
+      if (selectedDumpId != null) {
+        const consumedId = selectedDumpId;
+        setSelectedDumpId(null);
+        api(`/api/pending-dumps/${consumedId}`, {}, 'DELETE').then(refreshPendingDumps).catch(() => {});
+      }
       resetContent();
     } catch (err) {
       // a gate rejection carries the fix; anything else the toast reported.
@@ -429,6 +462,23 @@ function RegisterScreen({ onRegister }) {
             ? 'the LLM is unreachable — fill the fields yourself'
             : 'dump it — the LLM drafts the fields, you confirm'}
       </p>
+      {!issueMode && pendingDumps.length > 0 && (
+        <Card style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            pending dump{pendingDumps.length > 1 ? 's' : ''} — sent here from scratchpad triage, awaiting writeup
+          </span>
+          {pendingDumps.map((d) => (
+            <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                flex: 1, fontSize: 'var(--text-sm)', color: 'var(--text-body)',
+                fontWeight: d.id === selectedDumpId ? 600 : 400,
+              }}>{d.line}</span>
+              <Button variant={d.id === selectedDumpId ? 'primary' : 'secondary'} size="sm" onClick={() => pickPendingDump(d)}>Use</Button>
+              <Button variant="ghost" size="sm" onClick={() => discardPendingDump(d.id)}>Discard</Button>
+            </div>
+          ))}
+        </Card>
+      )}
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => { setSource(e.target.value); setGate(null); }} />
         {issueMode && (

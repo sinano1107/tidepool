@@ -137,6 +137,18 @@ export function openDb(path: string): Db {
       line       TEXT NOT NULL
     );
 
+    -- pending dumps (issue #61): scratchpad lines dispositioned \`register\`
+    -- land here — the Register screen's pending dump (仕上げ待ち) queue, 1
+    -- line = 1 row, no auto-merge. Consumed by either a successful
+    -- registration built from the line or an explicit discard; until then
+    -- the line is never lost. Durable across restart, same as
+    -- triage_scratchpad — no session linkage, just a plain table.
+    CREATE TABLE IF NOT EXISTS pending_dumps (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      line       TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     -- a workspace the slot-release tree rule failed on (conflict, broken
     -- checkout): marked needs-human, its tasks stay out of the slot until a
     -- human repairs it (issue #8)

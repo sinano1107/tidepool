@@ -255,10 +255,12 @@ export function listScratchpad(db: Db, sessionId: number): ScratchpadLine[] {
     .all(sessionId) as ScratchpadLine[];
 }
 
-export type ScratchpadDisposition = "meta_review" | "task" | "discard";
+export type ScratchpadDisposition = "meta_review" | "task" | "register" | "discard";
 
 /** The commit screen's verdict per line: a meta-review task (the condensation
- *  entry point), an ordinary work task, or nothing at all. */
+ *  entry point), an ordinary work task, a pending dump bound for Register
+ *  (issue #61 — the line needs writing up, not something a worker can act on
+ *  as-is), or nothing at all. */
 function applyScratchpad(
   db: Db,
   sessionId: number,
@@ -274,6 +276,13 @@ function applyScratchpad(
     // adopted by the next session (startTriage)
     consume.run(id);
     if (disposition === "discard") continue;
+    if (disposition === "register") {
+      db.prepare("INSERT INTO pending_dumps (line, created_at) VALUES (?, ?)").run(
+        line.line,
+        now.toISOString(),
+      );
+      continue;
+    }
     registerTask(
       db,
       {
@@ -288,6 +297,27 @@ function applyScratchpad(
       now,
     );
   }
+}
+
+export interface PendingDump {
+  id: number;
+  line: string;
+  created_at: string;
+}
+
+/** Register's pending-dump queue (issue #61): lines dispositioned `register`
+ *  at triage commit, waiting to be picked, drafted, confirmed, and either
+ *  registered or discarded. Durable across restart — plain table read, no
+ *  session involved. */
+export function listPendingDumps(db: Db): PendingDump[] {
+  return db.prepare("SELECT * FROM pending_dumps ORDER BY id").all() as PendingDump[];
+}
+
+/** Consumes one pending dump — called either after a task is registered from
+ *  its line or on an explicit discard; both remove the row the same way, so
+ *  the line is never double-consumed and never silently reappears. */
+export function consumePendingDump(db: Db, id: number): void {
+  db.prepare("DELETE FROM pending_dumps WHERE id = ?").run(id);
 }
 
 /** An event id that must point at a decision-log entry (a human-facing kind). */
