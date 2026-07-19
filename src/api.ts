@@ -288,6 +288,13 @@ const scratchpadSchema = z.object({
   line: z.string().min(1),
 });
 
+// z.coerce: route params always arrive as strings — coercing here keeps the
+// numeric-id validation on the same zod/treeifyError footing as every body
+// schema in this file, rather than a hand-rolled Number() check.
+const pendingDumpIdParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+});
+
 const displayedSchema = z.object({
   entry_ids: z.array(z.number().int().positive()).min(1),
 });
@@ -1221,12 +1228,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.delete("/pending-dumps/:id", (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      res.status(400).json({ error: "invalid pending dump id" });
+    const parsed = pendingDumpIdParamSchema.safeParse(req.params);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    consumePendingDump(db, id);
+    consumePendingDump(db, parsed.data.id);
     res.json({ ok: true });
   });
 

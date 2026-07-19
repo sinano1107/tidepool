@@ -480,7 +480,13 @@ function RegisterScreen({ onRegister }) {
         </Card>
       )}
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => { setSource(e.target.value); setGate(null); }} />
+        <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
+          setSource(e.target.value); setGate(null);
+          // switching away from the pending-dump's own manual content: a
+          // later registration (e.g. an unrelated issue reference) must not
+          // consume a dump it was never built from
+          setSelectedDumpId(null);
+        }} />
         {issueMode && (
           <React.Fragment>
             <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
