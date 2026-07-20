@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { authedGit, type GitHubAuth } from "./github-auth.js";
 
 /** Everything a PR needs to exist, independent of how it's actually opened
  *  (issue #19): which task branch, onto which base, with what title/body. */
@@ -97,19 +98,18 @@ export interface Repository {
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
 
-/** Real implementation: `gh pr create` under the host's own `gh auth` session
- *  — the same ambient-credential shape the worker already runs under (no
- *  separate tidepool identity in v1). `gh` prints the new PR's URL on stdout;
- *  the number is the last path segment. */
+/** Real implementation: shells out to `gh`/`git` as the board's machine user
+ *  (ADR 0024) — every call injects the token into the child env fresh via
+ *  GitHubAuth, never the host's ambient `gh auth`. `gh` prints the new PR's
+ *  URL on stdout; the number is the last path segment. */
 export class GhCliClient implements GitHubClient {
+  constructor(private readonly auth: GitHubAuth) {}
+
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     // `gh pr create --head <branch>` needs the branch to already exist on the
     // remote — run non-interactively, it cannot fall back to its "push now?"
     // prompt.
-    execFileSync("git", ["push", "-u", "origin", input.branch], {
-      cwd: input.path,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    authedGit(this.auth, input.path, "push", "-u", "origin", input.branch);
     const url = execFileSync(
       "gh",
       [
@@ -124,7 +124,7 @@ export class GhCliClient implements GitHubClient {
         "--body",
         input.body,
       ],
-      { cwd: input.path, stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: input.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
     )
       .toString()
       .trim();
@@ -143,7 +143,7 @@ export class GhCliClient implements GitHubClient {
       output = execFileSync(
         "gh",
         ["pr", "checks", String(ref.number), "--json", "bucket"],
-        { cwd: ref.path, stdio: ["ignore", "pipe", "pipe"] },
+        { cwd: ref.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
     } catch (err) {
       output = (err as { stdout?: Buffer }).stdout?.toString() ?? "[]";
@@ -157,6 +157,7 @@ export class GhCliClient implements GitHubClient {
   async mergePullRequest(ref: PrRef): Promise<void> {
     execFileSync("gh", ["pr", "merge", String(ref.number), "--merge"], {
       cwd: ref.path,
+      env: this.auth.env(),
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
@@ -167,7 +168,7 @@ export class GhCliClient implements GitHubClient {
       output = execFileSync(
         "gh",
         ["issue", "view", String(ref.number), "--json", "title,body,comments,state"],
-        { cwd: ref.path, stdio: ["ignore", "pipe", "pipe"] },
+        { cwd: ref.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
     } catch (err) {
       // gh's not-found failure ("GraphQL: Could not resolve to an issue or
@@ -194,6 +195,7 @@ export class GhCliClient implements GitHubClient {
   async addIssueComment(ref: IssueRef, body: string): Promise<void> {
     execFileSync("gh", ["issue", "comment", String(ref.number), "--body", body], {
       cwd: ref.path,
+      env: this.auth.env(),
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
@@ -204,6 +206,7 @@ export class GhCliClient implements GitHubClient {
     let output: string;
     try {
       output = execFileSync("gh", ["repo", "view", name, "--json", "url"], {
+        env: this.auth.env(),
         stdio: ["ignore", "pipe", "pipe"],
       }).toString();
     } catch (err) {
@@ -221,6 +224,7 @@ export class GhCliClient implements GitHubClient {
     // --add-readme is what makes the initial commit exist (issue #57: an
     // empty repository has no default branch); gh prints the new repo's URL
     const url = execFileSync("gh", ["repo", "create", name, "--private", "--add-readme"], {
+      env: this.auth.env(),
       stdio: ["ignore", "pipe", "pipe"],
     })
       .toString()

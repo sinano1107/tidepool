@@ -66,6 +66,7 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 import {
+  GitHubIdentityMissingError,
   RegistrySelfUnprotectError,
   UnprotectNeedsConfirmationError,
   type WorkspaceAdmin,
@@ -570,6 +571,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         res.status(400).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
         res.status(409).json({ error: err.message });
+      } else if (err instanceof GitHubIdentityMissingError) {
+        // same "not configured" family as the workspaceAdmin?.create gate
+        // above — the board simply has no GitHub identity (ADR 0024)
+        res.status(503).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }

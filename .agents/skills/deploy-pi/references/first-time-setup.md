@@ -40,6 +40,8 @@ Both need an **interactive browser login** — cannot be done non-interactively 
 
 **After `gh auth login` succeeds, run `gh auth setup-git` too** — without it, `git push`/`pull` over HTTPS still fails even though `gh` itself is authenticated (the credential helper isn't wired into git's config until this runs).
 
+Note the split since issue #50 / ADR 0024: this human `gh auth` only serves the **deploy tooling** (the `git pull` on `/mnt/ssd/tidepool` and `/mnt/ssd/tidepool-registry`). The **board's own** GitHub operations (push / PR / merge / issue / registry push) run as the machine user via `TIDEPOOL_GITHUB_TOKEN_FILE` (step 5) and work with the human logged out.
+
 **Also trust the board's own cwd once, interactively** (issue #81 / ADR-0028): the hourly usage throttle scrapes `/usage` from an *interactive* `claude --safe-mode` session run in `/opt/tidepool`, and the interactive TUI shows a folder-trust gate ("Is this a project you trust?") plus one-time onboarding modals that block the input prompt until dismissed. Once, as masaki: `ssh $PI`, then `cd /opt/tidepool && claude`, accept "Yes, I trust this folder", dismiss any what's-new/onboarding modal, and quit. This persists in `~/.claude.json` (`projects["/opt/tidepool"].hasTrustDialogAccepted: true`, home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`). Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry. (A dismissed what's-new can re-appear after a `claude` update; same one-time fix.)
 
 ## 5. systemd unit + secrets
@@ -57,9 +59,18 @@ TIDEPOOL_WORKER_LOGS=/opt/tidepool/worker-logs
 TIDEPOOL_VAPID_SUBJECT=mailto:<owner-email>
 TIDEPOOL_VAPID_PUBLIC_KEY=<generated>
 TIDEPOOL_VAPID_PRIVATE_KEY=<generated>
+TIDEPOOL_GITHUB_TOKEN_FILE=/home/masaki/.tidepool/github-token
 EOF
 sudo chmod 600 /etc/default/tidepool && sudo chown root:root /etc/default/tidepool'
 ```
+
+**The GitHub machine-user token file** (issue #50 / ADR 0024) is a second, separate secrets file — the board's `tidepool-bot` PAT, read by the node process at runtime and injected per call into `gh`/`git` child envs. Unlike `/etc/default/tidepool`, it is read by the **service user** (`masaki`), not by PID1 — `root:root` would fail closed (unreadable → GitHub features off), and permissions wider than `600` are refused by `loadGitHubAuth` for the same fail-closed result. Create it as masaki:
+
+```bash
+ssh $PI 'mkdir -p ~/.tidepool && umask 077 && printf "%s\n" "<the PAT>" > ~/.tidepool/github-token'
+```
+
+Same terminal discipline as the VAPID key above: write it straight in, verify with `test -f` / `stat -c %a`, never print it back.
 
 Generate the VAPID pair with `npx --yes web-push generate-vapid-keys` (run once on the Pi, `/opt/tidepool` must already exist — run this after the first `scripts/deploy-pi.sh`). `600 root:root` is correct and sufficient even though the service runs as `User=masaki` — systemd (PID1, root) reads `EnvironmentFile` before dropping privileges to spawn the process, so the running user never needs read access to the file itself.
 

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 import type { GitHubClient } from "./github.js";
+import { authedGit, type GitHubAuth } from "./github-auth.js";
 import {
   assertValidWorkspaceName,
   loadRegistry,
@@ -57,10 +58,16 @@ export type CreateWorkspaceInput = {
 export interface WorkspaceAdminDeps {
   registryDir: string;
   workspacesBaseDir: string;
+  /** The board's GitHub identity (ADR 0024), absent when no secrets file is
+   *  configured — registry pushes and clones then run unauthenticated, the
+   *  same fail-closed posture as the optional `github` client below. */
+  githubAuth?: GitHubAuth;
 }
 
 export interface CreateWorkspaceDeps extends WorkspaceAdminDeps {
-  github: GitHubClient;
+  /** Absent (no board GitHub identity, ADR 0024) → the create mode, the one
+   *  verb that must call GitHub's API, refuses; register/clone still work. */
+  github?: GitHubClient;
 }
 
 export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<RegistryCommitResult>;
@@ -74,6 +81,17 @@ export interface WorkspaceAdmin {
   create: CreateWorkspaceFn;
   list: () => WorkspaceView[];
   update: UpdateWorkspaceFn;
+}
+
+/** The create mode was requested while the board has no GitHub identity
+ *  (ADR 0024's fail-closed absence): creating a repository is the one
+ *  workspace verb that must call GitHub's API, so it refuses — register and
+ *  clone still work. */
+export class GitHubIdentityMissingError extends Error {
+  constructor() {
+    super("workspace create mode needs the board's GitHub identity (TIDEPOOL_GITHUB_TOKEN_FILE)");
+    this.name = "GitHubIdentityMissingError";
+  }
 }
 
 /** Orchestrates one workspace creation: external effects first, the registry
@@ -95,7 +113,7 @@ export async function createWorkspace(
     entry,
     `add workspace ${input.name} via WebUI`,
   );
-  return { pushed: pushRegistry(deps.registryDir) };
+  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
@@ -173,7 +191,7 @@ export async function updateWorkspace(
     next,
     `update workspace ${input.name} via WebUI`,
   );
-  return { pushed: pushRegistry(deps.registryDir) };
+  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** Each mode's external half, ordered so the registry commit stays last.
@@ -186,6 +204,7 @@ async function buildEntry(
 ): Promise<WorkspaceEntry> {
   if (input.mode === "register") return { path: input.path };
   if (input.mode === "clone") return cloneAndDescribe(input.name, input.repo, deps);
+  if (!deps.github) throw new GitHubIdentityMissingError();
   const existing = await deps.github.getRepository(input.name);
   const repository = existing ?? (await deps.github.createRepository(input.name));
   return cloneAndDescribe(input.name, repository.url, deps);
@@ -198,7 +217,9 @@ function cloneAndDescribe(name: string, repo: string, deps: CreateWorkspaceDeps)
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it
   // failed before the registry commit — not a conflict
-  if (!existsSync(dir)) git(deps.workspacesBaseDir, "clone", repo, dir);
+  // a private repo's clone needs the machine-user token too (ADR 0024) —
+  // same injection path as every other board-driven git network call
+  if (!existsSync(dir)) authedGit(deps.githubAuth, deps.workspacesBaseDir, "clone", repo, dir);
   // a fresh clone's HEAD is the upstream default branch — recorded when it
   // isn't "main" so branch discipline and the PR base start out right
   // (issue #27); "main" stays implicit (protectedBranch's default)

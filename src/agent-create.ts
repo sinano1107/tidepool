@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
+import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
   assertValidAgentName,
@@ -69,6 +70,10 @@ function assertValidIcon(icon: string | undefined): void {
  *  never read from env here (same shape as WorkspaceAdminDeps). */
 export interface AgentAdminDeps {
   registryDir: string;
+  /** The board's GitHub identity (ADR 0024) for the best-effort registry
+   *  push, absent when no secrets file is configured — same shape as
+   *  WorkspaceAdminDeps. */
+  githubAuth?: GitHubAuth;
 }
 
 /** ADR 0020's agent half: write `agents/<name>.md` to the registry clone and
@@ -87,7 +92,7 @@ export async function createAgent(
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
   commitAgentFile(deps.registryDir, { ...input, version: "1" }, `create agent ${input.name} via WebUI`);
-  return { pushed: pushRegistry(deps.registryDir) };
+  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** The edit half (issue #70): the same fields as creation — the form
@@ -119,7 +124,7 @@ export async function updateAgent(
       `update agent ${input.name} via WebUI`,
     );
   }
-  return { pushed: pushRegistry(deps.registryDir) };
+  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** version 以外の全フィールド(編集フォームが送るもの)の一致。systemPrompt

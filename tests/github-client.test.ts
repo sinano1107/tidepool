@@ -4,20 +4,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
+import { GitHubAuth } from "../src/github-auth.js";
 import { git } from "./harness.js";
 
 let repoPath: string | undefined;
 let remotePath: string | undefined;
 let binPath: string | undefined;
+let authPath: string | undefined;
 let originalPath: string | undefined;
 
 afterEach(async () => {
   if (originalPath !== undefined) process.env.PATH = originalPath;
-  for (const p of [repoPath, remotePath, binPath]) {
+  for (const p of [repoPath, remotePath, binPath, authPath]) {
     if (p) await rm(p, { recursive: true, force: true });
   }
-  repoPath = remotePath = binPath = originalPath = undefined;
+  repoPath = remotePath = binPath = authPath = originalPath = undefined;
 });
+
+/** ADR 0024 の secrets ファイルの代役: mode 600 のトークンファイルを実体で
+ *  作る — GhCliClient はここから読んだトークンを各呼び出しの env に都度
+ *  注入する(process.env には決して書かない)。 */
+async function makeAuth(token = "test-token"): Promise<GitHubAuth> {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
+  authPath = dir;
+  const file = join(dir, "github-token");
+  writeFileSync(file, `${token}\n`);
+  chmodSync(file, 0o600);
+  return new GitHubAuth(file);
+}
 
 /** Stands in for the real `gh` binary on PATH: git itself stays real (the
  *  PRD test policy), but the GitHub API side of `gh` would need real network
@@ -56,7 +70,7 @@ it("gh pr create の前にタスクブランチを origin へ push する", asyn
   originalPath = process.env.PATH;
   process.env.PATH = `${fakeBinDir}:${originalPath}`;
 
-  const client = new GhCliClient();
+  const client = new GhCliClient(await makeAuth());
   const result = await client.createPullRequest({
     path: repoPath,
     branch: "task/abc",
@@ -77,6 +91,23 @@ it("gh pr create の前にタスクブランチを origin へ push する", asyn
   expect(invocations).toContain("task/abc");
 });
 
+it("トークンは gh の子プロセス env にだけ注入され、盤面プロセスの env には載らない(ADR 0024)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\necho "token=$GH_TOKEN" >> "${logPath}"\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  await new GhCliClient(await makeAuth()).mergePullRequest({ path: "/tmp", number: 7 });
+
+  // gh 側(子プロセス)はトークンを見え、worker が丸ごと継承する側の
+  // process.env には現れない — issue #50 の「worker は credential ゼロ」
+  expect(await readFile(logPath, "utf8")).toContain("token=test-token");
+  expect(process.env.GH_TOKEN).toBeUndefined();
+});
+
 /** Stands in for `gh pr checks`: prints the given JSON to stdout and exits
  *  with the given code — `gh` itself exits non-zero while any check is
  *  pending or failing (its own documented exit codes), which is exactly the
@@ -95,7 +126,7 @@ it("getCiStatus は全チェック pass で success を返す", async () => {
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
   expect(status).toBe("success");
 });
 
@@ -104,7 +135,7 @@ it("getCiStatus は pending なチェックが残っていれば(非ゼロ終了
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
   expect(status).toBe("pending");
 });
 
@@ -113,7 +144,7 @@ it("getCiStatus は fail バケットがあれば failure を返す", async () =
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
   expect(status).toBe("failure");
 });
 
@@ -125,7 +156,7 @@ it("getCiStatus は非ゼロ終了で stdout が全く無い場合、チェッ�
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const status = await new GhCliClient().getCiStatus({ path: "/tmp", number: 1 });
+  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
   expect(status).toBe("success");
 });
 
@@ -152,7 +183,7 @@ it("getIssue は title / body / 全コメントを返す", async () => {
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const issue = await new GhCliClient().getIssue({ path: "/tmp", number: 49 });
+  const issue = await new GhCliClient(await makeAuth()).getIssue({ path: "/tmp", number: 49 });
 
   expect(issue).toEqual({
     title: "ログイン画面のバグ",
@@ -173,7 +204,7 @@ it("getIssue は close 済み issue に対して IssueGoneError(closed) を投�
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const err = await new GhCliClient()
+  const err = await new GhCliClient(await makeAuth())
     .getIssue({ path: "/tmp", number: 49 })
     .then(() => null)
     .catch((e: unknown) => e);
@@ -200,7 +231,7 @@ it("getIssue は存在しない issue に対して IssueGoneError(not_found) を
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  const notFound = await new GhCliClient()
+  const notFound = await new GhCliClient(await makeAuth())
     .getIssue({ path: "/tmp", number: 9999 })
     .then(() => null)
     .catch((e: unknown) => e);
@@ -209,7 +240,7 @@ it("getIssue は存在しない issue に対して IssueGoneError(not_found) を
 
   // ネットワーク断など、それ以外の失敗は分類せずそのまま伝播する(一時的失敗)
   writeFileSync(join(dir, "gh"), `#!/bin/sh\necho 'error connecting to api.github.com' >&2\nexit 1\n`);
-  const outage = await new GhCliClient()
+  const outage = await new GhCliClient(await makeAuth())
     .getIssue({ path: "/tmp", number: 49 })
     .then(() => null)
     .catch((e: unknown) => e);
@@ -226,7 +257,7 @@ it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  await new GhCliClient().mergePullRequest({ path: "/tmp", number: 7 });
+  await new GhCliClient(await makeAuth()).mergePullRequest({ path: "/tmp", number: 7 });
 
   const invocations = await readFile(logPath, "utf8");
   expect(invocations).toContain("pr merge 7 --merge");
@@ -241,7 +272,7 @@ it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
-  await new GhCliClient().addIssueComment(
+  await new GhCliClient(await makeAuth()).addIssueComment(
     { path: "/tmp", number: 49 },
     "## Completion criteria\n- the login form submits cleanly",
   );
