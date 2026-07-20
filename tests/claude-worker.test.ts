@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import {
+  agentGitIdentityEnv,
   ClaudeCodeWorker,
   type EnumerateSkillsFn,
   PROMPT_READY_MARKER,
@@ -58,6 +59,7 @@ interface SpawnCall {
   command: string;
   args: string[];
   cwd: string;
+  env: NodeJS.ProcessEnv;
 }
 
 /** Events reference tasks by FK, so a started task must exist on the board. */
@@ -89,7 +91,7 @@ function recordingSpawn() {
   const killed: NodeJS.Signals[] = [];
   const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
   const spawn: SpawnFn = (command, args, opts) => {
-    calls.push({ command, args, cwd: opts.cwd });
+    calls.push({ command, args, cwd: opts.cwd, env: opts.env });
     return {
       stdout,
       kill: (signal) => killed.push(signal),
@@ -226,6 +228,59 @@ describe("ClaudeCodeWorker", () => {
     // self-approves routine actions but keeps the classifier safety layer —
     // authority itself comes from the profile + MCP verbs.
     expect(call.args.join(" ")).toContain("--permission-mode auto");
+  });
+
+  it("spawn する worker child の env に、spawn されたエージェント名義の GIT_* 4変数を機械注入する(issue #53)", async () => {
+    const { start, calls } = await makeWorker();
+    start();
+    expect(calls).toHaveLength(1);
+    const { env } = calls[0]!;
+    // エージェントの善意に依存せず、盤面が author/committer 双方を焼き込む。
+    // 名義は spawn された既定エージェント(deckhand)、email は .invalid
+    // (RFC 2606 の到達不能ドメイン — 実在アドレスに化けない)。
+    expect(env.GIT_AUTHOR_NAME).toBe("deckhand");
+    expect(env.GIT_AUTHOR_EMAIL).toBe("deckhand@tidepool.invalid");
+    expect(env.GIT_COMMITTER_NAME).toBe("deckhand");
+    expect(env.GIT_COMMITTER_EMAIL).toBe("deckhand@tidepool.invalid");
+  });
+
+  it("GIT_* の名義は task.assignee で解決された実 spawn エージェントに従う(issue #53 / ADR 0012)", async () => {
+    const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
+    start("task-navigator", null, "navigator");
+    expect(calls).toHaveLength(1);
+    const { env } = calls[0]!;
+    expect(env.GIT_AUTHOR_NAME).toBe("navigator");
+    expect(env.GIT_AUTHOR_EMAIL).toBe("navigator@tidepool.invalid");
+    expect(env.GIT_COMMITTER_NAME).toBe("navigator");
+    expect(env.GIT_COMMITTER_EMAIL).toBe("navigator@tidepool.invalid");
+  });
+
+  it("git は agentGitIdentityEnv の GIT_* を実際に尊重する: その env で打ったコミットの author がエージェント名になる(issue #53 完了基準 a)", async () => {
+    // spawn env に変数が載ることだけでなく、git がそれを本当に author/committer
+    // に反映することまで確かめる — 変数名が1つでも綴り違いなら、env には載るが
+    // 履歴には効かない。実 claude セッションは要らない: git 自体が GIT_* を
+    // 尊重する事実が、注入機構の end-to-end の正しさを担保する。
+    const repo = await mkdtemp(join(tmpdir(), "tidepool-git-identity-"));
+    const env = { ...process.env, ...agentGitIdentityEnv("tako") };
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "work"], { cwd: repo, env });
+    const author = execFileSync("git", ["log", "-1", "--format=%an <%ae>"], { cwd: repo })
+      .toString()
+      .trim();
+    expect(author).toBe("tako <tako@tidepool.invalid>");
+  });
+
+  it("ADR 0024 の不変条件: 盤面が注入する identity env は GIT_* 4変数のみで、トークンを含まない", () => {
+    // worker は process.env をまるごと継承する(既存挙動)ので、盤面が worker
+    // env に「足す」ものだけがこの issue の関心。その注入物は identity 変数
+    // だけに閉じ、GitHub トークンは決して混ざらない(トークンは github-auth.ts
+    // が execFileSync の env に都度注入するのみ — ADR 0024 の「効く場所は1箇所」)。
+    expect(Object.keys(agentGitIdentityEnv("deckhand")).sort()).toEqual([
+      "GIT_AUTHOR_EMAIL",
+      "GIT_AUTHOR_NAME",
+      "GIT_COMMITTER_EMAIL",
+      "GIT_COMMITTER_NAME",
+    ]);
   });
 
   it("task.workspace が設定されていれば、コンストラクタの workspace より優先して cwd に使う(issue #26)", async () => {

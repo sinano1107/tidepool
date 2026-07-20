@@ -57,6 +57,26 @@ it("complete による解放で WIP コミットが強制され、ツリーが�
   expect(() => git(ws.path, "show", "main:notes.txt")).toThrow();
 });
 
+it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面の機械的執行でエージェントの行為ではない(issue #53)", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "write things");
+  await t.clock.advance(HOUR);
+
+  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  // WIP は盤面の tree rule が機械的に打つコミット — quarantine/watchdog question
+  // が Tidepool 名義で登録されるのと同じ線を git author に延長する。email は
+  // #50 の machine user の GitHub noreply(GitHub 上で tidepool-bot に紐づく)。
+  expect(git(ws.path, "log", "-1", "--format=%an", `task/${task.id}`)).toBe("tidepool");
+  expect(git(ws.path, "log", "-1", "--format=%ae", `task/${task.id}`)).toBe(
+    "306969821+tidepool-bot@users.noreply.github.com",
+  );
+});
+
 it("エスカレーション解放でも WIP が退避され、再開は自ブランチの checkout だけで済む", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
