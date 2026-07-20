@@ -962,26 +962,26 @@ function SettingsScreen({ say }) {
   // Quiet hours (issue #64): start/end only — tz is shown read-only here but
   // is only ever changed via POST /api/settings/timezone (ADR 0022), which
   // this section never calls.
-  const [quietStart, setQuietStart] = React.useState('');
-  const [quietEnd, setQuietEnd] = React.useState('');
-  const [quietTz, setQuietTz] = React.useState('');
+  const [quietHoursStart, setQuietHoursStart] = React.useState('');
+  const [quietHoursEnd, setQuietHoursEnd] = React.useState('');
+  const [quietHoursTz, setQuietHoursTz] = React.useState('');
   const [quietHoursLoaded, setQuietHoursLoaded] = React.useState(false);
   const [quietHoursBusy, setQuietHoursBusy] = React.useState(false);
   const loadQuietHours = async () => {
     const { start, end, tz } = await api('/api/settings/quiet-hours', undefined, 'GET');
-    setQuietStart(start);
-    setQuietEnd(end);
-    setQuietTz(tz);
+    setQuietHoursStart(start);
+    setQuietHoursEnd(end);
+    setQuietHoursTz(tz);
     setQuietHoursLoaded(true);
   };
   React.useEffect(() => { loadQuietHours(); }, []);
   const saveQuietHours = async () => {
     setQuietHoursBusy(true);
     try {
-      const { start, end, tz } = await api('/api/settings/quiet-hours', { start: quietStart, end: quietEnd });
-      setQuietStart(start);
-      setQuietEnd(end);
-      setQuietTz(tz);
+      const { start, end, tz } = await api('/api/settings/quiet-hours', { start: quietHoursStart, end: quietHoursEnd });
+      setQuietHoursStart(start);
+      setQuietHoursEnd(end);
+      setQuietHoursTz(tz);
       say('success', 'quiet hours saved', `${start}–${end}`);
     } catch (err) {
       say('danger', 'quiet hours save failed', String(err.message || err));
@@ -1168,14 +1168,14 @@ function SettingsScreen({ say }) {
             quiet hours
           </span>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input label="Start" mono value={quietStart} onChange={(e) => setQuietStart(e.target.value)} placeholder="HH:MM" />
-            <Input label="End" mono value={quietEnd} onChange={(e) => setQuietEnd(e.target.value)} placeholder="HH:MM" />
+            <Input label="Start" mono value={quietHoursStart} onChange={(e) => setQuietHoursStart(e.target.value)} placeholder="HH:MM" />
+            <Input label="End" mono value={quietHoursEnd} onChange={(e) => setQuietHoursEnd(e.target.value)} placeholder="HH:MM" />
           </div>
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             start after end wraps past midnight (e.g. 23:00–07:00) — that's valid, not an error.
-            timezone: {quietTz || 'unset'} — change it from the timezone setting, not here.
+            timezone: {quietHoursTz || 'unset'} — change it from the timezone setting, not here.
           </p>
-          <Button variant="primary" size="lg" full disabled={!quietStart.trim() || !quietEnd.trim() || quietHoursBusy} onClick={saveQuietHours}>
+          <Button variant="primary" size="lg" full disabled={!quietHoursStart.trim() || !quietHoursEnd.trim() || quietHoursBusy} onClick={saveQuietHours}>
             {quietHoursBusy ? 'Working…' : 'Save quiet hours'}
           </Button>
         </Card>
