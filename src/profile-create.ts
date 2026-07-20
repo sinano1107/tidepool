@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import type { z } from "zod";
+import type { GitHubAuth } from "./github-auth.js";
 import {
   type AuthorityProfile,
   assertValidAuthorityProfileName,
@@ -55,6 +56,10 @@ export function dangerousValues(
  *  root, same shape as AgentAdminDeps. */
 export interface ProfileAdminDeps {
   registryDir: string;
+  /** The board's GitHub identity (ADR 0024) for the best-effort registry
+   *  push, absent when no secrets file is configured — same shape as
+   *  AgentAdminDeps. */
+  githubAuth?: GitHubAuth;
 }
 
 /** ADR 0020's profile half: write `authority/<name>.yaml` to the registry
@@ -70,7 +75,7 @@ export async function createProfile(
   const registry = loadRegistry(deps.registryDir);
   assertValidAuthorityProfileName(registry, input.name);
   commitProfileFile(deps.registryDir, input, `create authority profile ${input.name} via WebUI`);
-  return { pushed: pushRegistry(deps.registryDir) };
+  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** The edit half (issue #76): the form resubmits the whole profile and the
@@ -93,7 +98,7 @@ export async function updateProfile(
   if (!sameEffectiveFields(existing, input)) {
     commitProfileFile(deps.registryDir, input, `update authority profile ${input.name} via WebUI`);
   }
-  return { pushed: pushRegistry(deps.registryDir) };
+  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** One authority profile as the settings surface's edit form needs it

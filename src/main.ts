@@ -6,6 +6,7 @@ import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
+import { loadGitHubAuth } from "./github-auth.js";
 import {
   createProfile,
   listProfileViews,
@@ -211,7 +212,12 @@ function pushClient(): PushClient | undefined {
   return vapid ? new WebPushClient(vapid) : undefined;
 }
 
-const github = new GhCliClient();
+// ADR 0024 / issue #50: the board's GitHub identity is the machine-user token
+// in this mode-600 secrets file — no file, no identity, and every GitHub
+// feature stays fail-closed off (the optional `github` shape below). The
+// token itself never enters process.env: workers inherit that wholesale.
+const githubAuth = loadGitHubAuth(process.env.TIDEPOOL_GITHUB_TOKEN_FILE);
+const github = githubAuth && new GhCliClient(githubAuth);
 
 /** The settings surface's workspace verbs (issue #57), bound to this board's
  *  registry clone, base dir (ADR 0018) and GitHub client here at the
@@ -219,7 +225,7 @@ const github = new GhCliClient();
  *  Without a registry there is nowhere to administer workspaces at all. */
 function workspaceAdmin(): WorkspaceAdmin | undefined {
   if (!registryDir) return undefined;
-  const deps = { registryDir, workspacesBaseDir: workspacesDir };
+  const deps = { registryDir, workspacesBaseDir: workspacesDir, githubAuth };
   return {
     create: (input) => createWorkspace(input, { ...deps, github }),
     list: () => listWorkspaceViews(deps),
@@ -233,7 +239,7 @@ function workspaceAdmin(): WorkspaceAdmin | undefined {
  *  is nowhere to administer agents at all. */
 function agentAdmin(): AgentAdmin | undefined {
   if (!registryDir) return undefined;
-  const deps = { registryDir };
+  const deps = { registryDir, githubAuth };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -250,7 +256,7 @@ function agentAdmin(): AgentAdmin | undefined {
  *  there is nowhere to administer profiles at all. */
 function profileAdmin(): ProfileAdmin | undefined {
   if (!registryDir) return undefined;
-  const deps = { registryDir };
+  const deps = { registryDir, githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),

@@ -1,3 +1,4 @@
+import { authedGit, type GitHubAuth } from "./github-auth.js";
 import { git } from "./workspace.js";
 
 /** The registry clone can't take the board's direct-to-main commit right now
@@ -33,10 +34,13 @@ export interface RegistryCommitResult {
 }
 
 /** Best-effort push of the registry commit (issue #57: push failure is a
- *  warning, never a rollback — the local clone is what the board reads). */
-export function pushRegistry(registryDir: string): boolean {
+ *  warning, never a rollback — the local clone is what the board reads).
+ *  With a board GitHub identity configured the push runs as the machine user
+ *  (ADR 0024); without one it falls back to whatever git's own config still
+ *  authenticates — likely nothing, which lands in the non-fatal warning. */
+export function pushRegistry(registryDir: string, auth?: GitHubAuth): boolean {
   try {
-    git(registryDir, "push", "origin", "main");
+    authedGit(auth, registryDir, "push", "origin", "main");
     return true;
   } catch (err) {
     console.warn("[registry-write] registry push failed (non-fatal):", err);
