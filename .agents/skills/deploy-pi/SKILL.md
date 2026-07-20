@@ -62,6 +62,8 @@ Registers a real `work` task, forces immediate pickup (task registration alone d
 
 The smoke-test task can't be deleted afterward (`events` table is append-only by DB trigger — intentional, not a bug). If it clutters the board, rename its title with a prefix instead of trying to delete it — see troubleshooting.md.
 
+For changes that touch the **GitHub-facing** path (machine-user identity, PR creation, merge, commit authorship — issues #50/#53 territory), the sandbox smoke test isn't enough: see [references/board-e2e-test.md](references/board-e2e-test.md) for the full task → PR → merge E2E against the real `tidepool-registry` repo, including the identity assertions and the mandatory cleanup.
+
 ## First-time setup / new Pi
 
 See [references/first-time-setup.md](references/first-time-setup.md) — cloning both repos, systemd unit, VAPID keys, `gh`/`claude` CLI install plus the interactive login step that only the user can do, tailscale serve, sandbox workspace git-init. Not needed for a routine deploy.
