@@ -31,7 +31,7 @@ import {
 export type SpawnFn = (
   command: string,
   args: string[],
-  opts: { cwd: string },
+  opts: { cwd: string; env: NodeJS.ProcessEnv },
 ) => {
   stdout: NodeJS.ReadableStream;
   kill(signal: NodeJS.Signals): void;
@@ -217,6 +217,24 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
 // one shape, not one copy per call site
 export function pinnedModelFlags(model: string, effort: string): string[] {
   return ["--model", model, "--effort", effort];
+}
+
+/** The agent's own git identity, injected into the worker child's env so the
+ *  commits a task session makes carry the agent's name, not the host's git
+ *  config (issue #53). Mechanical, not entrusted to the agent's good will — the
+ *  four GIT_* vars pin both author and committer. The email's `.invalid` TLD
+ *  (RFC 2606) can never resolve to a real deliverable address, so an agent
+ *  name never masquerades as a person's inbox. ADR 0024 invariant: only
+ *  identity vars ride the worker env — never a GitHub token (the board injects
+ *  those per-call in github-auth.ts, never into the inherited env). */
+export function agentGitIdentityEnv(agentName: string): Record<string, string> {
+  const email = `${agentName}@tidepool.invalid`;
+  return {
+    GIT_AUTHOR_NAME: agentName,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: agentName,
+    GIT_COMMITTER_EMAIL: email,
+  };
 }
 
 type WorkerExitedUsage = Extract<EventPayload, { kind: "worker_exited" }>["usage"];
@@ -531,7 +549,11 @@ function hasUsagePanel(buffer: string): boolean {
 }
 
 const defaultSpawn: SpawnFn = (command, args, opts) => {
-  const child = nodeSpawn(command, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "inherit"] });
+  const child = nodeSpawn(command, args, {
+    cwd: opts.cwd,
+    env: opts.env,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
   // an unlistened "error" (e.g. the claude binary missing) would crash the
   // whole board process; slot recovery for a dead session is the watchdog
   // slice (#9), so here we only keep the failure visible
@@ -824,7 +846,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         "--append-system-prompt",
         `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}${this.historicalDefinitionSection(task)}`,
       ],
-      { cwd: workspace.path },
+      // the agent's own commits are stamped with the agent's identity (issue
+      // #53), merged over the inherited env — never a token (ADR 0024).
+      { cwd: workspace.path, env: { ...process.env, ...agentGitIdentityEnv(agent.name) } },
     );
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board

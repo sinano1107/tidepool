@@ -44,12 +44,16 @@ export function protectedBranch(workspace: WorkspaceConfig): string {
 /** The board's own git identity: the author on the tree rule's WIP commits
  *  (releaseTree) and on the registry commits the WebUI flows make (issue #57,
  *  workspace-create.ts) — one authorship for everything tidepool itself
- *  commits. */
+ *  commits. The email is the #50 machine user's GitHub noreply (issue #53 /
+ *  ADR 0024 point 4): the board's mechanical execution shows up under the same
+ *  tidepool-bot account its GitHub operations do, extending the "board acts as
+ *  Tidepool, not as a person" line (quarantine/watchdog questions already
+ *  register under this name) onto git author. */
 export const TIDEPOOL_GIT_IDENTITY = [
   "-c",
   "user.name=tidepool",
   "-c",
-  "user.email=tidepool@board",
+  "user.email=306969821+tidepool-bot@users.noreply.github.com",
 ] as const;
 
 /** Shared by every board-driven git call (here and workspace-create.ts).
