@@ -255,6 +255,21 @@ describe("ClaudeCodeWorker", () => {
     expect(env.GIT_COMMITTER_EMAIL).toBe("navigator@tidepool.invalid");
   });
 
+  it("git は agentGitIdentityEnv の GIT_* を実際に尊重する: その env で打ったコミットの author がエージェント名になる(issue #53 完了基準 a)", async () => {
+    // spawn env に変数が載ることだけでなく、git がそれを本当に author/committer
+    // に反映することまで確かめる — 変数名が1つでも綴り違いなら、env には載るが
+    // 履歴には効かない。実 claude セッションは要らない: git 自体が GIT_* を
+    // 尊重する事実が、注入機構の end-to-end の正しさを担保する。
+    const repo = await mkdtemp(join(tmpdir(), "tidepool-git-identity-"));
+    const env = { ...process.env, ...agentGitIdentityEnv("tako") };
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "work"], { cwd: repo, env });
+    const author = execFileSync("git", ["log", "-1", "--format=%an <%ae>"], { cwd: repo })
+      .toString()
+      .trim();
+    expect(author).toBe("tako <tako@tidepool.invalid>");
+  });
+
   it("ADR 0024 の不変条件: 盤面が注入する identity env は GIT_* 4変数のみで、トークンを含まない", () => {
     // worker は process.env をまるごと継承する(既存挙動)ので、盤面が worker
     // env に「足す」ものだけがこの issue の関心。その注入物は identity 変数
