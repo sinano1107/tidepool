@@ -101,4 +101,8 @@ main() {
   verify
 }
 
-main "$@"
+# guarded so scripts/deploy-pi.test.sh can `source` this file and exercise
+# verify()/verify_fail() in isolation without running the real deploy
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
