@@ -45,6 +45,12 @@ export interface OpenIssue {
   title: string;
 }
 
+/** listIssues' own `--limit` (issue #67 grilling: no paging). The API layer
+ *  reuses this same value to tell the picker whether the list was cut off
+ *  (`issues.length === OPEN_ISSUES_LIMIT`), so the "older issues exist" hint
+ *  and the actual `gh` call never drift apart. */
+export const OPEN_ISSUES_LIMIT = 100;
+
 /** An issue-backed task's live content (issue #49, CONTEXT.md): "issue" means
  *  the title, body, and the full comment thread — every element a live
  *  reference needs to derive title/purpose/completion_criteria from. */
@@ -213,7 +219,16 @@ export class GhCliClient implements GitHubClient {
   async listIssues(ref: RepoRef): Promise<OpenIssue[]> {
     const output = execFileSync(
       "gh",
-      ["issue", "list", "--state", "open", "--limit", "100", "--json", "number,title"],
+      [
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        String(OPEN_ISSUES_LIMIT),
+        "--json",
+        "number,title",
+      ],
       { cwd: ref.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
     ).toString();
     return JSON.parse(output) as OpenIssue[];

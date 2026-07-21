@@ -11,7 +11,7 @@ import type { Db } from "./db.js";
 import { getDisplayLanguage, setDisplayLanguage } from "./display-language.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
-import { type GitHubClient, IssueGoneError } from "./github.js";
+import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { isPaused, setPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
@@ -588,7 +588,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      res.json(await github.listIssues({ path }));
+      const issues = await github.listIssues({ path });
+      res.json({ issues, truncated: issues.length === OPEN_ISSUES_LIMIT });
     } catch {
       res.status(502).json({ error: "could not fetch open issues" });
     }
