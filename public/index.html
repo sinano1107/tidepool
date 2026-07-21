@@ -1092,18 +1092,26 @@ function SettingsScreen({ say }) {
   // feature read — a plain board-wide setting, not gated on the registry
   // like workspaces/agents/profiles below.
   const [displayLanguage, setDisplayLanguageField] = React.useState('');
+  // options come straight from GET (display-language.ts's canonical list) —
+  // the UI never hardcodes the language list, so a board that adds a language
+  // needs no WebUI change (issue #115).
+  const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState([]);
   const [displayLanguageLoaded, setDisplayLanguageLoaded] = React.useState(false);
   const [displayLanguageBusy, setDisplayLanguageBusy] = React.useState(false);
   const loadDisplayLanguage = async () => {
-    const { language } = await api('/api/settings/display-language', undefined, 'GET');
+    const { language, options } = await api('/api/settings/display-language', undefined, 'GET');
     setDisplayLanguageField(language);
+    setDisplayLanguageOptions(options);
     setDisplayLanguageLoaded(true);
   };
   React.useEffect(() => { loadDisplayLanguage(); }, []);
   const saveDisplayLanguage = async () => {
     setDisplayLanguageBusy(true);
     try {
-      const { language } = await api('/api/settings/display-language', { language: displayLanguage.trim() });
+      // the select can only hold a canonical value, so POST sends it verbatim —
+      // no trimming/normalization here (that lives at the write boundary).
+      // POST returns { language } only; options stay as the initial GET's.
+      const { language } = await api('/api/settings/display-language', { language: displayLanguage });
       setDisplayLanguageField(language);
       say('success', 'display language saved', language);
     } catch (err) {
@@ -1332,9 +1340,8 @@ function SettingsScreen({ say }) {
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             display language
           </span>
-          <Input label="Language" value={displayLanguage} onChange={(e) => setDisplayLanguageField(e.target.value)}
-            placeholder="e.g. Japanese, English — steers draft prompts and future display translation" />
-          <Button variant="primary" size="lg" full disabled={!displayLanguage.trim() || displayLanguageBusy} onClick={saveDisplayLanguage}>
+          <Select label="Language" options={displayLanguageOptions} value={displayLanguage} onChange={(e) => setDisplayLanguageField(e.target.value)} />
+          <Button variant="primary" size="lg" full disabled={!displayLanguage || displayLanguageBusy} onClick={saveDisplayLanguage}>
             {displayLanguageBusy ? 'Working…' : 'Save display language'}
           </Button>
         </Card>
@@ -1485,7 +1492,7 @@ function toQuestionCardShape(task, parentTask) {
 // single-question-view.jsx) is the same screen the kit demo simulates a push
 // into; answering it here POSTs to the real /api/tasks/:id/answer instead of
 // touching mock data, so front-insert + the immediate poll fire for real.
-function QuestionDeepLinkView({ questionId, onDone }) {
+function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [q, setQ] = React.useState(undefined); // undefined = loading, null = gone
   const [rawTask, setRawTask] = React.useState(null);
@@ -1550,7 +1557,7 @@ function QuestionDeepLinkView({ questionId, onDone }) {
     // kit's own shell) — needs this positioned, width-capped ancestor so it
     // covers the 440px column instead of the full viewport.
     <div style={{ height: '100vh', position: 'relative', overflow: 'hidden', background: 'var(--surface-page)' }}>
-      <TpSingleQuestion q={q} onAnswer={answer} onClose={() => onDone(null)} onTranslate={translateTarget} />
+      <TpSingleQuestion q={q} onAnswer={answer} onClose={() => onDone(null)} onTranslate={onTranslate} />
       {err && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 60, fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--danger-fg, #c0392b)', borderRadius: 'var(--radius-md)', padding: '10px 16px' }}>
           {err}
@@ -1573,6 +1580,23 @@ function App() {
   const [notifPermission, setNotifPermission] = React.useState(
     () => (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'),
   );
+
+  // Display-time translation is meaningless when the board already presents in
+  // English (canonical text is English — CONTEXT.md's Display language), so an
+  // English board shows no translation toggle at all. We read the board's
+  // display language once at launch: English → withhold the onTranslate prop
+  // from every kit face (prop absent = no toggle, the kit's own design). This
+  // does not live-update on a settings save — a reload re-reads it, matching
+  // the "read once at the root" design (issue #47 / #115). Fail open: if the
+  // fetch fails we keep the toggle (consistent with the Japanese default).
+  const [translationEnabled, setTranslationEnabled] = React.useState(true);
+  React.useEffect(() => {
+    api('/api/settings/display-language', undefined, 'GET')
+      .then(({ language }) => setTranslationEnabled(language !== 'English'))
+      .catch(() => {});
+  }, []);
+  const onTranslateProp = translationEnabled ? translateTarget : undefined;
+
   const tabOrder = tabs.map((x) => x.key);
   const pointerDown = React.useRef(false);
   const tabRef = React.useRef(tab);
@@ -1887,6 +1911,7 @@ function App() {
     return (
       <QuestionDeepLinkView
         questionId={deepLinkQuestionId}
+        onTranslate={onTranslateProp}
         onDone={(answeredTask) => {
           if (answeredTask && answeredTask.parent_id) markFront(answeredTask.parent_id);
           history.replaceState(null, '', location.pathname);
@@ -1931,7 +1956,7 @@ function App() {
         {tab === 'triage' && (data.questions.length || unreadCount
           ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff}
               onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview}
-              onTranslate={translateTarget} />
+              onTranslate={onTranslateProp} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
               <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
