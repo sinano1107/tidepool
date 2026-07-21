@@ -878,16 +878,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      // the four pure preconditions (type / status=todo / answer count /
-      // fixed-choice options) run before every side effect below — promotion
-      // retry, CI check, real merge, and quarantine verification alike
-      // (issue #111). Without this, a malformed submission (right first
-      // answer, wrong item count) could still trigger a real GitHub action
-      // via the answers[0]-only gates below, then fail answerQuestion's own
-      // validation afterward with the action already done and nothing
-      // recorded on the board — the same failure mode #66 (9687ea1) and #105
-      // (96e2e3e) each patched on a single gate, now closed structurally
-      // instead of gate-by-gate.
+      // runs before every side effect below — promotion retry, CI check,
+      // real merge, and quarantine verification alike (issue #111; see
+      // assertAnswerable's doc for why). The same failure mode #66
+      // (9687ea1) and #105 (96e2e3e) each patched on a single
+      // answers[0]-only gate; this closes it structurally instead of
+      // gate-by-gate.
       assertAnswerable(task, parsed.data.answers);
 
       const promotionTaskId = task.question_pending_pr_promotion_task_id;

@@ -784,51 +784,14 @@ export function cancelTask(
   })();
 }
 
-/** The human steering channel: answer a question from the WebUI. One answer
- *  per item, in item order — the submission is atomic (issue #30): a length
- *  mismatch is refused outright and nothing is persisted, so a partial-answer
- *  state never exists. Each answer is either a one-tap option or a free-text
- *  override, either way a plain string. The question completes only once
- *  every item is answered; only a parent this answer actually unblocks
- *  returns to the queue head (the caller fires the immediate poll on
- *  `parentUnblocked`).
- *
- *  `stageUnblock` defers the head move: when given (an open triage session),
- *  the answer is just as durable but the unblocked parent is handed to the
- *  callback instead of moving — the queue only changes at triage commit.
- *
- *  Every system-internal special case below (abandon, quarantine
- *  confirmation, pending-child approval) is reachable only through a
- *  length-1 question (CONTEXT.md's Confirmation question / ADR 0006), so each
- *  reads `answers[0]` — the degenerate case of the same bundle shape, not a
- *  second code path.
- *
- *  Abandon (ADR 0006): when the sole answer matches the question's declared
- *  `question_cancel_option` (system-internal, set only on the watchdog's
- *  failure questions), the failed task's plan is discarded instead of
- *  unblocked — every unfinished descendant of its parent (siblings included,
- *  the failed task's own subtree among them) is cancelled, and the parent
- *  itself returns to the queue head to replan. With no parent, the failed
- *  task's own subtree is cancelled and nothing returns to the head.
- *
- *  Quarantine resolution (issue #21): a Confirmation question (declared by
- *  `question_quarantine_workspace`, system-internal) takes any answer at all
- *  as a repair confirmation — the caller has already verified the workspace's
- *  tree is clean before this runs (see api.ts). needs_human clears at once,
- *  reported back as `pickupResumed` so the caller fires the immediate poll,
- *  same as `parentUnblocked`. */
 /** The four pure preconditions an answer submission must clear before any
  *  caller may run a side effect on its behalf (issue #111): type is
  *  "question", status is still "todo", the answer count matches the
  *  question's item count, and — for a fixed-choice question — every answer
  *  is one of its item's declared options. `answerQuestion` below calls this
  *  first as its own self-defense (a direct caller, e.g. a test, gets the
- *  same rejection it always has). api.ts's answer route calls it again,
- *  before any side effect (promotion retry, CI check, real merge, quarantine
- *  verification) runs — a malformed submission (right first answer, wrong
- *  item count) must not be able to trigger a real GitHub action and then
- *  fail validation afterward with the action already done and nothing
- *  recorded on the board. */
+ *  same rejection it always has); see its call site in api.ts's answer route
+ *  for why this must also run there, before any side effect. */
 export function assertAnswerable(question: Task, answers: string[]): void {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
@@ -868,6 +831,39 @@ export function assertAnswerable(question: Task, answers: string[]): void {
   }
 }
 
+/** The human steering channel: answer a question from the WebUI. One answer
+ *  per item, in item order — the submission is atomic (issue #30): a length
+ *  mismatch is refused outright and nothing is persisted, so a partial-answer
+ *  state never exists. Each answer is either a one-tap option or a free-text
+ *  override, either way a plain string. The question completes only once
+ *  every item is answered; only a parent this answer actually unblocks
+ *  returns to the queue head (the caller fires the immediate poll on
+ *  `parentUnblocked`).
+ *
+ *  `stageUnblock` defers the head move: when given (an open triage session),
+ *  the answer is just as durable but the unblocked parent is handed to the
+ *  callback instead of moving — the queue only changes at triage commit.
+ *
+ *  Every system-internal special case below (abandon, quarantine
+ *  confirmation, pending-child approval) is reachable only through a
+ *  length-1 question (CONTEXT.md's Confirmation question / ADR 0006), so each
+ *  reads `answers[0]` — the degenerate case of the same bundle shape, not a
+ *  second code path.
+ *
+ *  Abandon (ADR 0006): when the sole answer matches the question's declared
+ *  `question_cancel_option` (system-internal, set only on the watchdog's
+ *  failure questions), the failed task's plan is discarded instead of
+ *  unblocked — every unfinished descendant of its parent (siblings included,
+ *  the failed task's own subtree among them) is cancelled, and the parent
+ *  itself returns to the queue head to replan. With no parent, the failed
+ *  task's own subtree is cancelled and nothing returns to the head.
+ *
+ *  Quarantine resolution (issue #21): a Confirmation question (declared by
+ *  `question_quarantine_workspace`, system-internal) takes any answer at all
+ *  as a repair confirmation — the caller has already verified the workspace's
+ *  tree is clean before this runs (see api.ts). needs_human clears at once,
+ *  reported back as `pickupResumed` so the caller fires the immediate poll,
+ *  same as `parentUnblocked`. */
 export function answerQuestion(
   db: Db,
   question: Task,
