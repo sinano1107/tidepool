@@ -48,16 +48,58 @@ sync_unit() {
 
 restart() {
   log "restart $SERVICE"
+  PRE_RESTART_NRESTARTS="$(sudo systemctl show -p NRestarts --value "$SERVICE.service")"
   sudo systemctl restart "$SERVICE.service"
+  INVOCATION_ID="$(sudo systemctl show -p InvocationID --value "$SERVICE.service")"
+}
+
+# verify() waits for the "tidepool listening on" line (src/main.ts, near the
+# server startup call) to show up in this invocation's journal, instead of a
+# fixed sleep + is-active check — that log line is the direct proof the
+# process reached a listening state, not just "still running so far". Do not
+# rename/remove that log line in src/ without updating VERIFY_LOG_PATTERN here.
+VERIFY_LOG_PATTERN='tidepool listening on'
+VERIFY_TIMEOUT=30
+VERIFY_POLL_INTERVAL=1
+
+# this invocation's journal only — never let a transient `sudo journalctl`
+# hiccup under set -e kill the poll loop, just treat it as "no lines yet"
+journal_lines() {
+  sudo journalctl "_SYSTEMD_INVOCATION_ID=$INVOCATION_ID" --no-pager 2>/dev/null || true
+}
+
+verify_fail() {
+  sudo systemctl status "$SERVICE.service" --no-pager -l | tail -30 || true
+  journal_lines | tail -30 || true
+  fail "$1"
 }
 
 verify() {
-  sleep 2
-  if ! systemctl is-active --quiet "$SERVICE.service"; then
-    sudo systemctl status "$SERVICE.service" --no-pager -l | tail -30
-    fail "$SERVICE is not active after restart"
-  fi
-  log "active: $SERVICE"
+  local waited=0
+  while (( waited < VERIFY_TIMEOUT )); do
+    if journal_lines | grep -qF "$VERIFY_LOG_PATTERN"; then
+      log "active: $SERVICE (listening)"
+      return 0
+    fi
+
+    if sudo systemctl is-failed --quiet "$SERVICE.service" 2>/dev/null; then
+      verify_fail "$SERVICE entered failed state during startup"
+    fi
+
+    # a transient `systemctl show` failure must not kill the loop under set -e
+    # (fail() is a bad enough surprise on its own without this contributing);
+    # an empty/non-numeric read just skips this iteration's crash-loop check
+    local current_nrestarts
+    current_nrestarts="$(sudo systemctl show -p NRestarts --value "$SERVICE.service" 2>/dev/null)" || current_nrestarts=""
+    if [[ "$current_nrestarts" =~ ^[0-9]+$ ]] && (( current_nrestarts > PRE_RESTART_NRESTARTS )); then
+      verify_fail "$SERVICE crash-looped during startup (NRestarts $PRE_RESTART_NRESTARTS -> $current_nrestarts)"
+    fi
+
+    sleep "$VERIFY_POLL_INTERVAL"
+    waited=$(( waited + VERIFY_POLL_INTERVAL ))
+  done
+
+  verify_fail "$SERVICE did not report listening within ${VERIFY_TIMEOUT}s"
 }
 
 main() {
@@ -67,4 +109,8 @@ main() {
   verify
 }
 
-main "$@"
+# guarded so scripts/deploy-pi.test.sh can `source` this file and exercise
+# verify()/verify_fail() in isolation without running the real deploy
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
