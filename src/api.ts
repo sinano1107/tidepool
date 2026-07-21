@@ -8,7 +8,11 @@ import {
 } from "./agent-create.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { getDisplayLanguage, setDisplayLanguage } from "./display-language.js";
+import {
+  getDisplayLanguage,
+  SUPPORTED_DISPLAY_LANGUAGES,
+  setDisplayLanguage,
+} from "./display-language.js";
 import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
@@ -271,13 +275,15 @@ const timezoneSchema = z.object({
   tz: z.string().min(1),
 });
 
-// the board display language (issue #46): one setting read by both this
-// issue's draft-prompt language instruction and a later display-time-
-// translation feature — validated only as a non-empty string, since it
-// names a language for a model prompt, not a value checked against a fixed
-// list.
+// the board display language (issue #46, tightened by #115): one setting
+// read by both this issue's draft-prompt language instruction and
+// display-time translation (ADR 0015, issue #47) — validated against
+// SUPPORTED_DISPLAY_LANGUAGES, the board's single source of truth for
+// legal values. Anything not an exact match (including case variants like
+// "japanese") is rejected at this write boundary, so nothing downstream
+// needs to normalize or fuzzy-match a language string.
 const displayLanguageSchema = z.object({
-  language: z.string().min(1),
+  language: z.enum(SUPPORTED_DISPLAY_LANGUAGES),
 });
 
 // display-time translation (issue #47 / ADR 0015): a discriminated union over
@@ -1277,7 +1283,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/settings/display-language", (_req, res) => {
-    res.json({ language: getDisplayLanguage(db) });
+    res.json({ language: getDisplayLanguage(db), options: SUPPORTED_DISPLAY_LANGUAGES });
   });
 
   router.post("/settings/display-language", (req, res) => {

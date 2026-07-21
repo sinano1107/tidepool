@@ -96,7 +96,7 @@ describe("ClaudeTranslationClient", () => {
     expect(prompt).toContain("Held = 保留");
   });
 
-  it("表記ゆれ(小文字の 'japanese' など)でも大文字小文字を無視して用語集を埋め込む(issue #46 の自由記述設定欄との整合)", async () => {
+  it("正規値 'Japanese' との完全一致でのみ用語集を埋め込む(表記ゆれは入口の displayLanguageSchema で 400 になり、ここには届かない — issue #115)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeTranslationClient({
       glossary: [{ term: "Settled", ja: "決着" }],
@@ -109,7 +109,7 @@ describe("ClaudeTranslationClient", () => {
     await client.translate("s", "japanese");
 
     const prompt = calls[0]![1]!;
-    expect(prompt).toContain("Settled = 決着");
+    expect(prompt).not.toContain("決着");
   });
 
   it("日本語以外への翻訳では用語集を埋め込まない(対訳が日本語専用のため)", async () => {

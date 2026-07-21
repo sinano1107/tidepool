@@ -1,5 +1,12 @@
 import type { Db } from "./db.js";
 
+/** Canonical values are English language names, not ISO codes or labels —
+ *  the single source of truth for what a board's display language can be
+ *  (issue #115). Normalization happens once at the write boundary
+ *  (api.ts's displayLanguageSchema); nothing downstream re-checks a value
+ *  against this list. */
+export const SUPPORTED_DISPLAY_LANGUAGES = ["Japanese", "English"] as const;
+
 const DEFAULT_DISPLAY_LANGUAGE = "Japanese";
 
 export function getDisplayLanguage(db: Db): string {

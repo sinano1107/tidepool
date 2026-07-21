@@ -25,11 +25,12 @@ function buildPrompt(source: string, language: string, glossary: GlossaryEntry[]
     "structure exactly, translating only the prose content.";
   // the glossary's Japanese gloss only means something when translating into
   // Japanese — CONTEXT.md carries no other language's terms (issue #47).
-  // Case-insensitive: issue #46's display-language setting is a free-text
-  // field (public/index.html's `Input`, not a fixed-option select), so
-  // "japanese"/"Japanese" are both real inputs a human might type.
+  // Exact match against the canonical value: display-language is normalized
+  // at the write boundary (api.ts's displayLanguageSchema) against
+  // SUPPORTED_DISPLAY_LANGUAGES, so only "Japanese" ever reaches here —
+  // no case-insensitive matching needed (issue #115).
   const glossaryBlock =
-    language.toLowerCase() === "japanese" && glossary.length > 0
+    language === "Japanese" && glossary.length > 0
       ? "Board terminology glossary — use these exact Japanese translations for these terms " +
         `wherever they appear:\n${glossary.map((g) => `${g.term} = ${g.ja}`).join("\n")}`
       : "";
