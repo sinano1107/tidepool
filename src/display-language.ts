@@ -16,7 +16,10 @@ export function getDisplayLanguage(db: Db): string {
   return row?.language ?? DEFAULT_DISPLAY_LANGUAGE;
 }
 
-export function setDisplayLanguage(db: Db, language: string): void {
+export function setDisplayLanguage(
+  db: Db,
+  language: (typeof SUPPORTED_DISPLAY_LANGUAGES)[number],
+): void {
   db.prepare(
     `INSERT INTO display_language (id, language) VALUES (1, ?)
      ON CONFLICT(id) DO UPDATE SET language = excluded.language`,

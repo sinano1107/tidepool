@@ -37,6 +37,7 @@ it("language が空文字、または欠落は 400", async () => {
 
 it("サポート言語リストにない値(表記ゆれ含む)は 400 になり、既存値は変化しない(issue #115)", async () => {
   t = await bootTidepool();
+  await api(t.baseUrl, "POST", "/api/settings/display-language", { language: "English" });
 
   for (const invalid of ["japanese", "日本語", "French"]) {
     const res = await api(t.baseUrl, "POST", "/api/settings/display-language", {
@@ -46,7 +47,7 @@ it("サポート言語リストにない値(表記ゆれ含む)は 400 になり
   }
 
   const res = await api(t.baseUrl, "GET", "/api/settings/display-language");
-  expect(res.json.language).toBe("Japanese");
+  expect(res.json.language).toBe("English");
 });
 
 it("サポート言語リストの正規値(Japanese/English)は 200 になる(issue #115)", async () => {
