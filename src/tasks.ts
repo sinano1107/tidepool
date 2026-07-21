@@ -817,20 +817,19 @@ export function cancelTask(
  *  tree is clean before this runs (see api.ts). needs_human clears at once,
  *  reported back as `pickupResumed` so the caller fires the immediate poll,
  *  same as `parentUnblocked`. */
-export function answerQuestion(
-  db: Db,
-  question: Task,
-  answers: string[],
-  now: Date,
-  stageUnblock?: (taskId: string) => void,
-  /** The reject-reason steering channel (issue #40): optional, one per
-   *  submission (not per item) — a reject often needs no more than the
-   *  option name, so this is never required. Carried verbatim onto the
-   *  `question_answered` event; omitted from the event payload entirely
-   *  when absent, rather than stored as null, so an unanswered comment
-   *  leaves the event shape exactly as it was before this existed. */
-  comment?: string,
-): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
+/** The four pure preconditions an answer submission must clear before any
+ *  caller may run a side effect on its behalf (issue #111): type is
+ *  "question", status is still "todo", the answer count matches the
+ *  question's item count, and — for a fixed-choice question — every answer
+ *  is one of its item's declared options. `answerQuestion` below calls this
+ *  first as its own self-defense (a direct caller, e.g. a test, gets the
+ *  same rejection it always has). api.ts's answer route calls it again,
+ *  before any side effect (promotion retry, CI check, real merge, quarantine
+ *  verification) runs — a malformed submission (right first answer, wrong
+ *  item count) must not be able to trigger a real GitHub action and then
+ *  fail validation afterward with the action already done and nothing
+ *  recorded on the board. */
+export function assertAnswerable(question: Task, answers: string[]): void {
   if (question.type !== "question") {
     throw new DomainError("only a question task can be answered");
   }
@@ -867,6 +866,24 @@ export function answerQuestion(
       }
     }
   }
+}
+
+export function answerQuestion(
+  db: Db,
+  question: Task,
+  answers: string[],
+  now: Date,
+  stageUnblock?: (taskId: string) => void,
+  /** The reject-reason steering channel (issue #40): optional, one per
+   *  submission (not per item) — a reject often needs no more than the
+   *  option name, so this is never required. Carried verbatim onto the
+   *  `question_answered` event; omitted from the event payload entirely
+   *  when absent, rather than stored as null, so an unanswered comment
+   *  leaves the event shape exactly as it was before this existed. */
+  comment?: string,
+): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
+  assertAnswerable(question, answers);
+  const items = question.question_items!;
   const answer = answers[0]!;
   let parentUnblocked = false;
   let pickupResumed = false;
