@@ -122,6 +122,13 @@ const issueCommentSchema = z.object({
   body: z.string().min(1),
 });
 
+// the issue-number picker's query (issue #67): workspace is the only input —
+// no search term/paging, same "one call per selection" posture as the fetch
+// itself
+const githubIssuesQuerySchema = z.object({
+  workspace: z.string().min(1),
+});
+
 // the shape stays close to CreateWorkspaceInput itself; the name rules
 // (charset, uniqueness) live in the domain (assertValidWorkspaceName) so
 // callers get a domain error, not a schema error, on a bad name — this file's
@@ -553,6 +560,38 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     res.status(201).json({});
+  });
+
+  // The issue-number picker's data source (issue #67): the workspace's own
+  // open issues, so a human confirms a number by reading "#N — title"
+  // instead of typing a bare integer. GET, so it never quarantines the
+  // workspace (display's own posture) — an unresolvable name is instead a
+  // fail-fast 400 (ADR 0009, same as /issue-comments above), and a GitHub
+  // failure a 502.
+  router.get("/github-issues", async (req, res) => {
+    const parsed = githubIssuesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    if (!github || !resolve) {
+      res.status(503).json({ error: "GitHub or workspace tracking not configured" });
+      return;
+    }
+    let path: string;
+    try {
+      path = resolve(parsed.data.workspace).path;
+    } catch (err) {
+      if (!(err instanceof UnknownWorkspaceError)) throw err;
+      res.status(400).json({ error: `unknown workspace: ${parsed.data.workspace}` });
+      return;
+    }
+    try {
+      res.json(await github.listIssues({ path }));
+    } catch {
+      res.status(502).json({ error: "could not fetch open issues" });
+    }
   });
 
   router.post("/workspaces", async (req, res) => {

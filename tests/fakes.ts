@@ -6,9 +6,11 @@ import type {
   GitHubClient,
   Issue,
   IssueRef,
+  OpenIssue,
   PrRef,
   PrResult,
   Repository,
+  RepoRef,
 } from "../src/github.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
@@ -107,6 +109,9 @@ export class FakeGitHubClient implements GitHubClient {
   private nextNumber = 1;
   private ciStatus: CiStatus = "success";
   private issues = new Map<number, Issue>();
+  readonly issueListFetches: RepoRef[] = [];
+  private issueList: OpenIssue[] | null = null;
+  private issueListFailure: Error | null = null;
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
@@ -137,6 +142,22 @@ export class FakeGitHubClient implements GitHubClient {
 
   scriptFailure(err: Error | null): void {
     this.failure = err;
+  }
+
+  async listIssues(ref: RepoRef): Promise<OpenIssue[]> {
+    this.issueListFetches.push(ref);
+    if (this.issueListFailure) throw this.issueListFailure;
+    return this.issueList ?? [];
+  }
+
+  /** Scripts what listIssues returns from here on (issue #67). */
+  scriptIssueList(issues: OpenIssue[]): void {
+    this.issueList = issues;
+  }
+
+  /** Makes listIssues throw from here on (issue #67). Pass null to clear. */
+  scriptIssueListFailure(err: Error | null): void {
+    this.issueListFailure = err;
   }
 
   /** Scripts what getCiStatus returns from here on (issue #11) — default

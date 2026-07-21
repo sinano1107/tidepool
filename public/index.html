@@ -318,6 +318,21 @@ function RegisterScreen({ onRegister }) {
   React.useEffect(() => {
     fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
   }, []);
+  // the issue-number picker's open-issue list (issue #67): one fetch per
+  // workspace selection, no cache/paging — the board-side rationale is the
+  // human's own operation frequency (one Select change = one API call)
+  const [issues, setIssues] = React.useState([]);
+  const [issuesFailed, setIssuesFailed] = React.useState(false);
+  React.useEffect(() => {
+    if (source !== 'github issue' || !workspace.trim()) {
+      setIssues([]); setIssuesFailed(false);
+      return;
+    }
+    setIssues([]); setIssuesFailed(false);
+    api(`/api/github-issues?workspace=${encodeURIComponent(workspace.trim())}`, undefined, 'GET')
+      .then(setIssues)
+      .catch(() => setIssuesFailed(true));
+  }, [source, workspace]);
   // pending dumps (issue #61) — triage's `register` disposition lands here.
   // Picking one flows its line into the brain dump the same as typing it by
   // hand; the row itself is consumed only by a successful registration built
@@ -342,6 +357,13 @@ function RegisterScreen({ onRegister }) {
     refreshPendingDumps();
   };
   const issueMode = source === 'github issue';
+  // the Input doubles as the list's filter (issue #67): a number or a
+  // title substring narrows the rows, tapping a row confirms the number
+  const filteredIssues = issueNumber.trim()
+    ? issues.filter((i) =>
+        String(i.number).includes(issueNumber.trim()) ||
+        i.title.toLowerCase().includes(issueNumber.trim().toLowerCase()))
+    : issues;
   const ok = issueMode
     ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim())
     : title.trim() && purpose.trim() && criteria.trim();
@@ -491,6 +513,28 @@ function RegisterScreen({ onRegister }) {
           <React.Fragment>
             <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
             <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+              {!workspace.trim() && (
+                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>select a workspace to browse its open issues</span>
+              )}
+              {workspace.trim() && issuesFailed && (
+                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>couldn't fetch open issues — type the number directly</span>
+              )}
+              {workspace.trim() && !issuesFailed && filteredIssues.map((i) => (
+                <div key={i.number} onClick={() => setIssueNumber(String(i.number))}
+                  style={{
+                    display: 'flex', gap: 8, padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
+                    fontSize: 'var(--text-sm)', color: 'var(--text-body)',
+                    background: String(i.number) === issueNumber.trim() ? 'var(--surface-sunken, rgba(0,0,0,0.06))' : 'transparent',
+                  }}>
+                  <span style={{ color: 'var(--text-muted)' }}>#{i.number}</span>
+                  <span>{i.title}</span>
+                </div>
+              ))}
+              {workspace.trim() && !issuesFailed && issues.length === 100 && (
+                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>older issues exist — type the number directly</span>
+              )}
+            </div>
           </React.Fragment>
         )}
         {!issueMode && !plainFormActive && !drafted && (
