@@ -89,6 +89,10 @@ export interface BootOptions {
    *  endpoint tests fake the one verb they exercise; the orchestration itself
    *  has its own coverage (tests/create-profile.test.ts). */
   profileAdmin?: Partial<ProfileAdmin>;
+  /** The skills picker's candidate source (issue #106 / ADR 0025 点4) — faked
+   *  here so GET /api/skills is exercised without a real `claude` CLI (ADR
+   *  0027). Absent → the route degrades to an empty candidate set. */
+  hostSkills?: () => Promise<string[] | null>;
 }
 
 /** The server wants a per-request candidates provider; a test may pass one
@@ -134,6 +138,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     workspaceAdmin: options.workspaceAdmin,
     agentAdmin: options.agentAdmin,
     profileAdmin: options.profileAdmin,
+    hostSkills: options.hostSkills,
   });
   let stopped = false;
   const stopServer = async () => {

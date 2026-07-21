@@ -664,7 +664,7 @@ function AgentIconPicker({ value, onChange }) {
 // every field the edit form resubmits (agent-create.ts's UpdateAgentInput)
 // prefilled from the GET /api/agents list, `name` shown via AgentChip only —
 // renaming isn't offered here at all (it's the file name, parent issue #54).
-function AgentCard({ agent, authorityProfiles, say, onChanged }) {
+function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, say, onChanged }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const [icon, setIcon] = React.useState(agent.icon ?? '');
@@ -673,6 +673,9 @@ function AgentCard({ agent, authorityProfiles, say, onChanged }) {
   const [authority, setAuthority] = React.useState(agent.authority);
   const [model, setModel] = React.useState(agent.model ?? '');
   const [effort, setEffort] = React.useState(agent.effort ?? '');
+  // prefilled from GET /api/agents (which already returns skills, ADR 0025) —
+  // edited through the same picker the create form uses
+  const [skills, setSkills] = React.useState(agent.skills ?? []);
   const [busy, setBusy] = React.useState(false);
 
   const dirty =
@@ -681,7 +684,10 @@ function AgentCard({ agent, authorityProfiles, say, onChanged }) {
     systemPrompt !== (agent.systemPrompt ?? '') ||
     authority !== agent.authority ||
     model.trim() !== (agent.model ?? '') ||
-    effort.trim() !== (agent.effort ?? '');
+    effort.trim() !== (agent.effort ?? '') ||
+    // order-sensitive: the allowlist is an ordered array (sameStrings, matching
+    // the server's no-op detection) — a reorder is a real edit
+    !sameStrings(skills, agent.skills ?? []);
   const ok = !!description.trim() && !!authority;
 
   const save = async () => {
@@ -693,6 +699,7 @@ function AgentCard({ agent, authorityProfiles, say, onChanged }) {
         icon: icon.trim() || undefined,
         model: model.trim() || undefined,
         effort: effort.trim() || undefined,
+        skills,
         systemPrompt,
       }, 'PATCH');
       sayCommitResult(say, pushed, 'agent updated — committed to the registry', agent.name);
@@ -715,6 +722,7 @@ function AgentCard({ agent, authorityProfiles, say, onChanged }) {
         <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
       </div>
       <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
+      <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={skills} onChange={setSkills} />
       {dirty && (
         <Button variant="secondary" disabled={busy || !ok} onClick={save}>
           Save changes — commits to the registry
@@ -803,6 +811,97 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
       {/* value is pinned to '' so the control always shows the placeholder and
           snaps back after each pick — it is an add-picker, not a bound field */}
       <Select value="" options={options} onChange={pick} />
+    </div>
+  );
+}
+
+// The skills allowlist picker's client-side grammar gate (issue #106 / ADR
+// 0025): mirrors just two of assertValidSkillAllowlist's rules — "* only when
+// alone" and "@ entries are only @workspace/@host" — plus empty/duplicate UX
+// guards. Everything else (a bare individual name, a "plugin名:*" glob, a
+// workspace-specific name) is deliberately let through: free entry's whole
+// point is adding references the picker can't enumerate (an allowlist is a
+// reference, not a claim of stock — ADR 0023). The server's
+// assertValidSkillAllowlist stays the authority; this only spares the round
+// trip on the two mistakes that are obvious at input time. Returns an error
+// string, or null when the entry may be added.
+function skillAddError(entry, existing) {
+  const v = entry.trim();
+  if (!v) return 'empty skill name';
+  if (existing.includes(v)) return 'already added';
+  if (v === '*') {
+    return existing.length > 0 ? '"*" must be the only entry — remove the others first' : null;
+  }
+  if (existing.includes('*')) return 'remove "*" first — it must be the only entry';
+  if (v.startsWith('@') && v !== '@workspace' && v !== '@host') {
+    return 'an @ entry may only be @workspace or @host';
+  }
+  return null;
+}
+
+// The agent skills allowlist picker (issue #106 / ADR 0025), ProfileListInput's
+// sibling: selected entries render as removable Tags; a Select adds a scope word
+// (@workspace/@host) or an enumerated @host skill; a free-entry field adds
+// anything the picker can't offer (a workspace-specific name, a "plugin名:*"
+// glob). `candidates` is the enumerated @host set from GET /api/skills; the
+// scope words and the "*" wildcard are this component's own additions. When the
+// enumeration degraded, `degraded` shows a one-line note — the scope words and
+// free entry still work, so the picker never hard-fails.
+function SkillListInput({ candidates, degraded, values, onChange }) {
+  const { Input, Button, Select, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const [free, setFree] = React.useState('');
+  const [freeError, setFreeError] = React.useState(null);
+  // scope words first, then the enumerated @host skills, then the bare wildcard
+  // — offer only entries the grammar would currently accept (this drops "*"
+  // once anything else is selected, drops everything once "*" is, and hides
+  // already-selected entries), so the Select can add without its own gate
+  const offerable = ['@workspace', '@host', ...candidates, '*'].filter(
+    (c) => skillAddError(c, values) === null,
+  );
+  const options = [
+    { value: '', label: offerable.length ? 'add a scope or skill…' : 'no more to add' },
+    ...offerable.map((c) => ({ value: c, label: c === '*' ? '* — every skill' : c })),
+  ];
+  const pick = (e) => { if (e.target.value) onChange([...values, e.target.value]); };
+  const addFree = () => {
+    const err = skillAddError(free, values);
+    if (err) { setFreeError(err); return; }
+    onChange([...values, free.trim()]);
+    setFree(''); setFreeError(null);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        Skills
+      </span>
+      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+        which skills this agent may use — a scope (@workspace / @host), an enumerated host skill, "plugin名:*", or "*" for all. Free entry adds a workspace-specific name the picker can't list.
+      </p>
+      {degraded && (
+        <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+          host skill list unavailable — scope words and free entry still work.
+        </p>
+      )}
+      {values.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {values.map((v) => (
+            <button key={v} type="button" title="remove" onClick={() => onChange(values.filter((x) => x !== v))}
+              style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+              <Tag color={v === '*' ? 'sun' : v.startsWith('@') ? 'grass' : 'tide'} mono>{v} ✕</Tag>
+            </button>
+          ))}
+        </div>
+      )}
+      {/* value pinned to '' so the control snaps back after each pick */}
+      <Select value="" options={options} onChange={pick} />
+      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+        <div style={{ flex: 1 }}>
+          <Input value={free} mono error={freeError || undefined}
+            onChange={(e) => { setFree(e.target.value); setFreeError(null); }}
+            placeholder='free entry — e.g. a workspace skill name or "plugin名:*"' />
+        </div>
+        <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
+      </div>
     </div>
   );
 }
@@ -1030,6 +1129,24 @@ function SettingsScreen({ say }) {
     }
   };
   React.useEffect(() => { loadProfiles(); }, []);
+
+  // the skills picker's candidate source (issue #106): the host's enumerated
+  // @host skills, loaded once for both the create form and every AgentCard.
+  // Degrades to an empty list — the picker still works on scope words + free
+  // entry, so a failed enumeration never blocks editing an agent's skills.
+  const [hostSkills, setHostSkills] = React.useState([]);
+  const [hostSkillsDegraded, setHostSkillsDegraded] = React.useState(false);
+  const loadSkills = async () => {
+    try {
+      const res = await api('/api/skills', undefined, 'GET');
+      setHostSkills(res.skills ?? []);
+      setHostSkillsDegraded(!!res.degraded);
+    } catch {
+      setHostSkills([]);
+      setHostSkillsDegraded(true);
+    }
+  };
+  React.useEffect(() => { loadSkills(); }, []);
   // a created or edited profile must reach the agent Authority dropdown too —
   // that list rides on GET /api/agents (a separate load), so a profile change
   // refreshes both, else the #55 completion path (create profile → referencing
@@ -1048,6 +1165,10 @@ function SettingsScreen({ say }) {
   const [newAgentAuthority, setNewAgentAuthority] = React.useState('');
   const [newAgentModel, setNewAgentModel] = React.useState('');
   const [newAgentEffort, setNewAgentEffort] = React.useState('');
+  // ADR 0025 決定7 / issue #106: the default agent (tako) is ["@workspace"], so
+  // a new agent starts there too — a visible field, not a hidden default: the
+  // author sees it and edits it before creating.
+  const [newAgentSkills, setNewAgentSkills] = React.useState(['@workspace']);
   const [agentBusy, setAgentBusy] = React.useState(false);
   // same charset gate as the workspace name field above — the server's
   // assertValidAgentName stays the authority, this only drives the button
@@ -1067,11 +1188,13 @@ function SettingsScreen({ say }) {
         icon: newAgentIcon.trim() || undefined,
         model: newAgentModel.trim() || undefined,
         effort: newAgentEffort.trim() || undefined,
+        skills: newAgentSkills,
         systemPrompt: newAgentPrompt,
       });
       sayCommitResult(say, pushed, 'agent added — committed to the registry', newAgentName.trim());
       setNewAgentName(''); setNewAgentIcon(''); setNewAgentDescription('');
       setNewAgentPrompt(''); setNewAgentAuthority(''); setNewAgentModel(''); setNewAgentEffort('');
+      setNewAgentSkills(['@workspace']);
       await loadAgents();
     } catch (err) {
       // creation is idempotent server-side, same posture as workspace creation
@@ -1225,7 +1348,8 @@ function SettingsScreen({ say }) {
         </Card>
       )}
       {(agents ?? []).map((agent) => (
-        <AgentCard key={agent.name} agent={agent} authorityProfiles={authorityProfiles} say={say} onChanged={loadAgents} />
+        <AgentCard key={agent.name} agent={agent} authorityProfiles={authorityProfiles}
+          hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} />
       ))}
       {!agentsUnavailable && agents && (
         <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1244,6 +1368,7 @@ function SettingsScreen({ say }) {
             <Input label="Model" value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)} placeholder="adapter default if empty" />
           </div>
           <Input label="Effort" value={newAgentEffort} onChange={(e) => setNewAgentEffort(e.target.value)} placeholder="adapter default if empty" />
+          <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={newAgentSkills} onChange={setNewAgentSkills} />
           <Button variant="primary" size="lg" full disabled={!newAgentOk || agentBusy} onClick={submitAgent}>
             {agentBusy ? 'Working…' : 'Add agent — commits to the registry'}
           </Button>

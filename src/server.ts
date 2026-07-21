@@ -110,6 +110,10 @@ export interface ServerOptions {
    *  bound to the registry clone by main.ts. Absent → no registry configured;
    *  the /api/profiles routes report 503. */
   profileAdmin?: Partial<ProfileAdmin>;
+  /** The skills picker's candidate source (issue #106 / ADR 0025 点4), bound by
+   *  main.ts to the adapter's neutral-cwd /usage ping. Absent → GET /api/skills
+   *  degrades to an empty candidate set (never 503). */
+  hostSkills?: () => Promise<string[] | null>;
 }
 
 export interface TidepoolServer {
@@ -240,6 +244,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspaceAdmin: options.workspaceAdmin,
       agentAdmin: options.agentAdmin,
       profileAdmin: options.profileAdmin,
+      hostSkills: options.hostSkills,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing
