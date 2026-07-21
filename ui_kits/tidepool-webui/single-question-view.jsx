@@ -29,7 +29,7 @@ function TpPushBanner({ q, onOpen, onDismiss }) {
 // onAnswer(answers) receives one array entry per item, in item order, fired
 // by TpQuestionCard the instant the bundle is fully answered — a live caller
 // POSTs that array straight to /api/tasks/:id/answer.
-function TpSingleQuestion({ q, onAnswer, onClose }) {
+function TpSingleQuestion({ q, onAnswer, onClose, onTranslate }) {
   const heading = q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : 'One answer, then back to your day.';
   return (
     <div className="tp-rise" style={{ position: 'absolute', inset: 0, zIndex: 56, background: 'var(--surface-page)', display: 'flex', flexDirection: 'column', padding: '20px 16px', overflowY: 'auto' }}>
@@ -38,7 +38,7 @@ function TpSingleQuestion({ q, onAnswer, onClose }) {
         <button onClick={onClose} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-lg)', cursor: 'pointer', padding: 0 }}>×</button>
       </div>
       <h1 style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', fontWeight: 400, color: 'var(--tide-5)', margin: '0 0 16px', lineHeight: 1.15 }}>{heading}</h1>
-      <TpQuestionCard q={q} answer={null} onAnswer={onAnswer} />
+      <TpQuestionCard q={q} answer={null} onAnswer={onAnswer} onTranslate={onTranslate} />
       <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textAlign: 'center', marginTop: 12 }}>
         {q.parent ? `answering sends ${q.parent} to the front · ` : ''}applies immediately · immediate poll if slot free · no transaction needed
       </p>

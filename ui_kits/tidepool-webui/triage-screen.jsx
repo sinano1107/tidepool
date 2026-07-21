@@ -24,14 +24,20 @@ function TpSegmentGauge({ total, filled }) {
 // decides when every item in the bundle has a pick and submits the whole
 // answer set atomically (issue #30) — this component only ever reports its
 // own item's value, never submits on its own.
-function TpQuestionItemPicker({ item, value, locked, onChange }) {
+// translated: { title, detail } for this item (issue #47), shown as a second
+// line under each original — the options below never take a translated
+// variant (CONTEXT.md's scope exclusion: a mistranslated option is a
+// 30-second decision an agent reads back).
+function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
   const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState('');
   return (
     <div>
       <div style={{ fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', marginBottom: item.detail ? 3 : 8 }}>{item.title}</div>
+      {translated && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)', marginBottom: item.detail ? 3 : 8 }}>{translated.title}</div>}
       {item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8 }}>{item.detail}</div>}
+      {translated && item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--tide-5)', marginBottom: 8 }}>{translated.detail}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {item.options.map((o) => {
           const picked = value === o.label;
@@ -68,6 +74,17 @@ function TpQuestionItemPicker({ item, value, locked, onChange }) {
   );
 }
 
+// The non-'translated' states of a translation request (issue #47) — the
+// 'translated' state renders differently per caller (a string vs a
+// purpose+items bundle vs a doc), so callers render that one themselves.
+function TpTranslationNote({ t }) {
+  if (t === 'loading') return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>…</span>;
+  if (t.status === 'throttled') {
+    return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)' }}>いまは usage limit で訳を添えられません — 原文のみ</span>;
+  }
+  return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{t.message}</span>;
+}
+
 // One question task's card: the shared context (its `purpose`) once, then
 // every item's picker (issue #30 — a single-item bundle is the degenerate,
 // most common case). The card owns its own in-progress picks and fires
@@ -77,8 +94,15 @@ function TpQuestionItemPicker({ item, value, locked, onChange }) {
 // that one tap) and generalizes it to a multi-item bundle (it fires on
 // whichever tap completes the set) — there is never a separate "submit"
 // button, and never a partial-answer state (CONTEXT.md's Question).
-function TpQuestionCard({ q, answer, onAnswer, locked }) {
-  const { Card, AgentChip } = window.TidepoolDesignSystem_8a0ead;
+// onTranslate(target): the display-time translation seam (issue #47 / ADR
+// 0015), a POST /api/translate caller — absent in the standalone kit (no
+// toggle rendered), passed through by both TriageScreen (section 0) and
+// TpSingleQuestion (single-question-view.jsx)'s push-answer flow, since both
+// render this same card. The question card's own toggle (one of CONTEXT.md's
+// 3 per-face toggles): translates `purpose`/items' title+detail, never the
+// options an answer is picked from.
+function TpQuestionCard({ q, answer, onAnswer, locked, onTranslate }) {
+  const { Card, AgentChip, Switch } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
   // a server-confirmed answer (locked) always wins over in-progress local picks
@@ -90,6 +114,20 @@ function TpQuestionCard({ q, answer, onAnswer, locked }) {
     if (next.every(Boolean)) onAnswer(next);
   };
   const answeredCount = draft.filter(Boolean).length;
+
+  const [translateOn, setTranslateOn] = React.useState(false);
+  const [translation, setTranslation] = React.useState(null);
+  const translateRequested = React.useRef(false);
+  React.useEffect(() => {
+    if (!translateOn || !onTranslate || translateRequested.current) return;
+    translateRequested.current = true;
+    setTranslation('loading');
+    onTranslate({ type: 'question', task_id: q.id })
+      .then(setTranslation)
+      .catch((err) => setTranslation({ status: 'error', message: String(err.message || err) }));
+  }, [translateOn]);
+  const translatedItems = translation && translation.status === 'translated' ? translation.items : null;
+
   return (
     <Card style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
@@ -103,7 +141,17 @@ function TpQuestionCard({ q, answer, onAnswer, locked }) {
           out-of-authority → approval
         </span>
       )}
+      {onTranslate && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+          <Switch label="訳を添える" checked={translateOn} onChange={setTranslateOn} />
+        </div>
+      )}
       <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: q.note ? 6 : 14 }}>{q.context}</div>
+      {translateOn && translation && (
+        translation.status === 'translated'
+          ? <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)', marginBottom: q.note ? 6 : 14 }}>{translation.purpose}</div>
+          : <div style={{ marginBottom: q.note ? 6 : 14 }}><TpTranslationNote t={translation} /></div>
+      )}
       {q.note && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 14 }}>⚠ {q.note}</div>}
       {items.length > 1 && !locked && (
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
@@ -112,7 +160,8 @@ function TpQuestionCard({ q, answer, onAnswer, locked }) {
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {items.map((item, i) => (
-          <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)} />
+          <TpQuestionItemPicker key={i} item={item} value={draft[i]} locked={locked} onChange={(v) => setItemAnswer(i, v)}
+            translated={translatedItems ? translatedItems[i] : null} />
         ))}
       </div>
     </Card>
@@ -225,8 +274,8 @@ function groupLogEntries(entries) {
 // data): onAnswer / onObject / onScratchAdd persist immediately (中断安全),
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
 // staged S3 queue. onCommit always closes the flow.
-function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview }) {
-  const { Button, Input, LogEntry, QueueItem } = window.TidepoolDesignSystem_8a0ead;
+function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, onTranslate }) {
+  const { Button, Input, LogEntry, QueueItem, Switch } = window.TidepoolDesignSystem_8a0ead;
   const nQuestions = data.questions.length;
   // no questions overnight → the flow still exists for the log skim; start at section 2
   const [section, setSection] = React.useState(nQuestions ? 0 : 1);
@@ -311,6 +360,41 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
   const fullyReadGroups = allLogGroups.filter((g) => g.unreadCount === 0);
   const logGroups = showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
+  // the log skim's own toggle (CONTEXT.md's per-face toggles, issue #47):
+  // one switch governs every entry currently rendered in this section — not
+  // just unread — keyed by logKey so a fold/reveal never re-requests an
+  // entry already translated this session. `renderedLogEntries` mirrors
+  // exactly what the two .map calls below actually paint (visible-read +
+  // unread, per group).
+  const [logTranslateOn, setLogTranslateOn] = React.useState(false);
+  const [logTranslations, setLogTranslations] = React.useState({});
+  const logTranslateRequested = React.useRef(new Set());
+  const renderedLogEntries = React.useMemo(() => {
+    const rendered = [];
+    for (const g of logGroups) {
+      const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
+      const hiddenCount = g.readCount - revealed;
+      rendered.push(...g.entries.slice(hiddenCount, g.readCount), ...g.entries.slice(g.readCount));
+    }
+    return rendered;
+  }, [logGroups, revealedRead]);
+  React.useEffect(() => {
+    if (!logTranslateOn || !onTranslate) return;
+    for (const entry of renderedLogEntries) {
+      const k = logKey(entry);
+      if (entry.id == null || logTranslateRequested.current.has(k)) continue;
+      logTranslateRequested.current.add(k);
+      setLogTranslations((prev) => ({ ...prev, [k]: 'loading' }));
+      onTranslate({ type: 'log_entry', event_id: entry.id })
+        .then((result) => setLogTranslations((prev) => ({ ...prev, [k]: result })))
+        .catch((err) => setLogTranslations((prev) => ({ ...prev, [k]: { status: 'error', message: String(err.message || err) } })));
+    }
+  }, [logTranslateOn, renderedLogEntries]);
+  // one switch covers a whole morning's worth of entries — a throttled
+  // reading is the same fact for every one of them, so it renders once next
+  // to the switch rather than once per row (a real skim can have many
+  // unread entries; N identical notes would just be noise).
+  const logThrottled = logTranslateOn && Object.values(logTranslations).some((v) => v && v.status === 'throttled');
   // iOS Safari has no CSS overflow-anchor: revealing an older batch inserts
   // content above the reader's current position, which would otherwise jump
   // the viewport by the inserted height. Captured synchronously in the click
@@ -336,6 +420,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   };
   const [handoffOpen, setHandoffOpen] = React.useState({});
   const handoffCache = React.useRef({});
+  // the handoff expansion's own toggle (CONTEXT.md's per-face toggles, issue
+  // #47) — one instance per expanded entry (its own on/off + cached result),
+  // keyed the same as handoffOpen.
+  const [handoffTranslateOn, setHandoffTranslateOn] = React.useState({});
+  const [handoffTranslations, setHandoffTranslations] = React.useState({});
+  const handoffTranslateRequested = React.useRef(new Set());
   const toggleObjecting = (k) => { setObjecting(objecting === k ? null : k); setDraft(''); };
   const toggleHandoff = async (k, entry) => {
     if (handoffOpen[k]) { setHandoffOpen((prev) => ({ ...prev, [k]: false })); return; }
@@ -347,6 +437,15 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       }
     }
     setHandoffOpen((prev) => ({ ...prev, [k]: true }));
+  };
+  const setHandoffTranslate = (k, entry, next) => {
+    setHandoffTranslateOn((prev) => ({ ...prev, [k]: next }));
+    if (!next || !onTranslate || handoffTranslateRequested.current.has(k)) return;
+    handoffTranslateRequested.current.add(k);
+    setHandoffTranslations((prev) => ({ ...prev, [k]: 'loading' }));
+    onTranslate({ type: 'handoff', task_id: entry.taskId })
+      .then((result) => setHandoffTranslations((prev) => ({ ...prev, [k]: result })))
+      .catch((err) => setHandoffTranslations((prev) => ({ ...prev, [k]: { status: 'error', message: String(err.message || err) } })));
   };
   const answered = Object.values(answers).filter(Boolean).length;
   const unread = data.log.filter((l) => l.unread);
@@ -375,7 +474,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         <div>
           {data.questions.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!onAnswer && !!answers[q.id]} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!onAnswer && !!answers[q.id]} onTranslate={onTranslate} />
             </div>
           ))}
         </div>
@@ -390,10 +489,27 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           return (
             <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
               <LogEntry entry={{ ...l, objection: objections[k] }} active={objecting === k} onObject={() => (hasHandoff ? toggleHandoff(k, l) : toggleObjecting(k))} />
+              {logTranslateOn && logTranslations[k] && logTranslations[k].status !== 'throttled' && (
+                <div style={{ padding: '2px 14px 10px', background: 'var(--surface-recessed)' }}>
+                  {logTranslations[k].status === 'translated'
+                    ? <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)' }}>{logTranslations[k].text}</div>
+                    : <TpTranslationNote t={logTranslations[k]} />}
+                </div>
+              )}
               {handoffOpen[k] && (
                 <div style={{ padding: '10px 14px 12px', background: 'var(--surface-recessed)' }}>
-                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>handoff — {l.taskId}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>handoff — {l.taskId}</span>
+                    {onTranslate && (
+                      <Switch label="訳を添える" checked={!!handoffTranslateOn[k]} onChange={(next) => setHandoffTranslate(k, l, next)} style={{ marginLeft: 'auto' }} />
+                    )}
+                  </div>
                   <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', lineHeight: 1.6, color: 'var(--text-body)', overflowX: 'auto' }}>{handoffCache.current[k]}</pre>
+                  {handoffTranslateOn[k] && handoffTranslations[k] && (
+                    handoffTranslations[k].status === 'translated'
+                      ? <pre style={{ margin: '8px 0 0', paddingTop: 8, borderTop: '1px dashed var(--border-hairline)', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', lineHeight: 1.6, color: 'var(--tide-5)', overflowX: 'auto' }}>{handoffTranslations[k].doc}</pre>
+                      : <div style={{ marginTop: 8 }}><TpTranslationNote t={handoffTranslations[k]} /></div>
+                  )}
                   {objecting !== k && (
                     <button onClick={() => toggleObjecting(k)} style={{ background: 'none', border: 'none', color: 'var(--coral-4)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '8px 0 0', display: 'block' }}>object to this completion…</button>
                   )}
@@ -417,6 +533,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         };
         return (
           <div>
+            {onTranslate && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                {logThrottled && <TpTranslationNote t={{ status: 'throttled' }} />}
+                <Switch label="訳を添える" checked={logTranslateOn} onChange={setLogTranslateOn} />
+              </div>
+            )}
             {fullyReadGroups.length > 0 && (
               <button onClick={() => setShowFullyReadWorkspaces((v) => !v)}
                 style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px 10px', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>

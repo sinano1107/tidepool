@@ -102,6 +102,14 @@ async function api(path, body, method = 'POST') {
   return res.json();
 }
 
+// display-time translation (issue #47 / ADR 0015): the one seam behind every
+// kit face's own `onTranslate` prop — { type: 'log_entry', event_id } |
+// { type: 'question' | 'handoff', task_id }. The server resolves
+// cached/throttled/translated; this call never throws on a throttled
+// response (that's a 200), only on a genuine request/outage failure, which
+// each toggle's own catch renders inline.
+const translateTarget = (target) => api('/api/translate', target);
+
 // Web Push (issue #14): applicationServerKey wants raw bytes, the server
 // hands back the VAPID public key as URL-safe base64.
 function urlBase64ToUint8Array(base64String) {
@@ -1542,7 +1550,7 @@ function QuestionDeepLinkView({ questionId, onDone }) {
     // kit's own shell) — needs this positioned, width-capped ancestor so it
     // covers the 440px column instead of the full viewport.
     <div style={{ height: '100vh', position: 'relative', overflow: 'hidden', background: 'var(--surface-page)' }}>
-      <TpSingleQuestion q={q} onAnswer={answer} onClose={() => onDone(null)} />
+      <TpSingleQuestion q={q} onAnswer={answer} onClose={() => onDone(null)} onTranslate={translateTarget} />
       {err && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 60, fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--danger-fg, #c0392b)', borderRadius: 'var(--radius-md)', padding: '10px 16px' }}>
           {err}
@@ -1922,7 +1930,8 @@ function App() {
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
         {tab === 'triage' && (data.questions.length || unreadCount
           ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff}
-              onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview} />
+              onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview}
+              onTranslate={translateTarget} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>
               <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
