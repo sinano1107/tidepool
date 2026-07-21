@@ -875,7 +875,7 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
         Skills
       </span>
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        which skills this agent may use — a scope (@workspace / @host), an enumerated host skill, "plugin名:*", or "*" for all. Free entry adds a workspace-specific name the picker can't list.
+        which skills this agent may use — a scope (@workspace / @host), an enumerated host skill, "plugin-name:*", or "*" for all. Free entry adds a workspace-specific name the picker can't list.
       </p>
       {degraded && (
         <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
@@ -898,7 +898,7 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
         <div style={{ flex: 1 }}>
           <Input value={free} mono error={freeError || undefined}
             onChange={(e) => { setFree(e.target.value); setFreeError(null); }}
-            placeholder='free entry — e.g. a workspace skill name or "plugin名:*"' />
+            placeholder='free entry — e.g. a workspace skill name or "plugin-name:*"' />
         </div>
         <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
       </div>
