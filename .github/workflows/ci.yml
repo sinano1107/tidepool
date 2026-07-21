@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # サーバー境界までの実物テスト(ADR 0027)。tidepool のリスクの大半はここが
+  # 吸収している。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+
+  # WebUI ブラウザスモーク(e2e/*.spec.ts)の job はここに足す。ただし
+  # public/index.html は React/Babel/lucide を unpkg CDN から実行時に読むため、
+  # 先に CDN を CI で賄う手当て(unpkg 到達可 or 依存を vendor/precompile)が要る。
+  # この precondition が未解決のうちは spec を昇格させない(ADR 0029 /
+  # docs/webui-e2e-harness.md)。最初の昇格でこの job を有効化する。その際、
+  # playwright.config.ts は `channel: "chrome"`(ローカルのシステム Chrome)を
+  # 使うが、CI ランナーに Chrome は無い。job 側で入れる browser と config の
+  # channel を必ず突き合わせること(例: `channel: "chromium"` に切替 + 下記の
+  # chromium install、あるいは setup-chrome 系で Chrome を入れて channel 据置)。
+  #
+  # e2e:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with: { node-version: 22, cache: npm }
+  #     - run: npm ci
+  #     - run: npx playwright install --with-deps chromium  # ↑ config の channel と要整合
+  #     - run: npm run e2e

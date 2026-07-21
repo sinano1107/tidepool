@@ -9,8 +9,8 @@ import type {
   OpenIssue,
   PrRef,
   PrResult,
-  Repository,
   RepoRef,
+  Repository,
 } from "../src/github.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";

@@ -3,3 +3,11 @@
 node_modules
 board.sqlite*
 worker-logs/
+
+# 使い捨ての突発 E2E 確認(docs/webui-e2e-harness.md)。昇格したスモークは
+# e2e/*.spec.ts で git 管理し、こちらは資産にしない。
+e2e/*.scratch.spec.ts
+# Playwright の実行成果物
+/test-results/
+/playwright-report/
+/blob-report/
