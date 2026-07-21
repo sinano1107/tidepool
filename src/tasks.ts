@@ -843,6 +843,30 @@ export function answerQuestion(
       `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
     );
   }
+  // a system-registered question with a real external side effect (merge,
+  // PR promotion, pending-child materialization, retry-vs-abandon) commits
+  // to a fixed choice — a typo must not silently settle one as though it
+  // were an option (issue #105: a "retry" typo on a PR promotion failure
+  // question used to settle it with no retry and no recorded abandon
+  // either). This deliberately leaves two documented exceptions untouched:
+  // an agent's own escalate question, whose free-text override is a real
+  // feature (escalate.test.ts), and a Confirmation question (quarantine
+  // resolution), which takes any answer text as a repair note (CONTEXT.md's
+  // Quarantine) — neither carries this kind of consequence.
+  const isFixedChoiceQuestion =
+    question.question_pending_merge_pr !== null ||
+    question.question_pending_pr_promotion_task_id !== null ||
+    question.question_pending_child !== null ||
+    question.question_cancel_option !== null;
+  if (isFixedChoiceQuestion) {
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i]!.options.includes(answers[i]!)) {
+        throw new DomainError(
+          `answer "${answers[i]}" is not one of item ${i}'s options: ${items[i]!.options.join(", ")}`,
+        );
+      }
+    }
+  }
   const answer = answers[0]!;
   let parentUnblocked = false;
   let pickupResumed = false;
