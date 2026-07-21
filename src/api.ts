@@ -28,6 +28,7 @@ import {
 import { RegistryCloneBusyError } from "./registry-write.js";
 import {
   answerQuestion,
+  assertAnswerable,
   type BoardTask,
   completeTask,
   DomainError,
@@ -877,15 +878,21 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
+      // the four pure preconditions (type / status=todo / answer count /
+      // fixed-choice options) run before every side effect below — promotion
+      // retry, CI check, real merge, and quarantine verification alike
+      // (issue #111). Without this, a malformed submission (right first
+      // answer, wrong item count) could still trigger a real GitHub action
+      // via the answers[0]-only gates below, then fail answerQuestion's own
+      // validation afterward with the action already done and nothing
+      // recorded on the board — the same failure mode #66 (9687ea1) and #105
+      // (96e2e3e) each patched on a single gate, now closed structurally
+      // instead of gate-by-gate.
+      assertAnswerable(task, parsed.data.answers);
+
       const promotionTaskId = task.question_pending_pr_promotion_task_id;
-      // gated on the question still being open: answerQuestion rejects a
-      // settled question below anyway, but the retry's side effect (a real PR
-      // + merge question) must not run first — an "abandon promotion" already
-      // taken would otherwise be overturned by one more POST
       const wantsPromotionRetry =
-        task.status === "todo" &&
-        promotionTaskId !== null &&
-        parsed.data.answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
+        promotionTaskId !== null && parsed.data.answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
       if (wantsPromotionRetry) {
         const promotionTask = getTask(db, promotionTaskId);
         if (!promotionTask || !retryPrPromotion) {
@@ -905,16 +912,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // a merge-decision question is always length-1 (CONTEXT.md's
       // Confirmation question — this one carries a real 2-way choice, not a
       // confirmation, but the bundle is still a single item)
-      //
-      // gated on the question still being open, same as wantsPromotionRetry
-      // above: answerQuestion rejects a settled question below anyway, but
-      // the merge's side effect (a live CI check + a real merge) must not
-      // run first — a "hold" already taken would otherwise be overturned by
-      // one more POST (issue #105)
-      const wantsMerge =
-        task.status === "todo" &&
-        mergePr !== null &&
-        parsed.data.answers[0] === MERGE_QUESTION_OPTIONS[0];
+      const wantsMerge = mergePr !== null && parsed.data.answers[0] === MERGE_QUESTION_OPTIONS[0];
       if (wantsMerge) {
         if (!github) {
           throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
