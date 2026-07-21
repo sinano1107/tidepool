@@ -62,17 +62,22 @@ VERIFY_LOG_PATTERN='tidepool listening on'
 VERIFY_TIMEOUT=30
 VERIFY_POLL_INTERVAL=1
 
+# this invocation's journal only — never let a transient `sudo journalctl`
+# hiccup under set -e kill the poll loop, just treat it as "no lines yet"
+journal_lines() {
+  sudo journalctl "_SYSTEMD_INVOCATION_ID=$INVOCATION_ID" --no-pager 2>/dev/null || true
+}
+
 verify_fail() {
   sudo systemctl status "$SERVICE.service" --no-pager -l | tail -30 || true
-  sudo journalctl "_SYSTEMD_INVOCATION_ID=$INVOCATION_ID" --no-pager | tail -30 || true
+  journal_lines | tail -30 || true
   fail "$1"
 }
 
 verify() {
   local waited=0
   while (( waited < VERIFY_TIMEOUT )); do
-    if sudo journalctl "_SYSTEMD_INVOCATION_ID=$INVOCATION_ID" --no-pager 2>/dev/null \
-        | grep -qF "$VERIFY_LOG_PATTERN"; then
+    if journal_lines | grep -qF "$VERIFY_LOG_PATTERN"; then
       log "active: $SERVICE (listening)"
       return 0
     fi
@@ -81,9 +86,12 @@ verify() {
       verify_fail "$SERVICE entered failed state during startup"
     fi
 
+    # a transient `systemctl show` failure must not kill the loop under set -e
+    # (fail() is a bad enough surprise on its own without this contributing);
+    # an empty/non-numeric read just skips this iteration's crash-loop check
     local current_nrestarts
-    current_nrestarts="$(sudo systemctl show -p NRestarts --value "$SERVICE.service")"
-    if (( current_nrestarts > PRE_RESTART_NRESTARTS )); then
+    current_nrestarts="$(sudo systemctl show -p NRestarts --value "$SERVICE.service" 2>/dev/null)" || current_nrestarts=""
+    if [[ "$current_nrestarts" =~ ^[0-9]+$ ]] && (( current_nrestarts > PRE_RESTART_NRESTARTS )); then
       verify_fail "$SERVICE crash-looped during startup (NRestarts $PRE_RESTART_NRESTARTS -> $current_nrestarts)"
     fi
 
