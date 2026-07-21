@@ -8,7 +8,7 @@ import type { Clock } from "./clock.js";
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
-import { createMcpRouter } from "./mcp.js";
+import { createMcpRouter, retryHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
@@ -211,6 +211,22 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
+      retryPrPromotion: (task) =>
+        retryHandoffPr(
+          {
+            db,
+            slot,
+            clock: options.clock,
+            workspace: options.workspace,
+            resolveWorkspace: options.resolveWorkspace,
+            github: options.github,
+            authority: options.authority,
+            resolveAuthority: options.resolveAuthority,
+            defaultAgentName: worker.id,
+            isProtectedWorkspace: options.isProtectedWorkspace,
+          },
+          task,
+        ),
       registryCandidates: options.registryCandidates,
       draftClient: options.draftClient,
       defaultAgentName: worker.id,

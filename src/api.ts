@@ -335,6 +335,8 @@ export interface ApiRouterDeps {
   /** The GitHub-facing seam (issue #19), reused here for the merge dial's
    *  CI-check-then-merge (issue #11). Absent → same as no workspace. */
   github?: GitHubClient;
+  /** Retries a failed PR promotion from a failure question (issue #66). */
+  retryPrPromotion?: (task: Task) => Promise<void>;
   /** Assignee/workspace name candidates for the registration screen (issue
    *  #12), resolved from the agent registry by the caller (main.ts) — the
    *  API layer never touches the filesystem/git registry loader itself.
@@ -398,6 +400,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     workspace,
     resolveWorkspace,
     github,
+    retryPrPromotion,
     registryCandidates,
     draftClient,
     defaultAgentName,
@@ -831,6 +834,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
+      const promotionTaskId = task.question_pending_pr_promotion_task_id;
+      const wantsPromotionRetry = promotionTaskId !== null && parsed.data.answers[0] === "retry";
+      if (wantsPromotionRetry) {
+        const promotionTask = getTask(db, promotionTaskId);
+        if (!promotionTask || !retryPrPromotion) {
+          throw new DomainError("PR promotion can no longer be retried");
+        }
+        try {
+          await retryPrPromotion(promotionTask);
+        } catch (err) {
+          throw new DomainError(err instanceof Error ? err.message : String(err));
+        }
+      }
       // a merge-decision question's "merge" answer (issue #11) must not
       // resolve the question until CI is actually green, checked live right
       // now — otherwise a stale approval could merge a build that has since

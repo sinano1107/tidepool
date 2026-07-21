@@ -91,6 +91,9 @@ export interface Task {
    *  `escalate` merge dial, read only by the answer route to gate the actual
    *  merge on a live CI check. Never set via MCP or the JSON API. */
   question_pending_merge_pr: number | null;
+  /** System-internal only (issue #66): the completed work task whose failed
+   *  PR promotion this failure question can retry. */
+  question_pending_pr_promotion_task_id: string | null;
   /** System-internal only (issue #21): the workspace name a quarantine
    *  Confirmation question stands in for, set only by quarantineWorkspace —
    *  never set via MCP or the JSON API. */
@@ -249,6 +252,9 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  question stands in for. Never set via MCP or the JSON API — only
    *  recordPrOpened's `escalate` branch sets this. */
   pending_merge_pr?: number;
+  /** System-internal only (issue #66): the completed work task whose failed
+   *  PR promotion this question can retry. */
+  pending_pr_promotion_task_id?: string;
   /** System-internal only (issue #21): the workspace name a quarantine
    *  Confirmation question stands in for. Never set via MCP or the JSON
    *  API — only quarantineWorkspace sets this. */
@@ -474,6 +480,7 @@ export function registerTask(
     question_cancel_option: input.cancel_option ?? null,
     question_pending_child: input.pending_child ?? null,
     question_pending_merge_pr: input.pending_merge_pr ?? null,
+    question_pending_pr_promotion_task_id: input.pending_pr_promotion_task_id ?? null,
     question_quarantine_workspace: input.quarantine_workspace ?? null,
     question_quarantine_agent: input.quarantine_agent ?? null,
     github_issue_number: input.github_issue_number ?? null,
@@ -484,12 +491,12 @@ export function registerTask(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
-         question_pending_child, question_pending_merge_pr, question_quarantine_workspace,
+         question_pending_child, question_pending_merge_pr, question_pending_pr_promotion_task_id, question_quarantine_workspace,
          question_quarantine_agent, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
-         @question_pending_child, @question_pending_merge_pr, @question_quarantine_workspace,
+         @question_pending_child, @question_pending_merge_pr, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
          @question_quarantine_agent, @github_issue_number, @created_at)`,
     ).run({
       ...task,
@@ -1012,6 +1019,40 @@ export interface AuthorityContext {
  *  answerQuestion recognizes this exact pair via question_pending_merge_pr,
  *  same shape as the pending-child mechanism's fixed options. */
 export const MERGE_QUESTION_OPTIONS = ["merge", "hold"] as const;
+
+export const PR_PROMOTION_FAILURE_OPTIONS = ["retry", "abandon promotion"] as const;
+
+/** A PR promotion failure never rolls back completion or the tree rule (issue
+ *  #19). It instead leaves a Tidepool-owned question whose retry points back
+ *  to the completed task, where its branch and handoff still live. */
+export function registerPrPromotionFailureQuestion(
+  db: Db,
+  task: Task,
+  error: string,
+  now: Date,
+): void {
+  const title = `PR promotion failed: ${task.title}`;
+  registerTask(
+    db,
+    {
+      type: "question",
+      title,
+      purpose: `Creating a PR for completed task "${task.title}" failed: ${error}`,
+      completion_criteria: "a human decides whether to retry PR promotion",
+      question: [
+        {
+          title,
+          options: [...PR_PROMOTION_FAILURE_OPTIONS],
+          recommendation: "retry",
+        },
+      ],
+      pending_pr_promotion_task_id: task.id,
+      workspace: task.workspace ?? undefined,
+    },
+    now,
+    BOARD_WORKER_ID,
+  );
+}
 
 /** Registers the merge-decision question every merge escalation shares
  *  (the `escalate` dial, and `auto_if_ci_green`'s risky-task and CI-failure

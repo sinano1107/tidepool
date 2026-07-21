@@ -22,6 +22,7 @@ import {
   HUMAN_WORKER_ID,
   logDecision,
   recordPrOpened,
+  registerPrPromotionFailureQuestion,
   settledChildren,
   type Task,
 } from "./tasks.js";
@@ -112,47 +113,73 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
  *  failure so the completion itself still stands) — in the latter case the
  *  task branch may carry none of the finished work, so no PR is attempted.
  *  Never entrusted to the worker, never lets a PR failure touch the
- *  completion that already landed — best-effort, logged and swallowed.
+ *  completion that already landed — a real creation failure becomes a
+ *  Tidepool failure question, while pre-existing quarantine still skips PR
+ *  promotion as it did before.
  *  question/review tasks carry no handoff doc and open no PR. */
-async function openHandoffPr(
+export async function retryHandoffPr(
   deps: McpDeps,
   task: Task,
-  handoffDoc: string | null,
+  strict = true,
 ): Promise<void> {
-  if (task.type !== "work" || !deps.github) return;
+  if (task.type !== "work" || !deps.github) {
+    if (strict) throw new Error("GitHub is not configured for PR promotion");
+    return;
+  }
   // resolved against the task's own execution workspace (issue #26 / ADR
   // 0009), never just the board's default, through the same fail-closed
   // seam every other async board-driven use of a task's workspace goes
   // through — an unresolvable name (registry drift) re-quarantines (a no-op
   // if the task's slot release already did moments earlier) and skips the PR
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-  if (!resolve) return;
+  if (!resolve) {
+    if (strict) throw new Error("no workspace is configured for PR promotion");
+    return;
+  }
   const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-  if (!workspace) return;
-  if (workspaceNeedsHuman(deps.db, workspace.name)) return;
+  if (!workspace) {
+    if (strict) throw new Error("workspace is unavailable for PR promotion");
+    return;
+  }
+  if (workspaceNeedsHuman(deps.db, workspace.name)) {
+    if (strict) {
+      throw new Error(`workspace "${workspace.name}" needs human attention before PR promotion`);
+    }
+    return;
+  }
+  // an issue-backed task's stored title is only the "#N" placeholder
+  // (rowToTask) — the PR title is another of ADR 0016's real use-moments,
+  // so it resolves the live issue instead when there is one.
+  const { title } = await contentSourceFor(task, deps.github, () => workspace.path).expand();
+  const pr = await deps.github.createPullRequest({
+    path: workspace.path,
+    branch: taskBranch(task.id),
+    base: protectedBranch(workspace),
+    title,
+    body: prBody(task.handoff_doc, task.github_issue_number),
+  });
+  recordPrOpened(
+    deps.db,
+    task,
+    pr.number,
+    attributedWorkerId(deps, task),
+    deps.clock.now(),
+    attributedAuthority(deps, task),
+    deps.isProtectedWorkspace?.(workspace.name),
+  );
+}
+
+async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
+  if (task.type !== "work" || !deps.github) return;
   try {
-    // an issue-backed task's stored title is only the "#N" placeholder
-    // (rowToTask) — the PR title is another of ADR 0016's real use-moments,
-    // so it resolves the live issue instead when there is one.
-    const { title } = await contentSourceFor(task, deps.github, () => workspace.path).expand();
-    const pr = await deps.github.createPullRequest({
-      path: workspace.path,
-      branch: taskBranch(task.id),
-      base: protectedBranch(workspace),
-      title,
-      body: prBody(handoffDoc, task.github_issue_number),
-    });
-    recordPrOpened(
+    await retryHandoffPr(deps, task, false);
+  } catch (err) {
+    registerPrPromotionFailureQuestion(
       deps.db,
       task,
-      pr.number,
-      attributedWorkerId(deps, task),
+      err instanceof Error ? err.message : String(err),
       deps.clock.now(),
-      attributedAuthority(deps, task),
-      deps.isProtectedWorkspace?.(workspace.name),
     );
-  } catch (err) {
-    console.error(`PR creation failed for task ${task.id}:`, err);
   }
 }
 
@@ -365,7 +392,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         completed = done;
         return { id: done.id, status: done.status };
       });
-      if (completed) await openHandoffPr(deps, completed, completed.handoff_doc);
+      if (completed) await openHandoffPr(deps, completed);
       return result;
     },
   );

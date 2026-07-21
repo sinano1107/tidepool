@@ -135,7 +135,7 @@ export class FakeGitHubClient implements GitHubClient {
     return issue;
   }
 
-  scriptFailure(err: Error): void {
+  scriptFailure(err: Error | null): void {
     this.failure = err;
   }
 

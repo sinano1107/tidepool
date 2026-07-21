@@ -57,6 +57,10 @@ const TASKS_TABLE_DDL = `
       -- question stands in for. Never set via MCP or the JSON API — only
       -- recordPrOpened's escalate branch sets this.
       question_pending_merge_pr INTEGER,
+      -- system-internal only (issue #66): the completed work task whose PR
+      -- promotion failed. The answer route retries it synchronously on
+      -- "retry"; never set through MCP or the JSON API.
+      question_pending_pr_promotion_task_id TEXT,
       -- system-internal only (issue #21): the workspace name a quarantine
       -- Confirmation question stands in for — set only by quarantineWorkspace,
       -- read only to dedup a re-fire onto the same open question. Never set
@@ -260,6 +264,7 @@ export function openDb(path: string): Db {
     "question_answer_comment",
     "question_cancel_option",
     "question_pending_child",
+    "question_pending_pr_promotion_task_id",
     "question_quarantine_workspace",
     "question_quarantine_agent",
     "workspace",
