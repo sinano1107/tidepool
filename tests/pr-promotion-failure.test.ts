@@ -173,3 +173,31 @@ it("a settled failure question cannot be re-answered into a retry", async () => 
     expect.objectContaining({ question_pending_merge_pr: 1 }),
   );
 });
+
+it("a typo'd answer is rejected outright instead of silently settling the question as an implicit abandon", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  t.github.scriptFailure(new Error("token expired"));
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question",
+  );
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["retyr"],
+  });
+
+  // before issue #105 this typo fell through to no-op (neither "retry" nor
+  // "abandon promotion" matched) and still settled the question — an
+  // implicit abandon with no recorded decision. It must be rejected instead,
+  // leaving the question open to answer correctly.
+  expect(answered.status).toBe(409);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
+});
