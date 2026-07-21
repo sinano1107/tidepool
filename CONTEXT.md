@@ -107,7 +107,7 @@ agent 定義が宣言する、その agent が worker session 中に使ってよ
 
 ## Assignee(アサイン先)
 
-タスクを実行する worker への割当。登録時は任意で、指定した場合は委譲先の要求として登録者の決裁権(assignable_to)に対して検査され、registry に解決できない名前は登録時に即拒否される。値は3通りに読まれる: **未指定 = その時の盤面の既定 agent への参照**(pickup の瞬間に解決され、値は焼き込まれない — Workspace の「既定への参照」と同型)、**エージェント名 = その agent として実行**(spawn の瞬間に registry から解決される)、**human = slot の外**(人間タスクとして並行する)。割当待ちという停止状態は存在しない — 未指定のタスクは assign を待たず既定へ流れる。
+タスクを実行する worker への割当。登録時は任意で、指定した場合は委譲先の要求として登録者の決裁権(assignable_to)に対して検査され、registry に解決できない名前は登録時に即拒否される。human への委譲も assignable_to の検査対象 — この検査が human 宛てに守るのは権限ではなく**人間の注意予算**であり、assignable_to に human を持たない agent も封じられてはいない(承認 question への変換に落ちる)。直接割り当ては、承認の実績が見えた agent の profile に後から human を足して開く — Condensation の線(2026-07-21 の grilling、issue #116)。値は3通りに読まれる: **未指定 = その時の盤面の既定 agent への参照**(pickup の瞬間に解決され、値は焼き込まれない — Workspace の「既定への参照」と同型)、**エージェント名 = その agent として実行**(spawn の瞬間に registry から解決される)、**human = slot の外**(人間タスクとして並行する)。割当待ちという停止状態は存在しない — 未指定のタスクは assign を待たず既定へ流れる。
 
 ## Default agent(既定エージェント)
 
@@ -218,12 +218,12 @@ Swell = 外部からの周期的なタスク流入・処理サイクル。Conden
 
 ## Quiet hours(静穏時間)
 
-question タスクの即時プッシュ通知を抑制する時間帯(issue #14)。既定 23:00–07:00、盤面設定として変更可能。判定は Timezone(盤面タイムゾーン)の壁時計時刻で行い(ADR 0022)、既定のように開始が終了より後(23:00→07:00)の範囲は日付境界をまたいで判定される。quiet hours 中に登録された question は通知されず溜まり、明けた瞬間(quiet → not quiet の遷移)に Digest として1通にまとまる。Throttle / Pause と異なり、pickup など盤面の稼働そのものには一切触れない — 操作対象は人間への通知だけ。
+即時プッシュ通知を抑制する時間帯(issue #14)。通知対象は question タスクと、人間の操作なしに登録された human 宛てタスク(agent の decompose による直接登録 — issue #116)の2種 — どちらも「人間がボトルネックで親を塞ぐ」点で同格の緊急度を持つ。人間自身の操作が引き金の登録(WebUI 直接登録、approve 回答による実体化)は自分の操作のエコーであり通知しない。既定 23:00–07:00、盤面設定として変更可能。判定は Timezone(盤面タイムゾーン)の壁時計時刻で行い(ADR 0022)、既定のように開始が終了より後(23:00→07:00)の範囲は日付境界をまたいで判定される。quiet hours 中に登録された通知対象は通知されず溜まり、明けた瞬間(quiet → not quiet の遷移)に Digest として1通にまとまる。Throttle / Pause と異なり、pickup など盤面の稼働そのものには一切触れない — 操作対象は人間への通知だけ。
 
 ## Digest(朝のまとめ通知)
 
-quiet hours が明けた瞬間に一度だけ発火し、蓄積分を1通へ畳む push 通知(issue #14)。未通知の question 件数と、前回の digest 以降に増えた Decision log 件数を「質問N件、新規ログM件」として要約する — 通知の文面がそのまま朝のセッションの予算見積りになる。quiet hours 明け以外の通常時は question ごとに個別に即時通知され、digest へは畳まれない。
+quiet hours が明けた瞬間に一度だけ発火し、蓄積分を1通へ畳む push 通知(issue #14)。未通知の question 件数・未通知の human 宛てタスク件数(issue #116)・前回の digest 以降に増えた Decision log 件数を「質問N件、あなたのタスクK件、新規ログM件」として要約する — 通知の文面がそのまま朝のセッションの予算見積りになる。quiet hours 明け以外の通常時は通知対象ごとに個別に即時通知され、digest へは畳まれない。
 
 ## Push subscription(プッシュ購読)
 
-ホーム画面にインストールした PWA が Web Push を受け取るための購読情報(endpoint + 鍵)。quiet hours 外の question 登録・digest 発火のいずれも、登録済みの全 push subscription 宛てに送られる。購読は端末単位で、購読が1件もない(あるいは push 自体が未設定の)盤面では通知は一切発生しない。
+ホーム画面にインストールした PWA が Web Push を受け取るための購読情報(endpoint + 鍵)。quiet hours 外の通知対象の登録(Quiet hours 参照)・digest 発火のいずれも、登録済みの全 push subscription 宛てに送られる。購読は端末単位で、購読が1件もない(あるいは push 自体が未設定の)盤面では通知は一切発生しない。
