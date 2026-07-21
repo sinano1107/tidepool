@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
-import { ClaudeCodeWorker } from "./claude-worker.js";
+import { ClaudeCodeWorker, enumerateHostSkills } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
@@ -287,6 +287,9 @@ const server = await startServer({
   push: pushClient(),
   vapidPublicKey: vapidConfig()?.publicKey,
   auditorName,
+  // the skills picker's candidate source (issue #106): the real `claude` CLI's
+  // neutral-cwd enumeration — always available on a real host, faked in tests
+  hostSkills: enumerateHostSkills,
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

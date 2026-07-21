@@ -1,6 +1,7 @@
 import { execFile, spawn as nodeSpawn } from "node:child_process";
-import { createWriteStream, readdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
@@ -429,6 +430,37 @@ const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) =>
       finish(skills);
     });
   });
+
+/** The skills-picker candidate source (issue #106 / ADR 0025): the `@host`
+ *  individual skills the WebUI's agent skills picker offers, enumerated by the
+ *  same `/usage` ping mechanism the spawn-time complement-deny uses — but at a
+ *  *neutral* cwd (a fresh empty directory), so nothing but the host's own
+ *  user-level + plugin-prefixed skills is resolved. At an empty cwd there is no
+ *  `.claude/skills/`, so the whole enumerated set *is* the `@host` set; the
+ *  caller returns it verbatim (the scope words `*`/`@workspace`/`@host` are the
+ *  picker's own additions, not this API's).
+ *
+ *  Why the picker deliberately does NOT enumerate a workspace's own skills: the
+ *  settings screen has no workspace context to enumerate against — an agent
+ *  definition is workspace-independent (it traverses every workspace it is sent
+ *  to, ADR 0025 点2), so `@workspace` is a *late-bound* reference resolved per
+ *  spawn against whichever checkout the task runs in, never a fixed list picked
+ *  here. A workspace-specific individual name is added by free entry instead
+ *  (an allowlist is a reference, not a claim of stock — ADR 0023). Null on a
+ *  failed probe, same fail-closed shape as `defaultEnumerateSkills`; the route
+ *  degrades that to an empty candidate set rather than a spawn failure. */
+export const enumerateHostSkills = (): Promise<string[] | null> => {
+  const dir = mkdtempSync(join(tmpdir(), "tidepool-skills-"));
+  // clean up only AFTER the probe resolves — the CLI is still running against
+  // this cwd until then, so removing it mid-probe would be a race
+  return defaultEnumerateSkills(dir).finally(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best-effort: a leftover empty temp dir is harmless
+    }
+  });
+};
 
 /** The checkout's own skills (issue #56 / ADR 0025): the directory names under
  *  `<workspace>/.claude/skills/`. This one-directory scan is the only discovery

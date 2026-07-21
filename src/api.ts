@@ -401,6 +401,12 @@ export interface ApiRouterDeps {
    *  verb absent — tests fake them singly) → not configured, the route reports
    *  503. */
   profileAdmin?: Partial<ProfileAdmin>;
+  /** The skills picker's candidate source (issue #106 / ADR 0025 点4), bound by
+   *  main.ts to the adapter's neutral-cwd `/usage` ping (claude-worker.ts's
+   *  `enumerateHostSkills`). Returns the host's enumerated `@host` skills, or
+   *  null on a failed probe. Absent → no CLI to enumerate against; GET /api/
+   *  skills degrades to an empty candidate set (never 503 — see the route). */
+  hostSkills?: () => Promise<string[] | null>;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -421,6 +427,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     workspaceAdmin,
     agentAdmin,
     profileAdmin,
+    hostSkills,
   } = deps;
   const router = Router();
   router.use(json());
@@ -710,6 +717,21 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       agents: agentAdmin.list(),
       authorityProfiles: agentAdmin.authorityProfiles?.() ?? [],
     });
+  });
+
+  // The skills picker's candidate source (issue #106 / ADR 0025 点4): the host's
+  // `@host` skills, enumerated fresh per request (no cache) by the adapter's
+  // neutral-cwd /usage ping. Deliberately NOT 503 when unconfigured or on a
+  // failed probe, unlike the agents/workspaces/profiles settings routes above:
+  // this only *assists* input, so it degrades — `{ skills: [], degraded: true }`
+  // and the picker still works on the scope words + free entry. (Contrast the
+  // spawn-time enumeration, where a failed probe fails the spawn closed — the
+  // strictness there is access control, which does not apply to input assist.)
+  router.get("/skills", async (_req, res) => {
+    const enumerated = hostSkills ? await hostSkills() : null;
+    res.json(
+      enumerated === null ? { skills: [], degraded: true } : { skills: enumerated, degraded: false },
+    );
   });
 
   router.patch("/agents/:name", async (req, res) => {
