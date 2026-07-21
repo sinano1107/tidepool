@@ -929,8 +929,8 @@ function ProfileCard({ profile, agentNames, workspaceNames, say, onChanged }) {
 }
 
 // Settings — the board's admin surface (issue #57 phase 3). One tab, one
-// section per resource: display language (#46), workspaces, agents (#72) and
-// authority profiles (#55) now; quiet hours (#64) joins as a later section.
+// section per resource: display language (#46), quiet hours (#64),
+// workspaces, agents (#72) and authority profiles (#55).
 function SettingsScreen({ say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
 
@@ -957,6 +957,36 @@ function SettingsScreen({ say }) {
       say('danger', 'display language save failed', String(err.message || err));
     }
     setDisplayLanguageBusy(false);
+  };
+
+  // Quiet hours (issue #64): start/end only — tz is shown read-only here but
+  // is only ever changed via POST /api/settings/timezone (ADR 0022), which
+  // this section never calls.
+  const [quietHoursStart, setQuietHoursStart] = React.useState('');
+  const [quietHoursEnd, setQuietHoursEnd] = React.useState('');
+  const [quietHoursTz, setQuietHoursTz] = React.useState('');
+  const [quietHoursLoaded, setQuietHoursLoaded] = React.useState(false);
+  const [quietHoursBusy, setQuietHoursBusy] = React.useState(false);
+  const loadQuietHours = async () => {
+    const { start, end, tz } = await api('/api/settings/quiet-hours', undefined, 'GET');
+    setQuietHoursStart(start);
+    setQuietHoursEnd(end);
+    setQuietHoursTz(tz);
+    setQuietHoursLoaded(true);
+  };
+  React.useEffect(() => { loadQuietHours(); }, []);
+  const saveQuietHours = async () => {
+    setQuietHoursBusy(true);
+    try {
+      const { start, end, tz } = await api('/api/settings/quiet-hours', { start: quietHoursStart, end: quietHoursEnd });
+      setQuietHoursStart(start);
+      setQuietHoursEnd(end);
+      setQuietHoursTz(tz);
+      say('success', 'quiet hours saved', `${start}–${end}`);
+    } catch (err) {
+      say('danger', 'quiet hours save failed', String(err.message || err));
+    }
+    setQuietHoursBusy(false);
   };
 
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
@@ -1129,6 +1159,24 @@ function SettingsScreen({ say }) {
             placeholder="e.g. Japanese, English — steers draft prompts and future display translation" />
           <Button variant="primary" size="lg" full disabled={!displayLanguage.trim() || displayLanguageBusy} onClick={saveDisplayLanguage}>
             {displayLanguageBusy ? 'Working…' : 'Save display language'}
+          </Button>
+        </Card>
+      )}
+      {quietHoursLoaded && (
+        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            quiet hours
+          </span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Input label="Start" mono value={quietHoursStart} onChange={(e) => setQuietHoursStart(e.target.value)} placeholder="HH:MM" />
+            <Input label="End" mono value={quietHoursEnd} onChange={(e) => setQuietHoursEnd(e.target.value)} placeholder="HH:MM" />
+          </div>
+          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            start after end wraps past midnight (e.g. 23:00–07:00) — that's valid, not an error.
+            timezone: {quietHoursTz || 'unset'} — change it from the timezone setting, not here.
+          </p>
+          <Button variant="primary" size="lg" full disabled={!quietHoursStart.trim() || !quietHoursEnd.trim() || quietHoursBusy} onClick={saveQuietHours}>
+            {quietHoursBusy ? 'Working…' : 'Save quiet hours'}
           </Button>
         </Card>
       )}
