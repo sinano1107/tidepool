@@ -10,7 +10,7 @@ one task per verification, never a loop of them.
 
 Ground rules that keep this safe and cheap:
 
-- **One minimal task.** The task below is a single-line README append — fully
+- **One minimal task.** The task below is two small README appends — fully
   specified, no ambiguity, nothing for the worker to explore.
 - **Bounded polling only.** Every wait below is a `for`-loop with a max
   iteration count, never `while true`.
@@ -27,19 +27,33 @@ ssh $PI 'systemctl is-active tidepool; curl -s localhost:4589/api/pause; echo; c
 ssh $PI 'cd /mnt/ssd/tidepool-registry && git status --short | wc -l && git branch --show-current'
 ```
 
-Expect: `active`, `paused:false`, `throttled:false`, current time outside quiet
-hours (23:00–07:00 Asia/Tokyo — pickup won't fire inside them), registry
-checkout clean on `main`. If the code under test isn't deployed yet, deploy
-first (SKILL.md routine path).
+Expect: `active`, `paused:false`, `throttled:false`, registry checkout clean on
+`main`. If the code under test isn't deployed yet, deploy first (SKILL.md
+routine path).
+
+Note: quiet hours (23:00–07:00 Asia/Tokyo) do **not** gate pickup — only
+`src/push.ts` reads `isQuietHours`; `src/scheduler.ts`'s `pickupBlocked()` /
+`poll()` never do. Pickup runs fine inside quiet hours, but the merge
+question's push notification won't fire, so step 4 below must pull the
+question via the API directly rather than waiting on a notification.
 
 ## 1. Register the minimal task
 
+The task is two small parts in one, so a single PR yields both an
+agent-authored commit and a board-made WIP-stash commit (issue #53's
+criteria (a) and (b)):
+
+- Append one line to README.md and **commit it yourself** (`git commit`) —
+  leave the push/PR to the board.
+- Make one more small edit — a second line appended to README.md — and
+  leave it **uncommitted** in the working tree at completion.
+
 ```bash
-ssh $PI 'curl -s -X POST localhost:4589/api/tasks -H "Content-Type: application/json" -d "{\"type\":\"work\",\"title\":\"E2E: minimal README append\",\"purpose\":\"E2E probe of the board GitHub flow. Append exactly one line to README.md in tidepool-registry.\",\"completion_criteria\":\"README.md ends with the line <!-- e2e: board flow check YYYY-MM-DD -->. No other file is touched.\",\"workspace\":\"registry\"}"'
+ssh $PI 'curl -s -X POST localhost:4589/api/tasks -H "Content-Type: application/json" -d "{\"type\":\"work\",\"title\":\"E2E: minimal README append\",\"purpose\":\"E2E probe of the board GitHub flow.\",\"completion_criteria\":\"1) Append the line <!-- e2e: board flow check YYYY-MM-DD --> to README.md and commit it yourself with git commit (do not push). 2) Append a second line <!-- e2e: wip stash check YYYY-MM-DD --> to README.md and leave it uncommitted in the working tree. No other file is touched.\",\"workspace\":\"registry\"}"'
 ```
 
-Save the returned `id`. Adjust the marker line's date so reruns don't collide
-with an already-present line.
+Save the returned `id`. Adjust the marker lines' dates so reruns don't
+collide with already-present lines.
 
 ## 2. Trigger pickup — it does NOT happen on registration
 
@@ -119,6 +133,8 @@ switching, so this is normal, not damage) and the merged branch behind:
 ssh $PI "cd /mnt/ssd/tidepool-registry && git checkout main -q && git pull --ff-only -q && git branch -D task/$ID && git push -q origin --delete task/$ID"
 ```
 
-The one-line README marker stays merged in — harmless, but if a pristine
-README matters, remove it with a direct human-named commit to registry main
-(no second E2E task for it).
+The README marker lines stay merged in — harmless, but if a pristine README
+matters, remove them with a direct human-named commit to registry main (no
+second E2E task for it). Because the uncommitted change in step 1 lands as a
+second README line rather than a new file, the WIP-stash commit can never
+introduce a stray file into `main` — there's nothing extra to clean up here.
