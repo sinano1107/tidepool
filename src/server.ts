@@ -8,7 +8,7 @@ import type { Clock } from "./clock.js";
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
-import { createMcpRouter, retryHandoffPr } from "./mcp.js";
+import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
@@ -202,6 +202,25 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const stopNotificationPoll = options.clock.setInterval(() => {
     void notificationTick.run(options.clock.now());
   }, 60 * 1000);
+  // one deps object for both MCP-side promotion paths: the MCP router's
+  // completion-time attempt and the answer route's synchronous retry (issue
+  // #66) — the retry is the same promotion under the same identity, so the
+  // two must not drift apart field by field
+  const mcpDeps = {
+    db,
+    slot,
+    clock: options.clock,
+    workspace: options.workspace,
+    resolveWorkspace: options.resolveWorkspace,
+    github: options.github,
+    authority: options.authority,
+    resolveAuthority: options.resolveAuthority,
+    defaultAgentName: worker.id,
+    auditorName,
+    agentRegistered: options.agentRegistered,
+    isProtectedWorkspace: options.isProtectedWorkspace,
+    listAgents: options.listAgents,
+  };
   app.use(
     "/api",
     createApiRouter({
@@ -211,22 +230,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
-      retryPrPromotion: (task) =>
-        retryHandoffPr(
-          {
-            db,
-            slot,
-            clock: options.clock,
-            workspace: options.workspace,
-            resolveWorkspace: options.resolveWorkspace,
-            github: options.github,
-            authority: options.authority,
-            resolveAuthority: options.resolveAuthority,
-            defaultAgentName: worker.id,
-            isProtectedWorkspace: options.isProtectedWorkspace,
-          },
-          task,
-        ),
+      retryPrPromotion: (task) => promoteHandoffPr(mcpDeps, task),
       registryCandidates: options.registryCandidates,
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
@@ -241,24 +245,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing
   // `port` via `tailscale serve` can never also expose MCP tool calls
   const mcpApp = express();
-  mcpApp.use(
-    "/mcp",
-    createMcpRouter({
-      db,
-      slot,
-      clock: options.clock,
-      workspace: options.workspace,
-      resolveWorkspace: options.resolveWorkspace,
-      github: options.github,
-      authority: options.authority,
-      resolveAuthority: options.resolveAuthority,
-      defaultAgentName: worker.id,
-      auditorName,
-      agentRegistered: options.agentRegistered,
-      isProtectedWorkspace: options.isProtectedWorkspace,
-      listAgents: options.listAgents,
-    }),
-  );
+  mcpApp.use("/mcp", createMcpRouter(mcpDeps));
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   app.use(express.static(join(root, "public")));
   // the WebUI is the design-synced UI kit: screens come straight from the kit

@@ -116,8 +116,11 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
  *  completion that already landed — a real creation failure becomes a
  *  Tidepool failure question, while pre-existing quarantine still skips PR
  *  promotion as it did before.
- *  question/review tasks carry no handoff doc and open no PR. */
-export async function retryHandoffPr(
+ *  question/review tasks carry no handoff doc and open no PR.
+ *  strict=true is the answer route's synchronous retry (issue #66): every
+ *  precondition that the first attempt silently skips on becomes a thrown
+ *  error the human sees. */
+export async function promoteHandoffPr(
   deps: McpDeps,
   task: Task,
   strict = true,
@@ -172,7 +175,7 @@ export async function retryHandoffPr(
 async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
   if (task.type !== "work" || !deps.github) return;
   try {
-    await retryHandoffPr(deps, task, false);
+    await promoteHandoffPr(deps, task, false);
   } catch (err) {
     registerPrPromotionFailureQuestion(
       deps.db,

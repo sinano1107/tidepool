@@ -136,4 +136,40 @@ it("abandoning PR promotion settles the failure question without changing comple
     pr_number: null,
   });
   expect(t.github.requests).toHaveLength(1);
+  // the give-up itself is a recorded decision (issue #66): the completed task
+  // carries work that never reached a PR, and the log is the only trace why
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
+  const decision = events.find((e: any) => e.kind === "decision_logged");
+  expect(decision.payload.line).toContain(task.id);
+});
+
+it("a settled failure question cannot be re-answered into a retry", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  t.github.scriptFailure(new Error("token expired"));
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question",
+  );
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["abandon promotion"],
+  });
+  t.github.scriptFailure(null);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["retry"],
+  });
+
+  // the abandon decision is final: the late retry must be rejected before its
+  // side effect, not after — no PR gets created, no merge question appears
+  expect(answered.status).toBe(409);
+  expect(t.github.requests).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).toBeNull();
+  expect((await api(t.baseUrl, "GET", "/api/tasks")).json).not.toContainEqual(
+    expect.objectContaining({ question_pending_merge_pr: 1 }),
+  );
 });

@@ -25,7 +25,7 @@
 
 ## Cancel(キャンセル)
 
-人間の判断による作業の放棄。完了基準を満たさないまま終端し(Settled 参照)、記録は消さない。blocked の導出上は done と同じ完了扱い(cancelled の子は親を塞がない)— これが放棄後に親が再計画へ復帰できる根拠。v1 で cancel に至る唯一の経路は failure question への「abandon」回答であり、失敗タスクのサブツリーと計画の残り(親の未完了子孫、巻き込まれた未回答 question を含む)が一括で cancel され、親が先頭復帰して再計画する(計画ごと破棄 — 子は1つの判断に基づくため、1子の放棄は計画全体を無効にする)。
+人間の判断による作業の放棄。完了基準を満たさないまま終端し(Settled 参照)、記録は消さない。blocked の導出上は done と同じ完了扱い(cancelled の子は親を塞がない)— これが放棄後に親が再計画へ復帰できる根拠。v1 で cancel に至る唯一の経路は failure question への「abandon」回答であり、失敗タスクのサブツリーと計画の残り(親の未完了子孫、巻き込まれた未回答 question を含む)が一括で cancel され、親が先頭復帰して再計画する(計画ごと破棄 — 子は1つの判断に基づくため、1子の放棄は計画全体を無効にする)。PR 昇格失敗の failure question(retry / abandon promotion)はこの族ではない — 対象タスクは既に done であり放棄すべき作業が存在しないため、「abandon promotion」は何も cancel せず、昇格の断念を decision log に記録して question を決着させるだけ。
 
 ## Held(保留)
 

@@ -38,7 +38,9 @@ import {
   listBoard,
   listQueue,
   listYourTasks,
+  logDecision,
   moveTask,
+  PR_PROMOTION_FAILURE_OPTIONS,
   presentTask,
   registerTask,
   type Task,
@@ -835,7 +837,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     try {
       const promotionTaskId = task.question_pending_pr_promotion_task_id;
-      const wantsPromotionRetry = promotionTaskId !== null && parsed.data.answers[0] === "retry";
+      // gated on the question still being open: answerQuestion rejects a
+      // settled question below anyway, but the retry's side effect (a real PR
+      // + merge question) must not run first — an "abandon promotion" already
+      // taken would otherwise be overturned by one more POST
+      const wantsPromotionRetry =
+        task.status === "todo" &&
+        promotionTaskId !== null &&
+        parsed.data.answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
       if (wantsPromotionRetry) {
         const promotionTask = getTask(db, promotionTaskId);
         if (!promotionTask || !retryPrPromotion) {
@@ -942,6 +951,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           payload: { kind: "pr_merged", pr_number: mergePr! },
           at: clock.now(),
         });
+      }
+      // abandoning promotion settles the question with no other trace — the
+      // spec (issue #66) wants the give-up itself on the decision log, since
+      // the completed task will forever carry work that never reached a PR
+      if (promotionTaskId !== null && parsed.data.answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
+        logDecision(
+          db,
+          question,
+          `PR promotion abandoned for task ${promotionTaskId} — the work stays on its task branch, no PR`,
+          HUMAN_WORKER_ID,
+          clock.now(),
+        );
       }
       // an answer that unblocked the parent, or resumed a quarantined
       // workspace's pickup (issue #21), put something pickable at the head —
