@@ -31,6 +31,26 @@ export interface IssueRef {
   number: number;
 }
 
+/** Which workspace checkout to run `gh` from — listIssues' only input (issue
+ *  #67): unlike PrRef/IssueRef there is no specific number, the listing
+ *  covers the whole repository. */
+export interface RepoRef {
+  path: string;
+}
+
+/** One open issue as the issue-number picker sees it (issue #67): just
+ *  enough to render a "#N — title" row and confirm a number. */
+export interface OpenIssue {
+  number: number;
+  title: string;
+}
+
+/** listIssues' own `--limit` (issue #67 grilling: no paging). The API layer
+ *  reuses this same value to tell the picker whether the list was cut off
+ *  (`issues.length === OPEN_ISSUES_LIMIT`), so the "older issues exist" hint
+ *  and the actual `gh` call never drift apart. */
+export const OPEN_ISSUES_LIMIT = 100;
+
 /** An issue-backed task's live content (issue #49, CONTEXT.md): "issue" means
  *  the title, body, and the full comment thread — every element a live
  *  reference needs to derive title/purpose/completion_criteria from. */
@@ -74,6 +94,10 @@ export interface GitHubClient {
   getCiStatus(ref: PrRef): Promise<CiStatus>;
   mergePullRequest(ref: PrRef): Promise<void>;
   getIssue(ref: IssueRef): Promise<Issue>;
+  /** Lists the repository's open issues (issue #67) — the issue-number
+   *  picker's data source. No paging/search-term filter/cache: `--limit 100`,
+   *  gh's default (newest-first) order, one call per workspace selection. */
+  listIssues(ref: RepoRef): Promise<OpenIssue[]>;
   /** Appends a comment to the referenced issue — the write half of issue
    *  #49's registration gate: a human-approved suggestion lands on the
    *  issue (GitHub stays the sole source of truth, ADR 0016), never on the
@@ -190,6 +214,24 @@ export class GhCliClient implements GitHubClient {
       body: parsed.body,
       comments: parsed.comments.map((c) => c.body),
     };
+  }
+
+  async listIssues(ref: RepoRef): Promise<OpenIssue[]> {
+    const output = execFileSync(
+      "gh",
+      [
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        String(OPEN_ISSUES_LIMIT),
+        "--json",
+        "number,title",
+      ],
+      { cwd: ref.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
+    ).toString();
+    return JSON.parse(output) as OpenIssue[];
   }
 
   async addIssueComment(ref: IssueRef, body: string): Promise<void> {

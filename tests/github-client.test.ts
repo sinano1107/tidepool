@@ -248,6 +248,31 @@ it("getIssue は存在しない issue に対して IssueGoneError(not_found) を
   expect(outage).toBeInstanceOf(Error);
 });
 
+it("listIssues は gh issue list --state open --limit 100 --json number,title を呼び、結果を返す(issue #67)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '%s' '${JSON.stringify([
+      { number: 12, title: "ログイン画面のバグ" },
+      { number: 7, title: "テストを直す" },
+    ])}'\n`,
+  );
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const issues = await new GhCliClient(await makeAuth()).listIssues({ path: "/tmp" });
+
+  expect(issues).toEqual([
+    { number: 12, title: "ログイン画面のバグ" },
+    { number: 7, title: "テストを直す" },
+  ]);
+  const invocations = await readFile(logPath, "utf8");
+  expect(invocations).toContain("issue list --state open --limit 100 --json number,title");
+});
+
 it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
   binPath = dir;
