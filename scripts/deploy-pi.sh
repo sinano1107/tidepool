@@ -48,16 +48,50 @@ sync_unit() {
 
 restart() {
   log "restart $SERVICE"
+  PRE_RESTART_NRESTARTS="$(sudo systemctl show -p NRestarts --value "$SERVICE.service")"
   sudo systemctl restart "$SERVICE.service"
+  INVOCATION_ID="$(sudo systemctl show -p InvocationID --value "$SERVICE.service")"
+}
+
+# verify() waits for the "tidepool listening on" line (src/main.ts, near the
+# server startup call) to show up in this invocation's journal, instead of a
+# fixed sleep + is-active check — that log line is the direct proof the
+# process reached a listening state, not just "still running so far". Do not
+# rename/remove that log line in src/ without updating VERIFY_LOG_PATTERN here.
+VERIFY_LOG_PATTERN='tidepool listening on'
+VERIFY_TIMEOUT=30
+VERIFY_POLL_INTERVAL=1
+
+verify_fail() {
+  sudo systemctl status "$SERVICE.service" --no-pager -l | tail -30 || true
+  sudo journalctl "_SYSTEMD_INVOCATION_ID=$INVOCATION_ID" --no-pager | tail -30 || true
+  fail "$1"
 }
 
 verify() {
-  sleep 2
-  if ! systemctl is-active --quiet "$SERVICE.service"; then
-    sudo systemctl status "$SERVICE.service" --no-pager -l | tail -30
-    fail "$SERVICE is not active after restart"
-  fi
-  log "active: $SERVICE"
+  local waited=0
+  while (( waited < VERIFY_TIMEOUT )); do
+    if sudo journalctl "_SYSTEMD_INVOCATION_ID=$INVOCATION_ID" --no-pager 2>/dev/null \
+        | grep -qF "$VERIFY_LOG_PATTERN"; then
+      log "active: $SERVICE (listening)"
+      return 0
+    fi
+
+    if sudo systemctl is-failed --quiet "$SERVICE.service" 2>/dev/null; then
+      verify_fail "$SERVICE entered failed state during startup"
+    fi
+
+    local current_nrestarts
+    current_nrestarts="$(sudo systemctl show -p NRestarts --value "$SERVICE.service")"
+    if (( current_nrestarts > PRE_RESTART_NRESTARTS )); then
+      verify_fail "$SERVICE crash-looped during startup (NRestarts $PRE_RESTART_NRESTARTS -> $current_nrestarts)"
+    fi
+
+    sleep "$VERIFY_POLL_INTERVAL"
+    waited=$(( waited + VERIFY_POLL_INTERVAL ))
+  done
+
+  verify_fail "$SERVICE did not report listening within ${VERIFY_TIMEOUT}s"
 }
 
 main() {
