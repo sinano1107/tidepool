@@ -48,6 +48,13 @@ import {
   type Task,
 } from "./tasks.js";
 import { getThrottleState, isPickupBlocked } from "./throttle.js";
+import type { TranslationClient } from "./translate.js";
+import {
+  TranslationTargetError,
+  translateHandoff,
+  translateLogEntry,
+  translateQuestion,
+} from "./translation.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -272,6 +279,17 @@ const displayLanguageSchema = z.object({
   language: z.string().min(1),
 });
 
+// display-time translation (issue #47 / ADR 0015): a discriminated union over
+// the 3 UX surfaces (CONTEXT.md's toggles) — triage log skim (log_entry,
+// covering both a decision-log line and a completion report by event id),
+// question card, handoff expansion. Option labels and task title are never a
+// target (out of scope by design, not merely unimplemented).
+const translateRequestSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("log_entry"), event_id: z.number().int() }),
+  z.object({ type: z.literal("question"), task_id: z.string().min(1) }),
+  z.object({ type: z.literal("handoff"), task_id: z.string().min(1) }),
+]);
+
 /** IANA name existence check: an unknown zone throws inside the
  *  Intl.DateTimeFormat constructor itself (issue #63) — no separate
  *  allowlist to keep in sync with the runtime's own tz database. */
@@ -407,6 +425,10 @@ export interface ApiRouterDeps {
    *  null on a failed probe. Absent → no CLI to enumerate against; GET /api/
    *  skills degrades to an empty candidate set (never 503 — see the route). */
   hostSkills?: () => Promise<string[] | null>;
+  /** The display-time translation seam (issue #47 / ADR 0015). Absent →
+   *  POST /api/translate reports the LLM as unreachable, same 503 posture as
+   *  no draftClient configured. */
+  translationClient?: TranslationClient;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -428,6 +450,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     agentAdmin,
     profileAdmin,
     hostSkills,
+    translationClient,
   } = deps;
   const router = Router();
   router.use(json());
@@ -1127,6 +1150,43 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
       res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
+    }
+  });
+
+  // display-time translation (issue #47 / ADR 0015): canonical text stays
+  // English on every board surface — this derives a translated view at read
+  // time, never stored back onto the task/event. Cache-first (translation.ts's
+  // translateSource): a re-request for the same source+language never calls
+  // the LLM twice. Any TranslationClient failure gets the same "outage" 503
+  // /tasks/draft uses — a target that simply doesn't resolve (unknown id,
+  // wrong task type, no content) is a 404 instead, since it's a request
+  // problem, not an LLM outage.
+  router.post("/translate", async (req, res) => {
+    const parsed = translateRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!translationClient) {
+      res.status(503).json({ error: "translation client not configured" });
+      return;
+    }
+    const language = getDisplayLanguage(db);
+    try {
+      const target = parsed.data;
+      const outcome =
+        target.type === "log_entry"
+          ? await translateLogEntry(db, translationClient, target.event_id, language, clock.now())
+          : target.type === "question"
+            ? await translateQuestion(db, translationClient, target.task_id, language, clock.now())
+            : await translateHandoff(db, translationClient, target.task_id, language, clock.now());
+      res.json(outcome);
+    } catch (err) {
+      if (err instanceof TranslationTargetError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      res.status(503).json({ error: err instanceof Error ? err.message : "translation failed" });
     }
   });
 

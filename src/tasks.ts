@@ -555,6 +555,32 @@ export function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
     .join("\n\n");
 }
 
+const HANDOFF_HEADING_SET: ReadonlySet<string> = new Set(Object.values(HANDOFF_HEADINGS));
+
+/** The structural inverse of renderHandoffMarkdown (issue #47): only the
+ *  rendered blob is stored on a task row (the per-field HandoffDoc is never
+ *  persisted separately), so display-time translation of a handoff doc must
+ *  recover its `## heading` / body sections mechanically rather than ask the
+ *  model to preserve them — the headings are board scaffolding (ADR 0015's
+ *  precision addendum), never sent to a translation call. Only a line whose
+ *  text matches one of HANDOFF_HEADINGS' own fixed strings counts as a
+ *  boundary — a bare `/^## /` would misfire on free-form agent prose (a
+ *  markdown subheading in resume_context, a `## ` shell comment inside a
+ *  fenced code block), splitting the body and sending a body line to the
+ *  translator as if it were scaffolding. */
+export function splitHandoffMarkdown(doc: string): Array<{ heading: string; body: string }> {
+  const sections: Array<{ heading: string; body: string[] }> = [];
+  for (const line of doc.split("\n")) {
+    const heading = /^## (.+)$/.exec(line);
+    if (heading && HANDOFF_HEADING_SET.has(heading[1]!)) {
+      sections.push({ heading: heading[1]!, body: [] });
+    } else if (sections.length > 0) {
+      sections[sections.length - 1]!.body.push(line);
+    }
+  }
+  return sections.map((s) => ({ heading: s.heading, body: s.body.join("\n").trim() }));
+}
+
 export class DomainError extends Error {}
 
 /** Hand the queue head to a worker: in_progress + event, atomically. `assignee`

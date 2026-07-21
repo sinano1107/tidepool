@@ -238,6 +238,25 @@ export function openDb(path: string): Db {
       language TEXT NOT NULL DEFAULT 'Japanese'
     );
 
+    -- display-time translation cache (issue #47 / ADR 0015): keyed by a hash
+    -- of the source fragment (not an event id) so every translation target —
+    -- decision-log line, completion report, question purpose/item, handoff
+    -- doc section — shares one lookup shape regardless of whether its source
+    -- lives on an events row or a tasks row. Log entries are immutable
+    -- (CONTEXT.md: 記録は不滅・不変) so a cache hit never needs invalidating.
+    CREATE TABLE IF NOT EXISTS translation_cache (
+      source_hash           TEXT NOT NULL,
+      language              TEXT NOT NULL,
+      translated            TEXT NOT NULL,
+      input_tokens          INTEGER NOT NULL,
+      output_tokens         INTEGER NOT NULL,
+      cache_read_tokens     INTEGER NOT NULL,
+      cache_creation_tokens INTEGER NOT NULL,
+      estimated_cost_usd    REAL NOT NULL,
+      created_at            TEXT NOT NULL,
+      PRIMARY KEY (source_hash, language)
+    );
+
     -- the merge dial's auto_if_ci_green queue (issue #11): a completed
     -- low-risk task's just-opened PR, awaiting the CI poll to merge it
     -- unattended. Removed once resolved (merged, or converted to an

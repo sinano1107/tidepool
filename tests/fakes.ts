@@ -14,6 +14,7 @@ import type {
 } from "../src/github.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
+import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 
 /** A reading well under the default threshold — the harness default so tests
@@ -325,5 +326,37 @@ export class FakeDraftClient implements DraftClient {
 
   scriptHandoffFailure(err: Error): void {
     this.handoffFailure = err;
+  }
+}
+
+const DEFAULT_TRANSLATION_USAGE = {
+  input_tokens: 10,
+  output_tokens: 5,
+  cache_read_tokens: 0,
+  cache_creation_tokens: 0,
+  estimated_cost_usd: 0.0001,
+};
+
+/** Scripted stand-in at the TranslationClient seam (issue #47): records every
+ *  (source, language) pair it was asked to translate, in call order — tests
+ *  assert on `.calls.length` to prove a cache hit skipped a real call. */
+export class FakeTranslationClient implements TranslationClient {
+  readonly calls: Array<{ source: string; language: string }> = [];
+  private response: string | ((source: string) => string) = (source) => `[translated] ${source}`;
+  private failure: Error | null = null;
+
+  async translate(source: string, language: string): Promise<TranslationResult> {
+    this.calls.push({ source, language });
+    if (this.failure) throw this.failure;
+    const text = typeof this.response === "function" ? this.response(source) : this.response;
+    return { text, usage: DEFAULT_TRANSLATION_USAGE };
+  }
+
+  scriptTranslation(text: string | ((source: string) => string)): void {
+    this.response = text;
+  }
+
+  scriptFailure(err: Error): void {
+    this.failure = err;
   }
 }

@@ -179,6 +179,13 @@ export function taskDecisionLog(db: Db, taskId: string): EventRow[] {
   return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as EventPayload }));
 }
 
+export function getEvent(db: Db, id: number): EventRow | undefined {
+  const row = db.prepare("SELECT * FROM events WHERE id = ?").get(id) as
+    | (Omit<EventRow, "payload"> & { payload: string })
+    | undefined;
+  return row && { ...row, payload: JSON.parse(row.payload) as EventPayload };
+}
+
 export function listEvents(db: Db, taskId: string): EventRow[] {
   const rows = db
     .prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id")

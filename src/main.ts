@@ -1,12 +1,16 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
+import { ClaudeTranslationClient } from "./claude-translation-client.js";
 import { ClaudeCodeWorker, enumerateHostSkills } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
 import { loadGitHubAuth } from "./github-auth.js";
+import { parseGlossary } from "./glossary.js";
 import {
   createProfile,
   listProfileViews,
@@ -23,6 +27,7 @@ import {
 } from "./registry.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
+import type { TranslationClient } from "./translate.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
   resolveExecutionWorkspace,
@@ -195,6 +200,32 @@ function draftClientFactory(): DraftClient | undefined {
   return new ClaudeDraftClient({ candidates: registryCandidates() });
 }
 
+// this board's own CONTEXT.md (issue #47): resolved against the module's own
+// file location, not process.cwd(), so it finds the checkout regardless of
+// where the process was launched from — same posture as server.ts's static
+// `root` (dirname(fileURLToPath(import.meta.url)) + "..").
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** CONTEXT.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
+ *  for the translation client's prompt. Absent/unreadable CONTEXT.md → no
+ *  glossary guidance rather than a boot failure — the glossary sharpens
+ *  translation quality, it isn't required for the feature to function. */
+function boardGlossary(): ReturnType<typeof parseGlossary> {
+  try {
+    return parseGlossary(readFileSync(join(repoRoot, "CONTEXT.md"), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+/** TranslationClient (issue #47 / ADR 0015's display-time translation),
+ *  wired to the real Claude CLI. Unlike draftClientFactory, this needs no
+ *  registry — only the `claude` CLI and the board's own CONTEXT.md — so it's
+ *  always configured, never gated. */
+function translationClientFactory(): TranslationClient {
+  return new ClaudeTranslationClient({ glossary: boardGlossary() });
+}
+
 /** Web Push (issue #14): all three VAPID env vars must be set together, or
  *  push stays off — a partial configuration would silently drop every send.
  *  The single source both pushClient() and the API's vapidPublicKey option
@@ -284,6 +315,7 @@ const server = await startServer({
   // candidates must reflect agents/workspaces created live through settings
   registryCandidates: registryCandidates,
   draftClient: draftClientFactory(),
+  translationClient: translationClientFactory(),
   push: pushClient(),
   vapidPublicKey: vapidConfig()?.publicKey,
   auditorName,

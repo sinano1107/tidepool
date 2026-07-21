@@ -11,6 +11,7 @@ import type { ProfileAdmin } from "../src/profile-create.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "../src/registry.js";
 import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
+import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
@@ -66,6 +67,9 @@ export interface BootOptions {
   /** The LLM draft seam (issue #12). Absent (the default) — same as no LLM
    *  configured, matching the "LLM outage" fallback path. */
   draftClient?: DraftClient;
+  /** The display-time translation seam (issue #47). Absent (the default) —
+   *  same "unreachable" posture as no draftClient configured. */
+  translationClient?: TranslationClient;
   /** The board's Auditor pointer (issue #15 layer 2). Absent → falls back to
    *  `DEFAULT_AUDITOR_NAME` inside `commitTriage` itself. */
   auditorName?: string;
@@ -131,6 +135,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     // directly, otherwise wrap the static snapshot
     registryCandidates: normalizeCandidates(options.registryCandidates),
     draftClient: options.draftClient,
+    translationClient: options.translationClient,
     push,
     auditorName: options.auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,

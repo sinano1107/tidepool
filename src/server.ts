@@ -16,6 +16,7 @@ import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./regist
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
+import type { TranslationClient } from "./translate.js";
 import { autoCommitStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
@@ -114,6 +115,9 @@ export interface ServerOptions {
    *  main.ts to the adapter's neutral-cwd /usage ping. Absent → GET /api/skills
    *  degrades to an empty candidate set (never 503). */
   hostSkills?: () => Promise<string[] | null>;
+  /** The display-time translation seam (issue #47 / ADR 0015). Absent →
+   *  POST /api/translate reports the LLM as unreachable. */
+  translationClient?: TranslationClient;
 }
 
 export interface TidepoolServer {
@@ -245,6 +249,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentAdmin: options.agentAdmin,
       profileAdmin: options.profileAdmin,
       hostSkills: options.hostSkills,
+      translationClient: options.translationClient,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing
