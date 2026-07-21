@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Unit tests for verify()/verify_fail() in deploy-pi.sh (issue #98 regression
 # guard). Runs entirely without a real Pi/systemd: sudo/systemctl/journalctl
-# are stubbed here and deploy-pi.sh is sourced (not executed) so its
-# functions can be called directly against the stubs.
+# are stubbed here, and each case sources deploy-pi.sh into a fresh `bash -c`
+# subprocess (see run_verify) so its functions run against the stubs.
 #
 # This only exercises verify()'s control flow (log-line success, failed-unit
 # abort, crash-loop abort, timeout). It does not replace the Pi smoke test in
@@ -29,6 +29,7 @@ BASE_NRESTARTS=5
 LOG_APPEARS_AT=""
 FAILED_AT=""
 NRESTARTS_AT=""
+NRESTARTS_SHOW_FAILS_AT="" # iteration at which `systemctl show -p NRestarts` itself errors out (transient failure), not just reports a bump
 
 sleep() { :; } # keep the timeout test fast; verify()'s only use of sleep
 
@@ -64,6 +65,9 @@ fake_systemctl() {
         NRestarts)
           local iter
           iter=$(cat "$ITER_FILE")
+          if [[ -n "$NRESTARTS_SHOW_FAILS_AT" ]] && (( iter == NRESTARTS_SHOW_FAILS_AT )); then
+            return 1 # simulate a transient `sudo systemctl show` failure (no output, nonzero exit)
+          fi
           if [[ -n "$NRESTARTS_AT" ]] && (( iter >= NRESTARTS_AT )); then
             echo "$((BASE_NRESTARTS + 1))"
           else
@@ -95,10 +99,6 @@ sudo() {
   esac
 }
 
-# --- load deploy-pi.sh as functions only ------------------------------------
-
-source "$SCRIPT_DIR/deploy-pi.sh"
-
 # --- test framework ----------------------------------------------------------
 
 PASS=0
@@ -109,14 +109,25 @@ reset_state() {
   LOG_APPEARS_AT=""
   FAILED_AT=""
   NRESTARTS_AT=""
+  NRESTARTS_SHOW_FAILS_AT=""
   PRE_RESTART_NRESTARTS="$BASE_NRESTARTS"
   INVOCATION_ID="fake-invocation-id"
 }
 
-# run_verify sets $rc and $output; must not let verify()'s internal `exit 1`
-# (via fail()) kill this test script, and must not trip our own set -e.
+# run_verify sets $rc and $output. verify() runs in a genuinely separate
+# `bash -c` subprocess, invoked there as a bare top-level command (exactly
+# how main() calls it for real) rather than inside this script's own
+# `$(...) && ... || ...` capture. That distinction matters: bash suspends
+# errexit for anything executed *as* the tested command of an if/&&/||
+# — including whatever it calls into — so calling verify() directly inline
+# here would silently hide a `set -e` kill inside it (that hid the very bug
+# this fix addresses, see the "transient NRestarts read failure" case below).
+# A separate subprocess has no such context, so its own errexit is real.
 run_verify() {
-  output=$(verify 2>&1) && rc=0 || rc=$?
+  export ITER_FILE LOG_APPEARS_AT FAILED_AT NRESTARTS_AT NRESTARTS_SHOW_FAILS_AT \
+    BASE_NRESTARTS PRE_RESTART_NRESTARTS INVOCATION_ID SCRIPT_DIR
+  export -f sleep next_iter fake_journalctl fake_systemctl sudo
+  output=$(bash -c 'set -euo pipefail; source "$SCRIPT_DIR/deploy-pi.sh"; verify' 2>&1) && rc=0 || rc=$?
 }
 
 assert_eq() {
@@ -167,6 +178,17 @@ reset_state
 run_verify
 assert_eq "timeout: exit 1 when nothing ever happens" "1" "$rc"
 assert_contains "timeout: reason mentions timeout" "did not report listening" "$output"
+
+# regression case for the review fix: a transient `sudo systemctl show -p
+# NRestarts` failure (e.g. sudo hiccup) must not kill the poll loop via
+# set -e — it should just be skipped for that iteration, and verify() should
+# keep polling and still succeed once the listening log shows up.
+reset_state
+NRESTARTS_SHOW_FAILS_AT=1
+LOG_APPEARS_AT=3
+run_verify
+assert_eq "transient NRestarts read failure: loop survives, exit 0" "0" "$rc"
+assert_contains "transient NRestarts read failure: still detects listening" "active:" "$output"
 
 # --- summary ---------------------------------------------------------------
 
