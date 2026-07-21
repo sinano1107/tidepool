@@ -784,6 +784,53 @@ export function cancelTask(
   })();
 }
 
+/** The four pure preconditions an answer submission must clear before any
+ *  caller may run a side effect on its behalf (issue #111): type is
+ *  "question", status is still "todo", the answer count matches the
+ *  question's item count, and — for a fixed-choice question — every answer
+ *  is one of its item's declared options. `answerQuestion` below calls this
+ *  first as its own self-defense (a direct caller, e.g. a test, gets the
+ *  same rejection it always has); see its call site in api.ts's answer route
+ *  for why this must also run there, before any side effect. */
+export function assertAnswerable(question: Task, answers: string[]): void {
+  if (question.type !== "question") {
+    throw new DomainError("only a question task can be answered");
+  }
+  if (question.status !== "todo") {
+    throw new DomainError(`a ${question.status} question cannot be answered`);
+  }
+  const items = question.question_items!;
+  if (answers.length !== items.length) {
+    throw new DomainError(
+      `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
+    );
+  }
+  // a system-registered question with a real external side effect (merge,
+  // PR promotion, pending-child materialization, retry-vs-abandon) commits
+  // to a fixed choice — a typo must not silently settle one as though it
+  // were an option (issue #105: a "retry" typo on a PR promotion failure
+  // question used to settle it with no retry and no recorded abandon
+  // either). This deliberately leaves two documented exceptions untouched:
+  // an agent's own escalate question, whose free-text override is a real
+  // feature (escalate.test.ts), and a Confirmation question (quarantine
+  // resolution), which takes any answer text as a repair note (CONTEXT.md's
+  // Quarantine) — neither carries this kind of consequence.
+  const isFixedChoiceQuestion =
+    question.question_pending_merge_pr !== null ||
+    question.question_pending_pr_promotion_task_id !== null ||
+    question.question_pending_child !== null ||
+    question.question_cancel_option !== null;
+  if (isFixedChoiceQuestion) {
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i]!.options.includes(answers[i]!)) {
+        throw new DomainError(
+          `answer "${answers[i]}" is not one of item ${i}'s options: ${items[i]!.options.join(", ")}`,
+        );
+      }
+    }
+  }
+}
+
 /** The human steering channel: answer a question from the WebUI. One answer
  *  per item, in item order — the submission is atomic (issue #30): a length
  *  mismatch is refused outright and nothing is persisted, so a partial-answer
@@ -831,42 +878,8 @@ export function answerQuestion(
    *  leaves the event shape exactly as it was before this existed. */
   comment?: string,
 ): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
-  if (question.type !== "question") {
-    throw new DomainError("only a question task can be answered");
-  }
-  if (question.status !== "todo") {
-    throw new DomainError(`a ${question.status} question cannot be answered`);
-  }
+  assertAnswerable(question, answers);
   const items = question.question_items!;
-  if (answers.length !== items.length) {
-    throw new DomainError(
-      `this question carries ${items.length} item(s), but ${answers.length} answer(s) were submitted`,
-    );
-  }
-  // a system-registered question with a real external side effect (merge,
-  // PR promotion, pending-child materialization, retry-vs-abandon) commits
-  // to a fixed choice — a typo must not silently settle one as though it
-  // were an option (issue #105: a "retry" typo on a PR promotion failure
-  // question used to settle it with no retry and no recorded abandon
-  // either). This deliberately leaves two documented exceptions untouched:
-  // an agent's own escalate question, whose free-text override is a real
-  // feature (escalate.test.ts), and a Confirmation question (quarantine
-  // resolution), which takes any answer text as a repair note (CONTEXT.md's
-  // Quarantine) — neither carries this kind of consequence.
-  const isFixedChoiceQuestion =
-    question.question_pending_merge_pr !== null ||
-    question.question_pending_pr_promotion_task_id !== null ||
-    question.question_pending_child !== null ||
-    question.question_cancel_option !== null;
-  if (isFixedChoiceQuestion) {
-    for (let i = 0; i < items.length; i++) {
-      if (!items[i]!.options.includes(answers[i]!)) {
-        throw new DomainError(
-          `answer "${answers[i]}" is not one of item ${i}'s options: ${items[i]!.options.join(", ")}`,
-        );
-      }
-    }
-  }
   const answer = answers[0]!;
   let parentUnblocked = false;
   let pickupResumed = false;

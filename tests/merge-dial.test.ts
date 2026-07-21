@@ -117,6 +117,30 @@ it("answering \"merge\" while CI is not green is rejected, and the question stay
   expect(stillOpen.status).toBe("todo");
 });
 
+it("a malformed POST (answer count mismatch) to an open merge question is rejected before any CI check or merge (issue #111)", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({
+    workspace: ws,
+    authority: { name: "standard", guidance: "", merge: "escalate" },
+  });
+  const { question } = await completeUnderEscalate(t);
+  t.github.scriptCiStatus("success");
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge", "x"],
+  });
+  expect(answered.status).toBe(409);
+
+  // before issue #111 this ran the live CI check and the real merge before
+  // answerQuestion's own length validation ever threw — leaving GitHub
+  // actually merged while the board recorded nothing
+  expect(t.github.ciChecks).toEqual([]);
+  expect(t.github.merged).toEqual([]);
+
+  const stillOpen = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
+  expect(stillOpen.status).toBe("todo");
+});
+
 it("answering \"hold\" resolves the question without checking CI or merging", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({

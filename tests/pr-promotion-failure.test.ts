@@ -201,3 +201,35 @@ it("a typo'd answer is rejected outright instead of silently settling the questi
     question_answer: null,
   });
 });
+
+it("a malformed POST (answer count mismatch) to an open promotion-failure question is rejected before any retry (issue #111)", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  t.github.scriptFailure(new Error("token expired"));
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question",
+  );
+  t.github.scriptFailure(null);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["retry", "x"],
+  });
+
+  // before issue #111 this ran retryPrPromotion's real PR-open before
+  // answerQuestion's own length validation ever threw — leaving a real PR
+  // (and a real merge question) with nothing recorded on the board
+  expect(answered.status).toBe(409);
+  expect(t.github.requests).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
+  expect((await api(t.baseUrl, "GET", "/api/tasks")).json).not.toContainEqual(
+    expect.objectContaining({ question_pending_merge_pr: 1 }),
+  );
+});
