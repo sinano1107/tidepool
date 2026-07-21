@@ -8,8 +8,9 @@ import { getCachedTranslation, hashSource, saveTranslation } from "./translation
 /** Raised when a translation request names a target that doesn't resolve to
  *  translatable source text — an unknown event id, an event that isn't a
  *  decision-log entry, a completion report with no result text (issue #47).
- *  Mapped to a 4xx by the API layer, same DomainError-maps-to-4xx posture
- *  tasks.ts's own errors get. */
+ *  Deliberately its own type rather than tasks.ts's `DomainError`: this is a
+ *  "no such resource" failure (mapped to 404 by the API layer), not the
+ *  in-authority-but-rejected shape `DomainError` covers (400/409 there). */
 export class TranslationTargetError extends Error {}
 
 export type TranslationOutcome =
@@ -68,6 +69,31 @@ export async function translateLogEntry(
   return translateSource(db, client, source, language, now);
 }
 
+/** Internal short-circuit for a multi-fragment translation (a handoff's
+ *  sections, a question's purpose/items): thrown by translateTracked instead
+ *  of each caller repeating its own "outcome.status === 'throttled' → early
+ *  return" check. Never escapes this module — every exported multi-fragment
+ *  translator catches it at its own top level. */
+class ThrottledSignal extends Error {}
+
+/** Translates one fragment and folds its cache-hit status into `tracker`
+ *  (issue #47) — the shared body behind translateHandoff/translateQuestion's
+ *  per-fragment loops, so "translate, note throttled, fold into allCached"
+ *  is written once. */
+async function translateTracked(
+  db: Db,
+  client: TranslationClient,
+  source: string,
+  language: string,
+  now: Date,
+  tracker: { allCached: boolean },
+): Promise<string> {
+  const outcome = await translateSource(db, client, source, language, now);
+  if (outcome.status === "throttled") throw new ThrottledSignal();
+  tracker.allCached = tracker.allCached && outcome.cached;
+  return outcome.text;
+}
+
 export type TranslateHandoffOutcome =
   | { status: "translated"; doc: string; cached: boolean }
   | { status: "throttled" };
@@ -91,15 +117,18 @@ export async function translateHandoff(
   if (!task.handoff_doc) throw new TranslationTargetError(`task ${taskId} has no handoff doc`);
   const sections = splitHandoffMarkdown(task.handoff_doc);
 
-  let allCached = true;
-  const translatedSections: string[] = [];
-  for (const section of sections) {
-    const outcome = await translateSource(db, client, section.body, language, now);
-    if (outcome.status === "throttled") return { status: "throttled" };
-    allCached = allCached && outcome.cached;
-    translatedSections.push(`## ${section.heading}\n\n${outcome.text}`);
+  const tracker = { allCached: true };
+  try {
+    const translatedSections: string[] = [];
+    for (const section of sections) {
+      const text = await translateTracked(db, client, section.body, language, now, tracker);
+      translatedSections.push(`## ${section.heading}\n\n${text}`);
+    }
+    return { status: "translated", doc: translatedSections.join("\n\n"), cached: tracker.allCached };
+  } catch (err) {
+    if (err instanceof ThrottledSignal) return { status: "throttled" };
+    throw err;
   }
-  return { status: "translated", doc: translatedSections.join("\n\n"), cached: allCached };
 }
 
 export interface TranslatedQuestionItem {
@@ -128,24 +157,21 @@ export async function translateQuestion(
   if (!task) throw new TranslationTargetError(`no task with id ${taskId}`);
   if (task.type !== "question") throw new TranslationTargetError(`task ${taskId} is not a question`);
 
-  const purposeOutcome = await translateSource(db, client, task.purpose, language, now);
-  if (purposeOutcome.status === "throttled") return { status: "throttled" };
-  let allCached = purposeOutcome.cached;
-
-  const items: TranslatedQuestionItem[] = [];
-  for (const item of task.question_items ?? []) {
-    const titleOutcome = await translateSource(db, client, item.title, language, now);
-    if (titleOutcome.status === "throttled") return { status: "throttled" };
-    allCached = allCached && titleOutcome.cached;
-
-    let detail: string | undefined;
-    if (item.detail !== undefined) {
-      const detailOutcome = await translateSource(db, client, item.detail, language, now);
-      if (detailOutcome.status === "throttled") return { status: "throttled" };
-      allCached = allCached && detailOutcome.cached;
-      detail = detailOutcome.text;
+  const tracker = { allCached: true };
+  try {
+    const purpose = await translateTracked(db, client, task.purpose, language, now, tracker);
+    const items: TranslatedQuestionItem[] = [];
+    for (const item of task.question_items ?? []) {
+      const title = await translateTracked(db, client, item.title, language, now, tracker);
+      const detail =
+        item.detail !== undefined
+          ? await translateTracked(db, client, item.detail, language, now, tracker)
+          : undefined;
+      items.push({ title, detail });
     }
-    items.push({ title: titleOutcome.text, detail });
+    return { status: "translated", purpose, items, cached: tracker.allCached };
+  } catch (err) {
+    if (err instanceof ThrottledSignal) return { status: "throttled" };
+    throw err;
   }
-  return { status: "translated", purpose: purposeOutcome.text, items, cached: allCached };
 }

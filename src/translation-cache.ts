@@ -50,7 +50,11 @@ export function getCachedTranslation(
 }
 
 /** Log entries are immutable (CONTEXT.md: 記録は不滅・不変), so a cached
- *  translation stays valid forever — this only ever inserts, never updates. */
+ *  translation stays valid forever — this only ever inserts, never updates.
+ *  `OR IGNORE`: two concurrent misses on the same source+language (e.g. a
+ *  question's purpose translated twice from overlapping requests) can both
+ *  reach here before either's row lands — the loser's insert is a silent
+ *  no-op rather than a UNIQUE-constraint throw, first writer wins. */
 export function saveTranslation(
   db: Db,
   sourceHash: string,
@@ -60,7 +64,7 @@ export function saveTranslation(
   now: Date,
 ): void {
   db.prepare(
-    `INSERT INTO translation_cache
+    `INSERT OR IGNORE INTO translation_cache
        (source_hash, language, translated, input_tokens, output_tokens,
         cache_read_tokens, cache_creation_tokens, estimated_cost_usd, created_at)
      VALUES (@sourceHash, @language, @translated, @input_tokens, @output_tokens,
@@ -72,4 +76,41 @@ export function saveTranslation(
     ...usage,
     createdAt: now.toISOString(),
   });
+}
+
+export interface TranslationUsageRecord {
+  language: string;
+  usage: TranslationUsage;
+  createdAt: string;
+}
+
+interface TranslationUsageRow extends TranslationCacheRow {
+  language: string;
+  created_at: string;
+}
+
+/** Every generated (non-cached) translation's token usage, oldest first
+ *  (issue #47's "record it the same way worker sessions do, make it
+ *  observable"): a cache hit never adds a row (saveTranslation only runs on
+ *  a miss), so this lists exactly the LLM calls actually made, same as
+ *  GET /api/tasks/:id/events surfaces a work task's worker_exited usage. */
+export function listTranslationUsage(db: Db): TranslationUsageRecord[] {
+  const rows = db
+    .prepare(
+      `SELECT language, translated, input_tokens, output_tokens, cache_read_tokens,
+              cache_creation_tokens, estimated_cost_usd, created_at
+         FROM translation_cache ORDER BY created_at`,
+    )
+    .all() as TranslationUsageRow[];
+  return rows.map((row) => ({
+    language: row.language,
+    usage: {
+      input_tokens: row.input_tokens,
+      output_tokens: row.output_tokens,
+      cache_read_tokens: row.cache_read_tokens,
+      cache_creation_tokens: row.cache_creation_tokens,
+      estimated_cost_usd: row.estimated_cost_usd,
+    },
+    createdAt: row.created_at,
+  }));
 }

@@ -52,3 +52,14 @@ it("同じソースでも言語が異なればキャッシュは独立してい�
 
   expect(getCachedTranslation(db, hash, "French")).toBeUndefined();
 });
+
+it("同じ source_hash+language への2回目の保存は例外を投げない(同時翻訳リクエストの競合対策)", async () => {
+  const db = await freshDb();
+  const hash = hashSource("settled");
+  const now = new Date("2026-07-21T00:00:00Z");
+  saveTranslation(db, hash, "Japanese", "決着", USAGE, now);
+
+  expect(() => saveTranslation(db, hash, "Japanese", "別訳", USAGE, now)).not.toThrow();
+  // first writer wins — the row is never silently corrupted by the loser
+  expect(getCachedTranslation(db, hash, "Japanese")?.translated).toBe("決着");
+});

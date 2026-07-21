@@ -55,6 +55,7 @@ import {
   translateLogEntry,
   translateQuestion,
 } from "./translation.js";
+import { listTranslationUsage } from "./translation-cache.js";
 import {
   activeTriageSession,
   addScratchpadLine,
@@ -1174,12 +1175,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const language = getDisplayLanguage(db);
     try {
       const target = parsed.data;
-      const outcome =
-        target.type === "log_entry"
-          ? await translateLogEntry(db, translationClient, target.event_id, language, clock.now())
-          : target.type === "question"
-            ? await translateQuestion(db, translationClient, target.task_id, language, clock.now())
-            : await translateHandoff(db, translationClient, target.task_id, language, clock.now());
+      let outcome;
+      if (target.type === "log_entry") {
+        outcome = await translateLogEntry(db, translationClient, target.event_id, language, clock.now());
+      } else if (target.type === "question") {
+        outcome = await translateQuestion(db, translationClient, target.task_id, language, clock.now());
+      } else {
+        outcome = await translateHandoff(db, translationClient, target.task_id, language, clock.now());
+      }
       res.json(outcome);
     } catch (err) {
       if (err instanceof TranslationTargetError) {
@@ -1188,6 +1191,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
       res.status(503).json({ error: err instanceof Error ? err.message : "translation failed" });
     }
+  });
+
+  // every generated (non-cached) translation's token usage (issue #47's
+  // "record it the same way worker sessions do, make it observable") — a
+  // read path parallel to GET /api/tasks/:id/events surfacing worker_exited
+  // usage, since translation calls aren't tied to any one task/worker session.
+  router.get("/translate/usage", (_req, res) => {
+    res.json({ records: listTranslationUsage(db) });
   });
 
   // the decision log: events narrowed to human-facing kinds, oldest first,

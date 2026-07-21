@@ -156,3 +156,36 @@ it("不正なリクエストボディは 400 を返す", async () => {
   const res = await api(t.baseUrl, "POST", "/api/translate", { type: "bogus" });
   expect(res.status).toBe(400);
 });
+
+it("GET /api/translate/usage で生成済み翻訳のトークン消費を観測できる(完了基準: worker session と同様に観測可能)", async () => {
+  const translationClient = new FakeTranslationClient();
+  translationClient.scriptTranslation("訳文");
+  t = await bootTidepool({ translationClient });
+
+  const question = registerQuestion(t, {
+    title: "merge decision",
+    purpose: "CI passed, ready to merge?",
+    completion_criteria: "answered",
+    question: [{ title: "merge now?", options: ["merge", "hold"], recommendation: "merge" }],
+  });
+  // one generation (purpose) + one cache hit on re-request — usage is only
+  // ever recorded once per source+language, never on the cached replay
+  await api(t.baseUrl, "POST", "/api/translate", { type: "question", task_id: question.id });
+  await api(t.baseUrl, "POST", "/api/translate", { type: "question", task_id: question.id });
+
+  const res = await api(t.baseUrl, "GET", "/api/translate/usage");
+
+  expect(res.status).toBe(200);
+  expect(res.json.records).toHaveLength(2); // purpose + the item's title, each generated once
+  expect(res.json.records[0]).toEqual({
+    language: "Japanese",
+    usage: {
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      estimated_cost_usd: 0.0001,
+    },
+    createdAt: expect.any(String),
+  });
+});
