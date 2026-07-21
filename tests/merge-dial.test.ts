@@ -244,3 +244,26 @@ it("a risky task under auto_if_ci_green asks for merge approval immediately inst
   await t.clock.advance(MINUTE); // the auto-merge poll ticks; nothing was queued
   expect(t.github.merged).toEqual([]);
 });
+
+it("a settled merge-decision question cannot be re-answered into a merge", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({
+    workspace: ws,
+    authority: { name: "standard", guidance: "", merge: "escalate" },
+  });
+  const { question } = await completeUnderEscalate(t);
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["hold"],
+  });
+  t.github.scriptCiStatus("success");
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  // the hold decision is final: the late "merge" must be rejected before its
+  // side effect, not after — no CI check runs, no merge happens
+  expect(answered.status).toBe(409);
+  expect(t.github.ciChecks).toEqual([]);
+  expect(t.github.merged).toEqual([]);
+});

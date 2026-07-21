@@ -39,6 +39,7 @@ import {
   listQueue,
   listYourTasks,
   logDecision,
+  MERGE_QUESTION_OPTIONS,
   moveTask,
   PR_PROMOTION_FAILURE_OPTIONS,
   presentTask,
@@ -864,7 +865,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // a merge-decision question is always length-1 (CONTEXT.md's
       // Confirmation question — this one carries a real 2-way choice, not a
       // confirmation, but the bundle is still a single item)
-      const wantsMerge = mergePr !== null && parsed.data.answers[0] === "merge";
+      //
+      // gated on the question still being open, same as wantsPromotionRetry
+      // above: answerQuestion rejects a settled question below anyway, but
+      // the merge's side effect (a live CI check + a real merge) must not
+      // run first — a "hold" already taken would otherwise be overturned by
+      // one more POST (issue #105)
+      const wantsMerge =
+        task.status === "todo" &&
+        mergePr !== null &&
+        parsed.data.answers[0] === MERGE_QUESTION_OPTIONS[0];
       if (wantsMerge) {
         if (!github) {
           throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
