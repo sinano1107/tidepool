@@ -2,7 +2,7 @@ import webpush from "web-push";
 import type { Db } from "./db.js";
 import { HUMAN_FACING_KINDS } from "./events.js";
 import { isQuietHours } from "./quiet-hours.js";
-import { rowToTask, type Task, type TaskRow } from "./tasks.js";
+import { HUMAN_WORKER_ID, rowToTask, type Task, type TaskRow } from "./tasks.js";
 
 /** A browser's Web Push registration (the standard PushSubscription shape,
  *  flattened) — endpoint is the push service URL, p256dh/auth the keys
@@ -53,6 +53,18 @@ export function buildQuestionPushPayload(task: Task): PushPayload {
   return { title: task.title, body: task.purpose, url: `/?question=${task.id}` };
 }
 
+/** An agent-registered human task's push notification content (issue #116):
+ *  title is the task, body its purpose — the same shape as a question's, since
+ *  a human child blocks its parent the same way (CONTEXT.md's Quiet hours).
+ *  Unlike a question there is no single-task answer view to deep-link into: the
+ *  WebUI has no dedicated your-tasks screen yet (its `humanTasks` slice renders
+ *  empty — public/index.html), so the url lands on the board root, the same "/"
+ *  the morning digest itself uses. When a your-tasks view exists this is the
+ *  one place to repoint. */
+export function buildHumanTaskPushPayload(task: Task): PushPayload {
+  return { title: task.title, body: task.purpose, url: "/" };
+}
+
 /** Question tasks the human hasn't been pushed about yet — no row in
  *  question_notifications (issue #14) and still todo. A question answered
  *  directly on the board (bypassing the push deep link) before the next
@@ -76,12 +88,51 @@ export function markQuestionNotified(db: Db, taskId: string, now: Date): void {
   ).run(taskId, now.toISOString());
 }
 
+/** Human-assignee tasks the human hasn't been pushed about yet — the twin of
+ *  listUnnotifiedQuestions above (issue #116). Only a task registered *without*
+ *  a human operation counts: an agent's decompose registering it directly. The
+ *  registrant is read off the task's own `task_registered` event's worker_id —
+ *  tasks carry no registrant column of their own — and the two human-triggered
+ *  paths both stamp it `human` there (a WebUI registration and an approve
+ *  answer materializing a pending child, both via registerTask's
+ *  HUMAN_WORKER_ID default / explicit arg), so excluding worker_id = 'human'
+ *  keeps a human's own operation from pushing back at them (CONTEXT.md's Quiet
+ *  hours: "自分の操作のエコー"). Filtered on `status = 'todo'` like the question
+ *  query, so a task the human already settled before the next poll neither
+ *  re-pushes nor inflates the digest's "K your tasks" figure — a human task is
+ *  never picked up into the slot, so 'todo' is its whole live span. */
+export function listUnnotifiedHumanTasks(db: Db): Task[] {
+  const rows = db
+    .prepare(
+      `SELECT t.* FROM tasks t
+       JOIN events e ON e.task_id = t.id AND e.kind = 'task_registered'
+       LEFT JOIN human_task_notifications n ON n.task_id = t.id
+       WHERE t.assignee = @humanWorkerId AND t.status = 'todo'
+         AND e.worker_id <> @humanWorkerId AND n.task_id IS NULL
+       ORDER BY t.created_at`,
+    )
+    .all({ humanWorkerId: HUMAN_WORKER_ID }) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
+export function markHumanTaskNotified(db: Db, taskId: string, now: Date): void {
+  db.prepare(
+    "INSERT OR IGNORE INTO human_task_notifications (task_id, notified_at) VALUES (?, ?)",
+  ).run(taskId, now.toISOString());
+}
+
 /** Outside quiet hours, push each still-unnotified question individually
  *  (issue #14) — a poll rather than a hook at every registerTask call site,
  *  so every question-creating path (API, MCP escalate, watchdog failure,
  *  quarantine confirmation) is covered without threading push through each
  *  of them. Inside quiet hours, does nothing — they stay pending for the
- *  morning digest. Absent `push` (not configured), does nothing at all. */
+ *  morning digest. Absent `push` (not configured), does nothing at all.
+ *
+ *  Agent-registered human tasks ride the same poll (issue #116): they are
+ *  notification targets of equal urgency (both block their parent — CONTEXT.md's
+ *  Quiet hours), and the poll shape is exactly why this is a poll and not a
+ *  registerTask hook — a human task can enter through the API, MCP decompose,
+ *  or an approve materialization, and none of them needs to know about push. */
 export async function pollNotifications(deps: { db: Db; push?: PushClient }, now: Date): Promise<void> {
   const { db, push } = deps;
   if (!push) return;
@@ -93,6 +144,13 @@ export async function pollNotifications(deps: { db: Db; push?: PushClient }, now
       await sendOrLog(push, subscription, payload);
     }
     markQuestionNotified(db, task.id, now);
+  }
+  for (const task of listUnnotifiedHumanTasks(db)) {
+    const payload = buildHumanTaskPushPayload(task);
+    for (const subscription of subscriptions) {
+      await sendOrLog(push, subscription, payload);
+    }
+    markHumanTaskNotified(db, task.id, now);
   }
 }
 
@@ -124,26 +182,42 @@ function countLogEntriesSince(db: Db, lastReported: number): number {
   return count;
 }
 
-/** What the morning digest reports (issue #14) — the same "N questions · M
- *  new log" shape the triage tab badge already shows, folded into one push
- *  instead of N individual ones once quiet hours end. */
+/** What the morning digest reports (issue #14 / #116) — folded into one push
+ *  instead of N individual ones once quiet hours end. Now three counts:
+ *  unnotified questions, unnotified agent-registered human tasks (issue #116),
+ *  and new log entries — "the notification text doubles as the morning
+ *  session's budget estimate" (CONTEXT.md's Digest). The triage tab badge
+ *  (public/index.html) is deliberately NOT grown to match: it counts the
+ *  triage surface (questions to answer + unread log to skim), and your-tasks
+ *  is a separate list that isn't triaged — the digest reaches wider than the
+ *  badge because it estimates everything the morning holds, not just triage. */
 export interface MorningDigest {
   questionCount: number;
+  yourTaskCount: number;
   logCount: number;
   text: string;
 }
 
 export function buildMorningDigest(db: Db): MorningDigest {
   const questionCount = listUnnotifiedQuestions(db).length;
+  const yourTaskCount = listUnnotifiedHumanTasks(db).length;
   const logCount = countLogEntriesSince(db, getDigestCursor(db));
-  return { questionCount, logCount, text: `${questionCount} questions · ${logCount} new log entries` };
+  return {
+    questionCount,
+    yourTaskCount,
+    logCount,
+    text: `${questionCount} questions · ${yourTaskCount} your tasks · ${logCount} new log entries`,
+  };
 }
 
-/** Marks every currently-pending question notified and advances the digest
- *  cursor to "now" (issue #14) — the digest's one push stands in for all of
- *  them, so none of it is reported again by a later individual poll or digest. */
+/** Marks every currently-pending question and human task notified and advances
+ *  the digest cursor to "now" (issue #14 / #116) — the digest's one push stands
+ *  in for all of them, so none of it is reported again by a later individual
+ *  poll or digest. Kept symmetric with the two poll loops: every count the
+ *  digest folded in gets its notified-mark, or the next poll would re-push it. */
 export function recordDigestSent(db: Db, now: Date): void {
   for (const task of listUnnotifiedQuestions(db)) markQuestionNotified(db, task.id, now);
+  for (const task of listUnnotifiedHumanTasks(db)) markHumanTaskNotified(db, task.id, now);
   const { id: lastEventId } = (db.prepare("SELECT MAX(id) AS id FROM events").get() as {
     id: number | null;
   }) ?? { id: null };
@@ -155,7 +229,7 @@ export function recordDigestSent(db: Db, now: Date): void {
  *  quiet, no empty "0 questions, 0 log entries" push). */
 async function fireMorningDigest(db: Db, push: PushClient, now: Date): Promise<void> {
   const digest = buildMorningDigest(db);
-  if (digest.questionCount === 0 && digest.logCount === 0) return;
+  if (digest.questionCount === 0 && digest.yourTaskCount === 0 && digest.logCount === 0) return;
   const payload: PushPayload = { title: "Good morning", body: digest.text, url: "/" };
   for (const subscription of listPushSubscriptions(db)) await sendOrLog(push, subscription, payload);
   recordDigestSent(db, now);

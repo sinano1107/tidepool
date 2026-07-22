@@ -361,7 +361,8 @@ describe("ClaudeCodeWorker", () => {
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(systemPrompt).toContain("navigator — Navigation specialist");
     expect(systemPrompt).toContain(
-      "human — delegate to a human — runs outside the slot, as a question task",
+      "human — delegate to a human — runs outside the slot in their own task list; " +
+        "human attention is scarce, delegate only what genuinely needs a human",
     );
     // 明示リストに無い deckhand 自身は roster に現れない
     expect(systemPrompt).not.toContain("deckhand — General work agent");

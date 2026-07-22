@@ -19,9 +19,16 @@ export const HUMAN_WORKER_ID = "human";
  *  This English rule covers scaffolding (board/agent-authored text) only;
  *  human-authored payload (task titles, answers, objections, scratchpad)
  *  stays in whatever language the human wrote — see ADR 0015. */
+// The description said "as a question task" — a factual error (issue #116): a
+// human-assignee task lands as a *work* task in the your-tasks list, not as a
+// question. Corrected, and given the attention-budget hint the #116 grilling
+// asked for: the assignable_to gate guards human attention, not permission, so
+// the roster line itself should steer agents to delegate sparingly.
 export const HUMAN_ROSTER_AGENT: RosterAgent = {
   name: HUMAN_WORKER_ID,
-  description: "delegate to a human — runs outside the slot, as a question task",
+  description:
+    "delegate to a human — runs outside the slot in their own task list; " +
+    "human attention is scarce, delegate only what genuinely needs a human",
 };
 
 /** Worker id the board acts under when it enforces its own rules (issue #8):

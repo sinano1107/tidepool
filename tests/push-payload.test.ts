@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQuestionPushPayload } from "../src/push.js";
+import { buildHumanTaskPushPayload, buildQuestionPushPayload } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
 
 function questionTask(overrides: Partial<Task> = {}): Task {
@@ -39,6 +39,26 @@ describe("buildQuestionPushPayload(issue #14): 通知タップで単発回答ビ
       title: "workspace を quarantine 解除していい?",
       body: "registry に復活していることを確認済み",
       url: "/?question=q-1",
+    });
+  });
+});
+
+describe("buildHumanTaskPushPayload(issue #116): 通知タップで your-tasks 着地", () => {
+  it("タイトルにタスク名、本文に purpose、url は your-tasks ビューへ", () => {
+    const task = questionTask({
+      id: "h-1",
+      type: "work",
+      assignee: "human",
+      title: "現地で植物を確認して",
+      purpose: "センサーでは分からない",
+      question_items: null,
+    });
+    expect(buildHumanTaskPushPayload(task)).toEqual({
+      title: "現地で植物を確認して",
+      body: "センサーでは分からない",
+      // no dedicated your-tasks view yet (humanTasks slice empty in
+      // index.html) — lands on the board root, like the digest's own "/"
+      url: "/",
     });
   });
 });
