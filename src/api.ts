@@ -33,6 +33,7 @@ import { RegistryCloneBusyError } from "./registry-write.js";
 import {
   answerQuestion,
   assertAnswerable,
+  assertNoUnsettledIssueRef,
   type BoardTask,
   completeTask,
   DomainError,
@@ -502,6 +503,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         !agentRegistered(parsed.data.assignee)
       ) {
         throw new DomainError(`unknown agent: ${parsed.data.assignee}`);
+      }
+      // the duplicate half of the registration gate (issue #104): board-local,
+      // so it runs before the costly GitHub fetch + LLM inspection below —
+      // registerTask enforces the same rule as the domain's own backstop,
+      // covering boards without a GitHub seam
+      if (parsed.data.github_issue_number !== undefined && parsed.data.workspace) {
+        assertNoUnsettledIssueRef(db, parsed.data.workspace, parsed.data.github_issue_number);
       }
       // the registration gate (issue #49 設計点4): an issue-backed
       // registration is the human's own synchronous request (ADR 0009) —
