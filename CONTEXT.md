@@ -157,7 +157,7 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 通常タスクと逆に、workspace は参照ではなく確定値(登録時に必須・焼き込み)— issue 参照では workspace が実行場所ではなく**内容の同一性**を担うため(既定差し替えで別リポジトリの同番号 issue に化けてはならない)。登録の門は人間のみ・type は work のみ(エージェントが issue を参照したければ、読んで自分の言葉で decompose するのが既存の道 — 分解の約束が decision log に残る)。
 
-登録時に「3要素を見いだせるか」の検査ゲートがあり、不合格は弾かれる。不足は AI がサジェストし、人間が UI で承認すると issue のコメントとして追記される(source of truth は GitHub 一本のまま)。ゲートは登録時の一度きりの検査であって不変条件ではない(Assignee の「登録時に検査、spawn 時に解決」と同型)。
+登録時に「3要素を見いだせるか」の検査ゲートがあり、不合格は弾かれる。同じ参照を持つ未決着の issue-backed task が既にある登録も拒否される(issue #104)— 重複は同一内容の二重実行と将来の確定的失敗(片方の merge が issue を閉じ、他方が close 済み参照になる)を製造するため。settled 済みの参照は再登録を妨げない(abandon 後の再挑戦は正当な再登録)。不足は AI がサジェストし、人間が UI で承認すると issue のコメントとして追記される(source of truth は GitHub 一本のまま)。ゲートは登録時の一度きりの検査であって不変条件ではない(Assignee の「登録時に検査、spawn 時に解決」と同型)。
 
 展開の失敗は2種に分かれる: **一時的失敗**(ネットワーク・GitHub 障害)はそのサイクルの pickup を skip する環境事象(Throttle と同じ fail-closed、人間を呼ばない)。**確定的失敗**(not found、close 済み)は retry / abandon の failure question(Watchdog と同じ形 — 分岐は人間の30秒の回答)。
 
