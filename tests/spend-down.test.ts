@@ -139,6 +139,32 @@ it("Pause が勝つ — pause 中は spend-down を有効化しても pickup せ
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });
 
+it("手動取り消しも再評価を発火する — 取り消し後の観測が通るなら hourly tick を待たず pickup し、throttle_state も最新化される", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "runs after cancel");
+
+  // session 100% — キャップが止めるので spend-down 有効化の poll でも pickup しない
+  const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
+  t.worker.scriptUsage(
+    usagePanelText({
+      session: { percent: 100, resetsAt },
+      week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
+    }),
+  );
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session" });
+  expect(t.worker.started).toEqual([]);
+
+  // 使用状況が健全に変わった後の取り消し — 発火しなければ次の tick まで観測されない
+  t.worker.scriptUsage(
+    usagePanelText({
+      session: { percent: 10, resetsAt },
+      week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
+    }),
+  );
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: null });
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+});
+
 it("spend-down は人間専用の操舵チャネル: MCP には一切公開されない(pause と同じ姿勢)", async () => {
   t = await bootTidepool();
   const client = await mcpClient(t.mcpBaseUrl);

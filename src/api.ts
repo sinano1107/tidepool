@@ -1365,10 +1365,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       clearSpendDown(db);
     } else {
       setSpendDown(db, parsed.data.window, clock.now());
-      // 有効化は「今すぐ残りを燃やせ」— ペース線で skip されていた pickup を
-      // hourly tick を待たず再評価させる(pause の resume と同じ唯一の発火点)
-      onQueueHeadChanged();
     }
+    // 有効化(今すぐ残りを燃やせ)も取り消しも即時再評価 — 取り消し側を tick 待ち
+    // にすると、spend-down 時代の throttle_state が最大1時間 UI に残る
+    // (ADR 0028「fail-closed は可視化とセット」の可視化の延長)
+    onQueueHeadChanged();
     res.json({ spendDown: spendDownJson() });
   });
 

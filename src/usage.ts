@@ -193,10 +193,6 @@ function evaluateWindow(
   return { throttled: true, resumeAt: new Date(catchUpMs) };
 }
 
-/** ADR 0030: session / week のどちらかがペース線を超えていれば盤面全体の新規
- *  pickup を絞る。fable 線は盤面を止めない — fable モデルのタスクだけを絞る
- *  資源単位の線で、windows.fable として運ばれ scheduler がタスク単位に適用する。
- *  実行中のタスクには決して触れない。 */
 /** Spend-down 中の対象ウィンドウの判定: ペース線の代わりに100%ハードキャップ
  *  (全ウィンドウ常時有効の唯一の上限)だけを見る。キャップ到達の再開見込みは
  *  リセット時刻そのもの — catch-up は存在しない(ADR 0030)。 */
@@ -219,6 +215,11 @@ export function isSpendDownExpired(spendDown: SpendDownState, snapshot: UsageSna
   return spendDown.activatedAt.getTime() < target.resetsAt.getTime() - windowMs;
 }
 
+/** ADR 0030: session / week のどちらかがペース線を超えていれば盤面全体の新規
+ *  pickup を絞る。fable 線は盤面を止めない — fable モデルのタスクだけを絞る
+ *  資源単位の線で、windows.fable として運ばれ scheduler がタスク単位に適用する。
+ *  実行中のタスクには決して触れない。spendDown(失効済みは無視)は対象
+ *  ウィンドウの判定を evaluateCappedWindow に差し替える。 */
 export function evaluateThrottle(
   snapshot: UsageSnapshot,
   offsets: PaceOffsets,
