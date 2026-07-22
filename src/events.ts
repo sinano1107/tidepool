@@ -79,6 +79,13 @@ export type EventPayload =
       kind: "worker_exited";
       exit_code: number | null;
       signal: string | null;
+      // issue #125: the tail (last ~20 lines) of the worker session's stderr,
+      // where process-level failures leave their evidence. null means the
+      // session wrote nothing there, keeping "quiet exit" distinguishable
+      // from a broken capture. The verbatim full text is saved by the worker
+      // adapter alongside its transcript (adapter-specific layout — ADR
+      // 0005); this field is the event-side pointer into it.
+      stderr_tail: string | null;
       usage: {
         input_tokens: number;
         output_tokens: number;
