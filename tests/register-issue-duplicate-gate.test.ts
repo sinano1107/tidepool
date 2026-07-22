@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTask, completeTask, registerTask } from "../src/tasks.js";
+import { cancelTask, completeTask, listBoard, registerTask } from "../src/tasks.js";
 import { FakeDraftClient } from "./fakes.js";
 import { api, bootTidepool, FULL_HANDOFF, type Tidepool } from "./harness.js";
 
@@ -27,6 +27,18 @@ describe("登録ゲートの重複検査(issue #104): 未決着の同一参照�
     const db = openDb(":memory:");
     const first = registerTask(db, ref, new Date(0));
     cancelTask(db, first, "origin-question", "tidepool", new Date(1));
+
+    const again = registerTask(db, ref, new Date(2));
+    expect(again.github_issue_number).toBe(49);
+  });
+
+  it("判定はタスク自身の status — done の親に未決着のレビュー子が残っていても再登録を妨げない", () => {
+    const db = openDb(":memory:");
+    const first = registerTask(db, { ...ref, review_flag: true }, new Date(0));
+    completeTask(db, first, FULL_HANDOFF, "reef-crab", new Date(1));
+    // 完了時レビュー子が未決着に残り、ツリーとしては未決着のまま
+    const review = listBoard(db).find((c) => c.type === "review" && c.parent_id === first.id);
+    expect(review).toBeDefined();
 
     const again = registerTask(db, ref, new Date(2));
     expect(again.github_issue_number).toBe(49);
