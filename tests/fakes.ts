@@ -21,9 +21,38 @@ import type { KillSignal, WorkerAdapter } from "../src/worker.js";
  *  unrelated to throttling never need to script usage themselves. Exported
  *  so other hand-rolled WorkerAdapter fakes (e.g. worker-failure.test.ts)
  *  don't each carry their own copy of the panel text. */
-export const NOT_THROTTLED_USAGE_TEXT =
-  "Current session\n0% used\nResets 12:00am (UTC)\n" +
-  "Current week (all models)\n0% used\nResets Jan 1 at 12:00am (UTC)\n";
+/** Renders a Date the way the /usage panel renders the session window's
+ *  reset (ADR 0028): no date, 12-hour clock, e.g. "5:59pm". */
+export function formatSessionResetTime(d: Date): string {
+  let hour = Number(d.toLocaleString("en-US", { timeZone: "UTC", hour: "numeric", hour12: false }));
+  const minute = d.toLocaleString("en-US", { timeZone: "UTC", minute: "2-digit" });
+  const meridiem = hour >= 12 ? "pm" : "am";
+  hour = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour}:${minute.padStart(2, "0")}${meridiem}`;
+}
+
+/** Renders a Date the way the /usage panel renders the week window's reset:
+ *  no year, English month, 12-hour clock, e.g. "Jul 9 at 5:59pm". */
+export function formatUsageDate(d: Date): string {
+  const month = d.toLocaleString("en-US", { timeZone: "UTC", month: "short" });
+  const day = d.toLocaleString("en-US", { timeZone: "UTC", day: "numeric" });
+  return `${month} ${day} at ${formatSessionResetTime(d)}`;
+}
+
+/** ペース基準 (ADR 0030) の「健全」は now に相対 — 経過割合はリセット時刻から
+ *  逆算されるため、固定の panel 文字列は clock の前進でいずれ逆算不整合
+ *  (fail-closed)に化ける。checkUsage のたびに now から生成することで、
+ *  throttle と無関係なテストがどれだけ clock を進めても健全なままになる。
+ *  session は3時間後リセット(経過40%、0% used はどのオフセットでも線の下)、
+ *  week は2日後リセット(経過71%)。 */
+export function healthyUsageText(now: Date): string {
+  const sessionResets = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  const weekResets = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+  return (
+    `Current session\n0% used\nResets ${formatSessionResetTime(sessionResets)} (UTC)\n` +
+    `Current week (all models)\n0% used\nResets ${formatUsageDate(weekResets)} (UTC)\n`
+  );
+}
 
 interface ScheduledInterval {
   fn: () => void;
@@ -72,7 +101,11 @@ export class ScriptedWorker implements WorkerAdapter {
   readonly id = "fake-worker";
   readonly started: Task[] = [];
   readonly killed: Array<{ taskId: string; signal: KillSignal }> = [];
-  private usageText: string | null = NOT_THROTTLED_USAGE_TEXT;
+  /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
+   *  null はスクリプトされた観測失敗(fail-closed)。 */
+  private usageText: string | null | undefined = undefined;
+
+  constructor(private readonly clock: Clock) {}
 
   start(task: Task): void {
     this.started.push(task);
@@ -83,7 +116,7 @@ export class ScriptedWorker implements WorkerAdapter {
   }
 
   async checkUsage(): Promise<string | null> {
-    return this.usageText;
+    return this.usageText === undefined ? healthyUsageText(this.clock.now()) : this.usageText;
   }
 
   /** Scripts what the next checkUsage() call(s) return (ADR 0008) — the same

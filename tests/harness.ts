@@ -115,7 +115,7 @@ function normalizeCandidates(
 export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
   const clock = new FakeClock();
-  const worker = new ScriptedWorker();
+  const worker = new ScriptedWorker(clock);
   const github = new FakeGitHubClient();
   const push = new FakePushClient();
   const server = await startServer({

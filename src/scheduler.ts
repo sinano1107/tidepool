@@ -8,6 +8,7 @@ import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
   evaluateThrottle,
+  type PaceOffsets,
   parseUsage,
   type ThrottleDecision,
   type UsageSnapshot,
@@ -25,17 +26,9 @@ import {
 
 export const HOURLY = 60 * 60 * 1000;
 
-const DEFAULT_USAGE_THRESHOLD = 80;
-
-/** An invalid override must not silently disable throttling: `Number(bad)` is
- *  NaN, and every `percent >= threshold` comparison against NaN is false — a
- *  fail-open, the opposite of ADR 0008's fail-closed posture. Fall back to
- *  the default instead of trusting an unparseable env value. */
-function usageThreshold(): number {
-  if (process.env.TIDEPOOL_USAGE_THRESHOLD === undefined) return DEFAULT_USAGE_THRESHOLD;
-  const parsed = Number(process.env.TIDEPOOL_USAGE_THRESHOLD);
-  return Number.isFinite(parsed) ? parsed : DEFAULT_USAGE_THRESHOLD;
-}
+// ADR 0030: 人間の取り分の予約(pt)。盤面設定(DB + WebUI)化は #126 の
+// 後続スライスで、それまでは既定値。旧 TIDEPOOL_USAGE_THRESHOLD は廃止。
+const DEFAULT_PACE_OFFSETS: PaceOffsets = { session: 20, week: 10 };
 
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
  *  check every time there is a candidate, never a background poll. Persists
@@ -44,25 +37,27 @@ async function checkThrottle(
   db: Db,
   clock: Clock,
   worker: WorkerAdapter,
-  threshold: number,
+  offsets: PaceOffsets,
 ): Promise<ThrottleDecision> {
   const resultText = await worker.checkUsage();
   const snapshot: UsageSnapshot =
     resultText !== null ? parseUsage(resultText, clock.now()) : { session: null, week: null };
-  const decision = evaluateThrottle(snapshot, threshold);
+  const decision = evaluateThrottle(snapshot, offsets, clock.now());
   reportThrottle(db, decision);
   return decision;
 }
 
 /** A single, replace-style one-shot timer (ADR 0008): scheduling while
  *  already armed cancels the stale handle first, so a fresh skip re-arming
- *  every poll never stacks duplicates. */
+ *  every poll never stacks duplicates. ADR 0030 arms it at the catch-up
+ *  instant (再開見込み時刻), not the window reset — waiting for the reset
+ *  plus the hourly tick would leak up to ~1h of idle pace every cycle. */
 function createResetTimer(clock: Clock, onFire: () => void) {
   let cancelCurrent: (() => void) | null = null;
   return {
-    schedule(resetsAt: Date): void {
+    schedule(resumeAt: Date): void {
       cancelCurrent?.();
-      const delay = Math.max(0, resetsAt.getTime() - clock.now().getTime());
+      const delay = Math.max(0, resumeAt.getTime() - clock.now().getTime());
       const cancel = clock.setInterval(() => {
         cancel();
         cancelCurrent = null;
@@ -233,7 +228,7 @@ export function startScheduler(deps: {
     if (pickupBlocked()) return;
     inFlight = true;
     try {
-      const decision = await checkThrottle(db, clock, worker, usageThreshold());
+      const decision = await checkThrottle(db, clock, worker, DEFAULT_PACE_OFFSETS);
       if (decision.throttled) {
         if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
         return;

@@ -125,53 +125,136 @@ it("Current session / Current week のラベル自体が現れないテキスト
   expect(snapshot).toEqual({ session: null, week: null });
 });
 
-it("session/week とも閾値未満なら throttled しない", () => {
+// --- ペース基準判定 (ADR 0030): throttled ⟺ 使用率% > 経過時間割合% − オフセット(pt) ---
+// 経過割合はリセット時刻からウィンドウ長(session 5時間 / week 7日)を引いて逆算する。
+// now = 12:00, session resets 13:00 → 開始 08:00、経過 4h/5h = 80%。
+const PACE_NOW = new Date("2026-07-22T12:00:00.000Z");
+const SESSION_RESETS = new Date("2026-07-22T13:00:00.000Z");
+// week resets 2日後 → 開始 Jul 17 12:00、経過 5/7 ≈ 71.4%。オフセット10で線は61.4。
+const WEEK_RESETS = new Date("2026-07-24T12:00:00.000Z");
+const OFFSETS = { session: 20, week: 10 };
+
+it("使用率がペース線(経過% − オフセット)以下なら throttled しない(経過80%・オフセット20 → 線60、使用率55は通る)", () => {
   const decision = evaluateThrottle(
     {
-      session: { percent: 56, resetsAt: new Date("2026-07-09T08:59:00.000Z") },
-      week: { percent: 5, resetsAt: new Date("2026-07-16T03:59:00.000Z") },
+      session: { percent: 55, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
     },
-    80,
+    OFFSETS,
+    PACE_NOW,
   );
 
-  expect(decision).toEqual({ throttled: false, resetsAt: null });
+  expect(decision).toEqual({
+    throttled: false,
+    resetsAt: null,
+    windows: {
+      session: { throttled: false, resumeAt: null },
+      week: { throttled: false, resumeAt: null },
+    },
+  });
 });
 
-it("session が閾値以上なら throttled、resetsAt は session のもの", () => {
+it("使用率がペース線を超えたら throttled、再開はリセットではなく catch-up 時刻(経過% = 使用率 + オフセット になる瞬間)", () => {
   const decision = evaluateThrottle(
     {
-      session: { percent: 85, resetsAt: new Date("2026-07-09T08:59:00.000Z") },
-      week: { percent: 5, resetsAt: new Date("2026-07-16T03:59:00.000Z") },
+      // 70 > 80−20=60 で超過。catch-up は経過90%の瞬間 = 開始08:00 + 4.5h = 12:30
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
     },
-    80,
+    OFFSETS,
+    PACE_NOW,
   );
 
-  expect(decision).toEqual({ throttled: true, resetsAt: new Date("2026-07-09T08:59:00.000Z") });
+  expect(decision).toEqual({
+    throttled: true,
+    resetsAt: new Date("2026-07-22T12:30:00.000Z"),
+    windows: {
+      session: { throttled: true, resumeAt: new Date("2026-07-22T12:30:00.000Z") },
+      week: { throttled: false, resumeAt: null },
+    },
+  });
 });
 
-it("session/week 両方が閾値以上なら、resetsAt は遅い方(両方解消するまで待つ)", () => {
+it("使用率がペース線ちょうどなら通す(strict 比較 — 線上は「ペースどおり」)", () => {
   const decision = evaluateThrottle(
     {
-      session: { percent: 85, resetsAt: new Date("2026-07-09T08:59:00.000Z") },
-      week: { percent: 90, resetsAt: new Date("2026-07-16T03:59:00.000Z") },
+      session: { percent: 60, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
     },
-    80,
+    OFFSETS,
+    PACE_NOW,
   );
 
-  expect(decision).toEqual({ throttled: true, resetsAt: new Date("2026-07-16T03:59:00.000Z") });
+  expect(decision.throttled).toBe(false);
+});
+
+it("複数線が同時に超過したら、再開見込みは catch-up 時刻の最大値(全部の線が解消するまで待つ)", () => {
+  const decision = evaluateThrottle(
+    {
+      // session: catch-up 12:30(前テストと同じ)
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      // week: 85 > 71.4−10 で超過。catch-up は経過95%の瞬間 = Jul 17 12:00 + 6.65日 = Jul 24 03:36
+      week: { percent: 85, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+  );
+
+  expect(decision.throttled).toBe(true);
+  expect(decision.resetsAt).toEqual(new Date("2026-07-24T03:36:00.000Z"));
+});
+
+it("使用率 + オフセットが100%以上なら、ウィンドウ内に catch-up は来ない — 再開見込みはリセット時刻へクランプ", () => {
+  const decision = evaluateThrottle(
+    {
+      // 85 + 20 = 105% — 経過がそこへ達する前にリセットが来る
+      session: { percent: 85, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+  );
+
+  expect(decision.resetsAt).toEqual(SESSION_RESETS);
+  expect(decision.windows.session).toEqual({ throttled: true, resumeAt: SESSION_RESETS });
+});
+
+it("逆算の不整合(リセットがウィンドウ長より先 = 開始時刻が未来)はそのウィンドウを観測不能として fail-closed に落とす", () => {
+  const decision = evaluateThrottle(
+    {
+      // resets が6時間先 — session ウィンドウは5時間なので開始が未来になり矛盾
+      session: { percent: 5, resetsAt: new Date("2026-07-22T18:00:00.000Z") },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+  );
+
+  expect(decision.throttled).toBe(true);
+  expect(decision.resetsAt).toBeNull();
+  expect(decision.windows.session).toBeNull();
 });
 
 it("パース不能(session/week とも観測不能)なら fail-closed で throttled、resetsAt は null(次回 hourly tick で再試行)", () => {
-  const decision = evaluateThrottle({ session: null, week: null }, 80);
+  const decision = evaluateThrottle({ session: null, week: null }, OFFSETS, PACE_NOW);
 
-  expect(decision).toEqual({ throttled: true, resetsAt: null });
+  expect(decision).toEqual({
+    throttled: true,
+    resetsAt: null,
+    windows: { session: null, week: null },
+  });
 });
 
-it("片方の窓だけ観測不能でも fail-closed で throttled(観測できた側が閾値未満でも)", () => {
+it("片方の窓だけ観測不能でも fail-closed で throttled(観測できた側がペース線以下でも)、観測できた側の内訳は残す", () => {
   const decision = evaluateThrottle(
-    { session: { percent: 5, resetsAt: new Date("2026-07-09T08:59:00.000Z") }, week: null },
-    80,
+    { session: { percent: 5, resetsAt: SESSION_RESETS }, week: null },
+    OFFSETS,
+    PACE_NOW,
   );
 
-  expect(decision).toEqual({ throttled: true, resetsAt: null });
+  expect(decision).toEqual({
+    throttled: true,
+    resetsAt: null,
+    windows: { session: { throttled: false, resumeAt: null }, week: null },
+  });
 });

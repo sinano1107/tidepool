@@ -42,12 +42,13 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
     );
     seedDb.close();
 
+    const bootClock = new FakeClock();
     server = await startServer({
       dbPath,
       port: 0,
       mcpPort: 0,
-      clock: new FakeClock(),
-      worker: () => new ScriptedWorker(),
+      clock: bootClock,
+      worker: () => new ScriptedWorker(bootClock),
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];

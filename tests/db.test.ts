@@ -4,7 +4,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { isPickupBlocked, reportThrottle } from "../src/throttle.js";
+import { getThrottleState, isPickupBlocked, reportThrottle } from "../src/throttle.js";
 
 it("throttle_state の旧スキーマ(state/utilization)を持つ既存 board は、再オープン時に新スキーマ(throttled)へ移行される(ADR 0008)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-db-migrate-"));
@@ -27,8 +27,43 @@ it("throttle_state の旧スキーマ(state/utilization)を持つ既存 board �
 
   // must be writable/readable under the new single-`throttled` shape without
   // tripping the old CHECK/NOT NULL constraints
-  reportThrottle(db, { throttled: true, resetsAt: null });
+  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null } });
   expect(isPickupBlocked(db, new Date())).toBe(true);
+  db.close();
+});
+
+it("ADR 0030 以前の throttle_state(throttled/resets_at のみ)は再オープン時にウィンドウ列が追加され、既存行は「未観測」として読める", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-db-migrate-0030-"));
+  const dbPath = join(dir, "board.sqlite");
+
+  const legacy = new Database(dbPath);
+  legacy.exec(`
+    CREATE TABLE throttle_state (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      throttled  INTEGER NOT NULL,
+      resets_at  TEXT
+    );
+  `);
+  legacy
+    .prepare("INSERT INTO throttle_state (id, throttled, resets_at) VALUES (1, 1, '2026-07-22T13:00:00.000Z')")
+    .run();
+  legacy.close();
+
+  const db = openDb(dbPath);
+
+  // the pre-0030 row survives, its windows reading as unobserved until the
+  // next JIT poll overwrites them
+  expect(getThrottleState(db)).toEqual({
+    throttled: true,
+    resetsAt: "2026-07-22T13:00:00.000Z",
+    windows: { session: null, week: null },
+  });
+  reportThrottle(db, {
+    throttled: false,
+    resetsAt: null,
+    windows: { session: { throttled: false, resumeAt: null }, week: { throttled: false, resumeAt: null } },
+  });
+  expect(getThrottleState(db).windows.session).toEqual({ throttled: false, resumeAt: null });
   db.close();
 });
 

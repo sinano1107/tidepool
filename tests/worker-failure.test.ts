@@ -5,7 +5,7 @@ import { Slot } from "../src/slot.js";
 import type { Task } from "../src/tasks.js";
 import { registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, NOT_THROTTLED_USAGE_TEXT } from "./fakes.js";
+import { FakeClock, healthyUsageText } from "./fakes.js";
 
 it("worker.start の throw はボードを落とさない: タスクは slot を保持したまま残る(解放経路は #9)", async () => {
   const db = openDb(":memory:");
@@ -20,7 +20,7 @@ it("worker.start の throw はボードを落とさない: タスクは slot を
     },
     kill(): void {},
     async checkUsage() {
-      return NOT_THROTTLED_USAGE_TEXT;
+      return healthyUsageText(clock.now());
     },
   };
   const task = registerTask(

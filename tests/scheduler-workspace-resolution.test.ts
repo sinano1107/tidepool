@@ -20,7 +20,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
     const db = openDb(":memory:");
     const clock = new FakeClock();
-    const worker = new ScriptedWorker();
+    const worker = new ScriptedWorker(clock);
     const slot = new Slot();
     const scheduler = startScheduler({
       db,
@@ -55,7 +55,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     const registry: Record<string, WorkspaceConfig> = { sandbox };
     const db = openDb(":memory:");
     const clock = new FakeClock();
-    const worker = new ScriptedWorker();
+    const worker = new ScriptedWorker(clock);
     const slot = new Slot();
     const scheduler = startScheduler({
       db,
@@ -90,7 +90,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     };
     const db = openDb(":memory:");
     const clock = new FakeClock();
-    const worker = new ScriptedWorker();
+    const worker = new ScriptedWorker(clock);
     const slot = new Slot();
     const scheduler = startScheduler({
       db,

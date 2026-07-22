@@ -121,24 +121,78 @@ function parseSessionResetsAt(time: ParsedTimeOfDay, now: Date): Date {
   return roundToFutureUtc(now, time, { year, month, day }, (base) => ({ ...base, day: base.day + 1 }));
 }
 
-export interface ThrottleDecision {
-  throttled: boolean;
-  resetsAt: Date | null;
+// ADR 0030: ウィンドウ長は Anthropic のプロダクト事実でありハードコード定数。
+// 仕様が変われば /usage 書式変更と同類のスクレイパー破損イベントとして直す。
+export const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
+export const WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** ADR 0030: 人間の取り分の予約(pt)。盤面がペースからこの分だけ遅れて
+ *  走ることで、空いた分が人間の対話利用に残る。 */
+export interface PaceOffsets {
+  session: number;
+  week: number;
 }
 
-/** ADR 0008: session or week (all models) at or above threshold blocks new
- *  pickup. Neither window touches an already-running task. */
-export function evaluateThrottle(snapshot: UsageSnapshot, thresholdPercent: number): ThrottleDecision {
+/** 一つのウィンドウのペース判定。resumeAt は catch-up 時刻(経過割合 =
+ *  使用率 + オフセット になる瞬間)— リセット時刻ではない(ADR 0030)。 */
+export interface WindowDecision {
+  throttled: boolean;
+  resumeAt: Date | null;
+}
+
+export interface ThrottleDecision {
+  throttled: boolean;
+  /** 再開見込み時刻(超過した線の catch-up の最大値)。fail-closed 時は null。 */
+  resetsAt: Date | null;
+  /** ウィンドウ別の内訳(UI 表示用)。null はそのウィンドウが観測不能
+   *  (パース失敗または逆算の不整合)であること。 */
+  windows: { session: WindowDecision | null; week: WindowDecision | null };
+}
+
+/** ADR 0030: throttled ⟺ 使用率% > 経過時間割合% − オフセット(pt)(strict)。
+ *  経過割合は「リセット時刻 − ウィンドウ長」で逆算した開始時刻から出す。
+ *  now が逆算した開始より前(不整合)は観測不能と同じ fail-closed に落とす。 */
+function evaluateWindow(
+  w: UsageWindowSnapshot,
+  windowMs: number,
+  offsetPt: number,
+  now: Date,
+): WindowDecision | null {
+  const startMs = w.resetsAt.getTime() - windowMs;
+  if (now.getTime() < startMs) return null;
+  const elapsedPct = ((now.getTime() - startMs) / windowMs) * 100;
+  if (!(w.percent > elapsedPct - offsetPt)) return { throttled: false, resumeAt: null };
+  // 使用率 + オフセットが100%以上だと catch-up はウィンドウ内に来ない —
+  // その場合はリセット自体が再開の瞬間
+  const catchUpMs = Math.min(
+    startMs + ((w.percent + offsetPt) / 100) * windowMs,
+    w.resetsAt.getTime(),
+  );
+  return { throttled: true, resumeAt: new Date(catchUpMs) };
+}
+
+/** ADR 0030: どちらかのウィンドウがペース線を超えていれば新規 pickup を
+ *  絞る。実行中のタスクには決して触れない。 */
+export function evaluateThrottle(
+  snapshot: UsageSnapshot,
+  offsets: PaceOffsets,
+  now: Date,
+): ThrottleDecision {
+  const session =
+    snapshot.session && evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now);
+  const week = snapshot.week && evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now);
+  const windows = { session: session ?? null, week: week ?? null };
   // fail-closed: either window unobserved means the decision can't be trusted,
   // even if the other window looks fine (issue #22: "観測不能なとき...は
   // fail-closed で skip する")
-  if (snapshot.session === null || snapshot.week === null) return { throttled: true, resetsAt: null };
-  const triggered = [snapshot.session, snapshot.week].filter(
-    (w): w is UsageWindowSnapshot => w !== null && w.percent >= thresholdPercent,
+  if (!session || !week) return { throttled: true, resetsAt: null, windows };
+  const violated = [session, week].filter((w) => w.throttled);
+  if (violated.length === 0) return { throttled: false, resetsAt: null, windows };
+  const resumeAt = violated.reduce(
+    (latest, w) => (w.resumeAt! > latest ? w.resumeAt! : latest),
+    violated[0]!.resumeAt!,
   );
-  if (triggered.length === 0) return { throttled: false, resetsAt: null };
-  const resetsAt = triggered.reduce((latest, w) => (w.resetsAt > latest ? w.resetsAt : latest), triggered[0]!.resetsAt);
-  return { throttled: true, resetsAt };
+  return { throttled: true, resetsAt: resumeAt, windows };
 }
 
 /** The text between `label` and the next occurrence of `until` (or end of

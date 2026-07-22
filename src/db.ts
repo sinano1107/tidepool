@@ -171,11 +171,17 @@ export function openDb(path: string): Db {
 
     -- Swell throttle (ADR 0008): one row, account-scoped (not per-task/
     -- workspace) usage state from the last just-in-time /usage poll at pickup
-    -- time. No row means normal (unthrottled).
+    -- time. No row means normal (unthrottled). ADR 0030 extends it with the
+    -- per-window pace verdicts (which line is hit, and its catch-up instant);
+    -- a NULL *_throttled means that window went unobserved (fail-closed).
     CREATE TABLE IF NOT EXISTS throttle_state (
-      id         INTEGER PRIMARY KEY CHECK (id = 1),
-      throttled  INTEGER NOT NULL,
-      resets_at  TEXT
+      id                 INTEGER PRIMARY KEY CHECK (id = 1),
+      throttled          INTEGER NOT NULL,
+      resets_at          TEXT,
+      session_throttled  INTEGER,
+      session_resume_at  TEXT,
+      week_throttled     INTEGER,
+      week_resume_at     TEXT
     );
 
     -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
@@ -391,13 +397,29 @@ export function openDb(path: string): Db {
     db.prepare("PRAGMA table_info(throttle_state)").all() as Array<{ name: string }>
   ).map((c) => c.name);
   if (throttleCols.includes("state")) {
+    // The rebuilt table gets the current DDL (ADR 0030's window columns
+    // included) — the base CREATE above only fires for brand-new boards.
     db.exec(`
       DROP TABLE throttle_state;
       CREATE TABLE throttle_state (
-        id         INTEGER PRIMARY KEY CHECK (id = 1),
-        throttled  INTEGER NOT NULL,
-        resets_at  TEXT
+        id                 INTEGER PRIMARY KEY CHECK (id = 1),
+        throttled          INTEGER NOT NULL,
+        resets_at          TEXT,
+        session_throttled  INTEGER,
+        session_resume_at  TEXT,
+        week_throttled     INTEGER,
+        week_resume_at     TEXT
       );
+    `);
+  } else if (!throttleCols.includes("session_throttled")) {
+    // ADR 0030: additive per-window verdict columns. NULL (the ALTER default)
+    // reads as "window unobserved", which is exactly right for a pre-0030
+    // last-observed row — the next JIT poll fills them in.
+    db.exec(`
+      ALTER TABLE throttle_state ADD COLUMN session_throttled INTEGER;
+      ALTER TABLE throttle_state ADD COLUMN session_resume_at TEXT;
+      ALTER TABLE throttle_state ADD COLUMN week_throttled INTEGER;
+      ALTER TABLE throttle_state ADD COLUMN week_resume_at TEXT;
     `);
   }
   return db;
