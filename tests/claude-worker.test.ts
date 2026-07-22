@@ -1008,10 +1008,37 @@ describe("ClaudeCodeWorker", () => {
     stderr.write(`${lines.join("\n")}\n`);
     emitExit(0, null);
     const exited = listEvents(db, "task-stderr-tail").find((e) => e.kind === "worker_exited");
+    // 期待値は独立に書き下す(入力から slice で再計算すると実装と同じ誤りを
+    // 共有しうる): 25行流したら 6〜25 行目の20行が残る
     expect(exited?.payload).toMatchObject({
       kind: "worker_exited",
-      stderr_tail: lines.slice(-20).join("\n"),
+      stderr_tail:
+        "stderr line 6\nstderr line 7\nstderr line 8\nstderr line 9\nstderr line 10\n" +
+        "stderr line 11\nstderr line 12\nstderr line 13\nstderr line 14\nstderr line 15\n" +
+        "stderr line 16\nstderr line 17\nstderr line 18\nstderr line 19\nstderr line 20\n" +
+        "stderr line 21\nstderr line 22\nstderr line 23\nstderr line 24\nstderr line 25",
     });
+  });
+
+  it("マルチバイト文字が chunk 境界で割れても stderr_tail に置換文字が混入しない(issue #125 code review)", async () => {
+    const { start, stderr, emitExit, db } = await makeWorker();
+    start("task-stderr-mb");
+    // "認証" の2文字目(証)のバイト列の途中で chunk を切る
+    const bytes = Buffer.from("認証エラー: トークン期限切れ\n");
+    stderr.write(bytes.subarray(0, 4));
+    stderr.write(bytes.subarray(4));
+    emitExit(0, null);
+    const exited = listEvents(db, "task-stderr-mb").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ stderr_tail: "認証エラー: トークン期限切れ" });
+  });
+
+  it("改行だけで実内容の無い stderr も stderr_tail null(空文字で「捕捉欠落」と紛れさせない — issue #125 code review)", async () => {
+    const { start, stderr, emitExit, db } = await makeWorker();
+    start("task-stderr-blank");
+    stderr.write("\n");
+    emitExit(0, null);
+    const exited = listEvents(db, "task-stderr-blank").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ stderr_tail: null });
   });
 
   it("最終 result イベントが出ないまま終了したセッション(watchdog kill 等)は usage null で worker_exited を記録する(issue #32)", async () => {

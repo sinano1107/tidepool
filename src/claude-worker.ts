@@ -3,6 +3,7 @@ import { createWriteStream, mkdtempSync, readdirSync, rmSync, writeFileSync } fr
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -262,14 +263,15 @@ function trimStderrTail(text: string): string {
 }
 
 /** The worker_exited summary (issue #125): the last STDERR_TAIL_LINES lines
- *  of the captured stderr, or null when the session wrote no stderr at all —
- *  「stderr が無かった」を空文字の捕捉欠落と区別して残す。A trailing "\n"
- *  terminates the last line rather than opening an empty one. */
+ *  of the captured stderr, or null when the session wrote nothing (or only a
+ *  bare newline) — 実内容の無い stderr を空文字で残すと「捕捉が欠落した」形と
+ *  紛れるので、null 側に倒す。A trailing "\n" terminates the last line rather
+ *  than opening an empty one. */
 function stderrTail(text: string): string | null {
   const lines = text.split("\n");
   if (lines.at(-1) === "") lines.pop();
-  if (lines.length === 0) return null;
-  return lines.slice(-STDERR_TAIL_LINES).join("\n");
+  const tail = lines.slice(-STDERR_TAIL_LINES).join("\n");
+  return tail === "" ? null : tail;
 }
 
 /** The stream-json CLI's own final `result` event shape (vendor-specific,
@@ -982,10 +984,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 唯一証拠を残す面 — stream.jsonl の隣に全量保存する(issue #125)
     child.stderr.pipe(createWriteStream(join(this.logDir, `${task.id}.stderr.log`)));
     // stdout の lastResult と同じ tee 形: worker_exited がファイルを読み返さず
-    // に末尾要約を載せられるよう、イベント用の末尾だけをメモリに保つ
+    // に末尾要約を載せられるよう、イベント用の末尾だけをメモリに保つ。
+    // chunk 単位の toString() は UTF-8 文字を境界で割ると置換文字に化けるので、
+    // StringDecoder が境界をまたぐシーケンスを繰り越す(全量ファイル側は pipe
+    // なのでバイト正確 — これは要約側だけの問題)
+    const stderrDecoder = new StringDecoder("utf8");
     let stderrBuffered = "";
     child.stderr.on("data", (chunk: Buffer | string) => {
-      stderrBuffered = trimStderrTail(stderrBuffered + chunk.toString());
+      const text = typeof chunk === "string" ? chunk : stderrDecoder.write(chunk);
+      stderrBuffered = trimStderrTail(stderrBuffered + text);
     });
     // teed alongside the file write (issue #32): tracks the latest
     // stream-json `result` line so worker_exited can report usage/cost at
@@ -1024,6 +1031,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // `buffered` forever and read as a false "missing usage" — same
       // status as an actual kill, which it isn't
       lastResult = parseResultLine(buffered) ?? lastResult;
+      // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
+      // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
+      stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
       // this diagnostic used to live in defaultSpawn (console.error only);
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)
