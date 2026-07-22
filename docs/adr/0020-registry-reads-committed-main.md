@@ -14,6 +14,14 @@
 - GitHub branch protection は agent の push を弾く床として維持し、盤面の専用アカウント(issue #50)を bypass に置く。
 - 人間がローカル編集を試すにも commit が必要になるが、それは保護 workspace の建前どおりの手順(試運転のショートカットを塞ぐのはむしろ整合的)。
 
+## 追記: 当時版は objected entry ごとに解決する(2026-07-22 の grilling、issue #87)
+
+決定3は「当時版」を単数として書いたが、objected 判断が複数の worker session(escalation 復帰・retry による再 spawn)にまたがり、各 session が異なる版で走っていた場合、単数は成立しない。当初実装は最も早い objected entry を anchor に1版へ畳んでいた — 決定的だが、一部の判断を「それを形作っていない定義」に照らして読ませる静かな歪みで、この ADR が escalation 復帰の再 spawn に対して防いだものと同種。
+
+精密化: **当時版は objected entry ごとに解決する**(その entry が書かれた時点で live だった session の記録 hash)。全 entry が1版に解決される通常ケースは従来と同一の注入。複数版に解決されるときは各版を注入し、それぞれが live だった entry id をラベルする — entry→版の相関は盤面には自明で RCA 本人には復元不能な計算だから。一部の entry の版が解決できない(記録欠測・到達不能 commit)ときは、解決できた版を注入した上で欠落を1行申告する。0件解決は従来どおりセクションなし(主張がなければ申告も不要)。earliest / latest の anchor 選択問題は、畳み込みをやめた時点で消滅。スキーマ変更なし、events のみで導出 — この ADR の性質は変わらない。
+
+追記時の considered options: **(worker, 版)ごとの RCA 分割** — 1人の worker の判断連鎖を1つの文脈で読むことに当事者レビューの価値があり、版で裂くと連鎖が切れる。**版間 diff の注入** — 証拠(原本)と解釈(diff の意味づけ)の線を越える、RCA 本人の仕事の先取り。
+
 Considered options:
 
 - **ワーキングツリー読みを維持し、dirty フラグを記録する**(当初案) — 記録は正直になるが、床の破れ(未 merge 内容が spawn に効く)はそのまま残る。
