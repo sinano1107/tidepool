@@ -35,6 +35,10 @@ export type SpawnFn = (
   opts: { cwd: string; env: NodeJS.ProcessEnv },
 ) => {
   stdout: NodeJS.ReadableStream;
+  /** issue #125: the CLI's own failure channel (spawn-time errors, auth
+   *  errors, forced terminations print here, not to stream-json) — captured so
+   *  a failure always leaves evidence, alongside the stdout transcript. */
+  stderr: NodeJS.ReadableStream;
   kill(signal: NodeJS.Signals): void;
   /** issue #32: the adapter's own exit observation point (promoted out of
    *  defaultSpawn's former console.error-only handler) — usage/cost recording
@@ -239,6 +243,34 @@ export function agentGitIdentityEnv(agentName: string): Record<string, string> {
 }
 
 type WorkerExitedUsage = Extract<EventPayload, { kind: "worker_exited" }>["usage"];
+
+// issue #125: worker_exited が運ぶ stderr 末尾の行数。全量は <taskId>.stderr.log
+// に残るので、イベント側は失敗形の判別に足る末尾だけを持つ。
+const STDERR_TAIL_LINES = 20;
+
+/** Per-chunk trim for the in-memory stderr tail (issue #125): keeps the last
+ *  STDERR_TAIL_LINES lines plus the final `split("\n")` element (the empty
+ *  string a trailing "\n" produces, or an unterminated partial line) — so
+ *  concatenating the next chunk can never glue two real lines together. This
+ *  bounds the buffer regardless of how chatty a session's stderr is; the
+ *  verbatim full text is on disk, not here. */
+function trimStderrTail(text: string): string {
+  return text
+    .split("\n")
+    .slice(-(STDERR_TAIL_LINES + 1))
+    .join("\n");
+}
+
+/** The worker_exited summary (issue #125): the last STDERR_TAIL_LINES lines
+ *  of the captured stderr, or null when the session wrote no stderr at all —
+ *  「stderr が無かった」を空文字の捕捉欠落と区別して残す。A trailing "\n"
+ *  terminates the last line rather than opening an empty one. */
+function stderrTail(text: string): string | null {
+  const lines = text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length === 0) return null;
+  return lines.slice(-STDERR_TAIL_LINES).join("\n");
+}
 
 /** The stream-json CLI's own final `result` event shape (vendor-specific,
  *  hence kept private to this adapter — ADR 0005) — only the fields
@@ -584,8 +616,12 @@ const defaultSpawn: SpawnFn = (command, args, opts) => {
   const child = nodeSpawn(command, args, {
     cwd: opts.cwd,
     env: opts.env,
-    stdio: ["ignore", "pipe", "inherit"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  // stderr は捕捉のため pipe に変えた(issue #125)が、従来 "inherit" で
+  // 運用者がリアルタイムに見ていた可視性はこの tee で維持する(pipe は
+  // process.stderr を close しない — Node の readable.pipe の仕様)
+  child.stderr.pipe(process.stderr);
   // an unlistened "error" (e.g. the claude binary missing) would crash the
   // whole board process; slot recovery for a dead session is the watchdog
   // slice (#9), so here we only keep the failure visible
@@ -942,6 +978,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
     child.stdout.pipe(createWriteStream(join(this.logDir, `${task.id}.stream.jsonl`)));
+    // stderr は CLI レベルの失敗(spawn 即死・limit 強制終了・認証エラー)が
+    // 唯一証拠を残す面 — stream.jsonl の隣に全量保存する(issue #125)
+    child.stderr.pipe(createWriteStream(join(this.logDir, `${task.id}.stderr.log`)));
+    // stdout の lastResult と同じ tee 形: worker_exited がファイルを読み返さず
+    // に末尾要約を載せられるよう、イベント用の末尾だけをメモリに保つ
+    let stderrBuffered = "";
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      stderrBuffered = trimStderrTail(stderrBuffered + chunk.toString());
+    });
     // teed alongside the file write (issue #32): tracks the latest
     // stream-json `result` line so worker_exited can report usage/cost at
     // exit without re-reading the file back off disk
@@ -990,6 +1035,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           kind: "worker_exited",
           exit_code: code,
           signal,
+          stderr_tail: stderrTail(stderrBuffered),
           usage: lastResult ? toUsage(lastResult) : null,
         },
         at: this.options.clock.now(),

@@ -79,6 +79,13 @@ export type EventPayload =
       kind: "worker_exited";
       exit_code: number | null;
       signal: string | null;
+      // issue #125: the tail (last ~20 lines) of the session's stderr — the
+      // only channel CLI-level failures (spawn death, forced termination,
+      // auth errors) print to. null means the session wrote no stderr at
+      // all, keeping "quiet exit" distinguishable from a broken capture.
+      // The verbatim full text lives in <taskId>.stderr.log next to the
+      // stream-json transcript; this field is the event-side pointer into it.
+      stderr_tail: string | null;
       usage: {
         input_tokens: number;
         output_tokens: number;

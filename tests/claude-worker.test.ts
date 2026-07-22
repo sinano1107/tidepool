@@ -98,12 +98,14 @@ function registryGit(cwd: string) {
 function recordingSpawn() {
   const calls: SpawnCall[] = [];
   const stdout = new PassThrough();
+  const stderr = new PassThrough();
   const killed: NodeJS.Signals[] = [];
   const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
   const spawn: SpawnFn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env });
     return {
       stdout,
+      stderr,
       kill: (signal) => killed.push(signal),
       on: (event, listener) => {
         if (event === "exit") exitListeners.push(listener);
@@ -113,7 +115,7 @@ function recordingSpawn() {
   const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
     for (const listener of exitListeners) listener(code, signal);
   };
-  return { calls, stdout, killed, spawn, emitExit };
+  return { calls, stdout, stderr, killed, spawn, emitExit };
 }
 
 /** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
@@ -602,6 +604,18 @@ describe("ClaudeCodeWorker", () => {
     });
   });
 
+  it("セッションの stderr を <taskId>.stderr.log として stream.jsonl の隣に全量保存する(issue #125)", async () => {
+    const { start, stderr, logDir } = await makeWorker();
+    start("task-stderr");
+    stderr.write("Error: Invalid API key\n");
+    stderr.write("(run /login to authenticate)\n");
+    stderr.end();
+    await vi.waitFor(async () => {
+      const log = await readFile(join(logDir, "task-stderr.stderr.log"), "utf8");
+      expect(log).toBe("Error: Invalid API key\n(run /login to authenticate)\n");
+    });
+  });
+
   it("相対 logDir でも MCP config への参照は絶対パス(spawn 先の cwd は workspace であって盤面ではない)", async () => {
     const registryDir = await makeRegistry();
     const base = await mkdtemp(join(tmpdir(), "tidepool-relative-logs-"));
@@ -914,6 +928,9 @@ describe("ClaudeCodeWorker", () => {
       kind: "worker_exited",
       exit_code: 0,
       signal: null,
+      // stderr を一切書かず終わったセッション — 「stderr が無かった」ことが
+      // null で残る(空文字とは違い、捕捉の欠落と区別できる — issue #125)
+      stderr_tail: null,
       usage: {
         input_tokens: 100,
         output_tokens: 50,
@@ -983,6 +1000,20 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
+  it("worker_exited イベントに stderr の末尾20行を stderr_tail として載せる(issue #125)", async () => {
+    const { start, stderr, emitExit, db } = await makeWorker();
+    start("task-stderr-tail");
+    // 20行を超える stderr — イベントに載るのは末尾20行だけ
+    const lines = Array.from({ length: 25 }, (_, i) => `stderr line ${i + 1}`);
+    stderr.write(`${lines.join("\n")}\n`);
+    emitExit(0, null);
+    const exited = listEvents(db, "task-stderr-tail").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({
+      kind: "worker_exited",
+      stderr_tail: lines.slice(-20).join("\n"),
+    });
+  });
+
   it("最終 result イベントが出ないまま終了したセッション(watchdog kill 等)は usage null で worker_exited を記録する(issue #32)", async () => {
     const { start, emitExit, db } = await makeWorker();
     start("task-killed");
@@ -992,6 +1023,7 @@ describe("ClaudeCodeWorker", () => {
       kind: "worker_exited",
       exit_code: null,
       signal: "SIGKILL",
+      stderr_tail: null,
       usage: null,
     });
   });
