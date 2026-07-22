@@ -39,6 +39,29 @@ export function formatUsageDate(d: Date): string {
   return `${month} ${day} at ${formatSessionResetTime(d)}`;
 }
 
+/** /usage パネルの1ウィンドウ分の観測値 — usagePanelText の入力。 */
+export interface PanelWindow {
+  percent: number;
+  resetsAt: Date;
+}
+
+/** /usage パネルのテキストを1箇所で組み立てる(UTC 表記)— 行の書式
+ *  (`N% used` / `Resets …`)がテストごとに複製されて実パネルとドリフト
+ *  するのを防ぐ。fable は per-model 行なので省略可(Pro プラン形)。 */
+export function usagePanelText(w: {
+  session: PanelWindow;
+  week: PanelWindow;
+  fable?: PanelWindow;
+}): string {
+  const line = (label: string, percent: number, resets: string) =>
+    `${label}\n${percent}% used\nResets ${resets} (UTC)\n`;
+  return (
+    line("Current session", w.session.percent, formatSessionResetTime(w.session.resetsAt)) +
+    line("Current week (all models)", w.week.percent, formatUsageDate(w.week.resetsAt)) +
+    (w.fable ? line("Current week (Fable)", w.fable.percent, formatUsageDate(w.fable.resetsAt)) : "")
+  );
+}
+
 /** ペース基準 (ADR 0030) の「健全」は now に相対 — 経過割合はリセット時刻から
  *  逆算されるため、固定の panel 文字列は clock の前進でいずれ逆算不整合
  *  (fail-closed)に化ける。checkUsage のたびに now から生成することで、
@@ -46,12 +69,10 @@ export function formatUsageDate(d: Date): string {
  *  session は3時間後リセット(経過40%、0% used はどのオフセットでも線の下)、
  *  week は2日後リセット(経過71%)。 */
 export function healthyUsageText(now: Date): string {
-  const sessionResets = new Date(now.getTime() + 3 * 60 * 60 * 1000);
-  const weekResets = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
-  return (
-    `Current session\n0% used\nResets ${formatSessionResetTime(sessionResets)} (UTC)\n` +
-    `Current week (all models)\n0% used\nResets ${formatUsageDate(weekResets)} (UTC)\n`
-  );
+  return usagePanelText({
+    session: { percent: 0, resetsAt: new Date(now.getTime() + 3 * 60 * 60 * 1000) },
+    week: { percent: 0, resetsAt: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000) },
+  });
 }
 
 interface ScheduledInterval {

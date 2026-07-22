@@ -90,6 +90,21 @@ const TASKS_TABLE_DDL = `
       )
     )`;
 
+// Shared between the fresh-board CREATE and the pre-ADR-0008 rebuild
+// migration below, same pattern as TASKS_TABLE_DDL — the two can never drift.
+const THROTTLE_STATE_TABLE_DDL = `
+    CREATE TABLE throttle_state (
+      id                 INTEGER PRIMARY KEY CHECK (id = 1),
+      throttled          INTEGER NOT NULL,
+      resets_at          TEXT,
+      session_throttled  INTEGER,
+      session_resume_at  TEXT,
+      week_throttled     INTEGER,
+      week_resume_at     TEXT,
+      fable_throttled    INTEGER,
+      fable_resume_at    TEXT
+    )`;
+
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
@@ -174,17 +189,7 @@ export function openDb(path: string): Db {
     -- time. No row means normal (unthrottled). ADR 0030 extends it with the
     -- per-window pace verdicts (which line is hit, and its catch-up instant);
     -- a NULL *_throttled means that window went unobserved (fail-closed).
-    CREATE TABLE IF NOT EXISTS throttle_state (
-      id                 INTEGER PRIMARY KEY CHECK (id = 1),
-      throttled          INTEGER NOT NULL,
-      resets_at          TEXT,
-      session_throttled  INTEGER,
-      session_resume_at  TEXT,
-      week_throttled     INTEGER,
-      week_resume_at     TEXT,
-      fable_throttled    INTEGER,
-      fable_resume_at    TEXT
-    );
+    ${THROTTLE_STATE_TABLE_DDL.replace("CREATE TABLE throttle_state", "CREATE TABLE IF NOT EXISTS throttle_state")};
 
     -- Pace offsets (ADR 0030): the human's reserved share (pt) per usage
     -- window — the board runs this far behind the elapsed-time pace line.
@@ -411,21 +416,9 @@ export function openDb(path: string): Db {
     db.prepare("PRAGMA table_info(throttle_state)").all() as Array<{ name: string }>
   ).map((c) => c.name);
   if (throttleCols.includes("state")) {
-    // The rebuilt table gets the current DDL (ADR 0030's window columns
-    // included) — the base CREATE above only fires for brand-new boards.
     db.exec(`
       DROP TABLE throttle_state;
-      CREATE TABLE throttle_state (
-        id                 INTEGER PRIMARY KEY CHECK (id = 1),
-        throttled          INTEGER NOT NULL,
-        resets_at          TEXT,
-        session_throttled  INTEGER,
-        session_resume_at  TEXT,
-        week_throttled     INTEGER,
-        week_resume_at     TEXT,
-        fable_throttled    INTEGER,
-        fable_resume_at    TEXT
-      );
+      ${THROTTLE_STATE_TABLE_DDL};
     `);
   } else if (!throttleCols.includes("session_throttled")) {
     // ADR 0030: additive per-window verdict columns. NULL (the ALTER default)

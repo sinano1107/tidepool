@@ -17,7 +17,7 @@ import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
-import { getPaceOffsets, setPaceOffsets } from "./pace-offsets.js";
+import { getPaceOffsets, isValidOffset, setPaceOffsets } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
@@ -269,12 +269,15 @@ const quietHoursSchema = z.object({
   end: z.string().regex(HH_MM_PATTERN),
 });
 
-// ペースオフセット (ADR 0030): 0–100 の整数 pt、3ウィンドウとも必須 —
-// 値域の意味論は pace-offsets.ts の isValidOffset と一致させる
+// ペースオフセット (ADR 0030): 3ウィンドウとも必須。値域の意味論(0–100 の
+// 整数 pt)は pace-offsets.ts の isValidOffset そのものを使う — 二重定義しない
+const paceOffsetValue = z.number().refine(isValidOffset, {
+  message: "offset must be an integer between 0 and 100",
+});
 const paceOffsetsSchema = z.object({
-  session: z.number().int().min(0).max(100),
-  week: z.number().int().min(0).max(100),
-  fable: z.number().int().min(0).max(100),
+  session: paceOffsetValue,
+  week: paceOffsetValue,
+  fable: paceOffsetValue,
 });
 
 // the board timezone (issue #63 / ADR 0022) — a separate sender from

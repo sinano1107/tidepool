@@ -47,7 +47,7 @@ async function checkThrottle(db: Db, clock: Clock, worker: WorkerAdapter): Promi
  *  every poll never stacks duplicates. ADR 0030 arms it at the catch-up
  *  instant (再開見込み時刻), not the window reset — waiting for the reset
  *  plus the hourly tick would leak up to ~1h of idle pace every cycle. */
-function createResetTimer(clock: Clock, onFire: () => void) {
+function createResumeTimer(clock: Clock, onFire: () => void) {
   let cancelCurrent: (() => void) | null = null;
   return {
     schedule(resumeAt: Date): void {
@@ -106,7 +106,7 @@ export function startScheduler(deps: {
   const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName, github, fableAgents } =
     deps;
   let inFlight = false;
-  const resetTimer = createResetTimer(clock, pollNow);
+  const resumeTimer = createResumeTimer(clock, pollNow);
 
   function pickupBlocked(): boolean {
     if (slot.currentTaskId !== null) return true;
@@ -231,7 +231,7 @@ export function startScheduler(deps: {
     try {
       const decision = await checkThrottle(db, clock, worker);
       if (decision.throttled) {
-        if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
+        if (decision.resetsAt) resumeTimer.schedule(decision.resetsAt);
         return;
       }
       // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
@@ -243,7 +243,7 @@ export function startScheduler(deps: {
       if (!head) {
         // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
         // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)
-        if (fableWindow?.throttled && fableWindow.resumeAt) resetTimer.schedule(fableWindow.resumeAt);
+        if (fableWindow?.throttled && fableWindow.resumeAt) resumeTimer.schedule(fableWindow.resumeAt);
         return;
       }
       if (!(await issuePickupGate(head))) return;
@@ -261,7 +261,7 @@ export function startScheduler(deps: {
   return {
     stop: () => {
       cancel();
-      resetTimer.cancel();
+      resumeTimer.cancel();
     },
     pollNow,
   };

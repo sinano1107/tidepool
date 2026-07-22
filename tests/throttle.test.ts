@@ -1,9 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import {
-  formatSessionResetTime,
-  formatUsageDate,
-  healthyUsageText,
-} from "./fakes.js";
+import { healthyUsageText, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -26,10 +22,10 @@ const MIN = 60 * 1000;
  *  ウィンドウ内に来ず、再開見込みはリセット時刻にクランプされる。week は
  *  同時刻+1日リセットで健全なまま。 */
 function overPace(resetsAt: Date): string {
-  return (
-    `Current session\n85% used\nResets ${formatSessionResetTime(resetsAt)} (UTC)\n` +
-    `Current week (all models)\n5% used\nResets ${formatUsageDate(new Date(resetsAt.getTime() + 24 * HOUR))} (UTC)\n`
-  );
+  return usagePanelText({
+    session: { percent: 85, resetsAt },
+    week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
+  });
 }
 
 it("ペース線超過は catch-up 時刻(経過 = 使用率 + オフセット)で再開し、リセット時刻まで待たない(ADR 0030 の急所)", async () => {
@@ -41,8 +37,10 @@ it("ペース線超過は catch-up 時刻(経過 = 使用率 + オフセット)�
   // リセット(t=4h)より2時間早い。
   const resetsAt = new Date(t.clock.now().getTime() + 4 * HOUR);
   t.worker.scriptUsage(
-    `Current session\n40% used\nResets ${formatSessionResetTime(resetsAt)} (UTC)\n` +
-      `Current week (all models)\n5% used\nResets ${formatUsageDate(new Date(resetsAt.getTime() + 24 * HOUR))} (UTC)\n`,
+    usagePanelText({
+      session: { percent: 40, resetsAt },
+      week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
+    }),
   );
 
   await t.clock.advance(HOUR); // hourly tick: 超過を観測し catch-up タイマーを張る
@@ -140,14 +138,11 @@ it("throttled の間、todo タスクはキュービュー(/api/queue)では ski
  *  固定 panel 文字列は clock が session reset を跨ぐと逆算不整合で盤面ごと
  *  fail-closed に化けるため。 */
 function fableOverPace(now: Date): string {
-  const sessionResets = new Date(now.getTime() + 3 * HOUR);
-  const weekResets = new Date(now.getTime() + 2 * 24 * HOUR);
-  const fableResets = new Date(now.getTime() + 12 * HOUR);
-  return (
-    `Current session\n0% used\nResets ${formatSessionResetTime(sessionResets)} (UTC)\n` +
-    `Current week (all models)\n5% used\nResets ${formatUsageDate(weekResets)} (UTC)\n` +
-    `Current week (Fable)\n84% used\nResets ${formatUsageDate(fableResets)} (UTC)\n`
-  );
+  return usagePanelText({
+    session: { percent: 0, resetsAt: new Date(now.getTime() + 3 * HOUR) },
+    week: { percent: 5, resetsAt: new Date(now.getTime() + 2 * 24 * HOUR) },
+    fable: { percent: 84, resetsAt: new Date(now.getTime() + 12 * HOUR) },
+  });
 }
 
 it("fable 線の超過は fable モデルのタスクだけを skip し、他のタスクは流れ続ける — 盤面全体は止まらない(ADR 0030)", async () => {
@@ -193,8 +188,10 @@ it("盤面設定のオフセットが判定に効く: session オフセットを
   await api(t.baseUrl, "POST", "/api/settings/pace-offsets", { session: 0, week: 10, fable: 10 });
   const resetsAt = new Date(t.clock.now().getTime() + 4 * HOUR);
   t.worker.scriptUsage(
-    `Current session\n40% used\nResets ${formatSessionResetTime(resetsAt)} (UTC)\n` +
-      `Current week (all models)\n5% used\nResets ${formatUsageDate(new Date(resetsAt.getTime() + 24 * HOUR))} (UTC)\n`,
+    usagePanelText({
+      session: { percent: 40, resetsAt },
+      week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
+    }),
   );
 
   await t.clock.advance(HOUR);

@@ -239,7 +239,7 @@ function mapData(board, log, pause, icons = {}) {
   // per-task state — resets_at is now the catch-up ("resumes") instant, and a
   // fable-only excess shows here while the board itself keeps flowing
   const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
-  const hitLines = ['session', 'week'].filter((w) => throttleWindows[w]?.throttled);
+  const hitLines = ['session', 'week', 'fable'].filter((w) => throttleWindows[w]?.throttled);
   const fableWindow = throttleWindows.fable;
   const fableThrottled = !!fableWindow?.throttled;
   const fableResumesAt =
@@ -271,7 +271,12 @@ function mapData(board, log, pause, icons = {}) {
         line: 'slot free — fable tasks paced',
         meta: fableResumesAt ? `fable line · resumes ${fableResumesAt}` : 'fable line',
       }
-    : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
+    : {
+        color: 'var(--rock-3)', line: 'slot free — nothing running', taskId: null,
+        // fable の観測状態を常時可視化 (ADR 0030): per-model 行の書式変更で
+        // 観測が黙って落ちたとき、Max プランの人間がここで気づける
+        meta: `concurrency=1 · fable ${fableWindow ? 'on pace' : 'not observed'}`,
+      };
   return {
     questions, log: logEntries, queue, board: cols, icons,
     // empty until their domain slices exist: human tasks / agent registry /
