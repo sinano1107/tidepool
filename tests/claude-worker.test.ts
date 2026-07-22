@@ -85,6 +85,15 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
   );
 }
 
+/** A git runner pinned to the registry fixture clone, identity flags inlined
+ *  so fixture commits need no global config. */
+function registryGit(cwd: string) {
+  return (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd })
+      .toString()
+      .trim();
+}
+
 /** Scripted stand-in at the process boundary: records the spawn recipe. */
 function recordingSpawn() {
   const calls: SpawnCall[] = [];
@@ -1005,12 +1014,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("当事者レビュー(self RCA)の spawn には、記録 hash 時点の agent 定義本文を証拠として注入する(ADR 0020 part 4)", async () => {
     const { worker, calls, db, registryDir } = await makeWorker();
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
-        cwd: registryDir,
-      })
-        .toString()
-        .trim();
+    const git = registryGit(registryDir);
     // the version deckhand actually ran the objected task under
     const oldHash = git("rev-parse", "main");
     // main advances: the definition is refined after the objected call. The RCA
@@ -1066,12 +1070,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("同一 worker が objected task を複数回 spawn した場合、objected 判断時の session の版を注入し、後の再 spawn の版は使わない(ADR 0020 part 4)", async () => {
     const { worker, calls, db, registryDir } = await makeWorker();
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
-        cwd: registryDir,
-      })
-        .toString()
-        .trim();
+    const git = registryGit(registryDir);
     // v1: the version live when the objected decision was made (fixture body)
     const v1Hash = git("rev-parse", "main");
     const objected = makeTask("objected-3", null, "deckhand", "work");
@@ -1123,6 +1122,149 @@ describe("ClaudeCodeWorker", () => {
     expect(prompt).toContain("the tidepool board's general work agent");
   });
 
+  it("objected 判断が異なる版の session にまたがるとき、当時版は entry ごとに解決され、各版が entry id 付きで全部注入される(issue #87)", async () => {
+    const { worker, calls, db, registryDir } = await makeWorker();
+    const git = registryGit(registryDir);
+    const objected = makeTask("objected-4", null, "deckhand", "work");
+    insertTask(db, objected);
+    // session 1 under v1 (fixture body) → objected decision 1
+    const v1Hash = git("rev-parse", "main");
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1" },
+      at: new FakeClock().now(),
+    });
+    const decision1 = appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "decision_logged", line: "chose approach X" },
+      at: new FakeClock().now(),
+    });
+    // main advances; session 2 (escalation return) under v2 → objected decision 2
+    await writeFile(
+      join(registryDir, "agents", "deckhand.md"),
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED v2.\n`,
+    );
+    git("add", "-A");
+    git("commit", "-m", "refine deckhand to v2");
+    const v2Hash = git("rev-parse", "main");
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0" },
+      at: new FakeClock().now(),
+    });
+    const decision2 = appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "decision_logged", line: "chose approach Y" },
+      at: new FakeClock().now(),
+    });
+    // objections land on entries from BOTH sessions
+    for (const entryId of [decision1, decision2]) {
+      appendEvent(db, {
+        taskId: objected.id,
+        workerId: "human",
+        payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
+        at: new FakeClock().now(),
+      });
+    }
+    // main advances again: the RCA executes under v3, distinct from both 当時版
+    await writeFile(
+      join(registryDir, "agents", "deckhand.md"),
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.5.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED v3 current.\n`,
+    );
+    git("add", "-A");
+    git("commit", "-m", "refine deckhand to v3");
+
+    const rca: Task = { ...makeTask("rca-4", null, "deckhand", "review"), parent_id: "objected-4" };
+    insertTask(db, rca);
+    worker.start(rca);
+
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    // executes as the current definition (ADR 0019)
+    expect(prompt).toContain("REFINED v3 current");
+    // both 当時版 bodies are injected — neither session's version is folded away
+    expect(prompt).toContain("Definitions under review");
+    expect(prompt).toContain("the tidepool board's general work agent");
+    expect(prompt).toContain("REFINED v2");
+    // each version is labeled with the decision-log entry ids it was live for
+    expect(prompt).toContain(
+      `As of registry commit ${v1Hash.slice(0, 7)} — live for your objected entry #${decision1}`,
+    );
+    expect(prompt).toContain(
+      `As of registry commit ${v2Hash.slice(0, 7)} — live for your objected entry #${decision2}`,
+    );
+    // full coverage: no evidence-gap note
+    expect(prompt).not.toContain("no definition version could be resolved");
+  });
+
+  it("一部の objected entry の版が解決できないとき、解決できた版を注入した上で証拠の欠落を申告する(issue #87)", async () => {
+    const { worker, calls, db, registryDir } = await makeWorker();
+    const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
+      .toString()
+      .trim();
+    const objected = makeTask("objected-5", null, "deckhand", "work");
+    insertTask(db, objected);
+    // session 1's spawn hash points at a commit the registry no longer has
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: {
+        kind: "worker_spawned",
+        registry_commit: "0000000000000000000000000000000000000000",
+        definition_version: "0.2.0",
+      },
+      at: new FakeClock().now(),
+    });
+    const decision1 = appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "decision_logged", line: "chose approach X" },
+      at: new FakeClock().now(),
+    });
+    // session 2 under the reachable main commit
+    appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1" },
+      at: new FakeClock().now(),
+    });
+    const decision2 = appendEvent(db, {
+      taskId: objected.id,
+      workerId: "deckhand",
+      payload: { kind: "decision_logged", line: "chose approach Y" },
+      at: new FakeClock().now(),
+    });
+    for (const entryId of [decision1, decision2]) {
+      appendEvent(db, {
+        taskId: objected.id,
+        workerId: "human",
+        payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
+        at: new FakeClock().now(),
+      });
+    }
+
+    const rca: Task = { ...makeTask("rca-5", null, "deckhand", "review"), parent_id: "objected-5" };
+    insertTask(db, rca);
+    worker.start(rca);
+
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    // the resolvable version is injected, labeled with its entry
+    expect(prompt).toContain(
+      `As of registry commit ${main.slice(0, 7)} — live for your objected entry #${decision2}`,
+    );
+    // and the gap is declared, not silently absorbed
+    expect(prompt).toContain(
+      `no definition version could be resolved for your objected entry #${decision1}`,
+    );
+  });
+
   it("独立レビュー(assignee 未設定)の spawn には当時版定義を注入しない: 当事者レビューのみ(ADR 0020 part 4)", async () => {
     // an auditor agent so the unset-assignee review resolves and spawns
     const { worker, calls, db, registryDir } = await makeWorker(
@@ -1159,10 +1301,7 @@ describe("ClaudeCodeWorker", () => {
     const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
       .toString()
       .trim();
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
-        cwd: registryDir,
-      });
+    const git = registryGit(registryDir);
     // branch discipline has the registry clone sitting on a registry-edit task
     // branch with an unmerged definition bump — must not leak into the record
     git("checkout", "-b", "task/bump");
