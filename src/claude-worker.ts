@@ -746,11 +746,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         resolved[0]!.body
       );
     }
+    // no-spawn entries and unreachable-commit entries land in two phases above,
+    // so their interleaving can drift from entry order — restore it once here
+    unresolved.sort((a, b) => a - b);
     const gap =
       unresolved.length === 0
         ? ""
         : "\n\nNote: no definition version could be resolved for your objected " +
-          `${entryLabels(unresolved.sort((a, b) => a - b))} (missing session record or ` +
+          `${entryLabels(unresolved)} (missing session record or ` +
           "unreachable commit) — the evidence above is incomplete for those judgments.";
     return (
       "\n\n## Definitions under review (as they stood when you made each objected decision)\n\n" +

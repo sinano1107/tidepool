@@ -85,6 +85,15 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
   );
 }
 
+/** A git runner pinned to the registry fixture clone, identity flags inlined
+ *  so fixture commits need no global config. */
+function registryGit(cwd: string) {
+  return (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd })
+      .toString()
+      .trim();
+}
+
 /** Scripted stand-in at the process boundary: records the spawn recipe. */
 function recordingSpawn() {
   const calls: SpawnCall[] = [];
@@ -1005,12 +1014,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("当事者レビュー(self RCA)の spawn には、記録 hash 時点の agent 定義本文を証拠として注入する(ADR 0020 part 4)", async () => {
     const { worker, calls, db, registryDir } = await makeWorker();
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
-        cwd: registryDir,
-      })
-        .toString()
-        .trim();
+    const git = registryGit(registryDir);
     // the version deckhand actually ran the objected task under
     const oldHash = git("rev-parse", "main");
     // main advances: the definition is refined after the objected call. The RCA
@@ -1066,12 +1070,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("同一 worker が objected task を複数回 spawn した場合、objected 判断時の session の版を注入し、後の再 spawn の版は使わない(ADR 0020 part 4)", async () => {
     const { worker, calls, db, registryDir } = await makeWorker();
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
-        cwd: registryDir,
-      })
-        .toString()
-        .trim();
+    const git = registryGit(registryDir);
     // v1: the version live when the objected decision was made (fixture body)
     const v1Hash = git("rev-parse", "main");
     const objected = makeTask("objected-3", null, "deckhand", "work");
@@ -1125,12 +1124,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("objected 判断が異なる版の session にまたがるとき、当時版は entry ごとに解決され、各版が entry id 付きで全部注入される(issue #87)", async () => {
     const { worker, calls, db, registryDir } = await makeWorker();
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
-        cwd: registryDir,
-      })
-        .toString()
-        .trim();
+    const git = registryGit(registryDir);
     const objected = makeTask("objected-4", null, "deckhand", "work");
     insertTask(db, objected);
     // session 1 under v1 (fixture body) → objected decision 1
@@ -1307,10 +1301,7 @@ describe("ClaudeCodeWorker", () => {
     const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
       .toString()
       .trim();
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], {
-        cwd: registryDir,
-      });
+    const git = registryGit(registryDir);
     // branch discipline has the registry clone sitting on a registry-edit task
     // branch with an unmerged definition bump — must not leak into the record
     git("checkout", "-b", "task/bump");
