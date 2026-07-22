@@ -183,6 +183,24 @@ it("fable タスクしか無いキューは fable の catch-up 時刻で(hourly 
   expect(t.worker.started.map((x) => x.id)).toEqual([fableTask.id]);
 });
 
+it("盤面設定のオフセットが判定に効く: session オフセットを 0(予約なし)にすると、既定 20pt では絞られていた使用率が通る", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "long haul");
+
+  // 40% used, resets 4時間後 → t=1h 時点で経過40%。既定オフセット20なら線は20で
+  // 40 は超過(冒頭の catch-up テストと同じ数字)。オフセット0なら線は40 —
+  // strict 比較で 40 は通る。
+  await api(t.baseUrl, "POST", "/api/settings/pace-offsets", { session: 0, week: 10, fable: 10 });
+  const resetsAt = new Date(t.clock.now().getTime() + 4 * HOUR);
+  t.worker.scriptUsage(
+    `Current session\n40% used\nResets ${formatSessionResetTime(resetsAt)} (UTC)\n` +
+      `Current week (all models)\n5% used\nResets ${formatUsageDate(new Date(resetsAt.getTime() + 24 * HOUR))} (UTC)\n`,
+  );
+
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+});
+
 it("throttled 中は GET /api/pause が throttle 状態(再開見込み時刻とウィンドウ別内訳)を運ぶ(issue #82 / ADR 0030)", async () => {
   t = await bootTidepool();
   await registerWork(t, "long haul");

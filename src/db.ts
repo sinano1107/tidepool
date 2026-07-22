@@ -186,6 +186,18 @@ export function openDb(path: string): Db {
       fable_resume_at    TEXT
     );
 
+    -- Pace offsets (ADR 0030): the human's reserved share (pt) per usage
+    -- window — the board runs this far behind the elapsed-time pace line.
+    -- One row; no row means the code defaults (session 20 / week 10 /
+    -- fable 10). Values are validated at the API entry; the reader guards
+    -- out-of-range values back to defaults as well.
+    CREATE TABLE IF NOT EXISTS pace_offsets (
+      id      INTEGER PRIMARY KEY CHECK (id = 1),
+      session INTEGER NOT NULL,
+      week    INTEGER NOT NULL,
+      fable   INTEGER NOT NULL
+    );
+
     -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
     -- pickup — same one-row shape as throttle_state, but with no auto-resume
     -- (CONTEXT.md's Pause: clearing it is purely manual). No row means never

@@ -1,6 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
+import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
 import type { Slot } from "./slot.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
@@ -8,7 +9,6 @@ import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
   evaluateThrottle,
-  type PaceOffsets,
   parseUsage,
   type ThrottleDecision,
   type UsageSnapshot,
@@ -26,25 +26,18 @@ import {
 
 export const HOURLY = 60 * 60 * 1000;
 
-// ADR 0030: 人間の取り分の予約(pt)。盤面設定(DB + WebUI)化は #126 の
-// 後続スライスで、それまでは既定値。旧 TIDEPOOL_USAGE_THRESHOLD は廃止。
-const DEFAULT_PACE_OFFSETS: PaceOffsets = { session: 20, week: 10, fable: 10 };
-
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
  *  check every time there is a candidate, never a background poll. Persists
- *  the observation as a side effect so /api/queue reflects it immediately. */
-async function checkThrottle(
-  db: Db,
-  clock: Clock,
-  worker: WorkerAdapter,
-  offsets: PaceOffsets,
-): Promise<ThrottleDecision> {
+ *  the observation as a side effect so /api/queue reflects it immediately.
+ *  オフセットは盤面設定 (ADR 0030) を毎回読む — settings で変えた値が次の
+ *  poll から効く。 */
+async function checkThrottle(db: Db, clock: Clock, worker: WorkerAdapter): Promise<ThrottleDecision> {
   const resultText = await worker.checkUsage();
   const snapshot: UsageSnapshot =
     resultText !== null
       ? parseUsage(resultText, clock.now())
       : { session: null, week: null, fable: null };
-  const decision = evaluateThrottle(snapshot, offsets, clock.now());
+  const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now());
   reportThrottle(db, decision);
   return decision;
 }
@@ -236,7 +229,7 @@ export function startScheduler(deps: {
     if (pickupBlocked()) return;
     inFlight = true;
     try {
-      const decision = await checkThrottle(db, clock, worker, DEFAULT_PACE_OFFSETS);
+      const decision = await checkThrottle(db, clock, worker);
       if (decision.throttled) {
         if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
         return;

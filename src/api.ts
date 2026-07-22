@@ -17,6 +17,7 @@ import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
+import { getPaceOffsets, setPaceOffsets } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
@@ -266,6 +267,14 @@ const pushUnsubscribeSchema = z.object({
 const quietHoursSchema = z.object({
   start: z.string().regex(HH_MM_PATTERN),
   end: z.string().regex(HH_MM_PATTERN),
+});
+
+// ペースオフセット (ADR 0030): 0–100 の整数 pt、3ウィンドウとも必須 —
+// 値域の意味論は pace-offsets.ts の isValidOffset と一致させる
+const paceOffsetsSchema = z.object({
+  session: z.number().int().min(0).max(100),
+  week: z.number().int().min(0).max(100),
+  fable: z.number().int().min(0).max(100),
 });
 
 // the board timezone (issue #63 / ADR 0022) — a separate sender from
@@ -1275,6 +1284,22 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     setQuietHours(db, parsed.data);
     res.json(getQuietHours(db));
+  });
+
+  router.get("/settings/pace-offsets", (_req, res) => {
+    res.json(getPaceOffsets(db));
+  });
+
+  // ADR 0030: 不正値はこの入口で弾く — 範囲外の値が判定式に入ると strict
+  // 比較が黙って崩れる(旧 TIDEPOOL_USAGE_THRESHOLD の NaN fail-open の教訓)
+  router.post("/settings/pace-offsets", (req, res) => {
+    const parsed = paceOffsetsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    setPaceOffsets(db, parsed.data);
+    res.json(getPaceOffsets(db));
   });
 
   router.get("/settings/timezone", (_req, res) => {
