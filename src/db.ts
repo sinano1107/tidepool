@@ -204,6 +204,20 @@ export function openDb(path: string): Db {
       notified_at TEXT NOT NULL
     );
 
+    -- which agent-registered human-assignee tasks have already reached the
+    -- human via push (issue #116) — the exact twin of question_notifications
+    -- above: a human child registered by an agent's decompose blocks its
+    -- parent the same way a question does, so it is a notification target of
+    -- equal urgency (CONTEXT.md's Quiet hours / Digest). A row here means "no
+    -- longer pending notification", however delivered (individual or digest).
+    -- Kept a separate table from question_notifications, not a shared one,
+    -- because the two notification streams are counted separately in the
+    -- morning digest ("N questions · K your tasks · M new log").
+    CREATE TABLE IF NOT EXISTS human_task_notifications (
+      task_id     TEXT PRIMARY KEY REFERENCES tasks(id),
+      notified_at TEXT NOT NULL
+    );
+
     -- the morning digest's read position in the events table (issue #14) —
     -- separate from log_cursor (the human's own read/unread position in the
     -- decision-log UI): this one tracks what the digest has already reported.

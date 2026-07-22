@@ -66,7 +66,7 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
       title: "Good morning",
-      body: "2 questions · 1 new log entries",
+      body: "2 questions · 0 your tasks · 1 new log entries",
       url: "/",
     });
     void q2;
@@ -140,7 +140,39 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     expect(push.sent).toHaveLength(1);
     expect(push.sent[0]?.payload).toEqual({
       title: "Good morning",
-      body: "1 questions · 0 new log entries",
+      body: "1 questions · 0 your tasks · 0 new log entries",
+      url: "/",
+    });
+  });
+
+  it("quiet hours 中に登録された agent の human タスクは溜まり、明けると digest に3件数で出る(issue #116)", async () => {
+    const db = openDb(":memory:");
+    savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
+    const push = new FakePushClient();
+    const tick = createNotificationTick(db, push, MIDNIGHT);
+
+    // agent の decompose 直接登録(worker_id != 'human')— question と同格の通知対象
+    registerTask(
+      db,
+      {
+        type: "work",
+        title: "深夜に上がった用事",
+        purpose: "現地確認",
+        completion_criteria: "n/a",
+        assignee: "human",
+      },
+      MIDNIGHT,
+      "planner",
+    );
+
+    await tick.run(MIDNIGHT); // still quiet hours: nothing sent
+    expect(push.sent).toEqual([]);
+
+    await tick.run(SEVEN_AM); // quiet hours just ended: one digest push
+    expect(push.sent).toHaveLength(1);
+    expect(push.sent[0]?.payload).toEqual({
+      title: "Good morning",
+      body: "0 questions · 1 your tasks · 0 new log entries",
       url: "/",
     });
   });

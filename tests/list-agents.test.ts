@@ -72,7 +72,9 @@ it("list_agents は registry に定義の無い human も、direct/needs_approva
     const payload = JSON.parse(result.content[0].text);
     expect(payload.agents).toContainEqual({
       name: "human",
-      description: "delegate to a human — runs outside the slot, as a question task",
+      description:
+        "delegate to a human — runs outside the slot in their own task list; " +
+        "human attention is scarce, delegate only what genuinely needs a human",
       status: "direct",
     });
   } finally {
