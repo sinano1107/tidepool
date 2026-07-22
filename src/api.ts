@@ -31,6 +31,7 @@ import {
   type RegistryCandidates,
 } from "./registry.js";
 import { RegistryCloneBusyError } from "./registry-write.js";
+import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   answerQuestion,
   assertAnswerable,
@@ -327,6 +328,12 @@ function isValidTimezone(tz: string): boolean {
 // reordering)
 const pauseSchema = z.object({
   paused: z.boolean(),
+});
+
+// Spend-down (ADR 0030 / issue #128) — pause と同じ人間専用の盤面状態。
+// window: null が手動取り消し。
+const spendDownSchema = z.object({
+  window: z.enum(["session", "week"]).nullable(),
 });
 
 const objectionSchema = z.object({
@@ -1337,8 +1344,32 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json({ language: getDisplayLanguage(db) });
   });
 
+  // Spend-down は pause と同じ「盤面状態」応答に同乗する — UI の露出面が同格
+  // (ADR 0030: settings ではなく盤面状態としての表示・操作面)
+  function spendDownJson(): { window: string; activatedAt: string } | null {
+    const state = getSpendDown(db);
+    return state && { window: state.window, activatedAt: state.activatedAt.toISOString() };
+  }
+
   router.get("/pause", (_req, res) => {
-    res.json({ paused: isPaused(db), throttle: getThrottleState(db) });
+    res.json({ paused: isPaused(db), throttle: getThrottleState(db), spendDown: spendDownJson() });
+  });
+
+  router.post("/spend-down", (req, res) => {
+    const parsed = spendDownSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (parsed.data.window === null) {
+      clearSpendDown(db);
+    } else {
+      setSpendDown(db, parsed.data.window, clock.now());
+      // 有効化は「今すぐ残りを燃やせ」— ペース線で skip されていた pickup を
+      // hourly tick を待たず再評価させる(pause の resume と同じ唯一の発火点)
+      onQueueHeadChanged();
+    }
+    res.json({ spendDown: spendDownJson() });
   });
 
   router.post("/pause", (req, res) => {

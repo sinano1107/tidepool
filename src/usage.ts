@@ -164,6 +164,13 @@ export interface ThrottleDecision {
   };
 }
 
+/** Spend-down (ADR 0030 / issue #128): 終盤に残り予算を盤面で使い切る人間専用の
+ *  盤面状態。対象ウィンドウのペース線だけを外して100%ハードキャップへ切り替える。 */
+export interface SpendDownState {
+  window: "session" | "week";
+  activatedAt: Date;
+}
+
 /** ADR 0030: throttled ⟺ 使用率% > 経過時間割合% − オフセット(pt)(strict)。
  *  経過割合は「リセット時刻 − ウィンドウ長」で逆算した開始時刻から出す。
  *  now が逆算した開始より前(不整合)は観測不能と同じ fail-closed に落とす。 */
@@ -190,18 +197,54 @@ function evaluateWindow(
  *  pickup を絞る。fable 線は盤面を止めない — fable モデルのタスクだけを絞る
  *  資源単位の線で、windows.fable として運ばれ scheduler がタスク単位に適用する。
  *  実行中のタスクには決して触れない。 */
+/** Spend-down 中の対象ウィンドウの判定: ペース線の代わりに100%ハードキャップ
+ *  (全ウィンドウ常時有効の唯一の上限)だけを見る。キャップ到達の再開見込みは
+ *  リセット時刻そのもの — catch-up は存在しない(ADR 0030)。 */
+function evaluateCappedWindow(w: UsageWindowSnapshot, windowMs: number, now: Date): WindowDecision | null {
+  const startMs = w.resetsAt.getTime() - windowMs;
+  if (now.getTime() < startMs) return null;
+  if (w.percent < 100) return { throttled: false, resumeAt: null };
+  return { throttled: true, resumeAt: w.resetsAt };
+}
+
+/** Spend-down が対象ウィンドウのリセットで自動失効したか: 有効化時刻が観測
+ *  された現ウィンドウの開始より前なら、有効化されたウィンドウはもうリセット
+ *  済み。対象が観測不能なら判定できず失効させない(fail-closed 側は
+ *  evaluateThrottle 本体が受ける)。evaluateThrottle 自身の無視と scheduler の
+ *  状態クリアが同じ述語を共有する。 */
+export function isSpendDownExpired(spendDown: SpendDownState, snapshot: UsageSnapshot): boolean {
+  const target = spendDown.window === "session" ? snapshot.session : snapshot.week;
+  if (!target) return false;
+  const windowMs = spendDown.window === "session" ? SESSION_WINDOW_MS : WEEK_WINDOW_MS;
+  return spendDown.activatedAt.getTime() < target.resetsAt.getTime() - windowMs;
+}
+
 export function evaluateThrottle(
   snapshot: UsageSnapshot,
   offsets: PaceOffsets,
   now: Date,
+  spendDown?: SpendDownState | null,
 ): ThrottleDecision {
+  const active = spendDown && !isSpendDownExpired(spendDown, snapshot) ? spendDown : null;
   const session =
-    snapshot.session && evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now);
-  const week = snapshot.week && evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now);
+    snapshot.session &&
+    (active?.window === "session"
+      ? evaluateCappedWindow(snapshot.session, SESSION_WINDOW_MS, now)
+      : evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now));
+  // spend-down(week) は fable の線も一緒に外す — 同じ瞬間に失効する予算(ADR 0030)
+  const week =
+    snapshot.week &&
+    (active?.window === "week"
+      ? evaluateCappedWindow(snapshot.week, WEEK_WINDOW_MS, now)
+      : evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now));
   // fable の逆算不整合も null(観測なし)へ倒す: fail-closed は session/week の
   // 意味論で、fable でそれをやると Pro プラン運用時に恒久 skip を製造する側に
   // 倒れかねない。誤読の被害は全体線と100%キャップが上限を抑える(ADR 0030)。
-  const fable = snapshot.fable && evaluateWindow(snapshot.fable, WEEK_WINDOW_MS, offsets.fable, now);
+  const fable =
+    snapshot.fable &&
+    (active?.window === "week"
+      ? evaluateCappedWindow(snapshot.fable, WEEK_WINDOW_MS, now)
+      : evaluateWindow(snapshot.fable, WEEK_WINDOW_MS, offsets.fable, now));
   const windows = { session: session ?? null, week: week ?? null, fable: fable ?? null };
   // fail-closed: either window unobserved means the decision can't be trusted,
   // even if the other window looks fine (issue #22: "観測不能なとき...は

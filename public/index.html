@@ -283,6 +283,8 @@ function mapData(board, log, pause, icons = {}) {
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
     slot, running: !!running, paused: !!paused,
+    // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
+    spendDown: pause.spendDown ?? null,
     throttled, throttleFailClosed, throttleResumesAt,
     fableThrottled, fableResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
@@ -1942,6 +1944,22 @@ function App() {
     }
   };
 
+  // Spend-down (ADR 0030 / issue #128) — pause と同格の盤面状態。有効化は
+  // サーバー側が即時 poll を発火する(残りを今すぐ燃やす操作なので)。
+  const setSpendDown = async (window) => {
+    try {
+      await api('/api/spend-down', { window });
+      await refresh();
+      say(window ? 'warn' : 'info',
+        window ? `spend-down armed · ${window}` : 'spend-down cancelled',
+        window
+          ? 'pace line off — burns to the 100% cap, expires at the window reset'
+          : 'pace line back on');
+    } catch (err) {
+      say('danger', 'spend-down failed', String(err.message || err));
+    }
+  };
+
   const reorder = async (next, movedId, pos) => {
     try {
       const idx = next.findIndex((t) => t.id === movedId);
@@ -2037,7 +2055,7 @@ function App() {
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills as tasks come in.</div>
             </div>)}
         {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · ${t.type}`)} />}
-        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
+        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
         {tab === 'settings' && <SettingsScreen say={say} />}
         </div>

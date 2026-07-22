@@ -332,3 +332,133 @@ it("片方の窓だけ観測不能でも fail-closed で throttled(観測でき�
     windows: { session: { throttled: false, resumeAt: null }, week: null, fable: null },
   });
 });
+
+// --- Spend-down (ADR 0030 / issue #128): 対象ウィンドウのペース線だけを外して
+// 100%ハードキャップへ切り替える人間専用の盤面状態。有効化時刻が現ウィンドウの
+// 開始より前なら失効済み(対象ウィンドウのリセットで自動失効)。 ---
+
+it("spend-down(session) は session のペース線を外す — 線超過(70 > 60)でも 100% 未満なら通す", () => {
+  const decision = evaluateThrottle(
+    {
+      // ペース判定なら 70 > 80−20=60 で throttled になる観測(既存テストと同一)
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
+    },
+    OFFSETS,
+    PACE_NOW,
+    // 現 session ウィンドウ(開始 08:00)内の有効化 — 失効していない
+    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+  );
+
+  expect(decision).toEqual({
+    throttled: false,
+    resetsAt: null,
+    windows: {
+      session: { throttled: false, resumeAt: null },
+      week: { throttled: false, resumeAt: null },
+      fable: null,
+    },
+  });
+});
+
+it("spend-down 中も 100% ハードキャップは残る — 到達で throttled、再開見込みは catch-up ではなくリセット時刻", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 100, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
+    },
+    OFFSETS,
+    PACE_NOW,
+    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+  );
+
+  expect(decision.throttled).toBe(true);
+  expect(decision.resetsAt).toEqual(SESSION_RESETS);
+  expect(decision.windows.session).toEqual({ throttled: true, resumeAt: SESSION_RESETS });
+});
+
+it("spend-down(session) 中も week の線は生き続ける — session 使い切りが week の線で途中停止するのは正しい教示(ADR 0030)", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      // week: 85 > 71.4−10 で超過 — catch-up は Jul 24 03:36(既存テストと同じ観測)
+      week: { percent: 85, resetsAt: WEEK_RESETS },
+      fable: null,
+    },
+    OFFSETS,
+    PACE_NOW,
+    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+  );
+
+  expect(decision.throttled).toBe(true);
+  expect(decision.resetsAt).toEqual(new Date("2026-07-24T03:36:00.000Z"));
+  expect(decision.windows.session).toEqual({ throttled: false, resumeAt: null });
+});
+
+it("spend-down(week) は week と fable の線を一緒に外す(同じ瞬間に失効する予算)— どちらも 100% 未満なら通す", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 55, resetsAt: SESSION_RESETS },
+      // どちらもペース判定なら超過する観測(線は week 61.4 / fable 61.4)
+      week: { percent: 85, resetsAt: WEEK_RESETS },
+      fable: { percent: 85, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+    // 現 week ウィンドウ(開始 Jul 17 12:00)内の有効化
+    { window: "week", activatedAt: new Date("2026-07-21T12:00:00.000Z") },
+  );
+
+  expect(decision).toEqual({
+    throttled: false,
+    resetsAt: null,
+    windows: {
+      session: { throttled: false, resumeAt: null },
+      week: { throttled: false, resumeAt: null },
+      fable: { throttled: false, resumeAt: null },
+    },
+  });
+});
+
+it("spend-down(session) は fable の線に触れない — fable は週次予算で、session と失効時刻を共有しない", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+      // fable 線超過(85 > 61.4)— spend-down(session) では外れない
+      fable: { percent: 85, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+  );
+
+  expect(decision.throttled).toBe(false);
+  expect(decision.windows.fable).toEqual({
+    throttled: true,
+    resumeAt: new Date("2026-07-24T03:36:00.000Z"),
+  });
+});
+
+it("有効化が現ウィンドウの開始より前(= 対象はリセット済み)の spend-down は失効しており、通常のペース判定に戻る", () => {
+  const decision = evaluateThrottle(
+    {
+      // 70 > 60 で超過 — 失効した spend-down はこれを救わない
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
+    },
+    OFFSETS,
+    PACE_NOW,
+    // 現 session ウィンドウの開始は 08:00 — それより前の有効化は前ウィンドウのもの
+    { window: "session", activatedAt: new Date("2026-07-22T07:00:00.000Z") },
+  );
+
+  expect(decision.throttled).toBe(true);
+  expect(decision.windows.session).toEqual({
+    throttled: true,
+    resumeAt: new Date("2026-07-22T12:30:00.000Z"),
+  });
+});

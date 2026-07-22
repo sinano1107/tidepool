@@ -4,11 +4,13 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
 import type { Slot } from "./slot.js";
+import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
 import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
   evaluateThrottle,
+  isSpendDownExpired,
   parseUsage,
   type ThrottleDecision,
   type UsageSnapshot,
@@ -37,7 +39,14 @@ async function checkThrottle(db: Db, clock: Clock, worker: WorkerAdapter): Promi
     resultText !== null
       ? parseUsage(resultText, clock.now())
       : { session: null, week: null, fable: null };
-  const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now());
+  // Spend-down (ADR 0030 / issue #128) も poll ごとに読む — 対象ウィンドウの
+  // リセットが観測されたらここで自動失効させる(取り残された状態は必ず放置)。
+  let spendDown = getSpendDown(db);
+  if (spendDown && isSpendDownExpired(spendDown, snapshot)) {
+    clearSpendDown(db);
+    spendDown = null;
+  }
+  const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now(), spendDown);
   reportThrottle(db, decision);
   return decision;
 }

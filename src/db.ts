@@ -212,6 +212,17 @@ export function openDb(path: string): Db {
       paused INTEGER NOT NULL
     );
 
+    -- Spend-down (ADR 0030 / issue #128): the human-only end-of-window
+    -- burn-down state — drops the target window's pace line, leaving only the
+    -- 100% hard cap. One row; no row means inactive. Unlike pause_state it
+    -- auto-expires: activated_at predating the target window's observed start
+    -- means the window has reset, and the scheduler clears the row.
+    CREATE TABLE IF NOT EXISTS spend_down_state (
+      id           INTEGER PRIMARY KEY CHECK (id = 1),
+      window       TEXT NOT NULL CHECK (window IN ('session', 'week')),
+      activated_at TEXT NOT NULL
+    );
+
     -- Web Push subscriptions (issue #14): one row per installed PWA that
     -- opted into push. endpoint is the browser's own dedup key (a fresh
     -- subscribe from the same install replaces its old keys).
