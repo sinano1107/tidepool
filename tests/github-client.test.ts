@@ -2,7 +2,7 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { git } from "./harness.js";
@@ -12,8 +12,19 @@ let remotePath: string | undefined;
 let binPath: string | undefined;
 let authPath: string | undefined;
 let originalPath: string | undefined;
+let savedGhToken: string | undefined;
+
+beforeEach(() => {
+  savedGhToken = process.env.GH_TOKEN;
+  delete process.env.GH_TOKEN;
+});
 
 afterEach(async () => {
+  if (savedGhToken !== undefined) {
+    process.env.GH_TOKEN = savedGhToken;
+  } else {
+    delete process.env.GH_TOKEN;
+  }
   if (originalPath !== undefined) process.env.PATH = originalPath;
   for (const p of [repoPath, remotePath, binPath, authPath]) {
     if (p) await rm(p, { recursive: true, force: true });
