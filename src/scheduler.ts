@@ -28,7 +28,7 @@ export const HOURLY = 60 * 60 * 1000;
 
 // ADR 0030: 人間の取り分の予約(pt)。盤面設定(DB + WebUI)化は #126 の
 // 後続スライスで、それまでは既定値。旧 TIDEPOOL_USAGE_THRESHOLD は廃止。
-const DEFAULT_PACE_OFFSETS: PaceOffsets = { session: 20, week: 10 };
+const DEFAULT_PACE_OFFSETS: PaceOffsets = { session: 20, week: 10, fable: 10 };
 
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
  *  check every time there is a candidate, never a background poll. Persists
@@ -41,7 +41,9 @@ async function checkThrottle(
 ): Promise<ThrottleDecision> {
   const resultText = await worker.checkUsage();
   const snapshot: UsageSnapshot =
-    resultText !== null ? parseUsage(resultText, clock.now()) : { session: null, week: null };
+    resultText !== null
+      ? parseUsage(resultText, clock.now())
+      : { session: null, week: null, fable: null };
   const decision = evaluateThrottle(snapshot, offsets, clock.now());
   reportThrottle(db, decision);
   return decision;
@@ -102,8 +104,14 @@ export function startScheduler(deps: {
    *  Absent → the gate is skipped and issue-backed tasks spawn with their
    *  "#N" placeholder (a board with no GitHub seam at all). */
   github?: GitHubClient;
+  /** Agent names whose registry model is fable (ADR 0030), read fresh every
+   *  poll — the assignee → registry → `model` resolution the fable line
+   *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
+   *  configured, so the fable line can't attribute tasks and skips nothing. */
+  fableAgents?: () => string[];
 }): Scheduler {
-  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName, github } = deps;
+  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName, github, fableAgents } =
+    deps;
   let inFlight = false;
   const resetTimer = createResetTimer(clock, pollNow);
 
@@ -233,8 +241,18 @@ export function startScheduler(deps: {
         if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
         return;
       }
-      const head = nextSlotTask(db, workspace?.name, worker.id, auditorName);
-      if (!head) return;
+      // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
+      // 外す — Quarantine と同じ「資源単位の停止」。
+      const fableWindow = decision.windows.fable;
+      const excludedAssignees =
+        fableWindow?.throttled && fableAgents ? fableAgents() : undefined;
+      const head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excludedAssignees);
+      if (!head) {
+        // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
+        // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)
+        if (fableWindow?.throttled && fableWindow.resumeAt) resetTimer.schedule(fableWindow.resumeAt);
+        return;
+      }
       if (!(await issuePickupGate(head))) return;
       pickup(head);
     } finally {

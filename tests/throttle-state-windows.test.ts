@@ -19,6 +19,7 @@ it("ウィンドウ別の判定内訳(どの線か・catch-up 時刻)が persist
     windows: {
       session: { throttled: true, resumeAt: new Date("2026-07-22T12:30:00.000Z") },
       week: { throttled: false, resumeAt: null },
+      fable: null,
     },
   });
 
@@ -28,6 +29,7 @@ it("ウィンドウ別の判定内訳(どの線か・catch-up 時刻)が persist
     windows: {
       session: { throttled: true, resumeAt: "2026-07-22T12:30:00.000Z" },
       week: { throttled: false, resumeAt: null },
+      fable: null,
     },
   });
 });
@@ -41,6 +43,7 @@ it("fail-closed(観測不能)のウィンドウは null のまま往復する �
     windows: {
       session: { throttled: false, resumeAt: null },
       week: null,
+      fable: null,
     },
   });
 
@@ -50,6 +53,31 @@ it("fail-closed(観測不能)のウィンドウは null のまま往復する �
     windows: {
       session: { throttled: false, resumeAt: null },
       week: null,
+      fable: null,
+    },
+  });
+});
+
+it("fable 線の判定内訳(観測状態を含む)も persist され読み出せる — 盤面全体は unthrottled のまま(ADR 0030)", async () => {
+  const db = await freshDb();
+
+  reportThrottle(db, {
+    throttled: false,
+    resetsAt: null,
+    windows: {
+      session: { throttled: false, resumeAt: null },
+      week: { throttled: false, resumeAt: null },
+      fable: { throttled: true, resumeAt: new Date("2026-07-24T03:36:00.000Z") },
+    },
+  });
+
+  expect(getThrottleState(db)).toEqual({
+    throttled: false,
+    resetsAt: null,
+    windows: {
+      session: { throttled: false, resumeAt: null },
+      week: { throttled: false, resumeAt: null },
+      fable: { throttled: true, resumeAt: "2026-07-24T03:36:00.000Z" },
     },
   });
 });
@@ -60,6 +88,6 @@ it("一度も /usage 観測が走っていない board は unthrottled かつ内
   expect(getThrottleState(db)).toEqual({
     throttled: false,
     resetsAt: null,
-    windows: { session: null, week: null },
+    windows: { session: null, week: null, fable: null },
   });
 });

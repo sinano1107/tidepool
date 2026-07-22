@@ -133,6 +133,56 @@ it("throttled の間、todo タスクはキュービュー(/api/queue)では ski
   );
 });
 
+/** session/week は健全なまま、fable 線だけ超過している観測 (ADR 0030)。
+ *  fable resets は12時間後 → 経過 92.9%、オフセット10で線は82.9 — 84% は超過。
+ *  catch-up は経過94%の瞬間 = now + 1時間55分12秒後(hourly tick とずれた時刻)。
+ *  session(+3h)の壁時計 reset が有効なうちに catch-up が来る数字にしてある —
+ *  固定 panel 文字列は clock が session reset を跨ぐと逆算不整合で盤面ごと
+ *  fail-closed に化けるため。 */
+function fableOverPace(now: Date): string {
+  const sessionResets = new Date(now.getTime() + 3 * HOUR);
+  const weekResets = new Date(now.getTime() + 2 * 24 * HOUR);
+  const fableResets = new Date(now.getTime() + 12 * HOUR);
+  return (
+    `Current session\n0% used\nResets ${formatSessionResetTime(sessionResets)} (UTC)\n` +
+    `Current week (all models)\n5% used\nResets ${formatUsageDate(weekResets)} (UTC)\n` +
+    `Current week (Fable)\n84% used\nResets ${formatUsageDate(fableResets)} (UTC)\n`
+  );
+}
+
+it("fable 線の超過は fable モデルのタスクだけを skip し、他のタスクは流れ続ける — 盤面全体は止まらない(ADR 0030)", async () => {
+  t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
+  const fableTask = await registerWork(t, "fable work", undefined, undefined, "fable-artisan");
+  const normalTask = await registerWork(t, "normal work");
+
+  t.worker.scriptUsage(fableOverPace(t.clock.now()));
+  await t.clock.advance(HOUR);
+
+  // キュー先頭は fable タスクだが、skip されて後続の通常タスクが拾われる
+  expect(t.worker.started.map((x) => x.id)).toEqual([normalTask.id]);
+
+  // キュービューでは fable タスクだけが skipped、盤面(/api/tasks)は todo のまま
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  expect(queue.find((x: any) => x.id === fableTask.id).status).toBe("skipped");
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.find((x: any) => x.id === fableTask.id).status).toBe("todo");
+});
+
+it("fable タスクしか無いキューは fable の catch-up 時刻で(hourly tick を待たず)再開する", async () => {
+  t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
+  const fableTask = await registerWork(t, "fable work", undefined, undefined, "fable-artisan");
+
+  t.worker.scriptUsage(fableOverPace(t.clock.now()));
+
+  // hourly tick(t=1h)が fable skip で候補ゼロを観測し、catch-up タイマーを張る
+  await t.clock.advance(HOUR + 50 * MIN); // t=1h50m: catch-up(1h55m)より手前
+  expect(t.worker.started).toEqual([]);
+
+  // 使用率は変わらないまま catch-up を跨ぐ — 次の hourly tick(2h)より手前で再開
+  await t.clock.advance(7 * MIN); // t=1h57m
+  expect(t.worker.started.map((x) => x.id)).toEqual([fableTask.id]);
+});
+
 it("throttled 中は GET /api/pause が throttle 状態(再開見込み時刻とウィンドウ別内訳)を運ぶ(issue #82 / ADR 0030)", async () => {
   t = await bootTidepool();
   await registerWork(t, "long haul");
@@ -164,6 +214,6 @@ it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・r
   expect(res.json.throttle).toEqual({
     throttled: true,
     resetsAt: null,
-    windows: { session: null, week: null },
+    windows: { session: null, week: null, fable: null },
   });
 });

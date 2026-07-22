@@ -235,6 +235,15 @@ function mapData(board, log, pause, icons = {}) {
   // slot must say so rather than showing a bogus/absent resume time
   const throttleFailClosed = throttled && !throttle.resetsAt;
   const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resetsAt) : null;
+  // ADR 0030: which pace line is hit (session/week), and the fable line's own
+  // per-task state — resets_at is now the catch-up ("resumes") instant, and a
+  // fable-only excess shows here while the board itself keeps flowing
+  const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
+  const hitLines = ['session', 'week'].filter((w) => throttleWindows[w]?.throttled);
+  const fableWindow = throttleWindows.fable;
+  const fableThrottled = !!fableWindow?.throttled;
+  const fableResumesAt =
+    fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -247,7 +256,20 @@ function mapData(board, log, pause, icons = {}) {
         color: 'var(--coral-4)', taskId: null,
         ...(throttleFailClosed
           ? { line: 'usage check unavailable · nothing starts', meta: 'fail-closed — check usage check logs' }
-          : { line: 'usage limit · nothing starts', meta: `resumes ${throttleResumesAt}` }),
+          : {
+              line: 'usage pace · nothing starts',
+              // which line is hit (ADR 0030) — an old pre-window row (no
+              // windows persisted yet) falls back to the plain resume text
+              meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${throttleResumesAt}`,
+            }),
+      }
+    : fableThrottled
+    ? {
+        // fable line only (ADR 0030): the board keeps flowing — fable-model
+        // tasks alone wait for their catch-up
+        color: 'var(--rock-3)', taskId: null,
+        line: 'slot free — fable tasks paced',
+        meta: fableResumesAt ? `fable line · resumes ${fableResumesAt}` : 'fable line',
       }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
   return {
@@ -257,6 +279,7 @@ function mapData(board, log, pause, icons = {}) {
     humanTasks: [], agents: [],
     slot, running: !!running, paused: !!paused,
     throttled, throttleFailClosed, throttleResumesAt,
+    fableThrottled, fableResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
   };
 }

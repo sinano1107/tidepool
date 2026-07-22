@@ -181,7 +181,9 @@ export function openDb(path: string): Db {
       session_throttled  INTEGER,
       session_resume_at  TEXT,
       week_throttled     INTEGER,
-      week_resume_at     TEXT
+      week_resume_at     TEXT,
+      fable_throttled    INTEGER,
+      fable_resume_at    TEXT
     );
 
     -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
@@ -408,7 +410,9 @@ export function openDb(path: string): Db {
         session_throttled  INTEGER,
         session_resume_at  TEXT,
         week_throttled     INTEGER,
-        week_resume_at     TEXT
+        week_resume_at     TEXT,
+        fable_throttled    INTEGER,
+        fable_resume_at    TEXT
       );
     `);
   } else if (!throttleCols.includes("session_throttled")) {
@@ -420,6 +424,8 @@ export function openDb(path: string): Db {
       ALTER TABLE throttle_state ADD COLUMN session_resume_at TEXT;
       ALTER TABLE throttle_state ADD COLUMN week_throttled INTEGER;
       ALTER TABLE throttle_state ADD COLUMN week_resume_at TEXT;
+      ALTER TABLE throttle_state ADD COLUMN fable_throttled INTEGER;
+      ALTER TABLE throttle_state ADD COLUMN fable_resume_at TEXT;
     `);
   }
   return db;

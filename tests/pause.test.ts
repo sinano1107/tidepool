@@ -100,7 +100,7 @@ it("pause 状態はサーバー再起動を跨いで維持される", async () =
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json).toEqual({
     paused: true,
-    throttle: { throttled: false, resetsAt: null, windows: { session: null, week: null } },
+    throttle: { throttled: false, resetsAt: null, windows: { session: null, week: null, fable: null } },
   });
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);

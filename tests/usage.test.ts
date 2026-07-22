@@ -110,19 +110,50 @@ it("week ブロックに per-model の内訳行があっても、先頭に現れ
   });
 });
 
+// macOS 実機で claude 2.1.217 の /usage パネルを PTY キャプチャした生バイト列から
+// fable 行を抜粋(issue #126 実測、2026-07-22)。ラベルは "Current week (Fable)"、
+// 書式は (all models) と同形で、パネル下部の per-model 行として現れる。
+const REAL_PTY_CAPTURE_WITH_FABLE =
+  REAL_PTY_CAPTURE +
+  "\r\x1b[3C\x1b[2B\x1b[39m\x1b[1mCurrent week (Fable)\x1b[22m\x1b[K\r\x1b[3C\x1b[1B\x1b[48;2;80;83;112m\x1b[38;2;177;185;249m██████████████████████████████████████            \x1b[55G\x1b[39m\x1b[49m75%\x1b[59Gused\r\x1b[3C\x1b[1B\x1b[38;2;153;153;153mResets Jul 23 at 1pm (Asia/Tokyo)";
+
+it("fable 行(Current week (Fable))のある実機キャプチャから fable ウィンドウの使用率と reset 時刻をパースする(issue #126)", () => {
+  const now = new Date("2026-07-17T00:00:00.000Z");
+
+  const snapshot = parseUsage(REAL_PTY_CAPTURE_WITH_FABLE, now);
+
+  // session/week は従来どおり読めたまま
+  expect(snapshot.session?.percent).toBe(70);
+  expect(snapshot.week?.percent).toBe(28);
+  expect(snapshot.fable).toEqual({
+    percent: 75,
+    resetsAt: new Date("2026-07-23T04:00:00.000Z"),
+  });
+});
+
+it("fable 行が無いパネル(Pro プラン — 個別制限が存在しない)は fable=null で、session/week の読みは損なわれない(ADR 0030: 不在は fail-closed にしない)", () => {
+  const now = new Date("2026-07-17T00:00:00.000Z");
+
+  const snapshot = parseUsage(REAL_PTY_CAPTURE, now);
+
+  expect(snapshot.fable).toBeNull();
+  expect(snapshot.session?.percent).toBe(70);
+  expect(snapshot.week?.percent).toBe(28);
+});
+
 it("既知の行パターンに一致しないテキスト(該当行なし・unavailable 表示など)は session/week とも null(fail-closed の入力)", () => {
   const snapshot = parseUsage(
     "Current session\rusage data unavailable\rCurrent week (all models)\rusage data unavailable",
     new Date("2026-07-08T00:00:00.000Z"),
   );
 
-  expect(snapshot).toEqual({ session: null, week: null });
+  expect(snapshot).toEqual({ session: null, week: null, fable: null });
 });
 
 it("Current session / Current week のラベル自体が現れないテキストも session/week とも null(fail-closed の入力)", () => {
   const snapshot = parseUsage("something went wrong\n", new Date("2026-07-08T00:00:00.000Z"));
 
-  expect(snapshot).toEqual({ session: null, week: null });
+  expect(snapshot).toEqual({ session: null, week: null, fable: null });
 });
 
 // --- ペース基準判定 (ADR 0030): throttled ⟺ 使用率% > 経過時間割合% − オフセット(pt) ---
@@ -132,13 +163,14 @@ const PACE_NOW = new Date("2026-07-22T12:00:00.000Z");
 const SESSION_RESETS = new Date("2026-07-22T13:00:00.000Z");
 // week resets 2日後 → 開始 Jul 17 12:00、経過 5/7 ≈ 71.4%。オフセット10で線は61.4。
 const WEEK_RESETS = new Date("2026-07-24T12:00:00.000Z");
-const OFFSETS = { session: 20, week: 10 };
+const OFFSETS = { session: 20, week: 10, fable: 10 };
 
 it("使用率がペース線(経過% − オフセット)以下なら throttled しない(経過80%・オフセット20 → 線60、使用率55は通る)", () => {
   const decision = evaluateThrottle(
     {
       session: { percent: 55, resetsAt: SESSION_RESETS },
       week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
     },
     OFFSETS,
     PACE_NOW,
@@ -150,6 +182,7 @@ it("使用率がペース線(経過% − オフセット)以下なら throttled 
     windows: {
       session: { throttled: false, resumeAt: null },
       week: { throttled: false, resumeAt: null },
+      fable: null,
     },
   });
 });
@@ -160,6 +193,7 @@ it("使用率がペース線を超えたら throttled、再開はリセットで
       // 70 > 80−20=60 で超過。catch-up は経過90%の瞬間 = 開始08:00 + 4.5h = 12:30
       session: { percent: 70, resetsAt: SESSION_RESETS },
       week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
     },
     OFFSETS,
     PACE_NOW,
@@ -171,6 +205,7 @@ it("使用率がペース線を超えたら throttled、再開はリセットで
     windows: {
       session: { throttled: true, resumeAt: new Date("2026-07-22T12:30:00.000Z") },
       week: { throttled: false, resumeAt: null },
+      fable: null,
     },
   });
 });
@@ -180,12 +215,48 @@ it("使用率がペース線ちょうどなら通す(strict 比較 — 線上は
     {
       session: { percent: 60, resetsAt: SESSION_RESETS },
       week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
     },
     OFFSETS,
     PACE_NOW,
   );
 
   expect(decision.throttled).toBe(false);
+});
+
+it("fable 線の超過は盤面全体を throttled にしない — windows.fable にだけ超過と catch-up が載る(ADR 0030: 資源単位の絞り)", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 55, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+      // fable 週予算だけ逼迫: 85 > 71.4−10。catch-up は経過95%の瞬間 = Jul 24 03:36
+      fable: { percent: 85, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+  );
+
+  expect(decision.throttled).toBe(false);
+  expect(decision.resetsAt).toBeNull();
+  expect(decision.windows.fable).toEqual({
+    throttled: true,
+    resumeAt: new Date("2026-07-24T03:36:00.000Z"),
+  });
+});
+
+it("fable 行の不在(fable: null)は fail-closed の入力ではない — session/week が健全なら盤面は流れ、windows.fable は null(観測なし)", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 55, resetsAt: SESSION_RESETS },
+      week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
+    },
+    OFFSETS,
+    PACE_NOW,
+  );
+
+  expect(decision.throttled).toBe(false);
+  expect(decision.windows.fable).toBeNull();
 });
 
 it("複数線が同時に超過したら、再開見込みは catch-up 時刻の最大値(全部の線が解消するまで待つ)", () => {
@@ -195,6 +266,7 @@ it("複数線が同時に超過したら、再開見込みは catch-up 時刻の
       session: { percent: 70, resetsAt: SESSION_RESETS },
       // week: 85 > 71.4−10 で超過。catch-up は経過95%の瞬間 = Jul 17 12:00 + 6.65日 = Jul 24 03:36
       week: { percent: 85, resetsAt: WEEK_RESETS },
+      fable: null,
     },
     OFFSETS,
     PACE_NOW,
@@ -210,6 +282,7 @@ it("使用率 + オフセットが100%以上なら、ウィンドウ内に catch
       // 85 + 20 = 105% — 経過がそこへ達する前にリセットが来る
       session: { percent: 85, resetsAt: SESSION_RESETS },
       week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
     },
     OFFSETS,
     PACE_NOW,
@@ -225,6 +298,7 @@ it("逆算の不整合(リセットがウィンドウ長より先 = 開始時刻
       // resets が6時間先 — session ウィンドウは5時間なので開始が未来になり矛盾
       session: { percent: 5, resetsAt: new Date("2026-07-22T18:00:00.000Z") },
       week: { percent: 30, resetsAt: WEEK_RESETS },
+      fable: null,
     },
     OFFSETS,
     PACE_NOW,
@@ -236,18 +310,18 @@ it("逆算の不整合(リセットがウィンドウ長より先 = 開始時刻
 });
 
 it("パース不能(session/week とも観測不能)なら fail-closed で throttled、resetsAt は null(次回 hourly tick で再試行)", () => {
-  const decision = evaluateThrottle({ session: null, week: null }, OFFSETS, PACE_NOW);
+  const decision = evaluateThrottle({ session: null, week: null, fable: null }, OFFSETS, PACE_NOW);
 
   expect(decision).toEqual({
     throttled: true,
     resetsAt: null,
-    windows: { session: null, week: null },
+    windows: { session: null, week: null, fable: null },
   });
 });
 
 it("片方の窓だけ観測不能でも fail-closed で throttled(観測できた側がペース線以下でも)、観測できた側の内訳は残す", () => {
   const decision = evaluateThrottle(
-    { session: { percent: 5, resetsAt: SESSION_RESETS }, week: null },
+    { session: { percent: 5, resetsAt: SESSION_RESETS }, week: null, fable: null },
     OFFSETS,
     PACE_NOW,
   );
@@ -255,6 +329,6 @@ it("片方の窓だけ観測不能でも fail-closed で throttled(観測でき�
   expect(decision).toEqual({
     throttled: true,
     resetsAt: null,
-    windows: { session: { throttled: false, resumeAt: null }, week: null },
+    windows: { session: { throttled: false, resumeAt: null }, week: null, fable: null },
   });
 });

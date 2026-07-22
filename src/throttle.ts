@@ -9,20 +9,24 @@ export function reportThrottle(db: Db, decision: ThrottleDecision): void {
   db.prepare(
     `INSERT INTO throttle_state (
        id, throttled, resets_at,
-       session_throttled, session_resume_at, week_throttled, week_resume_at
-     ) VALUES (1, ?, ?, ?, ?, ?, ?)
+       session_throttled, session_resume_at, week_throttled, week_resume_at,
+       fable_throttled, fable_resume_at
+     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        throttled = excluded.throttled,
        resets_at = excluded.resets_at,
        session_throttled = excluded.session_throttled,
        session_resume_at = excluded.session_resume_at,
        week_throttled = excluded.week_throttled,
-       week_resume_at = excluded.week_resume_at`,
+       week_resume_at = excluded.week_resume_at,
+       fable_throttled = excluded.fable_throttled,
+       fable_resume_at = excluded.fable_resume_at`,
   ).run(
     decision.throttled ? 1 : 0,
     decision.resetsAt?.toISOString() ?? null,
     ...windowColumns(decision.windows.session),
     ...windowColumns(decision.windows.week),
+    ...windowColumns(decision.windows.fable),
   );
 }
 
@@ -38,13 +42,16 @@ interface ThrottleStateRow {
   session_resume_at: string | null;
   week_throttled: number | null;
   week_resume_at: string | null;
+  fable_throttled: number | null;
+  fable_resume_at: string | null;
 }
 
 function readThrottleState(db: Db): ThrottleStateRow | undefined {
   return db
     .prepare(
       `SELECT throttled, resets_at,
-              session_throttled, session_resume_at, week_throttled, week_resume_at
+              session_throttled, session_resume_at, week_throttled, week_resume_at,
+              fable_throttled, fable_resume_at
        FROM throttle_state WHERE id = 1`,
     )
     .get() as ThrottleStateRow | undefined;
@@ -68,12 +75,27 @@ export interface WindowThrottleState {
   resumeAt: string | null;
 }
 
+/** The fable line's own isPickupBlocked (ADR 0030): true while the last
+ *  observation has fable over its pace line and the catch-up instant hasn't
+ *  passed. Unlike the board-wide gate this blocks only fable-model tasks —
+ *  the caller applies it per task. A missing fable observation (NULL column)
+ *  is "no per-model limit", never blocked. */
+export function isFablePickupBlocked(db: Db, now: Date): boolean {
+  const row = readThrottleState(db);
+  if (!row || !row.fable_throttled) return false;
+  if (!row.fable_resume_at) return true;
+  return now.getTime() < new Date(row.fable_resume_at).getTime();
+}
+
 export interface ThrottleState {
   throttled: boolean;
   resetsAt: string | null;
   windows: {
     session: WindowThrottleState | null;
     week: WindowThrottleState | null;
+    /** fable の null は「個別制限の観測なし」(Pro プラン等)— session/week の
+     *  null(観測不能 = fail-closed)とは意味が違う (ADR 0030)。 */
+    fable: WindowThrottleState | null;
   };
 }
 
@@ -88,7 +110,11 @@ function windowState(throttled: number | null, resumeAt: string | null): WindowT
 export function getThrottleState(db: Db): ThrottleState {
   const row = readThrottleState(db);
   if (!row) {
-    return { throttled: false, resetsAt: null, windows: { session: null, week: null } };
+    return {
+      throttled: false,
+      resetsAt: null,
+      windows: { session: null, week: null, fable: null },
+    };
   }
   return {
     throttled: !!row.throttled,
@@ -96,6 +122,7 @@ export function getThrottleState(db: Db): ThrottleState {
     windows: {
       session: windowState(row.session_throttled, row.session_resume_at),
       week: windowState(row.week_throttled, row.week_resume_at),
+      fable: windowState(row.fable_throttled, row.fable_resume_at),
     },
   };
 }

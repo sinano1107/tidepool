@@ -52,7 +52,7 @@ import {
   registerTask,
   type Task,
 } from "./tasks.js";
-import { getThrottleState, isPickupBlocked } from "./throttle.js";
+import { getThrottleState, isFablePickupBlocked, isPickupBlocked } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import {
   TranslationTargetError,
@@ -433,6 +433,10 @@ export interface ApiRouterDeps {
    *  null on a failed probe. Absent → no CLI to enumerate against; GET /api/
    *  skills degrades to an empty candidate set (never 503 — see the route). */
   hostSkills?: () => Promise<string[] | null>;
+  /** Agent names whose registry model is fable (ADR 0030), read fresh per
+   *  request — the queue view marks only their tasks skipped while the fable
+   *  line is over pace. Absent → no registry, fable skip never shows. */
+  fableAgents?: () => string[];
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable, same 503 posture as
    *  no draftClient configured. */
@@ -459,6 +463,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     profileAdmin,
     hostSkills,
     translationClient,
+    fableAgents,
   } = deps;
   const router = Router();
   router.use(json());
@@ -1477,6 +1482,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           workspace?.name,
           defaultAgentName,
           auditorName,
+          // fable 線の超過中は fable モデルのタスクだけが skipped に見える
+          // (ADR 0030) — 盤面全体の throttled とは独立の資源単位の絞り
+          isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
         ),
       ),
     );

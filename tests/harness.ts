@@ -97,6 +97,10 @@ export interface BootOptions {
    *  here so GET /api/skills is exercised without a real `claude` CLI (ADR
    *  0027). Absent → the route degrades to an empty candidate set. */
   hostSkills?: () => Promise<string[] | null>;
+  /** Agent names whose registry model is fable (ADR 0030) — read fresh every poll
+   *  by the scheduler's fable line and the queue view. Absent → no fable
+   *  model resolution, so the fable line never skips anything. */
+  fableAgents?: () => string[];
 }
 
 /** The server wants a per-request candidates provider; a test may pass one
@@ -144,6 +148,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     agentAdmin: options.agentAdmin,
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
+    fableAgents: options.fableAgents,
   });
   let stopped = false;
   const stopServer = async () => {
@@ -231,6 +236,7 @@ export async function registerWork(
   title: string,
   workspace?: string,
   reviewFlag?: boolean,
+  assignee?: string,
 ): Promise<any> {
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
@@ -239,6 +245,7 @@ export async function registerWork(
     completion_criteria: `criteria of ${title}`,
     ...(workspace !== undefined && { workspace }),
     ...(reviewFlag !== undefined && { review_flag: reviewFlag }),
+    ...(assignee !== undefined && { assignee }),
   });
   return res.json;
 }

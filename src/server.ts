@@ -95,6 +95,10 @@ export interface ServerOptions {
    *  registering worker's authority profile. Absent → no workspace is
    *  protected. */
   isProtectedWorkspace?: (name: string) => boolean;
+  /** Agent names whose registry model is fable (ADR 0030), read fresh by
+   *  the scheduler's fable line and the queue view. Absent → no registry
+   *  configured, so the fable line can't attribute tasks and skips nothing. */
+  fableAgents?: () => string[];
   /** The pull half of the roster (issue #43 / ADR 0014), read fresh against
    *  the registry by the caller — same pattern as `agentRegistered`. Absent
    *  → no registry configured, so `list_agents` reports only `human`. */
@@ -165,6 +169,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     resolveWorkspace: options.resolveWorkspace,
     auditorName,
     github: options.github,
+    fableAgents: options.fableAgents,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
@@ -250,6 +255,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       profileAdmin: options.profileAdmin,
       hostSkills: options.hostSkills,
       translationClient: options.translationClient,
+      fableAgents: options.fableAgents,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing
