@@ -2,11 +2,12 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authedGit, GitHubAuth, loadGitHubAuth } from "../src/github-auth.js";
 import { git } from "./harness.js";
 
 const dirs: string[] = [];
+let savedGhToken: string | undefined;
 
 async function makeDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -22,7 +23,17 @@ async function makeTokenFile(token: string, mode: number): Promise<string> {
   return file;
 }
 
+beforeEach(() => {
+  savedGhToken = process.env.GH_TOKEN;
+  delete process.env.GH_TOKEN;
+});
+
 afterEach(async () => {
+  if (savedGhToken !== undefined) {
+    process.env.GH_TOKEN = savedGhToken;
+  } else {
+    delete process.env.GH_TOKEN;
+  }
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
@@ -50,6 +61,9 @@ describe("loadGitHubAuth: fail-closed(issue #50 完了基準)", () => {
   });
 
   it("stat は通るが read できないファイルも undefined — 起動クラッシュではなく fail-closed", async () => {
+    if (process.getuid && process.getuid() === 0) {
+      return;
+    }
     silenceWarn();
     // mode 000: group/other ビットなしで mode 検査は通るが、所有者にも読めない
     const file = await makeTokenFile("tok\n", 0o000);
