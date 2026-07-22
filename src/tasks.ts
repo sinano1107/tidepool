@@ -1641,6 +1641,9 @@ export function listQueue(
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
   auditorName?: string,
+  /** fable 線の超過中の fable モデル agent 名 (ADR 0030) — 該当タスクだけが
+   *  skipped 表示になる(盤面全体の throttled とは独立)。 */
+  fableSkippedAssignees?: string[],
 ): BoardTask[] {
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   const rows = boardRows(
@@ -1648,12 +1651,19 @@ export function listQueue(
     `WHEN status = 'todo' AND type <> 'question' AND (
        ? = 1 OR (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
          OR (${fallback} IS NOT NULL AND ${agentQuarantinedSql("tasks.assignee", fallback)})
+         OR (@fableSkippedAssignees IS NOT NULL
+           AND COALESCE(tasks.assignee, ${fallback}) IN (
+             SELECT value FROM json_each(@fableSkippedAssignees)))
      ) THEN 'skipped'`,
     [
       throttled ? 1 : 0,
       defaultWorkspaceName ?? null,
       defaultWorkspaceName ?? null,
-      { defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null },
+      {
+        defaultAgentName: defaultAgentName ?? null,
+        auditorName: auditorName ?? null,
+        fableSkippedAssignees: fableSkippedAssignees ? JSON.stringify(fableSkippedAssignees) : null,
+      },
     ],
   );
   return rows
@@ -1780,6 +1790,10 @@ export function nextSlotTask(
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
   auditorName?: string,
+  /** fable 線の超過中だけ渡される、fable モデルに解決される agent 名の集合
+   *  (ADR 0030)。該当タスクは workspace/agent quarantine と同じ「資源単位の
+   *  skip」で候補から外れ、他のタスクは流れ続ける。 */
+  excludedAssignees?: string[],
 ): Task | undefined {
   const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
   const row = db
@@ -1796,6 +1810,10 @@ export function nextSlotTask(
            "@defaultWorkspaceName",
          )})
          AND (${fallback} IS NULL OR NOT ${agentQuarantinedSql("t.assignee", fallback)})
+         AND (@excludedAssignees IS NULL
+           OR COALESCE(t.assignee, ${fallback}) IS NULL
+           OR COALESCE(t.assignee, ${fallback}) NOT IN (
+             SELECT value FROM json_each(@excludedAssignees)))
        ORDER BY t.sort_key LIMIT 1`,
     )
     .get({
@@ -1803,6 +1821,7 @@ export function nextSlotTask(
       defaultAgentName: defaultAgentName ?? null,
       auditorName: auditorName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
+      excludedAssignees: excludedAssignees ? JSON.stringify(excludedAssignees) : null,
     }) as TaskRow | undefined;
   return row && rowToTask(row);
 }

@@ -90,6 +90,21 @@ const TASKS_TABLE_DDL = `
       )
     )`;
 
+// Shared between the fresh-board CREATE and the pre-ADR-0008 rebuild
+// migration below, same pattern as TASKS_TABLE_DDL — the two can never drift.
+const THROTTLE_STATE_TABLE_DDL = `
+    CREATE TABLE throttle_state (
+      id                 INTEGER PRIMARY KEY CHECK (id = 1),
+      throttled          INTEGER NOT NULL,
+      resets_at          TEXT,
+      session_throttled  INTEGER,
+      session_resume_at  TEXT,
+      week_throttled     INTEGER,
+      week_resume_at     TEXT,
+      fable_throttled    INTEGER,
+      fable_resume_at    TEXT
+    )`;
+
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
@@ -171,11 +186,21 @@ export function openDb(path: string): Db {
 
     -- Swell throttle (ADR 0008): one row, account-scoped (not per-task/
     -- workspace) usage state from the last just-in-time /usage poll at pickup
-    -- time. No row means normal (unthrottled).
-    CREATE TABLE IF NOT EXISTS throttle_state (
-      id         INTEGER PRIMARY KEY CHECK (id = 1),
-      throttled  INTEGER NOT NULL,
-      resets_at  TEXT
+    -- time. No row means normal (unthrottled). ADR 0030 extends it with the
+    -- per-window pace verdicts (which line is hit, and its catch-up instant);
+    -- a NULL *_throttled means that window went unobserved (fail-closed).
+    ${THROTTLE_STATE_TABLE_DDL.replace("CREATE TABLE throttle_state", "CREATE TABLE IF NOT EXISTS throttle_state")};
+
+    -- Pace offsets (ADR 0030): the human's reserved share (pt) per usage
+    -- window — the board runs this far behind the elapsed-time pace line.
+    -- One row; no row means the code defaults (session 20 / week 10 /
+    -- fable 10). Values are validated at the API entry; the reader guards
+    -- out-of-range values back to defaults as well.
+    CREATE TABLE IF NOT EXISTS pace_offsets (
+      id      INTEGER PRIMARY KEY CHECK (id = 1),
+      session INTEGER NOT NULL,
+      week    INTEGER NOT NULL,
+      fable   INTEGER NOT NULL
     );
 
     -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
@@ -393,11 +418,19 @@ export function openDb(path: string): Db {
   if (throttleCols.includes("state")) {
     db.exec(`
       DROP TABLE throttle_state;
-      CREATE TABLE throttle_state (
-        id         INTEGER PRIMARY KEY CHECK (id = 1),
-        throttled  INTEGER NOT NULL,
-        resets_at  TEXT
-      );
+      ${THROTTLE_STATE_TABLE_DDL};
+    `);
+  } else if (!throttleCols.includes("session_throttled")) {
+    // ADR 0030: additive per-window verdict columns. NULL (the ALTER default)
+    // reads as "window unobserved", which is exactly right for a pre-0030
+    // last-observed row — the next JIT poll fills them in.
+    db.exec(`
+      ALTER TABLE throttle_state ADD COLUMN session_throttled INTEGER;
+      ALTER TABLE throttle_state ADD COLUMN session_resume_at TEXT;
+      ALTER TABLE throttle_state ADD COLUMN week_throttled INTEGER;
+      ALTER TABLE throttle_state ADD COLUMN week_resume_at TEXT;
+      ALTER TABLE throttle_state ADD COLUMN fable_throttled INTEGER;
+      ALTER TABLE throttle_state ADD COLUMN fable_resume_at TEXT;
     `);
   }
   return db;

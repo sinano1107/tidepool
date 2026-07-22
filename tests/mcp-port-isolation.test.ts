@@ -18,12 +18,13 @@ afterEach(async () => {
 
 it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートでのみ待ち受ける(issue #37)", async () => {
   dir = await mkdtemp(join(tmpdir(), "tidepool-mcp-port-"));
+  const bootClock = new FakeClock();
   server = await startServer({
     dbPath: join(dir, "board.sqlite"),
     port: 0,
     mcpPort: 0,
-    clock: new FakeClock(),
-    worker: () => new ScriptedWorker(),
+    clock: bootClock,
+    worker: () => new ScriptedWorker(bootClock),
   });
 
   const webRes = await fetch(`http://127.0.0.1:${server.port}/mcp`, {

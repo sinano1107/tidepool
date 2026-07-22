@@ -116,6 +116,19 @@ function workspaceResolver(): ((taskWorkspace: string | null) => WorkspaceConfig
     resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace, workspacesDir);
 }
 
+/** fable モデルに解決される agent 名の集合 (ADR 0030)、毎 poll registry から
+ *  読み直す。CLI の --model は開かれた文字列("fable" でも "claude-fable-5"
+ *  でも通る)なので、部分一致で fable 系と判定する。default agent が fable
+ *  なら assignee 未設定のタスクもここに含まれる名前へ解決される(SQL 側の
+ *  COALESCE)。registry なし → fable 判定は不可能、skip なし。 */
+function fableAgentsResolver(): (() => string[]) | undefined {
+  if (!registryDir) return undefined;
+  return () =>
+    Object.values(loadRegistry(registryDir).agents)
+      .filter((agent) => agent.model?.toLowerCase().includes("fable"))
+      .map((agent) => agent.name);
+}
+
 /** Resolves the executing task's own agent's authority profile (ADR 0012 /
  *  issue #36), read fresh against the registry every call from the task's own
  *  `assignee` (null → the board's default agent, `TIDEPOOL_AGENT`) — the
@@ -322,6 +335,7 @@ const server = await startServer({
   // the skills picker's candidate source (issue #106): the real `claude` CLI's
   // neutral-cwd enumeration — always available on a real host, faked in tests
   hostSkills: enumerateHostSkills,
+  fableAgents: fableAgentsResolver(),
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

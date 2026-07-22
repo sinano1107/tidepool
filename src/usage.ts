@@ -15,6 +15,11 @@ export interface UsageWindowSnapshot {
 export interface UsageSnapshot {
   session: UsageWindowSnapshot | null;
   week: UsageWindowSnapshot | null;
+  /** fable の週次 per-model 行 (ADR 0030)。null は「行なし or 読めない」—
+   *  session/week が健全なら「個別制限のないプラン」(Pro)と読み、fail-closed
+   *  にはしない。書式変更で誤って null に化ける残リスクは全体線と100%キャップ
+   *  が被害上限を抑え、UI の観測状態表示で人間が気づける(ADR 0030)。 */
+  fable: UsageWindowSnapshot | null;
 }
 
 // PTY capture of the interactive TUI's /usage panel (ADR 0028) — replaces the
@@ -26,6 +31,9 @@ const ANSI_PATTERN = /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\))/g
 
 const SESSION_LABEL = "Current session";
 const WEEK_LABEL = "Current week (all models)";
+// 実機 PTY キャプチャで確定したラベル(issue #126、2026-07-22、claude 2.1.217)。
+// per-model 行として (all models) の後に現れ、書式は week と同形。
+const FABLE_LABEL = "Current week (Fable)";
 
 const PERCENT_USED_PATTERN = /(\d+)%\s*used/;
 
@@ -121,24 +129,91 @@ function parseSessionResetsAt(time: ParsedTimeOfDay, now: Date): Date {
   return roundToFutureUtc(now, time, { year, month, day }, (base) => ({ ...base, day: base.day + 1 }));
 }
 
-export interface ThrottleDecision {
-  throttled: boolean;
-  resetsAt: Date | null;
+// ADR 0030: ウィンドウ長は Anthropic のプロダクト事実でありハードコード定数。
+// 仕様が変われば /usage 書式変更と同類のスクレイパー破損イベントとして直す。
+export const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
+export const WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** ADR 0030: 人間の取り分の予約(pt)。盤面がペースからこの分だけ遅れて
+ *  走ることで、空いた分が人間の対話利用に残る。 */
+export interface PaceOffsets {
+  session: number;
+  week: number;
+  fable: number;
 }
 
-/** ADR 0008: session or week (all models) at or above threshold blocks new
- *  pickup. Neither window touches an already-running task. */
-export function evaluateThrottle(snapshot: UsageSnapshot, thresholdPercent: number): ThrottleDecision {
+/** 一つのウィンドウのペース判定。resumeAt は catch-up 時刻(経過割合 =
+ *  使用率 + オフセット になる瞬間)— リセット時刻ではない(ADR 0030)。 */
+export interface WindowDecision {
+  throttled: boolean;
+  resumeAt: Date | null;
+}
+
+export interface ThrottleDecision {
+  throttled: boolean;
+  /** 再開見込み時刻(超過した線の catch-up の最大値)。fail-closed 時は null。 */
+  resetsAt: Date | null;
+  /** ウィンドウ別の内訳(UI 表示用)。session/week の null はそのウィンドウが
+   *  観測不能(パース失敗または逆算の不整合)であること。fable の null は
+   *  「個別制限の観測なし」(行なし = Pro プラン、または読めない行)であり、
+   *  fail-closed の入力ではない(ADR 0030)。 */
+  windows: {
+    session: WindowDecision | null;
+    week: WindowDecision | null;
+    fable: WindowDecision | null;
+  };
+}
+
+/** ADR 0030: throttled ⟺ 使用率% > 経過時間割合% − オフセット(pt)(strict)。
+ *  経過割合は「リセット時刻 − ウィンドウ長」で逆算した開始時刻から出す。
+ *  now が逆算した開始より前(不整合)は観測不能と同じ fail-closed に落とす。 */
+function evaluateWindow(
+  w: UsageWindowSnapshot,
+  windowMs: number,
+  offsetPt: number,
+  now: Date,
+): WindowDecision | null {
+  const startMs = w.resetsAt.getTime() - windowMs;
+  if (now.getTime() < startMs) return null;
+  const elapsedPct = ((now.getTime() - startMs) / windowMs) * 100;
+  if (!(w.percent > elapsedPct - offsetPt)) return { throttled: false, resumeAt: null };
+  // 使用率 + オフセットが100%以上だと catch-up はウィンドウ内に来ない —
+  // その場合はリセット自体が再開の瞬間
+  const catchUpMs = Math.min(
+    startMs + ((w.percent + offsetPt) / 100) * windowMs,
+    w.resetsAt.getTime(),
+  );
+  return { throttled: true, resumeAt: new Date(catchUpMs) };
+}
+
+/** ADR 0030: session / week のどちらかがペース線を超えていれば盤面全体の新規
+ *  pickup を絞る。fable 線は盤面を止めない — fable モデルのタスクだけを絞る
+ *  資源単位の線で、windows.fable として運ばれ scheduler がタスク単位に適用する。
+ *  実行中のタスクには決して触れない。 */
+export function evaluateThrottle(
+  snapshot: UsageSnapshot,
+  offsets: PaceOffsets,
+  now: Date,
+): ThrottleDecision {
+  const session =
+    snapshot.session && evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now);
+  const week = snapshot.week && evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now);
+  // fable の逆算不整合も null(観測なし)へ倒す: fail-closed は session/week の
+  // 意味論で、fable でそれをやると Pro プラン運用時に恒久 skip を製造する側に
+  // 倒れかねない。誤読の被害は全体線と100%キャップが上限を抑える(ADR 0030)。
+  const fable = snapshot.fable && evaluateWindow(snapshot.fable, WEEK_WINDOW_MS, offsets.fable, now);
+  const windows = { session: session ?? null, week: week ?? null, fable: fable ?? null };
   // fail-closed: either window unobserved means the decision can't be trusted,
   // even if the other window looks fine (issue #22: "観測不能なとき...は
   // fail-closed で skip する")
-  if (snapshot.session === null || snapshot.week === null) return { throttled: true, resetsAt: null };
-  const triggered = [snapshot.session, snapshot.week].filter(
-    (w): w is UsageWindowSnapshot => w !== null && w.percent >= thresholdPercent,
+  if (!session || !week) return { throttled: true, resetsAt: null, windows };
+  const violated = [session, week].filter((w) => w.throttled);
+  if (violated.length === 0) return { throttled: false, resetsAt: null, windows };
+  const resumeAt = violated.reduce(
+    (latest, w) => (w.resumeAt! > latest ? w.resumeAt! : latest),
+    violated[0]!.resumeAt!,
   );
-  if (triggered.length === 0) return { throttled: false, resetsAt: null };
-  const resetsAt = triggered.reduce((latest, w) => (w.resetsAt > latest ? w.resetsAt : latest), triggered[0]!.resetsAt);
-  return { throttled: true, resetsAt };
+  return { throttled: true, resetsAt: resumeAt, windows };
 }
 
 /** The text between `label` and the next occurrence of `until` (or end of
@@ -200,8 +275,12 @@ export function parseUsage(resultText: string, now: Date): UsageSnapshot {
   const stripped = resultText.replace(ANSI_PATTERN, "").replace(/\r/g, "\n");
   const sessionBlock = extractBlock(stripped, SESSION_LABEL, WEEK_LABEL);
   const weekBlock = extractBlock(stripped, WEEK_LABEL, null);
+  // fable は per-model 行 (ADR 0030): 書式は week と同形。行が無い(Pro プラン)
+  // 場合は null — session/week と違い fail-closed の入力ではない。
+  const fableBlock = extractBlock(stripped, FABLE_LABEL, null);
   return {
     session: sessionBlock === null ? null : parseSessionWindow(sessionBlock, now),
     week: weekBlock === null ? null : parseWeekWindow(weekBlock, now),
+    fable: fableBlock === null ? null : parseWeekWindow(fableBlock, now),
   };
 }

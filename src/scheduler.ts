@@ -1,6 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
+import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
 import type { Slot } from "./slot.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
@@ -25,44 +26,33 @@ import {
 
 export const HOURLY = 60 * 60 * 1000;
 
-const DEFAULT_USAGE_THRESHOLD = 80;
-
-/** An invalid override must not silently disable throttling: `Number(bad)` is
- *  NaN, and every `percent >= threshold` comparison against NaN is false — a
- *  fail-open, the opposite of ADR 0008's fail-closed posture. Fall back to
- *  the default instead of trusting an unparseable env value. */
-function usageThreshold(): number {
-  if (process.env.TIDEPOOL_USAGE_THRESHOLD === undefined) return DEFAULT_USAGE_THRESHOLD;
-  const parsed = Number(process.env.TIDEPOOL_USAGE_THRESHOLD);
-  return Number.isFinite(parsed) ? parsed : DEFAULT_USAGE_THRESHOLD;
-}
-
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
  *  check every time there is a candidate, never a background poll. Persists
- *  the observation as a side effect so /api/queue reflects it immediately. */
-async function checkThrottle(
-  db: Db,
-  clock: Clock,
-  worker: WorkerAdapter,
-  threshold: number,
-): Promise<ThrottleDecision> {
+ *  the observation as a side effect so /api/queue reflects it immediately.
+ *  オフセットは盤面設定 (ADR 0030) を毎回読む — settings で変えた値が次の
+ *  poll から効く。 */
+async function checkThrottle(db: Db, clock: Clock, worker: WorkerAdapter): Promise<ThrottleDecision> {
   const resultText = await worker.checkUsage();
   const snapshot: UsageSnapshot =
-    resultText !== null ? parseUsage(resultText, clock.now()) : { session: null, week: null };
-  const decision = evaluateThrottle(snapshot, threshold);
+    resultText !== null
+      ? parseUsage(resultText, clock.now())
+      : { session: null, week: null, fable: null };
+  const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now());
   reportThrottle(db, decision);
   return decision;
 }
 
 /** A single, replace-style one-shot timer (ADR 0008): scheduling while
  *  already armed cancels the stale handle first, so a fresh skip re-arming
- *  every poll never stacks duplicates. */
-function createResetTimer(clock: Clock, onFire: () => void) {
+ *  every poll never stacks duplicates. ADR 0030 arms it at the catch-up
+ *  instant (再開見込み時刻), not the window reset — waiting for the reset
+ *  plus the hourly tick would leak up to ~1h of idle pace every cycle. */
+function createResumeTimer(clock: Clock, onFire: () => void) {
   let cancelCurrent: (() => void) | null = null;
   return {
-    schedule(resetsAt: Date): void {
+    schedule(resumeAt: Date): void {
       cancelCurrent?.();
-      const delay = Math.max(0, resetsAt.getTime() - clock.now().getTime());
+      const delay = Math.max(0, resumeAt.getTime() - clock.now().getTime());
       const cancel = clock.setInterval(() => {
         cancel();
         cancelCurrent = null;
@@ -107,10 +97,16 @@ export function startScheduler(deps: {
    *  Absent → the gate is skipped and issue-backed tasks spawn with their
    *  "#N" placeholder (a board with no GitHub seam at all). */
   github?: GitHubClient;
+  /** Agent names whose registry model is fable (ADR 0030), read fresh every
+   *  poll — the assignee → registry → `model` resolution the fable line
+   *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
+   *  configured, so the fable line can't attribute tasks and skips nothing. */
+  fableAgents?: () => string[];
 }): Scheduler {
-  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName, github } = deps;
+  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName, github, fableAgents } =
+    deps;
   let inFlight = false;
-  const resetTimer = createResetTimer(clock, pollNow);
+  const resumeTimer = createResumeTimer(clock, pollNow);
 
   function pickupBlocked(): boolean {
     if (slot.currentTaskId !== null) return true;
@@ -233,13 +229,23 @@ export function startScheduler(deps: {
     if (pickupBlocked()) return;
     inFlight = true;
     try {
-      const decision = await checkThrottle(db, clock, worker, usageThreshold());
+      const decision = await checkThrottle(db, clock, worker);
       if (decision.throttled) {
-        if (decision.resetsAt) resetTimer.schedule(decision.resetsAt);
+        if (decision.resetsAt) resumeTimer.schedule(decision.resetsAt);
         return;
       }
-      const head = nextSlotTask(db, workspace?.name, worker.id, auditorName);
-      if (!head) return;
+      // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
+      // 外す — Quarantine と同じ「資源単位の停止」。
+      const fableWindow = decision.windows.fable;
+      const excludedAssignees =
+        fableWindow?.throttled && fableAgents ? fableAgents() : undefined;
+      const head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excludedAssignees);
+      if (!head) {
+        // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
+        // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)
+        if (fableWindow?.throttled && fableWindow.resumeAt) resumeTimer.schedule(fableWindow.resumeAt);
+        return;
+      }
       if (!(await issuePickupGate(head))) return;
       pickup(head);
     } finally {
@@ -255,7 +261,7 @@ export function startScheduler(deps: {
   return {
     stop: () => {
       cancel();
-      resetTimer.cancel();
+      resumeTimer.cancel();
     },
     pollNow,
   };

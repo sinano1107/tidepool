@@ -17,6 +17,7 @@ import type { DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
+import { getPaceOffsets, isValidOffset, setPaceOffsets } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
@@ -52,7 +53,7 @@ import {
   registerTask,
   type Task,
 } from "./tasks.js";
-import { getThrottleState, isPickupBlocked } from "./throttle.js";
+import { getThrottleState, isFablePickupBlocked, isPickupBlocked } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import {
   TranslationTargetError,
@@ -268,6 +269,17 @@ const quietHoursSchema = z.object({
   end: z.string().regex(HH_MM_PATTERN),
 });
 
+// ペースオフセット (ADR 0030): 3ウィンドウとも必須。値域の意味論(0–100 の
+// 整数 pt)は pace-offsets.ts の isValidOffset そのものを使う — 二重定義しない
+const paceOffsetValue = z.number().refine(isValidOffset, {
+  message: "offset must be an integer between 0 and 100",
+});
+const paceOffsetsSchema = z.object({
+  session: paceOffsetValue,
+  week: paceOffsetValue,
+  fable: paceOffsetValue,
+});
+
 // the board timezone (issue #63 / ADR 0022) — a separate sender from
 // quiet-hours' start/end: this one is auto-reported by the browser at PWA
 // launch, not human-configured, so it gets its own endpoint rather than
@@ -433,6 +445,10 @@ export interface ApiRouterDeps {
    *  null on a failed probe. Absent → no CLI to enumerate against; GET /api/
    *  skills degrades to an empty candidate set (never 503 — see the route). */
   hostSkills?: () => Promise<string[] | null>;
+  /** Agent names whose registry model is fable (ADR 0030), read fresh per
+   *  request — the queue view marks only their tasks skipped while the fable
+   *  line is over pace. Absent → no registry, fable skip never shows. */
+  fableAgents?: () => string[];
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable, same 503 posture as
    *  no draftClient configured. */
@@ -459,6 +475,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     profileAdmin,
     hostSkills,
     translationClient,
+    fableAgents,
   } = deps;
   const router = Router();
   router.use(json());
@@ -1272,6 +1289,22 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(getQuietHours(db));
   });
 
+  router.get("/settings/pace-offsets", (_req, res) => {
+    res.json(getPaceOffsets(db));
+  });
+
+  // ADR 0030: 不正値はこの入口で弾く — 範囲外の値が判定式に入ると strict
+  // 比較が黙って崩れる(旧 TIDEPOOL_USAGE_THRESHOLD の NaN fail-open の教訓)
+  router.post("/settings/pace-offsets", (req, res) => {
+    const parsed = paceOffsetsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    setPaceOffsets(db, parsed.data);
+    res.json(getPaceOffsets(db));
+  });
+
   router.get("/settings/timezone", (_req, res) => {
     res.json({ tz: getQuietHours(db).tz });
   });
@@ -1477,6 +1510,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           workspace?.name,
           defaultAgentName,
           auditorName,
+          // fable 線の超過中は fable モデルのタスクだけが skipped に見える
+          // (ADR 0030) — 盤面全体の throttled とは独立の資源単位の絞り
+          isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
         ),
       ),
     );

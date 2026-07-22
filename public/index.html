@@ -235,6 +235,15 @@ function mapData(board, log, pause, icons = {}) {
   // slot must say so rather than showing a bogus/absent resume time
   const throttleFailClosed = throttled && !throttle.resetsAt;
   const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resetsAt) : null;
+  // ADR 0030: which pace line is hit (session/week), and the fable line's own
+  // per-task state — resets_at is now the catch-up ("resumes") instant, and a
+  // fable-only excess shows here while the board itself keeps flowing
+  const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
+  const hitLines = ['session', 'week', 'fable'].filter((w) => throttleWindows[w]?.throttled);
+  const fableWindow = throttleWindows.fable;
+  const fableThrottled = !!fableWindow?.throttled;
+  const fableResumesAt =
+    fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -247,9 +256,27 @@ function mapData(board, log, pause, icons = {}) {
         color: 'var(--coral-4)', taskId: null,
         ...(throttleFailClosed
           ? { line: 'usage check unavailable · nothing starts', meta: 'fail-closed — check usage check logs' }
-          : { line: 'usage limit · nothing starts', meta: `resumes ${throttleResumesAt}` }),
+          : {
+              line: 'usage pace · nothing starts',
+              // which line is hit (ADR 0030) — an old pre-window row (no
+              // windows persisted yet) falls back to the plain resume text
+              meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${throttleResumesAt}`,
+            }),
       }
-    : { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'concurrency=1', taskId: null };
+    : fableThrottled
+    ? {
+        // fable line only (ADR 0030): the board keeps flowing — fable-model
+        // tasks alone wait for their catch-up
+        color: 'var(--rock-3)', taskId: null,
+        line: 'slot free — fable tasks paced',
+        meta: fableResumesAt ? `fable line · resumes ${fableResumesAt}` : 'fable line',
+      }
+    : {
+        color: 'var(--rock-3)', line: 'slot free — nothing running', taskId: null,
+        // fable の観測状態を常時可視化 (ADR 0030): per-model 行の書式変更で
+        // 観測が黙って落ちたとき、Max プランの人間がここで気づける
+        meta: `concurrency=1 · fable ${fableWindow ? 'on pace' : 'not observed'}`,
+      };
   return {
     questions, log: logEntries, queue, board: cols, icons,
     // empty until their domain slices exist: human tasks / agent registry /
@@ -257,6 +284,7 @@ function mapData(board, log, pause, icons = {}) {
     humanTasks: [], agents: [],
     slot, running: !!running, paused: !!paused,
     throttled, throttleFailClosed, throttleResumesAt,
+    fableThrottled, fableResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
   };
 }
@@ -1150,6 +1178,33 @@ function SettingsScreen({ say }) {
     setQuietHoursBusy(false);
   };
 
+  // Pace offsets (issue #126 / ADR 0030): the human's reserved share (pt)
+  // per usage window — the board runs this far behind the elapsed-time pace.
+  const [paceOffsets, setPaceOffsets] = React.useState(null); // null → still loading
+  const [paceOffsetsBusy, setPaceOffsetsBusy] = React.useState(false);
+  const loadPaceOffsets = async () => {
+    setPaceOffsets(await api('/api/settings/pace-offsets', undefined, 'GET'));
+  };
+  React.useEffect(() => { loadPaceOffsets(); }, []);
+  const setPaceOffsetField = (key) => (e) => setPaceOffsets((o) => ({ ...o, [key]: e.target.value }));
+  // the API rejects non-integers / out-of-range at the entry (ADR 0030) — the
+  // form mirrors that check so the button only enables on a sendable value
+  const validOffset = (v) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
+  const paceOffsetsValid = paceOffsets && ['session', 'week', 'fable'].every((k) => validOffset(paceOffsets[k]));
+  const savePaceOffsets = async () => {
+    setPaceOffsetsBusy(true);
+    try {
+      const saved = await api('/api/settings/pace-offsets', {
+        session: Number(paceOffsets.session), week: Number(paceOffsets.week), fable: Number(paceOffsets.fable),
+      });
+      setPaceOffsets(saved);
+      say('success', 'pace offsets saved', `session ${saved.session}pt · week ${saved.week}pt · fable ${saved.fable}pt`);
+    } catch (err) {
+      say('danger', 'pace offsets save failed', String(err.message || err));
+    }
+    setPaceOffsetsBusy(false);
+  };
+
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
   const [unavailable, setUnavailable] = React.useState(false); // 503 — no registry configured
   const load = async () => {
@@ -1361,6 +1416,25 @@ function SettingsScreen({ say }) {
           </p>
           <Button variant="primary" size="lg" full disabled={!quietHoursStart.trim() || !quietHoursEnd.trim() || quietHoursBusy} onClick={saveQuietHours}>
             {quietHoursBusy ? 'Working…' : 'Save quiet hours'}
+          </Button>
+        </Card>
+      )}
+      {paceOffsets && (
+        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            pace offsets
+          </span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Input label="Session" mono value={String(paceOffsets.session)} onChange={setPaceOffsetField('session')} placeholder="20" />
+            <Input label="Week" mono value={String(paceOffsets.week)} onChange={setPaceOffsetField('week')} placeholder="10" />
+            <Input label="Fable" mono value={String(paceOffsets.fable)} onChange={setPaceOffsetField('fable')} placeholder="10" />
+          </div>
+          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            your reserved share of each usage window, in points (0–100). the board stays this far
+            behind the elapsed-time pace, leaving that slice of the budget for your own sessions.
+          </p>
+          <Button variant="primary" size="lg" full disabled={!paceOffsetsValid || paceOffsetsBusy} onClick={savePaceOffsets}>
+            {paceOffsetsBusy ? 'Working…' : 'Save pace offsets'}
           </Button>
         </Card>
       )}
