@@ -365,6 +365,32 @@ function assertGithubRef(input: RegisterTaskInput): void {
   }
 }
 
+/** The duplicate half of the registration gate (issue #104): while an
+ *  unsettled issue-backed task holds the same reference (workspace name +
+ *  issue number), registering another is refused — a duplicate is the same
+ *  work twice, and whichever PR merges first closes the issue, turning the
+ *  other into a dead reference and a manufactured failure question. Settled
+ *  (done/cancelled — the task's own status, not its tree's) references never
+ *  block: an abandon-then-retry re-registration is legitimate. Board-local
+ *  by design — it needs no GitHub seam, so it holds on seam-less boards too,
+ *  and the API gate reuses it as its cheap first check before the costly
+ *  fetch + LLM inspection. */
+export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber: number): void {
+  const dup = db
+    .prepare(
+      `SELECT id FROM tasks
+       WHERE workspace = ? AND github_issue_number = ?
+         AND status NOT IN ('done', 'cancelled')
+       LIMIT 1`,
+    )
+    .get(workspace, issueNumber) as { id: string } | undefined;
+  if (dup) {
+    throw new DomainError(
+      `issue #${issueNumber} in workspace ${workspace} is already referenced by unsettled task ${dup.id}`,
+    );
+  }
+}
+
 /** Derives an issue-backed task's three content fields from its live GitHub
  *  issue (issue #49, ADR 0016): title and purpose come straight from the
  *  issue's own title and body, completion_criteria is a fixed template
@@ -453,6 +479,10 @@ export function registerTask(
 ): Task {
   assertQuestionSpec(input);
   assertGithubRef(input);
+  // assertGithubRef above guarantees workspace whenever the ref is present
+  if (input.github_issue_number !== undefined && input.workspace) {
+    assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
+  }
   const { maxKey } = db
     .prepare("SELECT COALESCE(MAX(sort_key), 0) AS maxKey FROM tasks")
     .get() as { maxKey: number };

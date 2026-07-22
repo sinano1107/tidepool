@@ -101,8 +101,11 @@ it("登録ゲート: LLM検査の不合格は 422 で missing と suggested_comm
   expect(accepted.status).toBe(201);
 
   // LLM 到達不能は draft エンドポイントと同じ 503(fail-fast、登録されない)
+  // — 別の issue 番号を使う: #49 は上で登録済みなので、同じ参照の再 POST は
+  // LLM に届く前に重複ゲート(issue #104)の 400 で弾かれる
+  t.github.scriptIssue(50, { title: "曖昧なメモ2", body: "なんとかする", comments: [] });
   draftClient.scriptInspectionFailure(new Error("llm down"));
-  const llmDown = await api(t.baseUrl, "POST", "/api/tasks", body);
+  const llmDown = await api(t.baseUrl, "POST", "/api/tasks", { ...body, github_issue_number: 50 });
   expect(llmDown.status).toBe(503);
 });
 
