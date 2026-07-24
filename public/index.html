@@ -226,6 +226,12 @@ function mapData(board, log, pause, icons = {}) {
       assignee: t.assignee ?? (t.type === 'question' ? 'you' : undefined),
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined,
       human: t.type === 'question', risk: !!t.risk_flag, children: openChildren[t.id],
+      // the card's raw column status + assignee (issue #129's Add-child
+      // dialog gates on these client-side — a display convenience only, the
+      // API's own assertHumanDecomposable is the real gate) — kept separate
+      // from `assignee` above, which already substitutes 'you'/undefined for
+      // display and would misrepresent an unset assignee here
+      status: t.status, rawAssignee: t.assignee,
     });
   }
   const running = board.find((t) => t.status === 'in_progress');
@@ -329,8 +335,19 @@ function TpTideWash({ label, emoji, duration = 1250 }) {
 // (workspace + issue number) and the registration gate may reject with a
 // suggested issue comment — shown inline here for the human to approve
 // (posting it is the approval; the board never posts on its own).
-function RegisterScreen({ onRegister }) {
+// parentTask (issue #129, human decompose): when set, this screen registers
+// a child of parentTask instead of a root task — same dump → draft → edit →
+// submit flow (CONTEXT.md's Decompose point 2: "登録画面に木モードは作らない
+// — ルート登録 + 子追加の合成で足りる", no separate tree-registration mode),
+// with the type/source pickers and issue-backed path dropped (a decompose
+// child is always type work, never issue-backed — decomposeTask's own
+// ChildSpec has no such fields either) and one field added: an optional
+// free-text reason for the split, which both lands as a decision-log entry
+// when given (CONTEXT.md's Decompose point 5) and steers the child's own AI
+// draft as context (point 4).
+function RegisterScreen({ onRegister, parentTask, onClose }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
+  const childMode = !!parentTask;
   const [source, setSource] = React.useState('manual');
   const [type, setType] = React.useState('work');
   const [title, setTitle] = React.useState('');
@@ -340,6 +357,7 @@ function RegisterScreen({ onRegister }) {
   const [workspace, setWorkspace] = React.useState('');
   const [risk, setRisk] = React.useState(false);
   const [review, setReview] = React.useState(false);
+  const [reason, setReason] = React.useState('');
   const [issueNumber, setIssueNumber] = React.useState('');
   const [gate, setGate] = React.useState(null); // { missing, suggested_comment }
   const [busy, setBusy] = React.useState(false);
@@ -356,7 +374,14 @@ function RegisterScreen({ onRegister }) {
   React.useEffect(() => {
     fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
   }, []);
-  const issueMode = source === 'github issue';
+  const issueMode = !childMode && source === 'github issue';
+  // the parent_id/decompose_reason pair every childMode request (draft and
+  // submit alike) carries — one shared shape so the two call sites can't
+  // drift apart
+  const childExtras = () =>
+    childMode
+      ? { parent_id: parentTask.id, ...(reason.trim() ? { decompose_reason: reason.trim() } : {}) }
+      : {};
   // the issue-number picker's open-issue list (issue #67): one fetch per
   // workspace selection, no cache/paging — the board-side rationale is the
   // human's own operation frequency (one Select change = one API call).
@@ -411,6 +436,9 @@ function RegisterScreen({ onRegister }) {
     issueMode
       ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()) }
       : {
+          // a decompose child is always type work (decomposeTask's own
+          // ChildSpec has no type field) — the type picker is dropped in
+          // childMode below, so `type` state never leaves its 'work' default
           type, title: title.trim(), purpose: purpose.trim(), completion_criteria: criteria.trim(),
           risk_flag: risk, review_flag: review,
           // unset assignee/workspace resolve to the board's defaults at
@@ -418,11 +446,12 @@ function RegisterScreen({ onRegister }) {
           // unknown-workspace 400 never fires on a field the human left blank
           ...(assignee ? { assignee } : {}),
           ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
+          ...childExtras(),
         };
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
-    setAssignee(''); setWorkspace(''); setIssueNumber('');
+    setAssignee(''); setWorkspace(''); setIssueNumber(''); setReason('');
     setRisk(false); setReview(false);
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later
@@ -441,6 +470,9 @@ function RegisterScreen({ onRegister }) {
         api(`/api/pending-dumps/${consumedId}`, {}, 'DELETE').then(refreshPendingDumps).catch(() => {});
       }
       resetContent();
+      // a root registration stays on the screen for the next dump; a child
+      // add is a one-shot dialog action — close it once it lands
+      if (childMode) onClose();
     } catch (err) {
       // a gate rejection carries the fix; anything else the toast reported.
       // The inspected reference is burned into the gate state so a later
@@ -481,7 +513,7 @@ function RegisterScreen({ onRegister }) {
   const draftFields = async () => {
     setDraftBusy(true);
     try {
-      const d = await api('/api/tasks/draft', { dump: dump.trim() });
+      const d = await api('/api/tasks/draft', { dump: dump.trim(), ...childExtras() });
       setTitle(d.title); setPurpose(d.purpose); setCriteria(d.completion_criteria);
       setAssignee(d.assignee ?? ''); setWorkspace(d.workspace ?? '');
       setRisk(!!d.risk_flag); setReview(!!d.review_flag);
@@ -512,19 +544,35 @@ function RegisterScreen({ onRegister }) {
   const workspaceOptions = withPlaceholder('', '(default workspace)', candidates.workspaces);
   const issueWorkspaceOptions = withPlaceholder('', 'select workspace…', candidates.workspaces);
   const primaryAction = issueMode || plainFormActive || drafted
-    ? { label: 'Register — appends to queue tail', disabled: !ok || busy, onClick: submit }
+    ? {
+        label: childMode ? 'Add child — appends to queue tail' : 'Register — appends to queue tail',
+        disabled: !ok || busy,
+        onClick: submit,
+      }
     : { label: draftBusy ? 'Drafting…' : 'Draft fields', disabled: !dump.trim() || draftBusy, onClick: draftFields };
   return (
     <div style={{ padding: '20px 16px' }}>
-      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Register</h1>
+      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>{childMode ? 'Add child' : 'Register'}</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
-        {issueMode
-          ? "reference a GitHub issue — its title/purpose/completion criteria stay live on GitHub"
-          : plainFormActive
-            ? 'the LLM is unreachable — fill the fields yourself'
-            : 'dump it — the LLM drafts the fields, you confirm'}
+        {childMode
+          ? `splitting "${parentTask.title}" — appears as a child, same dump → draft → edit flow`
+          : issueMode
+            ? "reference a GitHub issue — its title/purpose/completion criteria stay live on GitHub"
+            : plainFormActive
+              ? 'the LLM is unreachable — fill the fields yourself'
+              : 'dump it — the LLM drafts the fields, you confirm'}
       </p>
-      {!issueMode && pendingDumps.length > 0 && (
+      {childMode && (
+        <Card style={{ marginBottom: 14 }}>
+          <Input
+            label="Reason for splitting this (optional)"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="left blank, only the fact that a child was added is recorded"
+          />
+        </Card>
+      )}
+      {!issueMode && !childMode && pendingDumps.length > 0 && (
         <Card style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             pending dump{pendingDumps.length > 1 ? 's' : ''} — sent here from scratchpad triage, awaiting writeup
@@ -542,13 +590,15 @@ function RegisterScreen({ onRegister }) {
         </Card>
       )}
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
-          setSource(e.target.value); setGate(null);
-          // switching away from the pending-dump's own manual content: a
-          // later registration (e.g. an unrelated issue reference) must not
-          // consume a dump it was never built from
-          setSelectedDumpId(null);
-        }} />
+        {!childMode && (
+          <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
+            setSource(e.target.value); setGate(null);
+            // switching away from the pending-dump's own manual content: a
+            // later registration (e.g. an unrelated issue reference) must not
+            // consume a dump it was never built from
+            setSelectedDumpId(null);
+          }} />
+        )}
         {issueMode && (
           <React.Fragment>
             <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
@@ -588,7 +638,10 @@ function RegisterScreen({ onRegister }) {
             <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
             <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
             <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
-            <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value)} />
+            {/* a decompose child is always type work (decomposeTask's own ChildSpec has no type field) */}
+            {!childMode && (
+              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value)} />
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />
               <Select label="Workspace" options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
@@ -598,6 +651,9 @@ function RegisterScreen({ onRegister }) {
           </React.Fragment>
         )}
         <Button variant="primary" size="lg" full disabled={primaryAction.disabled} onClick={primaryAction.onClick}>{primaryAction.label}</Button>
+        {childMode && (
+          <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Cancel</Button>
+        )}
       </Card>
       {!issueMode && (
         <button onClick={togglePlainForm}
@@ -1650,6 +1706,9 @@ function App() {
   const [tabDir, setTabDir] = React.useState('right');
   const [toast, setToast] = React.useState(null);
   const [wash, setWash] = React.useState(null);
+  // human decompose (issue #129): the board task an "Add child" dialog is
+  // open for, or null when closed — set from a board task-card tap
+  const [addChildParent, setAddChildParent] = React.useState(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get('question'),
   );
@@ -1999,6 +2058,44 @@ function App() {
     }
   };
 
+  // human decompose (issue #129): a board task-card tap opens the Add-child
+  // dialog only for a task the client can already tell is plausibly eligible
+  // — done and another worker's in-progress task are cheap, always-correct
+  // exclusions from the board's own derived `status`/`assignee` (CONTEXT.md's
+  // Decompose line's first two conditions); the third (no agent-decomposed
+  // child yet) needs event history the board payload doesn't carry, so it's
+  // left to the API's own assertHumanDecomposable to reject on submit. An
+  // ineligible tap keeps the plain info toast this used to always show.
+  const openTask = (t) => {
+    const settled = t.status === 'done';
+    const othersInProgress = t.status === 'in_progress' && t.rawAssignee !== 'human';
+    if (settled || othersInProgress) {
+      say('info', t.title, `${t.id} · ${t.type}`);
+      return;
+    }
+    setAddChildParent(t);
+  };
+
+  // human decompose (issue #129): adding a child stays on the current tab
+  // (it's a dialog, not a screen switch) — refresh the board so the new
+  // child (or, on a risk/protected-workspace conversion, the approval
+  // question it produced instead — same status code, humanDecomposeTask's
+  // own union) shows up at once.
+  const addChild = async (fields) => {
+    try {
+      const t = await api('/api/tasks', fields);
+      say(
+        'info',
+        t.type === 'question' ? 'sent for approval' : 'child added — appended to queue tail',
+        t.id,
+      );
+      await refreshFull();
+    } catch (err) {
+      say('danger', 'add child failed', String(err.message || err));
+      throw err;
+    }
+  };
+
   if (deepLinkQuestionId) {
     return (
       <QuestionDeepLinkView
@@ -2054,7 +2151,7 @@ function App() {
               <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', color: 'var(--tide-5)', marginBottom: 8 }}>Low tide. Go enjoy your coffee.</div>
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills as tasks come in.</div>
             </div>)}
-        {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · ${t.type}`)} />}
+        {tab === 'board' && <BoardScreen data={data} onOpenTask={openTask} />}
         {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
         {tab === 'settings' && <SettingsScreen say={say} />}
@@ -2068,6 +2165,18 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* human decompose (issue #129): a board task-card tap opens this
+          instead of building a separate tree-registration screen (CONTEXT.md's
+          Decompose point 2) — the line itself (unsettled / not in-progress
+          unless it's the human's own / no agent-decomposed child yet) is
+          enforced server-side; a task outside it just surfaces the domain
+          error as a toast on submit. */}
+      <PortalDialog open={!!addChildParent} onClose={() => setAddChildParent(null)}>
+        {addChildParent && (
+          <RegisterScreen parentTask={addChildParent} onRegister={addChild} onClose={() => setAddChildParent(null)} />
+        )}
+      </PortalDialog>
 
       <nav style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 440, display: 'flex', background: 'var(--surface-card)', borderTop: '1px solid var(--border-hairline)', zIndex: 20 }}>
         {tabs.map((t) => {

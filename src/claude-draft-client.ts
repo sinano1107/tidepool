@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defaultExec, type ExecFn, pinnedModelFlags } from "./claude-worker.js";
-import type { DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
+import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
@@ -53,10 +53,37 @@ function languageInstruction(language: string): string {
   );
 }
 
+/** The child-decompose context section (issue #129 point 4): the parent's
+ *  own content, its existing children's titles, and the human's own
+ *  decompose reason if given — steers the draft toward a child that fits the
+ *  split already under way instead of restating the parent or duplicating a
+ *  sibling. Read-only, never stored. */
+function buildChildContextSection(context: ChildDraftContext): string {
+  const lines = [
+    "This task is being registered as a CHILD of an existing parent task (a human decompose). " +
+      "Context on the parent, for reference only — do not simply restate it:",
+    `Parent title: ${context.parentTitle}`,
+    `Parent purpose: ${context.parentPurpose}`,
+    `Parent completion criteria: ${context.parentCompletionCriteria}`,
+    context.siblingTitles.length > 0
+      ? `Existing sibling children (avoid duplicating these): ${context.siblingTitles.join(", ")}`
+      : "No sibling children exist yet.",
+  ];
+  if (context.decomposeReason?.trim()) {
+    lines.push(`Reason given for this split: ${context.decomposeReason}`);
+  }
+  return lines.join("\n");
+}
+
 /** Instructs the model to answer with JSON only, and — when a registry is
  *  configured (issue #25) — steers assignee/workspace toward known names so
  *  a drafted response is likely to pass registration unmodified. */
-function buildPrompt(dump: string, language: string, candidates?: RegistryCandidates): string {
+function buildPrompt(
+  dump: string,
+  language: string,
+  candidates?: RegistryCandidates,
+  childContext?: ChildDraftContext,
+): string {
   const instructions =
     "You are drafting a task registration from a free-text brain dump for a work-tracking board. " +
     "Respond with ONLY a single JSON object (no markdown fences, no prose) with these fields: " +
@@ -67,7 +94,13 @@ function buildPrompt(dump: string, language: string, candidates?: RegistryCandid
       `Known workspaces: ${candidates.workspaces.join(", ")}. ` +
       "When suggesting assignee/workspace, only propose names from these lists."
     : "";
-  return [instructions, candidateGuidance, languageInstruction(language), `Brain dump:\n${dump}`]
+  return [
+    instructions,
+    candidateGuidance,
+    childContext ? buildChildContextSection(childContext) : "",
+    languageInstruction(language),
+    `Brain dump:\n${dump}`,
+  ]
     .filter(Boolean)
     .join("\n\n");
 }
@@ -147,8 +180,14 @@ export class ClaudeDraftClient implements DraftClient {
     this.exec = options.exec ?? defaultExec;
   }
 
-  async draftTask(dump: string, language: string): Promise<TaskDraft> {
-    const result = await this.runDraftPrompt(buildPrompt(dump, language, this.candidates));
+  async draftTask(
+    dump: string,
+    language: string,
+    context?: ChildDraftContext,
+  ): Promise<TaskDraft> {
+    const result = await this.runDraftPrompt(
+      buildPrompt(dump, language, this.candidates, context),
+    );
     return taskDraftSchema.parse(extractJson(result)) as TaskDraft;
   }
 

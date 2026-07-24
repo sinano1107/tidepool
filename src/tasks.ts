@@ -1365,7 +1365,16 @@ export function decomposeTask(
   }
   const children: Task[] = [];
   db.transaction(() => {
-    const decisionId = logDecision(db, parent, input.reason, workerId, now);
+    // an agent's reason is required at the MCP schema (`z.string().min(1)`,
+    // a length check, not a content one) — gating on length here, not
+    // `.trim()`, keeps this a strict no-op for the agent path regardless of
+    // whitespace, so this is always logged for the agent path. Human
+    // decompose (issue #129) is the one caller that can reach here with a
+    // blank reason (its own optional field coerces an omitted reason to
+    // `""`), in which case only the ordinary task_registered event(s) below
+    // record the fact.
+    const decisionId =
+      input.reason.length > 0 ? logDecision(db, parent, input.reason, workerId, now) : undefined;
     for (const child of input.children) {
       const reasons: string[] = [];
       if (child.risk_flag && !parent.risk_flag) {
@@ -1434,6 +1443,83 @@ export function decomposeTask(
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
   })();
   return children;
+}
+
+/** Whether `parentId` already carries a child an agent registered (issue
+ *  #129): an agent's only path to registering a child at all is the
+ *  `decompose` MCP tool, so "a child whose own `task_registered` event was
+ *  attributed to a non-human worker" and "an agent has already exercised its
+ *  one decompose judgment here" are the same fact — no separate provenance
+ *  marker is needed. Any status counts (even a since-cancelled agent child
+ *  still means the judgment was made); this is deliberately permanent, not
+ *  reset if that child later settles. */
+function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM tasks t
+       JOIN events e ON e.task_id = t.id AND e.kind = 'task_registered'
+       WHERE t.parent_id = ? AND e.worker_id <> ?
+       LIMIT 1`,
+    )
+    .get(parentId, HUMAN_WORKER_ID);
+  return row !== undefined;
+}
+
+/** The human-decompose gate (issue #129, CONTEXT.md's Decompose: "線は
+ *  「agent の判断がまだ存在しないところ」"). A human may add a child to
+ *  `parent` only when all three hold: `parent` is unsettled, `parent` is not
+ *  in_progress (unless it's the human's own — a `human`-assignee task runs
+ *  outside the slot and races no one), and `parent` carries no child an agent
+ *  has already registered via its own decompose judgment. Outside this line,
+ *  rearranging an agent-decomposed tree is the objection → repair task →
+ *  assignee's own replan route's job, not this one's — direct rearrangement
+ *  here would erase the fix-forward signal that route depends on. */
+export function assertHumanDecomposable(db: Db, parent: Task): void {
+  if (parent.status === "done" || parent.status === "cancelled") {
+    throw new DomainError("a settled task cannot be decomposed");
+  }
+  if (parent.status === "in_progress" && parent.assignee !== HUMAN_WORKER_ID) {
+    throw new DomainError(
+      "an in-progress task cannot be decomposed by a human unless it is the human's own task",
+    );
+  }
+  if (hasAgentRegisteredChild(db, parent.id)) {
+    throw new DomainError(
+      "a task an agent has already decomposed cannot be decomposed by a human — " +
+        "rearranging it is the objection route's job",
+    );
+  }
+}
+
+/** Human decompose (issue #129): the same mechanics as agent decompose
+ *  (`decomposeTask` — one decision, children queue at the tail, the parent
+ *  returns to `todo` and blocks on the derived-unfinished-children rule until
+ *  they all settle) with the registering worker fixed to `human` and no
+ *  authority restrictions (CONTEXT.md's Worker: "人間は全権限を持つ
+ *  worker") — `outsideAuthority`'s own "no allowlist configured means
+ *  unrestricted" reading already gives this for free by passing `authority:
+ *  undefined`, so no separate bypass is needed. The reason is optional
+ *  (unlike an agent's, required by the MCP tool schema): given, it lands as a
+ *  decision-log entry the same way decomposeTask always has; omitted, only
+ *  the ordinary task_registered event(s) record that a human added a child
+ *  (CONTEXT.md: "書かなくても「人間が子を追加した」事実はイベントに残る"). */
+export function humanDecomposeTask(
+  db: Db,
+  parent: Task,
+  input: { reason?: string; children: ChildSpec[] },
+  now: Date,
+  isProtectedWorkspace?: (name: string) => boolean,
+): Task[] {
+  assertHumanDecomposable(db, parent);
+  return decomposeTask(
+    db,
+    parent,
+    { reason: input.reason ?? "", children: input.children },
+    HUMAN_WORKER_ID,
+    now,
+    undefined,
+    isProtectedWorkspace,
+  );
 }
 
 /** The one SQL shape of the derived-blocked rule (CONTEXT.md): a child not
@@ -1695,6 +1781,20 @@ export function getTask(db: Db, id: string): Task | undefined {
   return row && rowToTask(row);
 }
 
+/** The task most recently registered under `parentId` — registration always
+ *  assigns a new max(sort_key), so "latest" is just the highest sort_key
+ *  among the parent's children. Used by the human decompose API route (issue
+ *  #129) to report back whichever landed: a plain work child, or (when
+ *  decomposeTask's own risk/protected-workspace machinery intervened) the
+ *  pending-child approval question it registered instead — either way, the
+ *  same single-Task response shape the plain registration door already has. */
+export function latestChild(db: Db, parentId: string): Task | undefined {
+  const row = db
+    .prepare("SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_key DESC LIMIT 1")
+    .get(parentId) as TaskRow | undefined;
+  return row && rowToTask(row);
+}
+
 /** issue #29's `get_current_task` shape for one settled (done/cancelled)
  *  direct child — a done question's answer, a done work's handoff doc
  *  verbatim (CONTEXT.md's Handoff doc: question/review carry none), or
@@ -1723,6 +1823,17 @@ function cancelOriginQuestion(db: Db, taskId: string): Task | undefined {
   if (!row) return undefined;
   const { origin_question_id } = JSON.parse(row.payload) as { origin_question_id: string };
   return getTask(db, origin_question_id);
+}
+
+/** Every direct child of `parentId`, any status, in registration order (issue
+ *  #129: the sibling-title list a child's AI draft is given — every existing
+ *  sibling is relevant context to avoid duplicating, not just settled ones,
+ *  unlike settledChildren below). */
+export function listChildren(db: Db, parentId: string): Task[] {
+  const rows = db
+    .prepare("SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_key")
+    .all(parentId) as TaskRow[];
+  return rows.map(rowToTask);
 }
 
 /** Settled direct children only (CONTEXT.md: 供給範囲は直接の子まで) — a

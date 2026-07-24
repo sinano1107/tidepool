@@ -256,6 +256,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       hostSkills: options.hostSkills,
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
+      isProtectedWorkspace: options.isProtectedWorkspace,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

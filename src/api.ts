@@ -13,7 +13,7 @@ import {
   SUPPORTED_DISPLAY_LANGUAGES,
   setDisplayLanguage,
 } from "./display-language.js";
-import type { DraftClient } from "./draft.js";
+import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
@@ -43,7 +43,10 @@ import {
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
   hasUnfinishedChildren,
+  humanDecomposeTask,
+  latestChild,
   listBoard,
+  listChildren,
   listQueue,
   listYourTasks,
   logDecision,
@@ -112,6 +115,13 @@ const registerTaskSchema = z.object({
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
+  // human decompose (issue #129): the optional reason a human gives for
+  // splitting `parent_id` into this child — meaningful only alongside
+  // parent_id, ignored on a root registration. Given, it lands as a
+  // decision-log entry the same way an agent's decompose reason always has;
+  // omitted, only the ordinary task_registered event records that a human
+  // added a child.
+  decompose_reason: z.string().optional(),
   // shape stays permissive: the 1-4-item / 2-4-options + recommendation
   // invariants are enforced in the domain so callers get a domain error
   question: z
@@ -128,6 +138,11 @@ const registerTaskSchema = z.object({
 
 const draftTaskSchema = z.object({
   dump: z.string().min(1),
+  // human decompose (issue #129): drafting a child from an "add child"
+  // screen — present, the draft is given parent/sibling context; absent,
+  // this is a plain root draft, unchanged
+  parent_id: z.string().optional(),
+  decompose_reason: z.string().optional(),
 });
 
 // the approval half of the registration gate (issue #49 設計点4): posting
@@ -460,6 +475,12 @@ export interface ApiRouterDeps {
    *  POST /api/translate reports the LLM as unreachable, same 503 posture as
    *  no draftClient configured. */
   translationClient?: TranslationClient;
+  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+   *  protected workspace / ADR 0013), threaded straight to human decompose's
+   *  own call into decomposeTask (issue #129) — same resource-side invariant
+   *  the MCP `decompose` tool's own `isProtectedWorkspace` already enforces
+   *  for an agent's decompose. Absent → no workspace is protected. */
+  isProtectedWorkspace?: (name: string) => boolean;
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -483,6 +504,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     hostSkills,
     translationClient,
     fableAgents,
+    isProtectedWorkspace,
   } = deps;
   const router = Router();
   router.use(json());
@@ -496,6 +518,22 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
+      // human decompose (issue #129) claims parent_id only for a work child
+      // — decomposeTask's own ChildSpec has no `type` field and always
+      // registers "work", so that's the one shape decompose (human or agent)
+      // ever produces. A `type: "review"` (or any non-work) registration
+      // that also names a parent_id is a different, pre-existing capability
+      // (e.g. a completion-time/fix-forward review child, or these tests'
+      // own review fixtures) — left on the unchanged plain registerTask path
+      // below, ungated, exactly as before this issue.
+      const isHumanDecomposeChild =
+        parsed.data.parent_id !== undefined && parsed.data.type === "work";
+      // a decompose child is never issue-backed (the domain's ChildSpec
+      // carries no such field) — reject rather than silently dropping the
+      // requested reference
+      if (isHumanDecomposeChild && parsed.data.github_issue_number !== undefined) {
+        throw new DomainError("a child task cannot be issue-backed");
+      }
       // an explicitly named workspace must exist in the registry (issue #26)
       // — this is the human's own synchronous request, so an unknown name
       // fails fast with a 400 rather than quarantining (ADR 0009); absent a
@@ -584,6 +622,48 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
             }
           }
         }
+      }
+      // human decompose (issue #129): a work child naming a parent_id routes
+      // registration through the gate (assertHumanDecomposable, inside
+      // humanDecomposeTask) instead of the plain registerTask a root
+      // registration uses — the existing /tasks door had accepted parent_id
+      // ungated for a work child since issue #11, with no status transition
+      // on the parent and no gate at all, which is exactly the gap this
+      // issue closes
+      if (isHumanDecomposeChild) {
+        const parent = getTask(db, parsed.data.parent_id!);
+        if (!parent) {
+          res.status(404).json({ error: "parent task not found" });
+          return;
+        }
+        const children = humanDecomposeTask(
+          db,
+          parent,
+          {
+            reason: parsed.data.decompose_reason,
+            children: [
+              {
+                title: parsed.data.title ?? "",
+                purpose: parsed.data.purpose ?? "",
+                completion_criteria: parsed.data.completion_criteria ?? "",
+                assignee: parsed.data.assignee,
+                workspace: parsed.data.workspace,
+                risk_flag: parsed.data.risk_flag,
+                review_flag: parsed.data.review_flag,
+              },
+            ],
+          },
+          clock.now(),
+          isProtectedWorkspace,
+        );
+        // the risk/protected-workspace machinery decomposeTask already
+        // carries can convert the child into a pending-child approval
+        // question instead of registering it outright (same as an agent's
+        // own decompose) — children is then empty, so latestChild reports
+        // back the question it registered instead, keeping this route's
+        // response the same single-Task shape either way
+        res.status(201).json(children[0] ?? latestChild(db, parent.id));
+        return;
       }
       res.status(201).json(registerTask(db, parsed.data, clock.now()));
     } catch (err) {
@@ -900,7 +980,31 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const draft = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db));
+      let context: ChildDraftContext | undefined;
+      if (parsed.data.parent_id !== undefined) {
+        const parent = getTask(db, parsed.data.parent_id);
+        if (!parent) {
+          res.status(404).json({ error: "parent task not found" });
+          return;
+        }
+        // resolves an issue-backed parent's *live* content (ADR 0016: the
+        // board never special-cases an issue-backed parent — CONTEXT.md's
+        // Decompose point 6), same short-TTL cache/resolver GET routes use
+        const live = await issueContent.present(
+          presentTask(db, parent),
+          github,
+          displayWorkspacePath(parent.workspace),
+          clock.now(),
+        );
+        context = {
+          parentTitle: live.title,
+          parentPurpose: live.purpose,
+          parentCompletionCriteria: live.completion_criteria,
+          siblingTitles: listChildren(db, parent.id).map((c) => c.title),
+          decomposeReason: parsed.data.decompose_reason,
+        };
+      }
+      const draft = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db), context);
       res.json(draft);
     } catch (err) {
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx

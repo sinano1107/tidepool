@@ -141,22 +141,33 @@ it("a task with an unfinished child cannot complete — completion criteria cove
   t = await bootTidepool();
   const parent = await registerWork(t, "build the toolchain");
   await t.clock.advance(HOUR); // parent picked up into the slot
-  // a child appears through the human door while the agent is mid-session
-  await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title: "handle the edge case first",
-    purpose: "found while reviewing",
-    completion_criteria: "edge case covered",
-    parent_id: parent.id,
+  // a child appears via the assignee's own decompose judgment mid-session
+  // (issue #129: a human can no longer inject a child into an in-progress,
+  // non-human-assigned task through the plain registration door — see
+  // tests/human-decompose-reject.test.ts)
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
+  await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "found an edge case that needs handling first",
+      children: [
+        {
+          title: "handle the edge case first",
+          purpose: "found while reviewing",
+          completion_criteria: "edge case covered",
+        },
+      ],
+    },
   });
+  await client.close();
 
   const res = await completeVia(t, parent.id);
   expect(res.isError).toBe(true);
 
-  // the parent kept the slot and its status
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe(
-    "in_progress",
-  );
+  // decompose already released the slot and returned the parent to 'todo'
+  // (derived 'blocked' — its child is still unsettled); the failed
+  // completion attempt changes none of that
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${parent.id}`)).json.status).toBe("blocked");
 });
 
 it("a completion flows through the log as its own kind, carrying the one-line outcome", async () => {

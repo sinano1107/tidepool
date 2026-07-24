@@ -1,5 +1,11 @@
 import type { Clock } from "../src/clock.js";
-import type { DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "../src/draft.js";
+import type {
+  ChildDraftContext,
+  DraftClient,
+  HandoffDraft,
+  IssueInspection,
+  TaskDraft,
+} from "../src/draft.js";
 import type {
   CiStatus,
   CreatePrInput,
@@ -311,6 +317,7 @@ export class FakePushClient implements PushClient {
 export class FakeDraftClient implements DraftClient {
   readonly dumps: string[] = [];
   readonly languages: string[] = [];
+  readonly contexts: (ChildDraftContext | undefined)[] = [];
   readonly handoffDumps: string[] = [];
   readonly handoffLanguages: string[] = [];
   readonly inspected: Issue[] = [];
@@ -327,9 +334,10 @@ export class FakeDraftClient implements DraftClient {
   private inspectionByTitle = new Map<string, IssueInspection>();
   private inspectionFailure: Error | null = null;
 
-  async draftTask(dump: string, language: string): Promise<TaskDraft> {
+  async draftTask(dump: string, language: string, context?: ChildDraftContext): Promise<TaskDraft> {
     this.dumps.push(dump);
     this.languages.push(language);
+    this.contexts.push(context);
     if (this.failure) throw this.failure;
     return this.response;
   }

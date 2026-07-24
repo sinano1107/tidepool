@@ -16,6 +16,20 @@ export interface TaskDraft {
   review_flag?: boolean;
 }
 
+/** Read-only context a child's AI draft is fed when drafted from a parent's
+ *  "add child" screen (issue #129 point 4): the parent's own content, its
+ *  existing children's titles (so a fresh child doesn't duplicate one
+ *  already split off), and the human's own decompose reason if they wrote
+ *  one before drafting. Nothing here is ever stored — it only steers the one
+ *  prompt that produces this draft. */
+export interface ChildDraftContext {
+  parentTitle: string;
+  parentPurpose: string;
+  parentCompletionCriteria: string;
+  siblingTitles: string[];
+  decomposeReason?: string;
+}
+
 /** A partial subset of HandoffDoc's 6 fields, drafted by an LLM from a
  *  free-text/voice dump (issue #13). Never enforced — a human task's
  *  completion doc stays fully optional (completeTask's own exemption); this
@@ -43,7 +57,7 @@ export interface DraftClient {
   /** language: the board's display language (issue #46), read fresh by the
    *  caller at each use — steers only the connective prose the model adds,
    *  never the fragments carried over from the dump. */
-  draftTask(dump: string, language: string): Promise<TaskDraft>;
+  draftTask(dump: string, language: string, context?: ChildDraftContext): Promise<TaskDraft>;
   draftHandoff(dump: string, language: string): Promise<HandoffDraft>;
   inspectIssue(issue: Issue): Promise<IssueInspection>;
 }
