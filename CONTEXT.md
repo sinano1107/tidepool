@@ -8,7 +8,7 @@
 
 - **type**: `work` / `question` / `review` のいずれか。
 - **purpose(目的)**: なぜやるかを運ぶ自由記述。実行経路上の制約(「A を使わずに B を満たす」のような、機械的には強制されない遵守事項)もここに書く — 制約条件は独立した概念でも専用フィールドでもなく purpose の一部(2026-07-13 の grilling: 独立フィールドは機械が読む・レビュー判定基準になる等の意味論上の帰結を持つときだけ足す)。
-- **parent/child(親子関係)**: 子タスクは親タスクの作業の結果としてのみ生まれる(decompose、escalation)。
+- **parent/child(親子関係)**: 子タスクは親タスクへの**1つの判断**の結果としてのみ生まれる(decompose、escalation)。判断の主は worker session 中の assignee、または人間(2026-07-24 の grilling、issue #129 — 旧文言「親タスクの作業の結果としてのみ」は人間 decompose を含む形へ改訂)。
 - **blocked**: 「未決着(settled でない)の子を持つ」状態。親子関係から機械的に導出される。独立した blocking エッジは存在しない。
 
 ## Status(ステータス)
@@ -25,7 +25,15 @@
 
 ## Cancel(キャンセル)
 
-人間の判断による作業の放棄。完了基準を満たさないまま終端し(Settled 参照)、記録は消さない。blocked の導出上は done と同じ完了扱い(cancelled の子は親を塞がない)— これが放棄後に親が再計画へ復帰できる根拠。v1 で cancel に至る唯一の経路は failure question への「abandon」回答であり、失敗タスクのサブツリーと計画の残り(親の未完了子孫、巻き込まれた未回答 question を含む)が一括で cancel され、親が先頭復帰して再計画する(計画ごと破棄 — 子は1つの判断に基づくため、1子の放棄は計画全体を無効にする)。PR 昇格失敗の failure question(retry / abandon promotion)はこの族ではない — 対象タスクは既に done であり放棄すべき作業が存在しないため、「abandon promotion」は何も cancel せず、昇格の断念を decision log に記録して question を決着させるだけ。
+人間の判断による作業の放棄。完了基準を満たさないまま終端し(Settled 参照)、記録は消さない。blocked の導出上は done と同じ完了扱い(cancelled の子は親を塞がない)— これが放棄後に親が再計画へ復帰できる根拠。v1 の cancel 経路は2本。第1は failure question への「abandon」回答 — 失敗タスクのサブツリーと計画の残り(親の未完了子孫、巻き込まれた未回答 question を含む)が一括で cancel され、親が先頭復帰して再計画する(計画ごと破棄 — 子は1つの判断に基づくため、1子の放棄は計画全体を無効にする)。第2は人間の直接 cancel(2026-07-24 の grilling、issue #130): 人間登録・未決着・実行中でないタスクを、配下の未決着子孫ごと一括で cancel する(理由の記入は任意)。「削除」は存在しない — 記録の抹消ではなく常に cancel であり、記録は何も消えない。ただしそのタスクを主題とする未回答の Tidepool 名義 question(failure question・quarantine 確認)が開いている間は直接 cancel できない — question への回答が唯一の門(abandon が運ぶ「計画ごと破棄 + 親の先頭復帰」というセットの遷移を半分だけ起こさない)。PR 昇格失敗の failure question(retry / abandon promotion)はこの族ではない — 対象タスクは既に done であり放棄すべき作業が存在しないため、「abandon promotion」は何も cancel せず、昇格の断念を decision log に記録して question を決着させるだけ。
+
+## Edit(編集)
+
+登録済みタスクの未消費フィールドを人間が書き換える行為(2026-07-24 の grilling、issue #130)。対象は**人間が登録したタスクのみ**(ルートも、人間 decompose で足した子も含む)で、状態の線は「未決着かつ実行中でない」。agent が decompose で登録した子タスクは対象外 — その散文・assignee 指定・risk flag は agent の分解判断の一部であり、不満は異議 → 修理タスクの経路が担う(Decompose 参照)。
+
+- **編集可**: title / purpose / completion criteria(消費は spawn 時)、assignee(編集時に登録時と同じ検査 — registry 解決 — を再実行)、workspace(通常タスクのみ・消費は pickup 時)、risk flag(「親の risk ≥ 承認済み子の risk」の上方伝播不変条件は機械が守る — risk ありの未決着子を持つ親を risk なしへ下げる編集は拒否)、review flag(Review flag 参照)
+- **編集不可**: type(work / question / review の変更は権限モデルのすり替え — review type だけが read-only 保証と Auditor 解決を運ぶ)、parent link の付け替え(木の外科手術は異議経路の領分)、issue-backed の内容・workspace・参照番号(内容の正本は GitHub — 編集経路は issue コメントとして既にある。workspace は内容の同一性を担う焼き込み)
+- 編集は上書きではなく**追記イベント** — 旧値はイベント履歴に不滅(write path の統計純度)
 
 ## Held(保留)
 
@@ -53,7 +61,7 @@ review タスクは親なしの**ルート**としても登録できる。入口
 
 ## Review flag(レビューフラグ)
 
-完了時レビュー(layer 1)へのタスク単位の opt-in。必須ではない。宣言者は登録者であり、人間・エージェントを問わない — エージェントは decompose の子に宣言でき、監視への opt-in は権限を広げないため risk flag と違い検査も承認変換もない(エージェント発のレビュー要請の唯一の経路 — review type の登録はエージェントに開かれず、独立監査の提案は escalation が担う。ADR 0021)。flag は登録時宣言のみで登録後不変 — 後からレビューしたくなった人間にはルート review の入口がある。レビュアーの指名(review_by)は flag への同乗として設計済み(未実装): 乗り物と同じく登録時宣言のみ・非伝播で、指名は登録者の assignable_to で検査され、フォールバックはタスク指名 → 盤面 Auditor の2段のみ — workspace 単位の役割ポインタは作らない(ADR 0031、2026-07-22 の grilling、issue #84)。子のレビューは既定で親に委譲される(分解された作業の品質は統合点で判断するのが最良)が、親の完了前に外部影響を持つ子 — risk flag で識別される — は個別にレビューされる。
+完了時レビュー(layer 1)へのタスク単位の opt-in。必須ではない。宣言者は登録者であり、人間・エージェントを問わない — エージェントは decompose の子に宣言でき、監視への opt-in は権限を広げないため risk flag と違い検査も承認変換もない(エージェント発のレビュー要請の唯一の経路 — review type の登録はエージェントに開かれず、独立監査の提案は escalation が担う。ADR 0021)。flag の宣言は登録時。人間登録タスクでは未消費の間(未決着かつ実行中でない間)編集できる — 旧・不変の線は撤回(2026-07-24 の grilling、issue #130): ルート review は完了**後**の救済であり、todo 中に付け忘れへ気づいたケースを救えない(flag だけが「完了の瞬間の自動発火」を運ぶ)。agent が decompose の子に宣言した flag は従来どおり登録後不変 — 編集は人間登録タスクに限る(Edit 参照)。review_by は flag への同乗ゆえ、実装時には flag と同じ門で編集可となる(ADR 0031 の登録時宣言のみ・非伝播・2段フォールバックの設計は無傷)。レビュアーの指名(review_by)は flag への同乗として設計済み(未実装): 乗り物と同じく登録時宣言のみ・非伝播で、指名は登録者の assignable_to で検査され、フォールバックはタスク指名 → 盤面 Auditor の2段のみ — workspace 単位の役割ポインタは作らない(ADR 0031、2026-07-22 の grilling、issue #84)。子のレビューは既定で親に委譲される(分解された作業の品質は統合点で判断するのが最良)が、親の完了前に外部影響を持つ子 — risk flag で識別される — は個別にレビューされる。
 
 ## Escalation(エスカレーション)
 
@@ -62,6 +70,8 @@ review タスクは親なしの**ルート**としても登録できる。入口
 ## Decompose(分解)
 
 残りの作業を子タスク群に分ける1つの判断。分解の理由は decision log のエントリとして残り、生まれた全子タスクがそのエントリに基づく。親は全子が完了するまで blocked となり、その後復帰して統合を行い、完了基準の全体が満たされたことを確認してから完了する(統合復帰)。未完了の子を持つタスクは完了できない — 完了基準はツリー全体を覆う。
+
+判断の主は worker session 中の assignee に限らず、**人間**でもよい(2026-07-24 の grilling、issue #129)。人間 decompose の線は「**agent の判断がまだ存在しないところ**」— 未決着・実行中でない・agent の decompose 判断に基づく子をまだ持たないタスクに、人間は子を追加できる(自分の human タスクは実行中でも割ってよい — slot の外で並行する作業の分割は誰とも競走しない)。agent が decompose 済みの木の組み替えは decompose でも Edit でもなく、既存の**異議 → 修理タスク → assignee 自身の再計画**の経路が担う — 直接の組み替えは異議統計から信号を消し(fix-forward の痛みは authority 調整の入力)、その痛みはまだ観測されていない(observed pain over speculation)。「登録時に木として登録」は独立機能ではなく、ルート登録 + 子追加の合成。人間 decompose の分解理由は**任意** — 理由を読むのは監査者ではなく、子として spawn される worker と統合復帰する親であり(文脈供給)、割り方が自明なら書かなくてよい。書けば decision log エントリとして残る。子の散文の AI ドラフトはノード単位のまま(木を提案するドラフトは作らない)で、親の title / purpose / completion criteria・兄弟 title 一覧・親の分解理由(あれば)がドラフトに文脈注入される(読み取り専用・何も保存しない)。issue-backed タスクへの人間 decompose も特別扱いしない — 親の内容の正本は GitHub のまま、盤面側の分解文脈は分解理由が運ぶ。
 
 - _Avoid_: register_child_task(初期の呼称)
 
