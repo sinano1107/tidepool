@@ -37,8 +37,10 @@ import {
   assertAnswerable,
   assertNoUnsettledIssueRef,
   type BoardTask,
+  cancelTaskDirectly,
   completeTask,
   DomainError,
+  editTask,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
@@ -134,6 +136,27 @@ const registerTaskSchema = z.object({
       }),
     )
     .optional(),
+});
+
+// the edit payload (issue #130): a strict subset of registerTaskSchema — only
+// the editable fields, and strict so an attempt to edit an immutable field
+// (type / parent_id / github_issue_number) is a 400 rather than a silent drop
+// (CONTEXT.md's Edit: those are 編集不可). The issue-backed content/workspace
+// immutability and the risk invariant live in the domain (editTask), so a
+// caller gets a domain error there — this file's usual split.
+const editTaskSchema = z.strictObject({
+  title: z.string().min(1).optional(),
+  purpose: z.string().min(1).optional(),
+  completion_criteria: z.string().min(1).optional(),
+  assignee: z.string().optional(),
+  workspace: z.string().optional(),
+  risk_flag: z.boolean().optional(),
+  review_flag: z.boolean().optional(),
+});
+
+// the direct-cancel payload (issue #130): reason is optional (理由の記入は任意)
+const cancelTaskSchema = z.object({
+  reason: z.string().min(1).optional(),
 });
 
 const draftTaskSchema = z.object({
@@ -1050,6 +1073,107 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       onQueueHeadChanged();
     }
     res.json(moved);
+  });
+
+  // edit a registered task's unconsumed fields (issue #130). The scope line
+  // (human-registered, unsettled, not in_progress), the issue-backed
+  // immutability, and the risk invariant all live in editTask — this route
+  // adds only the assignee/workspace registry rechecks, the same ones
+  // registration runs (CONTEXT.md's Edit: "登録時と同じ検査を再実行"), since
+  // they need the injected registry seams. An immutable field in the body was
+  // already rejected by the strict schema above.
+  router.patch("/tasks/:id", async (req, res) => {
+    const parsed = editTaskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const task = getTask(db, req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    try {
+      // assignee registry recheck (ADR 0012 / issue #36), same as registration:
+      // an explicitly named assignee must resolve in the registry. `human` is
+      // exempt (never a registry agent); an empty string means "unset — resolve
+      // to the board default" (editTask normalizes it to null), so it's exempt
+      // too; and absent a real registry every name is accepted.
+      if (
+        parsed.data.assignee &&
+        parsed.data.assignee !== HUMAN_WORKER_ID &&
+        agentRegistered &&
+        !agentRegistered(parsed.data.assignee)
+      ) {
+        throw new DomainError(`unknown agent: ${parsed.data.assignee}`);
+      }
+      // workspace recheck (issue #26 / ADR 0009), same as registration: an
+      // explicitly named workspace must exist in the registry (empty = unset,
+      // exempt, same as assignee above).
+      if (parsed.data.workspace) {
+        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+        if (resolve) {
+          try {
+            resolve(parsed.data.workspace);
+          } catch (err) {
+            if (!(err instanceof UnknownWorkspaceError)) throw err;
+            throw new DomainError(`unknown workspace: ${parsed.data.workspace}`);
+          }
+        }
+      }
+      const edited = editTask(db, task, parsed.data, clock.now());
+      res.json((await presentLive([presentTask(db, edited)]))[0]);
+    } catch (err) {
+      if (err instanceof DomainError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+  });
+
+  // the human's direct cancel (issue #130, CONTEXT.md's Cancel): the second
+  // cancel path beside abandon. Same scope line as edit, the target and its
+  // unfinished descendants go cancelled together (道連れ), reason optional. An
+  // open Tidepool-registered question that has the subtree as its subject
+  // gates it — the domain (cancelTaskDirectly) enforces all of this; the route
+  // passes the default workspace/agent pointers the quarantine half of the
+  // gate resolves against.
+  router.post("/tasks/:id/cancel", (req, res) => {
+    const parsed = cancelTaskSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const task = getTask(db, req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    try {
+      cancelTaskDirectly(db, task, parsed.data.reason ?? null, clock.now(), {
+        defaultWorkspaceName: workspace?.name,
+        defaultAgentName,
+        auditorName,
+      });
+      // cancelling can unblock the target's parent (its last unsettled child is
+      // now cancelled — settled), so give the queue head a chance to advance,
+      // same trigger the /complete route uses (CONTEXT.md: cancelled の親を
+      // 塞がない導出は既存機構をそのまま使う).
+      if (task.parent_id) {
+        const parent = getTask(db, task.parent_id);
+        if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
+          onQueueHeadChanged();
+        }
+      }
+      res.json(presentTask(db, getTask(db, task.id)!));
+    } catch (err) {
+      if (err instanceof DomainError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   // answering lives on the WebUI JSON API only, never MCP: it is the human

@@ -232,6 +232,10 @@ function mapData(board, log, pause, icons = {}) {
       // from `assignee` above, which already substitutes 'you'/undefined for
       // display and would misrepresent an unset assignee here
       status: t.status, rawAssignee: t.assignee,
+      // issue #130: the edit form hides content/workspace for an issue-backed
+      // task (immutable — the source of truth is GitHub); a display cue only,
+      // editTask on the server is the real gate
+      githubIssueNumber: t.github_issue_number,
     });
   }
   const running = board.find((t) => t.status === 'in_progress');
@@ -1699,6 +1703,150 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   );
 }
 
+// issue #130: the chooser a board task-card tap opens for a plausibly-editable
+// task — the three things a human can do to a registered task (add a child,
+// edit its unconsumed fields, cancel it). The eligibility line (human-
+// registered, unsettled, not in_progress) is enforced server-side on each
+// action; this sheet only offers them, and each action surfaces the domain
+// error as a toast if the line isn't met.
+function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }) {
+  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <div style={{ padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <h1 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>{task.title}</h1>
+      <p style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px' }}>{task.id} · {task.type}</p>
+      <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
+      <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
+      <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
+      <Button variant="ghost" size="lg" full onClick={onClose}>Close</Button>
+    </div>
+  );
+}
+
+// issue #130: edit a registered task's unconsumed fields. Fetches the full
+// task first (the board card carries only display fields), pre-fills, and
+// PATCHes only what the human changes. An issue-backed task hides its content
+// and workspace (immutable — the source of truth is its GitHub issue); type
+// and parent link are never shown (not editable). The server (editTask) is the
+// real gate — this form just avoids offering the forbidden edits.
+function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
+  const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
+  const [full, setFull] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
+  const [fields, setFields] = React.useState(null);
+  React.useEffect(() => {
+    fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
+    api(`/api/tasks/${taskCard.id}`, undefined, 'GET').then((t) => {
+      setFull(t);
+      setFields({
+        title: t.title ?? '', purpose: t.purpose ?? '', completion_criteria: t.completion_criteria ?? '',
+        assignee: t.assignee ?? '', workspace: t.workspace ?? '',
+        risk_flag: !!t.risk_flag, review_flag: !!t.review_flag,
+      });
+    }).catch((err) => say('danger', 'could not load task', String(err.message || err)));
+  }, [taskCard.id]);
+  if (!full || !fields) {
+    return <div style={{ padding: '24px 16px', color: 'var(--text-muted)' }}>loading…</div>;
+  }
+  const issueBacked = full.github_issue_number != null;
+  const set = (k, v) => setFields((f) => ({ ...f, [k]: v }));
+  const withPlaceholder = (label, names) => [{ value: '', label }, ...names.map((n) => ({ value: n, label: n }))];
+  // only the fields that actually changed — an unchanged submission is a no-op
+  // server-side, but sending a minimal patch keeps the intent clear
+  const changed = () => {
+    const out = {};
+    if (!issueBacked) {
+      if (fields.title !== (full.title ?? '')) out.title = fields.title;
+      if (fields.purpose !== (full.purpose ?? '')) out.purpose = fields.purpose;
+      if (fields.completion_criteria !== (full.completion_criteria ?? '')) out.completion_criteria = fields.completion_criteria;
+      if (fields.workspace !== (full.workspace ?? '')) out.workspace = fields.workspace;
+    }
+    if (fields.assignee !== (full.assignee ?? '')) out.assignee = fields.assignee;
+    if (fields.risk_flag !== !!full.risk_flag) out.risk_flag = fields.risk_flag;
+    if (fields.review_flag !== !!full.review_flag) out.review_flag = fields.review_flag;
+    return out;
+  };
+  const submit = async () => {
+    const patch = changed();
+    if (Object.keys(patch).length === 0) { onClose(); return; }
+    setBusy(true);
+    try {
+      await api(`/api/tasks/${taskCard.id}`, patch, 'PATCH');
+      say('info', 'task edited', taskCard.id);
+      await onSaved();
+      onClose();
+    } catch (err) {
+      say('danger', 'edit failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return (
+    <div style={{ padding: '20px 16px' }}>
+      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Edit</h1>
+      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+        {issueBacked
+          ? 'issue-backed — content and workspace stay on GitHub, only board-side fields are editable'
+          : 'unconsumed fields only — type and parent link are not editable'}
+      </p>
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {!issueBacked && (
+          <React.Fragment>
+            <Input label="Title" value={fields.title} onChange={(e) => set('title', e.target.value)} />
+            <Input label="Purpose" multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', e.target.value)} />
+            <Input label="Completion criteria" multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', e.target.value)} />
+          </React.Fragment>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: issueBacked ? '1fr' : '1fr 1fr', gap: 12 }}>
+          <Select label="Assignee" options={withPlaceholder('(default agent)', candidates.assignees)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
+          {!issueBacked && (
+            <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
+          )}
+        </div>
+        <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
+        <Checkbox label="review flag — request an on-completion review" checked={fields.review_flag} onChange={() => set('review_flag', !fields.review_flag)} />
+        <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Save changes</Button>
+        <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Cancel</Button>
+      </Card>
+    </div>
+  );
+}
+
+// issue #130: the human's direct cancel (CONTEXT.md's Cancel). Optional reason;
+// the target and its unfinished descendants go cancelled together (道連れ),
+// enforced server-side. An open Tidepool question over the subtree gates it —
+// the domain error surfaces as a toast.
+function CancelTaskDialog({ task, onCancelled, onClose, say }) {
+  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [reason, setReason] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/tasks/${task.id}/cancel`, reason.trim() ? { reason: reason.trim() } : {}, 'POST');
+      say('info', 'task cancelled', task.id);
+      await onCancelled();
+      onClose();
+    } catch (err) {
+      say('danger', 'cancel failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return (
+    <div style={{ padding: '20px 16px' }}>
+      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Cancel task</h1>
+      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+        cancels "{task.title}" and its unfinished descendants — the record is kept, never erased
+      </p>
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="left blank, only the fact of the cancel is recorded" />
+        <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Cancel this task</Button>
+        <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Keep it</Button>
+      </Card>
+    </div>
+  );
+}
+
 function App() {
   const { Toast, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const [data, setData] = React.useState(null);
@@ -1709,6 +1857,12 @@ function App() {
   // human decompose (issue #129): the board task an "Add child" dialog is
   // open for, or null when closed — set from a board task-card tap
   const [addChildParent, setAddChildParent] = React.useState(null);
+  // issue #130: a board task-card tap opens an action chooser (add child /
+  // edit / cancel) for a plausibly-eligible task; the edit and cancel dialogs
+  // each track their own open task
+  const [actionsTask, setActionsTask] = React.useState(null);
+  const [editTaskCard, setEditTaskCard] = React.useState(null);
+  const [cancelTaskCard, setCancelTaskCard] = React.useState(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get('question'),
   );
@@ -2058,14 +2212,15 @@ function App() {
     }
   };
 
-  // human decompose (issue #129): a board task-card tap opens the Add-child
-  // dialog only for a task the client can already tell is plausibly eligible
-  // — done and another worker's in-progress task are cheap, always-correct
-  // exclusions from the board's own derived `status`/`assignee` (CONTEXT.md's
-  // Decompose line's first two conditions); the third (no agent-decomposed
-  // child yet) needs event history the board payload doesn't carry, so it's
-  // left to the API's own assertHumanDecomposable to reject on submit. An
-  // ineligible tap keeps the plain info toast this used to always show.
+  // issue #129/#130: a board task-card tap opens the action chooser (add child
+  // / edit / cancel) only for a task the client can already tell is plausibly
+  // eligible — done and another worker's in-progress task are cheap, always-
+  // correct exclusions from the board's own derived `status`/`assignee`
+  // (CONTEXT.md's Decompose/Edit/Cancel share the same first two conditions);
+  // the remaining conditions (no agent-decomposed child yet for add-child;
+  // human-registered for edit/cancel) need event history the board payload
+  // doesn't carry, so they're left to the API's own gates to reject on submit.
+  // An ineligible tap keeps the plain info toast this used to always show.
   const openTask = (t) => {
     const settled = t.status === 'done';
     const othersInProgress = t.status === 'in_progress' && t.rawAssignee !== 'human';
@@ -2073,7 +2228,7 @@ function App() {
       say('info', t.title, `${t.id} · ${t.type}`);
       return;
     }
-    setAddChildParent(t);
+    setActionsTask(t);
   };
 
   // human decompose (issue #129): adding a child stays on the current tab
@@ -2175,6 +2330,32 @@ function App() {
       <PortalDialog open={!!addChildParent} onClose={() => setAddChildParent(null)}>
         {addChildParent && (
           <RegisterScreen parentTask={addChildParent} onRegister={addChild} onClose={() => setAddChildParent(null)} />
+        )}
+      </PortalDialog>
+
+      {/* issue #130: the action chooser and the edit/cancel dialogs. Each
+          action's real gate is server-side (editTask / cancelTaskDirectly) —
+          these surfaces only offer the actions and toast the domain error when
+          the task is outside the scope line. */}
+      <PortalDialog open={!!actionsTask} onClose={() => setActionsTask(null)}>
+        {actionsTask && (
+          <TaskActionsDialog
+            task={actionsTask}
+            onAddChild={() => { setAddChildParent(actionsTask); setActionsTask(null); }}
+            onEdit={() => { setEditTaskCard(actionsTask); setActionsTask(null); }}
+            onCancel={() => { setCancelTaskCard(actionsTask); setActionsTask(null); }}
+            onClose={() => setActionsTask(null)}
+          />
+        )}
+      </PortalDialog>
+      <PortalDialog open={!!editTaskCard} onClose={() => setEditTaskCard(null)}>
+        {editTaskCard && (
+          <EditTaskDialog taskCard={editTaskCard} say={say} onSaved={refreshFull} onClose={() => setEditTaskCard(null)} />
+        )}
+      </PortalDialog>
+      <PortalDialog open={!!cancelTaskCard} onClose={() => setCancelTaskCard(null)}>
+        {cancelTaskCard && (
+          <CancelTaskDialog task={cancelTaskCard} say={say} onCancelled={refreshFull} onClose={() => setCancelTaskCard(null)} />
         )}
       </PortalDialog>
 

@@ -29,6 +29,16 @@ export type EventPayload =
   // origin_question_id is the failure question the abandon answer came from,
   // shared by every task the cascade touches (its own subtree included)
   | { kind: "task_cancelled"; origin_question_id: string }
+  // issue #130: a human's direct cancel — the second cancel path (CONTEXT.md's
+  // Cancel), no failure question above it, so reason is the human's own free
+  // text (null when they gave none). Shared by every task the cascade touches
+  // (the target and its unfinished descendants), same as task_cancelled above.
+  | { kind: "task_cancelled_directly"; reason: string | null }
+  // issue #130: a human overwrote one editable field of a registered task. The
+  // edit is an append event, never a silent overwrite — `from` preserves the
+  // pre-edit value in the log forever (write-path statistical purity), one
+  // event per changed field. Booleans (risk_flag/review_flag) are stringified.
+  | { kind: "task_edited"; field: string; from: string | null; to: string | null }
   // recommendation_accepted and recommended_by are first-class: per-agent
   // acceptance rates are a primary statistic, recorded at answer time so they
   // never need a join back through task_registered. One entry per question
