@@ -185,6 +185,51 @@ describe("ClaudeDraftClient", () => {
     expect(calls[0]!.join(" ")).toContain("--safe-mode");
   });
 
+  it("draftTask: 子の文脈(親の title/purpose/completion_criteria・兄弟 title・分解理由)がプロンプトに注入される(issue #129)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+        });
+      },
+    });
+
+    await client.draftTask("handle the edge case", "English", {
+      parentTitle: "build the toolchain",
+      parentPurpose: "ship the compiler",
+      parentCompletionCriteria: "all stages pass",
+      siblingTitles: ["build the lexer", "build the printer"],
+      decomposeReason: "splitting off the edge case first",
+    });
+
+    const prompt = calls[0]!.join(" ");
+    expect(prompt).toContain("build the toolchain");
+    expect(prompt).toContain("ship the compiler");
+    expect(prompt).toContain("all stages pass");
+    expect(prompt).toContain("build the lexer");
+    expect(prompt).toContain("build the printer");
+    expect(prompt).toContain("splitting off the edge case first");
+  });
+
+  it("draftTask: context が無いプロンプトには子の文脈セクションが含まれない(ルート登録は今までどおり)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+        });
+      },
+    });
+
+    await client.draftTask("set up the greenhouse sensor", "English");
+
+    const prompt = calls[0]!.join(" ");
+    expect(prompt).not.toContain("CHILD of an existing parent");
+  });
+
   it("inspectIssue は issue 全体(title/本文/コメント)をプロンプトに入れ、CLI の応答から IssueInspection を返す(issue #49 設計点4)", async () => {
     const verdict = JSON.stringify({
       ok: false,
