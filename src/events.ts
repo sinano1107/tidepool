@@ -103,7 +103,36 @@ export type EventPayload =
         cache_creation_tokens: number;
         estimated_cost_usd: number;
       } | null;
-    };
+    }
+  // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —
+  // the child never comes into being, only an "error" event fires, never
+  // "exit") — a different failure class from worker_exited, not a variant of
+  // it. worker_exited(exit_code: null, signal: null) was considered and
+  // rejected: CONTEXT.md's Worker session is "one run from spawn to exit",
+  // and a process that never spawned never had a session — reusing
+  // worker_exited would fabricate the fact of an exit that did not happen.
+  // Node's real exits always carry a non-null code or signal, so (null, null)
+  // is otherwise an impossible pair; smuggling meaning into an impossible
+  // value makes the reader reverse-engineer what the pair "really" means.
+  // stderr_tail also carries no evidence here (spawn failure writes nothing
+  // to stderr), so the reuse would have bought nothing but a false pair.
+  //
+  // No `usage` field (unlike worker_exited): making it nullable would read as
+  // "usage unknown" and collide with the null-usage case worker_exited
+  // already has for a killed-but-real session — the field's *absence* is what
+  // says "cost accounting does not apply here" rather than "cost was not
+  // recorded".
+  //
+  // ADR 0025 point 6 contrast: the skill-enumeration failure path in
+  // claude-worker.ts's start() deliberately writes no event at all — that
+  // failure retreats before worker_spawned is written, so no pair is open and
+  // there is nothing to close (silence is safe there). A spawn() failure is
+  // the opposite shape: worker_spawned is already written by the time
+  // "error" fires (launch() writes it synchronously right after spawn()
+  // returns), so the pair is open — leaving it that way would make a failed
+  // spawn indistinguishable in the event log from a session still running.
+  // spawn_failed is what closes it.
+  | { kind: "spawn_failed"; error_code: string | null; message: string };
 
 export type EventKind = EventPayload["kind"];
 

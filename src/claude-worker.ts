@@ -45,6 +45,14 @@ export type SpawnFn = (
    *  defaultSpawn's former console.error-only handler) — usage/cost recording
    *  needs to happen here, at the process boundary, not buried in a fake. */
   on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  /** issue #127: the adapter's own spawn-failure observation point (promoted
+   *  out of defaultSpawn's former console.error-only handler, same move as
+   *  "exit" above / issue #32) — a spawn() that never produces a process
+   *  (ENOENT/EACCES/PATH misconfig) fires this instead of "exit", and
+   *  recording that as spawn_failed needs to happen at the process boundary,
+   *  not buried in a fake. Node's ChildProcess satisfies this structurally,
+   *  so defaultSpawn needs no implementation change to provide it. */
+  on(event: "error", listener: (err: Error) => void): void;
 };
 
 // the CLI defines this as a closed 5-value set; unlike --model (an open,
@@ -624,13 +632,12 @@ const defaultSpawn: SpawnFn = (command, args, opts) => {
   // 運用者がリアルタイムに見ていた可視性はこの tee で維持する(pipe は
   // process.stderr を close しない — Node の readable.pipe の仕様)
   child.stderr.pipe(process.stderr);
-  // an unlistened "error" (e.g. the claude binary missing) would crash the
-  // whole board process; slot recovery for a dead session is the watchdog
-  // slice (#9), so here we only keep the failure visible
-  child.on("error", (err) => console.error(`[worker] failed to spawn ${command}:`, err));
-  // exit observation (worker_exited event) is the adapter's job now (issue
-  // #32) — child already exposes .on("exit", ...) structurally, nothing more
-  // to wire here
+  // exit observation (worker_exited event) and spawn-failure observation
+  // (spawn_failed event, issue #127) are the adapter's job now (launch()) —
+  // child already exposes .on("exit", ...) and .on("error", ...)
+  // structurally, nothing more to wire here. An unlistened "error" would
+  // crash the whole board process, but launch() always attaches a listener,
+  // so that risk never materializes.
   return child;
 };
 
@@ -1014,12 +1021,47 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // #36) — not this worker's configured default, which a pre-set
       // delegation may override
       workerId: agent.name,
+      // issue #127: this records the *attempt* to spawn, not a successful
+      // session — spawn() has already returned synchronously by this point,
+      // but Node's "error" can still fire after this write if the process
+      // never actually came into being (ENOENT etc.). That is not a false
+      // record: every fact this event carries (the resolved definition, the
+      // registry commit read) is true regardless of whether the process
+      // starts. spawn_failed, when it follows, closes the pair honestly
+      // rather than this event needing to be walked back.
       payload: {
         kind: "worker_spawned",
         registry_commit: registry.commit,
         definition_version: definition.version,
       },
       at: this.options.clock.now(),
+    });
+    // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH
+    // misconfig) fires "error" but never "exit" — the process never comes
+    // into being, so the "exit" handler below never runs and worker_exited
+    // is never written. This is the dedicated observation point for that
+    // failure class (same promotion out of defaultSpawn as "exit" got in
+    // issue #32). "error" is not spawn-exclusive (e.g. a failed kill() also
+    // fires it), so err.syscall is the discriminator: Node stamps spawn
+    // failures with syscall "spawn <command>".
+    child.on("error", (err) => {
+      const errno = err as NodeJS.ErrnoException;
+      if (!errno.syscall?.startsWith("spawn")) {
+        console.error(`[worker] error on task ${task.id}:`, err);
+        return;
+      }
+      this.running.delete(task.id);
+      console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
+      appendEvent(this.options.db, {
+        taskId: task.id,
+        workerId: agent.name,
+        payload: {
+          kind: "spawn_failed",
+          error_code: errno.code ?? null,
+          message: err.message,
+        },
+        at: this.options.clock.now(),
+      });
     });
     // usage is settled at process exit — after task_completed via MCP, not
     // before (issue #32) — so kill/crash sessions still get a worker_exited
