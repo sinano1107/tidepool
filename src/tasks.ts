@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, type EventPayload } from "./events.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { RosterAgent } from "./registry.js";
 
@@ -807,21 +807,22 @@ export function escalateTask(
   return question!;
 }
 
-/** Cancel a task and every one of its unfinished descendants in one sweep
- *  (ADR 0006): the human's abandon answer discards a plan wholesale rather
- *  than picking through which branches survive — no dependency edges exist
- *  between siblings to reason about, so a partial cancel can't be more
- *  correct than a full one. `done` descendants are left untouched (nothing
- *  degrades a completed record); `cancelled` counts as finished for the
- *  blocked derivation, which is what lets the cancelled tree's own parent
- *  return to `todo` and pick up work again. Internal only — answerQuestion's
- *  abandon branch is the sole caller; no MCP or JSON API surface. */
-export function cancelTask(
+/** The unfinished-descendants sweep shared by both cancel paths (ADR 0006 /
+ *  issue #130): collect the target and every one of its unfinished descendants
+ *  and mark each cancelled, appending `payload` (built by the caller to name
+ *  why — an abandon answer or a human's direct cancel) to each. `done`
+ *  descendants are left untouched (nothing degrades a completed record);
+ *  `cancelled` counts as finished for the blocked derivation, which is what
+ *  lets the cancelled tree's own parent return to `todo` and pick up work
+ *  again. The plan is discarded wholesale rather than branch-by-branch — no
+ *  dependency edges exist between siblings to reason about, so a partial
+ *  cancel can't be more correct than a full one. */
+function cancelUnsettledSubtree(
   db: Db,
-  task: Task,
-  originQuestionId: string,
+  rootTaskId: string,
   workerId: string,
   now: Date,
+  payload: EventPayload,
 ): void {
   const rows = db
     .prepare(
@@ -833,18 +834,124 @@ export function cancelTask(
        SELECT subtree.id FROM subtree JOIN tasks ON tasks.id = subtree.id
        WHERE tasks.status NOT IN ('done', 'cancelled')`,
     )
-    .all(task.id) as Array<{ id: string }>;
+    .all(rootTaskId) as Array<{ id: string }>;
   db.transaction(() => {
     for (const { id } of rows) {
       db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
-      appendEvent(db, {
-        taskId: id,
-        workerId,
-        payload: { kind: "task_cancelled", origin_question_id: originQuestionId },
-        at: now,
-      });
+      appendEvent(db, { taskId: id, workerId, payload, at: now });
     }
   })();
+}
+
+/** Cancel a task and every unfinished descendant via an abandon answer (ADR
+ *  0006): the failure question the abandon came from is named on every
+ *  cancelled task. Internal only — answerQuestion's abandon branch is the sole
+ *  caller; no MCP or JSON API surface. */
+export function cancelTask(
+  db: Db,
+  task: Task,
+  originQuestionId: string,
+  workerId: string,
+  now: Date,
+): void {
+  cancelUnsettledSubtree(db, task.id, workerId, now, {
+    kind: "task_cancelled",
+    origin_question_id: originQuestionId,
+  });
+}
+
+/** The pointers the direct-cancel question gate's quarantine half resolves an
+ *  unset workspace/assignee against (issue #130), same fallbacks the pickup
+ *  gate uses (ADR 0009 / issue #36 / issue #42). */
+export interface CancelDefaults {
+  defaultWorkspaceName?: string;
+  defaultAgentName?: string;
+  auditorName?: string;
+}
+
+/** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
+ *  Tidepool-registered question that has the cancel subtree as its subject is
+ *  still open, a direct cancel is refused — answering that question is the only
+ *  gate, so a direct cancel can't perform half of abandon's set transition
+ *  (discard the plan + return the parent to the head). Two families qualify:
+ *
+ *   - a **failure question** (`question_cancel_option` set — a watchdog kill or
+ *     an issue-backed deterministic failure) whose failed task lies in the
+ *     subtree: answering "abandon" cancels that plan wholesale, so a direct
+ *     cancel would strand the question. A PR-promotion failure question is
+ *     deliberately outside this family (CONTEXT.md) — it carries no
+ *     cancel_option, since its target is already done and nothing is abandoned.
+ *   - a **quarantine Confirmation** (`question_quarantine_workspace`/`_agent`
+ *     set) for a resource some subtree task resolves to (its own value, or the
+ *     board default an unset one falls back to). */
+function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
+  const subtree = `WITH RECURSIVE subtree(id) AS (
+      SELECT @root
+      UNION
+      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id)`;
+  const failure = db
+    .prepare(
+      `${subtree}
+       SELECT 1 FROM tasks q
+       WHERE q.type = 'question' AND q.status = 'todo'
+         AND q.question_cancel_option IS NOT NULL
+         AND q.parent_id IN (SELECT id FROM subtree) LIMIT 1`,
+    )
+    .get({ root: taskId });
+  if (failure) {
+    throw new DomainError(
+      "cannot directly cancel while an open failure question stands over this subtree — " +
+        "answer it (retry / abandon) first; that answer is the only gate",
+    );
+  }
+  const fallback = typeAwareDefaultAgentSql("x.type", "@defaultAgentName", "@auditorName");
+  const quarantine = db
+    .prepare(
+      `${subtree}
+       SELECT 1 FROM tasks q, tasks x
+       WHERE x.id IN (SELECT id FROM subtree)
+         AND q.type = 'question' AND q.status = 'todo'
+         AND ((q.question_quarantine_workspace IS NOT NULL
+               AND q.question_quarantine_workspace = COALESCE(x.workspace, @defaultWorkspaceName))
+           OR (q.question_quarantine_agent IS NOT NULL
+               AND q.question_quarantine_agent = COALESCE(x.assignee, ${fallback})))
+       LIMIT 1`,
+    )
+    .get({
+      root: taskId,
+      defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
+      defaultAgentName: defaults.defaultAgentName ?? null,
+      auditorName: defaults.auditorName ?? null,
+    });
+  if (quarantine) {
+    throw new DomainError(
+      "cannot directly cancel while an open quarantine confirmation stands over this subtree's " +
+        "resource — answer it first; that answer is the only gate",
+    );
+  }
+}
+
+/** The human's direct cancel (issue #130, CONTEXT.md's Cancel): the second
+ *  cancel path beside abandon. Same scope line as edit
+ *  (`assertHumanEditableScope` — human-registered, unsettled, not
+ *  in_progress), the target and its unfinished descendants go cancelled
+ *  together (道連れ), the reason is optional and kept on every cancelled task's
+ *  event. It is refused while a Tidepool question with the subtree as its
+ *  subject is still open (`assertNoGatingQuestion`). No "delete" exists — this
+ *  is always a cancel, and the record is never erased. */
+export function cancelTaskDirectly(
+  db: Db,
+  task: Task,
+  reason: string | null,
+  now: Date,
+  defaults: CancelDefaults,
+): void {
+  assertHumanEditableScope(db, task, "cancelled");
+  assertNoGatingQuestion(db, task.id, defaults);
+  cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
+    kind: "task_cancelled_directly",
+    reason,
+  });
 }
 
 /** The four pure preconditions an answer submission must clear before any
@@ -1465,6 +1572,44 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
   return row !== undefined;
 }
 
+/** Whether `taskId`'s own `task_registered` event was attributed to a human
+ *  (issue #130): the mirror of `hasAgentRegisteredChild`'s technique — an
+ *  agent's only path to registering a task at all is the `decompose` MCP tool,
+ *  so a `task_registered` event by `HUMAN_WORKER_ID` is exactly "a human
+ *  registered this task" (a root the human registered, or a child they added
+ *  via human decompose). No separate provenance marker is needed. */
+export function isHumanRegistered(db: Db, taskId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM events
+       WHERE task_id = ? AND kind = 'task_registered' AND worker_id = ? LIMIT 1`,
+    )
+    .get(taskId, HUMAN_WORKER_ID);
+  return row !== undefined;
+}
+
+/** The status half of the human-decompose gate (issue #129), split out so the
+ *  edit / direct-cancel scope line (issue #130) can share the unsettled clause:
+ *  `task` must be unsettled and not in_progress. `allowOwnInProgress` grants the
+ *  one caller that has it — decompose — its own-task exception ("自分の human
+ *  タスクは実行中でも割ってよい", a `human`-assignee task runs outside the slot
+ *  and races no one); edit and cancel do NOT inherit it — their scope line is
+ *  flatly "未決着かつ実行中でない" (CONTEXT.md's Edit/Cancel, issue #130), so
+ *  they pass `false`. The `verb` names the action in the error for its caller. */
+function assertUnsettledNotInProgress(task: Task, verb: string, allowOwnInProgress: boolean): void {
+  if (task.status === "done" || task.status === "cancelled") {
+    throw new DomainError(`a settled task cannot be ${verb}`);
+  }
+  const ownInProgress = allowOwnInProgress && task.assignee === HUMAN_WORKER_ID;
+  if (task.status === "in_progress" && !ownInProgress) {
+    throw new DomainError(
+      allowOwnInProgress
+        ? `an in-progress task cannot be ${verb} unless it is the human's own task`
+        : `an in-progress task cannot be ${verb}`,
+    );
+  }
+}
+
 /** The human-decompose gate (issue #129, CONTEXT.md's Decompose: "線は
  *  「agent の判断がまだ存在しないところ」"). A human may add a child to
  *  `parent` only when all three hold: `parent` is unsettled, `parent` is not
@@ -1475,20 +1620,27 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
  *  assignee's own replan route's job, not this one's — direct rearrangement
  *  here would erase the fix-forward signal that route depends on. */
 export function assertHumanDecomposable(db: Db, parent: Task): void {
-  if (parent.status === "done" || parent.status === "cancelled") {
-    throw new DomainError("a settled task cannot be decomposed");
-  }
-  if (parent.status === "in_progress" && parent.assignee !== HUMAN_WORKER_ID) {
-    throw new DomainError(
-      "an in-progress task cannot be decomposed by a human unless it is the human's own task",
-    );
-  }
+  assertUnsettledNotInProgress(parent, "decomposed by a human", true);
   if (hasAgentRegisteredChild(db, parent.id)) {
     throw new DomainError(
       "a task an agent has already decomposed cannot be decomposed by a human — " +
         "rearranging it is the objection route's job",
     );
   }
+}
+
+/** The edit / direct-cancel scope gate (issue #130, CONTEXT.md's Edit and
+ *  Cancel): both share one line — the task must be human-registered (an
+ *  agent-registered decompose child is out of scope; the objection → repair
+ *  route handles dissatisfaction with it), unsettled, and not in_progress. The
+ *  `verb` distinguishes the two callers' error wording. */
+export function assertHumanEditableScope(db: Db, task: Task, verb: string): void {
+  if (!isHumanRegistered(db, task.id)) {
+    throw new DomainError(
+      `only a human-registered task can be ${verb} — an agent's decompose child is out of scope`,
+    );
+  }
+  assertUnsettledNotInProgress(task, verb, false);
 }
 
 /** Human decompose (issue #129): the same mechanics as agent decompose
@@ -1520,6 +1672,125 @@ export function humanDecomposeTask(
     undefined,
     isProtectedWorkspace,
   );
+}
+
+/** The fields a human may overwrite on a registered task (issue #130,
+ *  CONTEXT.md's Edit). Deliberately a subset of RegisterTaskInput: `type`,
+ *  `parent_id`, and `github_issue_number` are absent because they are not
+ *  editable (a type change is a permission-model swap; a parent relink is the
+ *  objection route's tree surgery; the issue reference is the burned-in
+ *  identity). The API schema rejects those keys outright; this type is the
+ *  domain-side statement of the same closed set. */
+export interface EditTaskInput {
+  title?: string;
+  purpose?: string;
+  completion_criteria?: string;
+  assignee?: string;
+  workspace?: string;
+  risk_flag?: boolean;
+  review_flag?: boolean;
+}
+
+/** issue #130: the one risk edit the spec names as machine-refused — a
+ *  **demotion** that would break the upward-propagation invariant "parent risk
+ *  ≥ approved child risk" (CONTEXT.md's Risk flag: "risk ありの未決着子を持つ
+ *  親を risk なしへ下げる編集は拒否"). Clearing a task's risk while it still has
+ *  an unsettled risk-bearing child would drop the parent below an already-
+ *  approved child. The promotion direction (raising a child above a non-risk
+ *  parent) is deliberately NOT refused here: the spec names only the demotion,
+ *  and CONTEXT.md's Risk flag keeps declared risk a *secondary* input to
+ *  attention allocation ("誤分類によって監査から逃れることはできない"), so a
+ *  human's edit-time promotion needs no re-escalation. Only called when the
+ *  flag actually flips off. */
+function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
+  const riskyChild = db
+    .prepare(
+      `SELECT 1 FROM tasks WHERE parent_id = ? AND risk_flag = 1
+         AND status NOT IN ('done', 'cancelled') LIMIT 1`,
+    )
+    .get(task.id);
+  if (riskyChild) {
+    throw new DomainError(
+      "cannot clear the risk flag while an unsettled child still carries risk — " +
+        "the parent's risk must stay at least its approved children's",
+    );
+  }
+}
+
+/** Edit a registered task's unconsumed fields in place (issue #130,
+ *  CONTEXT.md's Edit). The scope line is shared with direct cancel
+ *  (`assertHumanEditableScope`): human-registered, unsettled, not in_progress.
+ *  Values are consumed at spawn / pickup / completion, so a rewrite before
+ *  then makes no broken in-between state (the issue's Purpose). An edit is an
+ *  **append event, never a silent overwrite** — one `task_edited` per changed
+ *  field carries the pre-edit value into history forever (write-path
+ *  statistical purity). Unchanged fields emit nothing.
+ *
+ *  Issue-backed content and workspace are immutable here (their source of
+ *  truth is the GitHub issue / the burned-in reference identity — CONTEXT.md);
+ *  the assignee/workspace registry-resolution recheck is the caller's, mirror
+ *  of registration (see api.ts), since it needs the injected registry seams. */
+export function editTask(db: Db, task: Task, input: EditTaskInput, now: Date): Task {
+  assertHumanEditableScope(db, task, "edited");
+  const issueBacked = task.github_issue_number !== null;
+  if (issueBacked) {
+    if (
+      input.title !== undefined ||
+      input.purpose !== undefined ||
+      input.completion_criteria !== undefined
+    ) {
+      throw new DomainError(
+        "an issue-backed task's content is not editable — its source of truth is the GitHub issue",
+      );
+    }
+    if (input.workspace !== undefined) {
+      throw new DomainError(
+        "an issue-backed task's workspace is not editable — it is the burned-in identity of the reference",
+      );
+    }
+  }
+  if (input.risk_flag === false && task.risk_flag === 1) {
+    assertRiskDemotionKeepsInvariant(db, task);
+  }
+  // one row per field that actually changes value; `from`/`to` are stringified
+  // (booleans → "true"/"false") so the event payload is one flat shape across
+  // text, nullable, and boolean fields. An unchanged submission (same value)
+  // is a no-op — no event. The `field` doubles as the (hardcoded, never
+  // input-derived) column name in the UPDATE below. An empty assignee/
+  // workspace string means "unset — resolve to the board default" (CONTEXT.md's
+  // Assignee/Workspace), so it is normalized to null, same "" ⇢ default the
+  // registration door omits the field for.
+  const flag = (v: number): string => (v ? "true" : "false");
+  const changes: Array<{ field: string; from: string | null; to: string | null; value: string | number | null }> = [];
+  for (const field of ["title", "purpose", "completion_criteria"] as const) {
+    const next = input[field];
+    if (next !== undefined && next !== task[field]) {
+      changes.push({ field, from: task[field], to: next, value: next });
+    }
+  }
+  for (const field of ["assignee", "workspace"] as const) {
+    if (input[field] === undefined) continue;
+    const next = input[field] || null;
+    if (next !== task[field]) changes.push({ field, from: task[field], to: next, value: next });
+  }
+  for (const field of ["risk_flag", "review_flag"] as const) {
+    const next = input[field];
+    if (next !== undefined && (next ? 1 : 0) !== task[field]) {
+      changes.push({ field, from: flag(task[field]), to: flag(next ? 1 : 0), value: next ? 1 : 0 });
+    }
+  }
+  db.transaction(() => {
+    for (const c of changes) {
+      db.prepare(`UPDATE tasks SET ${c.field} = ? WHERE id = ?`).run(c.value, task.id);
+      appendEvent(db, {
+        taskId: task.id,
+        workerId: HUMAN_WORKER_ID,
+        payload: { kind: "task_edited", field: c.field, from: c.from, to: c.to },
+        at: now,
+      });
+    }
+  })();
+  return getTask(db, task.id)!;
 }
 
 /** The one SQL shape of the derived-blocked rule (CONTEXT.md): a child not
