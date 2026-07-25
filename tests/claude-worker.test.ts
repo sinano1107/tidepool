@@ -101,21 +101,33 @@ function recordingSpawn() {
   const stderr = new PassThrough();
   const killed: NodeJS.Signals[] = [];
   const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
+  const errorListeners: Array<(err: Error) => void> = [];
   const spawn: SpawnFn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env });
     return {
       stdout,
       stderr,
       kill: (signal) => killed.push(signal),
-      on: (event, listener) => {
-        if (event === "exit") exitListeners.push(listener);
+      on: (
+        event: "exit" | "error",
+        listener:
+          | ((code: number | null, signal: NodeJS.Signals | null) => void)
+          | ((err: Error) => void),
+      ) => {
+        if (event === "exit") {
+          exitListeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
+        }
+        if (event === "error") errorListeners.push(listener as (err: Error) => void);
       },
     };
   };
   const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
     for (const listener of exitListeners) listener(code, signal);
   };
-  return { calls, stdout, stderr, killed, spawn, emitExit };
+  const emitError = (err: Error) => {
+    for (const listener of errorListeners) listener(err);
+  };
+  return { calls, stdout, stderr, killed, spawn, emitExit, emitError };
 }
 
 /** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
@@ -1053,6 +1065,45 @@ describe("ClaudeCodeWorker", () => {
       stderr_tail: null,
       usage: null,
     });
+  });
+
+  // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig)
+  // fires "error" but never "exit", so worker_exited never gets written —
+  // spawn_failed is the dedicated event that closes the pair worker_spawned
+  // opened.
+  it("spawn 自体が ENOENT で失敗(syscall が \"spawn\" で始まる)すると spawn_failed を error_code/message 付きで記録し running から消す(issue #127)", async () => {
+    const { start, emitError, db, worker, killed } = await makeWorker();
+    const task = start("task-spawn-enoent");
+    const err = Object.assign(new Error("spawn claude ENOENT"), {
+      code: "ENOENT",
+      syscall: "spawn claude",
+    });
+    emitError(err);
+    const failed = listEvents(db, task.id).find((e) => e.kind === "spawn_failed");
+    expect(failed?.worker_id).toBe("deckhand");
+    expect(failed?.payload).toEqual({
+      kind: "spawn_failed",
+      error_code: "ENOENT",
+      message: "spawn claude ENOENT",
+    });
+    // running から消えている: 死んだ子への kill は no-op のはずなので、
+    // watchdog 相当の kill() を呼んでも子の kill() は一切呼ばれない
+    worker.kill(task.id, "SIGKILL");
+    expect(killed).toEqual([]);
+  });
+
+  it("spawn 族でない error(例: kill 失敗の syscall: \"kill\")は console.error のみで spawn_failed イベントは書かない(issue #127)", async () => {
+    const { start, emitError, db } = await makeWorker();
+    const task = start("task-non-spawn-error");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const err = Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" });
+      emitError(err);
+      expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {
