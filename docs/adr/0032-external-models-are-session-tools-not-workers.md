@@ -1,15 +1,24 @@
 # 外部モデルはセッション内の道具であり worker ではない
 
-外部モデル(OpenRouter 経由の安価・多系統モデル)を盤面に取り込むにあたり、registry に agent として定義し assignee にする案(worker 化)と、worker session 内の MCP ツールとして使う案を比較し、道具側を選んだ(2026-07-27 の grilling)。OpenRouter MCP の呼び出しはテキストイン・テキストアウトの白紙呼び出しであり(公式ツール一覧にファイル操作・実行系は存在しない — 実物のドキュメントで確認済み)、Worker の義務 — workspace への着地、branch discipline、slot-release tree rule、decision log、escalation の安全弁、handoff doc — のどれも果たせない。義務を免除した「二級 Worker」を作れば Worker の語が2つの意味を持ち始める。外注は ADR 0010 の線の「労力の分割」であり、説明責任は発注した worker に全部残る。
+外部モデル(OpenRouter 経由の安価・多系統モデル)を盤面に取り込むにあたり、registry に agent として定義し assignee にする案(worker 化)と、worker session 内の道具として使う案を比較し、道具側を選んだ(2026-07-27 の grilling)。外部モデルの呼び出しはどの経路でもテキストイン・テキストアウトの白紙呼び出しであり(OpenRouter の公式ツール・API 面にファイル操作・実行系は存在しない — 実物のドキュメントで確認済み)、Worker の義務 — workspace への着地、branch discipline、slot-release tree rule、decision log、escalation の安全弁、handoff doc — のどれも果たせない。義務を免除した「二級 Worker」を作れば Worker の語が2つの意味を持ち始める。外注は ADR 0010 の線の「労力の分割」であり、説明責任は発注した worker に全部残る。
 
 ## Considered Options
 
-worker 化: OpenRouter API を直接叩く新しい worker runtime(claude-worker の兄弟)を実装し、slot・watchdog・branch discipline を通す案。外注先は escalation できず(question を登録できない)安全弁を欠き、Worker の義務のほぼ全てを免除する必要があるため棄却。将来外部モデルをハーネス(Claude Code 相当)ごと動かす選択肢が生まれれば、その時は普通の worker 化として再検討できる — 本 ADR が禁じるのは「テキスト呼び出しの worker 扱い」であって外部モデル自体ではない。
+- **worker 化**: OpenRouter API を直接叩く新しい worker runtime(claude-worker の兄弟)を実装し、slot・watchdog・branch discipline を通す案。外注先は escalation できず(question を登録できない)安全弁を欠き、Worker の義務のほぼ全てを免除する必要があるため棄却。将来外部モデルをハーネス(Claude Code 相当)ごと動かす選択肢が生まれれば、その時は普通の worker 化として再検討できる — 本 ADR が禁じるのは「テキスト呼び出しの worker 扱い」であって外部モデル自体ではない。
+- **盤面による機械着地**: 外注結果を盤面が受け取り workspace へ機械的に反映する案。応答(散文・diff・全文が混在)のパース・検証は判断の仕事であり、「判断しない機械」である盤面に検収の一部を背負わせるため棄却。着地はセッション自身が行う。
+- **経路として OpenRouter MCP**: 型付きツールの自己記述性は得られるが、成果物が必ず発注者のコンテキストを通過し(受領の入力 + 書き出しの出力 ≈ 成果物×2 のトークン)、1呼び出し約180秒の強制打ち切りが長文の一括発注を壊す。照会系(モデル一覧・ランキング・プロバイダー実測・残高)も同じ REST エンドポイントで取れるため、API 直叩きに対する機能の優位がなく棄却。
+
+## Decision: 経路は API 直叩き(curl)一本
+
+発注はセッションが OpenRouter chat completions API を curl で叩き、応答の content を直接ファイルへリダイレクトする — 成果物は**どの Claude のコンテキストも通過せず**に着地し、反映のトークンコストはゼロ、180秒制限も存在しない。API の返り値は常に1本のテキスト文字列なので、着地契約は2形: 単ファイル = 機械的リダイレクト、複数ファイル = structured outputs(JSON Schema `{files: [{path, content}]}`)+ 機械展開。契約遵守はモデル・プロバイダーに依存するため面接課題で測る。判断を伴う統合(応答の切り出し・既存コードへの編み込み)だけは安いモデルの subagent が受け皿(ADR 0010 の労力分割)。
+
+対価として、API の使い方は skill が背負う(MCP の自己記述性を失う)。必要面は chat completions + 少数の照会 GET のみで OpenAI 互換の安定形状であり、skill には散文ではなく実行可能なヘルパースクリプトとして載せる — 腐れば静かに縮退せず騒がしく失敗する。
 
 ## Consequences
 
-- 外注能力の門は agent opt-in(registry の frontmatter フィールド、Advisor と同型)∧ workspace の外部送信可(external-send、既定禁止・fail-closed)の AND。成立するセッションにだけ盤面が MCP 設定を注入する — 権限は instructions への信頼ではなく道具の有無で構造的に強制される
+- 外注能力の門は agent opt-in(registry の frontmatter フィールド、Advisor と同型)∧ workspace の外部送信可(external-send、既定禁止・fail-closed)の AND。成立するセッションにだけ盤面が資格情報(API キーの env 変数)を注入する — 権限は instructions への信頼ではなく資格情報の有無で構造的に強制される
 - プライバシーは二層: 「送信の可否」は盤面(workspace マーカー)が持ち、「送信後の扱い」(保持・学習利用)は OpenRouter アカウント設定(no-training / ZDR 縛り)が持つ。後者を盤面に取り込むことはできない — 呼び出された時点で内容は先方に渡っており、盤面が制御できるのは送信の手前だけ
 - 名義は盤面保有の単一キー(ADR 0024 の「単一名義」と同型)だが、GitHub と異なり worker session がキーを保持する — 呼ぶのは worker 自身であるため。キーは専用・クレジット上限付きで、漏洩・暴走の損害は上限までで構造的に閉じる。7日失効キーは無人運用では安全層ではなく週次の故障源になるため使わない
-- 面接の順位表・外注の従量費は v1 では盤面の第一級データにならない(面接はセッション内で完結し、費用はセッション内で `get-credits` / `get-generation` により自己検分できる — 盤面に残るのは decision log の散文のみ)。永続化・観測は痛みが観測されてから足す
+- 検収原則: コンテキストを通過せず着地した成果物は、コミット前に必ず読む。着地の迂回は検収の迂回ではない — 最終防衛線は既存の完了時レビュー
+- 面接の順位表・外注の従量費は v1 では盤面の第一級データにならない(面接はセッション内で完結し、費用は API の credits / generation エンドポイントでセッション内から自己検分できる — 盤面に残るのは decision log の散文のみ)。永続化・観測は痛みが観測されてから足す
 - 指示書(面接手順・検収規則・運用知見)は skill として配布し、registry の agent 定義とは独立に改善する — Condensation の対象になり得る
