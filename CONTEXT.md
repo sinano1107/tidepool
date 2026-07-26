@@ -109,7 +109,7 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 
 ## Skill allowlist(skill 許可リスト)
 
-agent 定義が宣言する、その agent が worker session 中に使ってよい skill の集合。Worker 定義の構成要素 skills の実装対応物。参照であって在庫の主張ではない — workspace に実在しない skill を許可していても不問(使えないのは単に無いから)。無制限は明示の「*」、全禁止は空リストで綴り、省略は不正 — 省略 = 無制限という footgun を作らない。由来単位のスコープ語を持つ: @workspace(その workspace の checkout が運ぶ skill 全部)と @host(ホスト環境が持ち込む skill 全部 — 盤面が管理しない物)。
+agent 定義が宣言する、その agent が worker session 中に使ってよい skill の集合。Worker 定義の構成要素 skills の実装対応物。「**使ってよい**」の集合であって「**装備**(起動時に本文を注入される)」の集合ではない — skill の本文は worker が必要と判断したときに入り、許可リストはその入口を開けておくかどうかだけを決める(2026-07-26 の grilling、issue #132: 装備は、必ず読ませたい内容の置き場が agent 定義本文として既にあり、観測された痛みも無いため作らない)。参照であって在庫の主張ではない — workspace に実在しない skill を許可していても不問(使えないのは単に無いから)。無制限は明示の「*」、全禁止は空リストで綴り、省略は不正 — 省略 = 無制限という footgun を作らない。由来単位のスコープ語を持つ: @workspace(その workspace の checkout が運ぶ skill 全部)と @host(ホスト環境が持ち込む skill 全部 — 盤面が管理しない物)。
 
 ## Agent emoji(エージェント絵文字)
 
