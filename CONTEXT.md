@@ -131,6 +131,14 @@ agent が委譲判断の材料として受け取る worker の一覧。各行は
 
 エージェントワーカーの spawn から exit までの1回の実行。タスクと多対1 — 1つのタスクは retry や統合復帰により複数の worker session を持ちうる。終了時にトークン消費の内訳と推定ドル(実行時点の API 換算推定値 — サブスクリプション下では実請求額は存在しない)が記録される。kill などで終了報告が欠けたセッションは欠測(null)として記録され、事実が消えることはない。spawn 自体が失敗しプロセスが成立しなかった試みは worker session ではない — 試みと失敗の事実は記録に残るが、exit や消費が観測されたかのように扱われることはない(2026-07-25 の grilling、issue #127)。spawn 時に読まれた registry main の commit hash も記録される — 「どの版の定義で走ったか」は後から導出できない歴史的事実の観測であり、焼き込みではない(ADR 0020)。Throttle の「使用量(Usage)」はアカウント単位のウィンドウ使用率(%)であり、こちらはセッション単位のトークン消費 — 別概念。
 
+## 管理MCP(Management MCP)
+
+WebUI と同格の**もう一つの人間向け UI** で、人間が対話中のエージェントセッション(Claude Code 等)が**人間の手として**盤面を操作する入口(2026-07-27 の grilling、issue #131)。呼び出しの主体がエージェントであっても、**操作の帰属は常に人間** — question 回答・cancel・Edit・登録(work / review・issue-backed 含む)・人間 decompose・人間タスクの完了・issue コメント追記・registry 管理(agent / profile / workspace の作成・編集)は、すべて人間名義で行われる(義手モデル)。ドメインの「人間」の線はすべて無傷 — 「question 回答 = 人間の判断」「registry の人間発変更 = 盤面が main へ直接コミット」「保護 workspace への変更は人間承認」はそのまま成立する。
+
+Worker MCP(slot 帰属の worker session が使う、authority profile が縛る道具)とは**別物**であり、worker session からは届かない — worker には Worker MCP の URL しか渡らず、管理MCP は人間向けリスナーに mount される(新しい credential は作らない。ADR 0032)。v1 が開くのは読取(Board・キュー・タスク詳細・Decision log)とタスクの生涯 + registry 管理までで、triage セッション・Objection・Scratchpad・settings・Pause / Spend-down・push・翻訳・AI ドラフトは WebUI 専用のまま(痛みが観測されたら広げる)。
+
+操作イベントには**経路(webui / mcp)が機械記録される** — 帰属は人間でも「どの手から入ったか」は残り、エージェントが人間に確認せず question に回答するような事故を事後に追跡できる(自己申告に依らない機械観測。Advisor の相談記録と同型)。ただしログ読取は**純読取** — Decision log の未読カーソルも Displayed も一切動かさない。「ログが人間の視界に入った」は盤面が直接観測できる WebUI だけが記録でき、エージェントが人間に伝えたかは自己申告になるため観測として扱わない(異議率の分母は無傷)。
+
 ## Slot(スロット)
 
 システム全体で唯一の実行枠(concurrency = 1)。エージェント・インフラの概念であり、タスクモデルの概念ではない(人間タスクはスロットの外で並行する)。容量の制約であって**身元の制約ではない** — human 宛て以外のどの assignee のタスクも同じ slot で実行され、「slot の持ち主」というエージェントは存在しない。
