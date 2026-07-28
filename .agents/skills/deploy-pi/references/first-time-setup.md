@@ -44,6 +44,22 @@ Note the split since issue #50 / ADR 0024: this human `gh auth` only serves the 
 
 **Also trust the board's own cwd once, interactively** (issue #81 / ADR-0028): the hourly usage throttle scrapes `/usage` from an *interactive* `claude --safe-mode` session run in `/opt/tidepool`, and the interactive TUI shows a folder-trust gate ("Is this a project you trust?") plus one-time onboarding modals that block the input prompt until dismissed. Once, as masaki: `ssh $PI`, then `cd /opt/tidepool && claude`, accept "Yes, I trust this folder", dismiss any what's-new/onboarding modal, and quit. This persists in `~/.claude.json` (`projects["/opt/tidepool"].hasTrustDialogAccepted: true`, home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`). Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry. (A dismissed what's-new can re-appear after a `claude` update; same one-time fix.)
 
+## 4b. Worker sandbox dependencies (bubblewrap + socat)
+
+Every worker session runs its Bash inside the CLI's own sandbox (issue #60 / ADR 0033), and the board **refuses to pick up any agent task** on a host where that sandbox can't start — it halts board-wide and stands a Confirmation question instead. On Linux the sandbox needs both:
+
+```bash
+ssh $PI "sudo apt-get install -y bubblewrap socat"
+```
+
+`bwrap` being installed is not sufficient — it must actually run. Unprivileged user namespaces (or an AppArmor profile restricting them) can block it on a host where the package is present. Verify with the real thing:
+
+```bash
+ssh $PI "bwrap --ro-bind / / --dev /dev -- /bin/true; echo bwrap=\$?; socat -V >/dev/null; echo socat=\$?"
+```
+
+Both must print `0`. This is exactly the check the board runs at boot and before every pickup (`checkSandboxCapability`), so a `0/0` here means the board will not halt. On the production Pi (aarch64, kernel 6.6.51+rpt) both pass out of the box: `max_user_namespaces` is non-zero and there is no `apparmor_restrict_unprivileged_userns` knob. If `bwrap` fails on a future host, that is the known problem from ADR 0033's investigation — an AppArmor profile is needed; **ask the user before applying one.**
+
 ## 5. systemd unit + secrets
 
 The unit (`systemd/tidepool.service`) is committed in this repo and installed by `scripts/deploy-pi.sh`. `/etc/default/tidepool` (the `EnvironmentFile`) is **not** in git — create it by hand on first setup:

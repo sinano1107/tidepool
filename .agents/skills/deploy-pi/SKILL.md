@@ -62,6 +62,40 @@ Registers a real `work` task, forces immediate pickup (task registration alone d
 
 The smoke-test task can't be deleted afterward (`events` table is append-only by DB trigger — intentional, not a bug). If it clutters the board, rename its title with a prefix instead of trying to delete it — see troubleshooting.md.
 
+### Worker sandbox e2e smoke (re-run after every `claude` CLI update)
+
+Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`. The CLI **silently ignores a settings file that fails validation under `-p`** (its own `--help` says so), so a CLI update can quietly turn the containment off while every health check still passes. Nothing in the automated suite can catch that — it's an OS-enforcement fact, not a board fact (ADR 0027). Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
+
+Prerequisites: `bubblewrap` + `socat` installed and actually working — see [references/first-time-setup.md](references/first-time-setup.md) §4b.
+
+```bash
+PI=masaki@100.78.52.97
+# 1. canary outside the workspace, and a throwaway workspace
+ssh $PI 'mkdir -p ~/sandbox-smoke/ws && echo CANARY > ~/sandbox-smoke/canary.txt && echo inside > ~/sandbox-smoke/ws/inside.txt'
+# 2. emit the settings from the DEPLOYED code — never hand-write them, the
+#    point is to test the JSON the board actually produces
+ssh $PI 'sudo tee /opt/tidepool/scripts/_tmp-emit.ts >/dev/null <<TS
+import { buildSandboxSettings } from "../src/sandbox.js";
+console.log(JSON.stringify(buildSandboxSettings({ taskType: "work", workspacePath: "/home/masaki/sandbox-smoke/ws", permittedSkills: "all" })));
+TS
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts > ~/sandbox-smoke/work.json; sudo rm -f /opt/tidepool/scripts/_tmp-emit.ts'
+# 3. the canary must NOT be readable; the workspace must be
+ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash and report each exit code and output verbatim: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) cat ./inside.txt" --permission-mode auto --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 8 --max-budget-usd 0.3 < /dev/null'
+# 4. clean up — the canary must not outlive the check
+ssh $PI 'rm -rf ~/sandbox-smoke'
+```
+
+PASS = (1) refused, (2) `inside`. **The refusal text differs by platform**: macOS (Seatbelt) says `Operation not permitted`; Linux (bwrap) implements `denyRead` as a tmpfs overlay, so it says `No such file or directory` (`そのようなファイルやディレクトリはありません` under a Japanese locale). Both are the containment working. If (1) *succeeds*, the sandbox is off — stop and treat it as a production incident, not a smoke failure.
+
+The board's own fail-closed half needs no CLI session; drive it by breaking the dependency (this halts pickup board-wide while it's broken, so restore promptly):
+
+```bash
+ssh $PI 'sudo mv /usr/bin/bwrap /usr/bin/bwrap.disabled && sudo systemctl restart tidepool.service'
+# expect: a standing question "worker sandbox is unusable — pickup is stopped" on the board
+ssh $PI 'sudo mv /usr/bin/bwrap.disabled /usr/bin/bwrap'
+# then answer the question in the WebUI — the board re-runs the check before accepting it
+```
+
 For changes that touch the **GitHub-facing** path (machine-user identity, PR creation, merge, commit authorship — issues #50/#53 territory), the sandbox smoke test isn't enough: see [references/board-e2e-test.md](references/board-e2e-test.md) for the full task → PR → merge E2E against the real `tidepool-registry` repo, including the identity assertions and the mandatory cleanup.
 
 ## First-time setup / new Pi
