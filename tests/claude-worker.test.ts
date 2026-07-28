@@ -648,11 +648,16 @@ describe("ClaudeCodeWorker", () => {
     start("task-sbx-skills");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
-    expect(allowRead).toContain("/home/pi/work/tidepool/.claude/skills/code-review");
-    expect(allowRead).not.toContain("/home/pi/work/tidepool/.claude/skills/tdd");
+    expect(allowRead).toContain("~/.claude/skills/code-review");
+    // ホスト側の skill ルートは開かない — 開けば拒否 skill の本文が cat で読める
+    expect(allowRead).not.toContain("~/.claude/skills");
+    expect(allowRead).not.toContain("~/.claude/plugins");
+    expect(allowRead).not.toContain("~/.claude/skills/tdd");
     expect(allowRead).not.toContain("~/.claude/skills/grilling");
-    // ルート全体を開いてしまえば拒否 skill の本文が読めてしまう
-    expect(allowRead).not.toContain("/home/pi/work/tidepool/.claude/skills");
+    // 注: workspace 側の同名エントリも配列には載らないが、そちらは allowRead が
+    // workspace そのものを再帰的に開いている以上どのみち読める。この per-skill
+    // 封じ込めが実効を持つのはホスト側だけ(workspace の中身は定義上、封じ込め
+    // 境界の内側)。
   });
 
   it("skills が空リストの agent は skill ディレクトリを一切開かない", async () => {

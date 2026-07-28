@@ -66,7 +66,16 @@ function underRoot(root: string, name: string): string | undefined {
  *
  *  `"all"` (the `["*"]` agent) is the one case that does open the roots: with
  *  nothing denied there is no allowlist to route around. An empty list (the
- *  `--disable-slash-commands` shape) opens nothing. */
+ *  `--disable-slash-commands` shape) opens nothing.
+ *
+ *  Honest scope note: `allowRead` is recursive and always contains the
+ *  workspace itself, so a *workspace* skill's directory is readable whatever
+ *  this returns — the per-skill confinement is only enforceable over the host
+ *  half (`~/.claude/skills`, `~/.claude/plugins`), which is also the half ADR
+ *  0033 was written about (a workspace's own files are inside the containment
+ *  boundary by definition). The workspace entries are kept because the mapping
+ *  is one rule, not two, and a future workspace layout outside the session cwd
+ *  would need them — but they buy no permission today. */
 export function skillReadPaths(
   permittedSkills: string[] | "all",
   workspacePath: string,
