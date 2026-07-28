@@ -13,6 +13,7 @@ import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
+import { type SandboxCapability, sandboxPickupBlocked } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
@@ -122,6 +123,11 @@ export interface ServerOptions {
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
+  /** ADR 0033 の fail-closed ゲート: このホストで worker サンドボックスが実際に
+   *  使えるか。boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。
+   *  Absent → 実プロセスを持たないテスト盤面の既定(そこに spawn される実 CLI は
+   *  そもそも無い); main.ts は常に実検査を渡す。 */
+  sandboxCapability?: () => SandboxCapability;
 }
 
 export interface TidepoolServer {
@@ -160,6 +166,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // (mcp.ts's attributedWorkerId, claude-worker.ts's start()) — same
   // defense-in-depth `defaultAgentName ?? HUMAN_WORKER_ID` already relies on.
   const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
+  // ADR 0033: 起動時にも一度検査する — pickup 時だけだと、依存を失ったまま再起動
+  // した盤面は次の poll(最大1時間後)まで「止まっている理由」を出さない。
+  // 副作用は pickup ゲートと同一の関数なので、question は多くとも1枚に収まる。
+  const { sandboxCapability } = options;
+  if (sandboxCapability) sandboxPickupBlocked(db, sandboxCapability, options.clock.now());
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -170,6 +181,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     auditorName,
     github: options.github,
     fableAgents: options.fableAgents,
+    sandboxCapability,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
@@ -248,6 +260,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
+      sandboxCapability,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin: options.workspaceAdmin,

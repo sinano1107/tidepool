@@ -31,6 +31,7 @@ import {
   type RegistryCandidates,
 } from "./registry.js";
 import { RegistryCloneBusyError } from "./registry-write.js";
+import type { SandboxCapability } from "./sandbox.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   answerQuestion,
@@ -455,6 +456,11 @@ export interface ApiRouterDeps {
    *  that second half can ever clear an agent quarantine (no registry
    *  configured at all). */
   agentRegistered?: (name: string) => boolean;
+  /** ADR 0033 の fail-closed ゲート、回答側の半分: sandbox Confirmation question
+   *  の回答は鵜呑みにせず、受理の直前にホストの能力検査を走らせ直す(workspace
+   *  quarantine が tree の清潔さを実際に確かめるのと同じ「検証つき解除」)。
+   *  Absent → そのゲートを持たない盤面。 */
+  sandboxCapability?: () => SandboxCapability;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -519,6 +525,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     draftClient,
     defaultAgentName,
     agentRegistered,
+    sandboxCapability,
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
@@ -1281,6 +1288,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // the agent-name generalization of the workspace branch above (ADR
       // 0012 / issue #36): never taken on faith either — clears only if the
       // registry has the name back, or no more todo work depends on it
+      // ADR 0033 の host-wide 版(issue #60): 修理したという申告も鵜呑みにしない
+      // — 受理の直前に能力検査を走らせ直し、まだ成立しないなら回答ごと拒否して
+      // question を立たせたままにする。
+      if (task.question_quarantine_sandbox !== null && sandboxCapability) {
+        const capability = sandboxCapability();
+        if (!capability.available) {
+          throw new DomainError(`the worker sandbox is still unusable: ${capability.reason}`);
+        }
+      }
       const quarantineAgentName = task.question_quarantine_agent;
       if (quarantineAgentName !== null) {
         try {

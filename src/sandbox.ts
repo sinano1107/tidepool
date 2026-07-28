@@ -1,4 +1,6 @@
-import type { Task } from "./tasks.js";
+import { spawnSync } from "node:child_process";
+import type { Db } from "./db.js";
+import { BOARD_WORKER_ID, registerTask, type Task } from "./tasks.js";
 
 /** The CLI's own `sandbox` settings block (vendor shape, hence confined to this
  *  adapter-side module — ADR 0005). Key names and their semantics were read off
@@ -124,4 +126,142 @@ export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettin
       },
     },
   };
+}
+
+/** The one process boundary the capability check runs at: did this command
+ *  exit 0? Injected so the check's platform logic is tested without a real
+ *  bwrap (same fake-injection posture as SpawnFn/PtyFn — ADR 0027). */
+export type RunOkFn = (command: string, args: string[]) => boolean;
+
+export type SandboxCapability = { available: true } | { available: false; reason: string };
+
+/** macOS: the Seatbelt profile a no-op run needs. `(allow default)` grants
+ *  everything — this asks "can a sandbox be entered at all", not "does this
+ *  profile confine", which is the workers' own settings' job. */
+const SEATBELT_PROBE = ["-p", "(version 1)(allow default)", "/usr/bin/true"];
+/** Linux: a minimal bwrap that still exercises the parts that actually break —
+ *  an unprivileged user namespace and a bind mount. bwrap being *installed* is
+ *  not the question (ADR 0033 調査時の既知問題: AppArmor / userns 無効化で入って
+ *  いても動かない), so the probe runs it. */
+const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true"];
+/** socat has no no-op subcommand; `-V` prints its version and exits 0. The
+ *  sandbox's network proxy is spawned through it, so its absence is fatal. */
+const SOCAT_PROBE = ["-V"];
+
+/** ADR 0033's fail-closed gate: is the harness sandbox actually usable on this
+ *  host right now? Never "is the dependency installed" — a bwrap blocked by
+ *  AppArmor or a kernel with user namespaces disabled is installed and useless,
+ *  and that is the failure this check exists for. An unsupported platform
+ *  reports unavailable rather than being probed: "sandboxed as far as we know"
+ *  is the one state ADR 0033 refuses. */
+export function checkSandboxCapability(
+  platform: NodeJS.Platform,
+  runOk: RunOkFn = defaultRunOk,
+): SandboxCapability {
+  if (platform === "darwin") {
+    return runOk("/usr/bin/sandbox-exec", SEATBELT_PROBE)
+      ? { available: true }
+      : {
+          available: false,
+          reason:
+            "the macOS Seatbelt sandbox could not be entered: /usr/bin/sandbox-exec failed to run",
+        };
+  }
+  if (platform === "linux") {
+    if (!runOk("bwrap", BWRAP_PROBE)) {
+      return {
+        available: false,
+        reason:
+          "bubblewrap (bwrap) could not create a sandbox — install it (apt install bubblewrap), " +
+          "or check that unprivileged user namespaces and AppArmor allow it on this host",
+      };
+    }
+    if (!runOk("socat", SOCAT_PROBE)) {
+      return {
+        available: false,
+        reason: "socat is missing — the Linux sandbox's network proxy cannot start (apt install socat)",
+      };
+    }
+    return { available: true };
+  }
+  return {
+    available: false,
+    reason: `worker sandboxing is not supported on platform "${platform}"`,
+  };
+}
+
+/** Bounded like every other probe in this codebase (SKILL_ENUM_TIMEOUT_MS,
+ *  USAGE_TIMEOUT_MS): a wedged binary must not stall a pickup poll. A timeout
+ *  reads as "not usable", the fail-closed side. */
+const CAPABILITY_PROBE_TIMEOUT_MS = 5_000;
+
+const defaultRunOk: RunOkFn = (command, args) => {
+  try {
+    const result = spawnSync(command, args, {
+      stdio: "ignore",
+      timeout: CAPABILITY_PROBE_TIMEOUT_MS,
+    });
+    return result.error === undefined && result.status === 0;
+  } catch {
+    // a spawn that throws outright (ENOENT on some platforms) is the same
+    // answer as a non-zero exit
+    return false;
+  }
+};
+
+/** ADR 0033's fail-closed stop, the host-wide sibling of quarantineWorkspace /
+ *  quarantineAgent: an unusable sandbox halts pickup for the whole board (the
+ *  sandbox is a property of the host, so there is no narrower resource to halt)
+ *  and stands a Tidepool-registered Confirmation question saying why. One
+ *  question at a time — a board that cannot sandbox produces the same fact
+ *  every poll, and re-registering it hourly would bury the log. */
+export function quarantineSandbox(db: Db, reason: string, now: Date): void {
+  const title = "worker sandbox is unusable — pickup is stopped";
+  registerTask(
+    db,
+    {
+      type: "question",
+      title,
+      purpose:
+        `${reason}. ` +
+        "No agent task is picked up while this stands: a worker that believes it is " +
+        "sandboxed but is not is worse than no sandbox at all, so the board refuses to " +
+        "run one bare (ADR 0033). Repair the host, then answer — the board re-runs the " +
+        "capability check before it accepts the answer, and any answer text is kept as " +
+        "a repair note.",
+      completion_criteria: "the host's worker sandbox is repaired by hand",
+      question: [{ title, options: ["repaired by hand"], recommendation: "repaired by hand" }],
+      quarantine_sandbox: true,
+    },
+    now,
+    BOARD_WORKER_ID,
+  );
+}
+
+/** The open sandbox Confirmation question, if one stands. Its presence is half
+ *  the gate: like a workspace quarantine, a repaired host does not resume
+ *  pickup on its own — a human's confirmation is the only door out, so a
+ *  transient breakage can never quietly un-halt the board with nobody having
+ *  looked. */
+export function openSandboxQuestion(db: Db): { id: string } | undefined {
+  return db
+    .prepare(
+      `SELECT id FROM tasks WHERE question_quarantine_sandbox IS NOT NULL AND status = 'todo'`,
+    )
+    .get() as { id: string } | undefined;
+}
+
+/** The pickup gate (ADR 0033): true while no worker may be spawned. Registers
+ *  the Confirmation question as a side effect the first time the check fails —
+ *  and only then, since a standing question short-circuits ahead of it. */
+export function sandboxPickupBlocked(
+  db: Db,
+  capability: () => SandboxCapability,
+  now: Date,
+): boolean {
+  if (openSandboxQuestion(db)) return true;
+  const result = capability();
+  if (result.available) return false;
+  quarantineSandbox(db, result.reason, now);
+  return true;
 }
