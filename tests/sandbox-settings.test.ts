@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { buildSandboxSettings, skillReadPaths } from "../src/sandbox.js";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildSandboxSettings, sandboxOverridingSettings, skillReadPaths } from "../src/sandbox.js";
 
 /** ADR 0033: worker セッションの Bash はハーネス内蔵サンドボックス(macOS
  *  Seatbelt / Linux bubblewrap)で workspace に封じる。この純関数はその
@@ -26,6 +29,21 @@ describe("buildSandboxSettings", () => {
         allowWrite: ["/home/pi/work/tidepool"],
       },
     });
+  });
+
+  it("ツールチェーンの動作基盤は封じない: git の global config が allowRead に載る(無いと git が一切動かない)", () => {
+    // 期待値は独立した情報源から: ADR 0033 追記が名指しする2パスをそのまま literal で置く
+    const { allowRead } = buildSandboxSettings({
+      taskType: "work",
+      workspacePath: "/home/pi/work/tidepool",
+      permittedSkills: "all",
+    }).sandbox.filesystem;
+    expect(allowRead).toContain("~/.gitconfig");
+    expect(allowRead).toContain("~/.config/git");
+    // credential は開かない(ADR 0024: worker は GitHub credential を持たない)
+    expect(allowRead).not.toContain("~/.config/gh");
+    expect(allowRead).not.toContain("~/.ssh");
+    expect(allowRead).not.toContain("~/.netrc");
   });
 
   it("review プロファイル: allowWrite は空(ただし OS 強制の書き込み拒否ではない — 下のコメント参照)", () => {
@@ -109,5 +127,58 @@ describe("skillReadPaths", () => {
 
   it("plugin 接頭辞つきの名前は写像されない(パスが名前から決まらない — 過小許可に倒す)", () => {
     expect(skillReadPaths(["myplugin:deploy"], "/home/pi/work/tidepool")).toEqual([]);
+  });
+});
+
+/** issue #60 の実測: CLI は per-task の `--settings` とは別に、workspace 側の
+ *  `.claude/settings.json` の `sandbox` ブロックも読んで **merge** する。
+ *  `enabled: false` は `--settings` 側が勝つが、`filesystem.allowRead` は
+ *  マージされて効いてしまい(canary が読めた)、`--setting-sources user` でも
+ *  `--setting-sources ""` でも止まらなかった。work セッションは workspace に
+ *  書けるので、放置すると「自分で床を広げて次の spawn で抜ける」経路が残る。 */
+describe("sandboxOverridingSettings", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  async function workspaceWith(files: Record<string, string>): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "tidepool-sbx-ws-"));
+    dirs.push(dir);
+    if (Object.keys(files).length > 0) await mkdir(join(dir, ".claude"), { recursive: true });
+    for (const [name, body] of Object.entries(files)) {
+      await writeFile(join(dir, ".claude", name), body);
+    }
+    return dir;
+  }
+
+  it("sandbox ブロックを持たない project settings は素通しする(hooks 等の通常利用を壊さない)", async () => {
+    const dir = await workspaceWith({
+      "settings.json": JSON.stringify({ hooks: { PostToolUse: [] } }),
+    });
+    expect(sandboxOverridingSettings(dir)).toEqual([]);
+  });
+
+  it(".claude が無い workspace は素通しする", async () => {
+    expect(sandboxOverridingSettings(await workspaceWith({}))).toEqual([]);
+  });
+
+  it("settings.json が sandbox ブロックを持てば検出する", async () => {
+    const dir = await workspaceWith({
+      "settings.json": JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } } }),
+    });
+    expect(sandboxOverridingSettings(dir)).toEqual(["settings.json"]);
+  });
+
+  it("settings.local.json も同じく検出する(git 管理外でもディスク上にあれば CLI は読む)", async () => {
+    const dir = await workspaceWith({
+      "settings.local.json": JSON.stringify({ sandbox: { enabled: false } }),
+    });
+    expect(sandboxOverridingSettings(dir)).toEqual(["settings.local.json"]);
+  });
+
+  it("読めない/壊れた settings は fail-closed に倒す — こちらの parser と CLI の解釈が食い違う余地を残さない", async () => {
+    const dir = await workspaceWith({ "settings.json": "{ not json" });
+    expect(sandboxOverridingSettings(dir)).toEqual(["settings.json"]);
   });
 });

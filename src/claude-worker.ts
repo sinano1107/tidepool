@@ -18,11 +18,12 @@ import {
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
-import { buildSandboxSettings } from "./sandbox.js";
+import { buildSandboxSettings, sandboxOverridingSettings } from "./sandbox.js";
 import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
   guardRegistryDefaultBranch,
+  quarantineWorkspace,
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
@@ -850,6 +851,27 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       this.options.clock.now(),
     );
     if (!workspace) return;
+    // issue #60 / ADR 0033: the CLI merges the *workspace's* own
+    // `.claude/settings.json` `sandbox` block with the per-task `--settings`
+    // floor below, and its `filesystem.allowRead` entries win (measured — see
+    // sandboxOverridingSettings). A work session can write its own checkout, so
+    // this would be a two-session escalation: widen the floor in session N, walk
+    // out in N+1. A workspace that redefines the sandbox is a broken resource —
+    // quarantined like a dirty tree, and no session starts in it meanwhile.
+    const overriding = sandboxOverridingSettings(workspace.path);
+    if (overriding.length > 0) {
+      quarantineWorkspace(
+        this.options.db,
+        workspace.name,
+        new Error(
+          `workspace carries .claude/${overriding.join(", .claude/")} declaring its own ` +
+            "sandbox settings, which would widen the worker sandbox floor (ADR 0033) — " +
+            "remove the sandbox block",
+        ),
+        this.options.clock.now(),
+      );
+      return;
+    }
     // a review task's unset assignee resolves to the Auditor pointer, not
     // this worker's configured default agent (issue #42 / CONTEXT.md's
     // Auditor: independent review's value is its distance from the original

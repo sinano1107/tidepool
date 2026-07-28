@@ -31,7 +31,7 @@ import {
   type RegistryCandidates,
 } from "./registry.js";
 import { RegistryCloneBusyError } from "./registry-write.js";
-import type { SandboxCapability } from "./sandbox.js";
+import { openSandboxQuestion, type SandboxCapability } from "./sandbox.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   answerQuestion,
@@ -1288,21 +1288,21 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // the agent-name generalization of the workspace branch above (ADR
       // 0012 / issue #36): never taken on faith either — clears only if the
       // registry has the name back, or no more todo work depends on it
-      // ADR 0033 の host-wide 版(issue #60): 修理したという申告も鵜呑みにしない
-      // — 受理の直前に能力検査を走らせ直し、まだ成立しないなら回答ごと拒否して
-      // question を立たせたままにする。
-      if (task.question_quarantine_sandbox !== null && sandboxCapability) {
-        const capability = sandboxCapability();
-        if (!capability.available) {
-          throw new DomainError(`the worker sandbox is still unusable: ${capability.reason}`);
-        }
-      }
       const quarantineAgentName = task.question_quarantine_agent;
       if (quarantineAgentName !== null) {
         try {
           verifyAgentRepaired(db, quarantineAgentName, agentRegistered?.(quarantineAgentName) ?? false);
         } catch (err) {
           throw new DomainError(err instanceof Error ? err.message : String(err));
+        }
+      }
+      // ADR 0033 / issue #60 の host-wide 版: 資源名を持たないぶん検証は素直で、
+      // 「今このホストでサンドボックスが実際に動くか」を回答の受理直前にもう一度
+      // 測るだけ。まだ壊れていれば回答ごと拒否し、question は開いたまま残る。
+      if (task.question_quarantine_sandbox !== null && sandboxCapability) {
+        const capability = sandboxCapability();
+        if (!capability.available) {
+          throw new DomainError(`the worker sandbox is still unusable: ${capability.reason}`);
         }
       }
       // an answer during an open triage session is activity (defers the
@@ -1775,14 +1775,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // the queue view (#10): unlike the board, a todo task pickup can't reach
-  // right now — Swell throttle or the human's own Pause (issue #34), the
-  // same board-wide "nothing starts" shape — shows here as skipped
+  // right now — Swell throttle, the human's own Pause (issue #34), or a
+  // standing sandbox halt (issue #60 / ADR 0033), the same board-wide
+  // "nothing starts" shape — shows here as skipped. The sandbox half reads the
+  // standing question rather than re-running the capability check: the gate
+  // always registers the question before it blocks, so the question's presence
+  // *is* the halt, and this stays a plain SQL read on a polled endpoint.
   router.get("/queue", async (_req, res) => {
     res.json(
       await presentLive(
         listQueue(
           db,
-          isPickupBlocked(db, clock.now()) || isPaused(db),
+          isPickupBlocked(db, clock.now()) || isPaused(db) || openSandboxQuestion(db) !== undefined,
           workspace?.name,
           defaultAgentName,
           auditorName,

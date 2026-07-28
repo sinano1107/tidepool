@@ -70,22 +70,47 @@ Prerequisites: `bubblewrap` + `socat` installed and actually working — see [re
 
 ```bash
 PI=masaki@100.78.52.97
-# 1. canary outside the workspace, and a throwaway workspace
-ssh $PI 'mkdir -p ~/sandbox-smoke/ws && echo CANARY > ~/sandbox-smoke/canary.txt && echo inside > ~/sandbox-smoke/ws/inside.txt'
-# 2. emit the settings from the DEPLOYED code — never hand-write them, the
+# 1. a canary outside the workspace, a throwaway workspace, and two host skills
+#    (one the agent's allowlist will permit, one it won't)
+ssh $PI 'mkdir -p ~/sandbox-smoke/ws ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied
+echo CANARY > ~/sandbox-smoke/canary.txt
+echo inside > ~/sandbox-smoke/ws/inside.txt
+echo ALLOWED-AUX > ~/.claude/skills/tp-smoke-allowed/aux.txt
+echo DENIED-AUX  > ~/.claude/skills/tp-smoke-denied/aux.txt'
+# 2. emit BOTH profiles from the DEPLOYED code — never hand-write them; the
 #    point is to test the JSON the board actually produces
 ssh $PI 'sudo tee /opt/tidepool/scripts/_tmp-emit.ts >/dev/null <<TS
 import { buildSandboxSettings } from "../src/sandbox.js";
-console.log(JSON.stringify(buildSandboxSettings({ taskType: "work", workspacePath: "/home/masaki/sandbox-smoke/ws", permittedSkills: "all" })));
+const [taskType] = process.argv.slice(2);
+console.log(JSON.stringify(buildSandboxSettings({ taskType: taskType as any, workspacePath: "/home/masaki/sandbox-smoke/ws", permittedSkills: ["tp-smoke-allowed"] })));
 TS
-cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts > ~/sandbox-smoke/work.json; sudo rm -f /opt/tidepool/scripts/_tmp-emit.ts'
-# 3. the canary must NOT be readable; the workspace must be
-ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash and report each exit code and output verbatim: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) cat ./inside.txt" --permission-mode auto --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 8 --max-budget-usd 0.3 < /dev/null'
-# 4. clean up — the canary must not outlive the check
-ssh $PI 'rm -rf ~/sandbox-smoke'
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts work   > ~/sandbox-smoke/work.json
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts review > ~/sandbox-smoke/review.json
+sudo rm -f /opt/tidepool/scripts/_tmp-emit.ts'
+# 3a. work profile: outside read denied, inside read+write allowed, allowed
+#     skill's aux readable, denied skill's not
+ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt" --permission-mode auto --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 14 --max-budget-usd 0.5 < /dev/null'
+# 3b. review profile: the outside-read half of the same (its write half is NOT
+#     an OS floor — see ADR 0033's 追記)
+ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash and report EACH exit code and output verbatim: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) cat ./inside.txt" --permission-mode auto --settings ~/sandbox-smoke/review.json --model sonnet --effort low --max-turns 10 --max-budget-usd 0.4 < /dev/null'
+# 4. clean up — the canary and the probe skills must not outlive the check
+ssh $PI 'rm -rf ~/sandbox-smoke ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied'
 ```
 
-PASS = (1) refused, (2) `inside`. **The refusal text differs by platform**: macOS (Seatbelt) says `Operation not permitted`; Linux (bwrap) implements `denyRead` as a tmpfs overlay, so it says `No such file or directory` (`そのようなファイルやディレクトリはありません` under a Japanese locale). Both are the containment working. If (1) *succeeds*, the sandbox is off — stop and treat it as a production incident, not a smoke failure.
+**PASS is judged on the error string, not on "it failed."** ADR 0033 fact 1: headless `auto` already refuses cwd-external reads at the *permission* layer, so a plain refusal proves nothing — it is exactly what a session with the sandbox silently switched off looks like. A pass requires the **OS**'s own refusal:
+
+- macOS (Seatbelt): `Operation not permitted`
+- Linux (bwrap): `No such file or directory` — `denyRead` is implemented as a tmpfs overlay, so the path is masked rather than refused (`そのようなファイルやディレクトリはありません` under a Japanese locale)
+
+| check | expected |
+|---|---|
+| 3a(1), 3b(1) canary | denied, **with the OS string above** |
+| 3a(2) workspace write + read | `w` |
+| 3b(2) workspace read | `inside` |
+| 3a(3) allowed skill's aux | `ALLOWED-AUX` |
+| 3a(4) denied skill's aux | denied, with the OS string |
+
+If a canary read *succeeds*, or fails with a harness-worded permission message instead of the OS string, the sandbox is off — stop and treat it as a production incident, not a smoke failure.
 
 The board's own fail-closed half needs no CLI session; drive it by breaking the dependency (this halts pickup board-wide while it's broken, so restore promptly):
 

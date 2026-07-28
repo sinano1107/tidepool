@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Db } from "./db.js";
 import { BOARD_WORKER_ID, registerTask, type Task } from "./tasks.js";
 
@@ -306,4 +308,52 @@ export function sandboxPickupBlocked(
   if (result.available) return false;
   quarantineSandbox(db, result.reason, now);
   return true;
+}
+
+/** The workspace-side settings files the CLI merges into a session's settings.
+ *  Both live inside the checkout, so a `work` session can write them. */
+const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
+
+/** The floor's one data-dependent guard, and deliberately a guard rather than
+ *  part of the floor (ADR 0013:「床はデータの状態に依存しない」— the profile
+ *  itself stays a code constant above).
+ *
+ *  Measured on 2.1.220: the CLI reads `sandbox` out of the *workspace's* own
+ *  `.claude/settings.json` and merges it with the per-task `--settings` this
+ *  module builds. `sandbox.enabled: false` loses to `--settings` (the flag tier
+ *  wins), but `sandbox.filesystem.allowRead` **merges** — and since `allowRead`
+ *  beats `denyRead`, a workspace can re-open anything it names. Neither
+ *  `--setting-sources user` nor `--setting-sources ""` stops it.
+ *
+ *  A `work` session can write its own checkout, so left alone this is a
+ *  two-session escalation: widen the floor in session N, walk out in N+1 (and
+ *  the slot-release tree rule would helpfully commit the file). The board's
+ *  answer is to refuse the spawn instead — a workspace that redefines the
+ *  sandbox is a broken resource, quarantined like any other (the caller does
+ *  that; this returns the offending file names).
+ *
+ *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
+ *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean". A
+ *  settings file with no `sandbox` key is left alone — hooks, permissions and
+ *  the rest of a project's ordinary settings are none of this guard's
+ *  business. */
+export function sandboxOverridingSettings(workspacePath: string): string[] {
+  const offending: string[] = [];
+  for (const name of PROJECT_SETTINGS_FILES) {
+    let raw: string;
+    try {
+      raw = readFileSync(join(workspacePath, ".claude", name), "utf8");
+    } catch {
+      continue; // absent (or unreadable directory) — nothing to merge
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed === "object" && parsed !== null && "sandbox" in parsed) {
+        offending.push(name);
+      }
+    } catch {
+      offending.push(name);
+    }
+  }
+  return offending;
 }

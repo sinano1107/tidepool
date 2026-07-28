@@ -661,6 +661,36 @@ describe("ClaudeCodeWorker", () => {
     // 境界の内側)。
   });
 
+  it("workspace が自前の .claude/settings.json で sandbox を再定義していたら spawn せず workspace を quarantine する(issue #60: 床を自分で広げてから抜ける2セッション経路を塞ぐ)", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude"), { recursive: true });
+    await writeFile(
+      join(wsDir, ".claude", "settings.json"),
+      JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } } }),
+    );
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+    });
+    start("task-sbx-override");
+    expect(calls).toEqual([]);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+  });
+
+  it("sandbox を含まない通常の project settings(hooks 等)は spawn を止めない", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude"), { recursive: true });
+    await writeFile(
+      join(wsDir, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [] } }),
+    );
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+    });
+    start("task-sbx-plain-settings");
+    expect(calls).toHaveLength(1);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+  });
+
   it("skills が空リストの agent は skill ディレクトリを一切開かない", async () => {
     const { start, calls, logDir } = await makeWorker({
       "agents/deckhand.md": skilledMd("  []\n"),

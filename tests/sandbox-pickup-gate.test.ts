@@ -97,3 +97,12 @@ it("修理されただけでは再開しない — 人間の確認回答が解�
   expect(t.worker.started).toEqual([]);
   expect((await questions(t))[0].status).toBe("todo");
 });
+
+it("止まっている間、キュービューの todo は skipped として現れる(止まっている理由が盤面に見える)", async () => {
+  t = await bootTidepool({ sandboxCapability: () => UNAVAILABLE });
+  const task = await registerWork(t, "work that must not run unsandboxed");
+  await t.clock.advance(HOUR);
+
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json as any[];
+  expect(queue.find((x) => x.id === task.id).status).toBe("skipped");
+});

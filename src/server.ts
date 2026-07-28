@@ -170,7 +170,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // した盤面は次の poll(最大1時間後)まで「止まっている理由」を出さない。
   // 副作用は pickup ゲートと同一の関数なので、question は多くとも1枚に収まる。
   const { sandboxCapability } = options;
-  if (sandboxCapability) sandboxPickupBlocked(db, sandboxCapability, options.clock.now());
+  // 戻り値は捨てる — boot 時点では止める相手(pickup poll)がまだ走っておらず、
+  // 欲しいのは副作用の question だけ。実際の停止は同じ関数を呼ぶ pickup ゲート。
+  if (sandboxCapability) void sandboxPickupBlocked(db, sandboxCapability, options.clock.now());
   const scheduler = startScheduler({
     db,
     clock: options.clock,
