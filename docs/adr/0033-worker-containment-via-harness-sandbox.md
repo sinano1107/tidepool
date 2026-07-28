@@ -16,8 +16,12 @@ issue #60 のグリリング(2026-07-28)で決定。ADR 0013 追記が post-v1 �
 
 - 共通: `denyRead: ["~/"]`、`allowRead: [workspace.path, 許可された skill のディレクトリ…]`、`allowUnsandboxedCommands: false`(サンドボックス内で失敗したコマンドを裸で自動再実行するベンダー既定の fail-open ハッチを閉じる)
 - skill の再許可は**ホスト skill ルート全体ではなく、agent の skill allowlist に載る skill のディレクトリだけ**を spawn 時に組む。ルート全体を開くと、allowlist で拒否された skill の本文が `cat` で読めて手動でなぞれる — 「許可リストは入口を開けておくかどうかを決める」(issue #132)の意味論を Bash が迂回する。allowlist が運ぶのは skill 名でありパスではない — 名前 → パスの写像・サニタイズ・「skill ルート配下限定」の不変条件はコード側が持ち、registry をどう書いても到達面は skill ルートの外に出られない
-- review: `allowWrite: []`(セッション一時領域のみ)。issue #59 の `--disallowedTools` パターン列挙は早期に明示的に断る UX として残し、列挙漏れ(`dd`、リダイレクト等)の最後の砦が OS になる
-- work: `allowWrite: [workspace.path]`(+一時領域)
+- review: `denyWrite: [workspace.path]`。issue #59 の `--disallowedTools` パターン列挙は早期に明示的に断る UX として残し、列挙漏れ(`dd`、リダイレクト等)の最後の砦が OS になる
+- work: `allowWrite: [workspace.path]`
+
+書き込み側の形は #60 の実装時に実機で測り直して訂正した(当初は review = `allowWrite: []` と記録していた)。CLI 2.1.220 で確認した実挙動は読み書きで非対称である: `allowRead` は `denyRead` に**勝つ**ので読みの床は「`~/` を deny、workspace を再許可」でそのまま書ける。一方 `allowWrite` は `denyWrite` に**勝たない** — `denyWrite: ["~/"]` + `allowWrite: [workspace.path]` は workspace すら書けなくなる。かわりにサンドボックスの既定が cwd 外への書き込みを既に拒否する(`/tmp` も home 配下も拒否)ため、work は `denyWrite` を持たず既定に委ね、review は既定の上に `denyWrite: [workspace.path]` を重ねて read-only を成立させる。
+
+ツールチェーンの動作基盤は封じる対象ではない(上記「守る資産の定義」)という線は、`allowRead` に `~/.gitconfig` と `~/.config/git` を置くことで具体化する — `denyRead: ["~/"]` だけでは `git` が `fatal: unable to access '~/.gitconfig': Operation not permitted` で一切動かない。credential ではなく config であり、worker は GitHub credential をそもそも持たない(ADR 0024)。
 
 **fail-closed**: サンドボックスが成立しない環境(bubblewrap 不在、AppArmor 干渉等)では worker を裸で走らせない。起動時 + pickup 時の能力検査で不成立を検出したら agent タスクの pickup を停止し、Tidepool 名義の確認型 question を立てる(既存 quarantine と同じ検証つき解除 — 回答時に能力検査を再実行してから受理)。「CLI が設定を黙って無視する」将来リスクへは、デプロイ時の一度きり e2e スモーク(canary 読み取りが OS 拒否されることの確認)を充て、CLI 更新時に再実行する。macOS(開発機)と Pi(本番)の両方で常時有効 — 片方だけ裸だと dev/prod の挙動乖離がテストされないまま残る。
 

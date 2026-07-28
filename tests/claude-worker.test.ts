@@ -602,6 +602,67 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
+  // issue #60 / ADR 0033: 全 worker セッションはハーネス内蔵サンドボックスの
+  // settings を per-task ファイルで受け取る(--mcp-config と同型)。ここは
+  // 「配線」の seam — profile の中身そのものは sandbox-settings.test.ts。
+  const sandboxSettings = (args: string[], logDir: string) => {
+    const path = args[args.indexOf("--settings") + 1]!;
+    expect(isAbsolute(path)).toBe(true);
+    expect(path.startsWith(logDir)).toBe(true);
+    return JSON.parse(readFileSync(path, "utf8")).sandbox;
+  };
+
+  it("spawn ごとに sandbox settings を per-task ファイルで書き、--settings で注入する(ADR 0033)", async () => {
+    const { start, calls, logDir } = await makeWorker();
+    start("task-sbx");
+    const sandbox = sandboxSettings(calls[0]!.args, logDir);
+    expect(sandbox.enabled).toBe(true);
+    expect(sandbox.allowUnsandboxedCommands).toBe(false);
+    expect(sandbox.filesystem.denyRead).toEqual(["~/"]);
+    expect(sandbox.filesystem.allowRead).toContain("/home/pi/work/tidepool");
+  });
+
+  it("review タスクは書き込みを塞いだ profile で走る — read-only は行為の性質なので assignee によらない(ADR 0013 / 0033)", async () => {
+    const { start, calls, logDir } = await makeWorker();
+    start("task-sbx-review", null, "deckhand", "review");
+    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.denyWrite).toEqual([
+      "/home/pi/work/tidepool",
+    ]);
+  });
+
+  it("work タスクは workspace 内書き込みを許す profile で走る", async () => {
+    const { start, calls, logDir } = await makeWorker();
+    start("task-sbx-work", null, "deckhand", "work");
+    const { filesystem } = sandboxSettings(calls[0]!.args, logDir);
+    expect(filesystem.allowWrite).toEqual(["/home/pi/work/tidepool"]);
+    expect(filesystem.denyWrite).toBeUndefined();
+  });
+
+  it("有限の許可リストの agent は、許可された skill のディレクトリだけが allowRead に載る(拒否 skill のものは載らない・ADR 0033)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd", "grilling"]);
+    const { start, calls, logDir } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start("task-sbx-skills");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
+    expect(allowRead).toContain("/home/pi/work/tidepool/.claude/skills/code-review");
+    expect(allowRead).not.toContain("/home/pi/work/tidepool/.claude/skills/tdd");
+    expect(allowRead).not.toContain("~/.claude/skills/grilling");
+    // ルート全体を開いてしまえば拒否 skill の本文が読めてしまう
+    expect(allowRead).not.toContain("/home/pi/work/tidepool/.claude/skills");
+  });
+
+  it("skills が空リストの agent は skill ディレクトリを一切開かない", async () => {
+    const { start, calls, logDir } = await makeWorker({
+      "agents/deckhand.md": skilledMd("  []\n"),
+    });
+    start("task-sbx-noskills");
+    const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
+    expect(allowRead.some((p: string) => p.includes(".claude/skills"))).toBe(false);
+  });
+
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
     const { start, stdout, logDir } = await makeWorker();
     start("task-7");

@@ -18,6 +18,7 @@ import {
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
+import { buildSandboxSettings } from "./sandbox.js";
 import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
@@ -874,11 +875,21 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // ADR 0025 point 6).
     const skills = agent.definition.skills;
     if (skills.length === 1 && skills[0] === SKILL_WILDCARD) {
-      this.launch(task, workspace, agent, registry, { deny: [], disableSlashCommands: false });
+      this.launch(task, workspace, agent, registry, {
+        deny: [],
+        disableSlashCommands: false,
+        // nothing is denied, so ADR 0033's sandbox may open the skill roots
+        // wholesale — there is no allowlist for a `cat` to route around
+        permittedSkills: "all",
+      });
       return;
     }
     if (skills.length === 0) {
-      this.launch(task, workspace, agent, registry, { deny: [], disableSlashCommands: true });
+      this.launch(task, workspace, agent, registry, {
+        deny: [],
+        disableSlashCommands: true,
+        permittedSkills: [],
+      });
       return;
     }
     void this.enumerateSkills(workspace.path).then((enumerated) => {
@@ -903,7 +914,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const needsScan = skills.some((s) => s === "@workspace" || s === "@host");
       const workspaceSkills = needsScan ? scanWorkspaceSkills(workspace.path) : [];
       const deny = computeSkillDenials(skills, enumerated, workspaceSkills);
-      this.launch(task, workspace, agent, registry, { deny, disableSlashCommands: false });
+      // ADR 0033: the sandbox's skill re-allow is the *permitted* set — the
+      // same complement, the other way round — so a denied skill's directory
+      // is never opened for reading either (issue #132's semantics must hold
+      // for `cat`, not just for the Skill tool).
+      const denied = new Set(deny);
+      const permittedSkills = enumerated.filter((skill) => !denied.has(skill));
+      this.launch(task, workspace, agent, registry, {
+        deny,
+        disableSlashCommands: false,
+        permittedSkills,
+      });
     });
   }
 
@@ -912,13 +933,18 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  transcript verbatim, and records worker_spawned / worker_exited at the
    *  process boundary (issue #32). `enforcement` carries the per-skill denies
    *  (folded into --disallowedTools alongside the always-present Workflow ban)
-   *  and whether to --disable-slash-commands (the empty-allowlist shape). */
+   *  and whether to --disable-slash-commands (the empty-allowlist shape), plus
+   *  the permitted-skill set ADR 0033's sandbox re-allows for reading. */
   private launch(
     task: Task,
     workspace: WorkspaceConfig,
     agent: ResolvedAgent,
     registry: Registry,
-    enforcement: { deny: string[]; disableSlashCommands: boolean },
+    enforcement: {
+      deny: string[];
+      disableSlashCommands: boolean;
+      permittedSkills: string[] | "all";
+    },
   ): void {
     const { definition, profile } = agent;
     // the ?task= param is the attribution the MCP router checks against the
@@ -931,6 +957,21 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           tidepool: { type: "http", url: `${this.options.mcpUrl}?task=${task.id}` },
         },
       }),
+    );
+    // ADR 0033: every worker session — review and work alike — runs its Bash
+    // inside the CLI's own sandbox, confined to the workspace. Written per task
+    // next to the MCP config above, the same shape and lifetime; the profile
+    // itself is a code constant (src/sandbox.ts), never registry data.
+    const sandboxSettingsPath = join(this.logDir, `${task.id}.sandbox.json`);
+    writeFileSync(
+      sandboxSettingsPath,
+      JSON.stringify(
+        buildSandboxSettings({
+          taskType: task.type,
+          workspacePath: workspace.path,
+          permittedSkills: enforcement.permittedSkills,
+        }),
+      ),
     );
     const prompt =
       `You are picking up tidepool task ${task.id}. ` +
@@ -973,6 +1014,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",
+        // ADR 0033: the OS floor under the tool layer above. Note the CLI
+        // silently ignores a --settings file that fails validation under -p
+        // (documented in its own --help), so this flag alone is not evidence
+        // the sandbox is on — that is what the deploy-time canary smoke and
+        // the capability check are for.
+        "--settings",
+        sandboxSettingsPath,
         // who the agent is (registry definition body) and what its authority
         // sounds like (profile guidance prose), stitched at spawn time. A party
         // review (self RCA) additionally carries the 当時版 definition as
