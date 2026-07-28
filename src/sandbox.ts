@@ -12,10 +12,17 @@ export interface SandboxSettings {
      *  sandbox is otherwise re-run bare. Closing it is what makes the OS wall
      *  the floor rather than a suggestion. */
     allowUnsandboxedCommands: false;
+    /** The *other* fail-open hatch, and a different code path from the one
+     *  above: `allowUnsandboxedCommands` governs re-running a command that
+     *  failed inside the sandbox, this governs a sandbox that never started at
+     *  all. The vendor default is false — "a warning is shown and commands run
+     *  unsandboxed", which is precisely the state ADR 0033 refuses
+     *  (「サンドボックスされているつもりで裸」は機構不在より悪い). With it true
+     *  the session exits at startup instead, and the board sees a failed spawn. */
+    failIfUnavailable: true;
     filesystem: {
       denyRead: string[];
       allowRead: string[];
-      denyWrite?: string[];
       allowWrite: string[];
     };
   };
@@ -27,7 +34,12 @@ export interface SandboxSettings {
  *  '~/.gitconfig': Operation not permitted` under a bare `denyRead: ["~/"]`),
  *  so these two paths are re-allowed for reading. Deliberately read-only and
  *  deliberately two entries: config, never credentials — the board's GitHub
- *  identity is injected per call and never rides the worker (ADR 0024). */
+ *  identity is injected per call and never rides the worker (ADR 0024).
+ *
+ *  Deliberately *not* here: `~/.npm`. The CLI binds it into the masked home on
+ *  its own (verified on the Pi — `ls -a $HOME` inside a sandboxed session shows
+ *  `.claude`, `.gitconfig`, `.npm`), so naming it would add exposure and buy
+ *  nothing. */
 const TOOLCHAIN_READ = ["~/.gitconfig", "~/.config/git"];
 
 /** The skill roots a permitted skill name is mapped into. ADR 0033's invariant
@@ -106,20 +118,37 @@ export interface SandboxSettingsInput {
 /** ADR 0033's two profiles as one code constant (ADR 0013: the floor lives in
  *  code, never in registry data).
  *
- *  The asymmetry between the read and write halves is the CLI's, confirmed by
- *  running it (2.1.220): `allowRead` takes precedence over `denyRead`, so
- *  "deny the home tree, re-allow the workspace" expresses the read floor
- *  directly. `allowWrite` does **not** take precedence over `denyWrite` — a
- *  `denyWrite: ["~/"]` + `allowWrite: [workspace]` pair leaves the workspace
- *  unwritable, so the write halves are built the other way around:
+ *  **The read half is the floor this change actually delivers**, on both
+ *  platforms and for both profiles: `allowRead` takes precedence over
+ *  `denyRead` (confirmed by running the CLI), so "deny the home tree, re-allow
+ *  the workspace" expresses it directly and a workspace-external read becomes
+ *  an OS refusal — ADR 0033 line 11's whole point.
  *
- *  - work: no `denyWrite` at all. The sandbox's own default already confines
- *    writes to the session's cwd — `/tmp` and the rest of the home tree are
- *    refused without tidepool naming them.
- *  - review: `denyWrite: [workspace]` on top of that default, which is what
- *    actually makes the session read-only. (ADR 0033 originally recorded this
- *    as `allowWrite: []`; that shape does not deny workspace writes — the
- *    ADR's mechanism sentence was corrected to match the measurement.) */
+ *  **The write half deliberately does not use `denyWrite`.** Two measurements,
+ *  in order:
+ *
+ *  1. `allowWrite` does *not* take precedence over `denyWrite` (macOS 2.1.220),
+ *     so the natural "deny `~/`, re-allow the workspace" shape leaves the
+ *     workspace unwritable. It isn't needed anyway — the sandbox's own default
+ *     already confines writes to the session cwd, refusing `/tmp` and the rest
+ *     of the home tree without tidepool naming anything.
+ *  2. `denyWrite: [workspace]` — the shape that *would* have made a review
+ *     session read-only at the OS layer — cannot work on the Linux (bwrap)
+ *     backend at all (confirmed on the production Pi, 2.1.207). bwrap has to
+ *     create mount points inside the project for the CLI's own project-relative
+ *     protected paths (`.gitconfig`, `.git/config.lock`, …), which a read-only
+ *     workspace makes impossible: the sandbox never starts and *every* command
+ *     in the session dies with `bwrap: Can't create file at
+ *     <workspace>/.gitconfig: Read-only file system`. That is the backend's
+ *     architecture, not a version bug.
+ *
+ *  So review carries `allowWrite: []` and no `denyWrite`; its write floor stays
+ *  ADR 0013 追記 / issue #59's tool-layer deny plus the slot-release tree rule
+ *  —「書けないが覗ける、覗けば残る」— and the CLI's own default project
+ *  protections still refuse `.git/config`, `.git/hooks` and friends. A
+ *  macOS-only `denyWrite` was rejected on ADR 0033 line 22's dev/prod parity:
+ *  production must never be the weaker side, and a rule that runs only on the
+ *  dev machine is exactly that. */
 export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettings {
   const { taskType, workspacePath, permittedSkills } = input;
   const readOnly = taskType === "review";
@@ -127,10 +156,14 @@ export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettin
     sandbox: {
       enabled: true,
       allowUnsandboxedCommands: false,
+      failIfUnavailable: true,
       filesystem: {
         denyRead: ["~/"],
-        allowRead: [workspacePath, ...TOOLCHAIN_READ, ...skillReadPaths(permittedSkills, workspacePath)],
-        ...(readOnly ? { denyWrite: [workspacePath] } : {}),
+        allowRead: [
+          workspacePath,
+          ...TOOLCHAIN_READ,
+          ...skillReadPaths(permittedSkills, workspacePath),
+        ],
         allowWrite: readOnly ? [] : [workspacePath],
       },
     },

@@ -619,24 +619,25 @@ describe("ClaudeCodeWorker", () => {
     const sandbox = sandboxSettings(calls[0]!.args, logDir);
     expect(sandbox.enabled).toBe(true);
     expect(sandbox.allowUnsandboxedCommands).toBe(false);
+    // 起動できなかった場合の fail-open ハッチも閉じる(ベンダー既定は「警告して
+    // 裸で走る」— ADR 0033 が唯一拒む状態)
+    expect(sandbox.failIfUnavailable).toBe(true);
     expect(sandbox.filesystem.denyRead).toEqual(["~/"]);
     expect(sandbox.filesystem.allowRead).toContain("/home/pi/work/tidepool");
   });
 
-  it("review タスクは書き込みを塞いだ profile で走る — read-only は行為の性質なので assignee によらない(ADR 0013 / 0033)", async () => {
+  it("review タスクは allowWrite が空の profile で走る — profile は行為の性質(task.type)だけで決まり assignee によらない(ADR 0013)", async () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx-review", null, "deckhand", "review");
-    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.denyWrite).toEqual([
-      "/home/pi/work/tidepool",
-    ]);
+    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([]);
   });
 
   it("work タスクは workspace 内書き込みを許す profile で走る", async () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx-work", null, "deckhand", "work");
-    const { filesystem } = sandboxSettings(calls[0]!.args, logDir);
-    expect(filesystem.allowWrite).toEqual(["/home/pi/work/tidepool"]);
-    expect(filesystem.denyWrite).toBeUndefined();
+    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([
+      "/home/pi/work/tidepool",
+    ]);
   });
 
   it("有限の許可リストの agent は、許可された skill のディレクトリだけが allowRead に載る(拒否 skill のものは載らない・ADR 0033)", async () => {

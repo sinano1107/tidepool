@@ -28,25 +28,41 @@ describe("buildSandboxSettings", () => {
     });
   });
 
-  it("review プロファイル: workspace への書き込みを denyWrite で塞ぐ(allowWrite を空にするだけでは cwd 既定で書けてしまう)", () => {
+  it("review プロファイル: allowWrite は空(ただし OS 強制の書き込み拒否ではない — 下のコメント参照)", () => {
     const { filesystem } = buildSandboxSettings({
       taskType: "review",
       workspacePath: "/home/pi/work/tidepool",
       permittedSkills: "all",
     }).sandbox;
-    expect(filesystem.denyWrite).toEqual(["/home/pi/work/tidepool"]);
     expect(filesystem.allowWrite).toEqual([]);
     // 読みは review でも workspace に開く(「書けないが読める」— ADR 0013)
     expect(filesystem.allowRead).toContain("/home/pi/work/tidepool");
   });
 
-  it("床は task.type だけで決まる: work は denyWrite を持たない(サンドボックス既定が cwd 外を既に塞ぐ)", () => {
-    const { filesystem } = buildSandboxSettings({
-      taskType: "work",
-      workspacePath: "/home/pi/work/tidepool",
-      permittedSkills: "all",
-    }).sandbox;
-    expect(filesystem.denyWrite).toBeUndefined();
+  // 意図的に「review は workspace に書けない」を主張しない。sandbox 既定は cwd を
+  // 書き込み可のままにするので、これは allowWrite だけでは成立しない。それを成立
+  // させる denyWrite は Linux(bwrap)backend でサンドボックス自体を起動不能に
+  // するため採らなかった(ADR 0033 の追記 / buildSandboxSettings のコメント)。
+  // review の書き込み床は issue #59 のツール層 deny のままである。
+  it("どちらのプロファイルも denyWrite を持たない — 書き込み床はツール層(#59)にある", () => {
+    for (const taskType of ["work", "review"] as const) {
+      const { filesystem } = buildSandboxSettings({
+        taskType,
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      }).sandbox;
+      expect(filesystem).not.toHaveProperty("denyWrite");
+    }
+  });
+
+  it("サンドボックスが起動できなかったときも裸で走らせない(failIfUnavailable — ベンダー既定は fail-open)", () => {
+    expect(
+      buildSandboxSettings({
+        taskType: "work",
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      }).sandbox.failIfUnavailable,
+    ).toBe(true);
   });
 });
 
