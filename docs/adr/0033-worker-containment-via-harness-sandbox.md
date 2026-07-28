@@ -16,8 +16,24 @@ issue #60 のグリリング(2026-07-28)で決定。ADR 0013 追記が post-v1 �
 
 - 共通: `denyRead: ["~/"]`、`allowRead: [workspace.path, 許可された skill のディレクトリ…]`、`allowUnsandboxedCommands: false`(サンドボックス内で失敗したコマンドを裸で自動再実行するベンダー既定の fail-open ハッチを閉じる)
 - skill の再許可は**ホスト skill ルート全体ではなく、agent の skill allowlist に載る skill のディレクトリだけ**を spawn 時に組む。ルート全体を開くと、allowlist で拒否された skill の本文が `cat` で読めて手動でなぞれる — 「許可リストは入口を開けておくかどうかを決める」(issue #132)の意味論を Bash が迂回する。allowlist が運ぶのは skill 名でありパスではない — 名前 → パスの写像・サニタイズ・「skill ルート配下限定」の不変条件はコード側が持ち、registry をどう書いても到達面は skill ルートの外に出られない
-- review: `allowWrite: []`(セッション一時領域のみ)。issue #59 の `--disallowedTools` パターン列挙は早期に明示的に断る UX として残し、列挙漏れ(`dd`、リダイレクト等)の最後の砦が OS になる
-- work: `allowWrite: [workspace.path]`(+一時領域)
+- skill 再許可の唯一の例外は `skills: ["*"]` の agent — 拒否される skill が存在しないので、この場合だけ skill ルート(workspace / user / plugin キャッシュ)をまとめて開く。allowlist が無いところに迂回路は作れない
+- review: `allowWrite: []`。issue #59 の `--disallowedTools` パターン列挙は早期に明示的に断る UX として残る
+- work: `allowWrite: [workspace.path]`
+- 共通: `failIfUnavailable: true`(サンドボックスが**起動できなかった**ときの fail-open ハッチ。`allowUnsandboxedCommands` とは別経路 — 前者は「サンドボックス内で失敗したコマンドの裸での再実行」、これは「サンドボックスがそもそも立たなかったセッション」。ベンダー既定は false = 警告して裸で走る)
+
+**追記(#60 実装時、実機で測り直した結果)。この決定が実際に届けるのは読みの床であり、review の書き込み床は OS には降りない。**
+
+読み側は設計どおり成立する。CLI 実挙動(macOS 2.1.220 / Pi 2.1.207)で `allowRead` は `denyRead` に**勝つ**ので、「`~/` を deny、workspace と許可 skill を再許可」がそのまま床になる。
+
+書き側は2つの測定で形が変わった。(1) `allowWrite` は `denyWrite` に**勝たない** — `denyWrite: ["~/"]` + `allowWrite: [workspace.path]` は workspace すら書けなくなる。もっともサンドボックスの既定が既に cwd 外への書き込みを拒否する(`/tmp` も home 配下も拒否)ので、work にこの組は不要である。(2) review を read-only にするはずだった `denyWrite: [workspace.path]` は、**Linux(bwrap)backend では成立しない**。bwrap は CLI 自身の project 相対の保護パス(`.gitconfig`、`.git/config.lock` 等)のマウントポイントを project の中に作る必要があり、workspace が read-only だとそれができずサンドボックスが起動しない — セッションの全コマンドが `bwrap: Can't create file at <workspace>/.gitconfig: Read-only file system` で死ぬ(本番 Pi で確認)。backend のアーキテクチャであってバージョンの不具合ではない。
+
+macOS だけ `denyWrite` を効かせる案は採らない — 上の「片方だけ裸だと dev/prod の挙動乖離が残る」の裏返しで、**本番が弱い側になる**形はさらに悪い。したがって review の書き込み床は ADR 0013 追記(issue #59)のツール層 deny + slot-release tree rule のまま —「書けないが覗ける、覗けば残る」— に留まる。ただし CLI 既定の project 保護は `.git/config`・`.git/hooks` 等を依然拒否するので、残る隙間は「作業ツリーのファイルを書き換えられる」に狭まっている。
+
+ツールチェーンの動作基盤は封じる対象ではない(上記「守る資産の定義」)という線は、`allowRead` に `~/.gitconfig` と `~/.config/git` を置くことで具体化する — `denyRead: ["~/"]` だけでは `git` が `fatal: unable to access '~/.gitconfig': Operation not permitted` で一切動かない。credential ではなく config であり、worker は GitHub credential をそもそも持たない(ADR 0024)。`~/.npm` は書かない — CLI が自前でマスク済み home に bind するため(サンドボックス内の `ls -a $HOME` は `.claude`・`.gitconfig`・`.npm` を見せる)、名指しは露出を増やすだけで何も買わない。
+
+床を workspace 側から広げられる経路が1つあり、盤面側のガードで塞いだ。CLI は per-task の `--settings` とは別に **workspace 自身の `.claude/settings.json` の `sandbox` ブロックも読んで merge する**(実測 2.1.220: `enabled: false` は `--settings` が勝つが、`filesystem.allowRead` はマージされて効く。`--setting-sources user` でも `--setting-sources ""` でも止まらない)。work セッションは自分の checkout に書けるので、放置すると「セッション N で床を広げ、N+1 で抜ける」2セッション経路になる — しかも slot-release の tree rule がその設定ファイルを親切にコミットしてしまう。したがって spawn 時に checkout の `.claude/settings.json` / `settings.local.json` を検査し、`sandbox` ブロックを持つ workspace は quarantine して spawn しない。これは床そのものではなく床の**ガード**であり、床は依然コード定数である(ADR 0013)。パースできない設定ファイルは fail-closed 側に倒す — CLI の reader がこちらの `JSON.parse` より寛容な可能性があり、「判定できなかった」が「問題なし」と読まれてはならない。
+
+拒否の見え方は platform で異なる。macOS(Seatbelt)は `Operation not permitted`、Linux(bwrap)は denyRead を tmpfs の被せで実装するため `No such file or directory` になる。e2e スモークはどちらも「拒否」として扱う。
 
 **fail-closed**: サンドボックスが成立しない環境(bubblewrap 不在、AppArmor 干渉等)では worker を裸で走らせない。起動時 + pickup 時の能力検査で不成立を検出したら agent タスクの pickup を停止し、Tidepool 名義の確認型 question を立てる(既存 quarantine と同じ検証つき解除 — 回答時に能力検査を再実行してから受理)。「CLI が設定を黙って無視する」将来リスクへは、デプロイ時の一度きり e2e スモーク(canary 読み取りが OS 拒否されることの確認)を充て、CLI 更新時に再実行する。macOS(開発機)と Pi(本番)の両方で常時有効 — 片方だけ裸だと dev/prod の挙動乖離がテストされないまま残る。
 

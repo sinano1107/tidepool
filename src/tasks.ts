@@ -110,6 +110,13 @@ export interface Task {
    *  agent-name generalization of the workspace field above. Never set via
    *  MCP or the JSON API. */
   question_quarantine_agent: string | null;
+  /** System-internal only (issue #60 / ADR 0033): 1 on the Confirmation
+   *  question standing in for an unusable worker sandbox on this host, set
+   *  only by quarantineSandbox. Unlike the two fields above it names no
+   *  resource — the sandbox belongs to the host, not to a workspace or an
+   *  agent — so pickup stops board-wide while it stands. Never set via MCP or
+   *  the JSON API. */
+  question_quarantine_sandbox: number | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to, or null for an ordinary task.
    *  `workspace` doubles as the repo half of the reference for such a task. */
@@ -270,6 +277,10 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  quarantine Confirmation question stands in for. Never set via MCP or
    *  the JSON API — only quarantineAgent sets this. */
   quarantine_agent?: string;
+  /** System-internal only (issue #60 / ADR 0033): marks the Confirmation
+   *  question that stands in for an unusable worker sandbox. Never set via
+   *  MCP or the JSON API — only quarantineSandbox sets this. */
+  quarantine_sandbox?: boolean;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -309,7 +320,11 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     throw new DomainError("a question carries 1 to 4 items");
   }
   const minOptions =
-    input.quarantine_workspace !== undefined || input.quarantine_agent !== undefined ? 1 : 2;
+    input.quarantine_workspace !== undefined ||
+    input.quarantine_agent !== undefined ||
+    input.quarantine_sandbox !== undefined
+      ? 1
+      : 2;
   for (const item of items) {
     if (!item.title.trim()) throw new DomainError("a question item carries a title");
     if (item.options.length < minOptions || item.options.length > 4) {
@@ -520,6 +535,7 @@ export function registerTask(
     question_pending_pr_promotion_task_id: input.pending_pr_promotion_task_id ?? null,
     question_quarantine_workspace: input.quarantine_workspace ?? null,
     question_quarantine_agent: input.quarantine_agent ?? null,
+    question_quarantine_sandbox: input.quarantine_sandbox ? 1 : null,
     github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
   };
@@ -529,12 +545,12 @@ export function registerTask(
          risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, github_issue_number, created_at)
+         question_quarantine_agent, question_quarantine_sandbox, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @github_issue_number, @created_at)`,
+         @question_quarantine_agent, @question_quarantine_sandbox, @github_issue_number, @created_at)`,
     ).run({
       ...task,
       // the stored row keeps title/purpose/completion_criteria genuinely
@@ -1099,6 +1115,22 @@ export function answerQuestion(
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
         payload: { kind: "agent_reinstated", agent: agentName },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
+
+    // issue #60 / ADR 0033: the host sandbox gate. There is no needs_human row
+    // to clear — the gate is the live capability check plus this question's own
+    // presence, so answering *is* the clearance (the caller has already re-run
+    // the check and refused the answer if it still fails, same posture as the
+    // tree-clean verification above).
+    if (question.question_quarantine_sandbox !== null) {
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        payload: { kind: "sandbox_reinstated" },
         at: now,
       });
       pickupResumed = true;

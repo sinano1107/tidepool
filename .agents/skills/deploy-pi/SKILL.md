@@ -62,6 +62,65 @@ Registers a real `work` task, forces immediate pickup (task registration alone d
 
 The smoke-test task can't be deleted afterward (`events` table is append-only by DB trigger — intentional, not a bug). If it clutters the board, rename its title with a prefix instead of trying to delete it — see troubleshooting.md.
 
+### Worker sandbox e2e smoke (re-run after every `claude` CLI update)
+
+Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`. The CLI **silently ignores a settings file that fails validation under `-p`** (its own `--help` says so), so a CLI update can quietly turn the containment off while every health check still passes. Nothing in the automated suite can catch that — it's an OS-enforcement fact, not a board fact (ADR 0027). Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
+
+Prerequisites: `bubblewrap` + `socat` installed and actually working — see [references/first-time-setup.md](references/first-time-setup.md) §4b.
+
+```bash
+PI=masaki@100.78.52.97
+# 1. a canary outside the workspace, a throwaway workspace, and two host skills
+#    (one the agent's allowlist will permit, one it won't)
+ssh $PI 'mkdir -p ~/sandbox-smoke/ws ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied
+echo CANARY > ~/sandbox-smoke/canary.txt
+echo inside > ~/sandbox-smoke/ws/inside.txt
+echo ALLOWED-AUX > ~/.claude/skills/tp-smoke-allowed/aux.txt
+echo DENIED-AUX  > ~/.claude/skills/tp-smoke-denied/aux.txt'
+# 2. emit BOTH profiles from the DEPLOYED code — never hand-write them; the
+#    point is to test the JSON the board actually produces
+ssh $PI 'sudo tee /opt/tidepool/scripts/_tmp-emit.ts >/dev/null <<TS
+import { buildSandboxSettings } from "../src/sandbox.js";
+const [taskType] = process.argv.slice(2);
+console.log(JSON.stringify(buildSandboxSettings({ taskType: taskType as any, workspacePath: "/home/masaki/sandbox-smoke/ws", permittedSkills: ["tp-smoke-allowed"] })));
+TS
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts work   > ~/sandbox-smoke/work.json
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts review > ~/sandbox-smoke/review.json
+sudo rm -f /opt/tidepool/scripts/_tmp-emit.ts'
+# 3a. work profile: outside read denied, inside read+write allowed, allowed
+#     skill's aux readable, denied skill's not
+ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt" --permission-mode auto --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 14 --max-budget-usd 0.5 < /dev/null'
+# 3b. review profile: the outside-read half of the same (its write half is NOT
+#     an OS floor — see ADR 0033's 追記)
+ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash and report EACH exit code and output verbatim: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) cat ./inside.txt" --permission-mode auto --settings ~/sandbox-smoke/review.json --model sonnet --effort low --max-turns 10 --max-budget-usd 0.4 < /dev/null'
+# 4. clean up — the canary and the probe skills must not outlive the check
+ssh $PI 'rm -rf ~/sandbox-smoke ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied'
+```
+
+**PASS is judged on the error string, not on "it failed."** ADR 0033 fact 1: headless `auto` already refuses cwd-external reads at the *permission* layer, so a plain refusal proves nothing — it is exactly what a session with the sandbox silently switched off looks like. A pass requires the **OS**'s own refusal:
+
+- macOS (Seatbelt): `Operation not permitted`
+- Linux (bwrap): `No such file or directory` — `denyRead` is implemented as a tmpfs overlay, so the path is masked rather than refused (`そのようなファイルやディレクトリはありません` under a Japanese locale)
+
+| check | expected |
+|---|---|
+| 3a(1), 3b(1) canary | denied, **with the OS string above** |
+| 3a(2) workspace write + read | `w` |
+| 3b(2) workspace read | `inside` |
+| 3a(3) allowed skill's aux | `ALLOWED-AUX` |
+| 3a(4) denied skill's aux | denied, with the OS string |
+
+If a canary read *succeeds*, or fails with a harness-worded permission message instead of the OS string, the sandbox is off — stop and treat it as a production incident, not a smoke failure.
+
+The board's own fail-closed half needs no CLI session; drive it by breaking the dependency (this halts pickup board-wide while it's broken, so restore promptly):
+
+```bash
+ssh $PI 'sudo mv /usr/bin/bwrap /usr/bin/bwrap.disabled && sudo systemctl restart tidepool.service'
+# expect: a standing question "worker sandbox is unusable — pickup is stopped" on the board
+ssh $PI 'sudo mv /usr/bin/bwrap.disabled /usr/bin/bwrap'
+# then answer the question in the WebUI — the board re-runs the check before accepting it
+```
+
 For changes that touch the **GitHub-facing** path (machine-user identity, PR creation, merge, commit authorship — issues #50/#53 territory), the sandbox smoke test isn't enough: see [references/board-e2e-test.md](references/board-e2e-test.md) for the full task → PR → merge E2E against the real `tidepool-registry` repo, including the identity assertions and the mandatory cleanup.
 
 ## First-time setup / new Pi

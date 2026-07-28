@@ -71,6 +71,13 @@ const TASKS_TABLE_DDL = `
       -- quarantineAgent, the agent-name generalization of the workspace
       -- quarantine above. Never set via MCP or the JSON API.
       question_quarantine_agent TEXT,
+      -- system-internal only (issue #60 / ADR 0033): 1 on the single
+      -- Confirmation question that stands in for the host's worker sandbox
+      -- being unusable. Unlike the workspace/agent quarantines above there is
+      -- no resource *name* to key on — the sandbox is a property of the host
+      -- the board runs on, so the marker is a flag. Set only by
+      -- quarantineSandbox; never via MCP or the JSON API.
+      question_quarantine_sandbox INTEGER,
       -- issue-backed task reference (issue #49, ADR 0016): the GitHub issue
       -- number this task is a live reference to, or null for an ordinary
       -- task. workspace (already above) doubles as the repo half of the
@@ -340,7 +347,12 @@ export function openDb(path: string): Db {
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }
-  for (const col of ["pr_number", "question_pending_merge_pr", "github_issue_number"]) {
+  for (const col of [
+    "pr_number",
+    "question_pending_merge_pr",
+    "github_issue_number",
+    "question_quarantine_sandbox",
+  ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
   }
   // issue #49 / ADR 0016: title/purpose/completion_criteria's NOT NULL needs

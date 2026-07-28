@@ -51,6 +51,7 @@ function makeTask(
     question_pending_pr_promotion_task_id: null,
     question_quarantine_workspace: null,
     question_quarantine_agent: null,
+    question_quarantine_sandbox: null,
     github_issue_number: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
@@ -600,6 +601,103 @@ describe("ClaudeCodeWorker", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  // issue #60 / ADR 0033: 全 worker セッションはハーネス内蔵サンドボックスの
+  // settings を per-task ファイルで受け取る(--mcp-config と同型)。ここは
+  // 「配線」の seam — profile の中身そのものは sandbox-settings.test.ts。
+  const sandboxSettings = (args: string[], logDir: string) => {
+    const path = args[args.indexOf("--settings") + 1]!;
+    expect(isAbsolute(path)).toBe(true);
+    expect(path.startsWith(logDir)).toBe(true);
+    return JSON.parse(readFileSync(path, "utf8")).sandbox;
+  };
+
+  it("spawn ごとに sandbox settings を per-task ファイルで書き、--settings で注入する(ADR 0033)", async () => {
+    const { start, calls, logDir } = await makeWorker();
+    start("task-sbx");
+    const sandbox = sandboxSettings(calls[0]!.args, logDir);
+    expect(sandbox.enabled).toBe(true);
+    expect(sandbox.allowUnsandboxedCommands).toBe(false);
+    // 起動できなかった場合の fail-open ハッチも閉じる(ベンダー既定は「警告して
+    // 裸で走る」— ADR 0033 が唯一拒む状態)
+    expect(sandbox.failIfUnavailable).toBe(true);
+    expect(sandbox.filesystem.denyRead).toEqual(["~/"]);
+    expect(sandbox.filesystem.allowRead).toContain("/home/pi/work/tidepool");
+  });
+
+  it("review タスクは allowWrite が空の profile で走る — profile は行為の性質(task.type)だけで決まり assignee によらない(ADR 0013)", async () => {
+    const { start, calls, logDir } = await makeWorker();
+    start("task-sbx-review", null, "deckhand", "review");
+    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([]);
+  });
+
+  it("work タスクは workspace 内書き込みを許す profile で走る", async () => {
+    const { start, calls, logDir } = await makeWorker();
+    start("task-sbx-work", null, "deckhand", "work");
+    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([
+      "/home/pi/work/tidepool",
+    ]);
+  });
+
+  it("有限の許可リストの agent は、許可された skill のディレクトリだけが allowRead に載る(拒否 skill のものは載らない・ADR 0033)", async () => {
+    const rec = recordingEnumerator(["code-review", "tdd", "grilling"]);
+    const { start, calls, logDir } = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start("task-sbx-skills");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
+    expect(allowRead).toContain("~/.claude/skills/code-review");
+    // ホスト側の skill ルートは開かない — 開けば拒否 skill の本文が cat で読める
+    expect(allowRead).not.toContain("~/.claude/skills");
+    expect(allowRead).not.toContain("~/.claude/plugins");
+    expect(allowRead).not.toContain("~/.claude/skills/tdd");
+    expect(allowRead).not.toContain("~/.claude/skills/grilling");
+    // 注: workspace 側の同名エントリも配列には載らないが、そちらは allowRead が
+    // workspace そのものを再帰的に開いている以上どのみち読める。この per-skill
+    // 封じ込めが実効を持つのはホスト側だけ(workspace の中身は定義上、封じ込め
+    // 境界の内側)。
+  });
+
+  it("workspace が自前の .claude/settings.json で sandbox を再定義していたら spawn せず workspace を quarantine する(issue #60: 床を自分で広げてから抜ける2セッション経路を塞ぐ)", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude"), { recursive: true });
+    await writeFile(
+      join(wsDir, ".claude", "settings.json"),
+      JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } } }),
+    );
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+    });
+    start("task-sbx-override");
+    expect(calls).toEqual([]);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+  });
+
+  it("sandbox を含まない通常の project settings(hooks 等)は spawn を止めない", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude"), { recursive: true });
+    await writeFile(
+      join(wsDir, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [] } }),
+    );
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+    });
+    start("task-sbx-plain-settings");
+    expect(calls).toHaveLength(1);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+  });
+
+  it("skills が空リストの agent は skill ディレクトリを一切開かない", async () => {
+    const { start, calls, logDir } = await makeWorker({
+      "agents/deckhand.md": skilledMd("  []\n"),
+    });
+    start("task-sbx-noskills");
+    const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
+    expect(allowRead.some((p: string) => p.includes(".claude/skills"))).toBe(false);
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {

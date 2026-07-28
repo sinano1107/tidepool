@@ -3,6 +3,7 @@ import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
+import { type SandboxCapability, sandboxPickupBlocked } from "./sandbox.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
@@ -111,9 +112,24 @@ export function startScheduler(deps: {
    *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
+  /** ADR 0033 の fail-closed: このホストで worker サンドボックスが実際に使えるか。
+   *  pickup のたびに読み直す(依存の消滅・AppArmor の変更を次の poll で拾う)。
+   *  Absent → ゲートそのものを持たない盤面 — 実 CLI を持たないテストの既定形で、
+   *  本番の配線(server.ts)は常に実検査を渡す。 */
+  sandboxCapability?: () => SandboxCapability;
 }): Scheduler {
-  const { db, clock, slot, worker, workspace, resolveWorkspace, auditorName, github, fableAgents } =
-    deps;
+  const {
+    db,
+    clock,
+    slot,
+    worker,
+    workspace,
+    resolveWorkspace,
+    auditorName,
+    github,
+    fableAgents,
+    sandboxCapability,
+  } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimer(clock, pollNow);
 
@@ -125,6 +141,10 @@ export function startScheduler(deps: {
     // the human's own explicit pause (issue #34): orthogonal to triage — a
     // paused board still gates pickup after a triage commit
     if (isPaused(db)) return true;
+    // ADR 0033: a worker that cannot be sandboxed is not run at all. Unlike
+    // the workspace/agent quarantines below this halts the whole board — the
+    // sandbox belongs to the host, so no narrower resource can be halted.
+    if (sandboxCapability && sandboxPickupBlocked(db, sandboxCapability, clock.now())) return true;
     // the gate is keyed on each candidate's own execution workspace (issue
     // #26 / ADR 0009) and assignee (ADR 0012 / issue #36), skipped in SQL by
     // nextSlotTask itself — a quarantined workspace or agent halts only its

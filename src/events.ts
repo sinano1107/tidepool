@@ -78,6 +78,11 @@ export type EventPayload =
   // above — needs_human cleared for this agent name, resuming pickup for tasks
   // assigned to it
   | { kind: "agent_reinstated"; agent: string }
+  // issue #60 / ADR 0033: the host-wide twin of the two above — the worker
+  // sandbox's capability check was re-run at answer time and passed, so pickup
+  // resumes board-wide. It names no resource because the sandbox belongs to the
+  // host the board runs on, not to a workspace or an agent.
+  | { kind: "sandbox_reinstated" }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill); the event itself is

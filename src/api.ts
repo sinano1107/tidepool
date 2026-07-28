@@ -31,6 +31,7 @@ import {
   type RegistryCandidates,
 } from "./registry.js";
 import { RegistryCloneBusyError } from "./registry-write.js";
+import { openSandboxQuestion, type SandboxCapability } from "./sandbox.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   answerQuestion,
@@ -455,6 +456,11 @@ export interface ApiRouterDeps {
    *  that second half can ever clear an agent quarantine (no registry
    *  configured at all). */
   agentRegistered?: (name: string) => boolean;
+  /** ADR 0033 の fail-closed ゲート、回答側の半分: sandbox Confirmation question
+   *  の回答は鵜呑みにせず、受理の直前にホストの能力検査を走らせ直す(workspace
+   *  quarantine が tree の清潔さを実際に確かめるのと同じ「検証つき解除」)。
+   *  Absent → そのゲートを持たない盤面。 */
+  sandboxCapability?: () => SandboxCapability;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -519,6 +525,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     draftClient,
     defaultAgentName,
     agentRegistered,
+    sandboxCapability,
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
@@ -1289,6 +1296,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       }
+      // ADR 0033 / issue #60 の host-wide 版: 資源名を持たないぶん検証は素直で、
+      // 「今このホストでサンドボックスが実際に動くか」を回答の受理直前にもう一度
+      // 測るだけ。まだ壊れていれば回答ごと拒否し、question は開いたまま残る。
+      if (task.question_quarantine_sandbox !== null && sandboxCapability) {
+        const capability = sandboxCapability();
+        if (!capability.available) {
+          throw new DomainError(`the worker sandbox is still unusable: ${capability.reason}`);
+        }
+      }
       // an answer during an open triage session is activity (defers the
       // auto-commit) and stages the unblock instead of moving the queue
       const session = triageActivity(db, clock.now());
@@ -1759,14 +1775,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // the queue view (#10): unlike the board, a todo task pickup can't reach
-  // right now — Swell throttle or the human's own Pause (issue #34), the
-  // same board-wide "nothing starts" shape — shows here as skipped
+  // right now — Swell throttle, the human's own Pause (issue #34), or a
+  // standing sandbox halt (issue #60 / ADR 0033), the same board-wide
+  // "nothing starts" shape — shows here as skipped. The sandbox half reads the
+  // standing question rather than re-running the capability check: the gate
+  // always registers the question before it blocks, so the question's presence
+  // *is* the halt, and this stays a plain SQL read on a polled endpoint.
   router.get("/queue", async (_req, res) => {
     res.json(
       await presentLive(
         listQueue(
           db,
-          isPickupBlocked(db, clock.now()) || isPaused(db),
+          isPickupBlocked(db, clock.now()) || isPaused(db) || openSandboxQuestion(db) !== undefined,
           workspace?.name,
           defaultAgentName,
           auditorName,

@@ -9,6 +9,7 @@ import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "../src/registry.js";
+import type { SandboxCapability } from "../src/sandbox.js";
 import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
 import type { TranslationClient } from "../src/translate.js";
@@ -101,6 +102,10 @@ export interface BootOptions {
    *  by the scheduler's fable line and the queue view. Absent → no fable
    *  model resolution, so the fable line never skips anything. */
   fableAgents?: () => string[];
+  /** ADR 0033 の fail-closed ゲート(issue #60)。Absent → ゲートを持たない盤面
+   *  (既定): テストの spawn は ScriptedWorker で、封じ込める実プロセスが無い。
+   *  ゲートそのものを駆動するテストだけがこれを渡す。 */
+  sandboxCapability?: () => SandboxCapability;
 }
 
 /** The server wants a per-request candidates provider; a test may pass one
@@ -149,6 +154,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
+    sandboxCapability: options.sandboxCapability,
   });
   let stopped = false;
   const stopServer = async () => {
