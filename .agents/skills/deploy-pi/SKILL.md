@@ -117,13 +117,17 @@ ssh $PI 'rm -rf ~/sandbox-smoke ~/.claude/skills/tp-smoke-allowed ~/.claude/skil
 
 | check | expected |
 |---|---|
-| 3a(1), 3b(1) canary | denied, **with the OS string above** |
+| 3a(1) canary | denied, **with the OS string above** |
 | 3a(2) workspace write + read | `w` |
 | 3b(2) workspace read | `inside` |
 | 3a(3) allowed skill's aux | `ALLOWED-AUX` |
 | 3a(4) denied skill's aux | denied, with the OS string |
 
 If a canary read *succeeds*, or fails with a harness-worded permission message instead of the OS string, the sandbox is off — stop and treat it as a production incident, not a smoke failure.
+
+**The OS read floor is 3a's job alone, and deliberately so.** 3b's canary row is *not* on this table: under `--permission-mode manual` the harness refuses cwd-external file access **before the OS ever sees it**, so a review session cannot produce the OS string at all. Measured on the Pi (2026-07-29): `cat /home/masaki/sandbox-smoke/canary.txt` came back `cat in '…' was blocked. For security, Claude Code may only concatenate files from the allowed working directories for this session: '…/ws'` — harness wording, sandbox fully on. Even a command the allowlist explicitly opens does not get through: `wc -l <canary>` with `Bash(wc*)` allowed was refused the same way (`wc in '…' was blocked…`). Judging 3b(1) by the OS-string rule above would raise a false production incident.
+
+Nothing is lost by this: the two profiles carry **identical** `denyRead`/`allowRead` (`src/sandbox.ts` — only `allowWrite` and `autoAllowBashIfSandboxed` differ), so 3a tests the read floor both of them share. What is review-specific is the write floor, and that is exactly what 3b/3c/3d test. Positive evidence that the sandbox really started for the review run is in 3b(3)'s output: `git status --short` lists `.bashrc`, `.gitconfig`, `.mcp.json`, `.zshrc` and friends as untracked inside the workspace — those are bwrap's own mount points, which only exist when the sandbox is up (`failIfUnavailable: true` also means a sandbox that fails to start kills the session outright).
 
 **The manual write floor (ADR 0035) is judged the opposite way** — here the *harness's* wording is the pass, because this floor is the permission layer, not the OS. The reads are what a review session has to keep being able to do; the writes are what it must not.
 
