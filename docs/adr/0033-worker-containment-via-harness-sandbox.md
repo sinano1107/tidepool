@@ -8,8 +8,8 @@ issue #60 のグリリング(2026-07-28)で決定。ADR 0013 追記が post-v1 �
 
 実機実験(2026-07-28、CLI v2.1.220)で確定した事実が設計を規定する:
 
-1. headless auto モードは **cwd 外の読み取りを permission 層で既に塞いでいる**(Read ツールも Bash の `cat` も)。ただしコマンド解析ベースのヒューリスティックで、難読化で抜けうる。サンドボックスの価値は「開いた穴を閉じる」ではなく「ソフトな壁を OS の `Operation not permitted` に格上げする」こと
-2. permission ルールの **deny は allow に常勝**し、workspace は `~/` 配下にあるため `Read(~/**)` の deny は workspace 自身を壊す — permission 層の deny は使わない。Read ツールは既存の cwd 封じ込めに任せ、OS 硬化は Bash sandbox が担う役割分担
+1. headless auto モードは **cwd 外の読み取りを permission 層で既に塞いでいる**(Read ツールも Bash の `cat` も)。ただしコマンド解析ベースのヒューリスティックで、難読化で抜けうる。サンドボックスの価値は「開いた穴を閉じる」ではなく「ソフトな壁を OS の `Operation not permitted` に格上げする」こと。**この観測のうち Read ツールに関する半分は #140 の再グリリング(2026-07-29)で覆った — `--permission-mode auto` の Read は cwd 外の任意の絶対パスを読む(同じファイルを Bash は OS に拒否される)。issue #151 を参照。**
+2. permission ルールの **deny は allow に常勝**し、workspace は `~/` 配下にあるため `Read(~/**)` の deny は workspace 自身を壊す — permission 層の deny は使わない。Read ツールは既存の cwd 封じ込めに任せ、OS 硬化は Bash sandbox が担う役割分担(**この分担は実験1の前提が覆ったことで片肺になった — 任せた先の cwd 封じ込めが work プロファイルには存在しない。issue #151**)
 3. skill 本文の注入はハーネスの仕事でサンドボックスの影響を受けない。skill の補助ファイルは Bash 経由の読みだけが生きており(Read は現状でも cwd 外不可)、`allowRead` の再許可は OS レベルで機能する
 
 プロファイルの形(コード定数 — ADR 0013 の「床はデータの状態に依存しない」を維持):
@@ -54,7 +54,7 @@ macOS だけ `denyWrite` を効かせる案は採らない — 上の「片方�
 
 **上表は #146 の grilling 時、修理前の実測である。以下は実装後の再確認で、いずれも「設定ファイルが黙って捨てられていない」ことの control を同一セッションに同居させて測った** — CLI は `-p` 下で検証に失敗した settings を黙って無視するので、サンドボックス完全不在のセッションも同じく全 green を出し、それだけでは PASS と区別できない。work プロファイル + `auto` では読み取り床 canary が `Operation not permitted`(Seatbelt)を返した上で **152 file / 859 tests 全 green**、review プロファイルを production shape(`manual` + `--allowedTools "Bash(npm test*)"`)で回しても同じく全 green で、書き込み床も無傷だった(`Output redirection … was blocked.`、ファイルは生成されず)。`manual` 下では canary の `cat` がハーネス層で先に拒否されて OS 文字列が出せない(deploy-pi SKILL.md の整理)ため、review 側の control にはスイート実行中の git が吐く `Operation not permitted` を用いた。
 
-本番 Pi(bwrap + socat、CLI **2.1.207**)でも本キーは効く。deploy-pi スモーク 3a の形(branch のコードから emit した work プロファイル settings、デプロイはしない)で `127.0.0.1` の port 0 への listen が成功し(`BIND-OK 44667`)、**同一セッション**の読み取り床 canary は bwrap の tmpfs 被せによる OS 拒否(`そのようなファイルやディレクトリはありません`)を返した — 設定ファイルが黙って捨てられていない(= サンドボックスが本当に立っている)ことの control つきである。キーは 2.1.207 のバイナリにも実在するため、本番の CLI を上げずに測れた。なお Pi で測ったのは「キーを足せば通ること」であって「既定では拒否されること」ではない(既定拒否の測定は上表の macOS のみ)。
+本番 Pi(bwrap + socat、CLI **2.1.207**)でも bind は通るが、**それは本キーの効果ではない**。deploy-pi スモーク 3a の形(branch のコードから emit した work プロファイル settings、デプロイはしない)で `127.0.0.1` の port 0 への listen が成功し(`BIND-OK 44667`)、**同一セッション**の読み取り床 canary は bwrap の tmpfs 被せによる OS 拒否(`そのようなファイルやディレクトリはありません`)を返した — 設定ファイルが黙って捨てられていない(= サンドボックスが本当に立っている)ことの control つきである。当時はこれを「本キーは 2.1.207 でも効く」と読んだが、#140 の実装前実験(2026-07-29)が帰属の誤りを示した: Linux backend は `bwrap --unshare-net` による本物の netns で、sandbox 内 loopback はホストと別世界のため、**キー無しでも bind は既定で成功する**(`BIND-OK 46541`、同じく canary 拒否の control つき)。つまり Pi の測定が示したのは「キーを足しても壊れない」ことだけで、キーが bind を許した証拠ではない。キーの帰属が実測で立っているのは macOS(Seatbelt)側のみ — `allowLocalBinding: true` のときだけ bind 許可の profile 行が入り、無ければ拒否される(上表)。
 
 **原因は読み取り床ではない。** `denyRead: ["~/"]` も `allowRead` もこの失敗には無関係で、`allowRead` への追加は何も直さない。病巣はネットワーク既定であり、`sandbox.network.allowLocalBinding` はインストール済み CLI(2.1.220)に実在するキーで、意味論は上の実測で確認した。
 
