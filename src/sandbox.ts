@@ -54,6 +54,12 @@ export interface SandboxSettings {
      *  is untouched here and stays #140 / ADR 0034's question. */
     network: {
       allowLocalBinding: true;
+      /** The proxy filters on the `CONNECT` host string, not the address it
+       *  resolves to — so a name pattern here does not reach traffic to an
+       *  IP literal or to a name that merely *resolves into* a denied range.
+       *  See `DENIED_TAILNET_DOMAINS` for what tidepool puts in this key and
+       *  why. */
+      deniedDomains: string[];
     };
   };
 }
@@ -82,6 +88,24 @@ const WORKSPACE_SKILL_SUBDIR = ".claude/skills";
  *  denied, so opening the plugin cache wholesale bypasses no allowlist. A
  *  finite allowlist never gets this — see `skillReadPaths`. */
 const PLUGIN_ROOT = "~/.claude/plugins";
+
+/** ADR 0036: floor entry, not the primary mechanism (that's the human-surface
+ *  credential) — but independently justified by #150, where an
+ *  unauthenticated context-vault sits on the same Pi's tailnet. tidepool's
+ *  side of the auth story doesn't close that hole; this deny does.
+ *
+ *  Name patterns, not CIDR: `deniedDomains: ["100.64.0.0/10"]` does not block
+ *  a request to a name that resolves into that range (measured 2026-07-29),
+ *  so ADR 0034's "deny the whole CGNAT range" is only expressible as a name
+ *  pattern — `*.ts.net` here.
+ *
+ *  `*.ts.net` alone also measured false (2026-07-29, issue #152): MagicDNS's
+ *  bare short name (`raspberrypi`, no `.ts.net` suffix) reached the proxy's
+ *  `CONNECT` step and got tunneled through (`200 Connection Established`)
+ *  while the fully-qualified name got `403 blocked-by-allowlist`. There's no
+ *  shared suffix across short names to pattern-match on, so the known one is
+ *  enumerated — same posture as `TOOLCHAIN_READ`. */
+const DENIED_TAILNET_DOMAINS = ["*.ts.net", "raspberrypi"];
 
 /** A skill name safe to map into a path: no separator, no `..`, no leading dot.
  *  Plugin-prefixed names (`plugin:skill`) are excluded by the same rule — their
@@ -219,7 +243,9 @@ export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettin
       },
       // ADR 0033 追記 / issue #146: not keyed on the profile — a worker of
       // either type has to be able to run the suite it is judging.
-      network: { allowLocalBinding: true },
+      // ADR 0036 / issue #152: same for the tailnet deny — floor, not the
+      // primary mechanism, but independent of task type.
+      network: { allowLocalBinding: true, deniedDomains: [...DENIED_TAILNET_DOMAINS] },
     },
   };
 }
