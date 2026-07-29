@@ -226,3 +226,30 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
     ).toBeUndefined();
   });
 });
+
+/** ADR 0033 追記(issue #146): サンドボックスのネットワーク既定は loopback への
+ *  **listen** を拒否する。ADR 0033 本文の「ネットワークは現状のまま開放」は bind
+ *  に関して実態と食い違っていた。実測(macOS 2.1.220)では `app.listen(0,
+ *  "127.0.0.1")` が拒否されて `listener.address()` が null を返し、
+ *  `bootTidepool` を呼ぶテストファイルが 93 file 落ちる — このキー1つで 152
+ *  file / 858 tests が全 green になった。
+ *
+ *  ADR 0034 は「worker が自前のサーバーを loopback に立てて叩くのは正当な作業
+ *  (npm test / webui-e2e)」と既に明言しており、これはその線をコード定数にした
+ *  ものである。宛先(人間面)で塞ぐのは #140 / ADR 0034 の領分で、「bind は許すが
+ *  人間ポート宛は塞ぐ」は両立する。 */
+describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146)", () => {
+  // 期待値は独立した literal — ブロックまるごと置くので、キーが増えれば落ちる
+  // (ベンダー既定の意味論に依存する床なので、黙って広がってはならない)。
+  it("どちらのプロファイルも loopback への listen を開ける — サンドボックス下の worker がテストを回せる条件", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect(
+        buildSandboxSettings({
+          taskType,
+          workspacePath: "/home/pi/work/tidepool",
+          permittedSkills: "all",
+        }).sandbox.network,
+      ).toEqual({ allowLocalBinding: true });
+    }
+  });
+});

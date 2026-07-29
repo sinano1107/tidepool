@@ -39,6 +39,20 @@ export interface SandboxSettings {
       allowRead: string[];
       allowWrite: string[];
     };
+    /** ADR 0033 追記 (issue #146). The vendor's network defaults refuse a
+     *  *listen* on loopback, not just outbound traffic — ADR 0033's original
+     *  「ネットワークは現状のまま開放」 was measured false for bind. Without this
+     *  key `app.listen(0, "127.0.0.1")` is refused and `listener.address()`
+     *  returns null, which is 93 of tidepool's own test files (every one that
+     *  boots the server in-process) failing under either profile. Both
+     *  profiles carry it: ADR 0034 already holds that a worker standing up its
+     *  own loopback server and calling it is legitimate work (npm test /
+     *  webui-e2e), and that is not review-specific. Blocking the *destination*
+     *  (the human-facing port) stays #140 / ADR 0034's job — "allow the bind,
+     *  refuse the human port" are compatible. */
+    network: {
+      allowLocalBinding: true;
+    };
   };
 }
 
@@ -201,6 +215,9 @@ export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettin
         ],
         allowWrite: readOnly ? [] : [workspacePath],
       },
+      // ADR 0033 追記 / issue #146: not keyed on the profile — a worker of
+      // either type has to be able to run the suite it is judging.
+      network: { allowLocalBinding: true },
     },
   };
 }

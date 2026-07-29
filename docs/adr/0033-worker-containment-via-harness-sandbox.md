@@ -39,7 +39,26 @@ macOS だけ `denyWrite` を効かせる案は採らない — 上の「片方�
 
 **fail-closed**: サンドボックスが成立しない環境(bubblewrap 不在、AppArmor 干渉等)では worker を裸で走らせない。起動時 + pickup 時の能力検査で不成立を検出したら agent タスクの pickup を停止し、Tidepool 名義の確認型 question を立てる(既存 quarantine と同じ検証つき解除 — 回答時に能力検査を再実行してから受理)。「CLI が設定を黙って無視する」将来リスクへは、デプロイ時の一度きり e2e スモーク(canary 読み取りが OS 拒否されることの確認)を充て、CLI 更新時に再実行する。macOS(開発機)と Pi(本番)の両方で常時有効 — 片方だけ裸だと dev/prod の挙動乖離がテストされないまま残る。
 
-ネットワークはこの決定では触らない(現状のまま開放)。読める範囲が workspace + 許可 skill に閉じた時点で持ち出せる物はほぼ「もともとモデルに渡る内容」に一致し、ドメイン列挙の追従コストと正当タスクの失敗形が勝る。review プロファイルの Bash ネットワーク遮断(read-only + 書き込み不可の下でネットワークが要る正当な作業はほぼ無い)は将来の強化候補。
+ネットワークはこの決定では触らない(現状のまま開放)。読める範囲が workspace + 許可 skill に閉じた時点で持ち出せる物はほぼ「もともとモデルに渡る内容」に一致し、ドメイン列挙の追従コストと正当タスクの失敗形が勝る。review プロファイルの Bash ネットワーク遮断(read-only + 書き込み不可の下でネットワークが要る正当な作業はほぼ無い)は将来の強化候補。**この段落の「現状のまま開放」という前提は bind に関して #146 の実測で覆った — 下の追記を参照。**
+
+**追記(#146、2026-07-29 実測)。ベンダーのネットワーク既定は loopback への `listen` を拒否しており、「現状のまま開放」は bind に関して事実ではなかった。その下ではどちらのプロファイルの worker も in-process サーバーを立てるテストを1本も回せない。**
+
+実測(macOS 2.1.220、本物の tidepool checkout に対する実 CLI + 実スイートの実行結果):
+
+| 実行条件 | 結果 |
+|---|---|
+| review プロファイルの emit でフル `npm test` | 93 file failed / 59 passed。失敗 399 tests のうち **379 件(95%)が単一シグネチャ** `TypeError: Cannot read properties of null (reading 'port')` — `src/server.ts` の `app.listen(0, "127.0.0.1")` が拒否され `listener.address()` が null を返す |
+| 同・単独ファイル実行 | `bootTidepool` を呼ぶファイルは単独でも 100% 再現 — 並列度・負荷は無関係 |
+| **work** プロファイルで boot テスト1本 | 同一シグネチャで失敗。review 固有ではなく **worker 全体**(2プロファイルの settings 差は `allowWrite` と `autoAllowBashIfSandboxed` だけで、ネットワーク要素に差は無い) |
+| review プロファイル + `network: { allowLocalBinding: true }`(1行追加、読み取り床は無変更) | **152 file / 858 tests 全 green** |
+
+**原因は読み取り床ではない。** `denyRead: ["~/"]` も `allowRead` もこの失敗には無関係で、`allowRead` への追加は何も直さない。病巣はネットワーク既定であり、`sandbox.network.allowLocalBinding` はインストール済み CLI(2.1.220)に実在するキーで、意味論は上の実測で確認した。
+
+したがって **両プロファイルに `network: { allowLocalBinding: true }` をコード定数で足す**(床はデータに依存しない — ADR 0013)。プロファイル差をつけない理由は ADR 0034 が既に書いている:「worker が自前のサーバーを loopback に立てて叩くのは正当な作業(npm test / webui-e2e が in-process でサーバーを起動する)」であり、これは review 固有の要件ではない。review にテスト実行を期待することは ADR 0035 の「read-only は行為の性質」の線を壊さない — 任意コード実行を許しても書き込み半径はサンドボックスが workspace 内に閉じ、残余は slot-release tree rule が回収する(ADR 0035「層の分担」)。
+
+**人間面への到達はこの追記で後退しない。** macOS(Seatbelt)にはネットワーク名前空間が存在せず(ADR 0034 が同じ理由で netns 案を落としている)、サンドボックス内の loopback はホストの loopback そのものである。つまり worker の Bash から人間面 `/api` に届くかどうかはサンドボックス導入前と変わらず、`allowLocalBinding` はその状態を新しく作るのではなく維持する。宛先(人間面)で切るのは #140 / ADR 0034 の領分であり、「bind は許すが人間ポート宛は塞ぐ」は両立する — ADR 0034 のフィルタ極性 (ii)(loopback 既定 deny + allowlist)が成立するのは sandbox 内 loopback が別世界のプラットフォームだけで、macOS はそれに当たらないため狭い deny-list(極性 (i))へのフォールバック分岐に入る、という同 ADR 側の判断材料でもある。
+
+CLI 更新でベンダー既定や本キーの意味論が静かに変わるのは検出しないと分からない(設定ファイルの検証失敗は `-p` 下で黙って無視される)。したがって deploy-pi のサンドボックス e2e スモークの **work プロファイル側に bind canary を1本足す** — `network` ブロックは2プロファイル共有なので、`denyRead`/`allowRead` と同じく「共有の床は 3a が測る」という既存の整理にそのまま乗る。
 
 Considered options:
 

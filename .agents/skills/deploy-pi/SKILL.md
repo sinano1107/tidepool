@@ -64,19 +64,28 @@ The smoke-test task can't be deleted afterward (`events` table is append-only by
 
 ### Worker sandbox e2e smoke (re-run after every `claude` CLI update)
 
-Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`; issue #144 / ADR 0035 puts review's *write* floor in the permission layer on top of it (`--permission-mode manual`, plus the `autoAllowBashIfSandboxed: false` that stops the sandbox from waving Bash past that layer). Both are vendor behaviour the board cannot assert from inside: the CLI **silently ignores a settings file that fails validation under `-p`** (its own `--help` says so), and a CLI update can just as quietly change what `manual` refuses or how an MCP verb is named as a permission subject. Every health check would still pass. Nothing in the automated suite can catch either — they're CLI/OS-enforcement facts, not board facts (ADR 0027). Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
+Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`; issue #144 / ADR 0035 puts review's *write* floor in the permission layer on top of it (`--permission-mode manual`, plus the `autoAllowBashIfSandboxed: false` that stops the sandbox from waving Bash past that layer); issue #146 / ADR 0033 追記 re-opens the one thing the vendor's network defaults refuse and every worker needs (`network: { allowLocalBinding: true }` — without it no session can run a suite that boots a server in-process). All three are vendor behaviour the board cannot assert from inside: the CLI **silently ignores a settings file that fails validation under `-p`** (its own `--help` says so), and a CLI update can just as quietly change what `manual` refuses or how an MCP verb is named as a permission subject. Every health check would still pass. Nothing in the automated suite can catch either — they're CLI/OS-enforcement facts, not board facts (ADR 0027). Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
 
 Prerequisites: `bubblewrap` + `socat` installed and actually working — see [references/first-time-setup.md](references/first-time-setup.md) §4b.
 
 ```bash
 PI=masaki@100.78.52.97
-# 1. a canary outside the workspace, a throwaway workspace, and two host skills
-#    (one the agent's allowlist will permit, one it won't)
+# 1. a canary outside the workspace, a throwaway workspace, two host skills
+#    (one the agent's allowlist will permit, one it won't), and the loopback
+#    bind probe. The probe lives INSIDE ws on purpose — at ~/sandbox-smoke/ it
+#    would be OS-refused on *read* by denyRead and misread as a bind failure.
 ssh $PI 'mkdir -p ~/sandbox-smoke/ws ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied
 echo CANARY > ~/sandbox-smoke/canary.txt
 echo inside > ~/sandbox-smoke/ws/inside.txt
 echo ALLOWED-AUX > ~/.claude/skills/tp-smoke-allowed/aux.txt
-echo DENIED-AUX  > ~/.claude/skills/tp-smoke-denied/aux.txt'
+echo DENIED-AUX  > ~/.claude/skills/tp-smoke-denied/aux.txt
+cat > ~/sandbox-smoke/ws/bind-probe.js <<"JS"
+const server = require("net").createServer();
+server.listen(0, "127.0.0.1", () => {
+  console.log("BIND-OK " + server.address().port);
+  server.close();
+});
+JS'
 # 2. emit BOTH profiles from the DEPLOYED code — never hand-write them; the
 #    point is to test the JSON the board actually produces
 ssh $PI 'sudo tee /opt/tidepool/scripts/_tmp-emit.ts >/dev/null <<TS
@@ -88,8 +97,8 @@ cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts work   > ~/sand
 cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts review > ~/sandbox-smoke/review.json
 sudo rm -f /opt/tidepool/scripts/_tmp-emit.ts'
 # 3a. work profile: outside read denied, inside read+write allowed, allowed
-#     skill's aux readable, denied skill's not
-ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt" --permission-mode auto --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 14 --max-budget-usd 0.5 < /dev/null'
+#     skill's aux readable, denied skill's not, and a loopback listen allowed
+ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt (5) node ./bind-probe.js" --permission-mode auto --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 16 --max-budget-usd 0.5 < /dev/null'
 # 3b. review profile: outside-read denied (OS floor), and the manual write floor
 #     (ADR 0035) — run with the SAME --permission-mode and --allowedTools the
 #     board spawns review with, or you are not testing the production shape
@@ -122,12 +131,15 @@ ssh $PI 'rm -rf ~/sandbox-smoke ~/.claude/skills/tp-smoke-allowed ~/.claude/skil
 | 3b(2) workspace read | `inside` |
 | 3a(3) allowed skill's aux | `ALLOWED-AUX` |
 | 3a(4) denied skill's aux | denied, with the OS string |
+| 3a(5) loopback bind | `BIND-OK <port>` |
 
 If a canary read *succeeds*, or fails with a harness-worded permission message instead of the OS string, the sandbox is off — stop and treat it as a production incident, not a smoke failure.
 
+**3a(5) is the loopback bind canary (issue #146 / ADR 0033 追記), and it only means anything because rows (1) and (4) are in the same session.** The vendor's network defaults *refuse* a `listen` on loopback; `network: { allowLocalBinding: true }` in both profiles is what re-opens it, and without it no worker can run tidepool's own suite (93 test files died on `listener.address()` returning null). What this row watches for is a CLI update quietly changing that default or the key's semantics — and the failure it must not be fooled by is the settings file being dropped wholesale, which the CLI does silently when validation fails under `-p`. A `BIND-OK` printed by a session with no sandbox at all looks identical to a pass. The canary rows above are that control: they can only produce the OS string with the sandbox up, so read (5) as a pass **only** alongside (1) and (4) passing. Never split this check into its own session. A failure here reads as node's own errno on stderr (`EPERM` / `EACCES` / `EADDRNOTAVAIL`) and a non-zero exit; treat it as "workers can no longer run tests", not as a containment breach.
+
 **The OS read floor is 3a's job alone, and deliberately so.** 3b's canary row is *not* on this table: under `--permission-mode manual` the harness refuses cwd-external file access **before the OS ever sees it**, so a review session cannot produce the OS string at all. Measured on the Pi (2026-07-29): `cat /home/masaki/sandbox-smoke/canary.txt` came back `cat in '…' was blocked. For security, Claude Code may only concatenate files from the allowed working directories for this session: '…/ws'` — harness wording, sandbox fully on. Even a command the allowlist explicitly opens does not get through: `wc -l <canary>` with `Bash(wc*)` allowed was refused the same way (`wc in '…' was blocked…`). Judging 3b(1) by the OS-string rule above would raise a false production incident.
 
-Nothing is lost by this: the two profiles carry **identical** `denyRead`/`allowRead` (`src/sandbox.ts` — only `allowWrite` and `autoAllowBashIfSandboxed` differ), so 3a tests the read floor both of them share. What is review-specific is the write floor, and that is exactly what 3b/3c/3d test. Positive evidence that the sandbox really started for the review run is in 3b(3)'s output: `git status --short` lists `.bashrc`, `.gitconfig`, `.mcp.json`, `.zshrc` and friends as untracked inside the workspace — those are bwrap's own mount points, which only exist when the sandbox is up (`failIfUnavailable: true` also means a sandbox that fails to start kills the session outright).
+Nothing is lost by this: the two profiles carry **identical** `denyRead`/`allowRead` **and an identical `network` block** (`src/sandbox.ts` — only `allowWrite` and `autoAllowBashIfSandboxed` differ), so 3a tests both floors they share. That is also why the bind canary is a 3a row and is *not* repeated in 3b: `network: { allowLocalBinding: true }` is one shared constant, so a second run under the review profile would re-measure the same key and add a session's cost for no new fact. What is review-specific is the write floor, and that is exactly what 3b/3c/3d test. Positive evidence that the sandbox really started for the review run is in 3b(3)'s output: `git status --short` lists `.bashrc`, `.gitconfig`, `.mcp.json`, `.zshrc` and friends as untracked inside the workspace — those are bwrap's own mount points, which only exist when the sandbox is up (`failIfUnavailable: true` also means a sandbox that fails to start kills the session outright).
 
 **The manual write floor (ADR 0035) is judged the opposite way** — here the *harness's* wording is the pass, because this floor is the permission layer, not the OS. The reads are what a review session has to keep being able to do; the writes are what it must not.
 
@@ -137,7 +149,7 @@ Nothing is lost by this: the two profiles carry **identical** `denyRead`/`allowR
 | 3b(4) `echo x > ./pwned.txt` | `Output redirection to '…' was blocked.` |
 | 3b(5) `sh -c "echo y > …"` | `This command requires approval` |
 | 3b(6) `wc -l ./inside.txt` | runs — proves `--allowedTools` opens what it names (the `review_allowed_commands` path) |
-| 3c `ls` | `inside.txt` **only** — no `pwned.txt`, no `pwned2.txt` |
+| 3c `ls` | **no `pwned.txt`, no `pwned2.txt`** — the setup's `inside.txt`/`bind-probe.js` and 3a's own `out.txt` are expected; nothing the review session tried to write is |
 | 3d `get_current_task` | reaches the board: `call is not attributed to the current slot task` (verified against the live board, 2026-07-29) — never `Claude requested permissions to use mcp__tidepool__get_current_task, but you haven't granted it yet.` |
 
 3c is the real verdict for the write rows; 3b(4)/(5) are just how it explains itself. If a `pwned` file exists, the floor is off.
