@@ -102,6 +102,18 @@ const workspaceEntrySchema = z.object({
    *  pinned fork fact — resolved fresh against the registry at every use
    *  moment (ensureTaskBranch, PR open), never baked into a task row. */
   branch: z.string().optional(),
+  /** Host-independent command prefixes a review session may run despite the
+   *  `--permission-mode manual` write floor (issue #144 / ADR 0035). Absent →
+   *  empty. The board mechanically turns each into a `Bash(<prefix>*)` token
+   *  for `--allowedTools` at spawn time (claude-worker.ts) — the registry
+   *  carries the command, never the CLI's spelling, the same split as the
+   *  skill allowlist's names-not-paths rule (ADR 0033).
+   *
+   *  This is the one registry field that *widens* a session's permissions, so
+   *  its gate is the human merge a protected workspace requires (issue #15
+   *  layer 2). `assertValidReviewAllowedCommands` guards the grammar so a
+   *  spelling can't reach past what that human read. */
+  review_allowed_commands: z.array(z.string()).optional(),
 });
 
 /** A workspace entry in `workspaces.yaml`: where tasks run (name → path on
@@ -218,6 +230,63 @@ export function assertValidSkillAllowlist(skills: string[]): void {
     }
     if (entry === "") {
       throw new InvalidSkillAllowlistError(entry, "empty skill name");
+    }
+  }
+}
+
+/** A workspace's `review_allowed_commands` breaks ADR 0035's grammar. Same
+ *  entrance-guard role as InvalidSkillAllowlistError above. */
+class InvalidReviewAllowedCommandError extends Error {
+  constructor(public readonly entry: string, reason: string) {
+    super(`invalid review_allowed_commands entry "${entry}": ${reason}`);
+    this.name = "InvalidReviewAllowedCommandError";
+  }
+}
+
+/** Grammar-only validation of `review_allowed_commands` (issue #144 / ADR
+ *  0035) — never inventory, the same line as the skill allowlist above: a
+ *  prefix naming a command this host does not have is inert, not an error.
+ *
+ *  What the grammar is actually for is narrower than "well-formed". This is
+ *  the one registry field that *widens* a review session's permissions, and
+ *  its only gate is a human reading the registry PR. Every rule below exists
+ *  so that what the human read is what the CLI receives:
+ *
+ *  - **no comma** — `--allowedTools` is comma-joined (claude-worker.ts), so
+ *    `"npm test,rm -rf /"` reads as one allowance in the diff and arrives as
+ *    two at the CLI. The injection this closes is the whole reason the field
+ *    is validated at all.
+ *  - **no newline or control character** — same smuggling, one layer down: an
+ *    entry that renders as one line in a diff must not carry a second.
+ *  - **no `*`, `(`, `)`** — the registry carries a *command prefix*, not the
+ *    CLI's pattern spelling; the board adds `Bash(…*)` itself. Letting an
+ *    entry bring its own syntax would put the CLI's grammar into registry data
+ *    (ADR 0033's names-not-paths rule, restated for commands).
+ *  - **non-empty, no leading/trailing space** — an empty or space-padded entry
+ *    becomes `Bash(*)` or `Bash( foo*)`: the first opens everything, the
+ *    second silently matches nothing. Both are worse than a loud rejection. */
+function assertValidReviewAllowedCommands(commands: string[]): void {
+  for (const entry of commands) {
+    if (entry === "") {
+      throw new InvalidReviewAllowedCommandError(entry, "empty command prefix");
+    }
+    if (entry.includes(",")) {
+      throw new InvalidReviewAllowedCommandError(
+        entry,
+        "a comma would inject an extra --allowedTools token past the registry review",
+      );
+    }
+    if (/[\u0000-\u001f\u007f]/.test(entry)) {
+      throw new InvalidReviewAllowedCommandError(entry, "control characters are not allowed");
+    }
+    if (/[*()]/.test(entry)) {
+      throw new InvalidReviewAllowedCommandError(
+        entry,
+        'the CLI pattern spelling is the board\'s to add — write the command prefix alone (e.g. "npm test")',
+      );
+    }
+    if (entry !== entry.trim()) {
+      throw new InvalidReviewAllowedCommandError(entry, "leading or trailing whitespace");
     }
   }
 }
@@ -352,6 +421,15 @@ export class UnknownAuthorityProfileError extends Error {
 
 const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 
+/** Grammar check across a parsed workspaces.yaml (ADR 0035). Runs at load, the
+ *  same moment `parseAgentFile` checks a skill allowlist: a malformed widening
+ *  must fail the registry read loudly, never reach a spawn quietly. */
+function assertValidWorkspaces(workspaces: z.infer<typeof workspacesSchema>): void {
+  for (const entry of Object.values(workspaces)) {
+    assertValidReviewAllowedCommands(entry.review_allowed_commands ?? []);
+  }
+}
+
 function parseAuthorityFile(name: string, raw: string): AuthorityProfile {
   const profile = authorityProfileSchema.parse(parseYaml(raw));
   return {
@@ -484,6 +562,7 @@ export function loadRegistry(dir: string): Registry {
     authority[profile.name] = profile;
   }
   const workspaces = workspacesSchema.parse(parseYaml(gitShowFile(dir, ref, "workspaces.yaml")));
+  assertValidWorkspaces(workspaces);
   const commit = execFileSync("git", ["rev-parse", ref], { cwd: dir, stdio: GIT_STDIO })
     .toString()
     .trim();

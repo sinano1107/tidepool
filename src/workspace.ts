@@ -20,6 +20,11 @@ export interface WorkspaceConfig {
    *  the pre-#27 shape for a `WorkspaceConfig` built outside the registry
    *  (main.ts's fixed single-workspace fallback, test fixtures). */
   branch?: string;
+  /** Command prefixes a review session may run despite the `manual` write
+   *  floor (issue #144 / ADR 0035), passed through from the registry entry the
+   *  same way `branch` is. Absent → none: a `WorkspaceConfig` built outside the
+   *  registry widens nothing. */
+  review_allowed_commands?: string[];
 }
 
 /** The protected branch: no task ever works on it directly. */
@@ -90,7 +95,7 @@ export function resolveExecutionWorkspace(
   // the "main" default lives solely in protectedBranch — entry.branch passes
   // through as-is (possibly absent) rather than getting normalized here too
   const path = entry.path ?? join(workspacesBaseDir, name);
-  return { name, path, branch: entry.branch };
+  return { name, path, branch: entry.branch, review_allowed_commands: entry.review_allowed_commands };
 }
 
 export function taskBranch(taskId: string): string {

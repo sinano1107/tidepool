@@ -22,6 +22,18 @@ export interface SandboxSettings {
      *  (「サンドボックスされているつもりで裸」は機構不在より悪い). With it true
      *  the session exits at startup instead, and the board sees a failed spawn. */
     failIfUnavailable: true;
+    /** ADR 0035: the CLI treats a sandboxed Bash command as pre-approved
+     *  (`autoAllowBashIfSandboxed`, vendor default true) — the OS is the guard,
+     *  so the permission layer steps aside. That is fine while a session runs
+     *  in `auto`, which self-approves anyway, but review's write floor *is* the
+     *  permission layer (`--permission-mode manual`), and the sandbox's own
+     *  write allowance covers the whole workspace. Left at the default, turning
+     *  review to `manual` would buy nothing: measured on both macOS 2.1.220 and
+     *  the Pi's 2.1.207, `echo x > f` succeeds with the sandbox on and is
+     *  refused with this false. Present on review only — a work session must be
+     *  able to write, and under `manual`-less `auto` this flag would only make
+     *  its writes wait for an approval nobody is there to give. */
+    autoAllowBashIfSandboxed?: false;
     filesystem: {
       denyRead: string[];
       allowRead: string[];
@@ -144,13 +156,31 @@ export interface SandboxSettingsInput {
  *     <workspace>/.gitconfig: Read-only file system`. That is the backend's
  *     architecture, not a version bug.
  *
- *  So review carries `allowWrite: []` and no `denyWrite`; its write floor stays
- *  ADR 0013 追記 / issue #59's tool-layer deny plus the slot-release tree rule
- *  —「書けないが覗ける、覗けば残る」— and the CLI's own default project
- *  protections still refuse `.git/config`, `.git/hooks` and friends. A
- *  macOS-only `denyWrite` was rejected on ADR 0033 line 22's dev/prod parity:
- *  production must never be the weaker side, and a rule that runs only on the
- *  dev machine is exactly that. */
+ *  So review carries `allowWrite: []` and no `denyWrite`. A macOS-only
+ *  `denyWrite` was rejected on ADR 0033 line 22's dev/prod parity: production
+ *  must never be the weaker side, and a rule that runs only on the dev machine
+ *  is exactly that.
+ *
+ *  **Where review's write floor actually lives (ADR 0035 / issue #144), and how
+ *  the layers divide.** Not four independent walls — the first one steps aside
+ *  for the second unless told not to:
+ *
+ *  1. This sandbox — read visibility, network, and the write *radius* of
+ *     whatever the permission layer does allow (an `npm test` may run arbitrary
+ *     code; its writes still can't leave the workspace).
+ *  2. The permission layer (`--permission-mode manual`, claude-worker.ts) — the
+ *     write floor proper: redirections, interpreters and wrappers, the shapes
+ *     issue #59's enumeration could never reach. **Live only because
+ *     `autoAllowBashIfSandboxed: false` above stops layer 1 from waving Bash
+ *     past it.**
+ *  3. `--disallowedTools` (ADR 0013 追記 / issue #59) — no longer "the floor by
+ *     enumeration" (that failed); now the *ceiling* on what a registry's
+ *     `review_allowed_commands` can open, since deny always beats allow.
+ *  4. The slot-release tree rule — mechanical recovery of whatever residue
+ *     remains.
+ *
+ *  The CLI's own default project protections still refuse `.git/config`,
+ *  `.git/hooks` and friends underneath all of it. */
 export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettings {
   const { taskType, workspacePath, permittedSkills } = input;
   const readOnly = taskType === "review";
@@ -159,6 +189,9 @@ export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettin
       enabled: true,
       allowUnsandboxedCommands: false,
       failIfUnavailable: true,
+      // ADR 0035: review's write floor is the permission layer, and the
+      // sandbox would otherwise wave Bash past it entirely.
+      ...(readOnly && { autoAllowBashIfSandboxed: false as const }),
       filesystem: {
         denyRead: ["~/"],
         allowRead: [
@@ -314,6 +347,13 @@ export function sandboxPickupBlocked(
  *  Both live inside the checkout, so a `work` session can write them. */
 const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 
+/** The settings keys that define a worker session's floor rather than its
+ *  conveniences — `sandbox` for the OS layer (ADR 0033), `permissions` for the
+ *  permission layer review's write floor now rests on (ADR 0035). A checkout
+ *  naming either is claiming authorship of the floor, which is the board's
+ *  alone. */
+const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
+
 /** The floor's one data-dependent guard, and deliberately a guard rather than
  *  part of the floor (ADR 0013:「床はデータの状態に依存しない」— the profile
  *  itself stays a code constant above).
@@ -332,12 +372,23 @@ const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
  *  sandbox is a broken resource, quarantined like any other (the caller does
  *  that; this returns the offending file names).
  *
+ *  `permissions` joins `sandbox` as a guarded key once review runs under
+ *  `--permission-mode manual` (ADR 0035). Measured on 2.1.220: a
+ *  `permissions.allow` entry in the checkout's `settings.local.json` lifts the
+ *  manual write floor (`sh -c '… > f'` went through), while the same key in
+ *  `settings.json` and `permissions.defaultMode` in either file do not. The
+ *  guard covers both files and the whole `permissions` block regardless —
+ *  which tier and which sub-key the CLI honours is vendor behaviour that can
+ *  change under us, and this guard exists precisely so a change there is not a
+ *  silent floor loss. Under `auto` this was harmless (the classifier
+ *  self-approved anyway); under `manual` the permission layer *is* the floor,
+ *  so the same two-session escalation applies.
+ *
  *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
  *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean". A
- *  settings file with no `sandbox` key is left alone — hooks, permissions and
- *  the rest of a project's ordinary settings are none of this guard's
- *  business. */
-export function sandboxOverridingSettings(workspacePath: string): string[] {
+ *  settings file carrying neither key is left alone — hooks, env and the rest
+ *  of a project's ordinary settings are none of this guard's business. */
+export function floorOverridingSettings(workspacePath: string): string[] {
   const offending: string[] = [];
   for (const name of PROJECT_SETTINGS_FILES) {
     let raw: string;
@@ -348,7 +399,11 @@ export function sandboxOverridingSettings(workspacePath: string): string[] {
     }
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed === "object" && parsed !== null && "sandbox" in parsed) {
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        FLOOR_DEFINING_KEYS.some((key) => key in parsed)
+      ) {
         offending.push(name);
       }
     } catch {

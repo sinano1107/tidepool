@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildSandboxSettings, sandboxOverridingSettings, skillReadPaths } from "../src/sandbox.js";
+import { buildSandboxSettings, floorOverridingSettings, skillReadPaths } from "../src/sandbox.js";
 
 /** ADR 0033: worker セッションの Bash はハーネス内蔵サンドボックス(macOS
  *  Seatbelt / Linux bubblewrap)で workspace に封じる。この純関数はその
@@ -130,13 +130,19 @@ describe("skillReadPaths", () => {
   });
 });
 
-/** issue #60 の実測: CLI は per-task の `--settings` とは別に、workspace 側の
- *  `.claude/settings.json` の `sandbox` ブロックも読んで **merge** する。
- *  `enabled: false` は `--settings` 側が勝つが、`filesystem.allowRead` は
- *  マージされて効いてしまい(canary が読めた)、`--setting-sources user` でも
- *  `--setting-sources ""` でも止まらなかった。work セッションは workspace に
- *  書けるので、放置すると「自分で床を広げて次の spawn で抜ける」経路が残る。 */
-describe("sandboxOverridingSettings", () => {
+/** 床を定義する2キーのガード。CLI は per-task の `--settings` とは別に
+ *  workspace 側の `.claude/settings.json` / `settings.local.json` も読んで
+ *  **merge** するため、checkout がそこに床を書けば効いてしまう。
+ *
+ *  issue #60 の実測(`sandbox`): `enabled: false` は `--settings` 側が勝つが、
+ *  `filesystem.allowRead` はマージされて効いてしまい(canary が読めた)、
+ *  `--setting-sources user` でも `--setting-sources ""` でも止まらなかった。
+ *  issue #144 の実測(`permissions`): local tier の `permissions.allow` が
+ *  `manual` の書き込み床を持ち上げた(`sh -c '… > f'` が通った)。
+ *
+ *  work セッションは workspace に書けるので、放置するとどちらも「自分で床を
+ *  広げて次の spawn で抜ける」経路が残る。 */
+describe("floorOverridingSettings", () => {
   const dirs: string[] = [];
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
@@ -156,29 +162,67 @@ describe("sandboxOverridingSettings", () => {
     const dir = await workspaceWith({
       "settings.json": JSON.stringify({ hooks: { PostToolUse: [] } }),
     });
-    expect(sandboxOverridingSettings(dir)).toEqual([]);
+    expect(floorOverridingSettings(dir)).toEqual([]);
   });
 
   it(".claude が無い workspace は素通しする", async () => {
-    expect(sandboxOverridingSettings(await workspaceWith({}))).toEqual([]);
+    expect(floorOverridingSettings(await workspaceWith({}))).toEqual([]);
   });
 
   it("settings.json が sandbox ブロックを持てば検出する", async () => {
     const dir = await workspaceWith({
       "settings.json": JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } } }),
     });
-    expect(sandboxOverridingSettings(dir)).toEqual(["settings.json"]);
+    expect(floorOverridingSettings(dir)).toEqual(["settings.json"]);
   });
 
   it("settings.local.json も同じく検出する(git 管理外でもディスク上にあれば CLI は読む)", async () => {
     const dir = await workspaceWith({
       "settings.local.json": JSON.stringify({ sandbox: { enabled: false } }),
     });
-    expect(sandboxOverridingSettings(dir)).toEqual(["settings.local.json"]);
+    expect(floorOverridingSettings(dir)).toEqual(["settings.local.json"]);
   });
 
   it("読めない/壊れた settings は fail-closed に倒す — こちらの parser と CLI の解釈が食い違う余地を残さない", async () => {
     const dir = await workspaceWith({ "settings.json": "{ not json" });
-    expect(sandboxOverridingSettings(dir)).toEqual(["settings.json"]);
+    expect(floorOverridingSettings(dir)).toEqual(["settings.json"]);
+  });
+
+  it("permissions ブロックも検出する(ADR 0035): local tier の permissions.allow は manual の床を持ち上げる", async () => {
+    // #60 が allowRead で塞いだのと同じ二段階エスカレーション経路の1階上。
+    // 実測(2.1.220)で settings.local.json の permissions.allow を置くと
+    // `sh -c '… > f'` が通った。work セッションは自分の checkout に書けるので、
+    // review が封じ込めるはずの当の行為者が床を外せることになる。
+    const dir = await workspaceWith({
+      "settings.local.json": JSON.stringify({ permissions: { allow: ["Bash(sh -c:*)"] } }),
+    });
+    expect(floorOverridingSettings(dir)).toEqual(["settings.local.json"]);
+  });
+});
+
+/** ADR 0035(issue #144): review の書き込み床は permission 層が担うが、CLI の
+ *  `sandbox.autoAllowBashIfSandboxed`(既定 true)が「サンドボックス内の Bash は
+ *  承認不要」を意味するため、これを切らないと `--permission-mode manual` の床は
+ *  そもそも存在しない。実測(macOS 2.1.220 / Pi 2.1.207 の両方)で、既定では
+ *  `echo x > f` が通り、false では `Output redirection … was blocked.` になる。 */
+describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
+  it("review プロファイルはサンドボックスの Bash 自動承認を切る — これが manual 床の成立条件", () => {
+    expect(
+      buildSandboxSettings({
+        taskType: "review",
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      }).sandbox.autoAllowBashIfSandboxed,
+    ).toBe(false);
+  });
+
+  it("work プロファイルには載せない — work は auto で走り、切ると書き込みが全部承認待ちで headless では静かに死ぬ", () => {
+    expect(
+      buildSandboxSettings({
+        taskType: "work",
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      }).sandbox.autoAllowBashIfSandboxed,
+    ).toBeUndefined();
   });
 });

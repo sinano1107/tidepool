@@ -29,6 +29,8 @@ issue #60 のグリリング(2026-07-28)で決定。ADR 0013 追記が post-v1 �
 
 macOS だけ `denyWrite` を効かせる案は採らない — 上の「片方だけ裸だと dev/prod の挙動乖離が残る」の裏返しで、**本番が弱い側になる**形はさらに悪い。したがって review の書き込み床は ADR 0013 追記(issue #59)のツール層 deny + slot-release tree rule のまま —「書けないが覗ける、覗けば残る」— に留まる。ただし CLI 既定の project 保護は `.git/config`・`.git/hooks` 等を依然拒否するので、残る隙間は「作業ツリーのファイルを書き換えられる」に狭まっている。
 
+**この隙間はその後 ADR 0035(issue #144)が permission 層(`--permission-mode manual`)で埋めた。同 ADR は本 ADR のサンドボックスにも影響する — `sandbox.enabled: true` は CLI の `autoAllowBashIfSandboxed`(既定 `true`)経由で permission 層を無効化するため、review プロファイルは `autoAllowBashIfSandboxed: false` を併せ持つ必要がある。**
+
 ツールチェーンの動作基盤は封じる対象ではない(上記「守る資産の定義」)という線は、`allowRead` に `~/.gitconfig` と `~/.config/git` を置くことで具体化する — `denyRead: ["~/"]` だけでは `git` が `fatal: unable to access '~/.gitconfig': Operation not permitted` で一切動かない。credential ではなく config であり、worker は GitHub credential をそもそも持たない(ADR 0024)。`~/.npm` は書かない — CLI が自前でマスク済み home に bind するため(サンドボックス内の `ls -a $HOME` は `.claude`・`.gitconfig`・`.npm` を見せる)、名指しは露出を増やすだけで何も買わない。
 
 床を workspace 側から広げられる経路が1つあり、盤面側のガードで塞いだ。CLI は per-task の `--settings` とは別に **workspace 自身の `.claude/settings.json` の `sandbox` ブロックも読んで merge する**(実測 2.1.220: `enabled: false` は `--settings` が勝つが、`filesystem.allowRead` はマージされて効く。`--setting-sources user` でも `--setting-sources ""` でも止まらない)。work セッションは自分の checkout に書けるので、放置すると「セッション N で床を広げ、N+1 で抜ける」2セッション経路になる — しかも slot-release の tree rule がその設定ファイルを親切にコミットしてしまう。したがって spawn 時に checkout の `.claude/settings.json` / `settings.local.json` を検査し、`sandbox` ブロックを持つ workspace は quarantine して spawn しない。これは床そのものではなく床の**ガード**であり、床は依然コード定数である(ADR 0013)。パースできない設定ファイルは fail-closed 側に倒す — CLI の reader がこちらの `JSON.parse` より寛容な可能性があり、「判定できなかった」が「問題なし」と読まれてはならない。

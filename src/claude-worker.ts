@@ -18,7 +18,7 @@ import {
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
-import { buildSandboxSettings, sandboxOverridingSettings } from "./sandbox.js";
+import { buildSandboxSettings, floorOverridingSettings } from "./sandbox.js";
 import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
@@ -185,11 +185,30 @@ export function computeSkillDenials(
   );
 }
 
-// ADR 0013 追記(issue #59): review の書き込み系 Bash パターン。読み取り
-// コマンド(cat/ls/grep 等)は対象外 — v1 はツール層での完全なサンドボックス化
-// を狙わず、ADR 0013 が明示した「書けないが覗ける、覗けば残る」の線を守る。
-// パターン形式(`Bash(<prefix>*)`)はインストール済み CLI の --help(2.1.214)
-// の例("Bash(git *) Edit")で確認済み。この配列を編集したら
+// review の書き込み系 Bash パターン。**この配列の役割は ADR 0035(issue #144)
+// で変わった。**
+//
+// 当初(ADR 0013 追記 / issue #59)これは書き込み床そのもののつもりだった。
+// それは失敗している — `--disallowedTools` は `Bash(<prefix>*)` の前置一致で、
+// リダイレクト(`>`)はコマンドではないので原理的にパターンが書けず、
+// インタプリタとラッパは無限にある。床は permission 層(review spawn の
+// `--permission-mode manual`)へ移った。
+//
+// 今この配列が担うのは2つ:
+//
+//  1. **明確な拒否**。`git commit` や `rm` は、承認要求という形の暗黙の拒否では
+//     なく名指しで断る — エージェントに早い段階で境界を伝える UX。
+//  2. **`review_allowed_commands` の天井**。deny は allow に常勝する(ADR 0033
+//     実験2、manual 下でも実測)ので、registry がここに挙がるコマンドを開くこと
+//     はできない。ただし天井が覆うのは**ここに挙がっているものだけ**である。
+//     インタプリタもラッパも挙がっていないので、registry に `sh -c` と書けば
+//     文法検証を通り `Bash(sh -c*)` として実際に開く。これは穴ではなく設計上の
+//     線引き — 列挙で塞ぐ試みは上のとおり失敗したので、`review_allowed_commands`
+//     の門は機械ではなく保護 workspace の人間 merge である(ADR 0035)。
+//
+// 読み取りコマンド(cat/ls/grep 等)は対象外。パターン形式(`Bash(<prefix>*)`)
+// はインストール済み CLI の --help(2.1.214)の例("Bash(git *) Edit")で確認済み。
+// この配列を編集したら
 // tests/review-tool-denials.test.ts の arrayContaining リストも手で合わせる
 // こと — テスト側はこの配列を import せず独立した literal で書いている
 // (tdd スキルの「期待値は独立した情報源から」の線: import して比較すると
@@ -225,6 +244,45 @@ const REVIEW_BASH_WRITE_DENIALS = [
 export function reviewToolDenials(taskType: Task["type"]): string[] {
   if (taskType !== "review") return [];
   return ["Edit", "Write", "NotebookEdit", ...REVIEW_BASH_WRITE_DENIALS];
+}
+
+/** The MCP server key a worker's mcp-config carries, and therefore the stem of
+ *  every `mcp__<server>__<verb>` permission subject. One constant so the server
+ *  the board writes and the permission token it allows can never drift apart —
+ *  a typo would leave a review session unable to touch the board at all
+ *  (ADR 0035). */
+const MCP_SERVER_NAME = "tidepool";
+
+/** review の `--allowedTools`(ADR 0035 / issue #144)。review spawn は
+ *  `--permission-mode manual` で走り、manual は「非許可は全部拒否」ではなく
+ *  「読み取り系は素通し・副作用のあるものは承認要求」——headless では誰も
+ *  承認できないので後者が拒否になる、という形の床である。よって開ける必要が
+ *  あるのは2本だけ:
+ *
+ *  1. **MCP verbs**。素の manual では盤面への唯一の channel が全部承認待ちで
+ *     詰まり、review が一切完了できない(実測)。サーバ単位で開ける — verb の
+ *     権限は盤面側(authority profile / MCP router)が縛るので、CLI 側で開けて
+ *     も権限モデルは緩まない。
+ *  2. **workspace の `review_allowed_commands`**。`npm test` のような正当な
+ *     副作用コマンドの巻き添えを、ホスト非依存のコマンド接頭辞として registry
+ *     が宣言し、ここが `Bash(<prefix>*)` へ機械変換する。permission を広げる
+ *     設定なので門は registry の人間 merge(agent の skill allowlist と同じ線)。
+ *
+ *  `reviewToolDenials` と同じく `task.type` だけを見る — read-only は review と
+ *  いう task type の性質であって実行エージェントの性質ではない(ADR 0013)。
+ *  deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で確認)ので、
+ *  registry が `git commit` や `rm` を開くことはできない —— ただし天井が覆うのは
+ *  `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこのコメント参照)。
+ *  雑な allow に対する一般の防壁は機械ではなく registry の人間 merge。 */
+export function reviewAllowedTools(
+  taskType: Task["type"],
+  reviewAllowedCommands: string[],
+): string[] {
+  if (taskType !== "review") return [];
+  return [
+    `mcp__${MCP_SERVER_NAME}`,
+    ...reviewAllowedCommands.map((prefix) => `Bash(${prefix}*)`),
+  ];
 }
 
 // always explicit: the CLI remembers the host's last model/effort choice,
@@ -851,22 +909,24 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       this.options.clock.now(),
     );
     if (!workspace) return;
-    // issue #60 / ADR 0033: the CLI merges the *workspace's* own
-    // `.claude/settings.json` `sandbox` block with the per-task `--settings`
-    // floor below, and its `filesystem.allowRead` entries win (measured — see
-    // sandboxOverridingSettings). A work session can write its own checkout, so
-    // this would be a two-session escalation: widen the floor in session N, walk
-    // out in N+1. A workspace that redefines the sandbox is a broken resource —
-    // quarantined like a dirty tree, and no session starts in it meanwhile.
-    const overriding = sandboxOverridingSettings(workspace.path);
+    // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the *workspace's*
+    // own `.claude/settings.json` with the per-task `--settings` floor below,
+    // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
+    // entries win, and a `permissions.allow` entry lifts review's manual write
+    // floor (both measured — see floorOverridingSettings). A work session can
+    // write its own checkout, so this would be a two-session escalation: widen
+    // the floor in session N, walk out in N+1. A workspace that redefines the
+    // floor is a broken resource — quarantined like a dirty tree, and no session
+    // starts in it meanwhile.
+    const overriding = floorOverridingSettings(workspace.path);
     if (overriding.length > 0) {
       quarantineWorkspace(
         this.options.db,
         workspace.name,
         new Error(
           `workspace carries .claude/${overriding.join(", .claude/")} declaring its own ` +
-            "sandbox settings, which would widen the worker sandbox floor (ADR 0033) — " +
-            "remove the sandbox block",
+            "sandbox or permissions settings, which would widen the worker floor " +
+            "(ADR 0033 / ADR 0035) — remove the sandbox and permissions blocks",
         ),
         this.options.clock.now(),
       );
@@ -976,7 +1036,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       mcpConfigPath,
       JSON.stringify({
         mcpServers: {
-          tidepool: { type: "http", url: `${this.options.mcpUrl}?task=${task.id}` },
+          [MCP_SERVER_NAME]: { type: "http", url: `${this.options.mcpUrl}?task=${task.id}` },
         },
       }),
     );
@@ -1013,6 +1073,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       ...enforcement.deny.map((s) => `Skill(${s})`),
       ...reviewToolDenials(task.type),
     ].join(",");
+    // ADR 0035 / issue #144: the two things `manual` has to be told to open.
+    // Same comma join as the deny above, for the same reason — a
+    // `Bash(npm test*)` token carries an internal space. Empty for every
+    // non-review task, and the flag is then left off entirely.
+    const allowedTools = reviewAllowedTools(
+      task.type,
+      workspace.review_allowed_commands ?? [],
+    ).join(",");
     const child = this.spawn(
       "claude",
       [
@@ -1021,13 +1089,24 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         "--output-format",
         "stream-json",
         "--verbose",
-        // headless sessions cannot answer prompts. auto keeps the classifier
-        // safety layer while self-approving routine actions; authority is
-        // enforced by the profile guidance and the board's domain verbs
+        // headless sessions cannot answer prompts, and the two modes make
+        // opposite use of that (ADR 0035 / issue #144). `work` runs `auto`: the
+        // classifier self-approves routine actions so the session can actually
+        // write, and authority comes from the profile guidance and the board's
+        // domain verbs. `review` runs `manual`, which skips the classifier
+        // entirely — read-only commands pass, anything with a side effect asks,
+        // and with nobody there to answer, asking *is* the refusal. That is
+        // review's write floor: deterministic, not a model's judgment. It only
+        // holds because the sandbox profile turns off `autoAllowBashIfSandboxed`
+        // (src/sandbox.ts) — otherwise sandboxed Bash never reaches this layer.
         "--permission-mode",
-        "auto",
+        task.type === "review" ? "manual" : "auto",
         "--disallowedTools",
         disallowedTools,
+        // `manual` refuses the MCP verbs and any legitimate side-effecting
+        // command unless named here (ADR 0035). Omitted entirely when empty:
+        // a work spawn carries no allowlist.
+        ...(allowedTools ? ["--allowedTools", allowedTools] : []),
         // the empty-allowlist shape: one flag disables every slash command
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).
