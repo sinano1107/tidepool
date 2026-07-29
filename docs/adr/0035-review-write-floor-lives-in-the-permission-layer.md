@@ -43,6 +43,8 @@ CLI は checkout 自身の `.claude/settings.local.json` の `permissions.allow`
 
 `review_allowed_commands` に `npm test` を入れても、review セッションが実際にテストを通せるとは限らない。ADR 0033 の読み取り封じ込め(`denyRead: ["~/"]`)の下では tidepool 自身のスイートは 150 file 中 93 file が落ちる(サンドボックス外は 840 tests 全 green)。permission 層の問題ではなく読み取り床との衝突であり、この決定の範囲外である(issue #146 に切り出した)。したがって v1 では**スキーマと配線だけを入れ、registry には値を入れない** —— 通らないものを allow に並べて「開けた」という誤った安心を作らない。
 
+**追記(#146 で解決)**: 原因は読み取り床ではなく、サンドボックスのネットワーク既定が loopback への `listen` を拒否していたことだった(review 固有でもなく work プロファイルでも同じく落ちる)。修理は両プロファイルの `network: { allowLocalBinding: true }` で、review プロファイルの emit では 152 file / 858 tests が全 green になった(macOS 2.1.220)— 詳細は ADR 0033 の #146 追記。registry への値の投入は依然この決定の範囲外(ホストごとの登録判断)である。
+
 ## Considered options
 
 - **deny パターンを足す**(`dd`、`truncate`、`python*`、`node*`、`perl*` 等)— `--disallowedTools` は `Bash(<prefix>*)` の前置一致なので、**リダイレクト(`>`)はコマンドではなく原理的にパターンを書けない**。インタプリタとラッパは無限にある。塞げないまま「列挙した」という誤った安心だけが増える。ADR 0033 が「列挙漏れの最後の砦が OS になる」と書いたのがこの穴で、その OS 側が建てられなかった(ADR 0033 追記)。

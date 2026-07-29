@@ -39,6 +39,22 @@ export interface SandboxSettings {
       allowRead: string[];
       allowWrite: string[];
     };
+    /** ADR 0033's #146 addendum. The vendor's network defaults refuse a
+     *  *listen* on loopback — ADR 0033's original 「ネットワークは現状のまま開放」
+     *  was measured false for bind (macOS 2.1.220). Without this key
+     *  `app.listen(0, "127.0.0.1")` is refused and `listener.address()` returns
+     *  null: 93 of tidepool's own test files — every one that boots the server
+     *  in-process — died that way under the review profile, and the same
+     *  signature reproduced under work, so it is a worker-wide fact and not a
+     *  review-specific one. Both profiles therefore carry it, which is also
+     *  what ADR 0034 already holds: a worker standing up its own loopback
+     *  server and calling it is legitimate work (npm test / webui-e2e).
+     *  This key is an allowance to *bind*, not an allowance to reach a
+     *  destination — whether a worker's Bash can reach the human-facing `/api`
+     *  is untouched here and stays #140 / ADR 0034's question. */
+    network: {
+      allowLocalBinding: true;
+    };
   };
 }
 
@@ -201,6 +217,9 @@ export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettin
         ],
         allowWrite: readOnly ? [] : [workspacePath],
       },
+      // ADR 0033 追記 / issue #146: not keyed on the profile — a worker of
+      // either type has to be able to run the suite it is judging.
+      network: { allowLocalBinding: true },
     },
   };
 }
