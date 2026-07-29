@@ -4,10 +4,9 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, expect, it } from "vitest";
-import { hashToken } from "../src/auth.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { FakeClock, ScriptedWorker } from "./fakes.js";
-import { AUTH_HEADERS, TEST_TOKEN } from "./harness.js";
+import { AUTH_HEADERS, TEST_CREDENTIAL } from "./harness.js";
 
 let server: TidepoolServer | undefined;
 let dir: string | undefined;
@@ -26,7 +25,7 @@ it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートで
     port: 0,
     mcpPort: 0,
     clock: bootClock,
-    credential: { tokenHash: () => hashToken(TEST_TOKEN) },
+    credential: TEST_CREDENTIAL,
     worker: () => new ScriptedWorker(bootClock),
   });
 

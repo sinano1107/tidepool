@@ -85,6 +85,15 @@ it("`/api` の 401 は素の JSON(issue #153)", async () => {
   expect((await res.json()).error).toBeTypeOf("string");
 });
 
+// 「データの面」の判定は境界まで見る — prefix 一致だけだと `/apiary` のような
+// 別のパスまで `/api` 扱いになる
+it("`/api` の判定は境界まで見る(issue #153)", async () => {
+  t = await bootTidepool();
+  const res = await fetch(`${t.baseUrl}/apiary`, { headers: { accept: "text/html" } });
+  expect(res.status).toBe(401);
+  expect(res.headers.get("content-type")).toContain("text/html");
+});
+
 // CSRF の二枚目(ADR 0036): SameSite=Lax はクロスサイト POST に cookie を付けない
 // が、`/api` 側でも JSON content-type を要求してクロスオリジン fetch に preflight
 // を強制する。認証済みでも content-type が違えば通らない。

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AgentAdmin } from "../src/agent-create.js";
-import { BOOTSTRAP_PATH, hashToken } from "../src/auth.js";
+import { bootstrapUrl as authBootstrapUrl, hashToken } from "../src/auth.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
@@ -26,6 +26,10 @@ export { HOURLY as HOUR } from "../src/scheduler.js";
  *  認証の存在を知らないままでよい。無認証の振る舞いを主張したいテストだけが
  *  素の `fetch` を使う。 */
 export const TEST_TOKEN = "tidepool-test-token";
+
+/** `startServer` を直に呼ぶテスト(harness を通さないもの)が渡す credential。
+ *  ハッシュの組み立てを各所で書き直さない。 */
+export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 
 export interface Tidepool {
   baseUrl: string;
@@ -141,7 +145,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     clock,
     // issue #153: テスト盤面も本番と同じく必ず credential を持つ(「省略 =
     // 認証なし」の口は作らない)。テストが提示するのは固定の TEST_TOKEN。
-    credential: { tokenHash: () => hashToken(TEST_TOKEN) },
+    credential: TEST_CREDENTIAL,
     worker: () => worker,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
@@ -202,7 +206,7 @@ export const AUTH_HEADERS = { authorization: `Bearer ${TEST_TOKEN}` } as const;
 
 /** テスト盤面の bootstrap URL — 実ブラウザ(e2e)がここを1回踏んで cookie を得る。 */
 export function bootstrapUrl(baseUrl: string): string {
-  return `${baseUrl}${BOOTSTRAP_PATH}?token=${encodeURIComponent(TEST_TOKEN)}`;
+  return authBootstrapUrl(baseUrl, TEST_TOKEN);
 }
 
 export async function api(

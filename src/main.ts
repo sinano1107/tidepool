@@ -4,14 +4,7 @@ import { platform } from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
-import {
-  bootstrapNotice,
-  type HumanCredential,
-  readTokenHash,
-  resolvePublicOrigins,
-  resolveTokenFile,
-  rotateToken,
-} from "./auth.js";
+import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
 import { ClaudeCodeWorker, enumerateHostSkills } from "./claude-worker.js";
@@ -321,42 +314,20 @@ function profileAdmin(): ProfileAdmin | undefined {
 // ADR 0036 / issue #153: 人間面の credential。盤面が持つのはハッシュだけで、
 // 平文は生成した瞬間に一度表示されるだけ — process.env には**載せない**
 // (claude-worker.ts の spawn は `{ ...process.env }` を worker に渡す)。
-const tokenFile = resolveTokenFile(process.env.TIDEPOOL_API_TOKEN_FILE);
 // cookie はオリジン単位なので、盤面は自分が公開されている URL を知っている必要が
 // ある(自力では導出できない)。Pi なら tailnet の公開 URL をここに設定する。
-const publicOrigins = resolvePublicOrigins(process.env.TIDEPOOL_PUBLIC_ORIGINS, port);
-if (readTokenHash(tokenFile) === undefined) {
-  // 初回起動(あるいはハッシュを失った盤面)はその場で発行して表示する。以後
-  // 平文を得る手段はローテーション(`npm run token`)だけになる。
-  console.log(
-    bootstrapNotice({ token: rotateToken(tokenFile), tokenFile, origins: publicOrigins, rotated: false }),
-  );
-}
-/** ハッシュは**毎リクエスト読み直す**(github-auth.ts と同じ posture): ローテー
- *  ションが盤面の再起動なしに効く。読めなくなったら loud に一度だけ知らせる —
- *  その間 人間面は無認証で開くのではなく全部 401 になる(auth.ts の readTokenHash
- *  のコメント: 真の fail-open は pickup ゲートを持つ #154 とセットで入る)。 */
-function humanCredential(): HumanCredential {
-  let warned = false;
-  return {
-    tokenHash: () => {
-      const hash = readTokenHash(tokenFile);
-      if (hash === undefined && !warned) {
-        console.error(
-          `[auth] no usable token hash at ${tokenFile} — the human surface is closed (401). ` +
-            "Run `npm run token` to issue a new one.",
-        );
-        warned = true;
-      }
-      if (hash !== undefined) warned = false;
-      return hash;
-    },
-  };
+const { credential, messages } = openHumanCredential({
+  tokenFile: resolveTokenFile(process.env.TIDEPOOL_API_TOKEN_FILE),
+  origins: resolvePublicOrigins(process.env.TIDEPOOL_PUBLIC_ORIGINS, port),
+});
+for (const message of messages) {
+  if (message.level === "error") console.error(message.text);
+  else console.log(message.text);
 }
 
 const server = await startServer({
   dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
-  credential: humanCredential(),
+  credential,
   port,
   mcpPort,
   clock: new SystemClock(),

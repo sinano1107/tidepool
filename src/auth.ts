@@ -1,7 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { Request, Response } from "express";
 import { type RequestHandler, Router, urlencoded } from "express";
 
 /** ADR 0036 / issue #153: 人間面(静的資産・`/api`・そこに mount される管理MCP)
@@ -49,11 +50,10 @@ export function resolveTokenFile(configured: string | undefined): string {
 export function rotateToken(tokenFile: string): string {
   const token = generateToken();
   mkdirSync(dirname(tokenFile), { recursive: true, mode: 0o700 });
-  // mode は writeFileSync の作成時にしか効かない。既存ファイルの緩いパーミッ
-  // ションを引き継がないよう、書いたあとに chmod 相当を明示する代わりに
-  // 「ハッシュしか入っていない」ことを設計の主張にしている(平文なら 600 が
-  // 秘密性を担うが、ハッシュは読まれても盤面には入れない)。
   writeFileSync(tokenFile, `${hashToken(token)}\n`, { mode: 0o600 });
+  // writeFileSync の mode は**新規作成時にしか効かない**。ローテーションは既存
+  // ファイルへの上書きなので、緩いパーミッションのまま引き継がないよう明示する。
+  chmodSync(tokenFile, 0o600);
   return token;
 }
 
@@ -73,14 +73,11 @@ export function readTokenHash(tokenFile: string): string | undefined {
   return /^[0-9a-f]{64}$/.test(hash) ? hash : undefined;
 }
 
-/** 盤面が知っている全オリジンぶんの bootstrap URL。cookie はオリジン単位なので
- *  端末は入口ごとに1回ここを通る必要があり、公開 URL は盤面が自力で導出できない
- *  (ADR 0036)ため設定として渡される。 */
-export function bootstrapUrls(origins: string[], token: string): string[] {
-  return origins.map(
-    (origin) =>
-      `${origin.replace(/\/$/, "")}${BOOTSTRAP_PATH}?token=${encodeURIComponent(token)}`,
-  );
+/** 1オリジンぶんの bootstrap URL。cookie はオリジン単位なので端末は入口ごとに
+ *  1回ここを通る必要があり、公開 URL は盤面が自力で導出できない(ADR 0036)ため
+ *  設定として渡される。 */
+export function bootstrapUrl(origin: string, token: string): string {
+  return `${origin.replace(/\/$/, "")}${BOOTSTRAP_PATH}?token=${encodeURIComponent(token)}`;
 }
 
 /** 平文の token を人間に見せる唯一の面(初回起動とローテーション)。盤面は
@@ -106,7 +103,7 @@ export function bootstrapNotice(input: {
     // cookie はオリジン単位・端末単位。全オリジンぶん出さないと、tailnet から
     // 開いた端末が入れないことに人間はデプロイ後まで気づかない
     "  Open one of these per origin, per device (each sets the cookie):",
-    ...input.origins.map((origin) => `    ${bootstrapUrls([origin], input.token)[0]}`),
+    ...input.origins.map((origin) => `    ${bootstrapUrl(origin, input.token)}`),
   ];
   if (input.rotated) {
     lines.push(
@@ -137,6 +134,58 @@ export interface HumanCredential {
    *  なしに効く(github-auth.ts の `token()` と同じ posture)。undefined →
    *  認証が成立していない。 */
   tokenHash: () => string | undefined;
+}
+
+/** 起動時の credential 解決。composition root(main.ts)がそのまま乗る形にして
+ *  あるのは、「初回起動なら発行する / 壊れていたら発行しない」という分岐が
+ *  main.ts に散ると誰にもテストされないため。印字は呼び出し側が行う。 */
+export function openHumanCredential(input: { tokenFile: string; origins: string[] }): {
+  credential: HumanCredential;
+  messages: { level: "log" | "error"; text: string }[];
+} {
+  const { tokenFile, origins } = input;
+  const messages: { level: "log" | "error"; text: string }[] = [];
+  if (!existsSync(tokenFile)) {
+    // 初回起動: その場で発行して表示する。以後、平文を得る手段はローテーション
+    // (`npm run token`)だけになる。
+    try {
+      const token = rotateToken(tokenFile);
+      messages.push({ level: "log", text: bootstrapNotice({ token, tokenFile, origins, rotated: false }) });
+    } catch (err) {
+      // 書けないなら認証は立たない。ただし**起動そのものは拒まない** — Pi で
+      // 起動を拒むと ssh するしかなくなる(ADR 0036)。人間面は閉じたまま、
+      // worker MCP と scheduler は生きるので、直したら `npm run token` で開く。
+      messages.push({
+        level: "error",
+        text: `[auth] could not issue a board token at ${tokenFile} (${String(err)}) — the human surface stays closed (401).`,
+      });
+    }
+  } else if (readTokenHash(tokenFile) === undefined) {
+    // **発行し直さない。** 読めないだけかもしれないファイルを上書きすると、
+    // 生きている端末の cookie を黙って捨てることになる。人間が気づいて
+    // `npm run token` を打つまで人間面は閉じる(fail-open は #154 とセット)。
+    messages.push({
+      level: "error",
+      text: `[auth] the token hash at ${tokenFile} is unusable — the human surface stays closed (401). Run \`npm run token\` to issue a new one.`,
+    });
+  }
+  let warned = false;
+  return {
+    credential: {
+      tokenHash: () => {
+        const hash = readTokenHash(tokenFile);
+        if (hash === undefined && !warned) {
+          console.error(
+            `[auth] no usable token hash at ${tokenFile} — the human surface is closed (401).`,
+          );
+          warned = true;
+        }
+        if (hash !== undefined) warned = false;
+        return hash;
+      },
+    },
+    messages,
+  };
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -238,32 +287,36 @@ function loginPage(message?: string): string {
 `;
 }
 
-/** HTML を読む相手か。トップレベル遷移(ブラウザのアドレスバー・PWA の起動・
- *  push の deep link)だけがログインページを必要とする。`/api` の fetch や
- *  管理MCP の POST には素の 401 JSON を返す — `/api` はブラウザで直接開く面では
- *  ないので、Accept に text/html が載っていてもデータの面として扱う。 */
-function wantsHtml(method: string, accept: string | undefined, path: string): boolean {
-  if (method !== "GET" && method !== "HEAD") return false;
-  if (path === "/api" || path.startsWith("/api/")) return false;
-  return (accept ?? "").includes("text/html");
+/** 人間面のうち「データの面」= `/api`。`startsWith("/api")` だけだと `/apiary` の
+ *  ような別のパスにも当たるので、境界まで見る。 */
+function isApiPath(path: string): boolean {
+  return path === "/api" || path.startsWith("/api/");
 }
 
-function denyUnauthenticated(
-  method: string,
-  accept: string | undefined,
-  path: string,
-  res: Parameters<RequestHandler>[1],
-  message?: string,
-): void {
-  if (wantsHtml(method, accept, path)) {
-    res.status(401).type("html").send(loginPage(message));
+/** ログインページを要る相手か。トップレベル遷移(ブラウザのアドレスバー・PWA の
+ *  起動・push の deep link)だけがそれを必要とする。`/api` の fetch や管理MCP の
+ *  POST には素の 401 JSON を返す — `/api` はブラウザで直接開く面ではないので、
+ *  Accept に text/html が載っていてもデータの面として扱う。 */
+function wantsLoginPage(req: Request): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+  if (isApiPath(req.path)) return false;
+  return (req.headers.accept ?? "").includes("text/html");
+}
+
+function sendLoginPage(res: Response, message?: string): void {
+  res.status(401).type("html").send(loginPage(message));
+}
+
+function denyUnauthenticated(req: Request, res: Response, message?: string): void {
+  if (wantsLoginPage(req)) {
+    sendLoginPage(res, message);
     return;
   }
   // `{ error }` の形は WebUI の api() が読む形に揃える
   res.status(401).json({ error: message ?? "this board requires a credential" });
 }
 
-function setAuthCookie(res: Parameters<RequestHandler>[1], token: string): void {
+function setAuthCookie(res: Response, token: string): void {
   res.cookie(AUTH_COOKIE, token, {
     httpOnly: true,
     // Strict は不可: スマホでメッセージアプリから bootstrap URL を開くという
@@ -291,37 +344,30 @@ export interface HumanSurfaceAuth {
 }
 
 export function createHumanSurfaceAuth(credential: HumanCredential): HumanSurfaceAuth {
+  /** 提示された token が通れば cookie を張って `/` へ 302 し、true を返す。
+   *  GET(URL を開く)と POST(401 ページのフォーム)で違うのは token の
+   *  取り出し方と拒否時の見せ方だけなので、受理側はここ1つ。 */
+  const grant = (res: Response, token: string): boolean => {
+    const expected = credential.tokenHash();
+    if (expected === undefined || token === "" || !matches(token, expected)) return false;
+    setAuthCookie(res, token);
+    res.redirect(302, "/");
+    return true;
+  };
   const bootstrap = Router();
   // `…/auth?token=…` を開くと cookie を張って `/` へ 302。オリジンごと・端末
   // ごとに1回通る導線(cookie はオリジン単位)。
   bootstrap.get(BOOTSTRAP_PATH, (req, res) => {
     const token = typeof req.query.token === "string" ? req.query.token : "";
-    const expected = credential.tokenHash();
-    if (expected === undefined || token === "" || !matches(token, expected)) {
-      denyUnauthenticated(
-        req.method,
-        req.headers.accept,
-        req.path,
-        res,
-        "that token was not accepted",
-      );
-      return;
-    }
-    setAuthCookie(res, token);
-    res.redirect(302, "/");
+    if (!grant(res, token)) denyUnauthenticated(req, res, "that token was not accepted");
   });
   // 401 ページのフォームからの POST。urlencoded はこのルートにだけ効かせる
   // (/api は JSON content-type を要求するので、この解析を広げてはいけない)。
   bootstrap.post(BOOTSTRAP_PATH, urlencoded({ extended: false }), (req, res) => {
     const submitted = (req.body as { token?: unknown } | undefined)?.token;
     const token = typeof submitted === "string" ? submitted.trim() : "";
-    const expected = credential.tokenHash();
-    if (expected === undefined || token === "" || !matches(token, expected)) {
-      denyUnauthenticated("GET", "text/html", BOOTSTRAP_PATH, res, "that token was not accepted");
-      return;
-    }
-    setAuthCookie(res, token);
-    res.redirect(302, "/");
+    // このフォームを出すのはログインページだけなので、拒否も必ずそのページで返す
+    if (!grant(res, token)) sendLoginPage(res, "that token was not accepted");
   });
 
   const require: RequestHandler = (req, res, next) => {
@@ -329,11 +375,11 @@ export function createHumanSurfaceAuth(credential: HumanCredential): HumanSurfac
       next();
       return;
     }
-    denyUnauthenticated(req.method, req.headers.accept, req.path, res);
+    denyUnauthenticated(req, res);
   };
 
   const requireJsonContentType: RequestHandler = (req, res, next) => {
-    if (!MUTATING_METHODS.has(req.method) || !req.path.startsWith("/api")) {
+    if (!MUTATING_METHODS.has(req.method) || !isApiPath(req.path)) {
       next();
       return;
     }
