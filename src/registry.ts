@@ -236,7 +236,7 @@ export function assertValidSkillAllowlist(skills: string[]): void {
 
 /** A workspace's `review_allowed_commands` breaks ADR 0035's grammar. Same
  *  entrance-guard role as InvalidSkillAllowlistError above. */
-export class InvalidReviewAllowedCommandError extends Error {
+class InvalidReviewAllowedCommandError extends Error {
   constructor(public readonly entry: string, reason: string) {
     super(`invalid review_allowed_commands entry "${entry}": ${reason}`);
     this.name = "InvalidReviewAllowedCommandError";
@@ -265,7 +265,7 @@ export class InvalidReviewAllowedCommandError extends Error {
  *  - **non-empty, no leading/trailing space** — an empty or space-padded entry
  *    becomes `Bash(*)` or `Bash( foo*)`: the first opens everything, the
  *    second silently matches nothing. Both are worse than a loud rejection. */
-export function assertValidReviewAllowedCommands(commands: string[]): void {
+function assertValidReviewAllowedCommands(commands: string[]): void {
   for (const entry of commands) {
     if (entry === "") {
       throw new InvalidReviewAllowedCommandError(entry, "empty command prefix");

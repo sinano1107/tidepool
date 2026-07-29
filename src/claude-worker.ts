@@ -18,7 +18,7 @@ import {
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
-import { buildSandboxSettings, sandboxOverridingSettings } from "./sandbox.js";
+import { buildSandboxSettings, floorOverridingSettings } from "./sandbox.js";
 import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
@@ -185,11 +185,30 @@ export function computeSkillDenials(
   );
 }
 
-// ADR 0013 追記(issue #59): review の書き込み系 Bash パターン。読み取り
-// コマンド(cat/ls/grep 等)は対象外 — v1 はツール層での完全なサンドボックス化
-// を狙わず、ADR 0013 が明示した「書けないが覗ける、覗けば残る」の線を守る。
-// パターン形式(`Bash(<prefix>*)`)はインストール済み CLI の --help(2.1.214)
-// の例("Bash(git *) Edit")で確認済み。この配列を編集したら
+// review の書き込み系 Bash パターン。**この配列の役割は ADR 0035(issue #144)
+// で変わった。**
+//
+// 当初(ADR 0013 追記 / issue #59)これは書き込み床そのもののつもりだった。
+// それは失敗している — `--disallowedTools` は `Bash(<prefix>*)` の前置一致で、
+// リダイレクト(`>`)はコマンドではないので原理的にパターンが書けず、
+// インタプリタとラッパは無限にある。床は permission 層(review spawn の
+// `--permission-mode manual`)へ移った。
+//
+// 今この配列が担うのは2つ:
+//
+//  1. **明確な拒否**。`git commit` や `rm` は、承認要求という形の暗黙の拒否では
+//     なく名指しで断る — エージェントに早い段階で境界を伝える UX。
+//  2. **`review_allowed_commands` の天井**。deny は allow に常勝する(ADR 0033
+//     実験2、manual 下でも実測)ので、registry がここに挙がるコマンドを開くこと
+//     はできない。ただし天井が覆うのは**ここに挙がっているものだけ**である。
+//     インタプリタもラッパも挙がっていないので、registry に `sh -c` と書けば
+//     文法検証を通り `Bash(sh -c*)` として実際に開く。これは穴ではなく設計上の
+//     線引き — 列挙で塞ぐ試みは上のとおり失敗したので、`review_allowed_commands`
+//     の門は機械ではなく保護 workspace の人間 merge である(ADR 0035)。
+//
+// 読み取りコマンド(cat/ls/grep 等)は対象外。パターン形式(`Bash(<prefix>*)`)
+// はインストール済み CLI の --help(2.1.214)の例("Bash(git *) Edit")で確認済み。
+// この配列を編集したら
 // tests/review-tool-denials.test.ts の arrayContaining リストも手で合わせる
 // こと — テスト側はこの配列を import せず独立した literal で書いている
 // (tdd スキルの「期待値は独立した情報源から」の線: import して比較すると
@@ -252,8 +271,9 @@ const MCP_SERVER_NAME = "tidepool";
  *  `reviewToolDenials` と同じく `task.type` だけを見る — read-only は review と
  *  いう task type の性質であって実行エージェントの性質ではない(ADR 0013)。
  *  deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で確認)ので、
- *  registry の allow がどれだけ雑でもここが `reviewToolDenials` の上限を越える
- *  ことはない。 */
+ *  registry が `git commit` や `rm` を開くことはできない —— ただし天井が覆うのは
+ *  `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこのコメント参照)。
+ *  雑な allow に対する一般の防壁は機械ではなく registry の人間 merge。 */
 export function reviewAllowedTools(
   taskType: Task["type"],
   reviewAllowedCommands: string[],
@@ -893,12 +913,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // own `.claude/settings.json` with the per-task `--settings` floor below,
     // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
     // entries win, and a `permissions.allow` entry lifts review's manual write
-    // floor (both measured — see sandboxOverridingSettings). A work session can
+    // floor (both measured — see floorOverridingSettings). A work session can
     // write its own checkout, so this would be a two-session escalation: widen
     // the floor in session N, walk out in N+1. A workspace that redefines the
     // floor is a broken resource — quarantined like a dirty tree, and no session
     // starts in it meanwhile.
-    const overriding = sandboxOverridingSettings(workspace.path);
+    const overriding = floorOverridingSettings(workspace.path);
     if (overriding.length > 0) {
       quarantineWorkspace(
         this.options.db,
@@ -1016,7 +1036,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       mcpConfigPath,
       JSON.stringify({
         mcpServers: {
-          tidepool: { type: "http", url: `${this.options.mcpUrl}?task=${task.id}` },
+          [MCP_SERVER_NAME]: { type: "http", url: `${this.options.mcpUrl}?task=${task.id}` },
         },
       }),
     );

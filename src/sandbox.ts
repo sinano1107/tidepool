@@ -388,7 +388,7 @@ const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
  *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean". A
  *  settings file carrying neither key is left alone — hooks, env and the rest
  *  of a project's ordinary settings are none of this guard's business. */
-export function sandboxOverridingSettings(workspacePath: string): string[] {
+export function floorOverridingSettings(workspacePath: string): string[] {
   const offending: string[] = [];
   for (const name of PROJECT_SETTINGS_FILES) {
     let raw: string;

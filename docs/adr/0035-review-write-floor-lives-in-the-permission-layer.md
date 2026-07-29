@@ -21,7 +21,7 @@ ADR 0033 の OS サンドボックスと併用する。ただし独立した4層
 
 - **OS サンドボックス(ADR 0033)** — 読み取り視界とネットワーク、および allow で開けたコマンドの書き込み半径。`npm test` のような任意コード実行を許しても、書き込みは workspace 内に閉じる。
 - **permission 層(`manual`)** — 書き込み床の本体。リダイレクト・インタプリタ・ラッパを含む副作用系の決定的拒否。
-- **`--disallowedTools`(ADR 0013 追記 / issue #59)** — **役割が変わる**。「列挙で塞ぐ床」ではない(それは失敗した)。**allow で開けられる範囲の上限**であり、明確な拒否の宣言である。registry 側の allow がどれだけ雑でも `git commit` / `git push` 等は開かない。
+- **`--disallowedTools`(ADR 0013 追記 / issue #59)** — **役割が変わる**。「列挙で塞ぐ床」ではない(それは失敗した)。**allow で開けられる範囲の上限**であり、明確な拒否の宣言である。registry 側の allow がどれだけ雑でも `git commit` / `git push` / `rm` は開かない。ただし**上限が覆うのは列挙されたものだけ**である —— インタプリタもラッパも列挙されていないので、registry に `sh -c` と書けば文法検証を通り実際に開く。これは穴ではなく線引きで、列挙で塞ぐ試みが失敗した以上、`review_allowed_commands` に対する一般の門は機械ではなく保護 workspace の人間 merge である。
 - **slot-release tree rule** — 残余の汚れの機械的回収。
 
 `manual` はホスト能力に依存しないので、ADR 0033 の能力検査・quarantine に新しい資源は生えない。
@@ -37,11 +37,11 @@ ADR 0033 の OS サンドボックスと併用する。ただし独立した4層
 
 CLI は checkout 自身の `.claude/settings.local.json` の `permissions.allow` を merge し、それが `manual` の床を持ち上げる(`sh -c '… > f'` が通った)。`.claude/settings.json`(project tier)の `permissions` と、両ファイルの `permissions.defaultMode` は効かない —— 効くのは local tier の `allow` だけである。`auto` の下では分類器がどのみち自己承認していたので無害だったが、`manual` では permission 層が床そのものなので直撃する。work セッションは自分の checkout に書けるため、放置すれば #60 が `allowRead` で塞いだのと同じ「セッション N で床を広げ、N+1 で抜ける」2セッション経路になる。
 
-対処は既存ガードの拡張である。`sandboxOverridingSettings`(src/sandbox.ts)は checkout 側 settings の `sandbox` キーだけを offending として返していたが、`permissions` キーも返す。fail-closed の形も検査対象ファイルも変えない。これは床そのものではなく床の**ガード**であり、床は依然コード定数である(ADR 0013)。
+対処は既存ガードの拡張である。`floorOverridingSettings`(src/sandbox.ts)は checkout 側 settings の `sandbox` キーだけを offending として返していたが、`permissions` キーも返す。fail-closed の形も検査対象ファイルも変えない。これは床そのものではなく床の**ガード**であり、床は依然コード定数である(ADR 0013)。
 
 ## この決定が届けない範囲
 
-`review_allowed_commands` に `npm test` を入れても、review セッションが実際にテストを通せるとは限らない。ADR 0033 の読み取り封じ込め(`denyRead: ["~/"]`)の下では tidepool 自身のスイートは 150 file 中 93 file が落ちる(サンドボックス外は 840 tests 全 green)。permission 層の問題ではなく読み取り床との衝突であり、この決定の範囲外である。したがって v1 では**スキーマと配線だけを入れ、registry には値を入れない** —— 通らないものを allow に並べて「開けた」という誤った安心を作らない。
+`review_allowed_commands` に `npm test` を入れても、review セッションが実際にテストを通せるとは限らない。ADR 0033 の読み取り封じ込め(`denyRead: ["~/"]`)の下では tidepool 自身のスイートは 150 file 中 93 file が落ちる(サンドボックス外は 840 tests 全 green)。permission 層の問題ではなく読み取り床との衝突であり、この決定の範囲外である(issue #146 に切り出した)。したがって v1 では**スキーマと配線だけを入れ、registry には値を入れない** —— 通らないものを allow に並べて「開けた」という誤った安心を作らない。
 
 ## Considered options
 

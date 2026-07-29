@@ -544,6 +544,20 @@ describe("ClaudeCodeWorker", () => {
     expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool"]);
   });
 
+  it("allow する permission subject の綴りは、同じ spawn が書いた mcp-config のサーバ名と一致する", async () => {
+    // 一致は綴りの偶然ではなく成立条件: ズレれば review は盤面に一切触れられず、
+    // しかも「モデルが何もせず終了した」ようにしか見えない(ADR 0035 事実2)。
+    // 両側を別々の情報源(片や CLI 引数、片やディスク上の JSON)から読んで
+    // 突き合わせる — 実装の定数を import して比べると同語反復になる。
+    const { start, calls, logDir } = await makeWorker();
+    const task = start("task-review-mcp-key", null, "deckhand", "review");
+    const config = JSON.parse(
+      await readFile(join(logDir, `${task.id}.mcp.json`), "utf8"),
+    ) as { mcpServers: Record<string, unknown> };
+    const [serverName] = Object.keys(config.mcpServers);
+    expect(allowedTools(calls[0]!.args)).toContain(`mcp__${serverName}`);
+  });
+
   it("workspace の review_allowed_commands が review spawn の --allowedTools に Bash パターンとして畳まれる", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
