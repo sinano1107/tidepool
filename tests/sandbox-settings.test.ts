@@ -239,11 +239,16 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
  *  ADR 0034 は「worker が自前のサーバーを loopback に立てて叩くのは正当な作業
  *  (npm test / webui-e2e)」と既に明言しており、これはその線をコード定数にした
  *  ものである。宛先(人間面)で塞ぐのは #140 / ADR 0034 の領分で、「bind は許すが
- *  人間ポート宛は塞ぐ」は両立する。 */
-describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146)", () => {
+ *  人間ポート宛は塞ぐ」は両立する。
+ *
+ *  ADR 0036 / issue #152: tailnet の名前パターン deny は多層の一枚としてここに
+ *  同居する。*.ts.net の完全名は実測で塞げたが、MagicDNS の短縮名
+ *  (`raspberrypi`)は塞げず(2026-07-29 実測、プロキシが CONNECT を 200 で通す)、
+ *  短縮名も列挙している。 */
+describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 0036 / issue #152)", () => {
   // 期待値は独立した literal — ブロックまるごと置くので、キーが増えれば落ちる
   // (ベンダー既定の意味論に依存する床なので、黙って広がってはならない)。
-  it("どちらのプロファイルも loopback への listen を開ける — サンドボックス下の worker がテストを回せる条件", () => {
+  it("どちらのプロファイルも loopback への listen を開け、tailnet の完全名/短縮名を deny する", () => {
     for (const taskType of ["work", "review"] as const) {
       expect(
         buildSandboxSettings({
@@ -251,7 +256,10 @@ describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146)", () =>
           workspacePath: "/home/pi/work/tidepool",
           permittedSkills: "all",
         }).sandbox.network,
-      ).toEqual({ allowLocalBinding: true });
+      ).toEqual({
+        allowLocalBinding: true,
+        deniedDomains: ["*.ts.net", "raspberrypi"],
+      });
     }
   });
 });
