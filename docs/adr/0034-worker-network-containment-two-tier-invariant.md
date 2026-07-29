@@ -1,5 +1,7 @@
 # worker のネットワーク到達は「操作 = 完全閉鎖 / 読取 = 監査つき受容」の二段で封じる
 
+**Status: superseded by [ADR 0036](0036-human-surface-is-guarded-by-a-credential.md)(2026-07-29)。** 本 ADR が「実機実験で確定する変数」に挙げた3点を実測した結果、**主機構(サンドボックスのネットワークフィルタ)・極性((ii) 既定 deny → (i) deny-list のフォールバック)・二段構造(操作と読取の分割)のすべてが置き換わった** — macOS には loopback 宛の deny を表現する語彙が無く、Linux は netns により極性 (ii) を追加設定ゼロで既に満たしていた。執行は人間面の credential に移り、不変条件は一段(読取も閉鎖)に戻っている。以下の本文は**当時の決定のまま**で、今の設計ではない。読む価値が残るのは、宛先で不変条件を定義するという枠組みと、末尾の却下オプション一覧(netns / pf・nftables / WebFetch 丸ごと deny / 自ホスト宛だけ deny)である — これらの却下理由は ADR 0036 の下でも有効である。
+
 issue #140 の grilling(2026-07-28)で決定。管理MCP(ADR 0032)が別 issue に切り出した「worker が Bash で localhost の人間用 /api を叩ける柔らかい穴」の封じ方。post-v1 の hardening で、実装は #60(ADR 0033 の fs サンドボックス)の後続。
 
 **不変条件は経路ではなく宛先で定義する** — 「worker セッションからは、ツール・経路を問わず人間面(WebUI / /api / 管理MCP)に到達できない」。issue が名指しした `curl 127.0.0.1:<human port>` は経路の一つにすぎず、同じ宛先への別経路が少なくとも二つある: tailnet 側アドレス経由(tailscale serve が人間面を tailnet に公開しているため、同一ホストの worker からも**別ホストの worker からも**届く — 開発機の worker → Pi 本番の人間面というクロスホスト版を含む)と、WebFetch ツール経由(Bash サンドボックスの外にあるハーネスのツール)。経路単位で塞ぐと残りが「次の柔らかい穴」として issue を増やし続けるため、宛先で切る。
