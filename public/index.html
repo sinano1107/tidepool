@@ -3,7 +3,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>tidepool</title>
-<link rel="manifest" href="/manifest.json">
+<!-- credential なしでは manifest も 401(ADR 0036 / issue #153)。ブラウザは既定で
+     manifest を credential 抜きで取りに行くので、cookie を付けさせる -->
+<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
 <!-- Tab/bookmark favicon: symbol only, no background rect, so it reads
      cleanly at 16-32px against either a light or dark browser chrome -->
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -66,6 +68,27 @@
 </head>
 <body>
 <div id="root"></div>
+<script>
+// issue #153 / ADR 0036: 人間面は credential で守られる。cookie を失った端末
+// (ローテーション後・cookie 削除後)では以後の fetch がすべて 401 を返すが、
+// WebUI 側の呼び出しは `.then(r => r.json())` で 401 の JSON をそのまま描いて
+// しまう。ここで一律に受け止めて再読込し、盤面に token 入力ページを返させる —
+// インストール済み PWA にはアドレスバーが無く、これが唯一の復旧導線になる。
+// api() だけでなく素の fetch 呼び出しも拾うため、window.fetch を1箇所で包む。
+(function () {
+  var nativeFetch = window.fetch.bind(window);
+  var reloading = false;
+  window.fetch = function () {
+    return nativeFetch.apply(null, arguments).then(function (res) {
+      if (res.status === 401 && !reloading) {
+        reloading = true;
+        window.location.reload();
+      }
+      return res;
+    });
+  };
+})();
+</script>
 <!-- triage/board/queue come straight from the design-synced kit (single
      source, no copies); register stays a local component (its dump → draft →
      edit flow, issue #65, is specific to this screen and not part of the kit) -->

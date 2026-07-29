@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import type { AgentAdmin } from "./agent-create.js";
 import { createApiRouter } from "./api.js";
+import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import type { Clock } from "./clock.js";
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -35,6 +36,12 @@ export interface ServerOptions {
    *  `port` so `tailscale serve` can publish web/`/api`/static files without
    *  also exposing MCP tool calls to the rest of the tailnet. */
   mcpPort: number;
+  /** ADR 0036 / issue #153: 人間面(静的資産・`/api`・そこに mount される
+   *  管理MCP)を守る単一の盤面秘密のハッシュ源。**省略可にはしない** — 「口が
+   *  空いていれば無認証」は本番が事故で裸になる形であり、この不変条件を
+   *  ホストごとの設定に委ねないのが ADR 0036 のスコープ判断そのもの。
+   *  Worker MCP(`mcpPort` 側)には掛からない。 */
+  credential: HumanCredential;
   clock: Clock;
   worker: WorkerFactory;
   /** The board's workspace: a git checkout the branch discipline and the
@@ -158,6 +165,15 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     );
   }
   const app = express();
+  // ADR 0036 / issue #153: 人間面の credential。**app への登録より前**に置くのが
+  // 射程の担保 — 以降 `app` に何が生えても(将来の管理MCP mount を含む)、この
+  // 1本を通らずに到達できるルートは存在しない。bootstrap だけが手前に立つ。
+  // **`mcpApp` には絶対に掛けない**: 掛けると全 worker が死ぬ。
+  const auth = createHumanSurfaceAuth(options.credential);
+  app.use(auth.bootstrap);
+  app.use(auth.require);
+  // credential の**後**に置く: 無認証リクエストは 415 ではなく 401 で落ちる
+  app.use(auth.requireJsonContentType);
   const worker = options.worker({ db, clock: options.clock });
   // resolved here for this board's actual wiring, same as `worker.id` below
   // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built

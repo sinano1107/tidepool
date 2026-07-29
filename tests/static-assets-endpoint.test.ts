@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { bootTidepool, type Tidepool } from "./harness.js";
+import { AUTH_HEADERS, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -18,14 +18,14 @@ afterEach(() => t?.stop());
 // whenever the suite itself runs from a `.claude/worktrees/...` checkout.
 it("GET /styles.css serves the stylesheet, not a dotfile 404 (issue #108)", async () => {
   t = await bootTidepool();
-  const res = await fetch(`${t.baseUrl}/styles.css`);
+  const res = await fetch(`${t.baseUrl}/styles.css`, { headers: AUTH_HEADERS });
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toContain("css");
 });
 
 it("GET /_ds_bundle.js serves the design-system bundle (issue #108)", async () => {
   t = await bootTidepool();
-  const res = await fetch(`${t.baseUrl}/_ds_bundle.js`);
+  const res = await fetch(`${t.baseUrl}/_ds_bundle.js`, { headers: AUTH_HEADERS });
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toContain("javascript");
 });
