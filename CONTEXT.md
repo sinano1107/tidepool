@@ -13,7 +13,7 @@
 
 ## Status(ステータス)
 
-`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)— タスク自身にもキュー順序にも問題はないが、盤面側の事情(環境事象 = throttle・実行 workspace の quarantine・ホストの worker サンドボックスの不成立、または人間の Pause)が今は slot に入れさせないことを示す。`held` もステータスではなく導出される表示状態(Held 参照)。
+`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)— タスク自身にもキュー順序にも問題はないが、盤面側の事情(環境事象 = throttle・実行 workspace の quarantine・ホストの封じ込め能力の不成立、または人間の Pause)が今は slot に入れさせないことを示す。`held` もステータスではなく導出される表示状態(Held 参照)。
 
 ## Settled(決着)
 
@@ -161,13 +161,13 @@ workspace への書き込みは常にタスクブランチ(`task/<taskId>`)上�
 
 ## Quarantine(隔離)
 
-実行に必要な資源が実行不能と判明したときの封じ込め。資源は3種: **workspace**(契機は slot-release tree rule 自体の失敗 — コンフリクトや破損など — と、registry に存在しない workspace 名への遭遇、pickup 時にタスクブランチを用意できないこと — 存在しない保護ブランチなど — そして checkout 自身が `.claude/settings.json` / `settings.local.json` で worker の床を再定義していること — サンドボックス(`sandbox`)と permission(`permissions`)のどちらでも)と **agent 名**(契機は pickup 時に assignee が registry に解決できないこと)、そして **ホストの封じ込め能力**(Containment capability — このホストで worker の封じ込めが成立しているか。2種類の問いを1つの検査が束ねる: fs サンドボックスに**入れるか**〔Linux の bubblewrap / socat が無い、または user namespace / AppArmor に塞がれて実際には動かない。ADR 0033〕と、自分の人間面が**無認証リクエストを拒むか**〔ADR 0036〕。前者はホストの能力、後者は組み上がった自分自身の配線を測る)。該当資源が needs-human とマークされ、その資源に依存するタスクの pickup が停止し(資源単位の状態 — 他の資源のタスクは流れ続ける)、修理を求める確認型 question が生成される(同じ資源に未回答のものが既にあれば重ねない — 1資源につき確認は最大1枚)。
+実行に必要な資源が実行不能と判明したときの封じ込め。資源は3種: **workspace**(契機は slot-release tree rule 自体の失敗 — コンフリクトや破損など — と、registry に存在しない workspace 名への遭遇、pickup 時にタスクブランチを用意できないこと — 存在しない保護ブランチなど — そして checkout 自身が `.claude/settings.json` / `settings.local.json` で worker の床を再定義していること — サンドボックス(`sandbox`)と permission(`permissions`)のどちらでも)と **agent 名**(契機は pickup 時に assignee が registry に解決できないこと)、そして **ホストの封じ込め能力**(Containment capability 参照 — 契機はその検査の不成立)。該当資源が needs-human とマークされ、その資源に依存するタスクの pickup が停止し(資源単位の状態 — 他の資源のタスクは流れ続ける)、修理を求める確認型 question が生成される(同じ資源に未回答のものが既にあれば重ねない — 1資源につき確認は最大1枚)。
 
-封じ込め能力だけは例外的に**盤面全体**の pickup を止める。ホストと盤面自身の性質であって特定の workspace や agent の性質ではないため、止められるより狭い資源が存在しない — 「資源単位」の原則が適用できない唯一の資源である。したがって needs-human の行を持たず、能力検査そのものと確認 question の存在が状態を兼ねる。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず検証してから受理する: workspace は「registry に存在し、かつツリーがクリーン」、agent 名は「registry に復活している、またはその名前宛ての未着手タスクがもう存在しない」、封じ込め能力は「能力検査を回答時にもう一度走らせて成立する」(まだ壊れていれば回答は拒否され、question は開いたまま)。なお封じ込め能力が不成立の間、**人間面そのものは開いたままである**(fail-open)— 止まっているのは pickup の側で、worker が1枚も走らない以上そこに敵はおらず、開いていることが人間の復旧経路になる(ADR 0036)。
+封じ込め能力だけは例外的に**盤面全体**の pickup を止める。ホストと盤面自身の性質であって特定の workspace や agent の性質ではないため、止められるより狭い資源が存在しない — 「資源単位」の原則が適用できない唯一の資源である。したがって needs-human の行を持たず、能力検査そのものと確認 question の存在が状態を兼ねる。エージェントの失敗ではなく盤面自身の判断であるため、question はエージェントではなく Tidepool 自身の名義で登録される。解除はこの question への回答 — どんな回答も修理完了の確認として扱われ、自由記述は修理メモとして記録に残る。盤面は確認を鵜呑みにせず検証してから受理する: workspace は「registry に存在し、かつツリーがクリーン」、agent 名は「registry に復活している、またはその名前宛ての未着手タスクがもう存在しない」、封じ込め能力は「能力検査を回答時にもう一度走らせて成立する」(まだ壊れていれば回答は拒否され、question は開いたまま)。不成立の間も人間面そのものは開いたままであること(fail-open)は Containment capability を参照。
 
 ## Containment capability(封じ込め能力)
 
-このホストで worker の封じ込めが成立しているか、を答える1つの検査。2種類の問いを束ねる — **fs サンドボックスに入れるか**(ホストの能力。bubblewrap / socat の不在、user namespace や AppArmor による阻止。ADR 0033)と、**自分の人間面が無認証リクエストを拒むか**(組み上がった自分自身の配線。ADR 0036)。起動時と pickup ごと、そして quarantine の回答受理時に読み直され、不成立なら盤面全体の pickup が止まる(Quarantine 参照)。「封じられているつもりで裸」は機構の不在より悪いという判断から fail-closed に倒す。**人間面そのものは不成立の間も開いたままである**(fail-open)— 意図的な非対称で、worker が1枚も走らない以上そこに敵はおらず、開いていることが人間の復旧経路になる。
+このホストで worker の封じ込めが成立しているか、を答える1つの検査。2種類の問いを束ねる — **fs サンドボックスに入れるか**(ホストの能力。bubblewrap / socat の不在、user namespace や AppArmor による阻止。ADR 0033)と、**自分の人間面が無認証リクエストを拒むか**(組み上がった自分自身の配線。ADR 0036 — こちらの半分は未実装、#154)。起動時と pickup ごと、そして quarantine の回答受理時に読み直され、不成立なら盤面全体の pickup が止まる(Quarantine 参照)。「封じられているつもりで裸」は機構の不在より悪いという判断から fail-closed に倒す。**人間面そのものは不成立の間も開いたままである**(fail-open)— 意図的な非対称で、worker が1枚も走らない以上そこに敵はおらず、開いていることが人間の復旧経路になる。
 
 ## Question(質問)
 
