@@ -22,7 +22,10 @@ Unless the user explicitly asks to promote, every check is **throwaway**:
 2. Import from `./fixtures.js`, boot with `boot(opts)`, injecting only the seams the
    screen needs (`hostSkills`, `agentAdmin`, `workspaceAdmin`, …). See
    `tests/harness.ts` `BootOptions` for the full seam list.
-3. `page.goto(t.baseUrl)`, then assert with auto-waiting locators.
+3. `page.goto(t.baseUrl)`, then assert with auto-waiting locators. The human surface
+   requires a credential (ADR 0036 / issue #153), but `boot()` already walks the
+   bootstrap URL to set the cookie — a spec that wants the *unauthenticated* view calls
+   `page.context().clearCookies()` first.
 4. Run `npm run e2e` (add `<name>.scratch` to target just yours).
 
 ```ts

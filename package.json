@@ -7,6 +7,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "start": "tsx src/main.ts",
+    "token": "tsx scripts/token.ts",
     "start:live": "TIDEPOOL_REGISTRY=$HOME/tidepool-registry tsx src/main.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check",

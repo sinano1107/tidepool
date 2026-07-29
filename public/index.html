@@ -3,7 +3,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>tidepool</title>
-<link rel="manifest" href="/manifest.json">
+<!-- The human surface requires a credential (ADR 0036 / issue #153), and the browser
+     fetches the manifest without one by default — this attribute sends the cookie -->
+<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
 <!-- Tab/bookmark favicon: symbol only, no background rect, so it reads
      cleanly at 16-32px against either a light or dark browser chrome -->
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -66,6 +68,28 @@
 </head>
 <body>
 <div id="root"></div>
+<script>
+// The human surface requires a credential (ADR 0036 / issue #153). A device that
+// lost its cookie — after a rotation, or after the cookie was cleared — gets a 401
+// from every call, and the calls here would render that 401 JSON as if it were data
+// (`.then(r => r.json())`). Catch it in one place and reload, so the board answers
+// with its token-entry page: an installed PWA has no address bar, and that page is
+// the only way back in. Wrapping fetch covers the bare `fetch('/api/...')` call
+// sites too, not just api() below. Same-origin only — the board's own surface is
+// the only thing this credential governs.
+(function () {
+  const nativeFetch = window.fetch.bind(window);
+  let reloading = false;
+  window.fetch = (...args) =>
+    nativeFetch(...args).then((res) => {
+      if (res.status === 401 && !reloading && new URL(res.url, location.href).origin === location.origin) {
+        reloading = true;
+        location.reload();
+      }
+      return res;
+    });
+})();
+</script>
 <!-- triage/board/queue come straight from the design-synced kit (single
      source, no copies); register stays a local component (its dump → draft →
      edit flow, issue #65, is specific to this screen and not part of the kit) -->

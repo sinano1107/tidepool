@@ -30,6 +30,11 @@ Playwright でこの確認まで担う(ADR 0029)。この doc は、その確認
   `channel: "chrome"`、`expect.timeout` は CDN + Babel 描画のため寛容(15s)に。
 - `e2e/fixtures.ts` — `boot(opts)` **関数**を配る fixture。事前起動したインスタンスではなく
   関数を配るのは、画面ごとに要る seam が違うから。起こした台は fixture が全部 `stop()` する。
+- **`boot()` は bootstrap まで済ませる**(issue #153 / ADR 0036)。人間面は credential を
+  要求するので、cookie を持たない `page` は盤面ではなく 401 の token 入力ページに着地する。
+  fixture が `page.goto(bootstrapUrl(t.baseUrl))` を1回踏んで cookie を張るので、spec 本文は
+  これまでどおり `page.goto(t.baseUrl)` でよい。**無認証の見え方そのものを確かめたい spec**
+  だけが、その前に `page.context().clearCookies()` する。
 
 ```ts
 import { expect, test } from "./fixtures.js";

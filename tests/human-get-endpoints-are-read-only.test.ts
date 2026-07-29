@@ -4,7 +4,14 @@ import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import { type Db, openDb } from "../src/db.js";
 import { FakeClock } from "./fakes.js";
-import { api, bootTidepool, makeWorkspace, registerWork, type Tidepool } from "./harness.js";
+import {
+  AUTH_HEADERS,
+  api,
+  bootTidepool,
+  makeWorkspace,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
@@ -92,7 +99,9 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   try {
     let before = dumpDb(db);
     for (const path of paths) {
-      const res = await fetch(`${t.baseUrl}${path}`);
+      // issue #153: 人間面は credential を要求する。ここが測るのは無変異性で
+      // あって認証ではないので、道具側の bearer を付けて読み取り経路まで届かせる
+      const res = await fetch(`${t.baseUrl}${path}`, { headers: AUTH_HEADERS });
       await res.text();
       // 200 で固定する。「500 未満」だと将来 404 や 503 の早期 return に落ちた
       // ルートを素通りさせ、読み取り経路を1行も走らないまま合格してしまう

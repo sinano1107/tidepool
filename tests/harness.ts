@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AgentAdmin } from "../src/agent-create.js";
+import { bootstrapUrl as authBootstrapUrl, hashToken } from "../src/auth.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
@@ -19,6 +20,16 @@ import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
+
+/** テスト盤面の固定 credential(issue #153 / ADR 0036)。`bootTidepool` は必ず
+ *  これを持つ盤面を起こし、`api()` が bearer で提示する — 既存テストの本文は
+ *  認証の存在を知らないままでよい。無認証の振る舞いを主張したいテストだけが
+ *  素の `fetch` を使う。 */
+export const TEST_TOKEN = "tidepool-test-token";
+
+/** `startServer` を直に呼ぶテスト(harness を通さないもの)が渡す credential。
+ *  ハッシュの組み立てを各所で書き直さない。 */
+export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 
 export interface Tidepool {
   baseUrl: string;
@@ -132,6 +143,9 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     port: 0,
     mcpPort: 0,
     clock,
+    // issue #153: テスト盤面も本番と同じく必ず credential を持つ(「省略 =
+    // 認証なし」の口は作らない)。テストが提示するのは固定の TEST_TOKEN。
+    credential: TEST_CREDENTIAL,
     worker: () => worker,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
@@ -186,6 +200,15 @@ export async function mcpClient(baseUrl: string, taskId?: string): Promise<Clien
   return client;
 }
 
+/** 道具側の credential(issue #153): 盤面が受ける2つの形のうち bearer のほう。
+ *  ブラウザ導線(cookie)は e2e が bootstrap URL を踏んで得る。 */
+export const AUTH_HEADERS = { authorization: `Bearer ${TEST_TOKEN}` } as const;
+
+/** テスト盤面の bootstrap URL — 実ブラウザ(e2e)がここを1回踏んで cookie を得る。 */
+export function bootstrapUrl(baseUrl: string): string {
+  return authBootstrapUrl(baseUrl, TEST_TOKEN);
+}
+
 export async function api(
   baseUrl: string,
   method: string,
@@ -194,7 +217,7 @@ export async function api(
 ): Promise<{ status: number; json: any }> {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...AUTH_HEADERS },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, json: await res.json() };
