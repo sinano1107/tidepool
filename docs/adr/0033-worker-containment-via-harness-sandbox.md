@@ -52,6 +52,10 @@ macOS だけ `denyWrite` を効かせる案は採らない — 上の「片方�
 | **work** プロファイルで boot テスト1本 | 同一シグネチャで失敗。review 固有ではなく **worker 全体**(2プロファイルの settings 差は `allowWrite` と `autoAllowBashIfSandboxed` だけで、ネットワーク要素に差は無い) |
 | review プロファイル + `network: { allowLocalBinding: true }`(1行追加、読み取り床は無変更) | **152 file / 858 tests 全 green** |
 
+**上表は #146 の grilling 時、修理前の実測である。以下は実装後の再確認で、いずれも「設定ファイルが黙って捨てられていない」ことの control を同一セッションに同居させて測った** — CLI は `-p` 下で検証に失敗した settings を黙って無視するので、サンドボックス完全不在のセッションも同じく全 green を出し、それだけでは PASS と区別できない。work プロファイル + `auto` では読み取り床 canary が `Operation not permitted`(Seatbelt)を返した上で **152 file / 859 tests 全 green**、review プロファイルを production shape(`manual` + `--allowedTools "Bash(npm test*)"`)で回しても同じく全 green で、書き込み床も無傷だった(`Output redirection … was blocked.`、ファイルは生成されず)。`manual` 下では canary の `cat` がハーネス層で先に拒否されて OS 文字列が出せない(deploy-pi SKILL.md の整理)ため、review 側の control にはスイート実行中の git が吐く `Operation not permitted` を用いた。
+
+本番 Pi(bwrap + socat、CLI **2.1.207**)でも本キーは効く。deploy-pi スモーク 3a の形(branch のコードから emit した work プロファイル settings、デプロイはしない)で `127.0.0.1` の port 0 への listen が成功し(`BIND-OK 44667`)、**同一セッション**の読み取り床 canary は bwrap の tmpfs 被せによる OS 拒否(`そのようなファイルやディレクトリはありません`)を返した — 設定ファイルが黙って捨てられていない(= サンドボックスが本当に立っている)ことの control つきである。キーは 2.1.207 のバイナリにも実在するため、本番の CLI を上げずに測れた。なお Pi で測ったのは「キーを足せば通ること」であって「既定では拒否されること」ではない(既定拒否の測定は上表の macOS のみ)。
+
 **原因は読み取り床ではない。** `denyRead: ["~/"]` も `allowRead` もこの失敗には無関係で、`allowRead` への追加は何も直さない。病巣はネットワーク既定であり、`sandbox.network.allowLocalBinding` はインストール済み CLI(2.1.220)に実在するキーで、意味論は上の実測で確認した。
 
 したがって **両プロファイルに `network: { allowLocalBinding: true }` をコード定数で足す**(床はデータに依存しない — ADR 0013)。プロファイル差をつけない理由は ADR 0034 が既に書いている:「worker が自前のサーバーを loopback に立てて叩くのは正当な作業(npm test / webui-e2e が in-process でサーバーを起動する)」であり、これは review 固有の要件ではない。review にテスト実行を期待することは ADR 0035 の「read-only は行為の性質」の線を壊さない — 任意コード実行を許しても書き込み半径はサンドボックスが workspace 内に閉じ、残余は slot-release tree rule が回収する(ADR 0035「層の分担」)。

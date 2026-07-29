@@ -74,6 +74,9 @@ PI=masaki@100.78.52.97
 #    (one the agent's allowlist will permit, one it won't), and the loopback
 #    bind probe. The probe lives INSIDE ws on purpose — at ~/sandbox-smoke/ it
 #    would be OS-refused on *read* by denyRead and misread as a bind failure.
+#    The workspace is git-init'd because step 4 deletes it: every run after the
+#    first starts with no repo, and 3b(3)'s `git status --short` is the
+#    positive "the sandbox really started" evidence.
 ssh $PI 'mkdir -p ~/sandbox-smoke/ws ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied
 echo CANARY > ~/sandbox-smoke/canary.txt
 echo inside > ~/sandbox-smoke/ws/inside.txt
@@ -85,7 +88,8 @@ server.listen(0, "127.0.0.1", () => {
   console.log("BIND-OK " + server.address().port);
   server.close();
 });
-JS'
+JS
+git init -q ~/sandbox-smoke/ws'
 # 2. emit BOTH profiles from the DEPLOYED code — never hand-write them; the
 #    point is to test the JSON the board actually produces
 ssh $PI 'sudo tee /opt/tidepool/scripts/_tmp-emit.ts >/dev/null <<TS
@@ -137,7 +141,7 @@ If a canary read *succeeds*, or fails with a harness-worded permission message i
 
 **3a(5) is the loopback bind canary (issue #146 / ADR 0033's addendum), and it only means anything because rows (1) and (4) are in the same session.** The vendor's network defaults *refuse* a `listen` on loopback; `network: { allowLocalBinding: true }` in both profiles is what re-opens it, and without it no worker can run tidepool's own suite (measured on macOS 2.1.220: 93 test files died on `listener.address()` returning null). What this row watches for is a CLI update quietly changing that default or the key's semantics — and the failure it must not be fooled by is the settings file being dropped wholesale, which the CLI does silently when validation fails under `-p`. A `BIND-OK` printed by a session with no sandbox at all looks identical to a pass. The canary rows above are that control: they can only produce the OS string with the sandbox up, so read (5) as a pass **only** alongside (1) and (4) passing. Never split this check into its own session. Treat a failure here as "workers can no longer run tests", not as a containment breach.
 
-Scope note, and the reason this row is worth a line of its own: the numbers above are **macOS 2.1.220** observations. Everything else on the read-floor table already distinguishes the two backends (`Operation not permitted` vs `No such file or directory`), and the bind row deserves the same care — the Linux side runs the sandbox's network through `socat` (see `checkSandboxCapability`), which is a different mechanism from Seatbelt's. What a bind failure looks like under bwrap is not established yet; the first Pi run is what establishes it. Record whatever node prints on stderr — most likely one of `EPERM` / `EACCES` / `EADDRNOTAVAIL` — and write it into this section rather than assuming the macOS wording carries over.
+Scope note: the *default-refuses-a-listen* measurement behind this row is **macOS 2.1.220**. The pass itself is measured on both — on the Pi (bwrap + socat, 2.1.207) the probe returned `BIND-OK 44667` alongside a canary row showing bwrap's own masked-path refusal in the same session (2026-07-29). What a bind *failure* looks like under bwrap is still unmeasured; if this row ever fails, record whatever node prints on stderr — most likely one of `EPERM` / `EACCES` / `EADDRNOTAVAIL` — into this section rather than assuming the macOS wording carries over. The Linux side runs the sandbox's network through `socat` (see `checkSandboxCapability`), a different mechanism from Seatbelt's, which is why the read-floor table already distinguishes the two backends and why this row deserves the same care.
 
 **The OS read floor is 3a's job alone, and deliberately so.** 3b's canary row is *not* on this table: under `--permission-mode manual` the harness refuses cwd-external file access **before the OS ever sees it**, so a review session cannot produce the OS string at all. Measured on the Pi (2026-07-29): `cat /home/masaki/sandbox-smoke/canary.txt` came back `cat in '…' was blocked. For security, Claude Code may only concatenate files from the allowed working directories for this session: '…/ws'` — harness wording, sandbox fully on. Even a command the allowlist explicitly opens does not get through: `wc -l <canary>` with `Bash(wc*)` allowed was refused the same way (`wc in '…' was blocked…`). Judging 3b(1) by the OS-string rule above would raise a false production incident.
 
