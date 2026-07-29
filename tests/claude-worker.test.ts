@@ -239,6 +239,13 @@ function disallowedTools(args: string[]): string[] {
   return args[args.indexOf("--disallowedTools") + 1]!.split(",");
 }
 
+/** The `--allowedTools` value a spawn used, split the same way (ADR 0035).
+ *  Empty when the flag is absent — a work spawn carries no allowlist at all. */
+function allowedTools(args: string[]): string[] {
+  const at = args.indexOf("--allowedTools");
+  return at === -1 ? [] : args[at + 1]!.split(",");
+}
+
 describe("ClaudeCodeWorker", () => {
   it("タスクの workspace を cwd に、stream-json 出力のヘッドレス Claude Code を起動する", async () => {
     const { start, calls } = await makeWorker();
@@ -515,6 +522,50 @@ describe("ClaudeCodeWorker", () => {
     start("task-work-no-deny", null, "deckhand", "work");
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toEqual(["Workflow"]);
+  });
+
+  // ADR 0035 / issue #144: review の書き込み床は permission 層が担う。auto の
+  // 判定は LLM 分類器でモデル判断なので床に数えない、という原則の実装面。
+  it("review タスクの spawn は --permission-mode manual で走る(ADR 0035)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-review-manual", null, "deckhand", "review");
+    expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
+  });
+
+  it("work タスクの spawn は auto のまま — work は書けなければならない", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-work-auto", null, "deckhand", "work");
+    expect(calls[0]!.args.join(" ")).toContain("--permission-mode auto");
+  });
+
+  it("review タスクの spawn は tidepool MCP をサーバ単位で allow する — 無いと盤面への唯一の channel が承認待ちで詰まる", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-review-mcp-allow", null, "deckhand", "review");
+    expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool"]);
+  });
+
+  it("workspace の review_allowed_commands が review spawn の --allowedTools に Bash パターンとして畳まれる", async () => {
+    const { start, calls } = await makeWorker({
+      "workspaces.yaml": `tidepool:
+  path: /home/pi/work/tidepool
+  review_allowed_commands:
+    - npm test
+`,
+    });
+    start("task-review-allowed-cmds", null, "deckhand", "review");
+    expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool", "Bash(npm test*)"]);
+  });
+
+  it("review_allowed_commands は work の spawn には効かない(--allowedTools 自体が付かない)", async () => {
+    const { start, calls } = await makeWorker({
+      "workspaces.yaml": `tidepool:
+  path: /home/pi/work/tidepool
+  review_allowed_commands:
+    - npm test
+`,
+    });
+    start("task-work-no-allow", null, "deckhand", "work");
+    expect(calls[0]!.args).not.toContain("--allowedTools");
   });
 
   // issue #56 / ADR 0025: skill access is the agent's frontmatter allowlist,

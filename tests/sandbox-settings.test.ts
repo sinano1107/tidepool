@@ -181,4 +181,42 @@ describe("sandboxOverridingSettings", () => {
     const dir = await workspaceWith({ "settings.json": "{ not json" });
     expect(sandboxOverridingSettings(dir)).toEqual(["settings.json"]);
   });
+
+  it("permissions ブロックも検出する(ADR 0035): local tier の permissions.allow は manual の床を持ち上げる", async () => {
+    // #60 が allowRead で塞いだのと同じ二段階エスカレーション経路の1階上。
+    // 実測(2.1.220)で settings.local.json の permissions.allow を置くと
+    // `sh -c '… > f'` が通った。work セッションは自分の checkout に書けるので、
+    // review が封じ込めるはずの当の行為者が床を外せることになる。
+    const dir = await workspaceWith({
+      "settings.local.json": JSON.stringify({ permissions: { allow: ["Bash(sh -c:*)"] } }),
+    });
+    expect(sandboxOverridingSettings(dir)).toEqual(["settings.local.json"]);
+  });
+});
+
+/** ADR 0035(issue #144): review の書き込み床は permission 層が担うが、CLI の
+ *  `sandbox.autoAllowBashIfSandboxed`(既定 true)が「サンドボックス内の Bash は
+ *  承認不要」を意味するため、これを切らないと `--permission-mode manual` の床は
+ *  そもそも存在しない。実測(macOS 2.1.220 / Pi 2.1.207 の両方)で、既定では
+ *  `echo x > f` が通り、false では `Output redirection … was blocked.` になる。 */
+describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
+  it("review プロファイルはサンドボックスの Bash 自動承認を切る — これが manual 床の成立条件", () => {
+    expect(
+      buildSandboxSettings({
+        taskType: "review",
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      }).sandbox.autoAllowBashIfSandboxed,
+    ).toBe(false);
+  });
+
+  it("work プロファイルには載せない — work は auto で走り、切ると書き込みが全部承認待ちで headless では静かに死ぬ", () => {
+    expect(
+      buildSandboxSettings({
+        taskType: "work",
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      }).sandbox.autoAllowBashIfSandboxed,
+    ).toBeUndefined();
+  });
 });
