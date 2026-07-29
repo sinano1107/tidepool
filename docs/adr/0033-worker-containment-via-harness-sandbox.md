@@ -56,7 +56,9 @@ macOS だけ `denyWrite` を効かせる案は採らない — 上の「片方�
 
 したがって **両プロファイルに `network: { allowLocalBinding: true }` をコード定数で足す**(床はデータに依存しない — ADR 0013)。プロファイル差をつけない理由は ADR 0034 が既に書いている:「worker が自前のサーバーを loopback に立てて叩くのは正当な作業(npm test / webui-e2e が in-process でサーバーを起動する)」であり、これは review 固有の要件ではない。review にテスト実行を期待することは ADR 0035 の「read-only は行為の性質」の線を壊さない — 任意コード実行を許しても書き込み半径はサンドボックスが workspace 内に閉じ、残余は slot-release tree rule が回収する(ADR 0035「層の分担」)。
 
-**人間面への到達はこの追記で後退しない。** macOS(Seatbelt)にはネットワーク名前空間が存在せず(ADR 0034 が同じ理由で netns 案を落としている)、サンドボックス内の loopback はホストの loopback そのものである。つまり worker の Bash から人間面 `/api` に届くかどうかはサンドボックス導入前と変わらず、`allowLocalBinding` はその状態を新しく作るのではなく維持する。宛先(人間面)で切るのは #140 / ADR 0034 の領分であり、「bind は許すが人間ポート宛は塞ぐ」は両立する — ADR 0034 のフィルタ極性 (ii)(loopback 既定 deny + allowlist)が成立するのは sandbox 内 loopback が別世界のプラットフォームだけで、macOS はそれに当たらないため狭い deny-list(極性 (i))へのフォールバック分岐に入る、という同 ADR 側の判断材料でもある。
+**測ったのは `listen` であって、宛先としての人間面ではない。** `allowLocalBinding` は「自分でポートを開けてよいか」の許可であり、「どこへ繋いでよいか」の許可ではない。したがって worker の Bash から人間面 `/api` に到達できるか — 言い換えれば**サンドボックス内の loopback がホストの loopback と同じ世界か** — は本追記では測っておらず、ADR 0034 が「実機実験で確定する変数」に挙げたフィルタ極性の分岐((ii) loopback 既定 deny + allowlist / (i) 狭い deny-list へのフォールバック)は**未確定のままである**。そこは #140 / ADR 0034 の領分で、「bind は許すが人間ポート宛は塞ぐ」は両立しうる形として残る。
+
+ここで「macOS には netns が無いのだから sandbox 内 loopback = ホスト loopback だ」と推論してはならない — ADR 0034 の「netns は macOS に存在せず」は *OS レイヤ*案(netns / pf / nftables)の却下理由であって、**ハーネス**のサンドボックスが loopback に何を与えるかは別の層の話である。本キーが macOS でも実在して効くこと自体が、ハーネス側に OS の netns とは独立した loopback 制御があることを示している。
 
 CLI 更新でベンダー既定や本キーの意味論が静かに変わるのは検出しないと分からない(設定ファイルの検証失敗は `-p` 下で黙って無視される)。したがって deploy-pi のサンドボックス e2e スモークの **work プロファイル側に bind canary を1本足す** — `network` ブロックは2プロファイル共有なので、`denyRead`/`allowRead` と同じく「共有の床は 3a が測る」という既存の整理にそのまま乗る。
 

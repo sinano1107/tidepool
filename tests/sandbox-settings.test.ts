@@ -61,8 +61,10 @@ describe("buildSandboxSettings", () => {
   // 書き込み可のままにするので、これは allowWrite だけでは成立しない。それを成立
   // させる denyWrite は Linux(bwrap)backend でサンドボックス自体を起動不能に
   // するため採らなかった(ADR 0033 の追記 / buildSandboxSettings のコメント)。
-  // review の書き込み床は issue #59 のツール層 deny のままである。
-  it("どちらのプロファイルも denyWrite を持たない — 書き込み床はツール層(#59)にある", () => {
+  // review の書き込み床はその後 ADR 0035(#144)が permission 層
+  // (`--permission-mode manual`)に建てた — #59 のツール層 deny は「床」ではなく
+  // 「allow で開けられる範囲の上限」に役割が変わっている。
+  it("どちらのプロファイルも denyWrite を持たない — review の書き込み床は permission 層(ADR 0035)にある", () => {
     for (const taskType of ["work", "review"] as const) {
       const { filesystem } = buildSandboxSettings({
         taskType,
