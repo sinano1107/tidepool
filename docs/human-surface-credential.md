@@ -32,6 +32,10 @@ TIDEPOOL_PUBLIC_ORIGINS=https://raspberrypi.tailc0084f.ts.net:8443
 
 これを設定しておくと、`npm run token` が loopback と tailnet の両方ぶんの bootstrap URL を出す。
 
+**盤面を初めて起動する前に書くこと。** 初回起動は起動時点の設定で bootstrap URL を印字するので、
+未設定のまま起動すると loopback ぶんしか出ず、スマホから入る導線の URL が手元に残らない
+(取り戻すにはもう一度 `npm run token` = 発行済み token の破棄が要る)。
+
 ## 初回起動
 
 ハッシュ**ファイルが無い**盤面は起動時に token を発行し、その場で表示する(systemd 下なら
