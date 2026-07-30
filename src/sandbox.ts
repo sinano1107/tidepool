@@ -317,8 +317,11 @@ export function checkSandboxCapability(
 
 /** Bounded like every other probe in this codebase (SKILL_ENUM_TIMEOUT_MS,
  *  USAGE_TIMEOUT_MS): a wedged binary must not stall a pickup poll. A timeout
- *  reads as "not usable", the fail-closed side. */
-const CAPABILITY_PROBE_TIMEOUT_MS = 5_000;
+ *  reads as "not usable", the fail-closed side. Exported because the
+ *  containment capability's other half (containment.ts) is bounded the same
+ *  way — two halves of one gate, so one number rather than two that a comment
+ *  claims are equal. */
+export const CAPABILITY_PROBE_TIMEOUT_MS = 5_000;
 
 const defaultRunOk: RunOkFn = (command, args) => {
   try {

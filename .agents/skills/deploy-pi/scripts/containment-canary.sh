@@ -2,8 +2,8 @@
 # Containment canary (issue #154 / ADR 0036): measures that a confined worker
 # cannot enter the board's human surface.
 #
-#     bash .claude/skills/deploy-pi/scripts/containment-canary.sh local   # this machine
-#     bash .claude/skills/deploy-pi/scripts/containment-canary.sh pi      # the production Pi
+#     bash .agents/skills/deploy-pi/scripts/containment-canary.sh local   # this machine
+#     bash .agents/skills/deploy-pi/scripts/containment-canary.sh pi      # the production Pi
 #
 # `pi` re-executes this same file on the Pi in `local` mode over ssh, so there is
 # exactly one implementation of the measurement.
@@ -44,6 +44,46 @@
 # the split above is worth having.
 set -uo pipefail
 
+# Turn one curl result into a human-readable shape plus a verdict class
+# (refused | reachable | unreachable). Defined up here, ahead of every side
+# effect, so scripts/containment-canary.test.sh can source it — see the
+# source-only escape below. This is where the enumeration lives, so it is the
+# one part of the canary that has to be tested rather than trusted.
+classify() {
+  local code="$1" connect="$2" rc="$3"
+  # An HTTP status came back: the request completed end to end.
+  if [[ "$rc" == "0" && "$code" != "000" && "$code" != "0" ]]; then
+    case "$code" in
+      401 | 403) echo "HTTP $code|refused" ;;
+      *) echo "HTTP $code|reachable" ;;
+    esac
+    return
+  fi
+  # A 200 to CONNECT means the proxy OPENED THE TUNNEL — the worker got out.
+  # This must be judged before any "the request failed" reasoning, because it is
+  # exactly the hole #152 measured: `raspberrypi:8443` tunnelled through with
+  # `200 Connection Established` and only *then* died on the TLS handshake
+  # (SNI ≠ the tailnet cert). Reading that as "connection failed" would score
+  # the hole as a pass — delete the `raspberrypi` deny entry and the canary
+  # would still go green. TLS dying afterwards is not containment.
+  if [[ "$connect" == "200" ]]; then
+    echo "proxy ALLOWED CONNECT (tunnel opened), then curl exit $rc|reachable"
+    return
+  fi
+  if [[ "$connect" != "000" && "$connect" != "0" ]]; then
+    # the tunnel was refused before any HTTP request existed — #152's 403
+    echo "proxy refused CONNECT with $connect|refused"
+    return
+  fi
+  echo "connection failed (curl exit $rc)|unreachable"
+}
+
+# The test sources this file for `classify` alone; everything below has side
+# effects (ssh, mkdir, a real claude session).
+if [[ "${CONTAINMENT_CANARY_SOURCE_ONLY:-}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 PI="masaki@100.78.52.97"
 MODE="${1:-local}"
 
@@ -71,32 +111,22 @@ WORK=~/containment-canary
 log() { printf '\033[1;34m[canary]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; }
 
-cleanup() { rm -rf "$WORK"; }
+# Kept on a non-zero run: the DECLINED advice at the bottom tells the operator to
+# rerun the probe with `--settings $WORK/work.json`, which a blanket cleanup
+# would have deleted out from under them.
+cleanup() {
+  if [[ "${status:-1}" == "0" ]]; then
+    rm -rf "$WORK"
+  else
+    printf '\033[1;34m[canary]\033[0m kept %s for the rerun advice above\n' "$WORK"
+  fi
+}
 trap cleanup EXIT
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
 status=0
 printf -v TABLE '%-18s %-30s %-32s %s\n' "TARGET" "BASELINE (unconfined)" "OBSERVED (confined)" "VERDICT"
-
-# Turn a curl result into a human-readable shape plus a class
-# (refused | reachable | unreachable).
-classify() {
-  local code="$1" connect="$2" rc="$3"
-  if [[ "$rc" == "0" && "$code" != "000" && "$code" != "0" ]]; then
-    case "$code" in
-      401 | 403) echo "HTTP $code|refused" ;;
-      *) echo "HTTP $code|reachable" ;;
-    esac
-    return
-  fi
-  if [[ "$connect" != "000" && "$connect" != "0" && "$connect" != "200" ]]; then
-    # the tunnel was refused before any HTTP request existed — #152's shape
-    echo "proxy refused CONNECT with $connect|refused"
-    return
-  fi
-  echo "connection failed (curl exit $rc)|unreachable"
-}
 
 # The baseline asks ONE question: was there anything there to be blocked from?
 # So it judges at the transport layer, not the HTTP layer. The MagicDNS short

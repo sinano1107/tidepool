@@ -354,10 +354,11 @@ const server = await startServer({
   // neutral-cwd enumeration — always available on a real host, faked in tests
   hostSkills: enumerateHostSkills,
   fableAgents: fableAgentsResolver(),
-  // ADR 0033 の fail-closed ゲート(issue #60): 実ホストで実際に bwrap / Seatbelt
-  // が動くかを boot 時と pickup ごとに測る。ここが唯一の実検査の配線点 —
-  // テスト盤面は封じ込める実プロセスを持たないので、このゲート自体を持たない。
-  sandboxCapability: () => checkSandboxCapability(platform),
+  // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
+  // #154)。ここが唯一の実検査の配線点 — テスト盤面は封じ込める実プロセスを
+  // 持たないので、このゲート自体を持たない。渡すのは fs 半分だけで、人間面の
+  // 自己検査は startServer が実ポートを知った後に自分で足す。
+  containment: { sandboxCapability: () => checkSandboxCapability(platform) },
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

@@ -137,18 +137,20 @@ export interface ServerOptions {
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
-  /** 封じ込め能力(CONTEXT.md)の **fs 半分**: このホストで worker サンドボックスが
-   *  実際に使えるか(ADR 0033)。**もう半分の「自分の人間面が無認証リクエストを
-   *  拒むか」(ADR 0036 / issue #154)は、ここではなく startServer 自身が足す** —
-   *  撃つ先の実ポートを知っているのは listen した本人だけで、composition root
-   *  (main.ts)には導出できないため。
+  /** 封じ込め能力(CONTEXT.md)のゲート。**この口の有無が、盤面全体を止めうる
+   *  ゲートを持つかどうかそのもの**であり、2つの半分のどちらにも効く — 有無が
+   *  ここ1箇所で読み切れる形にしてある。Absent → ゲートを持たない盤面: 実
+   *  プロセスを持たないテスト盤面の既定(そこに spawn される実 CLI はそもそも
+   *  無い)。main.ts は常に渡す。
    *
-   *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。
-   *  Absent → **ゲートそのものを持たない盤面**: 実プロセスを持たないテスト盤面の
-   *  既定(そこに spawn される実 CLI はそもそも無い)。自己検査もこの1つの口に
-   *  従属させる — 盤面全体を止めうるゲートの有無が、ここ1箇所で読み切れる形に
-   *  しておく。main.ts は常に実検査を渡す。 */
-  sandboxCapability?: () => SandboxCapability;
+   *  渡すのは **fs 半分だけ**(ADR 0033: このホストで worker サンドボックスが
+   *  実際に使えるか)。**もう半分の「自分の人間面が無認証リクエストを拒むか」
+   *  (ADR 0036 / issue #154)は startServer 自身が足す** — 撃つ先の実ポートを
+   *  知っているのは listen した本人だけで、composition root(main.ts)には
+   *  導出できないため。
+   *
+   *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。 */
+  containment?: { sandboxCapability: () => SandboxCapability };
 }
 
 export interface TidepoolServer {
@@ -200,7 +202,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // ここで足す — 撃つ先の実ポートは listen するまで確定しない(port: 0 のテスト
   // 盤面では特に)ので、armed になるのは listen の直後。それまでは合成側が
   // fail-closed の答えを返す(containment.ts の UNPROBED)。
-  const { sandboxCapability } = options;
+  const sandboxCapability = options.containment?.sandboxCapability;
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
   const containment = sandboxCapability
     ? composeContainment(sandboxCapability, () => probeHumanSurface?.())

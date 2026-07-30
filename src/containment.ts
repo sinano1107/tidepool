@@ -16,18 +16,16 @@
  *  コードを信じるだけだが、後者は listen したリスナー・ミドルウェアの順序・
  *  credential の解決までを一度に測る。 */
 import type { Db } from "./db.js";
-import type { SandboxCapability } from "./sandbox.js";
+import { CAPABILITY_PROBE_TIMEOUT_MS, type SandboxCapability } from "./sandbox.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
-export type ContainmentCapability = { available: true } | { available: false; reason: string };
+/** 成立か、不成立ならその理由か。fs 半分(`SandboxCapability`)と同じ形を使う —
+ *  「どちらの半分が成立していないか」は reason の文面が担うのであって、型では
+ *  ない。停止機構が1つである以上、答えの型も1つでよい。 */
+export type ContainmentCapability = SandboxCapability;
 
 /** 封じ込め能力の検査。人間面の半分が実 HTTP を1往復するので非同期になる。 */
 export type ContainmentCheck = () => Promise<ContainmentCapability>;
-
-/** sandbox.ts の各 probe と同じく上限を持つ(CAPABILITY_PROBE_TIMEOUT_MS と同値)。
- *  無制限の fetch は、詰まったときに poll ごと止めて「止まっている理由が出ない
- *  まま盤面が沈黙する」という fail-closed より悪い状態を作る。 */
-const HUMAN_SURFACE_PROBE_TIMEOUT_MS = 5_000;
 
 /** 自己検査が撃つ先: **認証があれば 200 を返すパス**(ADR 0036)。存在しない
  *  パスを撃つと、認証が丸ごと外れていても 404 が返って「200 ではないから無事」に
@@ -58,7 +56,10 @@ export async function checkHumanSurfaceRefusesAnonymous(
     const res = await fetchImpl(url, {
       method: "GET",
       // credential を1つも提示しない — 測るのは「無認証で撃ったら断られるか」
-      signal: AbortSignal.timeout(HUMAN_SURFACE_PROBE_TIMEOUT_MS),
+      // 上限は fs 半分の probe と同じ1つの定数(sandbox.ts)。無制限の fetch は、
+      // 詰まったときに poll ごと止めて「止まっている理由が出ないまま盤面が沈黙
+      // する」という、fail-closed より悪い状態を作る。
+      signal: AbortSignal.timeout(CAPABILITY_PROBE_TIMEOUT_MS),
     });
     // socket を返す(keep-alive のまま放置すると poll のたびに1本ずつ溜まる)
     await res.arrayBuffer();

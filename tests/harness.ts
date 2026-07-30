@@ -126,9 +126,10 @@ export interface BootOptions {
    *  by the scheduler's fable line and the queue view. Absent → no fable
    *  model resolution, so the fable line never skips anything. */
   fableAgents?: () => string[];
-  /** ADR 0033 の fail-closed ゲート(issue #60)。Absent → ゲートを持たない盤面
-   *  (既定): テストの spawn は ScriptedWorker で、封じ込める実プロセスが無い。
-   *  ゲートそのものを駆動するテストだけがこれを渡す。 */
+  /** 封じ込め能力ゲートの fs 半分(ADR 0033 / issue #60)。**渡すとゲートごと
+   *  arm される**ので、人間面の自己検査(ADR 0036 / issue #154)も一緒に効く。
+   *  Absent → ゲートを持たない盤面(既定): テストの spawn は ScriptedWorker で、
+   *  封じ込める実プロセスが無い。ゲートそのものを駆動するテストだけが渡す。 */
   sandboxCapability?: () => SandboxCapability;
   /** 人間面の credential(issue #153 / ADR 0036)。Absent → 既定の
    *  `TEST_CREDENTIAL`。認証が成立しない盤面の振る舞い(fail-open と、それを
@@ -185,7 +186,9 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
-    sandboxCapability: options.sandboxCapability,
+    containment: options.sandboxCapability && {
+      sandboxCapability: options.sandboxCapability,
+    },
   });
   let stopped = false;
   const stopServer = async () => {

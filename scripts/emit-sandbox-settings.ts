@@ -9,14 +9,11 @@
  *  使い方: tsx scripts/emit-sandbox-settings.ts <work|review> <workspacePath> [skill...] */
 import { buildSandboxSettings, type SandboxSettingsInput } from "../src/sandbox.js";
 
+const USAGE = "usage: emit-sandbox-settings.ts <work|review> <workspacePath> [skill...]";
 const [taskType, workspacePath, ...permittedSkills] = process.argv.slice(2);
 
-if (taskType !== "work" && taskType !== "review") {
-  console.error("usage: emit-sandbox-settings.ts <work|review> <workspacePath> [skill...]");
-  process.exit(2);
-}
-if (!workspacePath) {
-  console.error("usage: emit-sandbox-settings.ts <work|review> <workspacePath> [skill...]");
+if ((taskType !== "work" && taskType !== "review") || !workspacePath) {
+  console.error(USAGE);
   process.exit(2);
 }
 

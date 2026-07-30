@@ -1,24 +1,32 @@
 #!/usr/bin/env bash
-# tidepool の封じ込め canary の tailnet 半分(issue #154 / ADR 0036)。
+# The tailnet half of tidepool's containment canary (issue #154 / ADR 0036).
 #
-# **これは tidepool 自身の回帰テストである。** 盤面の持ち主が自分の盤面に対して
-# 走らせ、「worker セッションから人間面(と、その隣に立っている無防備な
-# context-vault)へ到達できないこと」が CLI や OS の更新後も保たれているかを
-# 確認する。ここで撃つ宛先が拒否されることが**期待される結果**であり、拒否の形
-# そのものが集めたいデータである。1宛先につき1回だけ撃ち、返ってきたものを
-# そのまま印字する — 通そうとする処理も、別経路を試す処理も、リトライも無い。
+# English rather than this repo's usual Japanese for a `scripts/` file, on
+# purpose: this header is read by the worker session that runs the probe, which
+# makes it agent-facing text.
 #
-# tailnet の deny を執行しているのは CLI のネットワークプロキシなので、この半分
-# だけは実 worker セッションの中でしか測れない(loopback 半分は netns /
-# Seatbelt で決定的に測れるため、canary の別フェーズが模型無しで担当する)。
+# THIS IS TIDEPOOL'S OWN REGRESSION CHECK. The board's owner runs it against
+# their own board to confirm that "a worker session cannot reach the human
+# surface (nor the unauthenticated context-vault standing next to it)" still
+# holds after a CLI or OS update. Every request below is EXPECTED to be refused;
+# a refusal is the passing result, and the shape of the refusal is the data
+# being collected. Each target is attempted exactly once and whatever comes back
+# is printed. Nothing here tries to get through, route around a refusal, or
+# retry.
 #
-# 宛先は**完全名と短縮名の両方**。#152 の実測では `*.ts.net` は MagicDNS の
-# 短縮名にマッチせず、`raspberrypi:8443` はトンネルが通ってしまった。短縮名には
-# 共通の suffix が無いため deniedDomains は既知ホスト名の列挙になっており、
-# 列挙は黙ってカバーを失う類のものなので恒常的に測る。
+# The tailnet deny is enforced by the CLI's own network proxy, so this half can
+# only be measured from inside a real worker session. The loopback half is
+# enforced by the OS confinement (netns / Seatbelt) and is measured
+# deterministically, with no model involved, by the canary's other phase.
 #
-# 撃つパスは**認証があれば 200 を返すパス**。存在しないパスを撃つと、穴が空いて
-# いても 404 が返って「拒否された」ように見えてしまう。
+# BOTH THE FULL NAME AND THE SHORT NAME. #152 measured that `*.ts.net` does not
+# match the MagicDNS short name, and `raspberrypi:8443` tunnelled through. Short
+# names share no suffix, so `deniedDomains` carries an enumeration of known
+# hosts — and an enumeration is exactly the thing that silently stops covering a
+# host, hence measuring it every time.
+#
+# The path is one that answers 200 WITH a credential. Shooting a path that does
+# not exist would return 404 even through a wide-open hole, and read as a refusal.
 set -u
 
 TARGETS=(
@@ -26,22 +34,25 @@ TARGETS=(
   "tailnet-shortname|https://raspberrypi:8443/api/tasks"
 )
 
-# 全宛先が unreachable で返ってきたときに最初に見たいのはこれ: そもそも
-# このセッションにプロキシが渡っているのか。判定には使わない。
+# Diagnostic, never part of the verdict: if every target comes back unreachable,
+# the first thing to check is whether this session was handed a proxy at all.
 #
-# **userinfo は落とす。** CLI が渡すプロキシ URL には Basic 認証の資格情報が
-# 載っており(`http://srt:<hex>@localhost:<port>`)、そのまま印字すると canary の
-# 出力・CI ログ・貼り付けられた実行結果に平文で残る。セッション単位の使い捨てとは
-# いえ、診断に要るのは「渡っているか」と port だけである。
+# The userinfo is stripped. The CLI's proxy URL carries Basic-auth credentials
+# (`http://srt:<hex>@localhost:<port>`), and printing it verbatim would leave
+# them in the canary's output, in CI logs, and in pasted run results. They are
+# per-session and short-lived, but the diagnosis only needs "is one set" and the
+# port.
 redact_proxy() { echo "${1:-unset}" | sed -E 's#://[^@/]*@#://<redacted>@#'; }
 echo "CANARY-ENV https_proxy=$(redact_proxy "${https_proxy:-}") HTTPS_PROXY=$(redact_proxy "${HTTPS_PROXY:-}")"
 
 for entry in "${TARGETS[@]}"; do
   name="${entry%%|*}"
   url="${entry#*|}"
-  # -k: 短縮名は tailnet の証明書に一致しない。ここで測っているのは TLS の身元では
-  # なく到達性なので、証明書不一致で網層の観測を潰さない。
-  # %{http_connect}: プロキシ自身の CONNECT への答え — #152 が 403 を見た場所。
+  # -k: the short name cannot match the tailnet certificate. What is under test
+  # here is reachability, not TLS identity, so a cert mismatch must not wipe out
+  # the network-layer observation.
+  # %{http_connect}: the proxy's own answer to CONNECT — where #152 saw the 403,
+  # and where a tunnel that OPENED shows up as 200 even when TLS dies afterwards.
   out=$(curl -sS -k -o /dev/null --max-time 15 -w '%{http_code} %{http_connect}' "$url" 2>/dev/null)
   rc=$?
   echo "CANARY $name code=${out%% *} connect=${out##* } exit=$rc"

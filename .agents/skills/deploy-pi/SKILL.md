@@ -198,8 +198,10 @@ Passing is **401 / 403 / failed connection and nothing else** — not "anything 
 | target | baseline (unconfined) | observed (confined) | |
 |---|---|---|---|
 | loopback | HTTP 401 | HTTP 401 | reached, then refused by the credential |
-| tailnet-fqdn | HTTP 200 | proxy refused CONNECT with 403 | |
+| tailnet-fqdn | HTTP 200 | proxy refused CONNECT with 403 | the 200 is the Pi still on pre-#153 code, not a hole here |
 | tailnet-shortname | TCP reached, then curl exit 35 | proxy refused CONNECT with 403 | TLS always fails on the short name (SNI ≠ cert), hence the transport-level baseline |
+
+A tunnel that *opens* and then dies at TLS (`CONNECT` → `200 Connection Established`, curl exit 35) is a **FAIL**, not a failed connection — that is precisely the shape #152 measured on the short name, and reading it as "unreachable" would score the hole as a pass. `scripts/containment-canary.test.sh` pins that branch (`bash scripts/containment-canary.test.sh`, no Pi needed).
 
 **This canary is the network layer only.** The authentication layer is the board's own self-check, and it has to be: on the Pi the connection never establishes, so no run there can tell a working credential from an absent one.
 
