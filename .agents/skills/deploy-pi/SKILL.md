@@ -173,16 +173,28 @@ ssh $PI 'sudo mv /usr/bin/bwrap.disabled /usr/bin/bwrap'
 # then answer the question in the WebUI — the board re-runs the check before accepting it
 ```
 
-Since issue #154 that same gate also answers the *other* half of the containment capability — whether the board's own human surface refuses an unauthenticated request. To drive that half, take the token hash away instead of bwrap (**restore it in the same sitting**: the board fail-opens its human surface while this stands, which is safe only because pickup is halted):
+Since issue #154 that same gate also answers the *other* half of the containment capability — whether the board's own human surface refuses an unauthenticated request. To drive that half, break the token hash instead of bwrap (**repair it in the same sitting**: the board fail-opens its human surface while this stands, which is safe only because pickup is halted).
+
+**Corrupt the file — do not move it away.** An *absent* hash is the first-boot path, so the next restart silently issues a brand-new token and kills every live cookie and bearer; a *present but unusable* one is never reissued (`openHumanCredential`). Measured the hard way on 2026-07-30: `mv`-ing it away and restarting handed out a new token instead of staying fail-open.
 
 ```bash
-ssh $PI 'mv ~/.tidepool/api-token ~/.tidepool/api-token.bak'
-# no restart needed — the hash is re-read per request, and per pickup poll
-# expect within one poll: the same one question, its purpose naming the observed 200
-ssh $PI 'mv ~/.tidepool/api-token.bak ~/.tidepool/api-token'
-# then answer in the WebUI. Your cookie still works here because the hash came BACK
-# unchanged; after a real `npm run token` you must open the new bootstrap URL first.
+ssh $PI 'cp ~/.tidepool/api-token ~/.tidepool/api-token.real && printf "not a hash\n" > ~/.tidepool/api-token'
+curl -sk -o /dev/null -w '%{http_code}\n' https://raspberrypi.tailc0084f.ts.net:8443/api/tasks   # 200 = fail-open, immediately, no restart
+ssh $PI 'sudo systemctl restart tidepool.service'   # drives the boot check
 ```
+
+The restart is the reliable trigger. `POST /tasks/:id/move` with `{"after":null}` only fires a poll when the moved task **is the queue head for pickup**, and a board whose only todo is a question has no pickable head — so on an idle board that gesture does nothing and the next natural check is an hour away.
+
+Expect: one question titled `worker containment is not established — pickup is stopped`, registered by `tidepool`, its purpose naming the observed **200**. Answering it while still broken must give **409** with the question left `todo`. Then repair and answer:
+
+```bash
+ssh $PI 'mv ~/.tidepool/api-token.real ~/.tidepool/api-token'
+# 401 again immediately. Answer with the SAME token as before — the hash came back
+# unchanged, so no re-bootstrap is needed. After a real `npm run token` it would be,
+# and you must open the new bootstrap URL *before* answering.
+```
+
+Verified on production in exactly this order, 2026-07-30: 200 → question stands → 409 → repair → 401 → answer 200 → question `done`, queue unhalted.
 
 ### Containment canary (network layer)
 

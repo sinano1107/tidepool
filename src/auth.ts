@@ -144,7 +144,14 @@ export interface HumanCredential {
 
 /** 起動時の credential 解決。composition root(main.ts)がそのまま乗る形にして
  *  あるのは、「初回起動なら発行する / 壊れていたら発行しない」という分岐が
- *  main.ts に散ると誰にもテストされないため。印字は呼び出し側が行う。 */
+ *  main.ts に散ると誰にもテストされないため。印字は呼び出し側が行う。
+ *
+ *  **「無い」と「壊れている」は別の事故である。** 無い = 初回起動なので発行する
+ *  が、これは既存の cookie と bearer を全部黙って殺す道でもある — ハッシュを
+ *  失った盤面は、次の再起動の瞬間に全端末をログアウトさせる。壊れている側で
+ *  発行し直さないのはそのため(読めないだけかもしれないファイルの上書きは、
+ *  同じ結果を事故として起こす)。2026-07-30 の本番ドリルで実測: ファイルを退避
+ *  して再起動すると fail-open のまま留まらず、新しい token が発行される。 */
 export function openHumanCredential(input: { tokenFile: string; origins: string[] }): {
   credential: HumanCredential;
   messages: { level: "log" | "error"; text: string }[];
