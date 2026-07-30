@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { SandboxCapability } from "../src/sandbox.js";
 import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
 
@@ -65,7 +65,9 @@ it("回答は検証つき解除: 検査が依然不成立なら受理せず、qu
   });
   // workspace quarantine の tree 検証拒否と同じ 409(DomainError)
   expect(res.status).toBe(409);
-  expect(res.json.error).toContain("sandbox");
+  // 封じ込め能力という1つの答えの、どちらの半分で落ちたのかが読める形で返る
+  expect(res.json.error).toContain("worker containment is still not established");
+  expect(res.json.error).toContain("bubblewrap");
   expect((await questions(t))[0].status).toBe("todo");
 });
 
@@ -82,8 +84,9 @@ it("検査が通るようになれば回答が受理され、pickup が再開す
     answers: ["repaired by hand"],
   });
   expect(res.status).toBe(200);
-  // 回答は即時 poll を焚く(quarantine 解除と同じ)
-  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+  // 回答は即時 poll を焚く(quarantine 解除と同じ)。焚かれた poll は封じ込め能力を
+  // measure し直す — 人間面の自己検査が実 HTTP を1往復するので、応答より後に着く。
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
 });
 
 it("修理されただけでは再開しない — 人間の確認回答が解除の唯一の門(quarantine と同じ)", async () => {

@@ -40,13 +40,28 @@ if [[ "$local_head" != "$pi_head" ]]; then
   failed=1
 fi
 
+# Unauthenticated, on purpose (issue #154 / ADR 0036). The old check asked for
+# 200 over the tailnet URL, which needed a token in transit and proved only that
+# *something* answers. A 401 proves two things at once with no secret carried:
+# the listener is alive AND the credential middleware is actually in front of it.
+#
+# A 200 here is a production incident, not a stale expectation: it means the
+# board fail-opened (lost or unusable token hash — ADR 0036). Worker pickup will
+# already be halted board-wide with a standing question, so read the board.
 code=$(ssh "$PI" "curl -sk -o /dev/null -w '%{http_code}' $PUBLIC_URL/")
-log "GET  $PUBLIC_URL/ -> $code"
-[[ "$code" == "200" ]] || { fail "tidepool WebUI did not return 200"; failed=1; }
+log "GET  $PUBLIC_URL/ (no credential) -> $code"
+[[ "$code" == "401" ]] || {
+  fail "tidepool WebUI answered $code to an unauthenticated request, expected 401"
+  [[ "$code" == "200" ]] && fail "  200 = the human surface is OPEN — check the board's standing containment question and \`npm run token\`"
+  failed=1
+}
 
 code=$(ssh "$PI" "curl -sk -o /dev/null -w '%{http_code}' $PUBLIC_URL/api/tasks")
-log "GET  $PUBLIC_URL/api/tasks -> $code"
-[[ "$code" == "200" ]] || { fail "tidepool API did not return 200"; failed=1; }
+log "GET  $PUBLIC_URL/api/tasks (no credential) -> $code"
+[[ "$code" == "401" ]] || {
+  fail "tidepool API answered $code to an unauthenticated request, expected 401"
+  failed=1
+}
 
 # /mcp and the WebUI/API port must both stay 127.0.0.1-only — if either shows
 # up on 0.0.0.0 here, MCP tool calls (or unauthenticated API writes) would be

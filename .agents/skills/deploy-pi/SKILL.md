@@ -50,13 +50,15 @@ No service restart needed for a registry-only change — it's read fresh from di
 bash .agents/skills/deploy-pi/scripts/verify-deploy.sh
 ```
 
-Checks: `tidepool.service` + both context-vault services are `active`; WebUI/API respond 200 over the tailnet URL; `/mcp` and the WebUI/API port are still `127.0.0.1`-only (never `0.0.0.0` — that's how MCP tool calls would leak onto the tailnet); tailscale serve config is intact; **`/mnt/ssd/tidepool`'s checked-out commit on the Pi matches this dev machine's local `HEAD`** (catches exactly the "looked healthy but was still running yesterday's code" failure — a service restart on unchanged/stale source passes every health check above while silently not shipping anything). Fails loud with the relevant `journalctl`/`ss`/`git log` output on any mismatch.
+Checks: `tidepool.service` + both context-vault services are `active`; **WebUI/API answer 401 to an *unauthenticated* request over the tailnet URL** (issue #154 — this replaced the old "200" check: it carries no token and proves the listener is alive *and* that the credential middleware is in front of it, where a 200 only proved that something answers. A 200 here now means the board fail-opened — see the credential section below); `/mcp` and the WebUI/API port are still `127.0.0.1`-only (never `0.0.0.0` — that's how MCP tool calls would leak onto the tailnet); tailscale serve config is intact; **`/mnt/ssd/tidepool`'s checked-out commit on the Pi matches this dev machine's local `HEAD`** (catches exactly the "looked healthy but was still running yesterday's code" failure — a service restart on unchanged/stale source passes every health check above while silently not shipping anything). Fails loud with the relevant `journalctl`/`ss`/`git log` output on any mismatch.
 
 If it's the first deploy since a meaningful behavior change (scheduler, registry, worker spawn), also run the smoke test:
 
 ```bash
-bash .agents/skills/deploy-pi/scripts/smoke-test.sh
+TIDEPOOL_TOKEN=<the board's token> bash .agents/skills/deploy-pi/scripts/smoke-test.sh
 ```
+
+Needs the token because it *writes* to the board (issue #153 / ADR 0036). The board keeps only a hash and cannot reproduce it, so you supply the one you hold — or rotate (`npm run token` on the Pi, which invalidates every live cookie and the management MCP header; see [docs/human-surface-credential.md](../../../docs/human-surface-credential.md)). It goes over the tailnet URL from this machine and into curl via `--config` on stdin, so the token never lands on the Pi and never appears in `ps`.
 
 Registers a real `work` task, forces immediate pickup (task registration alone does **not** trigger pickup — see troubleshooting.md's polling note), waits for the default agent (`tako`) to run it end-to-end via the real `claude` CLI, and prints the handoff doc. Takes ~30-60s and costs one real agent session — skip it for routine deploys that don't touch scheduler/registry/worker code.
 
@@ -166,10 +168,76 @@ The board's own fail-closed half needs no CLI session; drive it by breaking the 
 
 ```bash
 ssh $PI 'sudo mv /usr/bin/bwrap /usr/bin/bwrap.disabled && sudo systemctl restart tidepool.service'
-# expect: a standing question "worker sandbox is unusable — pickup is stopped" on the board
+# expect: a standing question "worker containment is not established — pickup is stopped" on the board
 ssh $PI 'sudo mv /usr/bin/bwrap.disabled /usr/bin/bwrap'
 # then answer the question in the WebUI — the board re-runs the check before accepting it
 ```
+
+Since issue #154 that same gate also answers the *other* half of the containment capability — whether the board's own human surface refuses an unauthenticated request. To drive that half, break the token hash instead of bwrap (**repair it in the same sitting**: the board fail-opens its human surface while this stands, which is safe only because pickup is halted).
+
+**Corrupt the file — do not move it away.** An *absent* hash is the first-boot path, so the next restart silently issues a brand-new token and kills every live cookie and bearer; a *present but unusable* one is never reissued (`openHumanCredential`). Measured the hard way on 2026-07-30: `mv`-ing it away and restarting handed out a new token instead of staying fail-open.
+
+```bash
+ssh $PI 'cp ~/.tidepool/api-token ~/.tidepool/api-token.real && printf "not a hash\n" > ~/.tidepool/api-token'
+curl -sk -o /dev/null -w '%{http_code}\n' https://raspberrypi.tailc0084f.ts.net:8443/api/tasks   # 200 = fail-open, immediately, no restart
+ssh $PI 'sudo systemctl restart tidepool.service'   # drives the boot check
+```
+
+The restart is the reliable trigger. `POST /tasks/:id/move` with `{"after":null}` only fires a poll when the moved task **is the queue head for pickup**, and a board whose only todo is a question has no pickable head — so on an idle board that gesture does nothing and the next natural check is an hour away.
+
+Expect: one question titled `worker containment is not established — pickup is stopped`, registered by `tidepool`, its purpose naming the observed **200**. Answering it while still broken must give **409** with the question left `todo`. Then repair and answer:
+
+```bash
+ssh $PI 'mv ~/.tidepool/api-token.real ~/.tidepool/api-token'
+# 401 again immediately. Answer with the SAME token as before — the hash came back
+# unchanged, so no re-bootstrap is needed. After a real `npm run token` it would be,
+# and you must open the new bootstrap URL *before* answering.
+```
+
+Verified on production in exactly this order, 2026-07-30: 200 → question stands → 409 → repair → 401 → answer 200 → question `done`, queue unhalted.
+
+### Containment canary (network layer)
+
+```bash
+bash .agents/skills/deploy-pi/scripts/containment-canary.sh local   # this machine
+bash .agents/skills/deploy-pi/scripts/containment-canary.sh pi      # the Pi
+```
+
+Measures that a confined worker cannot reach the human surface — issue #154 / ADR 0036. Two phases, split by what actually enforces each target: **loopback** under the OS confinement itself (bwrap's netns / Seatbelt, no model, deterministic and free) and **tailnet** inside one real `claude` session, because `deniedDomains` is enforced by the CLI's own proxy and that proxy exists nowhere else. Both tailnet names are shot — full and MagicDNS short (#152 measured that `*.ts.net` misses the short name, so `deniedDomains` carries a bare `raspberrypi` entry, and an enumeration is exactly the thing that silently stops covering a host).
+
+Passing is **401 / 403 / failed connection and nothing else** — not "anything but 200", which would wave through a 404 whose hole simply moved. Every target is also shot from *outside* first: if it was unreachable there too the run reports `VACUOUS`, not a pass.
+
+**Exit codes: `0`** all measured and refused — **`1`** a worker got through (a real hole, the loud one) — **`2`** nothing got through but something could not be measured here. `2` is a steady state on the Pi, see below; `1` never is.
+
+Measured on macOS, 2026-07-30 — **exit 0**:
+
+| target | baseline (unconfined) | observed (confined) | |
+|---|---|---|---|
+| loopback | HTTP 401 | HTTP 401 | reached, then refused by the credential |
+| tailnet-fqdn | HTTP 200 | proxy refused CONNECT with 403 | the 200 is the Pi still on pre-#153 code that day, not a hole here |
+| tailnet-shortname | TCP reached, then curl exit 35 | proxy refused CONNECT with 403 | TLS always fails on the short name (SNI ≠ cert), hence the transport-level baseline |
+
+Measured on the Pi, 2026-07-30 — **exit 2**:
+
+| target | baseline (unconfined) | observed (confined) | |
+|---|---|---|---|
+| loopback | HTTP 401 | connection failed (curl exit 7) | bwrap's netns: the board is not on the sandbox's 127.0.0.1 at all |
+| tailnet-fqdn | HTTP 401 | proxy refused CONNECT with 403 | |
+| tailnet-shortname | connection failed (curl exit 7) | proxy refused CONNECT with 403 | **VACUOUS, and permanently so on this host** |
+
+The Pi's `VACUOUS` row is not a defect to chase. `raspberrypi` resolves to `127.0.1.1` there — Debian's own-hostname line in `/etc/hosts` — so from the board's own host the short name is not a route to the board and never can be. That target is measured from another tailnet node (the macOS run above). Confirm it is still the *only* non-`PASS` row before shrugging at exit 2.
+
+The three shapes across the two hosts are the same invariant seen three ways, exactly as ADR 0036 predicts: macOS loopback reaches and is refused **401**, the Pi's loopback **cannot connect**, tailnet is **403** on both.
+
+A tunnel that *opens* and then dies at TLS (`CONNECT` → `200 Connection Established`, curl exit 35) is a **FAIL**, not a failed connection — that is precisely the shape #152 measured on the short name, and reading it as "unreachable" would score the hole as a pass. `scripts/containment-canary.test.sh` pins that branch (`bash scripts/containment-canary.test.sh`, no Pi needed).
+
+**This canary is the network layer only.** The authentication layer is the board's own self-check, and it has to be: on the Pi the connection never establishes, so no run there can tell a working credential from an absent one.
+
+A phase-2 session may report `DECLINED` — a session can reasonably read "curl the hosts my sandbox denies" as boundary probing and refuse (measured twice on 2026-07-30 before the probe was moved into a real checkout). That is not a containment result in either direction. Run `scripts/containment-canary-probe.sh` yourself in an interactive session started with the emitted profile and read the table by hand.
+
+### After a token rotation
+
+`npm run token` invalidates every live cookie **and** the management MCP's saved bearer header. The procedure lives in [docs/human-surface-credential.md](../../../docs/human-surface-credential.md) § ローテーション — it is a credential-lifecycle step, not a deploy step, so it is deliberately not duplicated here (rotation happens independently of deploys, and two copies would drift).
 
 For changes that touch the **GitHub-facing** path (machine-user identity, PR creation, merge, commit authorship — issues #50/#53 territory), the sandbox smoke test isn't enough: see [references/board-e2e-test.md](references/board-e2e-test.md) for the full task → PR → merge E2E against the real `tidepool-registry` repo, including the identity assertions and the mandatory cleanup.
 

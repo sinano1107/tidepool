@@ -57,11 +57,17 @@ export function rotateToken(tokenFile: string): string {
   return token;
 }
 
+/** 認証が立たない盤面がどうなるかの一文。3箇所の運用者向けメッセージで同じ姿を
+ *  言う — インシデント中に「どっちだったか」を読み解かせないため。 */
+const UNAUTHENTICATED_POSTURE =
+  "the human surface is open to anyone who can reach it (ADR 0036 fail-open), and worker " +
+  "pickup is halted board-wide until it is repaired. Run `npm run token` to issue a new one, " +
+  "open the printed bootstrap URL, then answer the board's standing question.";
+
 /** 保存済みハッシュ。読めない・空・hex 64 桁でない → undefined。
- *  呼び出し側はこれを「認証が成立していない」として扱う: このスライスでは
- *  全リクエストが 401 になる(#154 の pickup ゲートが入るまで、人間面を
- *  無認証で開ける真の fail-open は採らない — ADR 0036 の fail-open は worker が
- *  1枚も走らないことと対になっており、片方だけ実装すると裸の盤面になる)。 */
+ *  呼び出し側はこれを「認証が成立していない」として扱う — 人間面は fail-open で
+ *  開き、対になる封じ込め能力ゲート(containment.ts)が worker を1枚も走らせない
+ *  ことで釣り合う(ADR 0036 / issue #154)。 */
 export function readTokenHash(tokenFile: string): string | undefined {
   let raw: string;
   try {
@@ -138,7 +144,14 @@ export interface HumanCredential {
 
 /** 起動時の credential 解決。composition root(main.ts)がそのまま乗る形にして
  *  あるのは、「初回起動なら発行する / 壊れていたら発行しない」という分岐が
- *  main.ts に散ると誰にもテストされないため。印字は呼び出し側が行う。 */
+ *  main.ts に散ると誰にもテストされないため。印字は呼び出し側が行う。
+ *
+ *  **「無い」と「壊れている」は別の事故である。** 無い = 初回起動なので発行する
+ *  が、これは既存の cookie と bearer を全部黙って殺す道でもある — ハッシュを
+ *  失った盤面は、次の再起動の瞬間に全端末をログアウトさせる。壊れている側で
+ *  発行し直さないのはそのため(読めないだけかもしれないファイルの上書きは、
+ *  同じ結果を事故として起こす)。2026-07-30 の本番ドリルで実測: ファイルを退避
+ *  して再起動すると fail-open のまま留まらず、新しい token が発行される。 */
 export function openHumanCredential(input: { tokenFile: string; origins: string[] }): {
   credential: HumanCredential;
   messages: { level: "log" | "error"; text: string }[];
@@ -153,20 +166,18 @@ export function openHumanCredential(input: { tokenFile: string; origins: string[
       messages.push({ level: "log", text: bootstrapNotice({ token, tokenFile, origins, rotated: false }) });
     } catch (err) {
       // 書けないなら認証は立たない。ただし**起動そのものは拒まない** — Pi で
-      // 起動を拒むと ssh するしかなくなる(ADR 0036)。人間面は閉じたまま、
-      // worker MCP と scheduler は生きるので、直したら `npm run token` で開く。
+      // 起動を拒むと ssh するしかなくなる(ADR 0036)。直したら `npm run token`。
       messages.push({
         level: "error",
-        text: `[auth] could not issue a board token at ${tokenFile} (${String(err)}) — the human surface stays closed (401).`,
+        text: `[auth] could not issue a board token at ${tokenFile} (${String(err)}) — ${UNAUTHENTICATED_POSTURE}`,
       });
     }
   } else if (readTokenHash(tokenFile) === undefined) {
     // **発行し直さない。** 読めないだけかもしれないファイルを上書きすると、
-    // 生きている端末の cookie を黙って捨てることになる。人間が気づいて
-    // `npm run token` を打つまで人間面は閉じる(fail-open は #154 とセット)。
+    // 生きている端末の cookie を黙って捨てることになる。
     messages.push({
       level: "error",
-      text: `[auth] the token hash at ${tokenFile} is unusable — the human surface stays closed (401). Run \`npm run token\` to issue a new one.`,
+      text: `[auth] the token hash at ${tokenFile} is unusable — ${UNAUTHENTICATED_POSTURE}`,
     });
   }
   let warned = false;
@@ -175,9 +186,7 @@ export function openHumanCredential(input: { tokenFile: string; origins: string[
       tokenHash: () => {
         const hash = readTokenHash(tokenFile);
         if (hash === undefined && !warned) {
-          console.error(
-            `[auth] no usable token hash at ${tokenFile} — the human surface is closed (401).`,
-          );
+          console.error(`[auth] no usable token hash at ${tokenFile} — ${UNAUTHENTICATED_POSTURE}`);
           warned = true;
         }
         if (hash !== undefined) warned = false;
@@ -229,7 +238,14 @@ function isAuthorized(
   credential: HumanCredential,
 ): boolean {
   const expected = credential.tokenHash();
-  if (expected === undefined) return false;
+  // ADR 0036 の fail-open(issue #154 でゲートと対になって初めて成立した): 使える
+  // ハッシュを1つも持たない盤面は人間面を**開ける**。**人間面は fail-open、
+  // pickup ゲートは fail-closed** — この非対称は意図的であり、「揃える」ために
+  // どちらかを反転させてはいけない。認証が立たない盤面では封じ込め能力の自己検査
+  // (containment.ts)が不成立になって worker が1枚も走らないので、開いた面に
+  // 対する敵が存在せず、開いていること自体が「question を読んで直す」という人間の
+  // 復旧経路になる。Pi で起動ごと拒むと ssh するしか手が無くなる。
+  if (expected === undefined) return true;
   return presentedTokens(headers).some((token) => matches(token, expected));
 }
 
@@ -339,7 +355,13 @@ export interface HumanSurfaceAuth {
   /** CSRF の二枚目: `/api` の変更系は JSON content-type を要求する
    *  (クロスオリジン fetch に preflight を強制し CORS で落ちる)。
    *  **`require` より後に置く** — 無認証リクエストは 415 ではなく 401 で
-   *  落ちなければならない。 */
+   *  落ちなければならない。
+   *
+   *  **fail-open 中はこれが CSRF の唯一の壁になる。** 一枚目の `SameSite=Lax` は
+   *  cookie の属性なので、cookie を1枚も使わない盤面では何も守っていない
+   *  (ADR 0036 / issue #154)。「認証を掛けているのだから content-type 検査は
+   *  冗長」という理由でここを畳まないこと — 認証が立っていない盤面こそが、この
+   *  検査が単独で立つ盤面である。 */
   requireJsonContentType: RequestHandler;
 }
 
@@ -349,7 +371,14 @@ export function createHumanSurfaceAuth(credential: HumanCredential): HumanSurfac
    *  取り出し方と拒否時の見せ方だけなので、受理側はここ1つ。 */
   const grant = (res: Response, token: string): boolean => {
     const expected = credential.tokenHash();
-    if (expected === undefined || token === "" || !matches(token, expected)) return false;
+    if (expected === undefined) {
+      // fail-open 中の盤面には bootstrap する対象が無い。**cookie は張らない** —
+      // 検証できない token を焼き付けると、`npm run token` で盤面が閉じた瞬間に
+      // その端末だけが「以前は入れたのに」と黙って締め出される。素通しで送り出す。
+      res.redirect(302, "/");
+      return true;
+    }
+    if (token === "" || !matches(token, expected)) return false;
     setAuthCookie(res, token);
     res.redirect(302, "/");
     return true;

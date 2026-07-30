@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Db } from "./db.js";
-import { BOARD_WORKER_ID, registerTask, type Task } from "./tasks.js";
+import type { Task } from "./tasks.js";
 
 /** The CLI's own `sandbox` settings block (vendor shape, hence confined to this
  *  adapter-side module — ADR 0005). Key names and their semantics were read off
@@ -270,8 +269,12 @@ const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true"];
  *  sandbox's network proxy is spawned through it, so its absence is fatal. */
 const SOCAT_PROBE = ["-V"];
 
-/** ADR 0033's fail-closed gate: is the harness sandbox actually usable on this
- *  host right now? Never "is the dependency installed" — a bwrap blocked by
+/** 封じ込め能力(CONTEXT.md)の**片方の半分**: is the harness sandbox actually
+ *  usable on this host right now? もう半分(自分の人間面が無認証リクエストを
+ *  拒むか — ADR 0036 / issue #154)は containment.ts が持ち、両者を束ねた1つの
+ *  答えが pickup ゲートを引く。ここは fs 側だけを答える。
+ *
+ *  Never "is the dependency installed" — a bwrap blocked by
  *  AppArmor or a kernel with user namespaces disabled is installed and useless,
  *  and that is the failure this check exists for. An unsupported platform
  *  reports unavailable rather than being probed: "sandboxed as far as we know"
@@ -314,8 +317,11 @@ export function checkSandboxCapability(
 
 /** Bounded like every other probe in this codebase (SKILL_ENUM_TIMEOUT_MS,
  *  USAGE_TIMEOUT_MS): a wedged binary must not stall a pickup poll. A timeout
- *  reads as "not usable", the fail-closed side. */
-const CAPABILITY_PROBE_TIMEOUT_MS = 5_000;
+ *  reads as "not usable", the fail-closed side. Exported because the
+ *  containment capability's other half (containment.ts) is bounded the same
+ *  way — two halves of one gate, so one number rather than two that a comment
+ *  claims are equal. */
+export const CAPABILITY_PROBE_TIMEOUT_MS = 5_000;
 
 const defaultRunOk: RunOkFn = (command, args) => {
   try {
@@ -330,63 +336,6 @@ const defaultRunOk: RunOkFn = (command, args) => {
     return false;
   }
 };
-
-/** ADR 0033's fail-closed stop, the host-wide sibling of quarantineWorkspace /
- *  quarantineAgent: an unusable sandbox halts pickup for the whole board (the
- *  sandbox is a property of the host, so there is no narrower resource to halt)
- *  and stands a Tidepool-registered Confirmation question saying why. One
- *  question at a time — a board that cannot sandbox produces the same fact
- *  every poll, and re-registering it hourly would bury the log. */
-export function quarantineSandbox(db: Db, reason: string, now: Date): void {
-  const title = "worker sandbox is unusable — pickup is stopped";
-  registerTask(
-    db,
-    {
-      type: "question",
-      title,
-      purpose:
-        `${reason}. ` +
-        "No agent task is picked up while this stands: a worker that believes it is " +
-        "sandboxed but is not is worse than no sandbox at all, so the board refuses to " +
-        "run one bare (ADR 0033). Repair the host, then answer — the board re-runs the " +
-        "capability check before it accepts the answer, and any answer text is kept as " +
-        "a repair note.",
-      completion_criteria: "the host's worker sandbox is repaired by hand",
-      question: [{ title, options: ["repaired by hand"], recommendation: "repaired by hand" }],
-      quarantine_sandbox: true,
-    },
-    now,
-    BOARD_WORKER_ID,
-  );
-}
-
-/** The open sandbox Confirmation question, if one stands. Its presence is half
- *  the gate: like a workspace quarantine, a repaired host does not resume
- *  pickup on its own — a human's confirmation is the only door out, so a
- *  transient breakage can never quietly un-halt the board with nobody having
- *  looked. */
-export function openSandboxQuestion(db: Db): { id: string } | undefined {
-  return db
-    .prepare(
-      `SELECT id FROM tasks WHERE question_quarantine_sandbox IS NOT NULL AND status = 'todo'`,
-    )
-    .get() as { id: string } | undefined;
-}
-
-/** The pickup gate (ADR 0033): true while no worker may be spawned. Registers
- *  the Confirmation question as a side effect the first time the check fails —
- *  and only then, since a standing question short-circuits ahead of it. */
-export function sandboxPickupBlocked(
-  db: Db,
-  capability: () => SandboxCapability,
-  now: Date,
-): boolean {
-  if (openSandboxQuestion(db)) return true;
-  const result = capability();
-  if (result.available) return false;
-  quarantineSandbox(db, result.reason, now);
-  return true;
-}
 
 /** The workspace-side settings files the CLI merges into a session's settings.
  *  Both live inside the checkout, so a `work` session can write them. */
