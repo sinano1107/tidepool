@@ -193,13 +193,29 @@ bash .agents/skills/deploy-pi/scripts/containment-canary.sh pi      # the Pi
 
 Measures that a confined worker cannot reach the human surface — issue #154 / ADR 0036. Two phases, split by what actually enforces each target: **loopback** under the OS confinement itself (bwrap's netns / Seatbelt, no model, deterministic and free) and **tailnet** inside one real `claude` session, because `deniedDomains` is enforced by the CLI's own proxy and that proxy exists nowhere else. Both tailnet names are shot — full and MagicDNS short (#152 measured that `*.ts.net` misses the short name, so `deniedDomains` carries a bare `raspberrypi` entry, and an enumeration is exactly the thing that silently stops covering a host).
 
-Passing is **401 / 403 / failed connection and nothing else** — not "anything but 200", which would wave through a 404 whose hole simply moved. Every target is also shot from *outside* first: if it was unreachable there too the run reports `VACUOUS`, not a pass. Measured on macOS 2026-07-30:
+Passing is **401 / 403 / failed connection and nothing else** — not "anything but 200", which would wave through a 404 whose hole simply moved. Every target is also shot from *outside* first: if it was unreachable there too the run reports `VACUOUS`, not a pass.
+
+**Exit codes: `0`** all measured and refused — **`1`** a worker got through (a real hole, the loud one) — **`2`** nothing got through but something could not be measured here. `2` is a steady state on the Pi, see below; `1` never is.
+
+Measured on macOS, 2026-07-30 — **exit 0**:
 
 | target | baseline (unconfined) | observed (confined) | |
 |---|---|---|---|
 | loopback | HTTP 401 | HTTP 401 | reached, then refused by the credential |
-| tailnet-fqdn | HTTP 200 | proxy refused CONNECT with 403 | the 200 is the Pi still on pre-#153 code, not a hole here |
+| tailnet-fqdn | HTTP 200 | proxy refused CONNECT with 403 | the 200 is the Pi still on pre-#153 code that day, not a hole here |
 | tailnet-shortname | TCP reached, then curl exit 35 | proxy refused CONNECT with 403 | TLS always fails on the short name (SNI ≠ cert), hence the transport-level baseline |
+
+Measured on the Pi, 2026-07-30 — **exit 2**:
+
+| target | baseline (unconfined) | observed (confined) | |
+|---|---|---|---|
+| loopback | HTTP 401 | connection failed (curl exit 7) | bwrap's netns: the board is not on the sandbox's 127.0.0.1 at all |
+| tailnet-fqdn | HTTP 401 | proxy refused CONNECT with 403 | |
+| tailnet-shortname | connection failed (curl exit 7) | proxy refused CONNECT with 403 | **VACUOUS, and permanently so on this host** |
+
+The Pi's `VACUOUS` row is not a defect to chase. `raspberrypi` resolves to `127.0.1.1` there — Debian's own-hostname line in `/etc/hosts` — so from the board's own host the short name is not a route to the board and never can be. That target is measured from another tailnet node (the macOS run above). Confirm it is still the *only* non-`PASS` row before shrugging at exit 2.
+
+The three shapes across the two hosts are the same invariant seen three ways, exactly as ADR 0036 predicts: macOS loopback reaches and is refused **401**, the Pi's loopback **cannot connect**, tailnet is **403** on both.
 
 A tunnel that *opens* and then dies at TLS (`CONNECT` → `200 Connection Established`, curl exit 35) is a **FAIL**, not a failed connection — that is precisely the shape #152 measured on the short name, and reading it as "unreachable" would score the hole as a pass. `scripts/containment-canary.test.sh` pins that branch (`bash scripts/containment-canary.test.sh`, no Pi needed).
 

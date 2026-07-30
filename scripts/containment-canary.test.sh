@@ -52,6 +52,25 @@ check "CONNECT refused with 407 is refused"     000 407 56 refused
 check "CONNECT allowed then TLS died is REACHABLE" 000 200 35 reachable
 check "CONNECT allowed then 401 is still refused"  401 200 0 refused
 
+echo "verdict_for() — baseline × observed"
+want_verdict() {
+  local what="$1" base="$2" observed="$3" want="$4" got
+  got=$(verdict_for "$base" "$observed")
+  if [[ "$got" == "$want" ]]; then
+    printf '  ok   %s\n' "$what"
+  else
+    printf '  FAIL %s: wanted %s, got %s\n' "$what" "$want" "$got" >&2
+    failures=$((failures + 1))
+  fi
+}
+want_verdict "reachable outside, refused inside"        reachable   refused     PASS
+want_verdict "reachable outside, unreachable inside"    reachable   unreachable PASS
+want_verdict "reachable outside, REACHABLE inside"      reachable   reachable   FAIL
+# The guard the whole baseline exists for: a dead target means the run proved
+# nothing, and must never be scored as containment working.
+want_verdict "dead outside stays VACUOUS, not PASS"     unreachable unreachable VACUOUS
+want_verdict "dead outside stays VACUOUS even if refused" unreachable refused   VACUOUS
+
 if [[ "$failures" -gt 0 ]]; then
   echo "$failures case(s) failed" >&2
   exit 1
