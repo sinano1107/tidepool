@@ -6,6 +6,13 @@ import type { AgentAdmin } from "./agent-create.js";
 import { createApiRouter } from "./api.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import type { Clock } from "./clock.js";
+import {
+  type ContainmentCapability,
+  checkHumanSurfaceRefusesAnonymous,
+  composeContainment,
+  containmentPickupBlocked,
+  HUMAN_SURFACE_PROBE_PATH,
+} from "./containment.js";
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
@@ -14,7 +21,7 @@ import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
-import { type SandboxCapability, sandboxPickupBlocked } from "./sandbox.js";
+import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
@@ -130,10 +137,17 @@ export interface ServerOptions {
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
-  /** ADR 0033 の fail-closed ゲート: このホストで worker サンドボックスが実際に
-   *  使えるか。boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。
-   *  Absent → 実プロセスを持たないテスト盤面の既定(そこに spawn される実 CLI は
-   *  そもそも無い); main.ts は常に実検査を渡す。 */
+  /** 封じ込め能力(CONTEXT.md)の **fs 半分**: このホストで worker サンドボックスが
+   *  実際に使えるか(ADR 0033)。**もう半分の「自分の人間面が無認証リクエストを
+   *  拒むか」(ADR 0036 / issue #154)は、ここではなく startServer 自身が足す** —
+   *  撃つ先の実ポートを知っているのは listen した本人だけで、composition root
+   *  (main.ts)には導出できないため。
+   *
+   *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。
+   *  Absent → **ゲートそのものを持たない盤面**: 実プロセスを持たないテスト盤面の
+   *  既定(そこに spawn される実 CLI はそもそも無い)。自己検査もこの1つの口に
+   *  従属させる — 盤面全体を止めうるゲートの有無が、ここ1箇所で読み切れる形に
+   *  しておく。main.ts は常に実検査を渡す。 */
   sandboxCapability?: () => SandboxCapability;
 }
 
@@ -182,13 +196,15 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // (mcp.ts's attributedWorkerId, claude-worker.ts's start()) — same
   // defense-in-depth `defaultAgentName ?? HUMAN_WORKER_ID` already relies on.
   const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
-  // ADR 0033: 起動時にも一度検査する — pickup 時だけだと、依存を失ったまま再起動
-  // した盤面は次の poll(最大1時間後)まで「止まっている理由」を出さない。
-  // 副作用は pickup ゲートと同一の関数なので、question は多くとも1枚に収まる。
+  // 封じ込め能力(CONTEXT.md)の合成。fs 半分は呼び出し側から、人間面の自己検査は
+  // ここで足す — 撃つ先の実ポートは listen するまで確定しない(port: 0 のテスト
+  // 盤面では特に)ので、armed になるのは listen の直後。それまでは合成側が
+  // fail-closed の答えを返す(containment.ts の UNPROBED)。
   const { sandboxCapability } = options;
-  // 戻り値は捨てる — boot 時点では止める相手(pickup poll)がまだ走っておらず、
-  // 欲しいのは副作用の question だけ。実際の停止は同じ関数を呼ぶ pickup ゲート。
-  if (sandboxCapability) void sandboxPickupBlocked(db, sandboxCapability, options.clock.now());
+  let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
+  const containment = sandboxCapability
+    ? composeContainment(sandboxCapability, () => probeHumanSurface?.())
+    : undefined;
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -199,7 +215,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     auditorName,
     github: options.github,
     fableAgents: options.fableAgents,
-    sandboxCapability,
+    containment,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
@@ -278,7 +294,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
-      sandboxCapability,
+      containment,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin: options.workspaceAdmin,
@@ -317,8 +333,24 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     const l = mcpApp.listen(options.mcpPort, "127.0.0.1", () => resolve(l));
   });
 
+  const humanPort = (listener.address() as AddressInfo).port;
+  // 自己検査を arm するのは**ここ**(listen の後)。ADR 0036 が測れと言っている
+  // のは「token ファイルが読めたか」ではなく「組み上がった実物が無認証を断るか」
+  // なので、撃つ相手はこの実ポートでなければならない。`options.port` ではなく
+  // 実際に bind された番号を使う — テスト盤面は port: 0 で起こす。
+  probeHumanSurface = () =>
+    checkHumanSurfaceRefusesAnonymous(`http://127.0.0.1:${humanPort}${HUMAN_SURFACE_PROBE_PATH}`);
+  // ADR 0033: 起動時にも一度検査する — pickup 時だけだと、封じ込めを失ったまま
+  // 再起動した盤面は次の poll(最大1時間後)まで「止まっている理由」を出さない。
+  // 副作用は pickup ゲートと同一の関数なので、question は多くとも1枚に収まる。
+  // 戻り値は捨てる — boot 時点では止める相手(pickup poll)がまだ走っておらず、
+  // 欲しいのは副作用の question だけ。実際の停止は同じ関数を呼ぶ pickup ゲート。
+  // **await する**: 起動が返った時点で盤面の封じ込め状態が確定していてほしい
+  // (実 HTTP を1往復するので、投げっぱなしだと「起動直後は無検査」の窓ができる)。
+  if (containment) await containmentPickupBlocked(db, containment, options.clock.now());
+
   return {
-    port: (listener.address() as AddressInfo).port,
+    port: humanPort,
     mcpPort: (mcpListener.address() as AddressInfo).port,
     stop: () =>
       new Promise((resolve, reject) => {

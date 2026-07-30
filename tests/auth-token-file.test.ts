@@ -161,7 +161,7 @@ it("ハッシュファイルが無い盤面は起動時に発行して表示す�
 
 // **壊れたハッシュでは発行し直さない。** 読めないだけかもしれないファイルを上書き
 // すると、生きている端末の cookie を黙って捨てることになる
-it("壊れたハッシュを持つ盤面は発行し直さず、閉じたまま知らせる(issue #153)", async () => {
+it("壊れたハッシュを持つ盤面は発行し直さず、認証が立たないことを知らせる(issue #153)", async () => {
   const dir = await tempDir();
   const tokenFile = join(dir, "api-token");
   await writeFile(tokenFile, "not a hash\n");
@@ -178,8 +178,8 @@ it("壊れたハッシュを持つ盤面は発行し直さず、閉じたまま�
 });
 
 // 発行に失敗しても**起動そのものは拒まない** — Pi で起動を拒むと ssh するしか
-// なくなる(ADR 0036)。人間面は閉じたまま、直したら `npm run token` で開く
-it("ハッシュを書けない盤面も起動する(閉じたまま)(issue #153)", async () => {
+// なくなる(ADR 0036)。直したら `npm run token` で認証が立つ
+it("ハッシュを書けない盤面も起動する(issue #153)", async () => {
   const dir = await tempDir();
   const blocker = join(dir, "not-a-dir");
   await writeFile(blocker, "");
@@ -191,16 +191,17 @@ it("ハッシュを書けない盤面も起動する(閉じたまま)(issue #153
   expect(credential.tokenHash()).toBeUndefined();
 });
 
-// #154(封じ込め能力ゲートの拡張)が入るまで、ADR 0036 の「人間面は fail-open」は
-// 採らない — あれは pickup ゲートが worker を1枚も走らせないことと対になっており、
-// 片方だけ実装すると裸の盤面になる。使えるハッシュを持たない盤面は起動はするが全部 401。
-it("使えるハッシュを持たない盤面は無認証で開かず、全部 401(issue #153)", async () => {
+// ADR 0036 の「人間面は fail-open」を composition root の実配線ごと確かめる
+// (harness の合成 credential ではなく、壊れたハッシュファイルから起こした盤面)。
+// 対になる pickup ゲート(#154)が worker を1枚も走らせないので、開いた面に敵は
+// おらず、開いていること自体が人間の復旧経路になる。
+it("使えるハッシュを持たない盤面は人間面を開ける(issue #154 / ADR 0036 の fail-open)", async () => {
   const dir = await tempDir();
   const tokenFile = join(dir, "api-token");
   await writeFile(tokenFile, "not a hash\n");
   server = await bootWithTokenFile(tokenFile);
-  expect((await board(server, "anything")).status).toBe(401);
+  expect((await board(server, "anything")).status).toBe(200);
   const page = await fetch(`http://127.0.0.1:${server.port}/`);
   await page.text();
-  expect(page.status).toBe(401);
+  expect(page.status).toBe(200);
 });

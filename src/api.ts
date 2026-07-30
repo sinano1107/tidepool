@@ -7,6 +7,7 @@ import {
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
 import type { Clock } from "./clock.js";
+import { type ContainmentCheck, openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
 import {
   getDisplayLanguage,
@@ -31,7 +32,6 @@ import {
   type RegistryCandidates,
 } from "./registry.js";
 import { RegistryCloneBusyError } from "./registry-write.js";
-import { openSandboxQuestion, type SandboxCapability } from "./sandbox.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   answerQuestion,
@@ -456,11 +456,13 @@ export interface ApiRouterDeps {
    *  that second half can ever clear an agent quarantine (no registry
    *  configured at all). */
   agentRegistered?: (name: string) => boolean;
-  /** ADR 0033 の fail-closed ゲート、回答側の半分: sandbox Confirmation question
-   *  の回答は鵜呑みにせず、受理の直前にホストの能力検査を走らせ直す(workspace
-   *  quarantine が tree の清潔さを実際に確かめるのと同じ「検証つき解除」)。
+  /** 封じ込め能力ゲートの回答側の半分(ADR 0033 / ADR 0036): 確認 question の
+   *  回答は鵜呑みにせず、受理の直前に能力検査を走らせ直す(workspace quarantine が
+   *  tree の清潔さを実際に確かめるのと同じ「検証つき解除」)。**ここは fs 半分
+   *  だけでなく合成後の検査を受け取る** — 認証側が壊れたまま立った question を
+   *  fs 側の成立だけで解除できてしまってはならない。
    *  Absent → そのゲートを持たない盤面。 */
-  sandboxCapability?: () => SandboxCapability;
+  containment?: ContainmentCheck;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -525,7 +527,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     draftClient,
     defaultAgentName,
     agentRegistered,
-    sandboxCapability,
+    containment,
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
@@ -1296,13 +1298,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       }
-      // ADR 0033 / issue #60 の host-wide 版: 資源名を持たないぶん検証は素直で、
-      // 「今このホストでサンドボックスが実際に動くか」を回答の受理直前にもう一度
-      // 測るだけ。まだ壊れていれば回答ごと拒否し、question は開いたまま残る。
-      if (task.question_quarantine_sandbox !== null && sandboxCapability) {
-        const capability = sandboxCapability();
+      // ADR 0033 / issue #60 の host-wide 版を issue #154 が広げたもの: 資源名を
+      // 持たないぶん検証は素直で、「今このホストで worker の封じ込めが成立して
+      // いるか」を回答の受理直前にもう一度測るだけ。まだ壊れていれば回答ごと拒否
+      // し、question は開いたまま残る。人間面の自己検査を含むので実 HTTP が1往復
+      // 走る(この経路は既に async)。
+      if (task.question_quarantine_sandbox !== null && containment) {
+        const capability = await containment();
         if (!capability.available) {
-          throw new DomainError(`the worker sandbox is still unusable: ${capability.reason}`);
+          throw new DomainError(`worker containment is still not established: ${capability.reason}`);
         }
       }
       // an answer during an open triage session is activity (defers the
@@ -1786,7 +1790,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       await presentLive(
         listQueue(
           db,
-          isPickupBlocked(db, clock.now()) || isPaused(db) || openSandboxQuestion(db) !== undefined,
+          isPickupBlocked(db, clock.now()) || isPaused(db) || openContainmentQuestion(db) !== undefined,
           workspace?.name,
           defaultAgentName,
           auditorName,

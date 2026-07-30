@@ -21,9 +21,28 @@ Ground rules that keep this safe and cheap:
 
 ## 0. Preconditions
 
+**Every `/api` call below needs the board's credential** (issue #153 / ADR 0036). The board
+keeps only a hash and cannot reproduce the token, so supply the one you hold — or rotate it
+(`npm run token` on the Pi; see [docs/human-surface-credential.md](../../../../docs/human-surface-credential.md)).
+Define this helper once and use it in place of every `curl` below. It runs from *this* machine
+over the tailnet, so the token never lands on the Pi — the host that runs workers — and it feeds
+curl through `--config` on stdin, so it never appears in `ps`:
+
 ```bash
 PI=masaki@100.78.52.97
-ssh $PI 'systemctl is-active tidepool; curl -s localhost:4589/api/pause; echo; curl -s localhost:4589/api/settings/quiet-hours'
+BOARD=https://raspberrypi.tailc0084f.ts.net:8443
+export TIDEPOOL_TOKEN=<the board's token>
+board() { printf 'header = "Authorization: Bearer %s"\n' "$TIDEPOOL_TOKEN" | curl -sk --config - "$@"; }
+```
+
+A 401 from any call below means the token is stale, not that the board is down. A **200 from an
+*unauthenticated* call** is the opposite problem: the board fail-opened, which means pickup is
+already halted board-wide with a standing question, and this E2E cannot run until it is repaired
+(issue #154).
+
+```bash
+ssh $PI 'systemctl is-active tidepool'
+board "$BOARD/api/pause"; echo; board "$BOARD/api/settings/quiet-hours"
 ssh $PI 'cd /mnt/ssd/tidepool-registry && git status --short | wc -l && git branch --show-current'
 ```
 
@@ -49,7 +68,7 @@ criteria (a) and (b)):
   leave it **uncommitted** in the working tree at completion.
 
 ```bash
-ssh $PI 'curl -s -X POST localhost:4589/api/tasks -H "Content-Type: application/json" -d "{\"type\":\"work\",\"title\":\"E2E: minimal README append\",\"purpose\":\"E2E probe of the board GitHub flow.\",\"completion_criteria\":\"1) Append the line <!-- e2e: board flow check YYYY-MM-DD --> to README.md and commit it yourself with git commit (do not push). 2) Append a second line <!-- e2e: wip stash check YYYY-MM-DD --> to README.md and leave it uncommitted in the working tree. No other file is touched.\",\"workspace\":\"registry\"}"'
+board -X POST "$BOARD/api/tasks" -H "Content-Type: application/json" -d '{"type":"work","title":"E2E: minimal README append","purpose":"E2E probe of the board GitHub flow.","completion_criteria":"1) Append the line <!-- e2e: board flow check YYYY-MM-DD --> to README.md and commit it yourself with git commit (do not push). 2) Append a second line <!-- e2e: wip stash check YYYY-MM-DD --> to README.md and leave it uncommitted in the working tree. No other file is touched.","workspace":"registry"}'
 ```
 
 Save the returned `id`. Adjust the marker lines' dates so reruns don't
@@ -63,13 +82,13 @@ is already at the queue head to the head again (`after: null`) — api.ts's
 `/move` handler fires `pollNow()` only for that exact shape.
 
 ```bash
-ssh $PI "curl -s -X POST localhost:4589/api/tasks/$ID/move -H 'Content-Type: application/json' -d '{\"after\":null}'"
+board -X POST "$BOARD/api/tasks/$ID/move" -H 'Content-Type: application/json' -d '{"after":null}'
 ```
 
 ## 3. Watch the task run (bounded)
 
 ```bash
-ssh $PI 'for i in $(seq 1 20); do curl -s localhost:4589/api/tasks/'$ID' | python3 -c "import sys,json; t=json.load(sys.stdin); print(t[\"status\"], t[\"pr_number\"])"; sleep 25; done'
+for i in $(seq 1 20); do board "$BOARD/api/tasks/$ID" | python3 -c 'import sys,json; t=json.load(sys.stdin); print(t["status"], t["pr_number"])'; sleep 25; done
 ```
 
 Expected progression: `todo` → `in_progress` (~seconds after the move; the
@@ -85,8 +104,8 @@ The protected workspace escalates the PR to a merge-decision question task.
 Find it and answer `merge` — use the FULL task id (a prefix 404s):
 
 ```bash
-ssh $PI 'curl -s localhost:4589/api/tasks | python3 -c "import sys,json; [print(t[\"id\"], t[\"question_pending_merge_pr\"]) for t in json.load(sys.stdin) if t[\"type\"]==\"question\" and t[\"status\"]==\"todo\"]"'
-ssh $PI "curl -s -X POST localhost:4589/api/tasks/$QID/answer -H 'Content-Type: application/json' -d '{\"answers\":[\"merge\"]}'"
+board "$BOARD/api/tasks" | python3 -c 'import sys,json; [print(t["id"], t["question_pending_merge_pr"]) for t in json.load(sys.stdin) if t["type"]=="question" and t["status"]=="todo"]'
+board -X POST "$BOARD/api/tasks/$QID/answer" -H 'Content-Type: application/json' -d '{"answers":["merge"]}'
 ```
 
 The answer route re-checks CI live and then merges as the board.

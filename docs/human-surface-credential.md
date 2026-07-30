@@ -66,9 +66,30 @@ npm run token
 ローテーション後にやり直しが要るもの:
 
 1. 各端末・各オリジンの bootstrap(出力の URL を開く)
-2. **管理MCP の再登録** — bearer ヘッダは `~/.claude.json` に保存されているので、
-   `claude mcp add --header "Authorization: Bearer <new token>"` を打ち直す。
-   `npm run token` の出力にもこの旨が出る。
+2. 立っている封じ込めの確認 question への回答(認証が落ちて止まっていた場合)
+3. **管理MCP の再登録**(下記)
+
+### 管理MCP の再登録 — 手順はここが正本
+
+管理MCP(ADR 0032 / issue #131)は人間面に相乗りして bearer ヘッダで認証するため、その平文は
+`claude mcp add --header` により**クライアント側の** `~/.claude.json` に保存される。したがって
+`npm run token` を打つたびに保存済みのヘッダが無効になり、打ち直しが要る。
+
+```sh
+# 対話セッションを走らせているホスト(= 盤面のホストとは限らない)で
+claude mcp remove tidepool
+claude mcp add --transport http tidepool https://raspberrypi.tailc0084f.ts.net:8443/mcp \
+  --header "Authorization: Bearer <npm run token が出した新しい token>"
+```
+
+**置き場所の判断(issue #154)**: これはデプロイの手順ではなく **credential のライフサイクルの
+手順**なので、正本はこの節に置き、deploy-pi 側(`SKILL.md` / `references/first-time-setup.md`)
+からは**指すだけで複製しない**。ローテーションはデプロイと独立に起きる(token を失くした、
+端末を増やした、単に回した)ため、deploy-pi にコピーを置くと「デプロイのときだけやる作業」に
+読み替えられ、しかも2箇所が別々に古くなる。`npm run token` の出力自体にもこの旨が印字される。
+
+打ち直す先は**盤面のホストではなく、対話セッションが走っているホスト**であることに注意
+(下記の運用制約の通り、worker を走らせるホストにはそもそも設定しない)。
 
 ## 運用制約(#151 が解決するまで)
 
@@ -81,9 +102,35 @@ npm run token
 いまは対話セッションが Mac、worker が Pi で同居していないため潜在的。**Mac に盤面を立てるなら
 #151 が先。** この制約は #151 の解決とともに消える(ADR 0036 の該当段落も消える)。
 
-## 認証が成立しない盤面
+## 認証が成立しない盤面(fail-open と、それを支えるゲート)
 
-ハッシュファイルを失った・壊れた盤面は、起動はするが**人間面は全部 401**(ログインページは出る)。
-ADR 0036 が書いている「人間面は fail-open」は、pickup ゲートが worker を1枚も走らせないことと
-**対**になっている非対称であり、そのゲート側(#154)が入るまで人間面だけを開けると裸の盤面に
-なる。復旧は `npm run token`。
+ハッシュファイルを失った・壊れた・書けなかった盤面は、起動はするが**人間面が開く**
+(無認証で誰でも入れる)。これは事故ではなく ADR 0036 の設計で、**pickup ゲートが worker を
+1枚も走らせないこと**と対になっている:
+
+| | 認証が立たないとき |
+| --- | --- |
+| 人間面 | **fail-open**(開く)— 開いていること自体が「question を読んで直す」復旧経路になる。Pi で起動ごと拒むと ssh するしかなくなる |
+| worker の pickup | **fail-closed**(全部止まる)— 封じ込め能力の自己検査が無認証 `GET /api/tasks` に 200 を観測して不成立になる |
+
+この非対称は意図的である。**「揃える」ためにどちらかを反転させてはいけない** — 人間面を閉じれば
+PWA から復旧できなくなり、pickup を開ければ裸の人間面の隣で worker が走る。
+
+盤面はこのとき Tidepool 名義の確認 question を1枚立てる(「worker containment is not
+established — pickup is stopped」)。実装は `src/containment.ts` / `src/auth.ts`、issue #154。
+
+### 復旧の順序(ここを間違えると詰まる)
+
+1. 盤面で `npm run token`
+2. **出力の bootstrap URL を、いま見ている端末で開く** — ローテーションはいま持っている cookie も
+   殺すので、これを飛ばすと次の手順に進めない
+3. WebUI に立っている確認 question に回答する(盤面は受理の直前に検査を走らせ直すので、
+   まだ直っていなければ 409 で拒否され question は開いたまま残る)
+4. 他の端末・他のオリジン、そして[管理MCP の再登録](#ローテーション)
+
+### fail-open 中の CSRF
+
+cookie を1枚も使わないので `SameSite=Lax` は何も守っていない。**`/api` の変更系に対する JSON
+content-type 要求だけが残った壁**である(クロスオリジン fetch に preflight を強制し CORS で
+落ちる)。「認証があるのだから冗長」に見えても畳まないこと — 認証が立っていない盤面こそ、
+この検査が単独で立つ盤面である。

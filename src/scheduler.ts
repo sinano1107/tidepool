@@ -1,9 +1,9 @@
 import type { Clock } from "./clock.js";
+import { type ContainmentCheck, containmentPickupBlocked } from "./containment.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
-import { type SandboxCapability, sandboxPickupBlocked } from "./sandbox.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
@@ -112,11 +112,12 @@ export function startScheduler(deps: {
    *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
-  /** ADR 0033 の fail-closed: このホストで worker サンドボックスが実際に使えるか。
-   *  pickup のたびに読み直す(依存の消滅・AppArmor の変更を次の poll で拾う)。
-   *  Absent → ゲートそのものを持たない盤面 — 実 CLI を持たないテストの既定形で、
-   *  本番の配線(server.ts)は常に実検査を渡す。 */
-  sandboxCapability?: () => SandboxCapability;
+  /** 封じ込め能力の fail-closed ゲート(ADR 0033 / ADR 0036): このホストで
+   *  worker の封じ込めが成立しているか。pickup のたびに読み直す(依存の消滅・
+   *  AppArmor の変更・認証の脱落を次の poll で拾う)。人間面の自己検査が実 HTTP を
+   *  1往復するので非同期。Absent → ゲートそのものを持たない盤面 — 実 CLI を
+   *  持たないテストの既定形で、本番の配線(server.ts)は常に実検査を渡す。 */
+  containment?: ContainmentCheck;
 }): Scheduler {
   const {
     db,
@@ -128,12 +129,12 @@ export function startScheduler(deps: {
     auditorName,
     github,
     fableAgents,
-    sandboxCapability,
+    containment,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimer(clock, pollNow);
 
-  function pickupBlocked(): boolean {
+  async function pickupBlocked(): Promise<boolean> {
     if (slot.currentTaskId !== null) return true;
     // triage pauses pickup: the human is re-steering the queue, so nothing
     // new enters the slot until the session commits (issue #6)
@@ -141,10 +142,11 @@ export function startScheduler(deps: {
     // the human's own explicit pause (issue #34): orthogonal to triage — a
     // paused board still gates pickup after a triage commit
     if (isPaused(db)) return true;
-    // ADR 0033: a worker that cannot be sandboxed is not run at all. Unlike
-    // the workspace/agent quarantines below this halts the whole board — the
-    // sandbox belongs to the host, so no narrower resource can be halted.
-    if (sandboxCapability && sandboxPickupBlocked(db, sandboxCapability, clock.now())) return true;
+    // ADR 0033 / ADR 0036: a worker whose containment is not established is not
+    // run at all. Unlike the workspace/agent quarantines below this halts the
+    // whole board — containment belongs to the host and to the board's own
+    // wiring, so no narrower resource can be halted.
+    if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return true;
     // the gate is keyed on each candidate's own execution workspace (issue
     // #26 / ADR 0009) and assignee (ADR 0012 / issue #36), skipped in SQL by
     // nextSlotTask itself — a quarantined workspace or agent halts only its
@@ -255,9 +257,13 @@ export function startScheduler(deps: {
 
   async function poll(): Promise<void> {
     if (inFlight) return;
-    if (pickupBlocked()) return;
+    // **`inFlight` は `pickupBlocked` より手前で立てる。** 封じ込め能力の検査が
+    // 実 HTTP を1往復するようになった時点(issue #154)で、ここに await 点が
+    // できた — 後で立てると、hourly tick と `POST /tasks/:id/move` が同時に
+    // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
     try {
+      if (await pickupBlocked()) return;
       const decision = await checkThrottle(db, clock, worker);
       if (decision.throttled) {
         if (decision.resetsAt) resumeTimer.schedule(decision.resetsAt);

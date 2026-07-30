@@ -58,7 +58,7 @@ ssh $PI "sudo apt-get install -y bubblewrap socat"
 ssh $PI "bwrap --ro-bind / / --dev /dev -- /bin/true; echo bwrap=\$?; socat -V >/dev/null; echo socat=\$?"
 ```
 
-Both must print `0`. This is exactly the check the board runs at boot and before every pickup (`checkSandboxCapability`), so a `0/0` here means the board will not halt. On the production Pi (aarch64, kernel 6.6.51+rpt) both pass out of the box: `max_user_namespaces` is non-zero and there is no `apparmor_restrict_unprivileged_userns` knob. If `bwrap` fails on a future host, that is the known problem from ADR 0033's investigation — an AppArmor profile is needed; **ask the user before applying one.**
+Both must print `0`. This is one half of the check the board runs at boot and before every pickup (`checkSandboxCapability`); the other half is the board probing its own human surface for a 401 (issue #154 — see §5b). A `0/0` here means the fs half will not halt the board; the credential half needs §5b done too. On the production Pi (aarch64, kernel 6.6.51+rpt) both pass out of the box: `max_user_namespaces` is non-zero and there is no `apparmor_restrict_unprivileged_userns` knob. If `bwrap` fails on a future host, that is the known problem from ADR 0033's investigation — an AppArmor profile is needed; **ask the user before applying one.**
 
 ## 5. systemd unit + secrets
 
@@ -76,9 +76,24 @@ TIDEPOOL_VAPID_SUBJECT=mailto:<owner-email>
 TIDEPOOL_VAPID_PUBLIC_KEY=<generated>
 TIDEPOOL_VAPID_PRIVATE_KEY=<generated>
 TIDEPOOL_GITHUB_TOKEN_FILE=/home/masaki/.tidepool/github-token
+TIDEPOOL_PUBLIC_ORIGINS=https://raspberrypi.tailc0084f.ts.net:8443
 EOF
 sudo chmod 600 /etc/default/tidepool && sudo chown root:root /etc/default/tidepool'
 ```
+
+**`TIDEPOOL_PUBLIC_ORIGINS` must be set before the board's first boot** (issue #153 / ADR 0036). Cookies are per-origin, so the board has to know the URLs it is published at — it cannot derive them. First boot issues the token and prints one bootstrap URL per known origin, once; boot without this set and only the loopback URL is printed, and the phone's way in is gone until you rotate (which throws away the token you just issued).
+
+## 5b. The board's credential (issue #153 / ADR 0036)
+
+The human surface — WebUI, `/api`, and the management MCP mounted there — is guarded by one board secret. There is nothing to create here: the **first boot issues it and prints it to the journal once**, and the board keeps only the hash (`~/.tidepool/api-token`, mode 600). It cannot be shown again.
+
+```bash
+ssh $PI 'journalctl -u tidepool.service --no-pager | grep -A6 "a board token was issued"'
+```
+
+Save the token where you keep secrets, then open the printed bootstrap URL once per origin per device. Issue, rotation, recovery ordering, and **the management MCP's re-registration** all live in one place — [docs/human-surface-credential.md](../../../../docs/human-surface-credential.md). That doc is the canonical procedure; it is deliberately not copied here, because rotation happens independently of deploys and two copies would drift.
+
+One operational constraint from ADR 0036 worth repeating: **do not configure the management MCP on a host that runs workers.** Its bearer header lives in plaintext in that host's `~/.claude.json`, and until #151 lands a `work`-profile worker's `Read` tool has no path floor to stop it being read.
 
 **The GitHub machine-user token file** (issue #50 / ADR 0024) is a second, separate secrets file — the board's `tidepool-bot` PAT, read by the node process at runtime and injected per call into `gh`/`git` child envs. Unlike `/etc/default/tidepool`, it is read by the **service user** (`masaki`), not by PID1 — `root:root` would fail closed (unreadable → GitHub features off), and permissions wider than `600` are refused by `loadGitHubAuth` for the same fail-closed result. Create it as masaki:
 

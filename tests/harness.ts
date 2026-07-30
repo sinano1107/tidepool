@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AgentAdmin } from "../src/agent-create.js";
-import { bootstrapUrl as authBootstrapUrl, hashToken } from "../src/auth.js";
+import {
+  bootstrapUrl as authBootstrapUrl,
+  generateToken,
+  type HumanCredential,
+  hashToken,
+} from "../src/auth.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
@@ -21,11 +26,19 @@ import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./f
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
 
-/** テスト盤面の固定 credential(issue #153 / ADR 0036)。`bootTidepool` は必ず
+/** テスト盤面の credential(issue #153 / ADR 0036)。`bootTidepool` は必ず
  *  これを持つ盤面を起こし、`api()` が bearer で提示する — 既存テストの本文は
  *  認証の存在を知らないままでよい。無認証の振る舞いを主張したいテストだけが
- *  素の `fetch` を使う。 */
-export const TEST_TOKEN = "tidepool-test-token";
+ *  素の `fetch` を使う。
+ *
+ *  **リテラルではなくその場で生成する(issue #154)。** 盤面もハーネスも同じ
+ *  プロセスの中にいるので、平文はこの変数として存在すれば足り、ディスクに置く
+ *  理由が1つも無い — 置けば「テスト用だから」で始まった文字列が、実盤面に
+ *  貼り付けられる既定値として一人歩きする余地が残る(ADR 0036 が盤面側で
+ *  ハッシュしか持たないと決めたのと同じ理由を、道具側にも通す)。
+ *  プロセスごとに違う値になるが、盤面を起こすのも提示するのもこのモジュールなので
+ *  テストからは見えない。 */
+export const TEST_TOKEN = generateToken();
 
 /** `startServer` を直に呼ぶテスト(harness を通さないもの)が渡す credential。
  *  ハッシュの組み立てを各所で書き直さない。 */
@@ -117,6 +130,10 @@ export interface BootOptions {
    *  (既定): テストの spawn は ScriptedWorker で、封じ込める実プロセスが無い。
    *  ゲートそのものを駆動するテストだけがこれを渡す。 */
   sandboxCapability?: () => SandboxCapability;
+  /** 人間面の credential(issue #153 / ADR 0036)。Absent → 既定の
+   *  `TEST_CREDENTIAL`。認証が成立しない盤面の振る舞い(fail-open と、それを
+   *  検出する封じ込め能力ゲート — issue #154)を駆動するテストだけが渡す。 */
+  credential?: HumanCredential;
 }
 
 /** The server wants a per-request candidates provider; a test may pass one
@@ -144,8 +161,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     mcpPort: 0,
     clock,
     // issue #153: テスト盤面も本番と同じく必ず credential を持つ(「省略 =
-    // 認証なし」の口は作らない)。テストが提示するのは固定の TEST_TOKEN。
-    credential: TEST_CREDENTIAL,
+    // 認証なし」の口は作らない)。既定で提示するのは TEST_TOKEN。
+    credential: options.credential ?? TEST_CREDENTIAL,
     worker: () => worker,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
