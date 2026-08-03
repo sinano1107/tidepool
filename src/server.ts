@@ -143,14 +143,21 @@ export interface ServerOptions {
    *  プロセスを持たないテスト盤面の既定(そこに spawn される実 CLI はそもそも
    *  無い)。main.ts は常に渡す。
    *
-   *  渡すのは **fs 半分だけ**(ADR 0033: このホストで worker サンドボックスが
-   *  実際に使えるか)。**もう半分の「自分の人間面が無認証リクエストを拒むか」
-   *  (ADR 0036 / issue #154)は startServer 自身が足す** — 撃つ先の実ポートを
-   *  知っているのは listen した本人だけで、composition root(main.ts)には
-   *  導出できないため。
+   *  渡すのは **fs 半分**(ADR 0033: このホストで worker サンドボックスが実際に
+   *  使えるか)と**ツール面の問い**(ADR 0039 / issue #164: `/usage` ping で観測した
+   *  面が Tool allowlist と一致するか — 実 CLI を1本起こすので合成 root が持つ)。
+   *  **「自分の人間面が無認証リクエストを拒むか」(ADR 0036 / issue #154)は
+   *  startServer 自身が足す** — 撃つ先の実ポートを知っているのは listen した本人
+   *  だけで、composition root(main.ts)には導出できないため。
    *
    *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。 */
-  containment?: { sandboxCapability: () => SandboxCapability };
+  containment?: {
+    sandboxCapability: () => SandboxCapability;
+    /** ツール面の問い(ADR 0039)。**`null` を明示すると**3つ目の問いを持たない
+     *  盤面になる(実 CLI を持たないテスト盤面の形)。省略できない口にしてあるのは、
+     *  忘れたときに検査が黙って1つ消えるのを型で止めるため。 */
+    toolSurface: (() => Promise<ContainmentCapability>) | null;
+  };
 }
 
 export interface TidepoolServer {
@@ -202,10 +209,12 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // ここで足す — 撃つ先の実ポートは listen するまで確定しない(port: 0 のテスト
   // 盤面では特に)ので、armed になるのは listen の直後。それまでは合成側が
   // fail-closed の答えを返す(containment.ts の UNPROBED)。
-  const sandboxCapability = options.containment?.sandboxCapability;
+  // ゲートの有無は `containment` の有無**だけ**で読み切れる(1箇所)。3つ目の問いは
+  // その中で `null` を明示して外す — 省略で消える口にはしていない(containment.ts)。
+  const gate = options.containment;
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
-  const containment = sandboxCapability
-    ? composeContainment(sandboxCapability, () => probeHumanSurface?.())
+  const containment = gate
+    ? composeContainment(gate.sandboxCapability, () => probeHumanSurface?.(), gate.toolSurface)
     : undefined;
   const scheduler = startScheduler({
     db,

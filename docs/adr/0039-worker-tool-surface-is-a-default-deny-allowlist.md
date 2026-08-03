@@ -14,7 +14,7 @@ issue #145 のグリリング(2026-08-03)で決定。ADR 0038 の**延長**で�
 
 ## 実測が設計を規定する
 
-macOS 2.1.220。盤面が実際に吐くフラグ形(`--permission-mode acceptEdits --setting-sources project --disallowedTools Workflow --allowedTools mcp__tidepool --mcp-config … --strict-mcp-config --settings …`)で、サンドボックスプロファイルは `scripts/emit-sandbox-settings.ts work <ws>` が盤面のコードから吐いたもの。手書きの profile は使っていない。判定は init イベントの `tools` 配列とツール実行結果の逐語で行い、モデルの語りは判定に使っていない。**Pi では未実測**(実装時に確認する)。
+macOS 2.1.220。盤面が実際に吐くフラグ形(`--permission-mode acceptEdits --setting-sources project --disallowedTools Workflow --allowedTools mcp__tidepool --mcp-config … --strict-mcp-config --settings …`)で、サンドボックスプロファイルは `scripts/emit-sandbox-settings.ts work <ws>` が盤面のコードから吐いたもの。手書きの profile は使っていない。判定は init イベントの `tools` 配列とツール実行結果の逐語で行い、モデルの語りは判定に使っていない。**Pi(2.1.207)での実測は実装時に取った** — 下の追記を参照。
 
 ### 1. headless の面に `AskUserQuestion` は無い
 
@@ -145,9 +145,41 @@ review の書き込み床は ADR 0035 が置いた場所(`--permission-mode manu
 
 正本は **`/usage` ping**(起動時 / pickup ごと / quarantine の回答受理時)。既存の skill 列挙 ping(`defaultEnumerateSkills` / `parseInitSkills`)が**すでに init イベントを取って返す機構そのもの**なので、`tools` も見るだけの小改造で済む。ping が `--tools` を反映することは実測済み — work リスト + 本番フラグ一式の `/usage` ping の init が `tools` 18本(組み込み17 + MCP verb 1)、`skills` 16本を返した。オンデマンドに走らせられることが必須である — 解除は「能力検査を回答時にもう一度走らせて成立する」ことで検証されるため、再実行できない検査は確認 question を受理できない。
 
+正本の ping が運ぶのは**本番フラグ一式のうち面を決める分だけ**である(`--tools` /
+`--permission-mode` / `--setting-sources project`)。`--settings`(サンドボックス
+プロファイル)と `--mcp-config` は**タスク単位の生成物**で spawn の外に存在しないので
+運べない。したがって正本が答えるのは「このホストの CLI が盤面の `--tools` 宣言を honor
+するか」であり、`--settings` まで含んだ実際の spawn 形を測るのは深層防御側(実セッション
+の init 行)である — 2つで面の全体を覆う分担であって、取りこぼしではない。
+
+ping の timeout は skill 列挙(15s)と**分ける**。失敗の重さが違う: skill 列挙の timeout は
+spawn 1回を諦めるだけだが、こちらの timeout は「観測できなかった = 不成立」→ 盤面全体の
+pickup 停止になる。つまり遅いホストが誤って盤面を止める側に倒れるので、上限は詰まりの
+検知だけを残して広く取る(60s)。ping が遅いぶんは poll が待つだけで、誤停止よりはるかに
+安い。
+
 worker 自身の init 行の照合も**深層防御として重ねる**。追加コストは実質ゼロ(盤面は既に worker の stdout を1行ずつパースしている)で、実セッションそのものを測れる。比較関数と期待集合は1つのコード定数を共有する。
 
-### 4. deploy 時 canary は作らない
+### 4. ずれた面のセッションは走らせない(issue #164 で追加)
+
+決定3 の深層防御側が init 行のずれを見たら、**そのセッションを SIGKILL する**。当初の
+設計は観測と quarantine だけ(= 次の pickup を止める)だったが、init 行はセッションの
+**開始直後 — モデルが最初の tool_use を出す前**に出るので、ここで止めるのは走っている
+仕事を途中で奪うことではない。ADR 0025 point 6 が skill 列挙の失敗に対して取ったのと
+同じ「fail-open しない = このセッションは走らせない」である。ずれが広い側なら worker は
+持つべきでない能力を持ったまま走り、狭い側なら能力を1つ失って詰まるだけなので、どちらの
+向きも走らせる理由がない。
+
+usage の throttle はこの判断の前例にならない。あれは構造上**走っているセッションを見る
+ことがない**ゲートである(`pickupBlocked` が `slot.currentTaskId !== null` で手前に短絡
+する)。走っているセッションを止める既存の経路は watchdog だけである。
+
+**代償**: slot は既存の失敗経路 — watchdog の per-type 時限 → 失敗 question(リトライ)—
+が回収するので、人間は封じ込めの確認 question に加えてその失敗 question も1枚見る。
+盤面はそもそも止まっているので待ち時間の実害は無く、2枚になるぶんは「セッションが1枚
+死んだ」事実がそのまま記録に残る側の価値と釣り合う。
+
+### 5. deploy 時 canary は作らない
 
 既存の canary 3本が deploy 時にあるのは、ファイル床の成否が**盤面から観測できない**からである(ADR 0027 の線)。この性質は違う — 盤面自身が毎 spawn・全ホストで実測できる。しかも **CLI の自動更新は deploy と deploy の間に起きる**ので、deploy 時のスナップショットではそこで生じたドリフトを捕まえられない。決定3が決定4を包含する。
 
@@ -156,8 +188,49 @@ worker 自身の init 行の照合も**深層防御として重ねる**。追加
 - **`permissions.deny` / `--disallowedTools` による列挙 deny** — 執行力はある(測定3)が閉世界の仮定であり、ベンダーが増やしたツールは**開いたまま**入ってくる。ADR 0038 が Bash について「列挙で塞ぐ試みは失敗した」と書いたのとは失敗理由が違う(ラッパの無限性ではなく、集合が未来に開いていること)が、結論は同じ方向を向く
 - **何もしない(WORKER_PROTOCOL の散文に任せる)** — 現状であり、測定2 がその不十分さそのものである
 
+## 追記: 実装時の実測(issue #164、2026-08-03、macOS 2.1.220 と Pi 2.1.207)
+
+実装後の**盤面の本番経路そのもの**(`ClaudeCodeWorker.launch` の実 spawn。フラグ列を
+手で再現したものではない)で測った。判定は init イベントの `tools` と tool_result の
+逐語で行っている。**下表は macOS 2.1.220 と production Pi 2.1.207 の両方で同一の結果**
+(Pi 側は production を触らず、ブランチの worktree を `/tmp` に切って同じスクリプトを
+走らせた)。
+
+| 測定 | 結果 |
+|---|---|
+| work セッションの init `tools` | 組み込み**17本ちょうど**、決定1のリストと集合一致 |
+| review セッションの init `tools` | 組み込み**14本ちょうど**、編集系3本が消えている |
+| `CronCreate` を直接呼ぶ | `<tool_use_error>Error: No such tool available: CronCreate. CronCreate exists but is not enabled in this context.</tool_use_error>` |
+| サブエージェント(`Task`)経由で `CronCreate` を呼ばせる | 同じ逐語エラー。サブエージェントも境界の内側(測定6 の再現) |
+| 新たに面へ足した `Glob` / `Grep` を workspace の外へ向ける | `Claude requested permissions to read from …, but you haven't granted it yet.` — `Read` と同じ形。ADR 0038 の残余の既定は**この2本にも届く**(headless では承認要求が拒否そのもの) |
+
+**バージョン差は面に出なかった。** Pi の CLI は 2.1.207 で macOS より古いが、`--tools` の
+`--help` 文面は同一で、17本 / 14本の名指しはどちらでもそのまま面になった(古い CLI で
+`Glob` / `Grep` が名指しに応じない、といった差は無かった)。これは重要な control である —
+allowlist の名前が実在しなければ**警告なく不活性**になる(測定8)ので、ホスト間の CLI
+バージョン差はそのまま「観測 ⊂ 期待」の不成立として現れうる。
+
+**3つ目の問いの ping の実時間**: macOS 2.2〜2.5s、Pi **4.2〜4.3s**(いずれも `available:
+true`)。上限 60s(決定3)に対して十分な余裕がある。この数字を取ることが目的の一つだった —
+上限を skill 列挙の 15s のまま流用していたら、Pi の冷えた CLI 起動が伸びた日に**盤面全体が
+誤って止まる**側に倒れていた。
+
+最後の行は決定1の副作用の検査である: この allowlist は面から削るだけでなく `Glob` /
+`Grep` を**足す**ので、ADR 0038 が `Read` / `Write` について測った床がその2本にも
+届いていなければ、床を敷きながら読み取りの穴を開けたことになっていた。届いていた。
+
+**綴りの注意**: 面の名前は `Task` であって `Agent` ではない。init の `tools` は
+`Task` を返すが、セッション自身は「I have Agent」と列挙する(同じ1本の別名)。
+allowlist を `Agent` に「直す」と測定8 の形で黙って不活性になる。
+
+**init 行は1セッションに1本**(実測: サブエージェントを起こしたセッションでも親の
+stream には1本しか出ない)。決定4 の SIGKILL がこの1本で決まり、同一セッション内で
+二度走ることはない。
+
 ## 帰結
 
 - ハーネスが新しい組み込みツールを増やしても、盤面がリストに書き足すまで worker には届かない。**便利な新機能が黙って使えるようになることはない** — 意図した非対称である
 - 2.1.220 で `Glob` / `Grep` が既定の面から外れていたように、ベンダーは既存ツールを deferred 側へ移すことがある。allowlist に名前がある限り面に現れるが(測定7)、**改名されれば黙って消える**(測定8)。これを捕まえるのが決定3である
 - リストの保守は人間の merge が門になる — コード定数なので registry データのように agent が書き換える経路は無い
+- 決定4 が発火した deploy では、人間は封じ込めの確認 question と、殺されたセッションの
+  失敗 question の**2枚**を見る。前者が盤面を止め、後者がそのタスクのリトライを持つ

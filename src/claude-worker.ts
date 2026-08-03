@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import type { Clock } from "./clock.js";
+import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
@@ -246,6 +247,141 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
   return ["Edit", "Write", "NotebookEdit", ...REVIEW_BASH_WRITE_DENIALS];
 }
 
+// ツール許可リスト(CONTEXT.md の Tool allowlist / ADR 0039)。**盤面のコード
+// 定数**であって registry データではない — 床はデータの状態に依存しない
+// (ADR 0013、`REVIEW_BASH_WRITE_DENIALS` / `src/sandbox.ts` と同じ位置づけ)。
+// agent には依らず、task type にのみ依る。
+//
+// ADR 0038 の「床 = 残余の既定」は、ファイル操作でない in-process ツールには
+// **届いていない**。`acceptEdits` + 本番フラグ一式の下で `CronCreate` が承認要求
+// なしに実行された(ADR 0039 測定2)— この族は permission の subject ですらなく、
+// モードの残余に落ちる対象に入っていない。塞ぎ方は列挙 deny ではなく `--tools`
+// による**既定拒否**である: 列挙 deny には執行力はあるが(測定3)閉世界の仮定で、
+// ベンダーが増やしたツールは**開いたまま**入ってくる。
+//
+// 挙げた理由のうち自明でないもの: `Task` は BOARD_DOCTRINE が意図的に開いている
+// 既決事項(ADR 0010 追記)。**綴りは `Task` であって `Agent` ではない** — この面の
+// 名前は `Task` で(init の `tools` もそう返す)、モデル側に現れる名前が `Agent`
+// である(実測: セッション自身は「I have Agent」と列挙しつつ、サブエージェントの
+// spawn は成功する)。`Agent` と書き換えると黙って不活性になる(測定8)。
+// `TaskOutput` / `TaskStop` は todo リストの仲間ではなく `Bash` の
+// `run_in_background` の受け口。`Glob` / `Grep` は
+// 2.1.220 の既定の面に出ていないが名指しすれば現れる(測定7)ので、work
+// セッションに本物の検索ツールを与えられるのはこのリストを書くからである。
+//
+// 落とした側は ADR 0039 決定1 に全量の理由がある(`RemoteTrigger` は人間の
+// アカウント名義の OAuth token をプロセス内で自動付与し、`PushNotification` は
+// Quiet hours と Digest を素通りする、等)。
+//
+// この配列を編集したら**テスト側の literal も手で合わせること**。テストはこの配列を
+// import せず独立した literal で書いている(`REVIEW_BASH_WRITE_DENIALS` と同じ線 —
+// import して比べるとコードが計算する通りに期待値も計算するトートロジーになる)ので、
+// 置いてある場所は1つではない: tests/spawn-tools.test.ts(正)、
+// tests/claude-worker.test.ts(spawn 引数と init 行、ファイル冒頭の2定数)、
+// tests/tool-surface-drift.test.ts / tests/tool-surface-containment.test.ts
+// (それぞれ WORK_SURFACE)。
+//
+// テストが保証できないのは**綴りの正しさ**である — 実在しない名前は警告なく不活性に
+// なる(測定8)。それを捕まえるのは封じ込め能力の3つ目の問い(`checkToolSurface`)。
+const WORKER_TOOLS: readonly string[] = [
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
+  "NotebookEdit",
+  "Glob",
+  "Grep",
+  "Skill",
+  "Task",
+  "WebFetch",
+  "WebSearch",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskUpdate",
+  "TaskOutput",
+  "TaskStop",
+];
+
+/** review の面から消える編集系。**書き込み床の移設ではない**(ADR 0039 決定2):
+ *  床は ADR 0035 が置いた permission 層(`--permission-mode manual` +
+ *  `autoAllowBashIfSandboxed: false`)にそのまま残り、`reviewToolDenials` の
+ *  `Edit` / `Write` / `NotebookEdit` も残る。2層にする理由は冗長性ではなく性質の
+ *  違いで、deny 層は**黙って**効かなくなりうる(ADR 0037 追記の実測)のに対し、
+ *  `--tools` による除去は init イベントの `tools` 配列を読めば**観測できる**。 */
+const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"];
+
+/** spawn の `--tools`(ADR 0039 決定1): そのセッションの面に現れる組み込み
+ *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
+ *  純関数、配線は `launch()`」の分離。
+ *
+ *  review 以外はすべて work と同じ面である — read-only は review という task
+ *  type の性質であって実行エージェントの性質ではない(ADR 0013)。 */
+export function spawnTools(taskType: Task["type"]): string[] {
+  // どちらの分岐も**新しい配列**を返す — 床の定数そのものを呼び出し側に渡すと、
+  // 呼び出し側の `sort()` や `push()` が床を書き換えられてしまう(`reviewToolDenials`
+  // が毎回組み立て直しているのと同じ理由)。
+  if (taskType !== "review") return [...WORKER_TOOLS];
+  return WORKER_TOOLS.filter((tool) => !REVIEW_REMOVED_TOOLS.includes(tool));
+}
+
+/** 比較対象から外す接頭辞。MCP verb は `--tools` を生き残る別軸なので(ADR 0039
+ *  測定5)、面の照合はこれで始まるエントリを見ない — MCP サーバーが繋がらなかった
+ *  セッションでは verb が丸ごと消えるため、含めると「盤面の MCP が落ちている」が
+ *  封じ込め能力の不成立に化ける。それは別の障害であり別の扱いを受けるべきである。 */
+const MCP_TOOL_PREFIX = "mcp__";
+
+/** 封じ込め能力の3つ目の問い(ADR 0039 決定3 / CONTEXT.md の Containment
+ *  capability): **観測されたツール面が盤面の宣言どおりか**。ツール面のドリフトは
+ *  workspace の性質でも agent の性質でもなく**ホストの性質**である — このホストの
+ *  CLI が盤面の宣言を honor しなくなった、という事実 — なので、既存2つ(fs
+ *  サンドボックス / 人間面の自己検査)と同格に束ねられ、不成立なら盤面全体の
+ *  pickup が止まる。
+ *
+ *  照合は**集合の一致**である。どちらの向きもずれであり、しかも意味が違う:
+ *
+ *  - **観測 ⊃ 期待** — 盤面の宣言が honor されなくなった / 新ツールが素通りしてきた。
+ *    `--tools` の外にあるのは `RemoteTrigger`(人間のアカウント名義の OAuth token を
+ *    プロセス内で自動付与)のような族である
+ *  - **観測 ⊂ 期待** — 挙げた名前が改名・廃止されて**警告なく不活性化**した
+ *    (測定8)。worker は能力を1つ失ったまま走り続けるので、放っておくとタスクが
+ *    詰まって初めて分かる
+ *
+ *  純関数であり、**封じ込め能力の probe(`probeToolSurfaceCapability`)と worker 自身の
+ *  init 行の照合が同じこれを共有する** — 期待集合を2箇所に置かない(ADR 0039
+ *  決定3)。答えの型も封じ込め能力の他の半分と同じ1つ(`ContainmentCapability`)。 */
+export function checkToolSurface(
+  observed: string[],
+  taskType: Task["type"],
+): ContainmentCapability {
+  const expected = spawnTools(taskType);
+  const builtIn = observed.filter((tool) => !tool.startsWith(MCP_TOOL_PREFIX));
+  const unexpected = builtIn.filter((tool) => !expected.includes(tool));
+  const missing = expected.filter((tool) => !builtIn.includes(tool));
+  if (unexpected.length === 0 && missing.length === 0) return { available: true };
+  // 観測された**具体名**を両方向とも本文に置く。封じ込めの question は「直して
+  // から答える」ものなので、どの名前が余ってどの名前が消えたのかが読めなければ
+  // 修理できない(人間面の半分が観測した status code を本文に置くのと同じ線)。
+  const observations = [
+    unexpected.length > 0
+      ? `it offered ${unexpected.join(", ")} on top of the allowlist`
+      : undefined,
+    missing.length > 0
+      ? `the allowlist named ${missing.join(", ")} but the session never got them`
+      : undefined,
+  ].filter((part) => part !== undefined);
+  return {
+    available: false,
+    reason:
+      `this host's claude CLI no longer gives a ${taskType} session the tool surface the board ` +
+      `declared (ADR 0039): ${observations.join("; ")}. A tool the board never named is a side ` +
+      "channel the WORKER_PROTOCOL closes in prose only, and a name that no longer exists goes " +
+      "inert with no warning — so either direction means the board's declaration and the CLI " +
+      "have parted ways. Check the CLI version against the Tool allowlist (CONTEXT.md), then " +
+      "fix the list or pin the CLI",
+  };
+}
+
 /** The MCP server key a worker's mcp-config carries, and therefore the stem of
  *  every `mcp__<server>__<verb>` permission subject. One constant so the server
  *  the board writes and the permission token it allows can never drift apart —
@@ -471,24 +607,31 @@ const SKILL_ENUM_ARGS = [
   "0.01",
 ];
 
-/** The `type: "system", subtype: "init"` line's `skills` array (ADR 0025) —
- *  the CLI's own report of every skill it resolved. Fail-closed like
- *  parseResultLine: a non-init line, a split/malformed line, or a `skills`
- *  that isn't an array of strings all read as "not the init report". */
-function parseInitSkills(line: string): string[] | null {
+/** The `type: "system", subtype: "init"` line's string-array fields — the CLI's
+ *  own report of what it resolved for the session. `skills` is ADR 0025's
+ *  enumeration; `tools` is the surface ADR 0039 compares against the board's
+ *  Tool allowlist. Fail-closed like parseResultLine: a non-init line, a
+ *  split/malformed line, or a field that isn't an array of strings all read as
+ *  "not the init report" rather than as an empty answer. */
+function parseInitField(line: string, field: "skills" | "tools"): string[] | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   try {
-    const parsed = JSON.parse(trimmed) as { type?: unknown; subtype?: unknown; skills?: unknown };
+    const parsed = JSON.parse(trimmed) as {
+      type?: unknown;
+      subtype?: unknown;
+      [key: string]: unknown;
+    };
     if (parsed.type !== "system" || parsed.subtype !== "init") return null;
-    if (!Array.isArray(parsed.skills) || !parsed.skills.every((s) => typeof s === "string")) {
-      return null;
-    }
-    return parsed.skills as string[];
+    const value = parsed[field];
+    if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) return null;
+    return value as string[];
   } catch {
     return null;
   }
 }
+
+const parseInitTools = (line: string): string[] | null => parseInitField(line, "tools");
 
 // The /usage ping exits naturally in ~2s (ADR 0025); this is the fail-closed
 // backstop for a CLI that hangs (auth stall, missing exit) so a wedged probe
@@ -496,17 +639,30 @@ function parseInitSkills(line: string): string[] | null {
 // posture as checkUsage (ADR 0028), reached by SIGKILL on timeout.
 const SKILL_ENUM_TIMEOUT_MS = 15_000;
 
-const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) =>
-  new Promise((resolve) => {
+/** One `/usage` init-report ping: run the CLI at `cwd` and return the init
+ *  event's `field` array, or null if the ping never produced one. Two callers
+ *  now — ADR 0025's skill enumeration and ADR 0039's tool-surface probe — which
+ *  is the whole reason the ADR could say "tools も見るだけの小改造で済む": this is
+ *  already the mechanism that takes an init event and hands it back. */
+function runInitPing(
+  cwd: string,
+  extraArgs: string[],
+  field: "skills" | "tools",
+  timeoutMs: number = SKILL_ENUM_TIMEOUT_MS,
+): Promise<string[] | null> {
+  return new Promise((resolve) => {
     let child: ReturnType<typeof nodeSpawn>;
     try {
-      child = nodeSpawn("claude", SKILL_ENUM_ARGS, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+      child = nodeSpawn("claude", [...SKILL_ENUM_ARGS, ...extraArgs], {
+        cwd,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
     } catch {
       resolve(null);
       return;
     }
     let buffered = "";
-    let skills: string[] | null = null;
+    let observed: string[] | null = null;
     let settled = false;
     const finish = (result: string[] | null) => {
       if (settled) return;
@@ -521,20 +677,125 @@ const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) =>
         // already gone
       }
       finish(null);
-    }, SKILL_ENUM_TIMEOUT_MS);
+    }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer | string) => {
       buffered += chunk.toString();
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
-      for (const line of lines) skills = parseInitSkills(line) ?? skills;
+      for (const line of lines) observed = parseInitField(line, field) ?? observed;
     });
     // an unlistened "error" (missing binary) would crash the board process
     child.on("error", () => finish(null));
     child.on("exit", () => {
-      skills = parseInitSkills(buffered) ?? skills;
-      finish(skills);
+      observed = parseInitField(buffered, field) ?? observed;
+      finish(observed);
     });
   });
+}
+
+const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) => runInitPing(cwd, [], "skills");
+
+/** A ping at a *neutral* cwd: a fresh empty directory, so nothing a checkout
+ *  carries takes part in what the CLI resolves. Cleaned up only AFTER the probe
+ *  resolves — the CLI is still running against this cwd until then, so removing
+ *  it mid-probe would be a race. */
+function atNeutralCwd(
+  prefix: string,
+  probe: (cwd: string) => Promise<string[] | null>,
+): Promise<string[] | null> {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  return probe(dir).finally(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best-effort: a leftover empty temp dir is harmless
+    }
+  });
+}
+
+/** The tool-surface probe's boundary (ADR 0039 決定3): what built-in tools a
+ *  session on this host actually gets when the board declares its allowlist, or
+ *  null if the ping failed. Injected so the capability answer is tested without a
+ *  real CLI (same posture as EnumerateSkillsFn). */
+export type EnumerateToolsFn = () => Promise<string[] | null>;
+
+// 3つ目の問いの正本の ping(ADR 0039 決定3)。**work のリストで撃つ — review 用に
+// 2本目は撃たない。** review は work の真部分集合なので、改名で不活性化した名前
+// (測定8)はどちらのリストでも同じように欠ける。review 固有の失敗形は「編集系の
+// **除去**が honor されなくなった」だけで、それは実 review セッションの init 行を
+// task type ごとに照合する深層防御側(`checkSessionToolSurface`)が観測する。
+//
+// **この ping が運ぶのは本番フラグ一式のうち面を決める分だけである。** `--tools` は
+// 測る対象そのもの、`--permission-mode` と `--setting-sources project` は本番と同じ値。
+// 運ばないのは `--settings`(サンドボックスプロファイル)と `--mcp-config` — どちらも
+// **タスク単位の生成物**(workspace のパス・タスク帰属つき URL)で、spawn の外には
+// 存在しない。したがって正本が答えるのは「このホストの CLI が盤面の `--tools` 宣言を
+// honor するか」であり、`--settings` まで含んだ**実際の spawn 形**を測るのは深層防御側
+// (実セッションの init 行)である。2つで面の全体を覆う、という分担であって取りこぼし
+// ではない — ADR 0039 の測定は本番フラグ一式で 18本(組み込み17 + MCP verb 1)を観測
+// しており、正本の側はその MCP verb が無い 17本を見る(`mcp__` は比較対象外なので
+// どちらでも同じ答えになる)。
+//
+// `--setting-sources project` を足すのは**本番と同じ tier を読ませる**ため。足さないと
+// ホストの人間の `~/.claude/settings.json` の `permissions.deny` が面を削り
+// (ADR 0039 測定3)、本番の worker では起きない欠落を封じ込めの不成立に化けさせる。
+// SKILL_ENUM_ARGS 側には足さない — skill 列挙は user tier の skill を見るのが
+// 目的で(`enumerateHostSkills` の @host 集合)、そこに足すと集合が壊れる。
+const TOOL_SURFACE_PROBE_ARGS = [
+  "--permission-mode",
+  "acceptEdits",
+  "--setting-sources",
+  "project",
+  "--tools",
+  spawnTools("work").join(","),
+];
+
+// この ping の timeout は skill 列挙と**分ける**。失敗の重さが違う:
+// skill 列挙の timeout は spawn 1回を諦めるだけ(タスクは watchdog が回収する)だが、
+// こちらの timeout は「観測できなかった = 不成立」→ **盤面全体の pickup 停止 +
+// 確認 question** になる。つまり遅いホストが誤って盤面を止める側に倒れる。冷えた CLI の
+// 起動がどこまで伸びうるかはホスト依存(ADR 0028 が Pi を macOS より遅い側として実測
+// している)なので、上限は「詰まりを検知する」役だけを残して広く取る。ping 自体が
+// 遅いぶんは poll が待つだけで、誤停止よりはるかに安い。
+const TOOL_SURFACE_PROBE_TIMEOUT_MS = 60_000;
+
+const defaultEnumerateTools: EnumerateToolsFn = () =>
+  // neutral cwd で撃つ: workspace の cwd で撃つと、その checkout の
+  // `.claude/settings.json` の `permissions.deny` が面を削って(測定3)「ホストの
+  // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
+  // `floorOverridingSettings` がすでにその担当である。
+  atNeutralCwd("tidepool-tools-", (cwd) =>
+    runInitPing(cwd, TOOL_SURFACE_PROBE_ARGS, "tools", TOOL_SURFACE_PROBE_TIMEOUT_MS),
+  );
+
+/** 封じ込め能力の3つ目の問い(ADR 0039 決定3)の正本: `/usage` ping を**その場で
+ *  撃ち**、観測されたツール面を `checkToolSurface` に渡す。
+ *
+ *  **memoize しない**のが要件である。解除は「能力検査を回答時にもう一度走らせて
+ *  成立する」ことで検証される(CONTEXT.md の Quarantine)ので、再実行できない検査は
+ *  確認 question を受理できない。呼ばれるのは起動時 / pickup ごと / quarantine の
+ *  回答受理時。
+ *
+ *  ping が失敗したら**不成立**に倒す — 「測れなかった」は「無事」ではない
+ *  (人間面の半分が接続失敗を不成立に倒すのと同じ線)。ここを skip にすると3つ目の
+ *  問いが黙って飾りになる。 */
+export async function probeToolSurfaceCapability(
+  enumerate: EnumerateToolsFn = defaultEnumerateTools,
+): Promise<ContainmentCapability> {
+  const observed = await enumerate();
+  if (observed === null) {
+    return {
+      available: false,
+      reason:
+        "the board could not observe the tool surface its own `claude` CLI hands a worker " +
+        "session (the /usage ping produced no init report — a missing binary, a stalled auth " +
+        "prompt, or a timeout) — whether the declared Tool allowlist is honored is unknown, " +
+        "and unknown is not safe (ADR 0039)",
+    };
+  }
+  // work プロファイルで撃っている(TOOL_SURFACE_PROBE_ARGS のコメント参照)
+  return checkToolSurface(observed, "work");
+}
 
 /** The skills-picker candidate source (issue #106 / ADR 0025): the `@host`
  *  individual skills the WebUI's agent skills picker offers, enumerated by the
@@ -554,18 +815,8 @@ const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) =>
  *  (an allowlist is a reference, not a claim of stock — ADR 0023). Null on a
  *  failed probe, same fail-closed shape as `defaultEnumerateSkills`; the route
  *  degrades that to an empty candidate set rather than a spawn failure. */
-export const enumerateHostSkills = (): Promise<string[] | null> => {
-  const dir = mkdtempSync(join(tmpdir(), "tidepool-skills-"));
-  // clean up only AFTER the probe resolves — the CLI is still running against
-  // this cwd until then, so removing it mid-probe would be a race
-  return defaultEnumerateSkills(dir).finally(() => {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // best-effort: a leftover empty temp dir is harmless
-    }
-  });
-};
+export const enumerateHostSkills = (): Promise<string[] | null> =>
+  atNeutralCwd("tidepool-skills-", defaultEnumerateSkills);
 
 /** The checkout's own skills (issue #56 / ADR 0025): the directory names under
  *  `<workspace>/.claude/skills/`. This one-directory scan is the only discovery
@@ -1137,6 +1388,24 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // spawn with no allowlist is a session that cannot reach the board.
         "--allowedTools",
         allowedTools,
+        // A DEFAULT-DENY ALLOWLIST (ADR 0039). The mode above is the floor for
+        // whatever the permission layer sees — but the non-file in-process tools
+        // are not permission subjects at all, so nothing residual reaches them:
+        // `CronCreate` executed under `acceptEdits` + this exact flag set with no
+        // approval asked (測定2). `--tools` closes that layer the other way round,
+        // by naming everything the session may have and nothing else, so a tool
+        // the vendor adds later arrives *closed* (an enumerated deny would let it
+        // in open). Only the built-in surface is affected — MCP verbs and skills
+        // survive it untouched (測定5), which is what makes this compatible with
+        // `--allowedTools mcp__tidepool` above and ADR 0025's skill machinery.
+        //
+        // Never conditional, never empty: `--tools ""` is the CLI's spelling for
+        // "disable all tools" (--help), so an empty join would silently produce a
+        // session that cannot call anything rather than an error. The value sits
+        // immediately before the next `--flag` because the option is variadic
+        // (`--tools <tools...>`) — a bare token after it would be swallowed.
+        "--tools",
+        spawnTools(task.type).join(","),
         // the empty-allowlist shape: one flag disables every slash command
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).
@@ -1185,12 +1454,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // exit without re-reading the file back off disk
     let lastResult: StreamResultEvent | null = null;
     let buffered = "";
+    // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
+    let toolSurfaceObserved = false;
     child.stdout.on("data", (chunk: Buffer | string) => {
       buffered += chunk.toString();
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
       for (const line of lines) {
         lastResult = parseResultLine(line) ?? lastResult;
+        if (!toolSurfaceObserved) {
+          toolSurfaceObserved = this.checkSessionToolSurface(task, line, child);
+        }
       }
     });
     this.running.set(task.id, child);
@@ -1272,6 +1546,48 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         at: this.options.clock.now(),
       });
     });
+  }
+
+  /** ADR 0039 決定3 の**深層防御側**: 走っているセッション自身の init 行の `tools`
+   *  を、封じ込め能力の probe と**同じ照合関数・同じ期待集合**(`checkToolSurface`)
+   *  で見る。正本は `/usage` ping のほうだが、盤面はすでに worker の stdout を
+   *  1行ずつ読んでいるので追加コストは実質ゼロで、しかも測っているのが**実
+   *  セッションそのもの**である(ping は本番と同じフラグ形の代理でしかない)。
+   *
+   *  不成立時は新しい器を作らず既存の封じ込め能力の経路に乗る — 盤面全体の pickup が
+   *  止まり、Tidepool 名義の確認 question が1枚立つ(2枚目は
+   *  `quarantineContainment` 自身が短絡する)。
+   *
+   *  **そのセッションは走らせない。** init 行はセッションの開始直後 — モデルが
+   *  最初の tool_use を出す前 — に出るので、ここで殺すのは「走っている仕事を途中で
+   *  奪う」ことではなく、ADR 0025 point 6 が skill 列挙の失敗に対して取ったのと同じ
+   *  「このセッションは走らせない(fail-open しない)」である。ずれが広い側なら
+   *  worker は持つべきでない能力を持ったまま走ることになり、狭い側なら能力を1つ
+   *  失って詰まるだけなので、どちらの向きも走らせる理由がない。slot は既存の失敗
+   *  経路 — watchdog の per-type 時限 → 失敗 question(リトライ)— が回収する。
+   *  SIGTERM ではなく SIGKILL なのは、猶予の目的が「エージェントに畳ませる」こと
+   *  であり、ここで止めたい相手がまさにその「これ以上動くこと」だから。
+   *
+   *  戻り値は「init の `tools` を観測したか」— 呼び出し側はそれ以降の行をこの検査に
+   *  通さない(1セッションに init 行は1本だけ、実測)。
+   *
+   *  init 行が無いセッション(壊れた行・`tools` を持たない init)は判定しない —
+   *  観測が無いことを不成立に化けさせるのは正本(ping)の仕事である。サブエージェント
+   *  を起こしたセッションでも親の stream に init 行は1本しか出ない(実測)ので、
+   *  この判定が同一セッション内で二度走ることはない。 */
+  private checkSessionToolSurface(
+    task: Task,
+    line: string,
+    child: { kill(signal: NodeJS.Signals): void },
+  ): boolean {
+    const tools = parseInitTools(line);
+    if (!tools) return false;
+    const surface = checkToolSurface(tools, task.type);
+    if (surface.available) return true;
+    console.error(`[worker] tool surface drift on task ${task.id}: ${surface.reason}`);
+    child.kill("SIGKILL");
+    quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
+    return true;
   }
 
   kill(taskId: string, signal: KillSignal): void {
