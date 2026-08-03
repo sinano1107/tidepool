@@ -280,11 +280,11 @@ Measured on macOS 2.1.220 in the production spawn shape, 2026-08-03 — **exit 0
 | hook/control | `disableHooks` (fake) | yes | hook fired: **yes** | the settings file *was* honoured — which is what makes the live row mean something, and it proves the project tier survives `--setting-sources project` |
 | deny/scope | same rule, skills path | yes | refused by: **mode** | the rule stayed silent on that path ⇒ the ban is still the two files, not the directory — ADR 0025 intact |
 
-The same four rows were **exit 0** on the production Pi (2.1.207 / bwrap) and on macOS on 2026-08-03 under the *previous* `auto` shape, with `deny/scope` passing on the write landing instead. The Pi has not yet been measured in the production shape — it needs the #162 deploy first.
+The production Pi (2.1.207 / bwrap) produced the **identical four rows, exit 0**, the same day right after the #162 deploy — `deny/scope` reading `refused by: mode` there too, so the mode's `.claude` write restriction is not a macOS quirk. Both hosts were also exit 0 earlier that day under the *previous* `auto` shape, with `deny/scope` passing on the write landing instead.
 
 The live row's own `notes.txt` is the bwrap evidence: `failIfUnavailable: true` means a sandbox that fails to start kills the session outright, so a session that wrote its file is a session whose sandbox came up.
 
-**Path note for the first post-deploy run.** That Pi measurement was taken *before* the change shipped, so the profile was emitted from a staged `src/sandbox.ts` under `~/hook-canary-src` rather than from `/opt/tidepool` — invoked as `ssh $PI 'bash -s -- local ~/hook-canary-src' < <this script>`. The plain `hook-canary.sh pi` form (which reads `/opt/tidepool`) has therefore never run; it will work once the deploy lands, and it exits 1 with "the emitted profile carries no disableAllHooks key" if run against a `/opt/tidepool` that predates it.
+**Path note (historical).** The ADR 0037 Pi measurement was taken *before* that change shipped, so its profile came from a staged `src/sandbox.ts` under `~/hook-canary-src` rather than from `/opt/tidepool` — invoked as `ssh $PI 'bash -s -- local ~/hook-canary-src' < <this script>`. The plain `hook-canary.sh pi` form (which reads `/opt/tidepool`) first ran on 2026-08-03 after the #162 deploy, and passed. Against a `/opt/tidepool` that predates a decision this script measures, it exits 1 by name: "carries no disableAllHooks key" (#160) or "does not spawn the ADR 0038 shape" (#162).
 
 ### Tool-floor canary (ADR 0038 — re-run after every `claude` CLI update)
 
@@ -316,7 +316,9 @@ Measured on macOS 2.1.220, 2026-08-03 — **exit 0**:
 | write/live | `acceptEdits` | yes | file appeared: **no**, layer refused: **yes** | `Claude requested permissions to write to …, but you haven't granted it yet.` — and `notes.txt` landed in the same session, so `acceptEdits` still lets work write |
 | write/control | `auto` | yes | file appeared: **yes** | the same write landed outside the workspace — #151's hole, reproduced as the baseline |
 
-`Blocked by classifier.` appeared in none of the four sessions, on either mode. The Pi has not yet been measured — it needs the #162 deploy first.
+`Blocked by classifier.` appeared in none of the four sessions, on either mode.
+
+**The production Pi (2.1.207 / bwrap) produced the identical table, exit 0**, the same day right after the #162 deploy — same refusal wording on the live rows, both controls out. The two backends closing the same edge with the same words is what makes this a floor rather than a platform accident.
 
 The script greps the deployed `src/claude-worker.ts` for the ADR 0038 flag shape and exits 1 if it is absent — that catches **a deployed board older than this decision** (the Pi before the #162 deploy) and nothing else. It cannot see an inverted ternary; `tests/claude-worker.test.ts` is the board-side drift guard.
 
