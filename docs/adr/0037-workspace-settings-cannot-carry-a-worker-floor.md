@@ -36,3 +36,47 @@ hooks / settings 書き込みの封じ込めは ADR 0033 の封じ込め能力�
 - **option (b) 保護ブランチ上の hooks だけ信頼し、タスクブランチの変更を spawn 時に検出して quarantine** — 実測 1(ホットリロード)で spawn 時検出が原理的に届かず、実測 4(正当 hook でも参照先が worker 可書き)で「保護ブランチ = 信頼できる」の前提自体が崩れた。加えて v1 には auto-merge(`auto_if_ci_green`)が実在し、low-risk タスクの hook 変更 PR は CI green なら人間の目を通らず保護ブランチへ着地する。
 - **option (c) `--setting-sources` で project settings を落とす** — hooks には効くが workspace skill と CLAUDE.md を道連れにする(実測 3)。ADR 0033 の実測では `sandbox` ブロックには効かなかった(層ごとに vendor 挙動が不整合)ので、床の防御としては信頼できない。
 - **hook コマンドの許可リスト(絶対パス・workspace 非参照のみ)** — 元要求「正当な hook を生かす」の唯一の生存変種だが、tidepool の唯一の正当な hook である `npx biome check --write .` が定義上これを満たせない(参照先が workspace)。仕組みだけ増えて何も救えない。
+
+## 追記: 実装時に `permissions.deny` の綴りが実測で割れた(2026-08-03、issue #160)
+
+機構1(`disableAllHooks: true`)と機構2の Bash 経路(**ファイル単位**の `denyWrite` 2本)は設計どおりに入り、macOS 2.1.220 と本番 Pi 2.1.207 / bwrap の両方で設計どおりに測れた。ディレクトリ単位を避けた判断も裏が取れている — ファイル単位の `denyWrite` を載せたプロファイルで Pi のセッションは正常に起動し、仕事をして終了した(`failIfUnavailable: true` の下では、走ったこと自体がサンドボックスが立ったことの証拠になる)。
+
+**割れたのは機構2のツール経路の綴りだけ。** 本 ADR は `Write` / `Edit` / `MultiEdit` × 2ファイルの6エントリを書いたが、実装時に測り直すと**そのうち4本は何も enforce していなかった**。CLI 2.1.220 は起動時にそれを名指しで言う:
+
+- `Write(path)` — 「is not matched by file permission checks — only `Edit(path)` rules are. Use `Edit(path)` instead (Edit rules cover all file-editing tools).」
+- `MultiEdit(...)` — 「matches no known tool — check for typos.」
+
+警告文だけを根拠にはせず、同一の中立ペイロード(`{"env":{"BUILD_STAMP":"1"}}` — C2 が分類器をすり抜けたのと同じ「ごく普通の依頼」の形)で測り直した:
+
+| `permissions.deny` | Write ツールの結果 |
+|---|---|
+| `Edit` 2本のみ | **拒否**。`File is in a directory that is denied by your permission settings.` 既存の上書きも、存在しない `settings.local.json` の新規作成も成立しない |
+| `Write` + `MultiEdit` 4本(`Edit` 抜き) | deny ルールは**沈黙**。止めたのは auto モードの分類器(`Blocked by classifier.`)= モデル判断であり、ADR 0033 が床として当てにしないと決めているもの |
+| 空(control) | 上書きも新規作成も**通る** |
+
+したがって**綴りは `Edit(path)` の2本**にした。これは決定の変更ではない — 6本のうち4本は床を 1mm も運んでおらず、載せ続けても得るものが無い一方で、毎 worker セッションのログに6行の警告を出し、しかもその文面が読者に「Edit に直せ」と指示する。本 ADR の「実測が設計を規定する」に従った結果である。
+
+**そのぶん canary の責務が増えた。** 「`Edit(path)` は全 file-editing tool を覆う」はベンダーの主張であって、tidepool 側で列挙できる規則ではない。CLI は**照合されないルールは警告するが、覆いが狭まったことは警告しない** — 将来 `Write` が `Edit` の傘から外れれば、床は音もなく消える。よって deploy-pi の canary は hook の不活性だけでなく、**deny ルール自身の文面による拒否**も毎回測る(`hook-canary.sh` の `deny` 行)。分類器が断っただけの回を合格にしないのが要点で、それを許すと deny が効かなくなった日に緑のまま出荷される。
+
+`FLOOR_DEFINING_KEYS` は本文どおり触っていない(`hooks` は足していない)。
+
+### 追記の追記: deny の**広さ**は測らないと分からない(同日)
+
+拒否文言は `File is in a **directory** that is denied by your permission settings.` である。「ディレクトリが deny されている」と読める文面なので、`Edit(.claude/settings.json)` が `.claude/` 配下まるごとの ban として解決されている可能性が残る。そうなっていれば ADR 0025 の `@workspace` skill スコープが消え、worker が最も多く走る tidepool 自身の repo が日常タスクで踏む — **しかも emit される配列は変わらないので、盤面のテストは何も言わない**。
+
+実測(macOS 2.1.220 / Pi 2.1.207、いずれも Edit 2本が効いている状態):`.claude/skills/**` も `.claude/commands/**` も**書けた**。ban はファイル単位で、文言が紛らわしいだけである。これを canary の `deny/scope` 行として固定した。
+
+**その過程で、canary 自身の設計欠陥を2つ踏んだ(記録に値する)。**
+
+1. **1セッションに両方の `.claude` 書き込みを入れると、分類器が汚染する。** Pi で「skills を書け」と「settings を書け」を同一セッションで頼むと、**skills の方まで**拒否された。同じ skills 書き込みを単独セッションで撃つと同じプロファイルで**2回とも成功**する。決定論的なルールにこの挙動はできない — 分類器が要求全体を circumvention と読み、隣まで巻き込んだ。よって scope の control は control セッション側(`permissions.deny` は同一)へ分けた。
+2. **拒否文字列を出力全体に grep すると誤帰属する。** 上記の汚染回では、`deny` 行が **skills の拒否文字列**を拾って PASS を出していた。2つを別セッションに分けたことで、`.claude` 書き込みが1セッションに1つしか無くなり、構造的に解消した。
+
+拒否の綴りも版で割れる。2.1.220 は file-permission check の `File is in a directory that is denied…`、2.1.207 は分類器がルールを引用する形(`… circumvents the configured Edit(.claude/settings.local.json) deny rule`)。どちらも**設定されたルールを名指しする**ので両方を合格とし、何も名指さない `Blocked by classifier.` は合格にしない — そこを緩めると、deny が効かなくなった日に分類器の気分で緑が出る。
+
+### 射程の境界(#151 との分担)
+
+本 ADR が塞いだのは **workspace 由来の床上書き**であって、ホスト全域の封じ込めではない。「worker はもう床を書き換えられない」と読んではならない。
+
+二層目の `permissions.deny` はパスを名指しする形なので、覆っているのは checkout 内の2ファイルだけである。**`~/.claude/settings.json`(user tier)への Write は本 ADR の射程外**で、そこは #151(work プロファイルのツール層にサンドボックスの床が掛かっていない)の領分になる。
+
+ただしその迂回路は #151 自身に**劣後する** — 床を広げてから Bash で読むより、Read ツールで `~/.claude/.credentials.json` を直接読むほうが早い。したがって user tier をここで列挙して追いかけるより、#151 を対処候補2(work も `--permission-mode manual`)で解く方が筋がよい。そちらが入れば、この射程外だった経路も同時に閉じる。

@@ -7,7 +7,7 @@
  *  中途半端に残る。デプロイに載る恒久的なスクリプトにしておく方が安い。
  *
  *  使い方: tsx scripts/emit-sandbox-settings.ts <work|review> <workspacePath> [skill...] */
-import { buildSandboxSettings, type SandboxSettingsInput } from "../src/sandbox.js";
+import { buildSandboxSettings, type WorkerSessionSettingsInput } from "../src/sandbox.js";
 
 const USAGE = "usage: emit-sandbox-settings.ts <work|review> <workspacePath> [skill...]";
 const [taskType, workspacePath, ...permittedSkills] = process.argv.slice(2);
@@ -17,5 +17,5 @@ if ((taskType !== "work" && taskType !== "review") || !workspacePath) {
   process.exit(2);
 }
 
-const input: SandboxSettingsInput = { taskType, workspacePath, permittedSkills };
+const input: WorkerSessionSettingsInput = { taskType, workspacePath, permittedSkills };
 console.log(JSON.stringify(buildSandboxSettings(input)));

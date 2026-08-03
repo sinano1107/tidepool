@@ -3,10 +3,33 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Task } from "./tasks.js";
 
-/** The CLI's own `sandbox` settings block (vendor shape, hence confined to this
- *  adapter-side module — ADR 0005). Key names and their semantics were read off
- *  the installed CLI (2.1.220) and confirmed by running it, not from memory. */
-export interface SandboxSettings {
+/** The CLI's own settings shape for a worker session (vendor shape, hence
+ *  confined to this adapter-side module — ADR 0005). Key names and their
+ *  semantics were read off the installed CLI (2.1.220) and confirmed by running
+ *  it, not from memory.
+ *
+ *  Not `SandboxSettings`: ADR 0037 added two members that live *outside* the
+ *  `sandbox` block, because the escapes they close are outside the sandbox too —
+ *  a hook runs in the harness, not in the confined Bash. The artifact the board
+ *  writes is still called the sandbox settings file (`<task>.sandbox.json`), so
+ *  `buildSandboxSettings` keeps its name — ADRs 0033/0035/0037 and several
+ *  issues cite it, and a rename would quietly break those references. */
+export interface WorkerSessionSettings {
+  /** ADR 0037: hooks declared by the workspace's own `.claude/settings.json`
+   *  run harness-side — outside the very sandbox this file builds — so a `work`
+   *  session that can write its checkout can execute arbitrary commands off the
+   *  floor. Measured (2.1.220 / Pi 2.1.207): this stops project hooks firing, a
+   *  workspace's own `disableAllHooks: false` does not cancel it (the flag tier
+   *  wins), and a hook hot-loaded *mid-session* is stopped too — which is what
+   *  makes it reach the one-session escalation a spawn-time check cannot.
+   *  The workspace's skills (`@workspace` scope) and CLAUDE.md survive, which
+   *  `--setting-sources user` would have taken down with it (ADR 0025). */
+  disableAllHooks: true;
+  /** ADR 0037's second layer, and the one the sandbox cannot provide: the
+   *  sandbox confines Bash alone, so the Write/Edit tools reach
+   *  `.claude/settings.json` straight through `filesystem.denyWrite`
+   *  (measured — it was written). See `SETTINGS_TOOL_DENY`. */
+  permissions: { deny: string[] };
   sandbox: {
     enabled: true;
     /** ADR 0033: the vendor's fail-open hatch — a command that fails inside the
@@ -37,6 +60,8 @@ export interface SandboxSettings {
       denyRead: string[];
       allowRead: string[];
       allowWrite: string[];
+      /** ADR 0037. **File-level entries only** — see `settingsDenyWrite`. */
+      denyWrite: string[];
     };
     /** ADR 0033's #146 addendum. The vendor's network defaults refuse a
      *  *listen* on loopback — ADR 0033's original 「ネットワークは現状のまま開放」
@@ -106,6 +131,74 @@ const PLUGIN_ROOT = "~/.claude/plugins";
  *  enumerated — same posture as `TOOLCHAIN_READ`. */
 const DENIED_TAILNET_DOMAINS = ["*.ts.net", "raspberrypi"];
 
+/** The workspace-side settings files the CLI merges into a session's settings.
+ *  Both live inside the checkout, so a `work` session can write them — which is
+ *  what ADR 0037 closes and what `floorOverridingSettings` guards behind it. One
+ *  list, because the two are the same fact about the CLI's merge order. */
+const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
+
+/** ADR 0037's OS-layer half: the sandbox confines Bash, so this is what stops a
+ *  `work` session redirecting into its own settings and re-defining the floor
+ *  for the *next* Bash call (project settings hot-reload mid-session — the
+ *  escalation `floorOverridingSettings`, a spawn-time check, cannot reach).
+ *
+ *  **File-level entries, never the `.claude` directory.** Measured on the
+ *  production Pi (2.1.207): `denyWrite: [<ws>/.claude]` leaves bwrap unable to
+ *  create its own mount points underneath (`bwrap: Can't create file at
+ *  .../.claude/commands: Read-only file system`) and the sandbox never starts —
+ *  the same backend constraint that ruled out `denyWrite: [workspace]` for
+ *  review's write floor above. Naming the two files instead starts cleanly on
+ *  both backends and still closes the `rm -rf .claude` → symlink escape: bwrap
+ *  binds a stub over each denied path, which makes the parent undeletable
+ *  whether or not the file exists, and Seatbelt refuses an `rm -rf` of a parent
+ *  containing a protected file. */
+function settingsDenyWrite(workspacePath: string): string[] {
+  return PROJECT_SETTINGS_FILES.map((name) => `${workspacePath}/.claude/${name}`);
+}
+
+/** ADR 0037's tool-layer half. `settingsDenyWrite` above only reaches Bash — the
+ *  sandbox governs nothing else — and a `work` session's Write tool went
+ *  straight through it to `.claude/settings.json` (measured, 2.1.220). This is
+ *  the deterministic refusal for that path; `auto`'s classifier is a model
+ *  judgment and was talked past by an ordinary-sounding request.
+ *
+ *  **Workspace-relative on purpose**, unlike the absolute paths above: deny is
+ *  matched against the tool call's literal `file_path` argument, so a worker
+ *  that symlinks `.claude` away still submits `.claude/settings.json` and is
+ *  still refused. Same reason the list is one code constant for every workspace.
+ *
+ *  **One spelling, `Edit(path)`, and it is not a choice.** There is no
+ *  per-tool enumeration to be exhaustive about: `Edit(path)` is the sole entry
+ *  point to the CLI's file-permission check and covers every file-editing tool,
+ *  `Write(path)` is never consulted, and `MultiEdit` is not a tool at all. 2.1.220
+ *  says both by name at startup ("is not matched by file permission checks —
+ *  only Edit(path) rules are", "matches no known tool"). Measured 2026-08-03
+ *  with an identical neutral payload: `Edit`-only refused the **Write** tool
+ *  deterministically (`File is in a directory that is denied by your permission
+ *  settings.`, new file not created); `Write`+`MultiEdit` with no `Edit` left
+ *  the deny layer silent and only the `auto` classifier objected — a model
+ *  judgment, which ADR 0033 refuses to call a floor; an empty deny wrote both
+ *  files. Adding the inert spellings back would buy nothing and print six
+ *  warnings into every worker session's log, four of which instruct the reader
+ *  to undo them.
+ *
+ *  Because that coverage is the vendor's claim rather than a rule tidepool can
+ *  enumerate, and the CLI warns about a rule that matches nothing but never
+ *  about coverage that has quietly narrowed, `hook-canary.sh` re-measures the
+ *  refusal on every deploy. That canary is this constant's real guard.
+ *
+ *  What keeps the list short in the first place is that a worker cannot write
+ *  these files at all, which shuts the whole family of harness-side keys
+ *  (`hooks`, `env`, `apiKeyHelper`, `statusLine`, …) at the root rather than one
+ *  key at a time — **for the workspace's own two files, which is the whole of
+ *  what this closes.** The entries name paths, so the *user* tier
+ *  (`~/.claude/settings.json`) is untouched and out of ADR 0037's scope; that
+ *  belongs to #151, where the `work` profile's tool layer has no sandbox floor
+ *  at all. Anyone reaching for it would take the shorter road anyway — under
+ *  #151 the Read tool reaches `~/.claude/.credentials.json` directly, without
+ *  widening any floor first. */
+const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${name})`);
+
 /** A skill name safe to map into a path: no separator, no `..`, no leading dot.
  *  Plugin-prefixed names (`plugin:skill`) are excluded by the same rule — their
  *  directory lives under a version-stamped plugin cache path the board cannot
@@ -157,7 +250,7 @@ export function skillReadPaths(
   return paths;
 }
 
-export interface SandboxSettingsInput {
+export interface WorkerSessionSettingsInput {
   /** ADR 0013: read-only is a property of the `review` task type, not of the
    *  agent executing it — so the write half is keyed on this alone. */
   taskType: Task["type"];
@@ -177,7 +270,13 @@ export interface SandboxSettingsInput {
  *  the workspace" expresses it directly and a workspace-external read becomes
  *  an OS refusal — ADR 0033 line 11's whole point.
  *
- *  **The write half deliberately does not use `denyWrite`.** Two measurements,
+ *  **The write half deliberately does not use `denyWrite` to build a floor —
+ *  only to punch two holes in one.** ADR 0037 added `denyWrite` for the two
+ *  settings files (`settingsDenyWrite`); everything below is about the shape
+ *  that was rejected, `denyWrite` covering the *workspace*, and it stays
+ *  rejected. Both facts come from the same backend constraint, which is why
+ *  ADR 0037's entries have to be file-level: name the `.claude` directory and
+ *  bwrap fails to start for exactly the reason in point 2. Two measurements,
  *  in order:
  *
  *  1. `allowWrite` does *not* take precedence over `denyWrite` (macOS 2.1.220),
@@ -195,10 +294,10 @@ export interface SandboxSettingsInput {
  *     <workspace>/.gitconfig: Read-only file system`. That is the backend's
  *     architecture, not a version bug.
  *
- *  So review carries `allowWrite: []` and no `denyWrite`. A macOS-only
- *  `denyWrite` was rejected on ADR 0033 line 22's dev/prod parity: production
- *  must never be the weaker side, and a rule that runs only on the dev machine
- *  is exactly that.
+ *  So review carries `allowWrite: []` and no workspace-wide `denyWrite`. A
+ *  macOS-only `denyWrite` was rejected on ADR 0033 line 22's dev/prod parity:
+ *  production must never be the weaker side, and a rule that runs only on the
+ *  dev machine is exactly that.
  *
  *  **Where review's write floor actually lives (ADR 0035 / issue #144), and how
  *  the layers divide.** Not four independent walls — the first one steps aside
@@ -220,10 +319,15 @@ export interface SandboxSettingsInput {
  *
  *  The CLI's own default project protections still refuse `.git/config`,
  *  `.git/hooks` and friends underneath all of it. */
-export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettings {
+export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
   const { taskType, workspacePath, permittedSkills } = input;
   const readOnly = taskType === "review";
   return {
+    // ADR 0037: not keyed on the profile — a hook fires harness-side whichever
+    // kind of worker is running, and the floor never depends on data (ADR 0013).
+    disableAllHooks: true,
+    // ADR 0037: the tool-layer half of the same ban, likewise on both profiles.
+    permissions: { deny: [...SETTINGS_TOOL_DENY] },
     sandbox: {
       enabled: true,
       allowUnsandboxedCommands: false,
@@ -239,6 +343,10 @@ export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettin
           ...skillReadPaths(permittedSkills, workspacePath),
         ],
         allowWrite: readOnly ? [] : [workspacePath],
+        // ADR 0037: on both profiles, and file-level for a reason — see
+        // settingsDenyWrite. review cannot write anyway, but the floor does not
+        // ask which profile is running (ADR 0013).
+        denyWrite: settingsDenyWrite(workspacePath),
       },
       // ADR 0033 追記 / issue #146: not keyed on the profile — a worker of
       // either type has to be able to run the suite it is judging.
@@ -336,10 +444,6 @@ const defaultRunOk: RunOkFn = (command, args) => {
     return false;
   }
 };
-
-/** The workspace-side settings files the CLI merges into a session's settings.
- *  Both live inside the checkout, so a `work` session can write them. */
-const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 
 /** The settings keys that define a worker session's floor rather than its
  *  conveniences — `sandbox` for the OS layer (ADR 0033), `permissions` for the
