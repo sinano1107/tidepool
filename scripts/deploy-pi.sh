@@ -1,22 +1,79 @@
 #!/usr/bin/env bash
 # scripts/deploy-pi.sh — sync tidepool source to /opt/tidepool and restart the
 # service. Mirrors the sinano1107/context-vault-infra deploy.sh pattern:
-# /mnt/ssd holds the git-tracked source (exFAT — weak on symlinks/exec bits/
-# native module builds), /opt holds the npm-installed runtime copy on the
-# Pi's native filesystem.
+# the git-tracked source checkout (exFAT on the Pi — weak on symlinks/exec
+# bits/native module builds) syncs to /opt, the npm-installed runtime copy on
+# the Pi's native filesystem.
 #
-# Run this ON THE PI, from the /mnt/ssd/tidepool checkout.
+# Run this ON THE PI, from the source checkout (any path — see SRC below).
 
 set -euo pipefail
 
-SRC="/mnt/ssd/tidepool"
+log() { printf '\033[1;34m[deploy]\033[0m %s\n' "$*"; }
+fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# The documented invocation (SKILL.md) is `sudo bash scripts/deploy-pi.sh`
+# from masaki's own checkout, so git ops against the deploy source below run
+# as masaki (via `sudo -u`), not root: root has no ssh-agent/credential
+# helper for `fetch`, and a root-owned git process touching a masaki-owned
+# checkout trips git's dubious-ownership guard (safe.directory) even for a
+# read-only rev-parse. Only downgrades when $SUDO_USER is actually set (we
+# were invoked via sudo, same as every real deploy) — a plain root shell or
+# an unprivileged `source` (tests) runs git as the current user, unchanged.
+# -n: this inner sudo runs inside a non-interactive ssh session — without it
+# a stray password prompt would hang the deploy instead of failing it.
+# -H: pins HOME to masaki's home. sudo does not reliably repoint HOME to the
+# target user by itself (depends on env_reset/always_set_home), and without
+# it git would look for ~/.gitconfig / ~/.ssh / credential helpers under
+# root's home, where masaki's credentials aren't.
+src_git() {
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    sudo -n -u "$SUDO_USER" -H git "$@"
+  else
+    git "$@"
+  fi
+}
+
+# SRC is derived from this script's own location, not hardcoded (issue #167):
+# a checkout that moves off /mnt/ssd/tidepool must keep working, and
+# preflight() below must inspect the actual deploy source, wherever it is.
+# BASH_SOURCE[0], not $0, so this also resolves correctly when the script is
+# sourced (scripts/deploy-pi.test.sh) rather than executed directly. The
+# `|| fail` must sit on the assignment (not inside the substitution) so
+# `exit 1` runs in this shell, not a subshell errexit silently swallows.
+SRC="$(src_git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)" \
+  || fail "cannot derive deploy source from $(dirname "${BASH_SOURCE[0]}") — not a git checkout"
 DST="/opt/tidepool"
 SERVICE="tidepool"
+PROTECTED_BRANCH="main"
 UNIT_SRC="$SRC/systemd/$SERVICE.service"
 UNIT_DST="/etc/systemd/system/$SERVICE.service"
 
-log() { printf '\033[1;34m[deploy]\033[0m %s\n' "$*"; }
-fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
+# preflight() closes the hole ADR 0040 identifies but cannot close from the
+# board side: the rsync *source* is never a workspace the board's own
+# overlap guard can see, so a task-branch commit (or a stray uncommitted
+# edit) sitting in $SRC would ride an ordinary human deploy straight to
+# production, skipping PR review entirely. Fail-closed on any of the three
+# checks — issue #167.
+preflight() {
+  local branch head origin_head
+
+  branch="$(src_git -C "$SRC" rev-parse --abbrev-ref HEAD)"
+  [[ "$branch" == "$PROTECTED_BRANCH" ]] \
+    || fail "deploy source is on branch '$branch', not '$PROTECTED_BRANCH' — refusing to deploy an unreviewed branch"
+
+  [[ -z "$(src_git -C "$SRC" status --porcelain)" ]] \
+    || fail "deploy source has uncommitted changes — refusing to deploy a dirty working tree"
+
+  src_git -C "$SRC" fetch -q origin "$PROTECTED_BRANCH" \
+    || fail "git fetch origin $PROTECTED_BRANCH failed"
+  head="$(src_git -C "$SRC" rev-parse HEAD)"
+  origin_head="$(src_git -C "$SRC" rev-parse "origin/$PROTECTED_BRANCH")"
+  [[ "$head" == "$origin_head" ]] \
+    || fail "deploy source HEAD ($head) does not match origin/$PROTECTED_BRANCH ($origin_head) — push or pull before deploying"
+
+  log "preflight ok: $SRC is on $PROTECTED_BRANCH, clean, matches origin/$PROTECTED_BRANCH"
+}
 
 sync_app() {
   [[ -d "$SRC" ]] || fail "missing source: $SRC"
@@ -103,6 +160,7 @@ verify() {
 }
 
 main() {
+  preflight
   sync_app
   sync_unit
   restart
