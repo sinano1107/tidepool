@@ -7,7 +7,11 @@ import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./age
 import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
-import { ClaudeCodeWorker, enumerateHostSkills } from "./claude-worker.js";
+import {
+  ClaudeCodeWorker,
+  checkToolSurfaceCapability,
+  enumerateHostSkills,
+} from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
@@ -355,10 +359,17 @@ const server = await startServer({
   hostSkills: enumerateHostSkills,
   fableAgents: fableAgentsResolver(),
   // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
-  // #154)。ここが唯一の実検査の配線点 — テスト盤面は封じ込める実プロセスを
-  // 持たないので、このゲート自体を持たない。渡すのは fs 半分だけで、人間面の
+  // #154、ADR 0039 / issue #164)。ここが唯一の実検査の配線点 — テスト盤面は
+  // 封じ込める実プロセスを持たないので、このゲート自体を持たない。人間面の
   // 自己検査は startServer が実ポートを知った後に自分で足す。
-  containment: { sandboxCapability: () => checkSandboxCapability(platform) },
+  //
+  // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
+  // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
+  // 再実行に依っている(ADR 0039 決定3)。
+  containment: {
+    sandboxCapability: () => checkSandboxCapability(platform),
+    toolSurface: () => checkToolSurfaceCapability(),
+  },
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

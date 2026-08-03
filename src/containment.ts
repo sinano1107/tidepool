@@ -1,10 +1,15 @@
 /** 封じ込め能力(CONTEXT.md: Containment capability)— このホストで worker の
- *  封じ込めが成立しているか、を答える**1つ**の検査。2種類の問いを束ねる:
+ *  封じ込めが成立しているか、を答える**1つ**の検査。3種類の問いを束ねる:
  *
  *  1. **fs サンドボックスに入れるか**(ホストの能力。ADR 0033 / issue #60)—
  *     `checkSandboxCapability`(sandbox.ts)。
  *  2. **自分の人間面が無認証リクエストを拒むか**(組み上がった自分自身の配線。
  *     ADR 0036 / issue #154)— 自分の人間ポートへ実際に1回撃って 401 を見る。
+ *  3. **ツール面が宣言どおりか**(ホストの CLI が盤面の宣言を honor しているか。
+ *     ADR 0039 / issue #164)— `/usage` ping の init が返す `tools` を Tool
+ *     allowlist と集合として突き合わせる(`checkToolSurfaceCapability`)。
+ *     3つ目もホストと盤面自身の性質であって特定の workspace や agent の性質では
+ *     ないため、既存2つと同格に束ねられる。
  *
  *  **ゲートを2本目として増やさない。** 停止機構も question も1つのままにする —
  *  人間から見た結果(盤面全体の pickup が止まる)が同じなのに機構が2つあると、
@@ -20,7 +25,7 @@ import { CAPABILITY_PROBE_TIMEOUT_MS, type SandboxCapability } from "./sandbox.j
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 /** 成立か、不成立ならその理由か。fs 半分(`SandboxCapability`)と同じ形を使う —
- *  「どちらの半分が成立していないか」は reason の文面が担うのであって、型では
+ *  「どの問いが成立していないか」は reason の文面が担うのであって、型では
  *  ない。停止機構が1つである以上、答えの型も1つでよい。 */
 export type ContainmentCapability = SandboxCapability;
 
@@ -84,17 +89,25 @@ export async function checkHumanSurfaceRefusesAnonymous(
   };
 }
 
-/** 2つの半分を1つの答えに束ねる。fs 側を先に引くのは、安くて listen に依存せず、
- *  不成立ならネットワーク I/O を1往復ぶん省けるから。`humanSurface` が
- *  undefined を返すのは listen 前だけ(server.ts が listen 後に armed する)。 */
+/** 3つの半分…ではなく**3つの問い**を1つの答えに束ねる。安い順に引く: fs 側は
+ *  spawnSync 1回で listen にも依存しない、人間面は loopback を1往復、ツール面は
+ *  実 CLI を1本起こす(~2s)。手前で答えが出ているなら後ろは撃たない。
+ *  `humanSurface` が undefined を返すのは listen 前だけ(server.ts が listen 後に
+ *  armed する)。
+ *
+ *  `toolSurface` が省略される盤面は3つ目の問いを持たない — 実 CLI を持たない
+ *  テスト盤面の形で、ゲートそのものの有無と同じ扱い(本番の合成 root は常に渡す)。 */
 export function composeContainment(
   sandbox: () => SandboxCapability,
   humanSurface: () => Promise<ContainmentCapability> | undefined,
+  toolSurface?: () => Promise<ContainmentCapability>,
 ): ContainmentCheck {
   return async () => {
     const filesystem = sandbox();
     if (!filesystem.available) return filesystem;
-    return (await humanSurface()) ?? UNPROBED;
+    const human = (await humanSurface()) ?? UNPROBED;
+    if (!human.available) return human;
+    return (await toolSurface?.()) ?? { available: true };
   };
 }
 

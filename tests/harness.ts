@@ -11,6 +11,7 @@ import {
   type HumanCredential,
   hashToken,
 } from "../src/auth.js";
+import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
@@ -131,6 +132,12 @@ export interface BootOptions {
    *  Absent → ゲートを持たない盤面(既定): テストの spawn は ScriptedWorker で、
    *  封じ込める実プロセスが無い。ゲートそのものを駆動するテストだけが渡す。 */
   sandboxCapability?: () => SandboxCapability;
+  /** 封じ込め能力ゲートの3つ目の問い(ADR 0039 決定3 / issue #164): 観測された
+   *  ツール面が Tool allowlist と一致するか。実物は `/usage` ping なので、ここでは
+   *  seam ごと差し替える(ADR 0027)。**`sandboxCapability` と一緒に渡さないと
+   *  ゲートそのものが arm されない**(封じ込めは1つの検査であって3つのゲートでは
+   *  ない)。Absent → 3つ目の問いを持たない盤面: 実 CLI を持たないテストの既定形。 */
+  toolSurface?: () => Promise<ContainmentCapability>;
   /** 人間面の credential(issue #153 / ADR 0036)。Absent → 既定の
    *  `TEST_CREDENTIAL`。認証が成立しない盤面の振る舞い(fail-open と、それを
    *  検出する封じ込め能力ゲート — issue #154)を駆動するテストだけが渡す。 */
@@ -188,6 +195,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     fableAgents: options.fableAgents,
     containment: options.sandboxCapability && {
       sandboxCapability: options.sandboxCapability,
+      toolSurface: options.toolSurface,
     },
   });
   let stopped = false;

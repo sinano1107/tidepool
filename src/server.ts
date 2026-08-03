@@ -143,14 +143,19 @@ export interface ServerOptions {
    *  プロセスを持たないテスト盤面の既定(そこに spawn される実 CLI はそもそも
    *  無い)。main.ts は常に渡す。
    *
-   *  渡すのは **fs 半分だけ**(ADR 0033: このホストで worker サンドボックスが
-   *  実際に使えるか)。**もう半分の「自分の人間面が無認証リクエストを拒むか」
-   *  (ADR 0036 / issue #154)は startServer 自身が足す** — 撃つ先の実ポートを
-   *  知っているのは listen した本人だけで、composition root(main.ts)には
-   *  導出できないため。
+   *  渡すのは **fs 半分**(ADR 0033: このホストで worker サンドボックスが実際に
+   *  使えるか)と**ツール面の問い**(ADR 0039 / issue #164: `/usage` ping で観測した
+   *  面が Tool allowlist と一致するか — 実 CLI を1本起こすので合成 root が持つ)。
+   *  **「自分の人間面が無認証リクエストを拒むか」(ADR 0036 / issue #154)は
+   *  startServer 自身が足す** — 撃つ先の実ポートを知っているのは listen した本人
+   *  だけで、composition root(main.ts)には導出できないため。
    *
    *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。 */
-  containment?: { sandboxCapability: () => SandboxCapability };
+  containment?: {
+    sandboxCapability: () => SandboxCapability;
+    /** Absent → 3つ目の問いを持たない盤面(実 CLI を持たないテスト盤面の形)。 */
+    toolSurface?: () => Promise<ContainmentCapability>;
+  };
 }
 
 export interface TidepoolServer {
@@ -205,7 +210,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const sandboxCapability = options.containment?.sandboxCapability;
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
   const containment = sandboxCapability
-    ? composeContainment(sandboxCapability, () => probeHumanSurface?.())
+    ? composeContainment(
+        sandboxCapability,
+        () => probeHumanSurface?.(),
+        options.containment?.toolSurface,
+      )
     : undefined;
   const scheduler = startScheduler({
     db,

@@ -248,6 +248,16 @@ function allowedTools(args: string[]): string[] {
   return at === -1 ? [] : args[at + 1]!.split(",");
 }
 
+/** The `--tools` value a spawn used, split the same way (ADR 0039): the
+ *  default-deny allowlist of built-in tools. Comma-joined for the same reason as
+ *  the two above — the CLI accepts comma or space (`--help`) and comma keeps one
+ *  token one entry. Empty array if the flag went missing, which is *not* the
+ *  same as `--tools ""` (that spelling disables every tool). */
+function spawnedTools(args: string[]): string[] {
+  const at = args.indexOf("--tools");
+  return at === -1 ? [] : args[at + 1]!.split(",");
+}
+
 describe("ClaudeCodeWorker", () => {
   it("タスクの workspace を cwd に、stream-json 出力のヘッドレス Claude Code を起動する", async () => {
     const { start, calls } = await makeWorker();
@@ -571,6 +581,84 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
+  // ADR 0039(issue #145): ADR 0038 の床が届かない層 — ファイル操作でない
+  // in-process ツール — を `--tools` の既定拒否で閉じる。期待値は実装を import せず
+  // 独立した literal で書く(tests/spawn-tools.test.ts と同じ線): ここが確かめるのは
+  // 「盤面が emit するフラグ列」までで、面が実際にそうなったかは実セッションの init
+  // 行しか答えられない(ADR 0027)。
+  it("work タスクの spawn は --tools に work の17本を渡す(ADR 0039 決定1)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-work-tools", null, "deckhand", "work");
+    expect(spawnedTools(calls[0]!.args)).toEqual([
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "NotebookEdit",
+      "Glob",
+      "Grep",
+      "Skill",
+      "Task",
+      "WebFetch",
+      "WebSearch",
+      "TaskCreate",
+      "TaskGet",
+      "TaskList",
+      "TaskUpdate",
+      "TaskOutput",
+      "TaskStop",
+    ]);
+  });
+
+  it("review タスクの spawn は --tools に review の14本を渡す — 編集系が面から消える(ADR 0039 決定2)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-review-tools", null, "deckhand", "review");
+    expect(spawnedTools(calls[0]!.args)).toEqual([
+      "Bash",
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "Task",
+      "WebFetch",
+      "WebSearch",
+      "TaskCreate",
+      "TaskGet",
+      "TaskList",
+      "TaskUpdate",
+      "TaskOutput",
+      "TaskStop",
+    ]);
+  });
+
+  it("--tools は空にならない — 空文字は CLI の綴りでは「全ツール無効」である", async () => {
+    // `--help`(2.1.220): `""` で全ツール無効、`"default"` で全ツール。空の join が
+    // 事故で通ると「床が立った」ではなく「何も呼べない worker」になり、しかも
+    // モデルが何もせず終了したようにしか見えない。
+    const { start, calls } = await makeWorker();
+    start("task-tools-nonempty-work", null, "deckhand", "work");
+    start("task-tools-nonempty-review", null, "deckhand", "review");
+    for (const call of calls) {
+      const value = call.args[call.args.indexOf("--tools") + 1];
+      expect(value).toBeTruthy();
+      // 次の引数を食わない: `--tools <tools...>` は可変長なので、値の直後は
+      // 必ず別のフラグでなければならない
+      expect(call.args[call.args.indexOf("--tools") + 2]).toMatch(/^--/);
+    }
+  });
+
+  it("既定拒否なので、落としたツールは spawn の綴りのどこにも現れない(列挙 deny ではない)", async () => {
+    // 列挙 deny(`--disallowedTools`)には執行力はあるが閉世界の仮定で、ベンダーが
+    // 増やしたツールは開いたまま入ってくる(ADR 0039 測定3)。`CronCreate` を
+    // deny の列に足したのではなく、allowlist に**書いていない**ことが塞ぎ方である。
+    const { start, calls } = await makeWorker();
+    start("task-tools-default-deny", null, "deckhand", "work");
+    const spelled = calls[0]!.args.join(" ");
+    for (const tool of ["CronCreate", "RemoteTrigger", "PushNotification", "EnterWorktree"]) {
+      expect(spelled).not.toContain(tool);
+    }
+  });
+
   it("review タスクの spawn は tidepool MCP をサーバ単位で allow する — 無いと盤面への唯一の channel が承認待ちで詰まる", async () => {
     const { start, calls } = await makeWorker();
     start("task-review-mcp-allow", null, "deckhand", "review");
@@ -809,6 +897,157 @@ describe("ClaudeCodeWorker", () => {
     start("task-sbx-noskills");
     const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
     expect(allowRead.some((p: string) => p.includes(".claude/skills"))).toBe(false);
+  });
+
+  // ADR 0039 決定3 の**深層防御側**: 正本は封じ込め能力の `/usage` ping だが、盤面は
+  // すでに worker の stdout を1行ずつパースしている(`parseResultLine`)ので、同じ
+  // ループで init 行の `tools` も見る。追加コストは実質ゼロで、**実セッションその
+  // ものを**測れる。不成立時は既存の封じ込め能力の経路にそのまま乗る(盤面全体の
+  // pickup 停止 + Tidepool 名義の確認 question)。
+  const initLine = (tools: string[]) =>
+    `${JSON.stringify({ type: "system", subtype: "init", tools })}\n`;
+  const containmentQuestion = (db: ReturnType<typeof openDb>) =>
+    listBoard(db).find((t) => t.type === "question" && t.question_quarantine_sandbox !== null);
+
+  it("宣言どおりの init 行なら何も起きない — 封じ込めの question は立たない", async () => {
+    const { start, stdout, db } = await makeWorker();
+    start("task-init-ok", null, "deckhand", "work");
+    stdout.write(
+      initLine([
+        "Bash",
+        "Read",
+        "Write",
+        "Edit",
+        "NotebookEdit",
+        "Glob",
+        "Grep",
+        "Skill",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "TaskStop",
+        // 実セッションには MCP verb も並ぶ — 比較対象外
+        "mcp__tidepool__get_current_task",
+      ]),
+    );
+    await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
+  });
+
+  it("init 行に allowlist 外のツールが並んでいたら封じ込め能力の question が立つ(ADR 0039 決定3)", async () => {
+    const { start, stdout, db } = await makeWorker();
+    start("task-init-drift", null, "deckhand", "work");
+    // `CronCreate` は測定2 でそのまま実行できてしまったツールそのもの。`--tools` が
+    // honor されていないホストでは、これが面に残る。
+    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    const question = await vi.waitFor(() => {
+      const q = containmentQuestion(db);
+      expect(q).toBeDefined();
+      return q!;
+    });
+    // 止まる資源も question も1つのまま(fs 半分・人間面と同じ1択の確認型)
+    expect(question.question_items?.[0]!.options).toEqual(["repaired by hand"]);
+    // 観測された具体名が本文に残る(「ずれた」ではなく「何がどうずれたか」)
+    expect(question.purpose).toContain("CronCreate");
+    expect(question.purpose).toContain("Glob");
+  });
+
+  it("ずれた面のセッションはそのまま走らせない — その場で kill する", async () => {
+    // init 行はセッションの**開始直後**に出る(モデルが最初の tool_use を出す前)。
+    // ここで止めるのは「走っている仕事を途中で殺す」ことではなく、ADR 0025 point 6 が
+    // skill 列挙の失敗に対して取ったのと同じ「このセッションは走らせない」である。
+    // 面が広い側にずれていればそれは worker が持つべきでない能力を持ったまま走る
+    // ことであり、狭い側にずれていれば能力を1つ失ったまま詰まるだけである。どちらも
+    // 走らせる理由がない。slot は watchdog が per-type 時限で回収する(既存の
+    // 失敗経路)。
+    const { start, stdout, killed } = await makeWorker();
+    start("task-init-kill", null, "deckhand", "work");
+    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    await vi.waitFor(() => expect(killed).toContain("SIGKILL"));
+  });
+
+  it("宣言どおりのセッションは kill されない", async () => {
+    const { start, stdout, killed } = await makeWorker();
+    start("task-init-nokill", null, "deckhand", "review");
+    stdout.write(
+      initLine([
+        "Bash",
+        "Read",
+        "Glob",
+        "Grep",
+        "Skill",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "TaskStop",
+        "mcp__tidepool__get_current_task",
+      ]),
+    );
+    stdout.write(`{"type":"result","result":"done"}\n`);
+    await vi.waitFor(() => expect(killed).toEqual([]));
+  });
+
+  it("review セッションの init 行は review の期待集合で照合される — 編集系が残っていたら不成立", async () => {
+    const { start, stdout, db } = await makeWorker();
+    start("task-init-review-drift", null, "deckhand", "review");
+    stdout.write(
+      initLine([
+        "Bash",
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "Skill",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "TaskCreate",
+        "TaskGet",
+        "TaskList",
+        "TaskUpdate",
+        "TaskOutput",
+        "TaskStop",
+      ]),
+    );
+    const question = await vi.waitFor(() => {
+      const q = containmentQuestion(db);
+      expect(q).toBeDefined();
+      return q!;
+    });
+    expect(question.purpose).toContain("Write");
+  });
+
+  it("ずれたまま何セッション走っても question は1枚(封じ込めは1資源につき確認1枚)", async () => {
+    const { start, stdout, db } = await makeWorker();
+    start("task-init-dup-1", null, "deckhand", "work");
+    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    await vi.waitFor(() => expect(containmentQuestion(db)).toBeDefined());
+    stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    stdout.write(initLine(["Bash", "Read", "RemoteTrigger"]));
+    await vi.waitFor(() =>
+      expect(listBoard(db).filter((t) => t.type === "question")).toHaveLength(1),
+    );
+  });
+
+  it("init 行を持たないセッションは判定しない — 盤面の照合は観測があったときだけ動く", async () => {
+    // `tools` を持たない init 行、壊れた行、`result` 行は「init の報告ではない」と
+    // 読む(`parseInitSkills` と同じ fail-closed の形)。ここで question を立てると、
+    // 正本である `/usage` ping が答えるべき問いを stdout の欠落で代弁してしまう。
+    const { start, stdout, db } = await makeWorker();
+    start("task-init-absent", null, "deckhand", "work");
+    stdout.write(`{"type":"system","subtype":"init"}\n`);
+    stdout.write(`{"type":"result","result":"done"}\n`);
+    stdout.write(`{not json\n`);
+    await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {

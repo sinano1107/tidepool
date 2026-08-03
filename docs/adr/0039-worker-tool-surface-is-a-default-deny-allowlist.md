@@ -156,6 +156,38 @@ worker 自身の init 行の照合も**深層防御として重ねる**。追加
 - **`permissions.deny` / `--disallowedTools` による列挙 deny** — 執行力はある(測定3)が閉世界の仮定であり、ベンダーが増やしたツールは**開いたまま**入ってくる。ADR 0038 が Bash について「列挙で塞ぐ試みは失敗した」と書いたのとは失敗理由が違う(ラッパの無限性ではなく、集合が未来に開いていること)が、結論は同じ方向を向く
 - **何もしない(WORKER_PROTOCOL の散文に任せる)** — 現状であり、測定2 がその不十分さそのものである
 
+## 追記: 実装時の実測(issue #164、2026-08-03、macOS 2.1.220)
+
+実装後の**盤面の本番経路そのもの**(`ClaudeCodeWorker.launch` の実 spawn。フラグ列を
+手で再現したものではない)で測った。判定は init イベントの `tools` と tool_result の
+逐語で行っている。**Pi は依然として未実測**(受け入れ基準4)。
+
+| 測定 | 結果 |
+|---|---|
+| work セッションの init `tools` | 組み込み**17本ちょうど**、決定1のリストと集合一致 |
+| review セッションの init `tools` | 組み込み**14本ちょうど**、編集系3本が消えている |
+| `CronCreate` を直接呼ぶ | `<tool_use_error>Error: No such tool available: CronCreate. CronCreate exists but is not enabled in this context.</tool_use_error>` |
+| サブエージェント(`Task`)経由で `CronCreate` を呼ばせる | 同じ逐語エラー。サブエージェントも境界の内側(測定6 の再現) |
+| 新たに面へ足した `Glob` / `Grep` を workspace の外へ向ける | `Claude requested permissions to read from …, but you haven't granted it yet.` — `Read` と同じ形。ADR 0038 の残余の既定は**この2本にも届く**(headless では承認要求が拒否そのもの) |
+
+最後の行は決定1の副作用の検査である: この allowlist は面から削るだけでなく `Glob` /
+`Grep` を**足す**ので、ADR 0038 が `Read` / `Write` について測った床がその2本にも
+届いていなければ、床を敷きながら読み取りの穴を開けたことになっていた。届いていた。
+
+**綴りの注意**: 面の名前は `Task` であって `Agent` ではない。init の `tools` は
+`Task` を返すが、セッション自身は「I have Agent」と列挙する(同じ1本の別名)。
+allowlist を `Agent` に「直す」と測定8 の形で黙って不活性になる。
+
+**深層防御側の停止は「そのセッションを走らせない」である。** init 行はセッションの
+開始直後 — モデルが最初の tool_use を出す前 — に出るので、ずれを見た時点で SIGKILL
+する。これは走っている仕事を途中で奪うことではなく、ADR 0025 point 6 が skill 列挙の
+失敗に対して取った「fail-open しない = このセッションは走らせない」と同じ形であり、
+slot は既存の失敗経路(watchdog の per-type 時限 → 失敗 question)が回収する。
+usage の throttle が比較対象にならないのは、あれが構造上**走っているセッションを見る
+ことがない**ゲート(`slot.currentTaskId !== null` で手前に短絡する)だからである。
+サブエージェントを起こしたセッションでも親の stream に init 行は1本しか出ない(実測)
+ので、この判定が同一セッション内で二度走ることはない。
+
 ## 帰結
 
 - ハーネスが新しい組み込みツールを増やしても、盤面がリストに書き足すまで worker には届かない。**便利な新機能が黙って使えるようになることはない** — 意図した非対称である
