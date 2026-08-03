@@ -14,7 +14,7 @@ issue #145 のグリリング(2026-08-03)で決定。ADR 0038 の**延長**で�
 
 ## 実測が設計を規定する
 
-macOS 2.1.220。盤面が実際に吐くフラグ形(`--permission-mode acceptEdits --setting-sources project --disallowedTools Workflow --allowedTools mcp__tidepool --mcp-config … --strict-mcp-config --settings …`)で、サンドボックスプロファイルは `scripts/emit-sandbox-settings.ts work <ws>` が盤面のコードから吐いたもの。手書きの profile は使っていない。判定は init イベントの `tools` 配列とツール実行結果の逐語で行い、モデルの語りは判定に使っていない。**Pi では未実測**(実装時に確認する)。
+macOS 2.1.220。盤面が実際に吐くフラグ形(`--permission-mode acceptEdits --setting-sources project --disallowedTools Workflow --allowedTools mcp__tidepool --mcp-config … --strict-mcp-config --settings …`)で、サンドボックスプロファイルは `scripts/emit-sandbox-settings.ts work <ws>` が盤面のコードから吐いたもの。手書きの profile は使っていない。判定は init イベントの `tools` 配列とツール実行結果の逐語で行い、モデルの語りは判定に使っていない。**Pi(2.1.207)での実測は実装時に取った** — 下の追記を参照。
 
 ### 1. headless の面に `AskUserQuestion` は無い
 
@@ -188,11 +188,13 @@ usage の throttle はこの判断の前例にならない。あれは構造上*
 - **`permissions.deny` / `--disallowedTools` による列挙 deny** — 執行力はある(測定3)が閉世界の仮定であり、ベンダーが増やしたツールは**開いたまま**入ってくる。ADR 0038 が Bash について「列挙で塞ぐ試みは失敗した」と書いたのとは失敗理由が違う(ラッパの無限性ではなく、集合が未来に開いていること)が、結論は同じ方向を向く
 - **何もしない(WORKER_PROTOCOL の散文に任せる)** — 現状であり、測定2 がその不十分さそのものである
 
-## 追記: 実装時の実測(issue #164、2026-08-03、macOS 2.1.220)
+## 追記: 実装時の実測(issue #164、2026-08-03、macOS 2.1.220 と Pi 2.1.207)
 
 実装後の**盤面の本番経路そのもの**(`ClaudeCodeWorker.launch` の実 spawn。フラグ列を
 手で再現したものではない)で測った。判定は init イベントの `tools` と tool_result の
-逐語で行っている。**Pi は依然として未実測**(受け入れ基準4)。
+逐語で行っている。**下表は macOS 2.1.220 と production Pi 2.1.207 の両方で同一の結果**
+(Pi 側は production を触らず、ブランチの worktree を `/tmp` に切って同じスクリプトを
+走らせた)。
 
 | 測定 | 結果 |
 |---|---|
@@ -201,6 +203,17 @@ usage の throttle はこの判断の前例にならない。あれは構造上*
 | `CronCreate` を直接呼ぶ | `<tool_use_error>Error: No such tool available: CronCreate. CronCreate exists but is not enabled in this context.</tool_use_error>` |
 | サブエージェント(`Task`)経由で `CronCreate` を呼ばせる | 同じ逐語エラー。サブエージェントも境界の内側(測定6 の再現) |
 | 新たに面へ足した `Glob` / `Grep` を workspace の外へ向ける | `Claude requested permissions to read from …, but you haven't granted it yet.` — `Read` と同じ形。ADR 0038 の残余の既定は**この2本にも届く**(headless では承認要求が拒否そのもの) |
+
+**バージョン差は面に出なかった。** Pi の CLI は 2.1.207 で macOS より古いが、`--tools` の
+`--help` 文面は同一で、17本 / 14本の名指しはどちらでもそのまま面になった(古い CLI で
+`Glob` / `Grep` が名指しに応じない、といった差は無かった)。これは重要な control である —
+allowlist の名前が実在しなければ**警告なく不活性**になる(測定8)ので、ホスト間の CLI
+バージョン差はそのまま「観測 ⊂ 期待」の不成立として現れうる。
+
+**3つ目の問いの ping の実時間**: macOS 2.2〜2.5s、Pi **4.2〜4.3s**(いずれも `available:
+true`)。上限 60s(決定3)に対して十分な余裕がある。この数字を取ることが目的の一つだった —
+上限を skill 列挙の 15s のまま流用していたら、Pi の冷えた CLI 起動が伸びた日に**盤面全体が
+誤って止まる**側に倒れていた。
 
 最後の行は決定1の副作用の検査である: この allowlist は面から削るだけでなく `Glob` /
 `Grep` を**足す**ので、ADR 0038 が `Read` / `Write` について測った床がその2本にも
