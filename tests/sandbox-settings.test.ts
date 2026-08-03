@@ -242,7 +242,7 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
     ).toBe(false);
   });
 
-  it("work プロファイルには載せない — work は auto で走り、切ると書き込みが全部承認待ちで headless では静かに死ぬ", () => {
+  it("work プロファイルには載せない — work は acceptEdits で走り、Bash のリダイレクトは「編集」ではないので、切ると書き込みが全部承認待ちで headless では静かに死ぬ", () => {
     expect(
       buildSandboxSettings({
         taskType: "work",

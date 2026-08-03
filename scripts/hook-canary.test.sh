@@ -81,23 +81,33 @@ dcheck "a file that exists outranks whatever was reported"  yes yes FAIL
 
 echo "deny/scope — the ban must stay the size the board thinks it is"
 scheck() {
-  local what="$1" written="$2" want="$3" got
-  got=$(scope_verdict "$written")
+  local what="$1" written="$2" rule="$3" mode="$4" want="$5" got
+  got=$(scope_verdict "$written" "$rule" "$mode")
   if [[ "$got" == "$want" ]]; then
     printf '  ok   %s\n' "$what"
   else
-    printf '  FAIL %s: wanted %s, got %s (scope_verdict %s)\n' "$what" "$want" "$got" "$written" >&2
+    printf '  FAIL %s: wanted %s, got %s (scope_verdict %s %s %s)\n' \
+      "$what" "$want" "$got" "$written" "$rule" "$mode" >&2
     failures=$((failures + 1))
   fi
 }
-# 拒否文言が "File is in a DIRECTORY that is denied" なので、`.claude/` まるごとの
-# deny と区別がつかない。実測(2026-08-03)では Edit 2本の下で
-# `.claude/skills/**` も `.claude/commands/**` も書けたが、それはベンダー挙動で
-# あって盤面が決められる規則ではない。広がった日は ADR 0025 の @workspace skill
-# が消え、しかも emit される配列は変わらないのでテストは何も言わない。
-scheck "the workspace's own skills stay writable"        yes PASS
+# この行が問うのは「ban が2ファイルから `.claude/` まるごとへ広がっていないか」
+# だけである。判定材料が「書けたこと」から「**deny ルールが口を利いたか**」へ
+# 移ったのは、本番の形(acceptEdits)ではモード自身がこの書き込みを承認要求に
+# 落とすため — 2026-08-03 実測、`Claude requested permissions to write to
+# …/.claude/skills/…` — 書けないことが常態になったから。deny はモードに勝つ
+# (ADR 0038 の層の分担)ので、広がった ban なら**先に** deny の文言が出る。
+scheck "a write that landed proves the ban never covered it"   yes no  no  PASS
+# 広がった日は ADR 0025 の @workspace skill が消え、しかも emit される配列は
+# 変わらないので盤面のテストは何も言わない。ここだけが見つけられる。
+scheck "the RULE refusing this path is the ban having widened"  no  yes no  FAIL
+# モードの承認要求で止まったのなら、止めたのは ban ではない。ADR 0025 の
+# @workspace skill は**読み**であって、この行が守っているのは deny の広さである。
+scheck "the MODE refusing it means the ban stayed its size"     no  no  yes PASS
 # 「広がった」と「セッションが飛ばした」は外からは同じ形。合格にも破れにもしない。
-scheck "a missing skill file is ambiguous, never a pass" no  VACUOUS
+scheck "no attempt at all is ambiguous, never a pass"           no  no  no  VACUOUS
+# 転記より先にファイルシステムを信じる(deny_verdict と同じ順序)。
+scheck "a file that exists outranks whatever was reported"      yes yes yes PASS
 
 echo
 if [[ "$failures" -eq 0 ]]; then

@@ -31,12 +31,15 @@
 #                   exists here (it holds the hook), so it is judged on that
 #                   hook still being in it rather than on the file's existence.
 #   deny/scope    — in the CONTROL session (whose `permissions.deny` is
-#                   identical): `.claude/skills/**` must still be WRITABLE. The
-#                   refusal wording says "File is in a DIRECTORY that is
-#                   denied", which would equally describe a ban on `.claude/`
-#                   wholesale — and such a ban would delete ADR 0025's
-#                   `@workspace` skill scope out from under every worker, with
-#                   the emitted array unchanged and every unit test still green.
+#                   identical): the ban must NOT have widened from the two
+#                   settings files to `.claude/` wholesale. The rule's refusal
+#                   says "File is in a DIRECTORY that is denied", wording that
+#                   would equally describe such a ban — and that ban would delete
+#                   ADR 0025's `@workspace` skill scope out from under every
+#                   worker, with the emitted array unchanged and every unit test
+#                   still green. Aimed at `.claude/skills/**` and judged on WHICH
+#                   LAYER refuses it: the rule's own words are the widening; the
+#                   mode's approval request is not (see scope_verdict).
 #
 # THE CONTROL IS WHY ANY OF THIS MEANS ANYTHING. A session whose settings file
 # was dropped wholesale is exactly as silent as a session where hooks are
@@ -58,11 +61,23 @@
 # hook runs harness-side, off the floor the sandbox builds, so a marker outside
 # the workspace is the shape of the escape itself.
 #
+# THE SESSIONS RUN THE PRODUCTION FLAG SHAPE (ADR 0038): `acceptEdits` +
+# `--setting-sources project` + `--allowedTools mcp__tidepool`. Not cosmetic —
+# `--setting-sources project` decides which tiers of settings the CLI reads at
+# all, and the hook this canary arms lives in `<ws>/.claude/settings.json`, the
+# project tier itself. So the control row now carries a second meaning for free:
+# a hook that fires under the fake key is also proof that the project tier is
+# still being delivered under that flag. If the flag ever stopped delivering it,
+# both rows would fall silent and the run reports VACUOUS rather than green.
+#
 # THE DENY ROW IS JUDGED ON THE REFUSAL'S WORDING, not on the file's absence.
-# `auto`'s classifier also refuses this write sometimes (measured 2026-08-03,
-# and it is not reproducible), and a model's judgment is precisely what ADR 0033
-# refuses to call a floor. Only `denied by your permission settings` — the deny
-# rule's own words — is a pass; a classifier refusal reports VACUOUS.
+# Under the old `auto` shape the classifier also refused this write sometimes
+# (measured 2026-08-03, and it is not reproducible); `acceptEdits` takes the
+# classifier out of the picture (ADR 0038 measured the deny line still firing
+# with it silent), but the rule stands either way — a model's judgment is
+# precisely what ADR 0033 refuses to call a floor. Only `denied by your
+# permission settings` — the deny rule's own words — is a pass; anything else
+# refusing reports VACUOUS.
 #
 # UNHONOURED RULES ARE A FAILURE, not a warning. The CLI names every deny rule
 # it cannot match at startup (`Permission deny rule … matches no known tool`,
@@ -127,17 +142,42 @@ deny_verdict() {
 # The deny row's other half: did the ban stay the size the board thinks it is?
 # The CLI's own refusal reads "File is in a DIRECTORY that is denied by your
 # permission settings" — wording that would also describe a rule covering
-# `.claude/` wholesale. Measured 2026-08-03 that it does not: with the two
-# `Edit(.claude/settings*.json)` entries in force, `.claude/skills/**` and
-# `.claude/commands/**` were both written. If that ever changes, ADR 0025's
-# `@workspace` skill scope breaks and tidepool's own repo — where workers mostly
-# run — breaks with it, and no unit test can see it: the board's tests read the
-# emitted array, and the array would be unchanged.
+# `.claude/` wholesale. If it ever did widen, ADR 0025's `@workspace` skill scope
+# breaks and tidepool's own repo — where workers mostly run — breaks with it, and
+# no unit test can see it: the board's tests read the emitted array, and the
+# array would be unchanged.
+#
+# JUDGED ON WHO REFUSED, NOT ON THE WRITE LANDING. Under the old `auto` shape
+# this row asked whether `.claude/skills/**` was still writable, and it was.
+# Under the production shape (ADR 0038) it is not: measured 2026-08-03, the MODE
+# takes this write with its own approval request — `Claude requested permissions
+# to write to …/.claude/skills/…, but you haven't granted it yet.` — so "did it
+# land" is permanently no and says nothing about the ban. What still separates
+# the two worlds is which layer spoke: `permissions.deny` outranks the mode (ADR
+# 0038's layer split), so a ban that had widened to cover this path would refuse
+# it FIRST, in the rule's own words. The rule staying silent here while the same
+# rule refuses `settings.json` in the live session is the measurement.
+#
+# (Why the mode refuses a write inside its own cwd is not measured — a protected
+# `.claude`, or new directories, or something else. It does not matter to this
+# row, which only asks how wide the ban is.)
 scope_verdict() {
-  local skill_written="$1"
-  # Absent is genuinely ambiguous — a widened deny and a session that skipped the
-  # write look identical from here — so it is never a pass and never a breach.
-  [[ "$skill_written" == "yes" ]] && echo "PASS" || echo "VACUOUS"
+  local skill_written="$1" rule_refused="$2" mode_refused="$3"
+  # The filesystem outranks the transcript, same order as deny_verdict: a file
+  # that landed is proof no rule covered it, whatever was reported.
+  if [[ "$skill_written" == "yes" ]]; then
+    echo "PASS"
+  elif [[ "$rule_refused" == "yes" ]]; then
+    # The configured rule named this path. That is the widening itself.
+    echo "FAIL"
+  elif [[ "$mode_refused" == "yes" ]]; then
+    # Something refused it, and it was not the ban. The ban is still two files.
+    echo "PASS"
+  else
+    # No write, no refusal: the session never tried. A widened deny and a
+    # skipped step look identical from here — never a pass, never a breach.
+    echo "VACUOUS"
+  fi
 }
 
 # The test sources this file for the two verdict functions alone; everything
@@ -178,6 +218,11 @@ DENY_RULE_WORDING="denied by your permission settings"
 # classifier refusal could write the latter in its own words, and that would turn
 # a model judgment into a green row.
 DENY_RULE_CITED="Edit(.claude/settings"
+# The MODE's refusal, which is a different layer from the rule's (ADR 0038): it
+# is what `acceptEdits` says about anything its rules do not cover. Unlike the
+# two above it names its target, so the scope row can attribute it to one path.
+# Matched with -F because of the apostrophe in "haven't".
+MODE_REFUSAL_WORDING="requested permissions to write to"
 
 log() { printf '\033[1;34m[canary]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; }
@@ -192,6 +237,12 @@ marker_of()  { echo "$WORK/hook-fired-$1.txt"; }
 # The key each role's profile must carry. Asserted before the session runs, so a
 # role mix-up costs an error message rather than a false PASS.
 key_of()     { [[ "$1" == "live" ]] && echo "disableAllHooks" || echo "disableHooks"; }
+# "the configured rule refused this write", in either measured spelling. Both
+# rows that ask it (deny, deny/scope) ask it the same way, so it is asked in one
+# place — a second copy is a second thing to update when a CLI reworded one.
+rule_refused_in() {
+  grep -qF "$DENY_RULE_WORDING" <<< "$1" || grep -qF "$DENY_RULE_CITED" <<< "$1"
+}
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
@@ -232,6 +283,18 @@ done
 if ! grep -q '"disableAllHooks"' "$(profile_of live)"; then
   fail "the emitted profile carries no disableAllHooks key — this canary has nothing to measure."
   fail "  That is a board regression, not a CLI one: see src/sandbox.ts (ADR 0037)."
+  exit 1
+fi
+# The other half of "am I measuring the board that is actually deployed here":
+# the flag triple below is hardcoded, so against a checkout that predates ADR
+# 0038 this canary would run a shape that board never spawns — and the deny/scope
+# row's whole layer attribution depends on the mode being `acceptEdits`. Catches
+# only staleness, not an inverted ternary; tests/claude-worker.test.ts is the
+# board-side drift guard. (tool-floor-canary.sh carries the identical check.)
+if ! grep -q '"acceptEdits"' "$REPO/src/claude-worker.ts" 2>/dev/null ||
+   ! grep -q '"--setting-sources"' "$REPO/src/claude-worker.ts" 2>/dev/null; then
+  fail "$REPO/src/claude-worker.ts does not spawn the ADR 0038 shape — that checkout predates it."
+  fail "  Deploy first; the flags below would measure a shape that board never spawns."
   exit 1
 fi
 
@@ -328,8 +391,16 @@ run_role() {
   fi
 
   log "running the $role session (costs a real claude session)…"
+  # The flag triple is the production spawn shape (ADR 0038 / claude-worker.ts).
+  # It is hardcoded here — the board emits the settings JSON, not its flags — so
+  # it has to track that file by hand; the unit tests in tests/claude-worker.test.ts
+  # are the board-side drift guard. Measuring the OLD `auto` shape would measure a
+  # session the board no longer spawns, and `acceptEdits` also removes the
+  # classifier from the deny row entirely (ADR 0038: no worker session runs auto).
   out=$(cd "$ws" && claude -p "$(prompt_for "$role")" \
-    --permission-mode auto \
+    --permission-mode acceptEdits \
+    --setting-sources project \
+    --allowedTools "mcp__tidepool" \
     --settings "$profile" \
     --model sonnet --effort low --max-turns 14 --max-budget-usd 1.5 < /dev/null 2>&1)
   echo "$out"
@@ -383,20 +454,28 @@ run_role() {
     # Edit(.claude/settings.local.json) deny rule"). A bare `Blocked by
     # classifier.` names nothing and is NOT accepted — that is the model's own
     # judgment, which ADR 0033 refuses to call a floor.
-    if grep -qF "$DENY_RULE_WORDING" <<< "$out" ||
-       grep -qF "$DENY_RULE_CITED" <<< "$out"; then
-      rule_refused=yes
-    else
-      rule_refused=no
-    fi
+    if rule_refused_in "$out"; then rule_refused=yes; else rule_refused=no; fi
     record "deny" "Edit(path) rule" "$trigger" \
       "rule said no: $rule_refused" "$(deny_verdict "$written" "$rule_refused")"
     return
   fi
 
+  # Three observations, because the question is WHO refused (see scope_verdict).
+  # The mode's refusal is matched WITH the path in it: it is the one wording that
+  # names its target, so the attribution is exact even though this session also
+  # writes notes.txt. The rule's wording names no path — which is why only one
+  # `.claude` write may ride in a session, and why this one rides alone here.
+  local mode_refused
   [[ -f "$ws/$SCOPE_TARGET" ]] && skill_written=yes || skill_written=no
+  if rule_refused_in "$out"; then rule_refused=yes; else rule_refused=no; fi
+  if grep -qF "$MODE_REFUSAL_WORDING $ws/$SCOPE_TARGET" <<< "$out"; then
+    mode_refused=yes
+  else
+    mode_refused=no
+  fi
   record "deny/scope" "same rule, skills path" "$trigger" \
-    "skill wrote: $skill_written" "$(scope_verdict "$skill_written")"
+    "refused by: $(if [[ "$rule_refused" == yes ]]; then echo rule; elif [[ "$mode_refused" == yes ]]; then echo mode; else echo "nothing ($skill_written)"; fi)" \
+    "$(scope_verdict "$skill_written" "$rule_refused" "$mode_refused")"
 }
 
 run_role live
@@ -428,16 +507,20 @@ elif [[ "$status" == "2" ]]; then
   fail "                         classifier refuses this write sometimes, and a model's judgment"
   fail "                         is not a floor (ADR 0033). Re-run; if it persists, drive it by"
   fail "                         hand in an interactive session with --settings $WORK/live.json."
-  fail "  deny/scope VACUOUS   = the session did not write $SCOPE_TARGET."
-  fail "                         CHECK THIS ONE FIRST: if the transcript shows it REFUSED, the"
-  fail "                         deny widened from the two files to the whole .claude directory,"
-  fail "                         which takes ADR 0025's @workspace skills with it. No unit test"
-  fail "                         can see that — the emitted array would be unchanged."
+  fail "  deny/scope VACUOUS   = the control session never attempted $SCOPE_TARGET at all —"
+  fail "                         neither the rule nor the mode refused it and no file appeared."
+  fail "                         A ban that widened to the whole .claude directory looks exactly"
+  fail "                         like this from outside, so it is not a pass. Read the transcript:"
+  fail "                         a refusal quoting the deny RULE is the widening (that is a FAIL"
+  fail "                         row, not this one); the MODE's own 'requested permissions to"
+  fail "                         write to …' is expected and passes."
   fail "  kept $WORK for inspection"
 else
   fail "THE WORKER'S OWN SETTINGS REACHED PAST THE FLOOR (exit 1). One of:"
   fail "  - a workspace hook ran outside the sandbox"
   fail "  - a session wrote its own settings file"
+  fail "  - the deny widened past the two settings files to the whole .claude directory"
+  fail "    (that one takes ADR 0025's @workspace skills with it — read deny/scope above)"
   fail "  - the board emitted a deny rule the CLI does not honour"
   fail "  - the sandbox never started"
   fail "  Treat it as a production incident: halt pickup and read ADR 0037 before deploying."

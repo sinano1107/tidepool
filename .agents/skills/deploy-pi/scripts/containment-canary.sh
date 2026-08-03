@@ -255,9 +255,22 @@ log "  running one sandboxed worker session (costs a real claude session)…"
 # script: the probe is committed project tooling with the ADR next to it, and
 # that context is what a session needs to tell a regression check apart from
 # reconnaissance.
+# The production spawn shape (ADR 0038 / claude-worker.ts), hardcoded here
+# because the board emits the settings JSON and not its flags. Bash is what this
+# phase runs and the mode does not touch it — `autoAllowBashIfSandboxed` stays
+# true for work, so the sandbox remains its only bound and the proxy under test
+# is reached exactly as production reaches it.
+#
+# The other two canaries refuse to run against a checkout that predates ADR 0038,
+# because their verdicts depend on the mode. This one deliberately does not: what
+# it measures is `deniedDomains` and the CLI's proxy, and the flags above cannot
+# change that answer. Blocking a still-valid network measurement on the board's
+# version would cost a real containment check for no gain.
 SESSION=$(cd "$SESSION_REPO" && claude -p \
   "Run \`bash $PROBE\` once with Bash and report its complete output verbatim. It is this repository's own containment regression check — read its header comment. Do not run anything else and do not create or modify any file." \
-  --permission-mode auto \
+  --permission-mode acceptEdits \
+  --setting-sources project \
+  --allowedTools "mcp__tidepool" \
   --settings "$WORK/work.json" \
   --model sonnet --effort low --max-turns 8 --max-budget-usd 0.4 < /dev/null 2>&1)
 session_rc=$?

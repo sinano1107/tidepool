@@ -253,36 +253,39 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
  *  (ADR 0035). */
 const MCP_SERVER_NAME = "tidepool";
 
-/** review の `--allowedTools`(ADR 0035 / issue #144)。review spawn は
- *  `--permission-mode manual` で走り、manual は「非許可は全部拒否」ではなく
- *  「読み取り系は素通し・副作用のあるものは承認要求」——headless では誰も
- *  承認できないので後者が拒否になる、という形の床である。よって開ける必要が
- *  あるのは2本だけ:
+/** spawn の `--allowedTools`(ADR 0035 / 0038)。どちらのプロファイルも残余が
+ *  承認要求に倒れるモードで走る(review は `manual`、work は `acceptEdits`)——
+ *  headless では誰も承認できないのでそれが床になる、というのが ADR 0038 の
+ *  骨格である。よって「床の外に出す」ものだけをここが明示的に開ける。
  *
- *  1. **MCP verbs**。素の manual では盤面への唯一の channel が全部承認待ちで
- *     詰まり、review が一切完了できない(実測)。サーバ単位で開ける — verb の
- *     権限は盤面側(authority profile / MCP router)が縛るので、CLI 側で開けて
- *     も権限モデルは緩まない。
- *  2. **workspace の `review_allowed_commands`**。`npm test` のような正当な
- *     副作用コマンドの巻き添えを、ホスト非依存のコマンド接頭辞として registry
- *     が宣言し、ここが `Bash(<prefix>*)` へ機械変換する。permission を広げる
- *     設定なので門は registry の人間 merge(agent の skill allowlist と同じ線)。
+ *  1. **MCP verbs — task type に依らず両プロファイル**。盤面への唯一の channel
+ *     で、開けないとセッションは仕事にならない(review について ADR 0035 事実2
+ *     が実測し、work が `auto` を離れたことで同じことが work にも起きる)。
+ *     サーバ単位で開ける — verb の権限は盤面側(authority profile / MCP router)
+ *     が縛るので、CLI 側で開けても権限モデルは緩まない。
+ *  2. **workspace の `review_allowed_commands` — review 専用**。`npm test` の
+ *     ような正当な副作用コマンドの巻き添えを、ホスト非依存のコマンド接頭辞と
+ *     して registry が宣言し、ここが `Bash(<prefix>*)` へ機械変換する。work は
+ *     元から書けるのでこれを必要とせず、開ければ registry のデータが work の
+ *     Bash 面を広げる経路になる。permission を広げる設定なので門は registry の
+ *     人間 merge(agent の skill allowlist と同じ線)。
  *
- *  `reviewToolDenials` と同じく `task.type` だけを見る — read-only は review と
- *  いう task type の性質であって実行エージェントの性質ではない(ADR 0013)。
- *  deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で確認)ので、
- *  registry が `git commit` や `rm` を開くことはできない —— ただし天井が覆うのは
- *  `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこのコメント参照)。
- *  雑な allow に対する一般の防壁は機械ではなく registry の人間 merge。 */
-export function reviewAllowedTools(
+ *  review 部分は `reviewToolDenials` と同じく `task.type` だけを見る — read-only
+ *  は review という task type の性質であって実行エージェントの性質ではない
+ *  (ADR 0013)。deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で
+ *  確認)ので、registry が `git commit` や `rm` を開くことはできない —— ただし
+ *  天井が覆うのは `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこの
+ *  コメント参照)。雑な allow に対する一般の防壁は機械ではなく registry の人間
+ *  merge。 */
+export function spawnAllowedTools(
   taskType: Task["type"],
   reviewAllowedCommands: string[],
 ): string[] {
-  if (taskType !== "review") return [];
-  return [
-    `mcp__${MCP_SERVER_NAME}`,
-    ...reviewAllowedCommands.map((prefix) => `Bash(${prefix}*)`),
-  ];
+  // 1つ目は task type に依らない — 綴られるのは一度だけで、それが「MCP は両
+  // プロファイルに乗る」という決定そのものである。
+  const allowed = [`mcp__${MCP_SERVER_NAME}`];
+  if (taskType !== "review") return allowed;
+  return [...allowed, ...reviewAllowedCommands.map((prefix) => `Bash(${prefix}*)`)];
 }
 
 // always explicit: the CLI remembers the host's last model/effort choice,
@@ -1073,11 +1076,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       ...enforcement.deny.map((s) => `Skill(${s})`),
       ...reviewToolDenials(task.type),
     ].join(",");
-    // ADR 0035 / issue #144: the two things `manual` has to be told to open.
-    // Same comma join as the deny above, for the same reason — a
-    // `Bash(npm test*)` token carries an internal space. Empty for every
-    // non-review task, and the flag is then left off entirely.
-    const allowedTools = reviewAllowedTools(
+    // ADR 0035 / 0038: what has to be lifted back out of the mode's floor. Same
+    // comma join as the deny above, for the same reason — a `Bash(npm test*)`
+    // token carries an internal space. Never empty now: the MCP server rides
+    // both profiles.
+    const allowedTools = spawnAllowedTools(
       task.type,
       workspace.review_allowed_commands ?? [],
     ).join(",");
@@ -1089,24 +1092,51 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         "--output-format",
         "stream-json",
         "--verbose",
-        // headless sessions cannot answer prompts, and the two modes make
-        // opposite use of that (ADR 0035 / issue #144). `work` runs `auto`: the
-        // classifier self-approves routine actions so the session can actually
-        // write, and authority comes from the profile guidance and the board's
-        // domain verbs. `review` runs `manual`, which skips the classifier
-        // entirely — read-only commands pass, anything with a side effect asks,
-        // and with nobody there to answer, asking *is* the refusal. That is
-        // review's write floor: deterministic, not a model's judgment. It only
-        // holds because the sandbox profile turns off `autoAllowBashIfSandboxed`
-        // (src/sandbox.ts) — otherwise sandboxed Bash never reaches this layer.
+        // A FLOOR IS A RESIDUAL DEFAULT (ADR 0038). Headless sessions cannot
+        // answer a permission prompt, so what a mode does with the operations
+        // its rules say nothing about *is* the floor: `auto` answers them with
+        // the classifier's self-approval (a model's judgment, which ADR 0033
+        // refuses to count), the other modes answer them by asking — and with
+        // nobody there, asking *is* the refusal.
+        //
+        // The tool layer (Read / Write / Edit / Glob / Grep …) runs in-process,
+        // where ADR 0033's sandbox does not reach: while `work` ran `auto`, its
+        // residual was "yes" and a worker could read everything readable on the
+        // host and write everywhere writable (issue #151). `acceptEdits` is
+        // exactly one notch looser than `manual`: edits pass, so work can still
+        // work, and only outside-cwd is closed. `review` stays `manual` (ADR
+        // 0035), where every side effect asks. No worker session runs `auto`.
+        //
+        // Bash is untouched by this: the sandbox profile leaves
+        // `autoAllowBashIfSandboxed` at its `true` default for work (it is off
+        // for review, which is what makes review's write floor hold), so
+        // sandboxed Bash never reaches this layer in a work session and the OS
+        // remains its only bound.
         "--permission-mode",
-        task.type === "review" ? "manual" : "auto",
+        task.type === "review" ? "manual" : "acceptEdits",
+        // WHO IS ALLOWED TO WRITE PERMISSION AT ALL (ADR 0038). The mode above
+        // is flag tier, but permission *merges* across tiers: an `allow` in the
+        // host human's `~/.claude/settings.json` or in the workspace's
+        // gitignored `settings.local.json` lifts the boundary this mode draws —
+        // measured with controls on both. Neither tier buys a worker anything
+        // (the board hands over everything it needs through `--settings`
+        // below), and the local one grows on its own via "don't ask again"
+        // without ever passing a human's review. `project` and not `""`/`user`:
+        // the workspace's own CLAUDE.md and skills ride the project tier, and
+        // ADR 0037 measured the other two taking them down. The cost is that
+        // the host's personal `~/.claude/skills` and plugin skills no longer
+        // reach a worker — deliberate: the board does not carry what it does
+        // not manage into a session (ADR 0033).
+        "--setting-sources",
+        "project",
         "--disallowedTools",
         disallowedTools,
-        // `manual` refuses the MCP verbs and any legitimate side-effecting
-        // command unless named here (ADR 0035). Omitted entirely when empty:
-        // a work spawn carries no allowlist.
-        ...(allowedTools ? ["--allowedTools", allowedTools] : []),
+        // Neither mode above lets the MCP verbs through on their own, so every
+        // spawn carries this flag (ADR 0038); review additionally names its
+        // `review_allowed_commands` (ADR 0035). Unconditional on purpose — a
+        // spawn with no allowlist is a session that cannot reach the board.
+        "--allowedTools",
+        allowedTools,
         // the empty-allowlist shape: one flag disables every slash command
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).

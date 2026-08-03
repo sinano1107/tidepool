@@ -46,15 +46,19 @@ export interface WorkerSessionSettings {
     failIfUnavailable: true;
     /** ADR 0035: the CLI treats a sandboxed Bash command as pre-approved
      *  (`autoAllowBashIfSandboxed`, vendor default true) — the OS is the guard,
-     *  so the permission layer steps aside. That is fine while a session runs
-     *  in `auto`, which self-approves anyway, but review's write floor *is* the
-     *  permission layer (`--permission-mode manual`), and the sandbox's own
-     *  write allowance covers the whole workspace. Left at the default, turning
-     *  review to `manual` would buy nothing: measured on both macOS 2.1.220 and
-     *  the Pi's 2.1.207, `echo x > f` succeeds with the sandbox on and is
-     *  refused with this false. Present on review only — a work session must be
-     *  able to write, and under `manual`-less `auto` this flag would only make
-     *  its writes wait for an approval nobody is there to give. */
+     *  so the permission layer steps aside. For a work session that is exactly
+     *  right: its Bash is meant to be bound by the OS and nothing else. But
+     *  review's write floor *is* the permission layer
+     *  (`--permission-mode manual`), and the sandbox's own write allowance
+     *  covers the whole workspace. Left at the default, turning review to
+     *  `manual` would buy nothing: measured on both macOS 2.1.220 and the Pi's
+     *  2.1.207, `echo x > f` succeeds with the sandbox on and is refused with
+     *  this false. Present on review only — a work session must be able to
+     *  write, and it now runs `acceptEdits` (ADR 0038), where a Bash redirect is
+     *  not an "edit": setting this false would push every such write into an
+     *  approval request nobody is there to give. Note the mode ADR 0038 chose is
+     *  what closes the *tool* layer above; this key governs only whether Bash
+     *  reaches that layer at all. */
     autoAllowBashIfSandboxed?: false;
     filesystem: {
       denyRead: string[];
