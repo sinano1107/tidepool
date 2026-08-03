@@ -9,8 +9,8 @@ import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
 import {
   ClaudeCodeWorker,
-  checkToolSurfaceCapability,
   enumerateHostSkills,
+  probeToolSurfaceCapability,
 } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import type { DraftClient } from "./draft.js";
@@ -368,7 +368,7 @@ const server = await startServer({
   // 再実行に依っている(ADR 0039 決定3)。
   containment: {
     sandboxCapability: () => checkSandboxCapability(platform),
-    toolSurface: () => checkToolSurfaceCapability(),
+    toolSurface: () => probeToolSurfaceCapability(),
   },
 });
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { checkToolSurfaceCapability } from "../src/claude-worker.js";
+import { probeToolSurfaceCapability } from "../src/claude-worker.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
 
@@ -64,19 +64,19 @@ function scriptedProbe(initial: ContainmentCapability) {
 // ── ping から答えへの写像(正本の側)────────────────────────────────────
 
 it("ping が観測した面が宣言どおりなら成立する", async () => {
-  expect(await checkToolSurfaceCapability(async () => WORK_SURFACE)).toEqual({ available: true });
+  expect(await probeToolSurfaceCapability(async () => WORK_SURFACE)).toEqual({ available: true });
 });
 
 it("ping が失敗したら不成立 — 「測れなかった」は「無事」ではない", async () => {
   // `defaultEnumerateSkills` と同じ形で、CLI の不在・認証の詰まり・timeout はすべて
   // null に落ちる。ここを skip にすると3つ目の問いが黙って飾りになる。
-  const result = await checkToolSurfaceCapability(async () => null);
+  const result = await probeToolSurfaceCapability(async () => null);
   expect(result.available).toBe(false);
   expect(result.available === false && result.reason).toContain("could not");
 });
 
 it("ping が allowlist 外のツールを観測したら不成立 — 具体名が残る", async () => {
-  const result = await checkToolSurfaceCapability(async () => [...WORK_SURFACE, "CronCreate"]);
+  const result = await probeToolSurfaceCapability(async () => [...WORK_SURFACE, "CronCreate"]);
   expect(result.available === false && result.reason).toContain("CronCreate");
 });
 
@@ -86,8 +86,8 @@ it("検査は毎回 ping を撃ち直す(memoize しない)— 解除の検証�
     calls += 1;
     return WORK_SURFACE;
   };
-  await checkToolSurfaceCapability(enumerate);
-  await checkToolSurfaceCapability(enumerate);
+  await probeToolSurfaceCapability(enumerate);
+  await probeToolSurfaceCapability(enumerate);
   expect(calls).toBe(2);
 });
 

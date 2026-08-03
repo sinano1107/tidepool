@@ -153,8 +153,10 @@ export interface ServerOptions {
    *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。 */
   containment?: {
     sandboxCapability: () => SandboxCapability;
-    /** Absent → 3つ目の問いを持たない盤面(実 CLI を持たないテスト盤面の形)。 */
-    toolSurface?: () => Promise<ContainmentCapability>;
+    /** ツール面の問い(ADR 0039)。**`null` を明示すると**3つ目の問いを持たない
+     *  盤面になる(実 CLI を持たないテスト盤面の形)。省略できない口にしてあるのは、
+     *  忘れたときに検査が黙って1つ消えるのを型で止めるため。 */
+    toolSurface: (() => Promise<ContainmentCapability>) | null;
   };
 }
 
@@ -207,14 +209,12 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // ここで足す — 撃つ先の実ポートは listen するまで確定しない(port: 0 のテスト
   // 盤面では特に)ので、armed になるのは listen の直後。それまでは合成側が
   // fail-closed の答えを返す(containment.ts の UNPROBED)。
-  const sandboxCapability = options.containment?.sandboxCapability;
+  // ゲートの有無は `containment` の有無**だけ**で読み切れる(1箇所)。3つ目の問いは
+  // その中で `null` を明示して外す — 省略で消える口にはしていない(containment.ts)。
+  const gate = options.containment;
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
-  const containment = sandboxCapability
-    ? composeContainment(
-        sandboxCapability,
-        () => probeHumanSurface?.(),
-        options.containment?.toolSurface,
-      )
+  const containment = gate
+    ? composeContainment(gate.sandboxCapability, () => probeHumanSurface?.(), gate.toolSurface)
     : undefined;
   const scheduler = startScheduler({
     db,

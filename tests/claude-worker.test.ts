@@ -258,6 +258,49 @@ function spawnedTools(args: string[]): string[] {
   return at === -1 ? [] : args[at + 1]!.split(",");
 }
 
+/** 盤面が宣言するツール面(ADR 0039 決定1)。**実装を import せず独立した literal**
+ *  で書く — import して組み立て直すとコードが計算する通りに期待値も計算するトートロジー
+ *  になる(tests/review-tool-denials.test.ts の線)。review の14本も「work から3本
+ *  引いた」ではなく手で全量を綴る。この2つはこのファイル内の spawn 引数の主張と
+ *  init 行の主張が共有する — 同じ literal をテストごとに書き写すと、リストを1本
+ *  足したときに直す場所がテスト本文の数だけ増える。 */
+const WORK_SURFACE = [
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
+  "NotebookEdit",
+  "Glob",
+  "Grep",
+  "Skill",
+  "Task",
+  "WebFetch",
+  "WebSearch",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskUpdate",
+  "TaskOutput",
+  "TaskStop",
+];
+
+const REVIEW_SURFACE = [
+  "Bash",
+  "Read",
+  "Glob",
+  "Grep",
+  "Skill",
+  "Task",
+  "WebFetch",
+  "WebSearch",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskUpdate",
+  "TaskOutput",
+  "TaskStop",
+];
+
 describe("ClaudeCodeWorker", () => {
   it("タスクの workspace を cwd に、stream-json 出力のヘッドレス Claude Code を起動する", async () => {
     const { start, calls } = await makeWorker();
@@ -589,46 +632,13 @@ describe("ClaudeCodeWorker", () => {
   it("work タスクの spawn は --tools に work の17本を渡す(ADR 0039 決定1)", async () => {
     const { start, calls } = await makeWorker();
     start("task-work-tools", null, "deckhand", "work");
-    expect(spawnedTools(calls[0]!.args)).toEqual([
-      "Bash",
-      "Read",
-      "Write",
-      "Edit",
-      "NotebookEdit",
-      "Glob",
-      "Grep",
-      "Skill",
-      "Task",
-      "WebFetch",
-      "WebSearch",
-      "TaskCreate",
-      "TaskGet",
-      "TaskList",
-      "TaskUpdate",
-      "TaskOutput",
-      "TaskStop",
-    ]);
+    expect(spawnedTools(calls[0]!.args)).toEqual(WORK_SURFACE);
   });
 
   it("review タスクの spawn は --tools に review の14本を渡す — 編集系が面から消える(ADR 0039 決定2)", async () => {
     const { start, calls } = await makeWorker();
     start("task-review-tools", null, "deckhand", "review");
-    expect(spawnedTools(calls[0]!.args)).toEqual([
-      "Bash",
-      "Read",
-      "Glob",
-      "Grep",
-      "Skill",
-      "Task",
-      "WebFetch",
-      "WebSearch",
-      "TaskCreate",
-      "TaskGet",
-      "TaskList",
-      "TaskUpdate",
-      "TaskOutput",
-      "TaskStop",
-    ]);
+    expect(spawnedTools(calls[0]!.args)).toEqual(REVIEW_SURFACE);
   });
 
   it("--tools は空にならない — 空文字は CLI の綴りでは「全ツール無効」である", async () => {
@@ -913,27 +923,8 @@ describe("ClaudeCodeWorker", () => {
     const { start, stdout, db } = await makeWorker();
     start("task-init-ok", null, "deckhand", "work");
     stdout.write(
-      initLine([
-        "Bash",
-        "Read",
-        "Write",
-        "Edit",
-        "NotebookEdit",
-        "Glob",
-        "Grep",
-        "Skill",
-        "Task",
-        "WebFetch",
-        "WebSearch",
-        "TaskCreate",
-        "TaskGet",
-        "TaskList",
-        "TaskUpdate",
-        "TaskOutput",
-        "TaskStop",
-        // 実セッションには MCP verb も並ぶ — 比較対象外
-        "mcp__tidepool__get_current_task",
-      ]),
+      // 実セッションには MCP verb も並ぶ — 比較対象外
+      initLine([...WORK_SURFACE, "mcp__tidepool__get_current_task"]),
     );
     await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
   });
@@ -974,23 +965,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, stdout, killed } = await makeWorker();
     start("task-init-nokill", null, "deckhand", "review");
     stdout.write(
-      initLine([
-        "Bash",
-        "Read",
-        "Glob",
-        "Grep",
-        "Skill",
-        "Task",
-        "WebFetch",
-        "WebSearch",
-        "TaskCreate",
-        "TaskGet",
-        "TaskList",
-        "TaskUpdate",
-        "TaskOutput",
-        "TaskStop",
-        "mcp__tidepool__get_current_task",
-      ]),
+      initLine([...REVIEW_SURFACE, "mcp__tidepool__get_current_task"]),
     );
     stdout.write(`{"type":"result","result":"done"}\n`);
     await vi.waitFor(() => expect(killed).toEqual([]));
@@ -1000,23 +975,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, stdout, db } = await makeWorker();
     start("task-init-review-drift", null, "deckhand", "review");
     stdout.write(
-      initLine([
-        "Bash",
-        "Read",
-        "Write",
-        "Glob",
-        "Grep",
-        "Skill",
-        "Task",
-        "WebFetch",
-        "WebSearch",
-        "TaskCreate",
-        "TaskGet",
-        "TaskList",
-        "TaskUpdate",
-        "TaskOutput",
-        "TaskStop",
-      ]),
+      initLine([...REVIEW_SURFACE, "Write"]),
     );
     const question = await vi.waitFor(() => {
       const q = containmentQuestion(db);

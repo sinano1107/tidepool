@@ -195,7 +195,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     fableAgents: options.fableAgents,
     containment: options.sandboxCapability && {
       sandboxCapability: options.sandboxCapability,
-      toolSurface: options.toolSurface,
+      // 明示の null = 3つ目の問いを持たないテスト盤面(server.ts の口が省略を許さない)
+      toolSurface: options.toolSurface ?? null,
     },
   });
   let stopped = false;

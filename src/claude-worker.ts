@@ -273,12 +273,17 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
 // アカウント名義の OAuth token をプロセス内で自動付与し、`PushNotification` は
 // Quiet hours と Digest を素通りする、等)。
 //
-// この配列を編集したら tests/spawn-tools.test.ts の literal も手で合わせること —
-// テスト側はこの配列を import せず独立した literal で書いている(`REVIEW_BASH_WRITE_DENIALS`
-// と同じ線)。名前が実在しなければ**警告なく不活性**になる(測定8)ので、綴りの
-// 正しさをテストは保証できない — それを捕まえるのは封じ込め能力の3つ目の問い
-// (`checkToolSurface`)である。
-const WORKER_TOOLS = [
+// この配列を編集したら**テスト側の literal も手で合わせること**。テストはこの配列を
+// import せず独立した literal で書いている(`REVIEW_BASH_WRITE_DENIALS` と同じ線 —
+// import して比べるとコードが計算する通りに期待値も計算するトートロジーになる)ので、
+// 置いてある場所は1つではない: tests/spawn-tools.test.ts(正)、
+// tests/claude-worker.test.ts(spawn 引数と init 行、ファイル冒頭の2定数)、
+// tests/tool-surface-drift.test.ts / tests/tool-surface-containment.test.ts
+// (それぞれ WORK_SURFACE)。
+//
+// テストが保証できないのは**綴りの正しさ**である — 実在しない名前は警告なく不活性に
+// なる(測定8)。それを捕まえるのは封じ込め能力の3つ目の問い(`checkToolSurface`)。
+const WORKER_TOOLS: readonly string[] = [
   "Bash",
   "Read",
   "Write",
@@ -304,7 +309,7 @@ const WORKER_TOOLS = [
  *  `Edit` / `Write` / `NotebookEdit` も残る。2層にする理由は冗長性ではなく性質の
  *  違いで、deny 層は**黙って**効かなくなりうる(ADR 0037 追記の実測)のに対し、
  *  `--tools` による除去は init イベントの `tools` 配列を読めば**観測できる**。 */
-const REVIEW_REMOVED_TOOLS = ["Write", "Edit", "NotebookEdit"];
+const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"];
 
 /** spawn の `--tools`(ADR 0039 決定1): そのセッションの面に現れる組み込み
  *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
@@ -313,7 +318,10 @@ const REVIEW_REMOVED_TOOLS = ["Write", "Edit", "NotebookEdit"];
  *  review 以外はすべて work と同じ面である — read-only は review という task
  *  type の性質であって実行エージェントの性質ではない(ADR 0013)。 */
 export function spawnTools(taskType: Task["type"]): string[] {
-  if (taskType !== "review") return WORKER_TOOLS;
+  // どちらの分岐も**新しい配列**を返す — 床の定数そのものを呼び出し側に渡すと、
+  // 呼び出し側の `sort()` や `push()` が床を書き換えられてしまう(`reviewToolDenials`
+  // が毎回組み立て直しているのと同じ理由)。
+  if (taskType !== "review") return [...WORKER_TOOLS];
   return WORKER_TOOLS.filter((tool) => !REVIEW_REMOVED_TOOLS.includes(tool));
 }
 
@@ -339,7 +347,7 @@ const MCP_TOOL_PREFIX = "mcp__";
  *    (測定8)。worker は能力を1つ失ったまま走り続けるので、放っておくとタスクが
  *    詰まって初めて分かる
  *
- *  純関数であり、**封じ込め能力の probe(`probeToolSurface`)と worker 自身の
+ *  純関数であり、**封じ込め能力の probe(`probeToolSurfaceCapability`)と worker 自身の
  *  init 行の照合が同じこれを共有する** — 期待集合を2箇所に置かない(ADR 0039
  *  決定3)。答えの型も封じ込め能力の他の半分と同じ1つ(`ContainmentCapability`)。 */
 export function checkToolSurface(
@@ -640,6 +648,7 @@ function runInitPing(
   cwd: string,
   extraArgs: string[],
   field: "skills" | "tools",
+  timeoutMs: number = SKILL_ENUM_TIMEOUT_MS,
 ): Promise<string[] | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof nodeSpawn>;
@@ -668,7 +677,7 @@ function runInitPing(
         // already gone
       }
       finish(null);
-    }, SKILL_ENUM_TIMEOUT_MS);
+    }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer | string) => {
       buffered += chunk.toString();
       const lines = buffered.split("\n");
@@ -710,34 +719,54 @@ function atNeutralCwd(
  *  real CLI (same posture as EnumerateSkillsFn). */
 export type EnumerateToolsFn = () => Promise<string[] | null>;
 
-// 本番の spawn が渡すのと同じ `--tools` を渡した /usage ping。ADR 0039 決定3 の
-// 正本であり、実測済み(work リスト + 本番フラグ一式で init が `tools` 18本 =
-// 組み込み17 + MCP verb 1、`skills` 16本を返した)。
+// 3つ目の問いの正本の ping(ADR 0039 決定3)。**work のリストで撃つ — review 用に
+// 2本目は撃たない。** review は work の真部分集合なので、改名で不活性化した名前
+// (測定8)はどちらのリストでも同じように欠ける。review 固有の失敗形は「編集系の
+// **除去**が honor されなくなった」だけで、それは実 review セッションの init 行を
+// task type ごとに照合する深層防御側(`checkSessionToolSurface`)が観測する。
 //
-// **work のリストで撃つ — review 用に2本目は撃たない。** review は work の真部分
-// 集合なので、改名で不活性化した名前(測定8)はどちらのリストでも同じように欠ける。
-// review 固有の失敗形は「編集系の**除去**が honor されなくなった」だけで、それは
-// 実 review セッションの init 行を task type ごとに照合する深層防御側
-// (`checkSessionToolSurface`)がそのまま観測する。
+// **この ping が運ぶのは本番フラグ一式のうち面を決める分だけである。** `--tools` は
+// 測る対象そのもの、`--permission-mode` と `--setting-sources project` は本番と同じ値。
+// 運ばないのは `--settings`(サンドボックスプロファイル)と `--mcp-config` — どちらも
+// **タスク単位の生成物**(workspace のパス・タスク帰属つき URL)で、spawn の外には
+// 存在しない。したがって正本が答えるのは「このホストの CLI が盤面の `--tools` 宣言を
+// honor するか」であり、`--settings` まで含んだ**実際の spawn 形**を測るのは深層防御側
+// (実セッションの init 行)である。2つで面の全体を覆う、という分担であって取りこぼし
+// ではない — ADR 0039 の測定は本番フラグ一式で 18本(組み込み17 + MCP verb 1)を観測
+// しており、正本の側はその MCP verb が無い 17本を見る(`mcp__` は比較対象外なので
+// どちらでも同じ答えになる)。
 //
-// `--setting-sources project` を足すのは**本番と同じ面を測る**ため。足さないと
+// `--setting-sources project` を足すのは**本番と同じ tier を読ませる**ため。足さないと
 // ホストの人間の `~/.claude/settings.json` の `permissions.deny` が面を削り
 // (ADR 0039 測定3)、本番の worker では起きない欠落を封じ込めの不成立に化けさせる。
 // SKILL_ENUM_ARGS 側には足さない — skill 列挙は user tier の skill を見るのが
 // 目的で(`enumerateHostSkills` の @host 集合)、そこに足すと集合が壊れる。
 const TOOL_SURFACE_PROBE_ARGS = [
+  "--permission-mode",
+  "acceptEdits",
   "--setting-sources",
   "project",
   "--tools",
   spawnTools("work").join(","),
 ];
 
+// この ping の timeout は skill 列挙と**分ける**。失敗の重さが違う:
+// skill 列挙の timeout は spawn 1回を諦めるだけ(タスクは watchdog が回収する)だが、
+// こちらの timeout は「観測できなかった = 不成立」→ **盤面全体の pickup 停止 +
+// 確認 question** になる。つまり遅いホストが誤って盤面を止める側に倒れる。冷えた CLI の
+// 起動がどこまで伸びうるかはホスト依存(ADR 0028 が Pi を macOS より遅い側として実測
+// している)なので、上限は「詰まりを検知する」役だけを残して広く取る。ping 自体が
+// 遅いぶんは poll が待つだけで、誤停止よりはるかに安い。
+const TOOL_SURFACE_PROBE_TIMEOUT_MS = 60_000;
+
 const defaultEnumerateTools: EnumerateToolsFn = () =>
   // neutral cwd で撃つ: workspace の cwd で撃つと、その checkout の
   // `.claude/settings.json` の `permissions.deny` が面を削って(測定3)「ホストの
   // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
   // `floorOverridingSettings` がすでにその担当である。
-  atNeutralCwd("tidepool-tools-", (cwd) => runInitPing(cwd, TOOL_SURFACE_PROBE_ARGS, "tools"));
+  atNeutralCwd("tidepool-tools-", (cwd) =>
+    runInitPing(cwd, TOOL_SURFACE_PROBE_ARGS, "tools", TOOL_SURFACE_PROBE_TIMEOUT_MS),
+  );
 
 /** 封じ込め能力の3つ目の問い(ADR 0039 決定3)の正本: `/usage` ping を**その場で
  *  撃ち**、観測されたツール面を `checkToolSurface` に渡す。
@@ -750,7 +779,7 @@ const defaultEnumerateTools: EnumerateToolsFn = () =>
  *  ping が失敗したら**不成立**に倒す — 「測れなかった」は「無事」ではない
  *  (人間面の半分が接続失敗を不成立に倒すのと同じ線)。ここを skip にすると3つ目の
  *  問いが黙って飾りになる。 */
-export async function checkToolSurfaceCapability(
+export async function probeToolSurfaceCapability(
   enumerate: EnumerateToolsFn = defaultEnumerateTools,
 ): Promise<ContainmentCapability> {
   const observed = await enumerate();
@@ -1425,13 +1454,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // exit without re-reading the file back off disk
     let lastResult: StreamResultEvent | null = null;
     let buffered = "";
+    // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
+    let toolSurfaceObserved = false;
     child.stdout.on("data", (chunk: Buffer | string) => {
       buffered += chunk.toString();
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
       for (const line of lines) {
         lastResult = parseResultLine(line) ?? lastResult;
-        this.checkSessionToolSurface(task, line, child);
+        if (!toolSurfaceObserved) {
+          toolSurfaceObserved = this.checkSessionToolSurface(task, line, child);
+        }
       }
     });
     this.running.set(task.id, child);
@@ -1535,6 +1568,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  SIGTERM ではなく SIGKILL なのは、猶予の目的が「エージェントに畳ませる」こと
    *  であり、ここで止めたい相手がまさにその「これ以上動くこと」だから。
    *
+   *  戻り値は「init の `tools` を観測したか」— 呼び出し側はそれ以降の行をこの検査に
+   *  通さない(1セッションに init 行は1本だけ、実測)。
+   *
    *  init 行が無いセッション(壊れた行・`tools` を持たない init)は判定しない —
    *  観測が無いことを不成立に化けさせるのは正本(ping)の仕事である。サブエージェント
    *  を起こしたセッションでも親の stream に init 行は1本しか出ない(実測)ので、
@@ -1543,14 +1579,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     task: Task,
     line: string,
     child: { kill(signal: NodeJS.Signals): void },
-  ): void {
+  ): boolean {
     const tools = parseInitTools(line);
-    if (!tools) return;
+    if (!tools) return false;
     const surface = checkToolSurface(tools, task.type);
-    if (surface.available) return;
+    if (surface.available) return true;
     console.error(`[worker] tool surface drift on task ${task.id}: ${surface.reason}`);
     child.kill("SIGKILL");
     quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
+    return true;
   }
 
   kill(taskId: string, signal: KillSignal): void {

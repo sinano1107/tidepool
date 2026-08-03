@@ -7,7 +7,7 @@
  *     ADR 0036 / issue #154)— 自分の人間ポートへ実際に1回撃って 401 を見る。
  *  3. **ツール面が宣言どおりか**(ホストの CLI が盤面の宣言を honor しているか。
  *     ADR 0039 / issue #164)— `/usage` ping の init が返す `tools` を Tool
- *     allowlist と集合として突き合わせる(`checkToolSurfaceCapability`)。
+ *     allowlist と集合として突き合わせる(`probeToolSurfaceCapability`)。
  *     3つ目もホストと盤面自身の性質であって特定の workspace や agent の性質では
  *     ないため、既存2つと同格に束ねられる。
  *
@@ -95,19 +95,24 @@ export async function checkHumanSurfaceRefusesAnonymous(
  *  `humanSurface` が undefined を返すのは listen 前だけ(server.ts が listen 後に
  *  armed する)。
  *
- *  `toolSurface` が省略される盤面は3つ目の問いを持たない — 実 CLI を持たない
- *  テスト盤面の形で、ゲートそのものの有無と同じ扱い(本番の合成 root は常に渡す)。 */
+ *  `toolSurface` は **`null` を明示して**初めて3つ目の問いを持たない盤面になる —
+ *  実 CLI を持たないテスト盤面の形であり、ゲートそのものの有無と同じ扱いである
+ *  (本番の合成 root は常に渡す)。省略可能にしないのは、この口が**塞ぐ側ではなく
+ *  開く側**へ倒れるためである: 忘れれば検査が1つ黙って消える。「省略 = 無制限」
+ *  という footgun は作らない(CONTEXT.md の Skill allowlist が同じ理由で省略を
+ *  不正にしているのと同じ線)。人間面の `undefined` はこれとは別物で、listen 前
+ *  という**一過性**の状態なので fail-closed(`UNPROBED`)に倒れる。 */
 export function composeContainment(
   sandbox: () => SandboxCapability,
   humanSurface: () => Promise<ContainmentCapability> | undefined,
-  toolSurface?: () => Promise<ContainmentCapability>,
+  toolSurface: (() => Promise<ContainmentCapability>) | null,
 ): ContainmentCheck {
   return async () => {
     const filesystem = sandbox();
     if (!filesystem.available) return filesystem;
     const human = (await humanSurface()) ?? UNPROBED;
     if (!human.available) return human;
-    return (await toolSurface?.()) ?? { available: true };
+    return toolSurface === null ? { available: true } : await toolSurface();
   };
 }
 
