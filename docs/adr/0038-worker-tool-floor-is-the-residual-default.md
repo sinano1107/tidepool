@@ -197,6 +197,21 @@ ADR 0037 は `SETTINGS_TOOL_DENY` について「deny はツール呼び出し�
 
 封じ込め能力ゲート(CONTEXT.md)には新しい停止条件を足さない — 床がフラグとして常に入るため、成立/不成立の分岐が無い。ADR 0037 と同じ整理である。
 
+## 追記(2026-08-03、#162 の実装中に実測): `acceptEdits` は cwd 内の `.claude/` への書き込みも承認要求に落とす
+
+hook-canary を本番の形へ移した最初の実走で、`deny/scope` 行 —— control セッションが `<ws>/.claude/skills/tp-canary-probe/SKILL.md` を**書けること**を確かめる行 —— が VACUOUS になった。拒否文言は deny ルールのものではなく**モードのもの**だった:
+
+```
+Claude requested permissions to write to <ws>/.claude/skills/tp-canary-probe/SKILL.md,
+but you haven't granted it yet.
+```
+
+同じセッションの `notes.txt`(cwd 直下の新規ファイル、ディレクトリ作成なし)は書けている。つまり `acceptEdits` の「編集は通す」は cwd 内でも一律ではない。**何がこの2つを分けたかは測っていない** — `.claude/` 配下だからなのか、途中の2階層を新規作成する書き込みだからなのか、他の要因かは未測である。
+
+**決定への影響は無い。** ADR 0025 の `@workspace` skill はセッションが skill を**読む**話であり、worker がその workspace に skill を**書く**能力を盤面は必要としていない。#160 が塞いだ `settings.json` / `settings.local.json` への書き込みは、この上にさらに `permissions.deny` が乗っている(deny はモードに勝つ)。
+
+**canary の設計には影響した。** `deny/scope` 行の判定材料を「書けたこと」から「**どの層が拒否したか**」へ移した。この行が問うのは ban が2ファイルから `.claude/` まるごとへ広がっていないかであり、deny はモードの上に立つ(本 ADR の層の分担)ので、広がった ban なら**先に**ルール自身の文言で拒否する。ルールが黙ったまま(モードが拒否した)なら ban は広がっていない。書き込みが成立しなくなった以上、こちらの方が測れる形である。
+
 ## Considered options
 
 - **`permissions.deny` の列挙(issue #151 の候補1)** — 上記1のとおり `allow` が `deny` に勝てないので default-deny が表現できず、「守りたい資産の列挙」に格下げされる。守る対象は「ホスト上の読める物すべて」で有限集合ではなく、追従漏れが静かに床の穴になる。ADR 0035 が書き込み側で記録した失敗の再演である。

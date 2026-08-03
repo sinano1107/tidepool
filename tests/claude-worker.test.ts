@@ -240,7 +240,9 @@ function disallowedTools(args: string[]): string[] {
 }
 
 /** The `--allowedTools` value a spawn used, split the same way (ADR 0035).
- *  Empty when the flag is absent — a work spawn carries no allowlist at all. */
+ *  Every spawn carries one now: leaving `auto` put the MCP verbs behind the same
+ *  approval prompt as everything else (ADR 0038), so the board's only channel has
+ *  to be opened explicitly in both profiles. Empty only if the flag went missing. */
 function allowedTools(args: string[]): string[] {
   const at = args.indexOf("--allowedTools");
   return at === -1 ? [] : args[at + 1]!.split(",");
@@ -256,10 +258,10 @@ describe("ClaudeCodeWorker", () => {
     // cwd comes from the registry's workspaces.yaml, not from tidepool itself
     expect(call.cwd).toBe("/home/pi/work/tidepool");
     expect(call.args.join(" ")).toContain("--output-format stream-json");
-    // headless: nobody is present to answer a permission prompt. auto mode
-    // self-approves routine actions but keeps the classifier safety layer —
-    // authority itself comes from the profile + MCP verbs.
-    expect(call.args.join(" ")).toContain("--permission-mode auto");
+    // headless: nobody is present to answer a permission prompt, so the mode's
+    // residual answer is the floor (ADR 0038). work runs acceptEdits — edits
+    // pass, cwd 外は訊く = 拒否。authority itself comes from the profile + MCP verbs.
+    expect(call.args.join(" ")).toContain("--permission-mode acceptEdits");
   });
 
   it("spawn する worker child の env に、spawn されたエージェント名義の GIT_* 4変数を機械注入する(issue #53)", async () => {
@@ -532,10 +534,41 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
   });
 
-  it("work タスクの spawn は auto のまま — work は書けなければならない", async () => {
+  // ADR 0038(issue #151 / #162): 床とは残余の既定である。`auto` の残余は分類器の
+  // 自己承認(既定「はい」)で、ツール層(Read / Write / Edit …)にはサンドボックス
+  // が届かない ——「ホスト上の読める物すべてを読め、書ける場所すべてに書ける」の
+  // 正体がこれだった。`acceptEdits` は編集を通しつつ残余を承認要求に倒すので、
+  // work は書けるまま cwd 外だけが閉じる。
+  it("work タスクの spawn は --permission-mode acceptEdits で走る(ADR 0038)", async () => {
     const { start, calls } = await makeWorker();
-    start("task-work-auto", null, "deckhand", "work");
-    expect(calls[0]!.args.join(" ")).toContain("--permission-mode auto");
+    start("task-work-accept-edits", null, "deckhand", "work");
+    expect(calls[0]!.args.join(" ")).toContain("--permission-mode acceptEdits");
+  });
+
+  it("盤面はどの task type でも auto を吐かない — 分類器は worker の床に一切関与しない(ADR 0038)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-no-auto-work", null, "deckhand", "work");
+    start("task-no-auto-review", null, "deckhand", "review");
+    for (const call of calls) {
+      const mode = call.args[call.args.indexOf("--permission-mode") + 1];
+      expect(mode).not.toBe("auto");
+    }
+  });
+
+  // ADR 0038: permission の**マージ**は tier をまたぐので、flag tier のモード境界は
+  // 人間の user tier(`~/.claude/settings.json`)と gitignore された local tier
+  // (`<ws>/.claude/settings.local.json`)の `permissions.allow` に持ち上げられる
+  // (両方とも control 付きで実測)。床はどちらの worker が走っているかを問わない
+  // (ADR 0013)ので両プロファイルに付ける。`project` を残すのは workspace の
+  // CLAUDE.md と skill がそこに乗るため — `""` / `user` はそれを道連れにする(ADR 0037)。
+  it("両プロファイルの spawn が --setting-sources project で走る(ADR 0038)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-sources-work", null, "deckhand", "work");
+    start("task-sources-review", null, "deckhand", "review");
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.args[call.args.indexOf("--setting-sources") + 1]).toBe("project");
+    }
   });
 
   it("review タスクの spawn は tidepool MCP をサーバ単位で allow する — 無いと盤面への唯一の channel が承認待ちで詰まる", async () => {
@@ -570,7 +603,18 @@ describe("ClaudeCodeWorker", () => {
     expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool", "Bash(npm test*)"]);
   });
 
-  it("review_allowed_commands は work の spawn には効かない(--allowedTools 自体が付かない)", async () => {
+  // ADR 0038: `auto` を離れると MCP verb も全部承認待ちになり、盤面への唯一の
+  // channel が詰まって work セッションが仕事にならない(ADR 0035 が review に
+  // ついて測ったのと同じことが work にも起きる)。verb の権限は盤面側
+  // (authority profile / MCP router)が縛るので、CLI 側で開けても権限モデルは
+  // 緩まない。
+  it("work タスクの spawn も tidepool MCP をサーバ単位で allow する(ADR 0038)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-work-mcp-allow", null, "deckhand", "work");
+    expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool"]);
+  });
+
+  it("review_allowed_commands は work の spawn には効かない(allowlist は MCP サーバだけ)", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
   path: /home/pi/work/tidepool
@@ -579,7 +623,9 @@ describe("ClaudeCodeWorker", () => {
 `,
     });
     start("task-work-no-allow", null, "deckhand", "work");
-    expect(calls[0]!.args).not.toContain("--allowedTools");
+    // Bash の接頭辞 allow は review 専用のまま — work は元から書けるので何も買わず、
+    // 開けば registry のデータが work の Bash 面を広げる経路になる。
+    expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool"]);
   });
 
   // issue #56 / ADR 0025: skill access is the agent's frontmatter allowlist,
