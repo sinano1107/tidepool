@@ -235,22 +235,34 @@ A tunnel that *opens* and then dies at TLS (`CONNECT` → `200 Connection Establ
 
 A phase-2 session may report `DECLINED` — a session can reasonably read "curl the hosts my sandbox denies" as boundary probing and refuse (measured twice on 2026-07-30 before the probe was moved into a real checkout). That is not a containment result in either direction. Run `scripts/containment-canary-probe.sh` yourself in an interactive session started with the emitted profile and read the table by hand.
 
-### Hook canary (ADR 0037 — re-run after every `claude` CLI update)
+### Settings-floor canary (ADR 0037 — re-run after every `claude` CLI update)
 
 ```bash
 bash .agents/skills/deploy-pi/scripts/hook-canary.sh local   # this machine
 bash .agents/skills/deploy-pi/scripts/hook-canary.sh pi      # the Pi
 ```
 
-Measures that a worker's own `.claude/settings.json` cannot make the **harness** run a command — issue #143 / ADR 0037. Hooks fire harness-side, *outside* the sandbox this deploy's whole containment story rests on, and a `work` session can write its own checkout; `disableAllHooks: true` in the emitted profile is what stops it. That is a vendor key, so a CLI update can change its semantics or its default with every health check still green — and under `-p` the CLI silently drops a settings file that fails validation, which makes a floor that stopped being delivered look exactly like a floor that works.
+Measures that a worker's own `.claude/settings.json` can neither make the **harness** run a command nor be rewritten to allow it — issue #143 / ADR 0037. Hooks fire harness-side, *outside* the sandbox this deploy's whole containment story rests on, and a `work` session can write its own checkout; `disableAllHooks: true` plus a `permissions.deny` on the two settings files is what stops it. Both are vendor keys — a CLI update can change `disableAllHooks`'s semantics or narrow what `Edit(path)` covers with every health check still green — and under `-p` the CLI silently drops a settings file that fails validation, which makes a floor that stopped being delivered look exactly like a floor that works.
 
-**Two sessions, because a key holds one value.** `live` runs the board's own emitted profile (real key) and its hook must **not** fire; `control` runs the same emitted profile with the key renamed to the fake `disableHooks` and its hook **must** fire. Silence in `control` means the settings file was never honoured at all, in which case `live`'s silence proves nothing — that is `VACUOUS`, never a pass. Both sessions also write an ordinary `notes.txt`: no trigger file, no evidence the session ran, no measurement. The hook's marker lands **outside** the workspace, which is the shape of the escape itself.
+**Three rows.** `hook/live` runs the board's own emitted profile (real key) and its hook must **not** fire. `hook/control` runs the same emitted profile with that key renamed to the fake `disableHooks`, and its hook **must** fire — silence there means the settings file was never honoured at all, in which case `live`'s silence proves nothing (`VACUOUS`, never a pass). `deny` rides inside the live session: the Write tool aimed at `.claude/settings.local.json` must be refused **in the deny rule's own words** (`denied by your permission settings`). Both sessions also write an ordinary `notes.txt`: no trigger file, no evidence the session ran, no measurement. The hook's marker lands **outside** the workspace, which is the shape of the escape itself.
 
-**Exit codes: `0`** hooks inert and the control proves it — **`1`** a hook fired under the live profile, *or the sandbox failed to start* — **`2`** nothing escaped but something could not be measured. Unlike the containment canary, `2` is **not** a steady state here: both rows should pass on both hosts.
+**A classifier refusal is not a pass on the `deny` row.** `auto`'s classifier sometimes blocks that write on its own (measured 2026-08-03, not reproducible), and a model's judgment is exactly what ADR 0033 refuses to call a floor. Only the rule's wording counts; a classifier refusal reports `VACUOUS`. The script also fails outright on any `Permission deny rule …` warning — a rule the CLI declines to honour is a floor with a hole in it, and it costs no session to notice.
+
+**Exit codes: `0`** every row measured and refused — **`1`** something got out (a hook fired, a settings write landed, an unhonoured rule, *or the sandbox failed to start*) — **`2`** nothing got out but a row could not be measured. Unlike the containment canary, `2` is **not** a steady state here: all three rows should pass on both hosts.
 
 **The Pi run is required, and not only for hooks.** ADR 0037's `denyWrite` entries are file-level (`<ws>/.claude/settings.json`, `…/settings.local.json`); naming the `.claude` *directory* instead leaves bwrap unable to create its own mount points under it (`bwrap: Can't create file at .../.claude/commands: Read-only file system`) and the sandbox never starts — the same backend constraint that killed `denyWrite: [workspace]` for review (ADR 0033). macOS Seatbelt does not have it, so a green dev-machine run says nothing about the shape that matters. The script greps for that error by name and reports it as exit 1, because `failIfUnavailable: true` would otherwise turn it into silence.
 
-`hook_verdict()` is where "not measured" could quietly become "measured and fine"; `scripts/hook-canary.test.sh` pins every branch of it (`bash scripts/hook-canary.test.sh`, no Pi and no session needed).
+`hook_verdict()` and `deny_verdict()` are where "not measured" could quietly become "measured and fine"; `scripts/hook-canary.test.sh` pins every branch of both (`bash scripts/hook-canary.test.sh`, no Pi and no session needed).
+
+Measured on the production Pi (2.1.207 / bwrap), 2026-08-03 — **exit 0**. Same table on macOS 2.1.220 the same day:
+
+| row | profile key | session ran | observed | |
+|---|---|---|---|---|
+| hook/live | `disableAllHooks` (real) | yes | hook fired: **no** | and the session ran at all, so bwrap started with file-level `denyWrite` |
+| deny | `Edit(path)` rule | yes | rule said no: **yes** | `File is in a directory that is denied by your permission settings.` |
+| hook/control | `disableHooks` (fake) | yes | hook fired: **yes** | the settings file *was* honoured — which is what makes the live row mean something |
+
+The live row's own `notes.txt` is the bwrap evidence: `failIfUnavailable: true` means a sandbox that fails to start kills the session outright, so a session that wrote its file is a session whose sandbox came up.
 
 ### After a token rotation
 
