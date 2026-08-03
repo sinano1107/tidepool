@@ -8,11 +8,13 @@ import type { Task } from "./tasks.js";
  *  semantics were read off the installed CLI (2.1.220) and confirmed by running
  *  it, not from memory.
  *
- *  Named for the `sandbox` block it was born to carry; ADR 0037 added two
- *  siblings that live *outside* that block, because the escapes they close are
- *  outside the sandbox too — a hook runs in the harness, not in the confined
- *  Bash. */
-export interface SandboxSettings {
+ *  Not `SandboxSettings`: ADR 0037 added two members that live *outside* the
+ *  `sandbox` block, because the escapes they close are outside the sandbox too —
+ *  a hook runs in the harness, not in the confined Bash. The artifact the board
+ *  writes is still called the sandbox settings file (`<task>.sandbox.json`), so
+ *  `buildSandboxSettings` keeps its name — ADRs 0033/0035/0037 and several
+ *  issues cite it, and a rename would quietly break those references. */
+export interface WorkerSessionSettings {
   /** ADR 0037: hooks declared by the workspace's own `.claude/settings.json`
    *  run harness-side — outside the very sandbox this file builds — so a `work`
    *  session that can write its checkout can execute arbitrary commands off the
@@ -188,7 +190,13 @@ function settingsDenyWrite(workspacePath: string): string[] {
  *  What keeps the list short in the first place is that a worker cannot write
  *  these files at all, which shuts the whole family of harness-side keys
  *  (`hooks`, `env`, `apiKeyHelper`, `statusLine`, …) at the root rather than one
- *  key at a time. */
+ *  key at a time — **for the workspace's own two files, which is the whole of
+ *  what this closes.** The entries name paths, so the *user* tier
+ *  (`~/.claude/settings.json`) is untouched and out of ADR 0037's scope; that
+ *  belongs to #151, where the `work` profile's tool layer has no sandbox floor
+ *  at all. Anyone reaching for it would take the shorter road anyway — under
+ *  #151 the Read tool reaches `~/.claude/.credentials.json` directly, without
+ *  widening any floor first. */
 const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${name})`);
 
 /** A skill name safe to map into a path: no separator, no `..`, no leading dot.
@@ -242,7 +250,7 @@ export function skillReadPaths(
   return paths;
 }
 
-export interface SandboxSettingsInput {
+export interface WorkerSessionSettingsInput {
   /** ADR 0013: read-only is a property of the `review` task type, not of the
    *  agent executing it — so the write half is keyed on this alone. */
   taskType: Task["type"];
@@ -311,7 +319,7 @@ export interface SandboxSettingsInput {
  *
  *  The CLI's own default project protections still refuse `.git/config`,
  *  `.git/hooks` and friends underneath all of it. */
-export function buildSandboxSettings(input: SandboxSettingsInput): SandboxSettings {
+export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
   const { taskType, workspacePath, permittedSkills } = input;
   const readOnly = taskType === "review";
   return {

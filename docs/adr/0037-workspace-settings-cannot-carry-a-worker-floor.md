@@ -72,3 +72,11 @@ hooks / settings 書き込みの封じ込めは ADR 0033 の封じ込め能力�
 2. **拒否文字列を出力全体に grep すると誤帰属する。** 上記の汚染回では、`deny` 行が **skills の拒否文字列**を拾って PASS を出していた。2つを別セッションに分けたことで、`.claude` 書き込みが1セッションに1つしか無くなり、構造的に解消した。
 
 拒否の綴りも版で割れる。2.1.220 は file-permission check の `File is in a directory that is denied…`、2.1.207 は分類器がルールを引用する形(`… circumvents the configured Edit(.claude/settings.local.json) deny rule`)。どちらも**設定されたルールを名指しする**ので両方を合格とし、何も名指さない `Blocked by classifier.` は合格にしない — そこを緩めると、deny が効かなくなった日に分類器の気分で緑が出る。
+
+### 射程の境界(#151 との分担)
+
+本 ADR が塞いだのは **workspace 由来の床上書き**であって、ホスト全域の封じ込めではない。「worker はもう床を書き換えられない」と読んではならない。
+
+二層目の `permissions.deny` はパスを名指しする形なので、覆っているのは checkout 内の2ファイルだけである。**`~/.claude/settings.json`(user tier)への Write は本 ADR の射程外**で、そこは #151(work プロファイルのツール層にサンドボックスの床が掛かっていない)の領分になる。
+
+ただしその迂回路は #151 自身に**劣後する** — 床を広げてから Bash で読むより、Read ツールで `~/.claude/.credentials.json` を直接読むほうが早い。したがって user tier をここで列挙して追いかけるより、#151 を対処候補2(work も `--permission-mode manual`)で解く方が筋がよい。そちらが入れば、この射程外だった経路も同時に閉じる。
