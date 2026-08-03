@@ -59,3 +59,16 @@ hooks / settings 書き込みの封じ込めは ADR 0033 の封じ込め能力�
 **そのぶん canary の責務が増えた。** 「`Edit(path)` は全 file-editing tool を覆う」はベンダーの主張であって、tidepool 側で列挙できる規則ではない。CLI は**照合されないルールは警告するが、覆いが狭まったことは警告しない** — 将来 `Write` が `Edit` の傘から外れれば、床は音もなく消える。よって deploy-pi の canary は hook の不活性だけでなく、**deny ルール自身の文面による拒否**も毎回測る(`hook-canary.sh` の `deny` 行)。分類器が断っただけの回を合格にしないのが要点で、それを許すと deny が効かなくなった日に緑のまま出荷される。
 
 `FLOOR_DEFINING_KEYS` は本文どおり触っていない(`hooks` は足していない)。
+
+### 追記の追記: deny の**広さ**は測らないと分からない(同日)
+
+拒否文言は `File is in a **directory** that is denied by your permission settings.` である。「ディレクトリが deny されている」と読める文面なので、`Edit(.claude/settings.json)` が `.claude/` 配下まるごとの ban として解決されている可能性が残る。そうなっていれば ADR 0025 の `@workspace` skill スコープが消え、worker が最も多く走る tidepool 自身の repo が日常タスクで踏む — **しかも emit される配列は変わらないので、盤面のテストは何も言わない**。
+
+実測(macOS 2.1.220 / Pi 2.1.207、いずれも Edit 2本が効いている状態):`.claude/skills/**` も `.claude/commands/**` も**書けた**。ban はファイル単位で、文言が紛らわしいだけである。これを canary の `deny/scope` 行として固定した。
+
+**その過程で、canary 自身の設計欠陥を2つ踏んだ(記録に値する)。**
+
+1. **1セッションに両方の `.claude` 書き込みを入れると、分類器が汚染する。** Pi で「skills を書け」と「settings を書け」を同一セッションで頼むと、**skills の方まで**拒否された。同じ skills 書き込みを単独セッションで撃つと同じプロファイルで**2回とも成功**する。決定論的なルールにこの挙動はできない — 分類器が要求全体を circumvention と読み、隣まで巻き込んだ。よって scope の control は control セッション側(`permissions.deny` は同一)へ分けた。
+2. **拒否文字列を出力全体に grep すると誤帰属する。** 上記の汚染回では、`deny` 行が **skills の拒否文字列**を拾って PASS を出していた。2つを別セッションに分けたことで、`.claude` 書き込みが1セッションに1つしか無くなり、構造的に解消した。
+
+拒否の綴りも版で割れる。2.1.220 は file-permission check の `File is in a directory that is denied…`、2.1.207 は分類器がルールを引用する形(`… circumvents the configured Edit(.claude/settings.local.json) deny rule`)。どちらも**設定されたルールを名指しする**ので両方を合格とし、何も名指さない `Blocked by classifier.` は合格にしない — そこを緩めると、deny が効かなくなった日に分類器の気分で緑が出る。

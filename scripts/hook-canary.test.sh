@@ -79,6 +79,26 @@ dcheck "a classifier refusal is not this floor"             no  no  VACUOUS
 # 転記だけを信じない: ルールの文面が出ていてもファイルが在るなら穴。
 dcheck "a file that exists outranks whatever was reported"  yes yes FAIL
 
+echo "deny/scope — the ban must stay the size the board thinks it is"
+scheck() {
+  local what="$1" written="$2" want="$3" got
+  got=$(scope_verdict "$written")
+  if [[ "$got" == "$want" ]]; then
+    printf '  ok   %s\n' "$what"
+  else
+    printf '  FAIL %s: wanted %s, got %s (scope_verdict %s)\n' "$what" "$want" "$got" "$written" >&2
+    failures=$((failures + 1))
+  fi
+}
+# 拒否文言が "File is in a DIRECTORY that is denied" なので、`.claude/` まるごとの
+# deny と区別がつかない。実測(2026-08-03)では Edit 2本の下で
+# `.claude/skills/**` も `.claude/commands/**` も書けたが、それはベンダー挙動で
+# あって盤面が決められる規則ではない。広がった日は ADR 0025 の @workspace skill
+# が消え、しかも emit される配列は変わらないのでテストは何も言わない。
+scheck "the workspace's own skills stay writable"        yes PASS
+# 「広がった」と「セッションが飛ばした」は外からは同じ形。合格にも破れにもしない。
+scheck "a missing skill file is ambiguous, never a pass" no  VACUOUS
+
 echo
 if [[ "$failures" -eq 0 ]]; then
   echo "hook_verdict: all cases pass"
