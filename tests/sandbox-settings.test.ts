@@ -59,19 +59,34 @@ describe("buildSandboxSettings", () => {
 
   // 意図的に「review は workspace に書けない」を主張しない。sandbox 既定は cwd を
   // 書き込み可のままにするので、これは allowWrite だけでは成立しない。それを成立
-  // させる denyWrite は Linux(bwrap)backend でサンドボックス自体を起動不能に
-  // するため採らなかった(ADR 0033 の追記 / buildSandboxSettings のコメント)。
-  // review の書き込み床はその後 ADR 0035(#144)が permission 層
+  // させる denyWrite: [workspace] は Linux(bwrap)backend でサンドボックス自体を
+  // 起動不能にするため採らなかった(ADR 0033 の追記 / buildSandboxSettings の
+  // コメント)。review の書き込み床はその後 ADR 0035(#144)が permission 層
   // (`--permission-mode manual`)に建てた — #59 のツール層 deny は「床」ではなく
   // 「allow で開けられる範囲の上限」に役割が変わっている。
-  it("どちらのプロファイルも denyWrite を持たない — review の書き込み床は permission 層(ADR 0035)にある", () => {
+  //
+  // かつてここには「どちらのプロファイルも denyWrite を持たない」があった。ADR
+  // 0037(#143)がそれを置き換える: **ファイル単位**の denyWrite は上の「起動
+  // 不能」とは別物で、実測(Pi 2.1.207 / bwrap)でサンドボックスは正常に起動する。
+  // 主張が「denyWrite を持たない」から「持つ形が2エントリに限られる」に変わった
+  // だけで、守っている backend 制約は同じ。
+  it("denyWrite はファイル単位の settings 2本だけ — .claude ディレクトリを名指すと Linux(bwrap)でサンドボックスが起動しない", () => {
     for (const taskType of ["work", "review"] as const) {
       const { filesystem } = buildSandboxSettings({
         taskType,
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
       }).sandbox;
-      expect(filesystem).not.toHaveProperty("denyWrite");
+      // 期待値は独立した literal(実測 G 表でこの2本が両プラットフォームで
+      // 堅牢だった形)。配列まるごと置くので、ディレクトリが1つ紛れ込めば落ちる。
+      expect(filesystem.denyWrite).toEqual([
+        "/home/pi/work/tidepool/.claude/settings.json",
+        "/home/pi/work/tidepool/.claude/settings.local.json",
+      ]);
+      // `bwrap: Can't create file at .../.claude/commands: Read-only file
+      // system` への回帰ガード — 親ディレクトリを足したくなったら、その前に
+      // Linux 実機で起動することを測ること
+      expect(filesystem.denyWrite).not.toContain("/home/pi/work/tidepool/.claude");
     }
   });
 
@@ -160,9 +175,18 @@ describe("floorOverridingSettings", () => {
     return dir;
   }
 
-  it("sandbox ブロックを持たない project settings は素通しする(hooks 等の通常利用を壊さない)", async () => {
+  // ADR 0037: `hooks` を FLOOR_DEFINING_KEYS に足さない、を行動として固定する。
+  // hooks はハーネス側(サンドボックス外)で走るので床を運ぶキーに見えるが、
+  // `disableAllHooks: true` が無害化した以上、hooks を持つだけの workspace を
+  // quarantine するのは過剰であり、biome hook を持つ **tidepool 自身が永久
+  // quarantine** になる。親切心で足そうとした読者はここで落ちる。
+  it("hooks だけを持つ project settings は素通しする — 無害化は disableAllHooks の仕事で、quarantine の理由にはならない(ADR 0037)", async () => {
     const dir = await workspaceWith({
-      "settings.json": JSON.stringify({ hooks: { PostToolUse: [] } }),
+      "settings.json": JSON.stringify({
+        hooks: {
+          PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "npm run fmt" }] }],
+        },
+      }),
     });
     expect(floorOverridingSettings(dir)).toEqual([]);
   });
@@ -226,6 +250,75 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
         permittedSkills: "all",
       }).sandbox.autoAllowBashIfSandboxed,
     ).toBeUndefined();
+  });
+});
+
+/** ADR 0037(issue #143 / #160): workspace checkout の `.claude/settings.json` は
+ *  per-task `--settings` でサンドボックス化された Bash の**外側**に効く経路を2つ
+ *  持つ — hook のハーネス側実行と、`sandbox` ブロックによる床の再定義(後者は
+ *  ホットリロードされるので spawn 時ガードでは届かない)。work セッションは自分の
+ *  checkout に書けるので、どちらも worker 自身が仕込める。
+ *
+ *  実測(CLI 2.1.220 / macOS、本番 Pi 2.1.207 / bwrap、すべて control つき):
+ *  `disableAllHooks: true` は project hook の発火を止め、workspace 側の
+ *  `disableAllHooks: false` では打ち消せず(flag tier 勝ち)、ホットリロードで
+ *  途中配置された hook も止める。偽キー `disableHooks` は素通り(negative
+ *  control)なので、これは「未知キーの黙殺」ではなく実在キーである。 */
+describe("buildSandboxSettings の disableAllHooks(ADR 0037)", () => {
+  it("どちらのプロファイルも hooks を無効化する — hook はサンドボックスの外で走るので、床はデータに依存しないコード定数で殺す(ADR 0013)", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect(
+        buildSandboxSettings({
+          taskType,
+          workspacePath: "/home/pi/work/tidepool",
+          permittedSkills: "all",
+        }).disableAllHooks,
+      ).toBe(true);
+    }
+  });
+});
+
+/** ADR 0037 の二層目。サンドボックスは **Bash しか縛らない** — 実測(C 表)で
+ *  `denyWrite` が Bash からの書き込みと symlink 差し替えを拒否する一方、**Write
+ *  ツールからは書けた(BREACH)**。ツール経路は permission 層で塞ぐしかない。
+ *
+ *  deny は tool 呼び出しの literal な `file_path` で判定されるので、エントリは
+ *  workspace 相対のまま。`denyWrite`(絶対パス)と綴りが違うのは意図で、揃える
+ *  のは未測定の形になる。
+ *
+ *  **綴りは `Edit(path)` だけ**(2026-08-03、実装時に測り直して判明。ADR 0037 の
+ *  追記を参照)。CLI 2.1.220 は `Write(path)` を
+ *  「is not matched by file permission checks — only Edit(path) rules are」と
+ *  名指しで警告し、`MultiEdit` は「matches no known tool」と言う。中立ペイロード
+ *  での実測:
+ *
+ *  - `Edit` 2本のみ → Write ツールが `File is in a directory that is denied by
+ *    your permission settings.` で拒否され、新規作成も成立しない
+ *  - `Write`/`MultiEdit` 4本のみ(Edit 抜き)→ deny ルールは沈黙し、止めたのは
+ *    auto モードの**分類器**(`Blocked by classifier.`)。ADR 0033 が床として
+ *    当てにしないと決めているモデル判断であり、床ではない
+ *  - deny 空(control)→ 上書きも新規作成も**通る**
+ */
+describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
+  it("綴りは Edit(path) だけ — Write(path) は照合されず MultiEdit はツールとして存在しない(2.1.220 が名指しで警告する)", () => {
+    // 期待値は独立した literal(上の実測で決定論的に拒否された唯一の形)。配列
+    // まるごと置くので、効かない綴りを親切心で足せば落ちる。
+    expect(
+      buildSandboxSettings({
+        taskType: "work",
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      }).permissions,
+    ).toEqual({
+      deny: ["Edit(.claude/settings.json)", "Edit(.claude/settings.local.json)"],
+    });
+  });
+
+  it("エントリは workspace 相対 — deny は literal path で判定されるので、workspace が変わっても同じ配列になる", () => {
+    const at = (workspacePath: string) =>
+      buildSandboxSettings({ taskType: "review", workspacePath, permittedSkills: "all" })
+        .permissions.deny;
+    expect(at("/home/pi/work/tidepool")).toEqual(at("/some/other/checkout"));
   });
 });
 
