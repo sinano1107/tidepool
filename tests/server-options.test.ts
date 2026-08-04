@@ -2,15 +2,27 @@ import { readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { type BoardComposition, buildServerOptions, WATCHDOG } from "../src/server-options.js";
-import { FakeClock, FakeTranslationClient, ScriptedWorker } from "./fakes.js";
+import { openDb } from "../src/db.js";
+import {
+  type BoardComposition,
+  buildServerOptions,
+  buildWorkerOptions,
+  WATCHDOG,
+} from "../src/server-options.js";
+import { FakeClock, FakeTranslationClient } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
-/** 盤面1台ぶんの入力。**ServerOptions のキーは1つも含まない**ので、この
- *  テストは自分が検査している一覧を写し取ることが構造的にできない —— 口の一覧を
- *  持つのは `buildServerOptions` だけで、ここが渡すのは env 由来のスカラと部品
- *  だけである。
+/** 盤面1台ぶんの入力。渡すのは env 由来のスカラと、合成 root でしか作れない
+ *  部品だけで、**口の一覧はここには無い** —— 一覧を持つのは `buildServerOptions`
+ *  と `buildWorkerOptions` だけである。
+ *
+ *  ADR 0041 §1 はこれを「`ServerOptions` のキーを1つも含まない」と書き、再演は
+ *  **構造的に**不可能だとしていたが、**それは文字通りには成立していない**
+ *  (ADR 0043 の訂正): `dbPath` / `port` / `mcpPort` / `credential` / `clock` /
+ *  `auditorName` は同名同義のまま残っている。したがってこのテストを守っている
+ *  のは入力の型の純度ではなく、**下の実行時の突き合わせ**そのものである
+ *  —— 口を1つ落とせばその名前で落ちる、という性質のほうを信頼すること。
  *
  *  `registryDir` は未設定にする: registry 由来の口がすべてそこ1つに掛かって
  *  いるので、ディスクを一切触らずに本番と同じ組み立てを走らせられる。 */
@@ -22,8 +34,9 @@ function composition(): BoardComposition {
     mcpPort: 0,
     credential: TEST_CREDENTIAL,
     clock,
-    worker: () => new ScriptedWorker(clock),
     registryDir: undefined,
+    logDir: "/nonexistent/worker-logs",
+    advisorDisabled: false,
     workspaceName: "sandbox",
     workspacesDir: "/nonexistent/workspaces",
     defaultAgentName: "tako",
@@ -36,6 +49,18 @@ function composition(): BoardComposition {
 }
 
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
+
+/** `src/<file>` の `export interface <name>` から、**インターフェース直下**
+ *  (インデント2)の任意フィールド名を読む。ソースを読み直すのが要点である ——
+ *  型を import すると、テストが観測するのは自分が書いた期待値の写しになる。
+ *  入れ子のフィールド(`boardState` / `containment` の中身はインデント4)は
+ *  拾わない。 */
+function optionalFields(file: string, name: string): string[] {
+  const s = source(file);
+  const rest = s.slice(s.indexOf(`export interface ${name} {`));
+  const body = rest.slice(0, rest.indexOf("\n}\n"));
+  return [...body.matchAll(/^ {2}(\w+)\?:/gm)].flatMap((m) => (m[1] ? [m[1]] : []));
+}
 
 // #172 そのもの。本番の盤面は watchdog を**必ず**持つ — 持たない盤面は、詰まった
 // セッションが唯一の slot を握ったまま誰にも回収されない盤面である。
@@ -71,14 +96,7 @@ it("question には時間リミットを持たせない(#172)", () => {
  *  実際に組み立てたオブジェクトと突き合わせるので、口を1つ落とせばその名前で
  *  ここが落ちる。 */
 it("ServerOptions の任意フィールドは authority を除いて全て組み立てられる(#172)", () => {
-  const body = (() => {
-    const s = source("server.ts");
-    const rest = s.slice(s.indexOf("export interface ServerOptions {"));
-    return rest.slice(0, rest.indexOf("\n}\n"));
-  })();
-  // インターフェース直下(インデント2)の任意フィールドだけ。入れ子の
-  // `boardState` / `containment` の中身はインデント4なので拾わない。
-  const optional = [...body.matchAll(/^ {2}(\w+)\?:/gm)].flatMap((m) => (m[1] ? [m[1]] : []));
+  const optional = optionalFields("server.ts", "ServerOptions");
   // 走査そのものが壊れていないことの control。件数だけでは正規表現が**部分的に**
   // 効かなくなった場合を見逃すので、性質の違う3つを名指しで要求する:
   // 素の口・短縮記法で渡される口・入れ子の口。
@@ -110,6 +128,84 @@ it("main.ts は buildServerOptions が組み立てたオプションで盤面を
 const dirs: string[] = [];
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
+
+/** ADR 0043 / issue #33: 同じ網羅を **worker options 層**にも掛ける。
+ *
+ *  ADR 0041 は `ClaudeWorkerOptions` を「#172 の類ではない」と除外していたが、
+ *  その根拠は当時の任意フィールドが `spawn` / `pty` / `enumerateSkills` ——
+ *  **不在 = 実物を使う**というテスト用の注入 seam —— だけだったことにある。
+ *  advisor の kill switch は機能そのもので、渡し忘れれば「緊急マスクが効かない」
+ *  形で fail-open に壊れる: 全部が健康に見えたまま advisor が止まらない。
+ *  除外一覧をテスト側に置くのは ADR 0041 §3 と同じ理由 —— 除外を1つ増やすことは
+ *  「その口は本番で永久に立たない」という宣言だからである。 */
+it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam を除いて全て組み立てられる(ADR 0043)", async () => {
+  const optional = optionalFields("claude-worker.ts", "ClaudeWorkerOptions");
+  // 走査が壊れていないことの control(server 側の網羅テストと同じ形)
+  expect(optional).toEqual(expect.arrayContaining(["advisorDisabled", "spawn", "boardState"]));
+
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  const emitted = new Set(
+    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock() })),
+  );
+  // 不在が正当なのは注入 seam の3つだけ —— そこでの不在は「機能が静かに切れる」
+  // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。
+  expect(optional.filter((key) => !emitted.has(key))).toEqual(["spawn", "pty", "enumerateSkills"]);
+});
+
+/** 上の網羅は `buildWorkerOptions` の戻り値を見ている。本番の worker がその
+ *  リテラルで組まれていなければ空振りする —— ADR 0041 §4 の「テストは合成 root が
+ *  組み立てたものを観測する」を、この層にも同じ形で適用する。
+ *
+ *  経由そのものは `ServerOptions.worker` の網羅(上の #172 のテスト)が既に
+ *  押さえている: `buildServerOptions` が `buildWorkerFactory` を呼んで埋める口な
+ *  ので、そこが切れれば必須フィールドとして型が落ちる。ここが足すのは**口の一覧が
+ *  main.ts に戻っていないこと**だけ —— リテラルが向こうにあれば、上の網羅テストが
+ *  観測するのはテスト自身が書いた複製にしかならない(#172 の構図が一段ずれて再現
+ *  する)。 */
+it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", () => {
+  expect(source("main.ts")).not.toMatch(/new ClaudeCodeWorker\(/);
+  // 本番の合成が実際にその一覧を使っていること(呼び出しの**形**は主張しない)
+  expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(buildWorkerOptions\(/);
+});
+
+/** キーが揃っていることと、**どのキーに何が刺さっているか**は別の主張である
+ *  (ADR 0041 §5 と同じ線)。kill switch は真偽値1つなので、取り違えても型検査は
+ *  黙る —— しかも壊れ方が fail-open なので、黙ったまま advisor が止まらなくなる。 */
+it("kill switch は盤面の合成からそのまま worker options へ届く(判断8)", async () => {
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  const options = (advisorDisabled: boolean) =>
+    buildWorkerOptions(
+      { ...composition(), registryDir, advisorDisabled },
+      { db: openDb(":memory:"), clock: new FakeClock() },
+    );
+
+  expect(options(true).advisorDisabled).toBe(true);
+  expect(options(false).advisorDisabled).toBe(false);
+});
+
+/** ADR 0040 の線: worker ログの置き場と、盤面が「重なるな」と守っている
+ *  パスは**同じ1つ**でなければならない —— 綴りが2つあると、守る対象と実際の
+ *  置き場が黙ってずれる。#33 で `logDir` が `BoardComposition` の口になり、
+ *  合成 root では `boardState` の組み立てと `buildWorkerOptions` の**2箇所**に
+ *  流れるようになったので、一致をここで観測する(どちらも `string` なので
+ *  取り違えても型は黙る — ADR 0041 §5 と同じ理由)。 */
+it("worker ログの置き場は、盤面が守っているパスと同じ1つである(ADR 0040)", async () => {
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  const logDir = "/opt/tidepool/worker-logs";
+  const board = {
+    ...composition(),
+    registryDir,
+    logDir,
+    boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
+  };
+  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock() });
+
+  expect(options.logDir).toBe(logDir);
+  expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);
 });
 
 /** 上の網羅テストは `registryDir` 未設定で走る — registry 由来の口が**すべて**

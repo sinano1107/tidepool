@@ -4,8 +4,14 @@ import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./age
 import type { HumanCredential } from "./auth.js";
 import type { BoardStatePath } from "./board-state.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
-import { enumerateHostSkills, probeToolSurfaceCapability } from "./claude-worker.js";
+import {
+  ClaudeCodeWorker,
+  type ClaudeWorkerOptions,
+  enumerateHostSkills,
+  probeToolSurfaceCapability,
+} from "./claude-worker.js";
 import type { Clock } from "./clock.js";
+import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -25,8 +31,10 @@ import {
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
+import type { Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
+import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -47,8 +55,10 @@ import {
  *  すべての値は分単位に量子化される: WATCHDOG_TICK が 60秒なので、それ未満の差は
  *  1 tick に丸められる。
  *
- *  - `work` = 90分。`/etc/default/tidepool` の `CLAUDE_STREAM_IDLE_TIMEOUT_MS` が
- *    10分(#33 / anthropics/claude-code#69238 の回避)なので、byte-idle 由来の
+ *  - `work` = 90分。adapter が spawn 時に立てる `CLAUDE_STREAM_IDLE_TIMEOUT_MS` が
+ *    10分(#33 / anthropics/claude-code#69238 の回避 —— 以前はホストの
+ *    `/etc/default/tidepool` にあり、#33 で adapter へ移した。値も適用範囲も
+ *    変えていない: advisor の有無に依らず**全セッション**に掛かる)なので、byte-idle 由来の
  *    ストールは CLI 側が拾う。拾えないのはループに入ったセッション —— バイトを
  *    出し続けるので idle 検知が効かず、watchdog だけが backstop になる。kill は
  *    失敗 question(retry / abandon)+ push に落ちる回復可能な事象なので、夜の
@@ -84,11 +94,15 @@ export interface BoardComposition {
    *  だけで、盤面はハッシュしか持たない。 */
   credential: HumanCredential;
   clock: Clock;
-  /** registry が無ければ LoggingWorker、あれば実 CLI worker。`mkdirSync` を伴う
-   *  ので合成 root 側で作る(この関数を I/O から切り離しておくため)。 */
-  worker: WorkerFactory;
   /** agent registry のローカルクローン。未設定 → registry 由来の口はすべて不在。 */
   registryDir: string | undefined;
+  /** worker の stream-json トランスクリプトと spawn 時 MCP config の置き場。
+   *  ディレクトリの作成そのものはホストの副作用なので合成 root 側に残る。 */
+  logDir: string;
+  /** issue #33 判断8 / ADR 0043: advisor の緊急マスク。**盤面ホストの運用設定**で
+   *  あって registry には置かない —— エージェントの定義ではなく、experimental な
+   *  機能を全員に配る代償として「agent.md を1枚も触らずに止める」ための口。 */
+  advisorDisabled: boolean;
   /** この盤面が実行に使う workspace 名。 */
   workspaceName: string;
   /** ADR 0018: path を省いた workspace エントリが解決される基底ディレクトリ。 */
@@ -110,6 +124,71 @@ export interface BoardComposition {
   /** issue #47 / ADR 0015: 表示時翻訳。盤面自身の CONTEXT.md を読んで作るので
    *  合成 root 側で組む。 */
   translationClient: TranslationClient;
+}
+
+/** Fallback when no registry clone is configured: logs the pickup so a human
+ *  can drive the MCP verbs by hand. */
+class LoggingWorker implements WorkerAdapter {
+  readonly id = "logging-worker";
+  start(task: Task): void {
+    console.log(`[worker] picked up ${task.id}: ${task.title}`);
+  }
+  kill(taskId: string, signal: KillSignal): void {
+    console.log(`[worker] would send ${signal} to ${taskId}`);
+  }
+  /** No registry means no real adapter behind this — report a well-under-
+   *  threshold reading so pickup logging is never fail-closed by a check
+   *  this placeholder cannot actually perform. */
+  async checkUsage(): Promise<string | null> {
+    return (
+      "Current session\n0% used\nResets 12:00am (UTC)\n" +
+      "Current week (all models)\n0% used\nResets Jan 1 at 12:00am (UTC)\n"
+    );
+  }
+}
+
+/** 実 CLI worker 1台ぶんの `ClaudeWorkerOptions`。**口の一覧を持つ唯一の場所**で
+ *  あり、`buildServerOptions` と同じ理由でここに在る(ADR 0043 / issue #33)。
+ *
+ *  ADR 0041 はこの層を「#172 の類ではない」と除外していた。その根拠は当時の任意
+ *  フィールドが `spawn` / `pty` / `enumerateSkills` —— **不在 = 実物を使う**という
+ *  テスト用の注入 seam —— だけだったことにある。`advisorDisabled` はその類では
+ *  ない: 機能そのものであり、渡し忘れたときの壊れ方は fail-open(緊急マスクが
+ *  効かないまま、盤面のどこも赤くならない)。したがって網羅の観測をこの層まで
+ *  伸ばす —— 一覧をここへ出さなければ、テストが見るのはテスト自身が書いた複製に
+ *  しかならない(ADR 0041 §1 / §4)。
+ *
+ *  `db` / `clock` は WorkerFactory がスケジューラから受け取る実行時の依存なので
+ *  合成の入力とは別に取る。 */
+export function buildWorkerOptions(
+  board: BoardComposition & { registryDir: string },
+  session: { db: Db; clock: Clock },
+): ClaudeWorkerOptions {
+  return {
+    db: session.db,
+    clock: session.clock,
+    registryDir: board.registryDir,
+    agent: board.defaultAgentName,
+    auditorName: board.auditorName,
+    workspace: board.workspaceName,
+    workspacesDir: board.workspacesDir,
+    mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
+    logDir: board.logDir,
+    // ADR 0040: 床そのもの — 重なっている workspace では spawn せず quarantine
+    boardState: board.boardState,
+    // issue #33 判断8: 不在が「マスクされていない」を意味する口なので、渡し忘れは
+    // 静かに fail-open する。上の網羅テストが見張っているのはまさにこれ。
+    advisorDisabled: board.advisorDisabled,
+  };
+}
+
+/** registry が無ければ LoggingWorker、あれば実 CLI worker(issue #33 / ADR 0043
+ *  でこの分岐ごと合成側へ移した)。`ServerOptions.worker` はこれで埋まるので、
+ *  合成 root から渡されるのは env 由来のスカラだけになる。 */
+export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
+  const { registryDir } = board;
+  if (!registryDir) return () => new LoggingWorker();
+  return ({ db, clock }) => new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock }));
 }
 
 /** The board's own view of the workspace (branch discipline + tree rule):
@@ -320,7 +399,7 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     port: board.port,
     mcpPort: board.mcpPort,
     clock: board.clock,
-    worker: board.worker,
+    worker: buildWorkerFactory(board),
     workspace: workspaceConfig(board),
     resolveWorkspace: workspaceResolver(board),
     github,

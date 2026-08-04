@@ -1,6 +1,56 @@
 import type { Db } from "./db.js";
 import type { TaskType } from "./tasks.js";
 
+/** What the advisor **actually did** in one worker session (issue #33 判断6),
+ *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
+ *  `worker_exited.usage.advisor`, where null means no consultation was observed
+ *  at all — see that field for what the null deliberately collapses.
+ *
+ *  Named rather than inlined because the adapter builds it in two pieces and
+ *  would otherwise spell `NonNullable<NonNullable<…>["advisor"]>` at each. */
+export interface AdvisorRecord {
+  /** The resolved model id the advisor actually ran as — `opus` resolves
+   *  differently per host CLI version (measured), so the alias in
+   *  worker_spawned does not settle it. null when the session consulted but
+   *  the CLI reported no resolved id: the result line names it only for the
+   *  **final turn**, so a session whose last consultation came earlier leaves
+   *  it unrecorded. Deriving it from the per-model cost breakdown is not
+   *  available either — that breakdown can hold the CLI's internal helper
+   *  model too, so subtracting the main model does not leave one answer. */
+  model: string | null;
+  /** How many times the parent thread consulted, counted off the stream. Kept
+   *  outside `usage` because it survives the cases `usage` does not, and
+   *  because cost alone cannot tell "one consultation in a long conversation"
+   *  from "three in a short one".
+   *
+   *  It counts the **parent thread only** — a subagent's consultations never
+   *  appear in the parent's stream (measured) while their cost still lands in
+   *  the session total, so this and `usage` have different denominators and
+   *  **`usage` is not divisible by `consultations`**: any per-consultation
+   *  cost derived from the pair is wrong. By the same asymmetry, a session
+   *  where only subagents consulted reports the whole record as null while its
+   *  advisor cost is still inside `estimated_cost_usd`. */
+  consultations: number;
+  /** The advisor's own slice of the session's consumption — the same shape the
+   *  enclosing `usage` reports for the main model, hence the same name
+   *  (CONTEXT.md's Worker session: 「トークン消費の内訳と推定ドル」). It is
+   *  deliberately **not** called `spend`: this codebase already spells
+   *  Spend-down(使い切り)that way, and one word for two unrelated concepts
+   *  is how a glossary starts to rot.
+   *
+   *  null = "could not be measured", never 0 — the same posture as
+   *  `usage: null` ("the session ran but filed no report"). Unmeasurable when
+   *  `model` is null, when the advisor resolved to the same model as the main
+   *  one (which merges both into a single per-model entry — measured), or when
+   *  the main model's own resolved id was never observed, since then
+   *  separability itself is unknown. */
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    estimated_cost_usd: number;
+  } | null;
+}
+
 /** Payloads are typed per-kind; adding a kind forces the writer through this
  *  union, which is what kills the "wrote to log but forgot stats" bug class. */
 export type EventPayload =
@@ -64,7 +114,29 @@ export type EventPayload =
   // version (ADR 0001: commit hash = agent version); definition_version is
   // only the human-readable stamp from the definition's frontmatter. The
   // vocabulary is registry-shaped, not vendor-shaped — no CLI names leak in.
-  | { kind: "worker_spawned"; registry_commit: string; definition_version: string }
+  //
+  // `advisor` (issue #33 判断6) is the advisor model the board actually pinned
+  // for this session, verbatim as the registry spells it (an alias like
+  // `opus`, or a full model id) — registry-shaped text, so it does not breach
+  // the line above. null means the session was launched with the advisor tool
+  // explicitly disabled, which collapses two causes: the agent has no advisor
+  // capability, or the host-side kill switch (判断8) was on. Recording the
+  // *pinned* value rather than the frontmatter's is deliberate — the
+  // frontmatter is already recoverable from registry_commit, whereas the host
+  // mask is not recoverable from anything, and CONTEXT.md's Advisor requires
+  // each session's effective configuration to be settleable from the event
+  // history alone.
+  //
+  // This is what the board *asked for*, never what ran: a capability-
+  // insufficient advisor is accepted at launch and silently left unattached
+  // (measured). Whether it actually ran lives on the other half of the pair,
+  // worker_exited.usage.advisor.
+  | {
+      kind: "worker_spawned";
+      registry_commit: string;
+      definition_version: string;
+      advisor: string | null;
+    }
   // issue #21: a workspace already needs-human failed the tree rule again
   // before its open Confirmation question was answered — recorded on that
   // same question rather than opening a second one (CONTEXT.md's Quarantine:
@@ -90,6 +162,18 @@ export type EventPayload =
   // estimated_cost_usd mirrors the CLI's total_cost_usd verbatim, but named
   // for the board's own vocabulary: under a subscription there is no real
   // invoice, only this run-time API-equivalent estimate.
+  //
+  // **The token fields and the cost field do not count the same thing**
+  // (issue #33, measured 2026-08-04 — the CLI's own asymmetry, not the
+  // board's choice). The token counts come from the result line's `usage`,
+  // which reports the **main model on the parent thread only**; the cost
+  // comes from `total_cost_usd`, which is the sum over **every model the
+  // session moved** — the CLI's internal helper model, subagents, and the
+  // advisor. The gap predates the advisor (the helper model's small calls),
+  // but an advisor makes it large: one measured consultation was 67% of the
+  // session total. The fields are left as they are so rows stay comparable
+  // across the change; `advisor` below is what makes the gap readable
+  // instead of silent.
   | {
       kind: "worker_exited";
       exit_code: number | null;
@@ -107,6 +191,20 @@ export type EventPayload =
         cache_read_tokens: number;
         cache_creation_tokens: number;
         estimated_cost_usd: number;
+        /** issue #33 判断6: what the advisor **actually did** this session, as
+         *  against worker_spawned.advisor's "what the board asked for". null
+         *  means no consultation was observed at all — which deliberately
+         *  collapses "configured, attached, never consulted" with
+         *  "configured, silently never attached". Only a consultation is
+         *  positive evidence of attachment, and the sole discriminator the
+         *  CLI offers is one English warning line on stderr; matching it
+         *  would be a detector that degrades silently when the vendor
+         *  rewords it — the exact shape ADR 0041 exists to refuse. The two
+         *  differ in cause but not in effect (neither session had an advisor
+         *  influence it), so the statistics this field feeds are unharmed;
+         *  the warning is still retained verbatim in stderr_tail for the
+         *  operational question. */
+        advisor: AdvisorRecord | null;
       } | null;
     }
   // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —

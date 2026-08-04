@@ -111,6 +111,26 @@ describe("loadRegistry", () => {
     expect(loadRegistry(without).agents.deckhand!.effort).toBeUndefined();
   });
 
+  // issue #33 / 判断4: `model` と同じ**開いた集合**なので、値の妥当性はここで
+  // 検査しない(ADR 0042)。エイリアスも具体 id も同じ自由文字列として通す。
+  it("frontmatter の advisor は optional: あれば読み、なければ undefined", async () => {
+    const withAdvisor = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: opus\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(withAdvisor).agents.deckhand!.advisor).toBe("opus");
+    const without = await makeRegistry();
+    expect(loadRegistry(without).agents.deckhand!.advisor).toBeUndefined();
+  });
+
+  // ADR 0042: 具体 id も同じ口を通る。「エイリアスだけ」と読める形にしない —
+  // ホストの CLI 版でエイリアスの解決先が動く以上、具体 id を書くのは正当な選択。
+  it("frontmatter の advisor は具体モデル id も同じ自由文字列として通す(ADR 0042)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: claude-opus-5\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(dir).agents.deckhand!.advisor).toBe("claude-opus-5");
+  });
+
   it("frontmatter の icon は optional: あれば読み、なければ undefined", async () => {
     const withIcon = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\n---\nYou are Deckhand.\n`,

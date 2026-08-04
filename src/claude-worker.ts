@@ -9,7 +9,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload, listEvents } from "./events.js";
+import { type AdvisorRecord, appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
   type AgentDefinition,
   agentBodyAtCommit,
@@ -433,6 +433,64 @@ export function pinnedModelFlags(model: string, effort: string): string[] {
   return ["--model", model, "--effort", effort];
 }
 
+/** The advisor capability's CLI spelling (issue #33 / ADR 0042), deliberately
+ *  **not** folded into `pinnedModelFlags` above: that helper is shared with the
+ *  board's own CLI calls (`ClaudeDraftClient`, `ClaudeTranslationClient`), and
+ *  an advisor there would make every draft poll and every display-time
+ *  translation consult a stronger model. The capability belongs to a worker
+ *  session, so only the worker spawn site spells it.
+ *
+ *  Absent capability is not spelled by omitting the flag. Omission leaves the
+ *  answer to the host: a workspace checkout's own `.claude/settings.json` can
+ *  carry `advisorModel`, and the project tier is exactly the one the board
+ *  admits with `--setting-sources project` (measured 2026-08-04 — an advisor
+ *  attached through it). That path would make a session the registry declared
+ *  advisor-less burn a stronger model while worker_spawned recorded `null`,
+ *  which is precisely the attribution the whole capability is instrumented to
+ *  protect. So absence is spelled as an explicit no, in the one env var that
+ *  overrides every configuration source (measured: it closes the project tier
+ *  too). The user tier is separately already blocked by `--setting-sources
+ *  project` alone (measured) — this var is not what buys that. */
+export function advisorSpawnFlags(advisor: string | undefined): string[] {
+  return advisor === undefined ? [] : ["--advisor", advisor];
+}
+
+/** anthropics/claude-code#69238: the CLI's stream byte-idle deadline defaults
+ *  to 3 minutes, which a slow advisor consultation can exceed. 10 minutes is
+ *  the value the Pi ran under while this was a host-side stopgap, kept as-is so
+ *  moving it into the adapter changes nothing about behaviour — and it is the
+ *  value ADR 0041's `work` = 90分 reasons against. */
+const STREAM_IDLE_TIMEOUT_MS = 600_000;
+
+/** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
+ *  identity vars. Two **independent** concerns, deliberately not named for the
+ *  advisor as a whole — only the first is advisor-scoped:
+ *
+ *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
+ *     `advisorSpawnFlags`, hence the parameter. It is the same var the board's
+ *     global kill switch (issue #33 判断8) uses, on purpose: "this session has
+ *     no advisor" has one spelling, whether the cause is a definition without
+ *     the capability or a host-side emergency mask.
+ *  2. The two #69238 stream timeouts — **unconditional, and they must stay
+ *     that way.** An advisor consultation re-reads the whole transcript
+ *     uncached, so its latency grows with the conversation and can reach the
+ *     CLI's 3-minute byte-idle deadline; widening both is the documented
+ *     workaround. It is tempting to scope them to advisor-on sessions since
+ *     that is what motivated them — **don't**: ADR 0041 justifies the
+ *     watchdog's `work` = 90分 on a 10-minute idle timeout covering *every*
+ *     session, so scoping these would silently pull that premise out from
+ *     under the advisor-off ones and leave them with no backstop short of 90
+ *     minutes. They live here rather than in the host's
+ *     `/etc/default/tidepool` because that was a second source of truth
+ *     invisible to both the registry and the board's code. */
+export function workerSpawnEnv(advisor: string | undefined): Record<string, string> {
+  return {
+    ...(advisor === undefined ? { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1" } : {}),
+    CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
+    API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
+  };
+}
+
 /** The agent's own git identity, injected into the worker child's env so the
  *  commits a task session makes carry the agent's name, not the host's git
  *  config (issue #53). Mechanical, not entrusted to the agent's good will — the
@@ -492,7 +550,56 @@ interface StreamResultEvent {
     output_tokens: number;
     cache_read_input_tokens: number;
     cache_creation_input_tokens: number;
+    /** issue #33: present only on newer CLIs, and only ever describing the
+     *  **final turn** (measured) — an earlier turn's `advisor_message` is gone
+     *  by the time this line is written. The one place the CLI names the
+     *  advisor's resolved model id. */
+    iterations?: unknown;
   };
+  /** Per-model breakdown, keyed by resolved model id — the only place the
+   *  advisor's own token/cost slice can be read off. Optional because a result
+   *  line without it must still yield usage rather than being discarded. */
+  modelUsage?: unknown;
+}
+
+/** One entry of the result line's per-model breakdown, narrowed on read (the
+ *  keys are vendor camelCase and only some are needed). */
+interface ModelUsageEntry {
+  inputTokens: number;
+  outputTokens: number;
+  costUSD: number;
+}
+
+function isModelUsageEntry(value: unknown): value is ModelUsageEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const { inputTokens, outputTokens, costUSD } = value as Record<string, unknown>;
+  return (
+    typeof inputTokens === "number" &&
+    typeof outputTokens === "number" &&
+    typeof costUSD === "number"
+  );
+}
+
+/** The advisor's resolved model id, from the only surface that names it: an
+ *  `advisor_message` entry in the final turn's iterations (issue #33, measured
+ *  2026-08-04). null when the session's last consultation happened in an
+ *  earlier turn — the CLI keeps nothing about it.
+ *
+ *  There is deliberately no fallback. Subtracting the main model from
+ *  `modelUsage`'s keys does not identify the advisor: the breakdown can also
+ *  carry the CLI's internal helper model (measured — three keys for one
+ *  consultation), so the remainder is not a single answer, and a rule that is
+ *  right only when that helper happens not to have run would make the field's
+ *  meaning depend on something the board cannot observe. */
+function advisorModelFrom(result: StreamResultEvent): string | null {
+  const { iterations } = result.usage;
+  if (!Array.isArray(iterations)) return null;
+  for (const entry of iterations) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { type, model } = entry as Record<string, unknown>;
+    if (type === "advisor_message" && typeof model === "string") return model;
+  }
+  return null;
 }
 
 /** Fail-closed like the rest of this file's vendor-shape handling
@@ -515,30 +622,86 @@ function isStreamResultEvent(value: unknown): value is StreamResultEvent {
   );
 }
 
-function parseResultLine(line: string): StreamResultEvent | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as { type?: unknown };
-    if (parsed.type !== "result") return null;
-    return isStreamResultEvent(parsed) ? parsed : null;
-  } catch {
-    // a line split mid-chunk or genuinely malformed output — the last
-    // *complete* result line already seen wins, so this just isn't one
-    return null;
-  }
+/** The decoded-line form. A line that isn't a `result`, or one whose shape
+ *  doesn't match, simply isn't one — the last *complete* result line already
+ *  seen wins. */
+function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEvent | null {
+  if (parsed === null || parsed.type !== "result") return null;
+  return isStreamResultEvent(parsed) ? parsed : null;
+}
+
+const parseResultLine = (line: string): StreamResultEvent | null =>
+  readResultEvent(parseStreamLine(line));
+
+/** What the stdout scan collected about this session's advisor while the
+ *  stream ran (issue #33). Both are needed at exit and neither survives on the
+ *  result line: the consultations happen in assistant lines, and the main
+ *  model's resolved id is on the init line. */
+interface AdvisorObservation {
+  /** `server_tool_use(name: "advisor")` blocks seen on the parent thread. */
+  consultations: number;
+  /** The init line's resolved main model, used only to decide whether the
+   *  advisor's own usage is separable from it. */
+  mainModel: string | null;
+}
+
+/** The advisor half of worker_exited's usage (issue #33 判断6). Non-null only
+ *  on positive evidence — at least one consultation actually observed on the
+ *  stream — so "the board pinned an advisor" alone never produces a row that
+ *  claims one ran. */
+function toAdvisorRecord(
+  result: StreamResultEvent,
+  observed: AdvisorObservation,
+): AdvisorRecord | null {
+  if (observed.consultations === 0) return null;
+  const model = advisorModelFrom(result);
+  return { model, consultations: observed.consultations, usage: advisorUsage(result, model, observed) };
+}
+
+/** The advisor's own token/cost slice, or null when it cannot be measured
+ *  (see the field's own doc in events.ts). Three ways it is unmeasurable:
+ *
+ *  - the advisor's resolved id was never reported;
+ *  - it resolved to the same model as the main one, which merges both into a
+ *    single per-model entry, leaving no way to tell whose tokens are whose
+ *    (measured);
+ *  - **the main model's resolved id was never observed** — a session whose
+ *    init line was missing or carried no `model`. Then separability itself is
+ *    unknown: the two may well have resolved to the same id, in which case the
+ *    per-model entry read below is the merged one and publishing it would
+ *    report the session's combined usage as the advisor's. "Could not be
+ *    measured" must not turn into a confident wrong number. */
+function advisorUsage(
+  result: StreamResultEvent,
+  model: string | null,
+  observed: AdvisorObservation,
+): AdvisorRecord["usage"] {
+  if (model === null || observed.mainModel === null || model === observed.mainModel) return null;
+  const breakdown = result.modelUsage;
+  if (typeof breakdown !== "object" || breakdown === null) return null;
+  const entry = ownEntry(breakdown as Record<string, unknown>, model);
+  if (!isModelUsageEntry(entry)) return null;
+  return {
+    input_tokens: entry.inputTokens,
+    output_tokens: entry.outputTokens,
+    estimated_cost_usd: entry.costUSD,
+  };
 }
 
 /** Translates the CLI's vendor-shaped result event into the board's own
  *  worker_exited usage vocabulary (ADR 0005 / issue #32): total_cost_usd
- *  becomes estimated_cost_usd, no CLI field names leak past this point. */
-function toUsage(result: StreamResultEvent): WorkerExitedUsage {
+ *  becomes estimated_cost_usd, no CLI field names leak past this point.
+ *
+ *  The advisor field is the one part that cannot be built from the result line
+ *  alone — see AdvisorObservation. */
+function toUsage(result: StreamResultEvent, observed: AdvisorObservation): WorkerExitedUsage {
   return {
     input_tokens: result.usage.input_tokens,
     output_tokens: result.usage.output_tokens,
     cache_read_tokens: result.usage.cache_read_input_tokens,
     cache_creation_tokens: result.usage.cache_creation_input_tokens,
     estimated_cost_usd: result.total_cost_usd,
+    advisor: toAdvisorRecord(result, observed),
   };
 }
 
@@ -579,6 +742,21 @@ export interface ClaudeWorkerOptions {
   /** issue #56 / ADR 0025: the skill-enumeration boundary the complement-deny
    *  ping runs at. Injected so the deny plumbing is tested without a real CLI. */
   enumerateSkills?: EnumerateSkillsFn;
+  /** issue #33 判断8 / ADR 0043: the board-wide advisor kill switch. True →
+   *  every session spawns with the advisor tool disabled no matter what the
+   *  registry says. It lives on the host (env), not in the registry, because
+   *  it is an operational emergency mask rather than a property of any agent's
+   *  definition — the point is to stop every advisor without touching a single
+   *  agent.md, for a vendor-side outage or spec change in an experimental
+   *  feature the whole fleet is on.
+   *
+   *  **Absent means "not masked", so forgetting to pass it fails open** — the
+   *  mask silently does nothing while everything else looks healthy. That is
+   *  the #172 shape, which is why this field is not in the same class as
+   *  `spawn`/`pty`/`enumerateSkills` above (test seams, where absence means
+   *  "use the real thing"), and why `buildWorkerOptions` in server-options.ts
+   *  owns this literal with a test watching its keys (ADR 0043). */
+  advisorDisabled?: boolean;
 }
 
 /** Request/response process boundary for one-shot CLI calls (unlike the
@@ -615,31 +793,78 @@ const SKILL_ENUM_ARGS = [
   "0.01",
 ];
 
-/** The `type: "system", subtype: "init"` line's string-array fields — the CLI's
- *  own report of what it resolved for the session. `skills` is ADR 0025's
- *  enumeration; `tools` is the surface ADR 0039 compares against the board's
- *  Tool allowlist. Fail-closed like parseResultLine: a non-init line, a
- *  split/malformed line, or a field that isn't an array of strings all read as
- *  "not the init report" rather than as an empty answer. */
-function parseInitField(line: string, field: "skills" | "tools"): string[] | null {
+/** One stream-json line, decoded once. The board reads several independent
+ *  things off the worker's stdout — the result event, ADR 0039's tool surface,
+ *  and issue #33's advisor observations — and each used to re-decode the line
+ *  itself, so a session paid one `JSON.parse` per concern per line on lines
+ *  that can be large (a whole assistant message). Decode here, and let each
+ *  reader below take the decoded object.
+ *
+ *  Fail-closed, as every vendor-shape read in this file is: a blank line, or
+ *  one split mid-chunk or genuinely malformed, is simply not a line anyone can
+ *  read anything from. */
+function parseStreamLine(line: string): Record<string, unknown> | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   try {
-    const parsed = JSON.parse(trimmed) as {
-      type?: unknown;
-      subtype?: unknown;
-      [key: string]: unknown;
-    };
-    if (parsed.type !== "system" || parsed.subtype !== "init") return null;
-    const value = parsed[field];
-    if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) return null;
-    return value as string[];
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
 }
 
-const parseInitTools = (line: string): string[] | null => parseInitField(line, "tools");
+/** The `type: "system", subtype: "init"` line's string-array fields — the CLI's
+ *  own report of what it resolved for the session. `skills` is ADR 0025's
+ *  enumeration; `tools` is the surface ADR 0039 compares against the board's
+ *  Tool allowlist. Fail-closed: a non-init line, or a field that isn't an array
+ *  of strings, reads as "not the init report" rather than as an empty answer. */
+function readInitField(
+  parsed: Record<string, unknown> | null,
+  field: "skills" | "tools",
+): string[] | null {
+  if (parsed === null || parsed.type !== "system" || parsed.subtype !== "init") return null;
+  const value = parsed[field];
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) return null;
+  return value as string[];
+}
+
+/** The line-taking form, for the `/usage` init ping — it reads its own stdout
+ *  and has no other concern to share a decode with. */
+const parseInitField = (line: string, field: "skills" | "tools"): string[] | null =>
+  readInitField(parseStreamLine(line), field);
+
+/** The init line's `model` — the CLI's **resolved** main model id, e.g.
+ *  `claude-sonnet-5` for a `--model sonnet` spawn (issue #33, measured). Only
+ *  used to decide whether the advisor's own usage is separable from the main
+ *  model's. Scalar, hence not `readInitField`'s array read. */
+function readInitModel(parsed: Record<string, unknown> | null): string | null {
+  if (parsed === null || parsed.type !== "system" || parsed.subtype !== "init") return null;
+  return typeof parsed.model === "string" ? parsed.model : null;
+}
+
+/** How many advisor consultations one assistant line carries (issue #33).
+ *  The advisor is a **server tool**: it shows up as a `server_tool_use` block
+ *  named `advisor` beside ordinary `tool_use` blocks in the same stream, so the
+ *  block type has to be checked too — an ordinary tool that happened to be
+ *  named `advisor` is not a consultation. The advice itself is encrypted
+ *  (`advisor_redacted_result`), so the fact and the count are all that is
+ *  observable; that is exactly what is being counted here.
+ *
+ *  ADR 0039's init-line observation cannot substitute: a server tool appears
+ *  neither in init's `tools` array nor as an `advisorModel` field (measured). */
+function countAdvisorConsultations(parsed: Record<string, unknown> | null): number {
+  if (parsed === null || parsed.type !== "assistant") return 0;
+  const content = (parsed.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return 0;
+  return content.filter((block) => {
+    if (typeof block !== "object" || block === null) return false;
+    const { type, name } = block as Record<string, unknown>;
+    return type === "server_tool_use" && name === "advisor";
+  }).length;
+}
 
 // The /usage ping exits naturally in ~2s (ADR 0025); this is the fail-closed
 // backstop for a CLI that hangs (auth stall, missing exit) so a wedged probe
@@ -1360,6 +1585,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       task.type,
       workspace.review_allowed_commands ?? [],
     ).join(",");
+    // issue #33: the advisor the board actually pins for this session. The
+    // host-side kill switch (判断8) collapses the capability to absent rather
+    // than sitting beside it — "no advisor this session" then has a single
+    // spelling in the flags, in the env, and in worker_spawned.
+    const advisor = this.options.advisorDisabled === true ? undefined : definition.advisor;
     const child = this.spawn(
       "claude",
       [
@@ -1436,6 +1666,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // point 5).
         ...(enforcement.disableSlashCommands ? ["--disable-slash-commands"] : []),
         ...pinnedModelFlags(definition.model ?? "sonnet", definition.effort ?? "medium"),
+        // issue #33: spelled here and not inside pinnedModelFlags — that helper
+        // is shared with the board's own draft/translation CLI calls, which must
+        // never acquire an advisor. Absence is not spelled by omission; see
+        // advisorSpawnFlags.
+        ...advisorSpawnFlags(advisor),
         "--mcp-config",
         mcpConfigPath,
         "--strict-mcp-config",
@@ -1454,8 +1689,18 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}${this.historicalDefinitionSection(task)}`,
       ],
       // the agent's own commits are stamped with the agent's identity (issue
-      // #53), merged over the inherited env — never a token (ADR 0024).
-      { cwd: workspace.path, env: { ...process.env, ...agentGitIdentityEnv(agent.name) } },
+      // #53), merged over the inherited env — never a token (ADR 0024). The
+      // the spawn-tier env knobs (issue #33) ride the same merge: the explicit
+      // "no advisor" and the #69238 stream timeouts, both pinned here rather
+      // than left to the host's environment file (ADR 0005).
+      {
+        cwd: workspace.path,
+        env: {
+          ...process.env,
+          ...agentGitIdentityEnv(agent.name),
+          ...workerSpawnEnv(advisor),
+        },
+      },
     );
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
@@ -1481,14 +1726,23 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
+    // issue #33 判断6: neither of these survives to the result line — the
+    // consultations are assistant-line blocks and the resolved main model is on
+    // the init line — so they are accumulated while the stream runs. The stdout
+    // scan already reads every line, so the added cost is a filter per line.
+    const advisorObserved: AdvisorObservation = { consultations: 0, mainModel: null };
     child.stdout.on("data", (chunk: Buffer | string) => {
       buffered += chunk.toString();
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
       for (const line of lines) {
-        lastResult = parseResultLine(line) ?? lastResult;
+        // decoded once, read by every concern below (see parseStreamLine)
+        const parsed = parseStreamLine(line);
+        lastResult = readResultEvent(parsed) ?? lastResult;
+        advisorObserved.consultations += countAdvisorConsultations(parsed);
+        advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
-          toolSurfaceObserved = this.checkSessionToolSurface(task, line, child);
+          toolSurfaceObserved = this.checkSessionToolSurface(task, parsed, child);
         }
       }
     });
@@ -1511,6 +1765,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         kind: "worker_spawned",
         registry_commit: registry.commit,
         definition_version: definition.version,
+        // issue #33 判断6: what the board pinned, not what the frontmatter said
+        // — the two differ under the kill switch, and only the frontmatter is
+        // recoverable from registry_commit above.
+        advisor: advisor ?? null,
       },
       at: this.options.clock.now(),
     });
@@ -1566,7 +1824,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           exit_code: code,
           signal,
           stderr_tail: stderrTail(stderrBuffered),
-          usage: lastResult ? toUsage(lastResult) : null,
+          usage: lastResult ? toUsage(lastResult, advisorObserved) : null,
         },
         at: this.options.clock.now(),
       });
@@ -1602,10 +1860,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  この判定が同一セッション内で二度走ることはない。 */
   private checkSessionToolSurface(
     task: Task,
-    line: string,
+    parsed: Record<string, unknown> | null,
     child: { kill(signal: NodeJS.Signals): void },
   ): boolean {
-    const tools = parseInitTools(line);
+    const tools = readInitField(parsed, "tools");
     if (!tools) return false;
     const surface = checkToolSurface(tools, task.type);
     if (surface.available) return true;

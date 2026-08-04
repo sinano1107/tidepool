@@ -12,10 +12,11 @@ import {
   type EnumerateSkillsFn,
   PROMPT_READY_MARKER,
   type PtyFn,
+  pinnedModelFlags,
   type SpawnFn,
 } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
@@ -1401,6 +1402,10 @@ describe("ClaudeCodeWorker", () => {
         cache_read_tokens: 10,
         cache_creation_tokens: 5,
         estimated_cost_usd: 0.1234,
+        // issue #33: この agent には advisor capability が無いので、そもそも
+        // 相談は起こりえない。既存欄の意味は変わっていない(トークンは main
+        // モデル・親スレッドのみ、コストはセッション総額)。
+        advisor: null,
       },
     });
   });
@@ -1600,6 +1605,7 @@ describe("ClaudeCodeWorker", () => {
         kind: "worker_spawned",
         registry_commit: oldHash,
         definition_version: "0.3.1",
+        advisor: null,
       },
       at: new FakeClock().now(),
     });
@@ -1641,7 +1647,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
@@ -1668,7 +1674,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null },
       at: new FakeClock().now(),
     });
 
@@ -1694,7 +1700,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
@@ -1714,7 +1720,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -1779,6 +1785,7 @@ describe("ClaudeCodeWorker", () => {
         kind: "worker_spawned",
         registry_commit: "0000000000000000000000000000000000000000",
         definition_version: "0.2.0",
+        advisor: null,
       },
       at: new FakeClock().now(),
     });
@@ -1792,7 +1799,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
-      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1" },
+      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -1843,7 +1850,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
-      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1" },
+      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });
     // independent review: unset assignee → resolves to the Auditor pointer
@@ -1879,6 +1886,408 @@ describe("ClaudeCodeWorker", () => {
       kind: "worker_spawned",
       registry_commit: main,
       definition_version: "0.3.1",
+    });
+  });
+});
+
+/** issue #33: advisor capability。frontmatter の `advisor` が spawn の面まで
+ *  届くか、不在・緊急マスク時に**確実に閉じる**か、そして「実際に走ったか」が
+ *  worker_exited に残るか。実 CLI は使わず、既存の SpawnFn seam に fake stream を
+ *  流す(ADR 0027 / ADR 0041 §4)。 */
+describe("advisor capability (issue #33)", () => {
+  const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nadvisor: opus\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
+  const withAdvisor = { "agents/deckhand.md": ADVISOR_MD };
+
+  /** `--advisor` に渡された値(フラグごと無ければ undefined)。 */
+  const advisorFlag = (args: string[]): string | undefined => {
+    const at = args.indexOf("--advisor");
+    return at === -1 ? undefined : args[at + 1];
+  };
+
+  // ── 綴りの場所 ────────────────────────────────────────────────
+
+  // `pinnedModelFlags` は**盤面自身の CLI 呼び出しとも共有されている**
+  // (claude-draft-client.ts / claude-translation-client.ts)。ここに `--advisor` を
+  // 足すと、下書きポーリングと表示時翻訳が1回ごとに上位モデルへ相談し始める —
+  // worker の capability が盤面の内部処理に漏れる。共有ヘルパは worker 専用の
+  // 能力を運ばない、という線をここで固定する。
+  it("--advisor は共有の pinnedModelFlags には決して入らない(盤面自身の draft/翻訳呼び出しに漏らさない)", () => {
+    expect(pinnedModelFlags("sonnet", "medium")).toEqual([
+      "--model",
+      "sonnet",
+      "--effort",
+      "medium",
+    ]);
+  });
+
+  // ── frontmatter → spawn ──────────────────────────────────────
+
+  it("frontmatter に advisor があれば --advisor でピン留めし、無効化 env は立てない(ADR 0005)", async () => {
+    const { start, calls } = await makeWorker(withAdvisor);
+    start();
+    const call = calls[0]!;
+    expect(advisorFlag(call.args)).toBe("opus");
+    expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
+  });
+
+  // 「フィールド不在 = advisor なし」を**フラグを省くだけ**で綴ると、閉じるかどうかが
+  // ホストの設定に委ねられる。実測(2026-08-04): workspace の checkout が持つ
+  // `.claude/settings.json` の `advisorModel` は、本番と同じ `--setting-sources project`
+  // の下で advisor を attach させる —— registry が「advisor なし」と言っている
+  // セッションが上位モデルを焼き、判断6 の記録は「advisor なし」と書いたままになる。
+  it("frontmatter に advisor が無ければフラグを渡さず、CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 で明示的に閉じる", async () => {
+    const { start, calls } = await makeWorker();
+    start();
+    const call = calls[0]!;
+    expect(advisorFlag(call.args)).toBeUndefined();
+    expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+  });
+
+  // ── 判断8: グローバル kill switch ──────────────────────────────
+
+  it("kill switch が立っていれば、frontmatter が advisor を持っていてもフラグを渡さず env で閉じる(判断8)", async () => {
+    const { start, calls } = await makeWorker(withAdvisor, { advisorDisabled: true });
+    start();
+    const call = calls[0]!;
+    expect(advisorFlag(call.args)).toBeUndefined();
+    expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+  });
+
+  // マスクは agent.md を1枚も触らずに効く必要がある(判断8 の存在理由そのもの) —
+  // registry 側は無傷のまま、盤面ホストの設定だけで全 worker が止まる。
+  it("kill switch は registry を書き換えない — 同じ registry で off に戻せば advisor は復活する(判断8)", async () => {
+    const masked = await makeWorker(withAdvisor, { advisorDisabled: true });
+    masked.start("task-masked");
+    expect(advisorFlag(masked.calls[0]!.args)).toBeUndefined();
+
+    const unmasked = await makeWorker(withAdvisor);
+    unmasked.start("task-unmasked");
+    expect(advisorFlag(unmasked.calls[0]!.args)).toBe("opus");
+  });
+
+  // ── anthropics/claude-code#69238 の回避 env ────────────────────
+
+  // ADR 0005 の「明示ピン留め」: これまで Pi の `/etc/default/tidepool` にあり、
+  // registry からも盤面のコードからも見えない第二の正本になっていた。advisor の
+  // 有無で分けない — ADR 0041 の `work` = 90分 は「10分の idle timeout が全
+  // セッションに掛かっている」前提で書かれており、advisor off のセッションだけ
+  // 前提が外れる形にしない。
+  it("#69238 の回避 env(stream idle / API timeout)は advisor の有無に依らず全 spawn に立つ", async () => {
+    const off = await makeWorker();
+    off.start("task-no-advisor");
+    const on = await makeWorker(withAdvisor);
+    on.start("task-advisor");
+    const masked = await makeWorker(withAdvisor, { advisorDisabled: true });
+    masked.start("task-advisor-masked-env");
+    for (const call of [off.calls[0]!, on.calls[0]!, masked.calls[0]!]) {
+      expect(call.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe("600000");
+      expect(call.env.API_TIMEOUT_MS).toBe("600000");
+    }
+    // 同じ関数が組み立てる2つの関心が**独立している**ことを1箇所で測る:
+    // advisor の口は3セルで開/閉/閉と動くのに、timeout は3セルとも同じ値で立つ。
+    // 片方を advisor の有無に紐づける将来の編集は、ここで落ちる。
+    expect([
+      off.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
+      on.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
+      masked.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
+    ]).toEqual(["1", undefined, "1"]);
+  });
+
+  // ── 判断6 前半: worker_spawned は「盤面が何をピン留めしたか」 ──────
+
+  it("worker_spawned は盤面がピン留めした advisor を記録する(判断6)", async () => {
+    const { start, db } = await makeWorker(withAdvisor);
+    start("task-spawn-advisor");
+    const spawned = listEvents(db, "task-spawn-advisor").find((e) => e.kind === "worker_spawned");
+    expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "opus" });
+  });
+
+  // registry_commit があるので frontmatter の文字列は後から引ける。**イベント履歴
+  // だけで**確定できないのはホスト側のマスクのほうなので、記録するのは「盤面が
+  // 実際にピン留めした値」— マスク下は null に畳まれる。
+  it("advisor 不在の agent と kill switch 下は、どちらも worker_spawned.advisor が null(判断6)", async () => {
+    const plain = await makeWorker();
+    plain.start("task-plain");
+    const masked = await makeWorker(withAdvisor, { advisorDisabled: true });
+    masked.start("task-masked-event");
+    for (const [w, id] of [
+      [plain, "task-plain"],
+      [masked, "task-masked-event"],
+    ] as const) {
+      const spawned = listEvents(w.db, id).find((e) => e.kind === "worker_spawned");
+      expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: null });
+    }
+  });
+
+  // ── 判断6 後半: worker_exited は「実際に走ったか」 ────────────────
+
+  /** 実測(2026-08-04)の gate セルをそのまま写した result 行: main sonnet ×
+   *  advisor opus、`usage` は main のみ・`total_cost_usd` は全モデル合計、
+   *  `usage.iterations` の `advisor_message` だけが解決済み id を名指しする。 */
+  const resultLine = (over: Record<string, unknown> = {}) =>
+    `${JSON.stringify({
+      type: "result",
+      result: "done",
+      total_cost_usd: 0.2999,
+      usage: {
+        input_tokens: 4,
+        output_tokens: 31,
+        cache_read_input_tokens: 61644,
+        cache_creation_input_tokens: 13114,
+        iterations: [
+          { type: "message" },
+          { type: "advisor_message", model: "claude-opus-5", input_tokens: 38484, output_tokens: 313 },
+          { type: "message" },
+        ],
+      },
+      modelUsage: {
+        "claude-sonnet-5": { inputTokens: 4, outputTokens: 31, costUSD: 0.0968847 },
+        "claude-opus-5": { inputTokens: 38484, outputTokens: 313, costUSD: 0.200245 },
+      },
+      ...over,
+    })}\n`;
+
+  const consultation = (id: string) =>
+    `${JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "server_tool_use", id, name: "advisor", input: {} },
+          { type: "advisor_tool_result", tool_use_id: id, content: { type: "advisor_redacted_result" } },
+        ],
+      },
+    })}\n`;
+
+  const initLine = (model: string) =>
+    `${JSON.stringify({ type: "system", subtype: "init", model })}\n`;
+
+  const usageOf = (db: ReturnType<typeof openDb>, id: string) => {
+    const exited = listEvents(db, id).find((e) => e.kind === "worker_exited");
+    const payload = exited!.payload as Extract<EventPayload, { kind: "worker_exited" }>;
+    return payload.usage;
+  };
+
+  it("相談が観測されたセッションは、解決済み advisor id・相談回数・分離した消費を記録する(判断6)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-usage");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-usage")).toEqual({
+      // 既存欄の意味は**変えない** — トークンは main モデル・親スレッドのみ、
+      // コストはセッション総額(advisor 込み)。過去行との比較可能性を守る。
+      input_tokens: 4,
+      output_tokens: 31,
+      cache_read_tokens: 61644,
+      cache_creation_tokens: 13114,
+      estimated_cost_usd: 0.2999,
+      advisor: {
+        model: "claude-opus-5",
+        consultations: 1,
+        usage: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 },
+      },
+    });
+  });
+
+  // コストだけでは「長い会話で1回」と「短い会話で3回」が区別できないので、回数は
+  // usage とは独立に数える。数え上げは既に1行ずつ読んでいる stdout から取れる。
+  it("相談回数は stream 中の server_tool_use(advisor) の本数を数える(判断6)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-count");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(consultation("srvtoolu_02"));
+    stdout.write(consultation("srvtoolu_03"));
+    stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
+  });
+
+  // 通常の tool_use(MCP verb 等)を advisor と数え間違えない — 数えるのは
+  // `server_tool_use` かつ name が advisor のものだけ。
+  it("通常の tool_use は相談として数えない", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-noise");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "advisor", input: {} }] },
+      })}\n`,
+    );
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-noise")?.advisor).toMatchObject({ consultations: 1 });
+  });
+
+  // 判断6 の眼目。能力不足の advisor は exit 0 で完走し、stderr に警告1行を残して
+  // 未 attach のまま終わる —— 盤面から見て成功セッションと区別が付かない。
+  // `advisor: null` が、そのセッションで advisor が**走らなかった**ことを言う。
+  it("advisor をピン留めしても相談が1本も観測されなければ usage.advisor は null(判断6)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-silent");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(resultLine({ modelUsage: { "claude-sonnet-5": { costUSD: 0.09 } }, usage: {
+      input_tokens: 4,
+      output_tokens: 31,
+      cache_read_input_tokens: 61644,
+      cache_creation_input_tokens: 13114,
+    } }));
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-silent")?.advisor).toBeNull();
+  });
+
+  // 「設定されていて一度も相談しなかった」と「設定されたが未 attach のまま走った」は
+  // どちらも上の null になる。両者を分ける唯一の材料は stderr の警告1行であり、
+  // 盤面はそれを**正規表現で判定しない**(黙って劣化する検出器は #172 が拒んだ形
+  // そのもの)。証拠は stderr_tail に verbatim で残る、という形で保つ。
+  it("未 attach の警告は判定に使わず、stderr_tail に verbatim で残す(判断3)", async () => {
+    const { start, stderr, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-warning");
+    // 実測の文言(main opus × advisor sonnet のセル)
+    const warning =
+      '"sonnet" cannot advise "claude-opus-5" (the advisor must be at least as ' +
+      "capable as the main model). The advisor will not be used for the main model.";
+    stderr.write(`${warning}\n`);
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(resultLine({ usage: {
+      input_tokens: 4,
+      output_tokens: 31,
+      cache_read_input_tokens: 61644,
+      cache_creation_input_tokens: 13114,
+    } }));
+    emitExit(0, null);
+    const exited = listEvents(db, "task-advisor-warning").find((e) => e.kind === "worker_exited");
+    expect(exited!.payload).toMatchObject({ exit_code: 0, stderr_tail: warning });
+    expect(usageOf(db, "task-advisor-warning")?.advisor).toBeNull();
+  });
+
+  // 同一モデルペアでは `modelUsage` が1キーに合算されて消費を分離できない(実測)。
+  // そのときの usage は 0 ではなく null —— 「測れなかった」を 0 に化けさせない
+  // (`usage: null` が「セッションは走ったが report が無い」を表すのと同じ形)。
+  // 回数だけは数えられるので `consultations` は usage の外に出してある。
+  it("main と advisor が同じモデルに解決されたら usage は null(0 ではない)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-same-model");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(
+      resultLine({
+        usage: {
+          input_tokens: 4,
+          output_tokens: 31,
+          cache_read_input_tokens: 61644,
+          cache_creation_input_tokens: 13114,
+          iterations: [
+            { type: "advisor_message", model: "claude-sonnet-5", input_tokens: 35202, output_tokens: 59 },
+          ],
+        },
+        modelUsage: { "claude-sonnet-5": { inputTokens: 35206, outputTokens: 90, costUSD: 0.1463895 } },
+      }),
+    );
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-same-model")?.advisor).toEqual({
+      model: "claude-sonnet-5",
+      consultations: 1,
+      usage: null,
+    });
+  });
+
+  // `usage.iterations` は**最終ターンぶんしか出ない**(実測)。最後の相談が最終
+  // ターンより前だったセッションでは解決済み id がどこにも残らないので、model は
+  // null になる。`modelUsage` のキーから引き算する手は使えない —— キーは
+  // {内部 haiku, main, advisor} になりうる(実測)ので、main を引いても1つに
+  // 定まらない。名前表もキャッシュ量のヒューリスティックも、黙って外れる形なので採らない。
+  it("最終ターンに相談が無ければ解決済み id は残らない — model は null、相談回数は残る", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-earlier-turn");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(
+      resultLine({
+        usage: {
+          input_tokens: 2,
+          output_tokens: 5,
+          cache_read_input_tokens: 37208,
+          cache_creation_input_tokens: 342,
+          iterations: [{ type: "message" }],
+        },
+        modelUsage: {
+          "claude-haiku-4-5-20251001": { costUSD: 0.00063 },
+          "claude-sonnet-5": { inputTokens: 4, outputTokens: 31, costUSD: 0.0744852 },
+          "claude-opus-5": { inputTokens: 38484, outputTokens: 313, costUSD: 0.18467 },
+        },
+      }),
+    );
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-earlier-turn")?.advisor).toEqual({
+      model: null,
+      consultations: 1,
+      usage: null,
+    });
+  });
+
+  // main モデルの解決先が分からなければ、**分離できるかどうかも分からない** ——
+  // advisor と main が同じ id に解決されていれば `modelUsage` のそのキーは合算済み
+  // なので、読めば advisor の消費として合算値を publish してしまう。init 行を
+  // 観測できなかったセッション(壊れた行・`model` を持たない init)はこの状態に
+  // なる。「測れなかった」を誤った値に化けさせない。
+  it("main モデルの解決先が観測できていなければ usage は null(分離可否そのものが不明)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-no-init");
+    // init 行を一切流さない
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-no-init")?.advisor).toEqual({
+      model: "claude-opus-5",
+      consultations: 1,
+      usage: null,
+    });
+  });
+
+  // `modelUsage` を持たない result 行(古い CLI・壊れた行)でも、相談の事実と回数は
+  // stream 側から取れている。ここで throw して usage 全体を失わない。
+  it("modelUsage を持たない result 行でも相談の事実は失わない", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-no-modelusage");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(
+      `${JSON.stringify({
+        type: "result",
+        result: "done",
+        total_cost_usd: 0.3,
+        usage: {
+          input_tokens: 4,
+          output_tokens: 31,
+          cache_read_input_tokens: 61644,
+          cache_creation_input_tokens: 13114,
+        },
+      })}\n`,
+    );
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-no-modelusage")).toMatchObject({
+      estimated_cost_usd: 0.3,
+      advisor: { model: null, consultations: 1, usage: null },
+    });
+  });
+
+  // 未知のモデルは exit 1・stdout 完全に空(実測)。result 行が無いので usage は
+  // null のまま —— `advisor` 欄が生えるのは usage がある行だけであり、欠測が
+  // 「advisor なしで走った」に化けない。
+  it("stdout が空のまま exit 1 したセッションは usage null のまま(advisor 欄も生えない)", async () => {
+    const { start, stderr, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-exit1");
+    stderr.write('Error: The model "haiku" cannot be used as an advisor.\n');
+    emitExit(1, null);
+    const exited = listEvents(db, "task-advisor-exit1").find((e) => e.kind === "worker_exited");
+    expect(exited!.payload).toMatchObject({
+      exit_code: 1,
+      usage: null,
+      stderr_tail: 'Error: The model "haiku" cannot be used as an advisor.',
     });
   });
 });

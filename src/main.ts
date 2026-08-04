@@ -4,38 +4,15 @@ import { fileURLToPath } from "node:url";
 import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
 import { boardStatePaths } from "./board-state.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
-import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
 import { loadGitHubAuth } from "./github-auth.js";
 import { parseGlossary } from "./glossary.js";
 import type { VapidConfig } from "./push.js";
-import { startServer, type WorkerFactory } from "./server.js";
+import { startServer } from "./server.js";
 import { buildServerOptions } from "./server-options.js";
-import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
+import { DEFAULT_AUDITOR_NAME } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
-import type { KillSignal, WorkerAdapter } from "./worker.js";
 import { resolveWorkspacesBaseDir } from "./workspace.js";
-
-/** Fallback when no registry clone is configured: logs the pickup so a human
- *  can drive the MCP verbs by hand. */
-class LoggingWorker implements WorkerAdapter {
-  readonly id = "logging-worker";
-  start(task: Task): void {
-    console.log(`[worker] picked up ${task.id}: ${task.title}`);
-  }
-  kill(taskId: string, signal: KillSignal): void {
-    console.log(`[worker] would send ${signal} to ${taskId}`);
-  }
-  /** No registry means no real adapter behind this — report a well-under-
-   *  threshold reading so pickup logging is never fail-closed by a check
-   *  this placeholder cannot actually perform. */
-  async checkUsage(): Promise<string | null> {
-    return (
-      "Current session\n0% used\nResets 12:00am (UTC)\n" +
-      "Current week (all models)\n0% used\nResets Jan 1 at 12:00am (UTC)\n"
-    );
-  }
-}
 
 const port = Number(process.env.PORT ?? 4589);
 // /mcp's own 127.0.0.1-only port (issue #37) — kept off `port` so
@@ -84,27 +61,16 @@ const boardState = boardStatePaths({
   servedRoot: repoRoot,
 });
 
-/** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository
- *  (`npm run start:live` supplies the conventional one); setting it swaps the
- *  logging placeholder for the real Claude Code worker. */
-function workerFactory(): WorkerFactory {
-  if (!registryDir) return () => new LoggingWorker();
-  mkdirSync(logDir, { recursive: true });
-  return ({ db, clock }) =>
-    new ClaudeCodeWorker({
-      db,
-      clock,
-      registryDir,
-      agent: defaultAgentName,
-      auditorName,
-      workspace: workspaceName,
-      workspacesDir,
-      mcpUrl: `http://127.0.0.1:${mcpPort}/mcp`,
-      logDir,
-      // ADR 0040: 床そのもの — 重なっている workspace では spawn せず quarantine
-      boardState,
-    });
-}
+// ADR 0043 / issue #33: worker options の口の一覧も server-options.ts が持つ。
+// ここに残るのはホストの副作用だけ —— ディレクトリの作成そのもの。registry 未設定
+// なら実 worker は立たないので(合成側が LoggingWorker に落ちる)作る必要もない。
+if (registryDir) mkdirSync(logDir, { recursive: true });
+
+// issue #33 判断8: advisor のグローバル kill switch。registry ではなく**ホストの
+// 運用設定**に置く —— エージェントの定義ではなく、experimental な機能を全員に配る
+// 代償としての緊急マスクであり、advisor 側の障害・仕様変更時に agent.md を1枚も
+// 触らずに全 worker を止めるための口。既定は off。
+const advisorDisabled = process.env.TIDEPOOL_DISABLE_ADVISOR === "1";
 
 /** CONTEXT.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
  *  for the translation client's prompt. Absent/unreadable CONTEXT.md → no
@@ -163,8 +129,9 @@ const server = await startServer(
     mcpPort,
     credential,
     clock: new SystemClock(),
-    worker: workerFactory(),
     registryDir,
+    logDir,
+    advisorDisabled,
     workspaceName,
     workspacesDir,
     defaultAgentName,

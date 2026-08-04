@@ -24,6 +24,15 @@ export interface AgentDefinition {
    *  is vendor knowledge that belongs to the adapter, not this registry
    *  (ADR 0005). */
   effort?: string;
+  /** Advisor capability (issue #33 / CONTEXT.md の Advisor): the model this
+   *  agent's worker sessions may consult at decision points. Absent → no
+   *  advisor at all (機構としての既定は無効 — the adapter then spawns with the
+   *  advisor tool explicitly disabled, ADR 0042). Sibling of `model`/`effort`
+   *  and free string for the same reason: the valid set is open (aliases *and*
+   *  full model ids) and, unlike either of those, an alias's meaning is
+   *  **host-CLI-version dependent** — vendor knowledge that a registry schema
+   *  cannot hold without going stale (ADR 0005 / ADR 0042). */
+  advisor?: string;
   /** Visual identity emoji for this agent (issue #52), shown by the board
    *  UI's AgentChip. Absent → the UI falls back to hashed initials. Loader
    *  checks only structural validity — a single Twemoji-covered grapheme
@@ -297,6 +306,7 @@ const agentFrontmatterSchema = z.looseObject({
   description: z.string(),
   model: z.string().optional(),
   effort: z.string().optional(),
+  advisor: z.string().optional(),
   icon: z
     .string()
     .refine(isSingleTwemojiGrapheme, {
@@ -389,6 +399,7 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     description: meta.description,
     model: meta.model,
     effort: meta.effort,
+    advisor: meta.advisor,
     icon: meta.icon,
     skills: meta.skills,
     systemPrompt: body.trim(),
