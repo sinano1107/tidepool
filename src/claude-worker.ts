@@ -9,7 +9,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { type AdvisorUsage, appendEvent, type EventPayload, listEvents } from "./events.js";
+import { type AdvisorRecord, appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
   type AgentDefinition,
   agentBodyAtCommit,
@@ -641,7 +641,7 @@ interface AdvisorObservation {
   /** `server_tool_use(name: "advisor")` blocks seen on the parent thread. */
   consultations: number;
   /** The init line's resolved main model, used only to decide whether the
-   *  advisor's spend is separable from it. */
+   *  advisor's own usage is separable from it. */
   mainModel: string | null;
 }
 
@@ -649,13 +649,13 @@ interface AdvisorObservation {
  *  on positive evidence — at least one consultation actually observed on the
  *  stream — so "the board pinned an advisor" alone never produces a row that
  *  claims one ran. */
-function toAdvisorUsage(
+function toAdvisorRecord(
   result: StreamResultEvent,
   observed: AdvisorObservation,
-): AdvisorUsage | null {
+): AdvisorRecord | null {
   if (observed.consultations === 0) return null;
   const model = advisorModelFrom(result);
-  return { model, consultations: observed.consultations, spend: advisorSpend(result, model, observed) };
+  return { model, consultations: observed.consultations, usage: advisorUsage(result, model, observed) };
 }
 
 /** The advisor's own token/cost slice, or null when it cannot be measured
@@ -669,13 +669,13 @@ function toAdvisorUsage(
  *    init line was missing or carried no `model`. Then separability itself is
  *    unknown: the two may well have resolved to the same id, in which case the
  *    per-model entry read below is the merged one and publishing it would
- *    report the session's combined spend as the advisor's. "Could not be
+ *    report the session's combined usage as the advisor's. "Could not be
  *    measured" must not turn into a confident wrong number. */
-function advisorSpend(
+function advisorUsage(
   result: StreamResultEvent,
   model: string | null,
   observed: AdvisorObservation,
-): AdvisorUsage["spend"] {
+): AdvisorRecord["usage"] {
   if (model === null || observed.mainModel === null || model === observed.mainModel) return null;
   const breakdown = result.modelUsage;
   if (typeof breakdown !== "object" || breakdown === null) return null;
@@ -701,7 +701,7 @@ function toUsage(result: StreamResultEvent, observed: AdvisorObservation): Worke
     cache_read_tokens: result.usage.cache_read_input_tokens,
     cache_creation_tokens: result.usage.cache_creation_input_tokens,
     estimated_cost_usd: result.total_cost_usd,
-    advisor: toAdvisorUsage(result, observed),
+    advisor: toAdvisorRecord(result, observed),
   };
 }
 
@@ -838,7 +838,7 @@ const parseInitField = (line: string, field: "skills" | "tools"): string[] | nul
 
 /** The init line's `model` — the CLI's **resolved** main model id, e.g.
  *  `claude-sonnet-5` for a `--model sonnet` spawn (issue #33, measured). Only
- *  used to decide whether the advisor's spend is separable from the main
+ *  used to decide whether the advisor's own usage is separable from the main
  *  model's. Scalar, hence not `readInitField`'s array read. */
 function readInitModel(parsed: Record<string, unknown> | null): string | null {
   if (parsed === null || parsed.type !== "system" || parsed.subtype !== "init") return null;

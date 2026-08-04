@@ -2085,13 +2085,13 @@ describe("advisor capability (issue #33)", () => {
       advisor: {
         model: "claude-opus-5",
         consultations: 1,
-        spend: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 },
+        usage: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 },
       },
     });
   });
 
   // コストだけでは「長い会話で1回」と「短い会話で3回」が区別できないので、回数は
-  // spend とは独立に数える。数え上げは既に1行ずつ読んでいる stdout から取れる。
+  // usage とは独立に数える。数え上げは既に1行ずつ読んでいる stdout から取れる。
   it("相談回数は stream 中の server_tool_use(advisor) の本数を数える(判断6)", async () => {
     const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-count");
@@ -2165,10 +2165,10 @@ describe("advisor capability (issue #33)", () => {
   });
 
   // 同一モデルペアでは `modelUsage` が1キーに合算されて消費を分離できない(実測)。
-  // そのときの spend は 0 ではなく null —— 「測れなかった」を 0 に化けさせない
+  // そのときの usage は 0 ではなく null —— 「測れなかった」を 0 に化けさせない
   // (`usage: null` が「セッションは走ったが report が無い」を表すのと同じ形)。
-  // 回数だけは数えられるので `consultations` は spend の外に出してある。
-  it("main と advisor が同じモデルに解決されたら spend は null(0 ではない)", async () => {
+  // 回数だけは数えられるので `consultations` は usage の外に出してある。
+  it("main と advisor が同じモデルに解決されたら usage は null(0 ではない)", async () => {
     const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-same-model");
     stdout.write(initLine("claude-sonnet-5"));
@@ -2191,7 +2191,7 @@ describe("advisor capability (issue #33)", () => {
     expect(usageOf(db, "task-advisor-same-model")?.advisor).toEqual({
       model: "claude-sonnet-5",
       consultations: 1,
-      spend: null,
+      usage: null,
     });
   });
 
@@ -2225,7 +2225,7 @@ describe("advisor capability (issue #33)", () => {
     expect(usageOf(db, "task-advisor-earlier-turn")?.advisor).toEqual({
       model: null,
       consultations: 1,
-      spend: null,
+      usage: null,
     });
   });
 
@@ -2234,7 +2234,7 @@ describe("advisor capability (issue #33)", () => {
   // なので、読めば advisor の消費として合算値を publish してしまう。init 行を
   // 観測できなかったセッション(壊れた行・`model` を持たない init)はこの状態に
   // なる。「測れなかった」を誤った値に化けさせない。
-  it("main モデルの解決先が観測できていなければ spend は null(分離可否そのものが不明)", async () => {
+  it("main モデルの解決先が観測できていなければ usage は null(分離可否そのものが不明)", async () => {
     const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
     start("task-advisor-no-init");
     // init 行を一切流さない
@@ -2244,7 +2244,7 @@ describe("advisor capability (issue #33)", () => {
     expect(usageOf(db, "task-advisor-no-init")?.advisor).toEqual({
       model: "claude-opus-5",
       consultations: 1,
-      spend: null,
+      usage: null,
     });
   });
 
@@ -2271,7 +2271,7 @@ describe("advisor capability (issue #33)", () => {
     emitExit(0, null);
     expect(usageOf(db, "task-advisor-no-modelusage")).toMatchObject({
       estimated_cost_usd: 0.3,
-      advisor: { model: null, consultations: 1, spend: null },
+      advisor: { model: null, consultations: 1, usage: null },
     });
   });
 

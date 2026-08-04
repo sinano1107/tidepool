@@ -8,7 +8,7 @@ import type { TaskType } from "./tasks.js";
  *
  *  Named rather than inlined because the adapter builds it in two pieces and
  *  would otherwise spell `NonNullable<NonNullable<…>["advisor"]>` at each. */
-export interface AdvisorUsage {
+export interface AdvisorRecord {
   /** The resolved model id the advisor actually ran as — `opus` resolves
    *  differently per host CLI version (measured), so the alias in
    *  worker_spawned does not settle it. null when the session consulted but
@@ -19,25 +19,32 @@ export interface AdvisorUsage {
    *  model too, so subtracting the main model does not leave one answer. */
   model: string | null;
   /** How many times the parent thread consulted, counted off the stream. Kept
-   *  outside `spend` because it survives the cases `spend` does not, and
+   *  outside `usage` because it survives the cases `usage` does not, and
    *  because cost alone cannot tell "one consultation in a long conversation"
    *  from "three in a short one".
    *
    *  It counts the **parent thread only** — a subagent's consultations never
    *  appear in the parent's stream (measured) while their cost still lands in
-   *  the session total, so this and `spend` have different denominators and
-   *  **`spend` is not divisible by `consultations`**: any per-consultation
+   *  the session total, so this and `usage` have different denominators and
+   *  **`usage` is not divisible by `consultations`**: any per-consultation
    *  cost derived from the pair is wrong. By the same asymmetry, a session
    *  where only subagents consulted reports the whole record as null while its
    *  advisor cost is still inside `estimated_cost_usd`. */
   consultations: number;
-  /** The advisor's own token/cost slice. null = "could not be measured",
-   *  never 0 — the same posture as `usage: null` ("the session ran but filed
-   *  no report"). Unmeasurable when `model` is null, when the advisor resolved
-   *  to the same model as the main one (which merges both into a single
-   *  per-model entry — measured), or when the main model's own resolved id was
-   *  never observed, since then separability itself is unknown. */
-  spend: {
+  /** The advisor's own slice of the session's consumption — the same shape the
+   *  enclosing `usage` reports for the main model, hence the same name
+   *  (CONTEXT.md's Worker session: 「トークン消費の内訳と推定ドル」). It is
+   *  deliberately **not** called `spend`: this codebase already spells
+   *  Spend-down(使い切り)that way, and one word for two unrelated concepts
+   *  is how a glossary starts to rot.
+   *
+   *  null = "could not be measured", never 0 — the same posture as
+   *  `usage: null` ("the session ran but filed no report"). Unmeasurable when
+   *  `model` is null, when the advisor resolved to the same model as the main
+   *  one (which merges both into a single per-model entry — measured), or when
+   *  the main model's own resolved id was never observed, since then
+   *  separability itself is unknown. */
+  usage: {
     input_tokens: number;
     output_tokens: number;
     estimated_cost_usd: number;
@@ -197,7 +204,7 @@ export type EventPayload =
          *  influence it), so the statistics this field feeds are unharmed;
          *  the warning is still retained verbatim in stderr_tail for the
          *  operational question. */
-        advisor: AdvisorUsage | null;
+        advisor: AdvisorRecord | null;
       } | null;
     }
   // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —
