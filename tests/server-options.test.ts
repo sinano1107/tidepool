@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
-import { expect, it } from "vitest";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
 import { type BoardComposition, buildServerOptions, WATCHDOG } from "../src/server-options.js";
 import { FakeClock, FakeTranslationClient, ScriptedWorker } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 /** 盤面1台ぶんの入力。**ServerOptions のキーは1つも含まない**ので、この
  *  テストは自分が検査している一覧を写し取ることが構造的にできない —— 口の一覧を
@@ -100,4 +103,69 @@ it("main.ts は buildServerOptions が組み立てたオプションで盤面を
 
   expect(main).toMatch(/\bbuildServerOptions\(/);
   expect(main).not.toMatch(/startServer\(\s*\{/);
+});
+
+const dirs: string[] = [];
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
+
+/** 上の網羅テストは `registryDir` 未設定で走る — registry 由来の口が**すべて**
+ *  そこ1つに掛かっているので、13本の解決子はどれも早期 return しか通らない。
+ *  つまりキーが揃っていることは分かっても、**どのキーにどの解決子が刺さって
+ *  いるか**は何も分からない。`agentRegistered` と `isProtectedWorkspace` は
+ *  どちらも `(name: string) => boolean` で、取り違えても型検査は黙る。
+ *
+ *  そこで registry を1つ立てて、解決子ごとに**別々の答え**を要求する。
+ *  registry を配線する経路はここにしか無い(ADR 0027 の盤面ハーネスは
+ *  `bootTidepool` 経由で、この組み立てを通らない)。 */
+it("registry があるとき、各口には対応する解決子が刺さっている(#172)", async () => {
+  const registryDir = await makeRegistry({
+    // `guarded` は protected、`derived` は path を省く(ADR 0018 の基底ディレクトリ
+    // 由来に落ちる)—— workspacesDir が正しく渡っていなければ後者が破綻する
+    "workspaces.yaml":
+      "tidepool:\n  path: /home/pi/work/tidepool\n" +
+      "guarded:\n  path: /home/pi/work/guarded\n  protected: true\n" +
+      "derived: {}\n",
+  });
+  dirs.push(registryDir);
+  const workspacesDir = "/base/workspaces";
+  const options = buildServerOptions({
+    ...composition(),
+    registryDir,
+    workspacesDir,
+    // `workspaceName` と `defaultAgentName` と `auditorName` はどれも string で、
+    // 取り違えても型検査は黙る。fixture に実在するのは前2つが指す名前だけなので、
+    // 入れ替われば下の解決がそのまま失敗する。
+    workspaceName: "derived",
+    defaultAgentName: "deckhand",
+  });
+
+  // workspaceConfig: 盤面自身の workspace 名で解決され、path 省略なら
+  // workspacesDir 由来に落ちる(ADR 0018)—— 名前と基底ディレクトリの両方を通す
+  expect(options.workspace?.name).toBe("derived");
+  expect(options.workspace?.path).toBe(join(workspacesDir, "derived"));
+  // resolveWorkspace: タスクが名指しした workspace を優先し、null なら盤面自身へ
+  expect(options.resolveWorkspace?.("tidepool").path).toBe("/home/pi/work/tidepool");
+  expect(options.resolveWorkspace?.("derived").path).toBe(join(workspacesDir, "derived"));
+  expect(options.resolveWorkspace?.(null).name).toBe("derived");
+  // この2つは同じ型なので、取り違えるとここで初めて分かる
+  expect(options.agentRegistered?.("deckhand")).toBe(true);
+  expect(options.agentRegistered?.("guarded")).toBe(false);
+  expect(options.isProtectedWorkspace?.("guarded")).toBe(true);
+  expect(options.isProtectedWorkspace?.("deckhand")).toBe(false);
+  // 残りの registry 由来の口も、registry の中身をそのまま映していること
+  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand"]);
+  expect(options.registryCandidates?.()?.assignees).toEqual(["deckhand", "human"]);
+  // assignee 未設定は defaultAgentName へ、registry の知らない名前は undefined へ
+  expect(options.resolveAuthority?.(null)).toBeDefined();
+  expect(options.resolveAuthority?.("nobody")).toBeUndefined();
+  expect(options.fableAgents?.()).toEqual([]); // fixture の agent に model 指定は無い
+  expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);
+  // registry ゲートで初めて立つ口
+  expect(options.draftClient).toBeDefined();
+  expect(options.workspaceAdmin).toBeDefined();
+  expect(options.profileAdmin).toBeDefined();
+  const swept = options.boardState?.listWorkspaces().map((ws) => ws.name);
+  expect(swept?.sort()).toEqual(["derived", "guarded", "tidepool"]);
 });

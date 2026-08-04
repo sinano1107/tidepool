@@ -14,6 +14,8 @@ issue #172 で決定。`startServer` の `watchdog?: WatchdogConfig` は**本番
 
 **4. テストは合成 root 自身を観測する。** 「本番と同じ配線」と称して production の関数をテスト側から呼び直すのは、#172 を素通しさせた形そのものである(`tests/auth-token-file.test.ts` の `bootWithTokenFile` がその形 — `main.ts` が実際に `openHumanCredential` を呼んでいるかは何も検査していない)。テストが渡す入力に `ServerOptions` のキーが1つも無いのは、この再演を**構造的に**不可能にするためでもある。加えて `main.ts` が組み立てを経由していること・口の一覧が `main.ts` に戻っていないことをソーステキストで見る — import できない以上、そこが残る唯一の観測面である。呼び出しの**形**は主張しない(中間変数を挟むリファクタで赤くしない)。
 
+**5. 網羅だけでは足りない — registry を立てた状態も1本測る。** キーが揃っていることと、**どのキーにどの解決子が刺さっているか**は別の主張である。`agentRegistered` と `isProtectedWorkspace` はどちらも `(name: string) => boolean`、`workspaceName` / `defaultAgentName` / `auditorName` はどれも `string` で、取り違えても型検査は沈黙する(実測: 前者を入れ替えても `tsc` は何も言わない)。registry 由来の口は `registryDir` 1つに掛かっているので、未設定の網羅テストではその13本がすべて早期 return しか通らない。したがって fixture registry を1つ立て、解決子ごとに**別々の答え**を要求する1本を置く。
+
 ## watchdog の値はコード定数に置く
 
 `work` = 90分 / `review` = 45分 / `grace` = 60秒。`question` は**キーごと無い**(`Partial<Record<TaskType, number>>` は「書かない = 監視しない」でしか表現できず、人間の回答を待つタスクを時限で殺すのは端的に誤り)。
