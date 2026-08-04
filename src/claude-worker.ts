@@ -440,6 +440,11 @@ export function pinnedModelFlags(model: string, effort: string): string[] {
  *  translation consult a stronger model. The capability belongs to a worker
  *  session, so only the worker spawn site spells it.
  *
+ *  Not adding an advisor to those calls is **not** the same as keeping one out
+ *  of them, and this helper only ever did the former (issue #174): the host's
+ *  own `advisorModel` rode in regardless, and it was measured doing exactly
+ *  that. Keeping it out is `boardCallEnv`'s job, one per Board call (ADR 0044).
+ *
  *  Absent capability is not spelled by omitting the flag. Omission leaves the
  *  answer to the host: a workspace checkout's own `.claude/settings.json` can
  *  carry `advisorModel`, and the project tier is exactly the one the board
@@ -453,6 +458,37 @@ export function pinnedModelFlags(model: string, effort: string): string[] {
  *  project` alone (measured) — this var is not what buys that. */
 export function advisorSpawnFlags(advisor: string | undefined): string[] {
   return advisor === undefined ? [] : ["--advisor", advisor];
+}
+
+/** The one env var that closes the advisor whatever the configuration sources
+ *  say (measured: it beats both the project settings tier and an explicit
+ *  `--advisor` flag). Named once because "this session has no advisor" must
+ *  have exactly one spelling — `boardCallEnv` sets it, `workerSpawnEnv` both
+ *  sets and deletes it, and a typo in any of those three places would fail open
+ *  and silently. */
+const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
+
+/** The env every **Board call** carries (issue #174 / ADR 0044) — the board's
+ *  own CLI invocations: the draft poll, display-time translation, the two
+ *  `/usage` init pings, and the usage scrape. None of them is a worker session,
+ *  so none of them has an advisor: there is no in-task judgement to consult
+ *  about, and no slot, assignee or decision log to attribute the cost to.
+ *
+ *  The absence is spelled here rather than left to the flags these calls
+ *  already pass, because **measured 2026-08-04: `--safe-mode` does not block
+ *  the advisor** (nor does `--max-turns 1` — a consultation costs no turn), and
+ *  the host's `~/.claude/settings.json` carrying `advisorModel` is enough to
+ *  attach opus to every draft poll. The `/usage` pings are advisor-free today
+ *  only because a local slash command raises no model turn at all, and the tool
+ *  probe is shielded only by flags ADR 0039 chose for a different reason —
+ *  neither is a property anyone placed here for the advisor, so neither is
+ *  accepted as the spelling of its absence.
+ *
+ *  Returns the **whole** env, not a delta, so a call site cannot half-apply it
+ *  by forgetting `...process.env` and lose PATH and auth with it. Same contract
+ *  as `workerSpawnEnv` below and as `SpawnFn`'s `opts.env`. */
+export function boardCallEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
 }
 
 /** anthropics/claude-code#69238: the CLI's stream byte-idle deadline defaults
@@ -470,7 +506,16 @@ const STREAM_IDLE_TIMEOUT_MS = 600_000;
  *     `advisorSpawnFlags`, hence the parameter. It is the same var the board's
  *     global kill switch (issue #33 判断8) uses, on purpose: "this session has
  *     no advisor" has one spelling, whether the cause is a definition without
- *     the capability or a host-side emergency mask.
+ *     the capability or a host-side emergency mask. **A present advisor
+ *     actively deletes it** rather than merely not setting it (issue #174 /
+ *     ADR 0044 決定4): this env is built over the board's own process env, so a
+ *     host that exports the var — `/etc/default/tidepool` is a live,
+ *     human-edited surface feeding exactly that — would silently strip the
+ *     advisor from sessions the registry declared it for, while
+ *     `worker_spawned` kept recording the advisor's name. Measured 2026-08-04:
+ *     **the env beats an explicit `--advisor` flag**, so the precedence is not
+ *     theoretical. This is why the whole env is built here rather than returned
+ *     as a delta — a spread can add a key but can never remove one.
  *  2. The two #69238 stream timeouts — **unconditional, and they must stay
  *     that way.** An advisor consultation re-reads the whole transcript
  *     uncached, so its latency grows with the conversation and can reach the
@@ -483,12 +528,15 @@ const STREAM_IDLE_TIMEOUT_MS = 600_000;
  *     minutes. They live here rather than in the host's
  *     `/etc/default/tidepool` because that was a second source of truth
  *     invisible to both the registry and the board's code. */
-export function workerSpawnEnv(advisor: string | undefined): Record<string, string> {
-  return {
-    ...(advisor === undefined ? { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1" } : {}),
+export function workerSpawnEnv(advisor: string | undefined): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
   };
+  if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
+  else delete env[ADVISOR_DISABLE_ENV];
+  return env;
 }
 
 /** The agent's own git identity, injected into the worker child's env so the
@@ -762,8 +810,15 @@ export interface ClaudeWorkerOptions {
 /** Request/response process boundary for one-shot CLI calls (unlike the
  *  streaming SpawnFn above) — the claude-draft-client's JIT draft poll runs
  *  through it (ADR 0008). checkUsage moved off this to the PTY boundary below
- *  (issue #81 / ADR 0028), since `/usage` only renders under a TTY. */
-export type ExecFn = (command: string, args: string[]) => Promise<string>;
+ *  (issue #81 / ADR 0028), since `/usage` only renders under a TTY.
+ *
+ *  `env` is **required**, not defaulted (issue #174 / ADR 0044 決定3). An
+ *  optional env would make "omitted = inherit the host's environment wholesale"
+ *  the default, and the next Board call added here would re-open #174 the
+ *  moment its author forgot to pass one — silently. Required, the compiler asks
+ *  them instead. Same reason `Skill allowlist` made omission invalid rather
+ *  than meaning "unrestricted". */
+export type ExecFn = (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
 
 /** The skill-enumeration boundary (issue #56 / ADR 0025 point 4): resolve the
  *  full skill set the CLI would give the session at `cwd`, or null if the probe
@@ -872,6 +927,22 @@ function countAdvisorConsultations(parsed: Record<string, unknown> | null): numb
 // posture as checkUsage (ADR 0028), reached by SIGKILL on timeout.
 const SKILL_ENUM_TIMEOUT_MS = 15_000;
 
+/** The `/usage` ping's spawn options. Extracted as a pure function purely so
+ *  the Board call env (ADR 0044) is **observable**: unlike the other four board
+ *  calls, these two pings sit below their injection seam — `EnumerateSkillsFn`
+ *  and `EnumerateToolsFn` are faked at the whole-probe level (ADR 0027), so a
+ *  test can never see what `runInitPing` handed to the child. Naming the
+ *  options makes the one thing worth asserting assertable, and leaves only the
+ *  one-line wiring below to review — the same residue `SKILL_ENUM_ARGS` itself
+ *  already has. */
+export function initPingSpawnOptions(cwd: string): {
+  cwd: string;
+  stdio: ["ignore", "pipe", "ignore"];
+  env: NodeJS.ProcessEnv;
+} {
+  return { cwd, stdio: ["ignore", "pipe", "ignore"], env: boardCallEnv() };
+}
+
 /** One `/usage` init-report ping: run the CLI at `cwd` and return the init
  *  event's `field` array, or null if the ping never produced one. Two callers
  *  now — ADR 0025's skill enumeration and ADR 0039's tool-surface probe — which
@@ -886,10 +957,7 @@ function runInitPing(
   return new Promise((resolve) => {
     let child: ReturnType<typeof nodeSpawn>;
     try {
-      child = nodeSpawn("claude", [...SKILL_ENUM_ARGS, ...extraArgs], {
-        cwd,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
+      child = nodeSpawn("claude", [...SKILL_ENUM_ARGS, ...extraArgs], initPingSpawnOptions(cwd));
     } catch {
       resolve(null);
       return;
@@ -1067,9 +1135,9 @@ function scanWorkspaceSkills(workspacePath: string): string[] {
   }
 }
 
-export const defaultExec: ExecFn = (command, args) =>
+export const defaultExec: ExecFn = (command, args, env) =>
   new Promise((resolve, reject) => {
-    execFile(command, args, (err, stdout) => {
+    execFile(command, args, { env }, (err, stdout) => {
       if (err) reject(err);
       else resolve(stdout);
     });
@@ -1092,7 +1160,7 @@ export type PtyProcess = {
 export type PtyFn = (
   command: string,
   args: string[],
-  opts: { cwd: string; cols: number; rows: number },
+  opts: { cwd: string; cols: number; rows: number; env: NodeJS.ProcessEnv },
 ) => PtyProcess;
 
 // ADR 0028 empirical parameters. The scrape orchestration (checkUsage below)
@@ -1207,7 +1275,13 @@ const defaultPty: PtyFn = (command, args, opts) => {
     spawn(
       file: string,
       args: string[],
-      options: { cwd: string; cols: number; rows: number; name: string },
+      options: {
+        cwd: string;
+        cols: number;
+        rows: number;
+        name: string;
+        env: NodeJS.ProcessEnv;
+      },
     ): PtyProcess;
   };
   return nodePty.spawn(command, args, {
@@ -1215,6 +1289,7 @@ const defaultPty: PtyFn = (command, args, opts) => {
     cols: opts.cols,
     rows: opts.rows,
     name: "xterm-256color",
+    env: opts.env,
   });
 };
 
@@ -1695,11 +1770,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // than left to the host's environment file (ADR 0005).
       {
         cwd: workspace.path,
-        env: {
-          ...process.env,
-          ...agentGitIdentityEnv(agent.name),
-          ...workerSpawnEnv(advisor),
-        },
+        // workerSpawnEnv builds over process.env and may *delete* the advisor
+        // kill var (ADR 0044 決定4), so it is the base here rather than an
+        // overlay — a spread on top of it could not have removed a key. The git
+        // identity carries no key it touches, so layering it after is safe.
+        env: { ...workerSpawnEnv(advisor), ...agentGitIdentityEnv(agent.name) },
       },
     );
     // the whole stream-json session is kept verbatim: the audit trail of what
@@ -1906,6 +1981,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         cwd: process.cwd(),
         cols: PTY_COLS,
         rows: PTY_ROWS,
+        // a Board call like any other (ADR 0044): this one raises no model turn
+        // today — nothing is ever typed at the prompt — but that is a property
+        // of the vendor's TUI, not one this board placed here.
+        env: boardCallEnv(),
       });
     } catch {
       return null;
