@@ -33,8 +33,12 @@ describe("Board call の env", () => {
   // worker spawn が `process.env` ごと継承して advisor を持つはずの全 worker が
   // 黙って advisor を失う(ADR 0044)。ここで閉じるのは呼び出し1回ぶんだけである。
   it("盤面プロセス自身の env は汚さない", () => {
+    // 「呼んでも変わらない」を見る —— `undefined` であることを直接主張すると、それは
+    // コードではなく**テストホストの性質**の検査になり、まさに決定4 が想定した
+    // 「env を export しているホスト」で偽陽性になる。
+    const before = process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL;
     boardCallEnv();
-    expect(process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe(before);
   });
 
   // ADR 0025 / 0039 の2本の `/usage` ping は、注入 seam(EnumerateSkillsFn /

@@ -102,12 +102,14 @@ kill switch は registry の宣言を確実に上書きできる。
   コンパイラではなくレビューが見る残余であり、#174 が実際に住んでいた本番側だけが
   機械に守られる。
 
-観測の網にも同じ種類の残余が1つある。5本のうち **seam で観測されるのは4本**
-(下書き・翻訳が `ExecFn`、使用量スクレイプが `PtyFn`、worker spawn が `SpawnFn`)で、
+観測の網にも同じ種類の残余が1つある。Board call 5本のうち **seam で観測されるのは
+3本**(下書き・翻訳が `ExecFn`、使用量スクレイプが `PtyFn`)で、
 `/usage` ping の2本は注入 seam が probe 全体を差し替える高さにあるため、
 `initPingSpawnOptions` という**名前を与えた純粋関数**を検査している。残るのは
 `nodeSpawn(..., initPingSpawnOptions(cwd))` の1行の配線で、これはレビューが見る ——
-`SKILL_ENUM_ARGS` 自体が今日置かれているのと同じ場所である。ping のためだけに
+`SKILL_ENUM_ARGS` 自体が今日置かれているのと同じ場所である(決定4 が触る worker
+spawn は Board call ではなく、`SpawnFn` seam で従来どおり観測される —— この3本の
+外側の話である)。ping のためだけに
 spawn 層へ seam を1枚下ろす取引はしない(ADR 0027 が引いた「vendor recipe は
 seam の内側」の線を、advisor 1件のために動かすことになる)。
 

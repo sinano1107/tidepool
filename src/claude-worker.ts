@@ -460,6 +460,14 @@ export function advisorSpawnFlags(advisor: string | undefined): string[] {
   return advisor === undefined ? [] : ["--advisor", advisor];
 }
 
+/** The one env var that closes the advisor whatever the configuration sources
+ *  say (measured: it beats both the project settings tier and an explicit
+ *  `--advisor` flag). Named once because "this session has no advisor" must
+ *  have exactly one spelling — `boardCallEnv` sets it, `workerSpawnEnv` both
+ *  sets and deletes it, and a typo in any of those three places would fail open
+ *  and silently. */
+const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
+
 /** The env every **Board call** carries (issue #174 / ADR 0044) — the board's
  *  own CLI invocations: the draft poll, display-time translation, the two
  *  `/usage` init pings, and the usage scrape. None of them is a worker session,
@@ -480,7 +488,7 @@ export function advisorSpawnFlags(advisor: string | undefined): string[] {
  *  by forgetting `...process.env` and lose PATH and auth with it. Same contract
  *  as `workerSpawnEnv` below and as `SpawnFn`'s `opts.env`. */
 export function boardCallEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1" };
+  return { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
 }
 
 /** anthropics/claude-code#69238: the CLI's stream byte-idle deadline defaults
@@ -526,8 +534,8 @@ export function workerSpawnEnv(advisor: string | undefined): NodeJS.ProcessEnv {
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
   };
-  if (advisor === undefined) env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1";
-  else delete env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL;
+  if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
+  else delete env[ADVISOR_DISABLE_ENV];
   return env;
 }
 
