@@ -1977,10 +1977,20 @@ describe("advisor capability (issue #33)", () => {
     off.start("task-no-advisor");
     const on = await makeWorker(withAdvisor);
     on.start("task-advisor");
-    for (const call of [off.calls[0]!, on.calls[0]!]) {
+    const masked = await makeWorker(withAdvisor, { advisorDisabled: true });
+    masked.start("task-advisor-masked-env");
+    for (const call of [off.calls[0]!, on.calls[0]!, masked.calls[0]!]) {
       expect(call.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe("600000");
       expect(call.env.API_TIMEOUT_MS).toBe("600000");
     }
+    // 同じ関数が組み立てる2つの関心が**独立している**ことを1箇所で測る:
+    // advisor の口は3セルで開/閉/閉と動くのに、timeout は3セルとも同じ値で立つ。
+    // 片方を advisor の有無に紐づける将来の編集は、ここで落ちる。
+    expect([
+      off.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
+      on.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
+      masked.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL,
+    ]).toEqual(["1", undefined, "1"]);
   });
 
   // ── 判断6 前半: worker_spawned は「盤面が何をピン留めしたか」 ──────

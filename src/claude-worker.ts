@@ -455,25 +455,28 @@ export function advisorSpawnFlags(advisor: string | undefined): string[] {
   return advisor === undefined ? [] : ["--advisor", advisor];
 }
 
-/** The worker child's advisor-related env. Two independent concerns land here
- *  because both are env-tier CLI knobs pinned at spawn (ADR 0005):
+/** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
+ *  identity vars. Two **independent** concerns, deliberately not named for the
+ *  advisor as a whole — only the first is advisor-scoped:
  *
- *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described above.
- *     It is the same var the board's global kill switch (issue #33 判断8) uses,
- *     on purpose: "this session has no advisor" has one spelling, whether the
- *     cause is a definition without the capability or a host-side emergency
- *     mask. One mechanism cannot drift from the other.
- *  2. The two #69238 timeouts. An advisor consultation re-reads the whole
- *     transcript uncached, so its latency grows with the conversation and can
- *     reach the CLI's 3-minute byte-idle deadline; widening both is the
- *     documented workaround. They are set for **every** session, advisor or
- *     not, and not just for advisor-on ones: ADR 0041 justifies the watchdog's
- *     `work` = 90分 on a 10-minute idle timeout covering every session, and
- *     scoping these to advisor-on sessions would quietly pull that premise out
- *     from under the advisor-off ones. This is also where they belong rather
- *     than in the host's `/etc/default/tidepool`, which was a second source of
- *     truth invisible to both the registry and the board's code. */
-export function advisorSpawnEnv(advisor: string | undefined): Record<string, string> {
+ *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
+ *     `advisorSpawnFlags`, hence the parameter. It is the same var the board's
+ *     global kill switch (issue #33 判断8) uses, on purpose: "this session has
+ *     no advisor" has one spelling, whether the cause is a definition without
+ *     the capability or a host-side emergency mask.
+ *  2. The two #69238 stream timeouts — **unconditional, and they must stay
+ *     that way.** An advisor consultation re-reads the whole transcript
+ *     uncached, so its latency grows with the conversation and can reach the
+ *     CLI's 3-minute byte-idle deadline; widening both is the documented
+ *     workaround. It is tempting to scope them to advisor-on sessions since
+ *     that is what motivated them — **don't**: ADR 0041 justifies the
+ *     watchdog's `work` = 90分 on a 10-minute idle timeout covering *every*
+ *     session, so scoping these would silently pull that premise out from
+ *     under the advisor-off ones and leave them with no backstop short of 90
+ *     minutes. They live here rather than in the host's
+ *     `/etc/default/tidepool` because that was a second source of truth
+ *     invisible to both the registry and the board's code. */
+export function workerSpawnEnv(advisor: string | undefined): Record<string, string> {
   return {
     ...(advisor === undefined ? { CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1" } : {}),
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
@@ -1680,15 +1683,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       ],
       // the agent's own commits are stamped with the agent's identity (issue
       // #53), merged over the inherited env — never a token (ADR 0024). The
-      // advisor vars (issue #33) ride the same merge: the explicit "no advisor"
-      // and the #69238 stream timeouts, both pinned here rather than left to
-      // the host's environment file (ADR 0005).
+      // the spawn-tier env knobs (issue #33) ride the same merge: the explicit
+      // "no advisor" and the #69238 stream timeouts, both pinned here rather
+      // than left to the host's environment file (ADR 0005).
       {
         cwd: workspace.path,
         env: {
           ...process.env,
           ...agentGitIdentityEnv(agent.name),
-          ...advisorSpawnEnv(advisor),
+          ...workerSpawnEnv(advisor),
         },
       },
     );

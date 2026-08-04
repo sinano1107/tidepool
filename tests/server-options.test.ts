@@ -180,6 +180,28 @@ it("kill switch は盤面の合成からそのまま worker options へ届く(�
   expect(options(false).advisorDisabled).toBe(false);
 });
 
+/** ADR 0040 の線: worker ログの置き場と、盤面が「重なるな」と守っている
+ *  パスは**同じ1つ**でなければならない —— 綴りが2つあると、守る対象と実際の
+ *  置き場が黙ってずれる。#33 で `logDir` が `BoardComposition` の口になり、
+ *  合成 root では `boardState` の組み立てと `buildWorkerOptions` の**2箇所**に
+ *  流れるようになったので、一致をここで観測する(どちらも `string` なので
+ *  取り違えても型は黙る — ADR 0041 §5 と同じ理由)。 */
+it("worker ログの置き場は、盤面が守っているパスと同じ1つである(ADR 0040)", async () => {
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  const logDir = "/opt/tidepool/worker-logs";
+  const board = {
+    ...composition(),
+    registryDir,
+    logDir,
+    boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
+  };
+  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock() });
+
+  expect(options.logDir).toBe(logDir);
+  expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);
+});
+
 /** 上の網羅テストは `registryDir` 未設定で走る — registry 由来の口が**すべて**
  *  そこ1つに掛かっているので、13本の解決子はどれも早期 return しか通らない。
  *  つまりキーが揃っていることは分かっても、**どのキーにどの解決子が刺さって
