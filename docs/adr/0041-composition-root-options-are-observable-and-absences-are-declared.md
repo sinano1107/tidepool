@@ -29,6 +29,7 @@ env に出さない理由は ADR 0037 と同じ軸である: **盤面の不変�
 
 - **ServerOptions の任意22個**: 本番が渡していないのは `watchdog` と `authority` だけ。事前調査どおりで、実際に列挙して突き合わせた(`github` / `auditorName` は短縮記法なので素朴な grep では見落とす)。`authority` の意図的不在は doc コメントの主張どおり。
 - **`ApiRouterDeps`(任意19)/ `McpDeps`(任意10)**: `server.ts` が全件を property として転送している。ここは合成 root ではなく `ServerOptions` から機械的に降りる層なので、穴の形が違う(渡し忘れは同じ1ファイルの中で完結する)。
+- **インライン `deps: {...}` 型**: 名前付き interface だけを見ると見落とすので別途走査した。該当は `startScheduler`(任意6 — `workspace` / `resolveWorkspace` / `auditorName` / `github` / `fableAgents` / `containment`)と `startWatchdog`(任意2)と `pollNotifications`(任意1)で、いずれも `server.ts` が全件転送している。**この層は `ServerOptions` の下**なので、`buildServerOptions` が口を確保すれば穴は上から塞がる。
 - **`ClaudeWorkerOptions` の `spawn` / `pty` / `enumerateSkills`**: **#172 の類ではない。** 不在が意味するのは「機能が静かに切れる」ではなく「実物を使う」であり、テスト側が渡すのは実プロセスを差し替えるためである(ADR 0027 の fake 注入の形)。`auditorName` / `workspacesDir` / `boardState` は `main.ts` が渡している。
 
 ## Considered options
