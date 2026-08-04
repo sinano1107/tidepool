@@ -72,7 +72,7 @@ describe("boardStateOverlap: 解決できないパスは fail-closed(ADR 0040)",
     return a;
   }
 
-  it("workspace パスが解決できなければ unresolved を返す(その1 workspace だけが止まる)", async () => {
+  it("workspace パスが解決できなければ重なり扱いで止める(波及するのはその1 workspace だけで、文面もそう言う)", async () => {
     const parent = await tempDir("parent");
     const ws = await makeUnresolvable(parent);
     const hit = boardStateOverlap(ws, [{ label: "board database", path: join(parent, "board.sqlite") }]);
@@ -81,7 +81,7 @@ describe("boardStateOverlap: 解決できないパスは fail-closed(ADR 0040)",
     expect(hit?.reason).toContain("could not be resolved");
   });
 
-  it("保護対象のパスが解決できなければ、どの保護対象が読めなかったかを名指しして unresolved を返す", async () => {
+  it("保護対象のパスが解決できなければ、どれが読めなかったかを文面で名指しする(全 workspace を巻き込む側なので診断が入れ替わってはいけない)", async () => {
     const parent = await tempDir("parent");
     const broken = await makeUnresolvable(parent);
     const ws = await tempDir("ws");
@@ -115,7 +115,7 @@ describe("boardStateOverlap: 大文字小文字の扱いはプラットフォー
   });
 });
 
-describe("boardStatePaths: 保護対象は盤面プロセスに固定の5点(ADR 0040)", () => {
+describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 の5点)", () => {
   const INPUT = {
     dbPath: "/srv/tidepool/board.sqlite",
     workerLogDir: "/srv/tidepool/worker-logs",
@@ -125,7 +125,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定の5点(ADR
     servedRoot: "/srv/tidepool",
   };
 
-  it("DB・worker-logs・API token・GitHub token・盤面の実行 checkout の5点を並べる", () => {
+  it("DB・worker-logs・API token・GitHub token・盤面の実行 checkout をこの順に並べる", () => {
     expect(boardStatePaths(INPUT).map((p) => p.path)).toEqual([
       "/srv/tidepool/board.sqlite",
       "/srv/tidepool/worker-logs",

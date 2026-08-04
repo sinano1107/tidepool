@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import type { Db } from "./db.js";
 import { quarantineWorkspace, type WorkspaceConfig } from "./workspace.js";
 
-/** 盤面プロセスに固定の保護対象1点(ADR 0040)。`label` は quarantine / 拒否の
+/** 盤面プロセスに固定の保護対象1つ(ADR 0040)。`label` は quarantine / 拒否の
  *  文面にそのまま出るので、人間が「どれを動かせばよいか」を読める綴りにする
  *  (env 変数名を含む)。 */
 export interface BoardStatePath {
@@ -11,10 +11,12 @@ export interface BoardStatePath {
   path: string;
 }
 
-/** 盤面プロセスが固定で持つ、保護対象の在り処(ADR 0040)。**workspace 毎に
- *  変わる保護対象は存在しない** — 検査は「固定5点 × workspace パス」の総当たり
- *  である。env の読み出しそのものは合成 root(main.ts)に留め、ここは解決済みの
- *  値だけを受ける。 */
+/** 盤面プロセスが固定で持つ、保護対象の在り処(ADR 0040 の5点)。**workspace 毎に
+ *  変わる保護対象は存在しない** — 検査は「盤面側の固定リスト × workspace パス」の
+ *  総当たりである。並ぶ*パス*の数は5とは限らない: GitHub token は env 未設定なら
+ *  落ち、5点目の「実行 checkout」は cwd と配信元が一致しなければ2つになる。
+ *  env の読み出しそのものは合成 root(main.ts)に留め、ここは解決済みの値だけを
+ *  受ける。 */
 export interface BoardStatePathsInput {
   /** `TIDEPOOL_DB`。SQLite のサイドカー(`-wal` / `-shm`)は同じディレクトリの
    *  兄弟なので、判定は DB パス基準で足りる。 */
