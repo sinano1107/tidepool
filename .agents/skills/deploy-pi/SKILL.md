@@ -9,7 +9,7 @@ Deploys tidepool source (this repo) to its systemd-managed production instance o
 ## Topology (read once, applies to every deploy)
 
 - Pi: `masaki@100.78.52.97` (already on tailnet, SSH key auth)
-- Source of truth: `/mnt/ssd/tidepool` on the Pi (git clone, exFAT — fine for git, weak for exec bits/native modules/symlinks)
+- Source of truth: `/mnt/ssd/tidepool` on the Pi (git clone, exFAT — fine for git, weak for exec bits/native modules/symlinks). This is a convention, not something `deploy-pi.sh` hardcodes: since issue #167 the script derives its source checkout from its own location (`git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel`), so it works from any path — but `deploy-pi.sh` itself still only exists at this path until the checkout is deliberately moved.
 - Runtime copy: `/opt/tidepool` (ext4) — `npm install`'d, what `tidepool.service` actually runs. Never edit here directly except for throwaway debugging (see troubleshooting.md); it's overwritten wholesale on every deploy.
 - Sibling repo: `/mnt/ssd/tidepool-registry` (agents/authority/workspaces config, `TIDEPOOL_REGISTRY`) — separate GitHub repo, separate git history
 - Service: `tidepool.service` (single systemd unit — WebUI + `/api` + `/mcp` + scheduler + agent spawning, all one process per ADR-0001)
@@ -34,7 +34,9 @@ Then deploy:
 ssh masaki@100.78.52.97 "cd /mnt/ssd/tidepool && git pull -q origin main && sudo bash scripts/deploy-pi.sh"
 ```
 
-`scripts/deploy-pi.sh` (committed in this repo's root) rsyncs `/mnt/ssd/tidepool` → `/opt/tidepool` (excluding `node_modules`, `.env*`, `data/`, `worker-logs/`, `board.sqlite` — these are runtime state, never wiped), runs `npm install` (full, including devDependencies — `tsx` runs the TS directly at runtime, there is no build step), installs the systemd unit if it changed, restarts `tidepool.service`, and self-verifies (`systemctl is-active` + a few seconds' grace). It exits non-zero and dumps `systemctl status` on failure.
+`scripts/deploy-pi.sh` (committed in this repo's root) first runs a preflight against its own checkout (derived from the script's own location, not a hardcoded path — issue #167): the source must be on `main`, the working tree must be clean, and `HEAD` must match `origin/main` after a fetch. This is fail-closed and non-negotiable — it's the only thing standing between an rsync source that happens to hold an unreviewed task-branch commit (or a stray uncommitted edit) and that commit landing on production without ever going through a PR, since the board's own workspace-overlap guard (ADR 0040) has no visibility into what this script's rsync source is. Any of the three failing aborts the deploy with a non-zero exit before rsync ever runs.
+
+It then rsyncs the checkout → `/opt/tidepool` (excluding `node_modules`, `.env*`, `data/`, `worker-logs/`, `board.sqlite` — these are runtime state, never wiped), runs `npm install` (full, including devDependencies — `tsx` runs the TS directly at runtime, there is no build step), installs the systemd unit if it changed, restarts `tidepool.service`, and self-verifies (`systemctl is-active` + a few seconds' grace). It exits non-zero and dumps `systemctl status` on failure.
 
 If `tidepool-registry` also changed (agent definitions, authority profiles, workspaces), pull it too — it's a separate repo and separate clone:
 
