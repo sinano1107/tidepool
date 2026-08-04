@@ -34,6 +34,7 @@ import {
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import { startServer, type WorkerFactory } from "./server.js";
+import { buildServerOptions } from "./server-options.js";
 import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
@@ -366,51 +367,56 @@ for (const message of messages) {
   else console.log(message.text);
 }
 
-const server = await startServer({
-  dbPath,
-  credential,
-  port,
-  mcpPort,
-  clock: new SystemClock(),
-  worker: workerFactory(),
-  workspace: workspaceConfig(),
-  resolveWorkspace: workspaceResolver(),
-  github,
-  workspaceAdmin: workspaceAdmin(),
-  agentAdmin: agentAdmin(),
-  profileAdmin: profileAdmin(),
-  resolveAuthority: authorityResolver(),
-  agentRegistered: agentRegisteredChecker(),
-  isProtectedWorkspace: protectedWorkspaceChecker(),
-  listAgents: listAgentsResolver(),
-  // pass the provider itself, not a boot-time snapshot: the register screen's
-  // candidates must reflect agents/workspaces created live through settings
-  registryCandidates: registryCandidates,
-  draftClient: draftClientFactory(),
-  translationClient: translationClientFactory(),
-  push: pushClient(),
-  vapidPublicKey: vapidConfig()?.publicKey,
-  auditorName,
-  // the skills picker's candidate source (issue #106): the real `claude` CLI's
-  // neutral-cwd enumeration — always available on a real host, faked in tests
-  hostSkills: enumerateHostSkills,
-  fableAgents: fableAgentsResolver(),
-  // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
-  // #154、ADR 0039 / issue #164)。ここが唯一の実検査の配線点 — テスト盤面は
-  // 封じ込める実プロセスを持たないので、このゲート自体を持たない。人間面の
-  // 自己検査は startServer が実ポートを知った後に自分で足す。
-  //
-  // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
-  // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
-  // 再実行に依っている(ADR 0039 決定3)。
-  // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
-  // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
-  // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
-  boardState: { paths: boardState, listWorkspaces: registeredWorkspaces },
-  containment: {
-    sandboxCapability: () => checkSandboxCapability(platform),
-    toolSurface: () => probeToolSurfaceCapability(),
-  },
-});
+// ADR 0041 / issue #172: 口の一覧は **buildServerOptions が単独で持つ**。ここに
+// リテラルを書くと、任意フィールドを1つ渡し忘れても型が何も言わない —— watchdog が
+// 本番で一度も走っていなかったのがその形である。
+const server = await startServer(
+  buildServerOptions({
+    dbPath,
+    credential,
+    port,
+    mcpPort,
+    clock: new SystemClock(),
+    worker: workerFactory(),
+    workspace: workspaceConfig(),
+    resolveWorkspace: workspaceResolver(),
+    github,
+    workspaceAdmin: workspaceAdmin(),
+    agentAdmin: agentAdmin(),
+    profileAdmin: profileAdmin(),
+    resolveAuthority: authorityResolver(),
+    agentRegistered: agentRegisteredChecker(),
+    isProtectedWorkspace: protectedWorkspaceChecker(),
+    listAgents: listAgentsResolver(),
+    // pass the provider itself, not a boot-time snapshot: the register screen's
+    // candidates must reflect agents/workspaces created live through settings
+    registryCandidates: registryCandidates,
+    draftClient: draftClientFactory(),
+    translationClient: translationClientFactory(),
+    push: pushClient(),
+    vapidPublicKey: vapidConfig()?.publicKey,
+    auditorName,
+    // the skills picker's candidate source (issue #106): the real `claude` CLI's
+    // neutral-cwd enumeration — always available on a real host, faked in tests
+    hostSkills: enumerateHostSkills,
+    fableAgents: fableAgentsResolver(),
+    // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
+    // #154、ADR 0039 / issue #164)。ここが唯一の実検査の配線点 — テスト盤面は
+    // 封じ込める実プロセスを持たないので、このゲート自体を持たない。人間面の
+    // 自己検査は startServer が実ポートを知った後に自分で足す。
+    //
+    // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
+    // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
+    // 再実行に依っている(ADR 0039 決定3)。
+    // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
+    // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
+    // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
+    boardState: { paths: boardState, listWorkspaces: registeredWorkspaces },
+    containment: {
+      sandboxCapability: () => checkSandboxCapability(platform),
+      toolSurface: () => probeToolSurfaceCapability(),
+    },
+  }),
+);
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);
