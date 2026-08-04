@@ -18,7 +18,11 @@ issue #172 で決定。`startServer` の `watchdog?: WatchdogConfig` は**本番
 
 ## watchdog の値はコード定数に置く
 
-`work` = 90分 / `review` = 45分 / `grace` = 60秒。`question` は**キーごと無い**(`Partial<Record<TaskType, number>>` は「書かない = 監視しない」でしか表現できず、人間の回答を待つタスクを時限で殺すのは端的に誤り)。
+`work` = 90分 / `review` = 45分 / `grace` = 60秒。`question` は**キーごと無い**。
+
+**`question` の根拠は当初「人間の回答を待つタスクを時限で殺すのは誤りだから」と書いたが、それは到達不能なシナリオへの防御だった(2026-08-04 のレビューで指摘され訂正)。** 実際には pickup の抽出そのものが `t.type <> 'question'` で question を外しており(`tasks.ts` の `nextSlotTask`)、`in_progress` を立てるのは `pickupTask` だけ、watchdog の tick は `slot.currentTaskId` と `in_progress` で門番している(`watchdog.ts`)。したがって **watchdog が question 型のタスクを見ることは起こり得ない** — question は人間タスクとして slot の外で回答される(CONTEXT.md の Held)。ここに値を書いても死んだ設定にしかならず、しかも「watchdog が question も governs する」という誤った含意を残す。それが不在の理由である。
+
+エスカレーションした側のタスク(`work` / `review`)と、生成される `question` は**別のタスク**である点にも注意する。前者は `runReleasingVerb`(`mcp.ts`)が slot を release してセッションが終わり、後者はそもそも pickup されない — どちらの側からも watchdog の出番は無い。
 
 env に出さない理由は ADR 0037 と同じ軸である: **盤面の不変条件をホストごとの設定に委ねない。** 「唯一の slot が誰にも回収されずに握られたままにならない」は盤面の性質であって、`/etc/default/tidepool` の綴り次第で消えてよいものではない — 消え方は正確に #172 の再演(値が無い = 監視されない)になる。
 

@@ -54,9 +54,14 @@ import {
  *    失敗 question(retry / abandon)+ push に落ちる回復可能な事象なので、夜の
  *    8時間のうち最大90分の損失に抑える側へ倒す。
  *  - `review` = 45分。読んで判断する仕事で、work のような長い実装ループを持たない。
- *  - `question` は**意図的に無い**。`Partial<Record<TaskType, number>>` の口は
- *    「キーを書かない = 監視しない」で、人間の回答を待つタスクを時限で殺すのは
- *    端的に誤りである(そもそも question は slot の外で回答される)。
+ *  - `question` は**意図的に無い**。watchdog が見るのは slot のタスクだけだが
+ *    (watchdog.ts の tick は `slot.currentTaskId` と `in_progress` で門番する)、
+ *    pickup の抽出そのものが `t.type <> 'question'` で question を外している
+ *    (tasks.ts の `nextSlotTask`)。`in_progress` を立てるのは `pickupTask`
+ *    だけなので、**watchdog が question 型のタスクを見ることは起こり得ない**。
+ *    したがってここに値を書いても死んだ設定にしかならず、しかも「watchdog が
+ *    question も governs する」という誤った含意を残す。question は人間タスクと
+ *    して slot の外で回答される(CONTEXT.md の Held)。
  *  - `grace` = 60秒 = 1 tick。SIGTERM から SIGKILL までの猶予で、watchdog.ts の
  *    比較は `>=` なので次の tick で SIGKILL が出る。 */
 export const WATCHDOG: WatchdogConfig = {

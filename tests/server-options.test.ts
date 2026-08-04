@@ -55,11 +55,13 @@ it("時間リミットは work=90分 / review=45分、猶予は 1 tick(#172)", (
   });
 });
 
-// question は**意図的に監視しない**。人間の回答を待つタスクを時限で殺すのは端的に
-// 誤りで、しかも `Partial<Record<TaskType, number>>` は「キーを書かない」ことでしか
-// それを表現できない。`question: undefined` を書くとキーは生えるが、watchdog.ts は
-// `limit === undefined` で抜けるので挙動は同じ — 型ではなく形で意図を残すため、
-// キーの不在そのものを主張する。
+// question に値を書いても**死んだ設定**にしかならない: pickup の抽出が
+// `t.type <> 'question'` で question を外し(tasks.ts の `nextSlotTask`)、
+// `in_progress` を立てるのは `pickupTask` だけなので、watchdog の tick が
+// question 型のタスクを見ることは起こり得ない。キーの不在そのものを主張するのは、
+// 将来の読者が「watchdog が question も governs する」と読める1行を足さないため。
+// (`question: undefined` でも挙動は同じ — watchdog.ts は `limit === undefined`
+// で抜ける。ここで見張っているのは挙動ではなく含意である。)
 it("question には時間リミットを持たせない(#172)", () => {
   expect("question" in WATCHDOG.timeLimits).toBe(false);
 });
