@@ -1,6 +1,49 @@
 import type { Db } from "./db.js";
 import type { TaskType } from "./tasks.js";
 
+/** What the advisor **actually did** in one worker session (issue #33 判断6),
+ *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
+ *  `worker_exited.usage.advisor`, where null means no consultation was observed
+ *  at all — see that field for what the null deliberately collapses.
+ *
+ *  Named rather than inlined because the adapter builds it in two pieces and
+ *  would otherwise spell `NonNullable<NonNullable<…>["advisor"]>` at each. */
+export interface AdvisorUsage {
+  /** The resolved model id the advisor actually ran as — `opus` resolves
+   *  differently per host CLI version (measured), so the alias in
+   *  worker_spawned does not settle it. null when the session consulted but
+   *  the CLI reported no resolved id: the result line names it only for the
+   *  **final turn**, so a session whose last consultation came earlier leaves
+   *  it unrecorded. Deriving it from the per-model cost breakdown is not
+   *  available either — that breakdown can hold the CLI's internal helper
+   *  model too, so subtracting the main model does not leave one answer. */
+  model: string | null;
+  /** How many times the parent thread consulted, counted off the stream. Kept
+   *  outside `spend` because it survives the cases `spend` does not, and
+   *  because cost alone cannot tell "one consultation in a long conversation"
+   *  from "three in a short one".
+   *
+   *  It counts the **parent thread only** — a subagent's consultations never
+   *  appear in the parent's stream (measured) while their cost still lands in
+   *  the session total, so this and `spend` have different denominators and
+   *  **`spend` is not divisible by `consultations`**: any per-consultation
+   *  cost derived from the pair is wrong. By the same asymmetry, a session
+   *  where only subagents consulted reports the whole record as null while its
+   *  advisor cost is still inside `estimated_cost_usd`. */
+  consultations: number;
+  /** The advisor's own token/cost slice. null = "could not be measured",
+   *  never 0 — the same posture as `usage: null` ("the session ran but filed
+   *  no report"). Unmeasurable when `model` is null, when the advisor resolved
+   *  to the same model as the main one (which merges both into a single
+   *  per-model entry — measured), or when the main model's own resolved id was
+   *  never observed, since then separability itself is unknown. */
+  spend: {
+    input_tokens: number;
+    output_tokens: number;
+    estimated_cost_usd: number;
+  } | null;
+}
+
 /** Payloads are typed per-kind; adding a kind forces the writer through this
  *  union, which is what kills the "wrote to log but forgot stats" bug class. */
 export type EventPayload =
@@ -154,39 +197,7 @@ export type EventPayload =
          *  influence it), so the statistics this field feeds are unharmed;
          *  the warning is still retained verbatim in stderr_tail for the
          *  operational question. */
-        advisor: {
-          /** The resolved model id the advisor actually ran as — `opus`
-           *  resolves differently per host CLI version (measured), so the
-           *  alias in worker_spawned does not settle it. null when the
-           *  session consulted but the CLI reported no resolved id: the
-           *  result line names it only for the **final turn**, so a session
-           *  whose last consultation came earlier leaves it unrecorded.
-           *  Deriving it from the per-model cost breakdown is not available
-           *  either — that breakdown can hold the CLI's internal helper
-           *  model too, so subtracting the main model does not leave one
-           *  answer. */
-          model: string | null;
-          /** How many times the parent thread consulted, counted off the
-           *  stream. Kept outside `spend` because it survives the cases
-           *  `spend` does not, and because cost alone cannot tell "one
-           *  consultation in a long conversation" from "three in a short
-           *  one". Note it counts the **parent thread only** — a subagent's
-           *  consultations never appear in the parent's stream (measured)
-           *  while their cost still lands in `spend`, so the two have
-           *  different denominators. */
-          consultations: number;
-          /** The advisor's own token/cost slice. null = "could not be
-           *  measured", never 0 — the same posture as `usage: null` above
-           *  ("the session ran but filed no report"). Unmeasurable when the
-           *  advisor resolved to the same model as the main model, which
-           *  merges both into a single per-model entry (measured), or when
-           *  `model` above is null. */
-          spend: {
-            input_tokens: number;
-            output_tokens: number;
-            estimated_cost_usd: number;
-          } | null;
-        } | null;
+        advisor: AdvisorUsage | null;
       } | null;
     }
   // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —

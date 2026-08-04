@@ -37,6 +37,32 @@ new Claude Code releases" と明記)。つまり表を持てば、盤面は**自
 どのみち実装する必要があり、この禁止が消せるコストは1つも無い。何も買わないガードは
 無いほうがよい。
 
+## 不在は「フラグを省く」では綴らない — ADR 0005 の読み替え
+
+ADR 0005 は「agent 定義に値が無くても、spawn 時は常に既定値込みで明示的に CLI へ
+渡す — CLI のデフォルト任せ(フラグ省略)にはしない」と決めている。advisor の不在は
+その形では綴れない: `--model` には「値が無いなら `sonnet`」という**綴れる既定値**が
+あるが、「advisor なし」に相当するモデル名は存在しないので、渡すべき値がそもそも無い。
+
+ここで単に `--advisor` を省くと、ADR 0005 が塞いだはずの穴がそのまま開く ——
+**ホストの設定が答えを決める**。実測(2026-08-04): workspace の checkout が持つ
+`.claude/settings.json` の `advisorModel` は、本番と同じ `--setting-sources project`
+の下で advisor を attach させる。registry が「advisor なし」と言っているセッションが
+上位モデルを焼き、判断6 の記録は「advisor なし」と書いたままになる。
+(`.claude/settings.json` は quarantine の spawn 時ガードが見る対象だが、見ているのは
+`sandbox` / `permissions` だけ —— ADR 0037 —— で `advisorModel` は素通りする。)
+
+したがって**不在は env で明示的に綴る**: `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`。
+これは ADR 0005 の例外ではなくその目的の充足である —— 綴りがフラグ層から env 層へ
+移るだけで、「ホストの状態が spawn の挙動を決めることを許さない」という要求は同じ
+ように満たされる。同じ env を判断8 の kill switch も使う: 「このセッションに advisor は
+無い」という状態の綴りは1つで、原因(capability が無い / ホストがマスクした)で
+分かれない。
+
+なお user tier(`~/.claude/settings.json`)の継承は `--setting-sources project`
+だけで既に塞がっている(実測)。この env が買っているのは**それではなく** project
+tier のほうである。
+
 ## 防げなくなるものと、その代わり
 
 表を持たないので、以下は spawn するまで分からない:

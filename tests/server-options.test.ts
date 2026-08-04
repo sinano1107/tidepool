@@ -13,10 +13,16 @@ import { FakeClock, FakeTranslationClient } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
-/** 盤面1台ぶんの入力。**ServerOptions のキーは1つも含まない**ので、この
- *  テストは自分が検査している一覧を写し取ることが構造的にできない —— 口の一覧を
- *  持つのは `buildServerOptions` だけで、ここが渡すのは env 由来のスカラと部品
- *  だけである。
+/** 盤面1台ぶんの入力。渡すのは env 由来のスカラと、合成 root でしか作れない
+ *  部品だけで、**口の一覧はここには無い** —— 一覧を持つのは `buildServerOptions`
+ *  と `buildWorkerOptions` だけである。
+ *
+ *  ADR 0041 §1 はこれを「`ServerOptions` のキーを1つも含まない」と書き、再演は
+ *  **構造的に**不可能だとしていたが、**それは文字通りには成立していない**
+ *  (ADR 0043 の訂正): `dbPath` / `port` / `mcpPort` / `credential` / `clock` /
+ *  `auditorName` は同名同義のまま残っている。したがってこのテストを守っている
+ *  のは入力の型の純度ではなく、**下の実行時の突き合わせ**そのものである
+ *  —— 口を1つ落とせばその名前で落ちる、という性質のほうを信頼すること。
  *
  *  `registryDir` は未設定にする: registry 由来の口がすべてそこ1つに掛かって
  *  いるので、ディスクを一切触らずに本番と同じ組み立てを走らせられる。 */
@@ -43,6 +49,18 @@ function composition(): BoardComposition {
 }
 
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
+
+/** `src/<file>` の `export interface <name>` から、**インターフェース直下**
+ *  (インデント2)の任意フィールド名を読む。ソースを読み直すのが要点である ——
+ *  型を import すると、テストが観測するのは自分が書いた期待値の写しになる。
+ *  入れ子のフィールド(`boardState` / `containment` の中身はインデント4)は
+ *  拾わない。 */
+function optionalFields(file: string, name: string): string[] {
+  const s = source(file);
+  const rest = s.slice(s.indexOf(`export interface ${name} {`));
+  const body = rest.slice(0, rest.indexOf("\n}\n"));
+  return [...body.matchAll(/^ {2}(\w+)\?:/gm)].flatMap((m) => (m[1] ? [m[1]] : []));
+}
 
 // #172 そのもの。本番の盤面は watchdog を**必ず**持つ — 持たない盤面は、詰まった
 // セッションが唯一の slot を握ったまま誰にも回収されない盤面である。
@@ -78,14 +96,7 @@ it("question には時間リミットを持たせない(#172)", () => {
  *  実際に組み立てたオブジェクトと突き合わせるので、口を1つ落とせばその名前で
  *  ここが落ちる。 */
 it("ServerOptions の任意フィールドは authority を除いて全て組み立てられる(#172)", () => {
-  const body = (() => {
-    const s = source("server.ts");
-    const rest = s.slice(s.indexOf("export interface ServerOptions {"));
-    return rest.slice(0, rest.indexOf("\n}\n"));
-  })();
-  // インターフェース直下(インデント2)の任意フィールドだけ。入れ子の
-  // `boardState` / `containment` の中身はインデント4なので拾わない。
-  const optional = [...body.matchAll(/^ {2}(\w+)\?:/gm)].flatMap((m) => (m[1] ? [m[1]] : []));
+  const optional = optionalFields("server.ts", "ServerOptions");
   // 走査そのものが壊れていないことの control。件数だけでは正規表現が**部分的に**
   // 効かなくなった場合を見逃すので、性質の違う3つを名指しで要求する:
   // 素の口・短縮記法で渡される口・入れ子の口。
@@ -129,12 +140,7 @@ afterEach(async () => {
  *  除外一覧をテスト側に置くのは ADR 0041 §3 と同じ理由 —— 除外を1つ増やすことは
  *  「その口は本番で永久に立たない」という宣言だからである。 */
 it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam を除いて全て組み立てられる(ADR 0043)", async () => {
-  const body = (() => {
-    const s = source("claude-worker.ts");
-    const rest = s.slice(s.indexOf("export interface ClaudeWorkerOptions {"));
-    return rest.slice(0, rest.indexOf("\n}\n"));
-  })();
-  const optional = [...body.matchAll(/^ {2}(\w+)\?:/gm)].flatMap((m) => (m[1] ? [m[1]] : []));
+  const optional = optionalFields("claude-worker.ts", "ClaudeWorkerOptions");
   // 走査が壊れていないことの control(server 側の網羅テストと同じ形)
   expect(optional).toEqual(expect.arrayContaining(["advisorDisabled", "spawn", "boardState"]));
 

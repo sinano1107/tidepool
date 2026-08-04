@@ -2229,6 +2229,25 @@ describe("advisor capability (issue #33)", () => {
     });
   });
 
+  // main モデルの解決先が分からなければ、**分離できるかどうかも分からない** ——
+  // advisor と main が同じ id に解決されていれば `modelUsage` のそのキーは合算済み
+  // なので、読めば advisor の消費として合算値を publish してしまう。init 行を
+  // 観測できなかったセッション(壊れた行・`model` を持たない init)はこの状態に
+  // なる。「測れなかった」を誤った値に化けさせない。
+  it("main モデルの解決先が観測できていなければ spend は null(分離可否そのものが不明)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-advisor-no-init");
+    // init 行を一切流さない
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(resultLine());
+    emitExit(0, null);
+    expect(usageOf(db, "task-advisor-no-init")?.advisor).toEqual({
+      model: "claude-opus-5",
+      consultations: 1,
+      spend: null,
+    });
+  });
+
   // `modelUsage` を持たない result 行(古い CLI・壊れた行)でも、相談の事実と回数は
   // stream 側から取れている。ここで throw して usage 全体を失わない。
   it("modelUsage を持たない result 行でも相談の事実は失わない", async () => {

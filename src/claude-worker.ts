@@ -9,7 +9,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload, listEvents } from "./events.js";
+import { type AdvisorUsage, appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
   type AgentDefinition,
   agentBodyAtCommit,
@@ -455,6 +455,13 @@ export function advisorSpawnFlags(advisor: string | undefined): string[] {
   return advisor === undefined ? [] : ["--advisor", advisor];
 }
 
+/** anthropics/claude-code#69238: the CLI's stream byte-idle deadline defaults
+ *  to 3 minutes, which a slow advisor consultation can exceed. 10 minutes is
+ *  the value the Pi ran under while this was a host-side stopgap, kept as-is so
+ *  moving it into the adapter changes nothing about behaviour — and it is the
+ *  value ADR 0041's `work` = 90分 reasons against. */
+const STREAM_IDLE_TIMEOUT_MS = 600_000;
+
 /** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
  *  identity vars. Two **independent** concerns, deliberately not named for the
  *  advisor as a whole — only the first is advisor-scoped:
@@ -483,13 +490,6 @@ export function workerSpawnEnv(advisor: string | undefined): Record<string, stri
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
   };
 }
-
-/** anthropics/claude-code#69238: the CLI's stream byte-idle deadline defaults
- *  to 3 minutes, which a slow advisor consultation can exceed. 10 minutes is
- *  the value the Pi ran under while this was a host-side stopgap, kept as-is so
- *  moving it into the adapter changes nothing about behaviour — and it is the
- *  value ADR 0041's `work` = 90分 reasons against. */
-const STREAM_IDLE_TIMEOUT_MS = 600_000;
 
 /** The agent's own git identity, injected into the worker child's env so the
  *  commits a task session makes carry the agent's name, not the host's git
@@ -622,19 +622,16 @@ function isStreamResultEvent(value: unknown): value is StreamResultEvent {
   );
 }
 
-function parseResultLine(line: string): StreamResultEvent | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as { type?: unknown };
-    if (parsed.type !== "result") return null;
-    return isStreamResultEvent(parsed) ? parsed : null;
-  } catch {
-    // a line split mid-chunk or genuinely malformed output — the last
-    // *complete* result line already seen wins, so this just isn't one
-    return null;
-  }
+/** The decoded-line form. A line that isn't a `result`, or one whose shape
+ *  doesn't match, simply isn't one — the last *complete* result line already
+ *  seen wins. */
+function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEvent | null {
+  if (parsed === null || parsed.type !== "result") return null;
+  return isStreamResultEvent(parsed) ? parsed : null;
 }
+
+const parseResultLine = (line: string): StreamResultEvent | null =>
+  readResultEvent(parseStreamLine(line));
 
 /** What the stdout scan collected about this session's advisor while the
  *  stream ran (issue #33). Both are needed at exit and neither survives on the
@@ -655,23 +652,31 @@ interface AdvisorObservation {
 function toAdvisorUsage(
   result: StreamResultEvent,
   observed: AdvisorObservation,
-): NonNullable<NonNullable<WorkerExitedUsage>["advisor"]> | null {
+): AdvisorUsage | null {
   if (observed.consultations === 0) return null;
   const model = advisorModelFrom(result);
   return { model, consultations: observed.consultations, spend: advisorSpend(result, model, observed) };
 }
 
 /** The advisor's own token/cost slice, or null when it cannot be measured
- *  (see the field's own doc in events.ts). Two ways it is unmeasurable: the
- *  resolved id was never reported, or the advisor resolved to the same model
- *  as the main one — which merges both into a single per-model entry, leaving
- *  no way to tell whose tokens are whose (measured). */
+ *  (see the field's own doc in events.ts). Three ways it is unmeasurable:
+ *
+ *  - the advisor's resolved id was never reported;
+ *  - it resolved to the same model as the main one, which merges both into a
+ *    single per-model entry, leaving no way to tell whose tokens are whose
+ *    (measured);
+ *  - **the main model's resolved id was never observed** — a session whose
+ *    init line was missing or carried no `model`. Then separability itself is
+ *    unknown: the two may well have resolved to the same id, in which case the
+ *    per-model entry read below is the merged one and publishing it would
+ *    report the session's combined spend as the advisor's. "Could not be
+ *    measured" must not turn into a confident wrong number. */
 function advisorSpend(
   result: StreamResultEvent,
   model: string | null,
   observed: AdvisorObservation,
-): NonNullable<NonNullable<WorkerExitedUsage>["advisor"]>["spend"] {
-  if (model === null || model === observed.mainModel) return null;
+): AdvisorUsage["spend"] {
+  if (model === null || observed.mainModel === null || model === observed.mainModel) return null;
   const breakdown = result.modelUsage;
   if (typeof breakdown !== "object" || breakdown === null) return null;
   const entry = ownEntry(breakdown as Record<string, unknown>, model);
@@ -788,47 +793,56 @@ const SKILL_ENUM_ARGS = [
   "0.01",
 ];
 
-/** The `type: "system", subtype: "init"` line's string-array fields — the CLI's
- *  own report of what it resolved for the session. `skills` is ADR 0025's
- *  enumeration; `tools` is the surface ADR 0039 compares against the board's
- *  Tool allowlist. Fail-closed like parseResultLine: a non-init line, a
- *  split/malformed line, or a field that isn't an array of strings all read as
- *  "not the init report" rather than as an empty answer. */
-function parseInitField(line: string, field: "skills" | "tools"): string[] | null {
+/** One stream-json line, decoded once. The board reads several independent
+ *  things off the worker's stdout — the result event, ADR 0039's tool surface,
+ *  and issue #33's advisor observations — and each used to re-decode the line
+ *  itself, so a session paid one `JSON.parse` per concern per line on lines
+ *  that can be large (a whole assistant message). Decode here, and let each
+ *  reader below take the decoded object.
+ *
+ *  Fail-closed, as every vendor-shape read in this file is: a blank line, or
+ *  one split mid-chunk or genuinely malformed, is simply not a line anyone can
+ *  read anything from. */
+function parseStreamLine(line: string): Record<string, unknown> | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   try {
-    const parsed = JSON.parse(trimmed) as {
-      type?: unknown;
-      subtype?: unknown;
-      [key: string]: unknown;
-    };
-    if (parsed.type !== "system" || parsed.subtype !== "init") return null;
-    const value = parsed[field];
-    if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) return null;
-    return value as string[];
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
 }
 
-const parseInitTools = (line: string): string[] | null => parseInitField(line, "tools");
+/** The `type: "system", subtype: "init"` line's string-array fields — the CLI's
+ *  own report of what it resolved for the session. `skills` is ADR 0025's
+ *  enumeration; `tools` is the surface ADR 0039 compares against the board's
+ *  Tool allowlist. Fail-closed: a non-init line, or a field that isn't an array
+ *  of strings, reads as "not the init report" rather than as an empty answer. */
+function readInitField(
+  parsed: Record<string, unknown> | null,
+  field: "skills" | "tools",
+): string[] | null {
+  if (parsed === null || parsed.type !== "system" || parsed.subtype !== "init") return null;
+  const value = parsed[field];
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) return null;
+  return value as string[];
+}
+
+/** The line-taking form, for the `/usage` init ping — it reads its own stdout
+ *  and has no other concern to share a decode with. */
+const parseInitField = (line: string, field: "skills" | "tools"): string[] | null =>
+  readInitField(parseStreamLine(line), field);
 
 /** The init line's `model` — the CLI's **resolved** main model id, e.g.
  *  `claude-sonnet-5` for a `--model sonnet` spawn (issue #33, measured). Only
  *  used to decide whether the advisor's spend is separable from the main
- *  model's. Scalar, so it needs its own read rather than `parseInitField`'s
- *  array one. */
-function parseInitModel(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    if (parsed.type !== "system" || parsed.subtype !== "init") return null;
-    return typeof parsed.model === "string" ? parsed.model : null;
-  } catch {
-    return null;
-  }
+ *  model's. Scalar, hence not `readInitField`'s array read. */
+function readInitModel(parsed: Record<string, unknown> | null): string | null {
+  if (parsed === null || parsed.type !== "system" || parsed.subtype !== "init") return null;
+  return typeof parsed.model === "string" ? parsed.model : null;
 }
 
 /** How many advisor consultations one assistant line carries (issue #33).
@@ -841,22 +855,15 @@ function parseInitModel(line: string): string | null {
  *
  *  ADR 0039's init-line observation cannot substitute: a server tool appears
  *  neither in init's `tools` array nor as an `advisorModel` field (measured). */
-function countAdvisorConsultations(line: string): number {
-  const trimmed = line.trim();
-  if (!trimmed) return 0;
-  try {
-    const parsed = JSON.parse(trimmed) as { type?: unknown; message?: unknown };
-    if (parsed.type !== "assistant") return 0;
-    const content = (parsed.message as { content?: unknown } | undefined)?.content;
-    if (!Array.isArray(content)) return 0;
-    return content.filter((block) => {
-      if (typeof block !== "object" || block === null) return false;
-      const { type, name } = block as Record<string, unknown>;
-      return type === "server_tool_use" && name === "advisor";
-    }).length;
-  } catch {
-    return 0;
-  }
+function countAdvisorConsultations(parsed: Record<string, unknown> | null): number {
+  if (parsed === null || parsed.type !== "assistant") return 0;
+  const content = (parsed.message as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return 0;
+  return content.filter((block) => {
+    if (typeof block !== "object" || block === null) return false;
+    const { type, name } = block as Record<string, unknown>;
+    return type === "server_tool_use" && name === "advisor";
+  }).length;
 }
 
 // The /usage ping exits naturally in ~2s (ADR 0025); this is the fail-closed
@@ -1729,11 +1736,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
       for (const line of lines) {
-        lastResult = parseResultLine(line) ?? lastResult;
-        advisorObserved.consultations += countAdvisorConsultations(line);
-        advisorObserved.mainModel = parseInitModel(line) ?? advisorObserved.mainModel;
+        // decoded once, read by every concern below (see parseStreamLine)
+        const parsed = parseStreamLine(line);
+        lastResult = readResultEvent(parsed) ?? lastResult;
+        advisorObserved.consultations += countAdvisorConsultations(parsed);
+        advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
-          toolSurfaceObserved = this.checkSessionToolSurface(task, line, child);
+          toolSurfaceObserved = this.checkSessionToolSurface(task, parsed, child);
         }
       }
     });
@@ -1851,10 +1860,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  この判定が同一セッション内で二度走ることはない。 */
   private checkSessionToolSurface(
     task: Task,
-    line: string,
+    parsed: Record<string, unknown> | null,
     child: { kill(signal: NodeJS.Signals): void },
   ): boolean {
-    const tools = parseInitTools(line);
+    const tools = readInitField(parsed, "tools");
     if (!tools) return false;
     const surface = checkToolSurface(tools, task.type);
     if (surface.available) return true;

@@ -55,8 +55,10 @@ import {
  *  すべての値は分単位に量子化される: WATCHDOG_TICK が 60秒なので、それ未満の差は
  *  1 tick に丸められる。
  *
- *  - `work` = 90分。`/etc/default/tidepool` の `CLAUDE_STREAM_IDLE_TIMEOUT_MS` が
- *    10分(#33 / anthropics/claude-code#69238 の回避)なので、byte-idle 由来の
+ *  - `work` = 90分。adapter が spawn 時に立てる `CLAUDE_STREAM_IDLE_TIMEOUT_MS` が
+ *    10分(#33 / anthropics/claude-code#69238 の回避 —— 以前はホストの
+ *    `/etc/default/tidepool` にあり、#33 で adapter へ移した。値も適用範囲も
+ *    変えていない: advisor の有無に依らず**全セッション**に掛かる)なので、byte-idle 由来の
  *    ストールは CLI 側が拾う。拾えないのはループに入ったセッション —— バイトを
  *    出し続けるので idle 検知が効かず、watchdog だけが backstop になる。kill は
  *    失敗 question(retry / abandon)+ push に落ちる回復可能な事象なので、夜の
