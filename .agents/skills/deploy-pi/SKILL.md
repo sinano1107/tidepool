@@ -236,6 +236,8 @@ Measured on the Pi, 2026-07-30 — **exit 2**:
 
 The Pi's `VACUOUS` row is not a defect to chase. `raspberrypi` resolves to `127.0.1.1` there — Debian's own-hostname line in `/etc/hosts` — so from the board's own host the short name is not a route to the board and never can be. That target is measured from another tailnet node (the macOS run above). Confirm it is still the *only* non-`PASS` row before shrugging at exit 2.
 
+Re-run on the Pi after the CLI was updated to **2.1.221** (2026-08-04, issue #33): the same three rows, exit 2, with `tailnet-shortname` still the only non-`PASS`.
+
 The three shapes across the two hosts are the same invariant seen three ways, exactly as ADR 0036 predicts: macOS loopback reaches and is refused **401**, the Pi's loopback **cannot connect**, tailnet is **403** on both.
 
 A tunnel that *opens* and then dies at TLS (`CONNECT` → `200 Connection Established`, curl exit 35) is a **FAIL**, not a failed connection — that is precisely the shape #152 measured on the short name, and reading it as "unreachable" would score the hole as a pass. `scripts/containment-canary.test.sh` pins that branch (`bash scripts/containment-canary.test.sh`, no Pi needed).
@@ -284,6 +286,8 @@ Measured on macOS 2.1.220 in the production spawn shape, 2026-08-03 — **exit 0
 
 The production Pi (2.1.207 / bwrap) produced the **identical four rows, exit 0**, the same day right after the #162 deploy — `deny/scope` reading `refused by: mode` there too, so the mode's `.claude` write restriction is not a macOS quirk. Both hosts were also exit 0 earlier that day under the *previous* `auto` shape, with `deny/scope` passing on the write landing instead.
 
+Re-run on the Pi after the CLI was updated to **2.1.221** (2026-08-04, issue #33): the identical four rows, exit 0. One detail moved with the version — the `deny` row now refuses with the file-permission wording (`File is in a directory that is denied by your permission settings.`) rather than 2.1.207's classifier quoting the rule back. Both spellings remain accepted above; the Pi simply stopped producing the older one.
+
 The live row's own `notes.txt` is the bwrap evidence: `failIfUnavailable: true` means a sandbox that fails to start kills the session outright, so a session that wrote its file is a session whose sandbox came up.
 
 **Path note (historical).** The ADR 0037 Pi measurement was taken *before* that change shipped, so its profile came from a staged `src/sandbox.ts` under `~/hook-canary-src` rather than from `/opt/tidepool` — invoked as `ssh $PI 'bash -s -- local ~/hook-canary-src' < <this script>`. The plain `hook-canary.sh pi` form (which reads `/opt/tidepool`) first ran on 2026-08-03 after the #162 deploy, and passed. Against a `/opt/tidepool` that predates a decision this script measures, it exits 1 by name: "carries no disableAllHooks key" (#160) or "does not spawn the ADR 0038 shape" (#162).
@@ -321,6 +325,8 @@ Measured on macOS 2.1.220, 2026-08-03 — **exit 0**:
 `Blocked by classifier.` appeared in none of the four sessions, on either mode.
 
 **The production Pi (2.1.207 / bwrap) produced the identical table, exit 0**, the same day right after the #162 deploy — same refusal wording on the live rows, both controls out. The two backends closing the same edge with the same words is what makes this a floor rather than a platform accident.
+
+Re-run on the Pi after the CLI was updated to **2.1.221** (2026-08-04, issue #33): the identical four rows, exit 0 — both live rows refused in the permission layer's own words, both `auto` controls out.
 
 The script greps the deployed `src/claude-worker.ts` for the ADR 0038 flag shape and exits 1 if it is absent — that catches **a deployed board older than this decision** (the Pi before the #162 deploy) and nothing else. It cannot see an inverted ternary; `tests/claude-worker.test.ts` is the board-side drift guard.
 
