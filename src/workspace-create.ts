@@ -16,6 +16,7 @@ import {
   type RegistryCommitResult,
 } from "./registry-write.js";
 import {
+  conventionCheckoutPath,
   git,
   resolvesToRegistryClone,
   TIDEPOOL_GIT_IDENTITY,
@@ -122,7 +123,9 @@ export class BoardStateOverlapError extends Error {
  *  yet at gate time (boardStateOverlap resolves the deepest existing ancestor
  *  and joins the rest lexically — ADR 0040). */
 function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminDeps): string {
-  return input.mode === "register" ? input.path : join(deps.workspacesBaseDir, input.name);
+  return input.mode === "register"
+    ? input.path
+    : conventionCheckoutPath(input.name, deps.workspacesBaseDir);
 }
 
 /** Orchestrates one workspace creation: external effects first, the registry
@@ -250,7 +253,7 @@ async function buildEntry(
 /** The clone mode's external half: a checkout at the convention-derived
  *  location (ADR 0018 — the entry never records the path). */
 function cloneAndDescribe(name: string, repo: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
-  const dir = join(deps.workspacesBaseDir, name);
+  const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it
   // failed before the registry commit — not a conflict

@@ -31,14 +31,33 @@ export interface BoardStatePathsInput {
    *  持たない」(ADR 0024)が静かに崩れる。env 未設定 → 盤面に GitHub 識別情報が
    *  無い(ADR 0024 の fail-closed な不在)ので、守る対象そのものが存在しない。 */
   githubTokenFile?: string;
-  /** 盤面の実行 checkout(process cwd)。盤面は `public/` の静的資産を実行中の
-   *  checkout から配信するので、走っている checkout 自体が workspace になると
-   *  worker が人間のブラウザに届く HTML を書き換えられる。状態ファイルの置き場を
-   *  どう動かしてもこの穴は残るため、cwd そのものが保護対象になる。 */
+  /** 盤面の実行 checkout(ADR 0040 の5点目)。盤面は `public/` の静的資産を
+   *  実行中の checkout から配信するので、走っている checkout 自体が workspace に
+   *  なると worker が `public/index.html` を書き換えられ、次のリロードで人間の
+   *  ブラウザに届く。状態ファイルの置き場をどう動かしてもこの穴は残る。
+   *
+   *  **cwd と配信元は原理的に別物**なので両方受ける: 既定の状態パス
+   *  (`board.sqlite` / `worker-logs`)が相対で解決される先は cwd だが、静的資産を
+   *  実際に配信するのはモジュールの位置から導いた checkout(server.ts の `root`)で
+   *  あり、リポジトリ外から起動すれば一致しない。ADR 0040 が「cwd」と書いたのは
+   *  両者が一致する運用を前提にした綴りであって、守りたいのは「走っている
+   *  checkout」そのものである。 */
   cwd: string;
+  servedRoot: string;
 }
 
 export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
+  const checkouts: BoardStatePath[] = [
+    { label: "the board's own working directory (process cwd)", path: input.cwd },
+  ];
+  // 一致するのが通常の運用(リポジトリのルートから起動する)— そのときは同じ
+  // パスを2度検査しない
+  if (resolve(input.servedRoot) !== resolve(input.cwd)) {
+    checkouts.push({
+      label: "the board's own checkout serving public/ (module root)",
+      path: input.servedRoot,
+    });
+  }
   return [
     { label: "board database (TIDEPOOL_DB)", path: input.dbPath },
     { label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: input.workerLogDir },
@@ -51,20 +70,18 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
             path: input.githubTokenFile,
           },
         ]),
-    { label: "the board's own checkout (process cwd)", path: input.cwd },
+    ...checkouts,
   ];
 }
 
 /** 重なり検査の答え。**boolean ではない**: 「重なった」と「判定できなかった」は
  *  同じ fail-closed でも波及範囲が違う — 解決できない *workspace* パスは
  *  workspace 1つを quarantine するだけだが、解決できない *保護対象* パスは
- *  全 workspace を「重なり」に倒す。人間が読む文面がその区別を落とすと、
- *  盤面全体が止まった理由が読み解けなくなる。 */
+ *  全 workspace を「重なり」に倒す。ただしその区別を運ぶのは**文面であって型では
+ *  ない**(containment.ts と同じ線: 止め方が1つである以上、答えの型も1つでよい)—
+ *  4つの執行点はいずれも「重なりがあれば止める」しかしないので、分岐する型を
+ *  持たせても読む者がいない。 */
 export interface BoardStateOverlap {
-  kind: "overlap" | "unresolved";
-  /** 重なった(または解決できなかった)保護対象。workspace 側が解決できな
-   *  かったときだけ undefined。 */
-  target?: BoardStatePath;
   /** quarantine の cause / 登録拒否の文面にそのまま載る英文。 */
   reason: string;
 }
@@ -127,7 +144,6 @@ export function boardStateOverlap(
   const workspace = resolveForComparison(workspacePath);
   if ("cause" in workspace) {
     return {
-      kind: "unresolved",
       reason:
         `workspace path ${workspacePath} could not be resolved (${workspace.cause}) — ` +
         "whether it overlaps the board's own state paths is unknown, and unknown is not safe (ADR 0040)",
@@ -137,8 +153,6 @@ export function boardStateOverlap(
     const candidate = resolveForComparison(target.path);
     if ("cause" in candidate) {
       return {
-        kind: "unresolved",
-        target,
         reason:
           `the board's ${target.label} at ${target.path} could not be resolved ` +
           `(${candidate.cause}) — whether a workspace overlaps it is unknown, and unknown ` +
@@ -149,8 +163,6 @@ export function boardStateOverlap(
     const b = forComparison(candidate.resolved, platform);
     if (contains(a, b) || contains(b, a)) {
       return {
-        kind: "overlap",
-        target,
         reason:
           `workspace path ${workspacePath} overlaps the board's ${target.label} ` +
           `at ${target.path} — a worker's write radius is its workspace (ADR 0033), so the ` +

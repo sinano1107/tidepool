@@ -38,6 +38,7 @@ import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
+  listRegisteredWorkspaces,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
   type WorkspaceConfig,
@@ -86,6 +87,12 @@ const defaultAgentName = process.env.TIDEPOOL_AGENT ?? "tako";
 // above, a pointer to the board's independent-review agent.
 const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
 
+// this board's own CONTEXT.md (issue #47): resolved against the module's own
+// file location, not process.cwd(), so it finds the checkout regardless of
+// where the process was launched from — same posture as server.ts's static
+// `root` (dirname(fileURLToPath(import.meta.url)) + "..").
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
 // ADR 0040 / issue #149: 盤面自身の状態パスは**1箇所で読む**。DB と worker-logs は
 // これまで使う場所(startServer 呼び出し / workerFactory)で env を読んでいたが、
 // 重なりガードが同じ値を見る以上、綴りが2つあると守る対象と実際の置き場が黙って
@@ -103,9 +110,12 @@ const boardState = boardStatePaths({
   workerLogDir: logDir,
   apiTokenFile,
   githubTokenFile,
-  // 盤面は public/ の静的資産を実行中の checkout から配信するので、cwd 自体が
-  // 保護対象(ADR 0040 の5点目)
+  // 5点目の「盤面の実行 checkout」は2つの綴りを持つ(ADR 0040): 既定の状態パスが
+  // 相対で解決される先は cwd、`public/` を実際に配信するのは server.ts が
+  // モジュールの位置から導く checkout(= repoRoot)。リポジトリ外から起動すれば
+  // 両者は一致しないので、cwd だけ守ると配信元が無防備になる。
   cwd: process.cwd(),
+  servedRoot: repoRoot,
 });
 
 /** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository
@@ -147,17 +157,12 @@ function workspaceResolver(): ((taskWorkspace: string | null) => WorkspaceConfig
     resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace, workspacesDir);
 }
 
-/** 登録済み workspace を registry から丸ごと解決したもの(ADR 0040 の boot 一斉
- *  検査の対象)。名前で引く resolver たちと違って全件を返すのはここだけであり、
- *  path の導出規則(エントリの `path`、無ければ ADR 0018 の規約由来)は
- *  resolveExecutionWorkspace 1本に任せる — ここで join し直すと規則が2つになる。
- *  registry なし → workspace という概念自体が無い。 */
+/** ADR 0040 の boot 一斉検査の対象: 登録済み workspace 全件。他の resolver たちと
+ *  同じく registry から fresh に読み直す(ADR 0009)。registry なし → workspace と
+ *  いう概念自体が無い。 */
 function registeredWorkspaces(): WorkspaceConfig[] {
   if (!registryDir) return [];
-  const registry = loadRegistry(registryDir);
-  return Object.keys(registry.workspaces).map((name) =>
-    resolveExecutionWorkspace(registry, workspaceName, name, workspacesDir),
-  );
+  return listRegisteredWorkspaces(loadRegistry(registryDir), workspacesDir);
 }
 
 /** fable モデルに解決される agent 名の集合 (ADR 0030)、毎 poll registry から
@@ -256,12 +261,6 @@ function draftClientFactory(): DraftClient | undefined {
   if (!registryDir) return undefined;
   return new ClaudeDraftClient({ candidates: registryCandidates() });
 }
-
-// this board's own CONTEXT.md (issue #47): resolved against the module's own
-// file location, not process.cwd(), so it finds the checkout regardless of
-// where the process was launched from — same posture as server.ts's static
-// `root` (dirname(fileURLToPath(import.meta.url)) + "..").
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** CONTEXT.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
  *  for the translation client's prompt. Absent/unreadable CONTEXT.md → no

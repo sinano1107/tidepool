@@ -805,11 +805,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // is the caller's 400; a busy registry clone is a 409 the idempotent
       // flow retries later; anything else is an external step failing — 502,
       // and the retry reuses whatever orphan it left behind (issue #57)
-      if (err instanceof InvalidWorkspaceNameError) {
-        res.status(400).json({ error: err.message });
-      } else if (err instanceof BoardStateOverlapError) {
-        // ADR 0040 / issue #149: 出し直せば通り得る入力の問題(別のパスを指す)
-        // なので、名前検証と同じ 400 — 盤面の故障(502)でも未設定(503)でもない
+      // 400 の2つ: 名前が使えない(#68)と、指した checkout が盤面自身の状態パスと
+      // 重なる(ADR 0040 / issue #149)。どちらも出し直せば通り得る呼び出し側の
+      // 入力の問題であって、盤面の故障(502)でも未設定(503)でもない
+      if (err instanceof InvalidWorkspaceNameError || err instanceof BoardStateOverlapError) {
         res.status(400).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
         res.status(409).json({ error: err.message });

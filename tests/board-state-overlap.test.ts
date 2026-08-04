@@ -17,9 +17,7 @@ describe("boardStateOverlap: パス包含(ADR 0040)", () => {
     const hit = boardStateOverlap(ws, [
       { label: "board database (TIDEPOOL_DB)", path: join(ws, "board.sqlite") },
     ]);
-    expect(hit?.kind).toBe("overlap");
-    expect(hit?.target?.label).toBe("board database (TIDEPOOL_DB)");
-    expect(hit?.reason).toContain("board database (TIDEPOOL_DB)");
+    expect(hit?.reason).toContain("overlaps the board's board database (TIDEPOOL_DB)");
   });
 
   it("workspace が保護対象の配下にあっても重なり(双方向 — worker-logs の中に workspace を掘る逆包含)", async () => {
@@ -27,14 +25,13 @@ describe("boardStateOverlap: パス包含(ADR 0040)", () => {
     const hit = boardStateOverlap(join(logs, "nested-workspace"), [
       { label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logs },
     ]);
-    expect(hit?.kind).toBe("overlap");
-    expect(hit?.target?.label).toBe("worker logs (TIDEPOOL_WORKER_LOGS)");
+    expect(hit?.reason).toContain("overlaps the board's worker logs (TIDEPOOL_WORKER_LOGS)");
   });
 
   it("workspace と保護対象が同一パスなら重なり", async () => {
     const dir = await tempDir("cwd");
     const hit = boardStateOverlap(dir, [{ label: "the board's own checkout (cwd)", path: dir }]);
-    expect(hit?.kind).toBe("overlap");
+    expect(hit?.reason).toContain("overlaps");
   });
 
   it("交差しない兄弟ディレクトリは重なりではない", async () => {
@@ -61,7 +58,7 @@ describe("boardStateOverlap: パス包含(ADR 0040)", () => {
     const hit = boardStateOverlap(link, [
       { label: "board database (TIDEPOOL_DB)", path: join(real, "board.sqlite") },
     ]);
-    expect(hit?.kind).toBe("overlap");
+    expect(hit?.reason).toContain("overlaps");
   });
 });
 
@@ -79,9 +76,9 @@ describe("boardStateOverlap: 解決できないパスは fail-closed(ADR 0040)",
     const parent = await tempDir("parent");
     const ws = await makeUnresolvable(parent);
     const hit = boardStateOverlap(ws, [{ label: "board database", path: join(parent, "board.sqlite") }]);
-    expect(hit?.kind).toBe("unresolved");
-    expect(hit?.target).toBeUndefined();
+    // 波及するのはこの1 workspace だけ — 文面もそう言う
     expect(hit?.reason).toContain("workspace path");
+    expect(hit?.reason).toContain("could not be resolved");
   });
 
   it("保護対象のパスが解決できなければ、どの保護対象が読めなかったかを名指しして unresolved を返す", async () => {
@@ -89,9 +86,9 @@ describe("boardStateOverlap: 解決できないパスは fail-closed(ADR 0040)",
     const broken = await makeUnresolvable(parent);
     const ws = await tempDir("ws");
     const hit = boardStateOverlap(ws, [{ label: "GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)", path: broken }]);
-    expect(hit?.kind).toBe("unresolved");
-    expect(hit?.target?.label).toBe("GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)");
-    // 全 workspace を巻き込む側なので、文面は「重なった」ではなく「読めなかった」と言う
+    // 全 workspace を巻き込む側なので、文面はどの保護対象が読めなかったかを名指しし、
+    // 「重なった」とは言わない
+    expect(hit?.reason).toContain("GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)");
     expect(hit?.reason).toContain("could not be resolved");
     expect(hit?.reason).not.toContain("overlaps the board's");
   });
@@ -109,7 +106,7 @@ describe("boardStateOverlap: 大文字小文字の扱いはプラットフォー
   it("darwin は case-insensitive に比較する(APFS 既定 — realpath は表記を直さない)", async () => {
     const { ws, protectedPath } = await makeCasePair();
     const hit = boardStateOverlap(ws, [{ label: "board database", path: protectedPath }], "darwin");
-    expect(hit?.kind).toBe("overlap");
+    expect(hit?.reason).toContain("overlaps");
   });
 
   it("linux は case-sensitive に比較する(綴りが違えば別のディレクトリ)", async () => {
@@ -125,6 +122,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定の5点(ADR
     apiTokenFile: "/home/pi/.tidepool/api-token",
     githubTokenFile: "/home/pi/.tidepool/github-token",
     cwd: "/srv/tidepool",
+    servedRoot: "/srv/tidepool",
   };
 
   it("DB・worker-logs・API token・GitHub token・盤面の実行 checkout の5点を並べる", () => {
@@ -143,7 +141,20 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定の5点(ADR
     expect(labels).toContain("worker logs (TIDEPOOL_WORKER_LOGS)");
     expect(labels).toContain("human-surface token file (TIDEPOOL_API_TOKEN_FILE)");
     expect(labels).toContain("GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)");
-    expect(labels).toContain("the board's own checkout (process cwd)");
+    expect(labels).toContain("the board's own working directory (process cwd)");
+  });
+
+  it("配信元の checkout が cwd と違うなら(リポジトリ外から起動した盤面)両方を守る", () => {
+    // public/ を配信するのは server.ts がモジュール位置から導く checkout であって
+    // cwd ではない — cwd だけ守ると配信元が無防備になる
+    const paths = boardStatePaths({ ...INPUT, cwd: "/var/run/board", servedRoot: "/srv/tidepool" });
+    expect(paths.map((p) => p.path)).toContain("/var/run/board");
+    expect(paths.map((p) => p.path)).toContain("/srv/tidepool");
+  });
+
+  it("cwd と配信元が同じ(通常の運用)なら同じパスを2度並べない", () => {
+    const checkouts = boardStatePaths(INPUT).filter((p) => p.path === "/srv/tidepool");
+    expect(checkouts).toHaveLength(1);
   });
 
   it("GitHub token ファイルは env 未設定なら守る対象そのものが無いので落ちる(ADR 0024 の fail-closed な不在)", () => {

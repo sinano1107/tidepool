@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Registry } from "../src/registry.js";
 import {
+  listRegisteredWorkspaces,
   protectedBranch,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
@@ -104,5 +105,23 @@ describe("protectedBranch", () => {
     expect(
       protectedBranch({ name: "sandbox", path: "/home/pi/work/sandbox", branch: "master" }),
     ).toBe("master");
+  });
+});
+
+describe("listRegisteredWorkspaces(ADR 0040 の boot 一斉検査の対象)", () => {
+  it("登録済み workspace を全件、path を解決して返す(明示 path と ADR 0018 の規約由来が混ざっていても)", () => {
+    const registry = makeRegistry({
+      sandbox: { path: "/home/pi/work/sandbox" },
+      // path 省略 = <workspacesBaseDir>/<name>(ADR 0018)
+      lagoon: {},
+    });
+    expect(listRegisteredWorkspaces(registry, BASE_DIR)).toEqual([
+      { name: "sandbox", path: "/home/pi/work/sandbox", branch: undefined, review_allowed_commands: undefined },
+      { name: "lagoon", path: `${BASE_DIR}/lagoon`, branch: undefined, review_allowed_commands: undefined },
+    ]);
+  });
+
+  it("登録が1つも無ければ空(検査する相手がいない)", () => {
+    expect(listRegisteredWorkspaces(makeRegistry({}), BASE_DIR)).toEqual([]);
   });
 });

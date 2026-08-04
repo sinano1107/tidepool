@@ -8,7 +8,7 @@ issue #149 のグリリング(2026-08-04)で決定。盤面自身の状態ファ
 2. **worker-logs**(`TIDEPOOL_WORKER_LOGS` — stream-json 監査記録の置き場)
 3. **API token ファイル**(`TIDEPOOL_API_TOKEN_FILE` — ハッシュのみだが、**書ければ**自分の知るハッシュへ差し替えて人間面 credential を偽造できる。書き込み半径からの保護が本体)
 4. **GitHub token ファイル**(`TIDEPOOL_GITHUB_TOKEN_FILE` — **平文**。workspace 配下に入ると work プロファイルの `allowRead: [workspace.path]` で読める。「worker は GitHub credential を一切持たない」(ADR 0024)が静かに崩れるため、5点の中で最も強い保護理由)
-5. **盤面の実行 checkout**(process cwd)— issue の原案(状態ファイル3点)への追加。盤面は `public/` の静的資産を**実行中の checkout から配信**するので、走っている checkout 自体が workspace になると worker が `public/index.html` を書き換えられ、次のリロードで人間のブラウザに届く — 人間面の改竄であり credential 窃取まで一直線。状態ファイルの置き場所をどう動かしてもこの穴は残るため、cwd そのものを保護対象にする
+5. **盤面の実行 checkout**(process cwd。**追記(実装時、issue #149)**: 守るのは「走っている checkout」であり、綴りは2つある — 既定の状態パスが相対で解決される先は cwd だが、`public/` を実際に配信するのは server.ts がモジュールの位置から導く checkout であって cwd ではない。リポジトリのルート以外から起動すれば両者は一致しないので、**両方**を保護対象に並べる)— issue の原案(状態ファイル3点)への追加。盤面は `public/` の静的資産を**実行中の checkout から配信**するので、走っている checkout 自体が workspace になると worker が `public/index.html` を書き換えられ、次のリロードで人間のブラウザに届く — 人間面の改竄であり credential 窃取まで一直線。状態ファイルの置き場所をどう動かしてもこの穴は残るため、cwd そのものを保護対象にする
 
 いずれも盤面プロセスに1つの singleton であり、workspace 毎に変わる保護対象は存在しない — 検査は「固定5点 × workspace パス(registry から live)」の総当たりである。
 
@@ -36,6 +36,7 @@ cwd 全体が保護対象になったことで、DB と worker-logs が cwd 配�
 - 判定直前に**両辺を realpath で正規化**し、パス区切りを尊重した包含判定(`path.relative` が `..` で始まらない形)で比較する — 文字列前置比較は symlink に嘘をつかれ(`/opt/tidepool` vs `/opt/tidepool-workspaces` の)前置境界で誤検知する
 - **双方向** — 「保護パスが workspace 配下」も「workspace が保護パス配下」も重なり(worker-logs の中に workspace を掘る逆包含も同じ交差)
 - **解決できないパスは fail-closed** — 「判定できなかった」を「問題なし」と読まない(ADR 0033 の settings ガードのパース不能と同じ線)。ただし登録の門の clone / 新規作成モードはディレクトリ未存在が正常なので、親ディレクトリの realpath + 字句結合で判定する
+  - **追記(実装時、issue #149)**: この「未存在なら親の realpath + 字句結合」は登録の門だけでなく**全ての検査点で**適用する。保護対象の側にも未存在が正常な瞬間がある — token をまだ発行していない盤面の `~/.tidepool/api-token` がそれで、ここを fail-closed に倒すと**新品の盤面が全 workspace を quarantine する**。存在しない末端に symlink は在り得ないので、実在する最も深い祖先まで解決すれば嘘は付かれない。fail-closed に倒すのは ENOENT **以外**の解決失敗(ELOOP・EACCES など、本当に「判定できなかった」場合)に限る
 - darwin は **case-insensitive 比較**(APFS 既定。realpath が実在パスの表記へ正規化する保証がないため比較側で吸収)
 - workspace **内部**の symlink(worker が作って外を指す)は守備範囲外 — サンドボックスの床は書き込み時に実パスで解決して拒否する。ガードが正規化するのは registry に登録されたパスそのものだけ
 

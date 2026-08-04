@@ -48,6 +48,22 @@ it("起動そのものは拒まない — 早く騒ぐだけで、床は pickup 
   expect((await api(t.baseUrl, "GET", "/api/tasks")).status).toBe(200);
 });
 
+it("重なったまま再起動しても question は増えない(1資源につき確認は最大1枚 — CONTEXT.md)", async () => {
+  const overlapping = await makeWorkspace(dirs, "self");
+  const boardState = {
+    paths: [{ label: "board database (TIDEPOOL_DB)", path: join(overlapping.path, "board.sqlite") }],
+    listWorkspaces: () => [overlapping],
+  };
+  t = await bootTidepool({ workspace: overlapping, boardState });
+  expect(await questions(t)).toHaveLength(1);
+
+  // 直さないまま再起動 — 一斉検査はもう一度撃たれる
+  await t.stopServer();
+  t = await bootTidepool({ dir: t.dir, workspace: overlapping, boardState });
+
+  expect(await questions(t)).toHaveLength(1);
+});
+
 it("workspace の列挙自体が失敗しても起動は続く(registry が壊れていても人間面は開く)", async () => {
   const clean = await makeWorkspace(dirs, "sandbox");
   const listWorkspaces = (): WorkspaceConfig[] => {

@@ -138,6 +138,19 @@ export interface ServerOptions {
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
+  /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)と、boot
+   *  時に一斉検査する登録済み workspace の列挙。Absent → 守る状態パスを持たない
+   *  盤面(実プロセスの env を持たないテスト盤面の既定形)。main.ts は常に渡す。
+   *
+   *  ここが持つのは**早く騒ぐ側**だけで、床は pickup(claude-worker.ts)にある —
+   *  workspace は WebUI から実行時に登録できるので、boot 一点では取りこぼす。
+   *  `paths` は quarantine 解除の検証(api.ts)にも同じものが渡る。 */
+  boardState?: {
+    paths: BoardStatePath[];
+    /** 登録済み workspace を registry から fresh に解決したもの。列挙が投げても
+     *  起動は続く(sweepBoardStateOverlap が握る)。 */
+    listWorkspaces: () => WorkspaceConfig[];
+  };
   /** 封じ込め能力(CONTEXT.md)のゲート。**この口の有無が、盤面全体を止めうる
    *  ゲートを持つかどうかそのもの**であり、2つの半分のどちらにも効く — 有無が
    *  ここ1箇所で読み切れる形にしてある。Absent → ゲートを持たない盤面: 実
@@ -152,19 +165,6 @@ export interface ServerOptions {
    *  だけで、composition root(main.ts)には導出できないため。
    *
    *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。 */
-  /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)と、boot
-   *  時に一斉検査する登録済み workspace の列挙。Absent → 守る状態パスを持たない
-   *  盤面(実プロセスの env を持たないテスト盤面の既定形)。main.ts は常に渡す。
-   *
-   *  ここが持つのは**早く騒ぐ側**だけで、床は pickup(claude-worker.ts)にある —
-   *  workspace は WebUI から実行時に登録できるので、boot 一点では取りこぼす。
-   *  `paths` は quarantine 解除の検証(api.ts)にも同じものが渡る。 */
-  boardState?: {
-    paths: BoardStatePath[];
-    /** 登録済み workspace を registry から fresh に解決したもの。列挙が投げても
-     *  起動は続く(sweepBoardStateOverlap が握る)。 */
-    listWorkspaces: () => WorkspaceConfig[];
-  };
   containment?: {
     sandboxCapability: () => SandboxCapability;
     /** ツール面の問い(ADR 0039)。**`null` を明示すると**3つ目の問いを持たない
