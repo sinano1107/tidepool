@@ -94,8 +94,43 @@ export function resolveExecutionWorkspace(
   if (!entry) throw new UnknownWorkspaceError(name);
   // the "main" default lives solely in protectedBranch — entry.branch passes
   // through as-is (possibly absent) rather than getting normalized here too
-  const path = entry.path ?? join(workspacesBaseDir, name);
+  const path = entryCheckoutPath(entry, name, workspacesBaseDir);
   return { name, path, branch: entry.branch, review_allowed_commands: entry.review_allowed_commands };
+}
+
+/** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
+ *  convention-derived location under the base dir. Every consumer that has to
+ *  know where a workspace's checkout lives goes through this, so the rule never
+ *  gets a second spelling (the board-state overlap gate judges a *prospective*
+ *  entry with `conventionCheckoutPath` below, which is the same rule with no
+ *  entry to consult yet). */
+export function entryCheckoutPath(
+  entry: WorkspaceEntry,
+  name: string,
+  workspacesBaseDir: string,
+): string {
+  return entry.path ?? conventionCheckoutPath(name, workspacesBaseDir);
+}
+
+export function conventionCheckoutPath(name: string, workspacesBaseDir: string): string {
+  return join(workspacesBaseDir, name);
+}
+
+/** Every registered workspace resolved to its checkout (ADR 0040's boot sweep).
+ *  The one full-registry enumeration — the name-keyed resolvers above answer
+ *  "where does *this* task run", this answers "what is there to check at all".
+ *  Never throws for a name it enumerated itself: the keys and the lookup come
+ *  from the same registry object. */
+export function listRegisteredWorkspaces(
+  registry: Registry,
+  workspacesBaseDir: string,
+): WorkspaceConfig[] {
+  return Object.entries(registry.workspaces).map(([name, entry]) => ({
+    name,
+    path: entryCheckoutPath(entry, name, workspacesBaseDir),
+    branch: entry.branch,
+    review_allowed_commands: entry.review_allowed_commands,
+  }));
 }
 
 export function taskBranch(taskId: string): string {
@@ -242,8 +277,7 @@ export function resolvesToRegistryClone(
   registryDir: string,
   workspacesBaseDir: string,
 ): boolean {
-  const path = entry.path ?? join(workspacesBaseDir, name);
-  return safeRealpath(path) === safeRealpath(registryDir);
+  return safeRealpath(entryCheckoutPath(entry, name, workspacesBaseDir)) === safeRealpath(registryDir);
 }
 
 /** The registry clone is itself a tracked workspace (a protected entry whose

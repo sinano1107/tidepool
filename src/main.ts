@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
 import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
+import { boardStatePaths } from "./board-state.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
 import {
@@ -37,6 +38,7 @@ import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
+  listRegisteredWorkspaces,
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
   type WorkspaceConfig,
@@ -85,12 +87,42 @@ const defaultAgentName = process.env.TIDEPOOL_AGENT ?? "tako";
 // above, a pointer to the board's independent-review agent.
 const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
 
+// this board's own CONTEXT.md (issue #47): resolved against the module's own
+// file location, not process.cwd(), so it finds the checkout regardless of
+// where the process was launched from — same posture as server.ts's static
+// `root` (dirname(fileURLToPath(import.meta.url)) + "..").
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// ADR 0040 / issue #149: 盤面自身の状態パスは**1箇所で読む**。DB と worker-logs は
+// これまで使う場所(startServer 呼び出し / workerFactory)で env を読んでいたが、
+// 重なりガードが同じ値を見る以上、綴りが2つあると守る対象と実際の置き場が黙って
+// ずれる。既定は cwd 相対のまま残す(ADR 0040: cwd 全体が保護対象になった今、
+// 既定を動かしても罠の表面積は縮まない)。
+const dbPath = process.env.TIDEPOOL_DB ?? "board.sqlite";
+const logDir = process.env.TIDEPOOL_WORKER_LOGS ?? "worker-logs";
+const apiTokenFile = resolveTokenFile(process.env.TIDEPOOL_API_TOKEN_FILE);
+// env 未設定 = 盤面に GitHub 識別情報が無い(ADR 0024)ので守る対象も無い。
+// **githubAuth の有無ではなく env の有無で見る**: mode が 600 でなくて識別情報が
+// 立たなかった場合でも、平文のファイルはそこに在る。
+const githubTokenFile = process.env.TIDEPOOL_GITHUB_TOKEN_FILE;
+const boardState = boardStatePaths({
+  dbPath,
+  workerLogDir: logDir,
+  apiTokenFile,
+  githubTokenFile,
+  // 5点目の「盤面の実行 checkout」は2つの綴りを持つ(ADR 0040): 既定の状態パスが
+  // 相対で解決される先は cwd、`public/` を実際に配信するのは server.ts が
+  // モジュールの位置から導く checkout(= repoRoot)。リポジトリ外から起動すれば
+  // 両者は一致しないので、cwd だけ守ると配信元が無防備になる。
+  cwd: process.cwd(),
+  servedRoot: repoRoot,
+});
+
 /** TIDEPOOL_REGISTRY points at a local clone of the agent registry repository
  *  (`npm run start:live` supplies the conventional one); setting it swaps the
  *  logging placeholder for the real Claude Code worker. */
 function workerFactory(): WorkerFactory {
   if (!registryDir) return () => new LoggingWorker();
-  const logDir = process.env.TIDEPOOL_WORKER_LOGS ?? "worker-logs";
   mkdirSync(logDir, { recursive: true });
   return ({ db, clock }) =>
     new ClaudeCodeWorker({
@@ -103,6 +135,8 @@ function workerFactory(): WorkerFactory {
       workspacesDir,
       mcpUrl: `http://127.0.0.1:${mcpPort}/mcp`,
       logDir,
+      // ADR 0040: 床そのもの — 重なっている workspace では spawn せず quarantine
+      boardState,
     });
 }
 
@@ -121,6 +155,14 @@ function workspaceResolver(): ((taskWorkspace: string | null) => WorkspaceConfig
   if (!registryDir) return undefined;
   return (taskWorkspace) =>
     resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace, workspacesDir);
+}
+
+/** ADR 0040 の boot 一斉検査の対象: 登録済み workspace 全件。他の resolver たちと
+ *  同じく registry から fresh に読み直す(ADR 0009)。registry なし → workspace と
+ *  いう概念自体が無い。 */
+function registeredWorkspaces(): WorkspaceConfig[] {
+  if (!registryDir) return [];
+  return listRegisteredWorkspaces(loadRegistry(registryDir), workspacesDir);
 }
 
 /** fable モデルに解決される agent 名の集合 (ADR 0030)、毎 poll registry から
@@ -220,12 +262,6 @@ function draftClientFactory(): DraftClient | undefined {
   return new ClaudeDraftClient({ candidates: registryCandidates() });
 }
 
-// this board's own CONTEXT.md (issue #47): resolved against the module's own
-// file location, not process.cwd(), so it finds the checkout regardless of
-// where the process was launched from — same posture as server.ts's static
-// `root` (dirname(fileURLToPath(import.meta.url)) + "..").
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-
 /** CONTEXT.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
  *  for the translation client's prompt. Absent/unreadable CONTEXT.md → no
  *  glossary guidance rather than a boot failure — the glossary sharpens
@@ -276,7 +312,8 @@ const github = githubAuth && new GhCliClient(githubAuth);
  *  Without a registry there is nowhere to administer workspaces at all. */
 function workspaceAdmin(): WorkspaceAdmin | undefined {
   if (!registryDir) return undefined;
-  const deps = { registryDir, workspacesBaseDir: workspacesDir, githubAuth };
+  // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
+  const deps = { registryDir, workspacesBaseDir: workspacesDir, githubAuth, boardState };
   return {
     create: (input) => createWorkspace(input, { ...deps, github }),
     list: () => listWorkspaceViews(deps),
@@ -321,7 +358,7 @@ function profileAdmin(): ProfileAdmin | undefined {
 // cookie はオリジン単位なので、盤面は自分が公開されている URL を知っている必要が
 // ある(自力では導出できない)。Pi なら tailnet の公開 URL をここに設定する。
 const { credential, messages } = openHumanCredential({
-  tokenFile: resolveTokenFile(process.env.TIDEPOOL_API_TOKEN_FILE),
+  tokenFile: apiTokenFile,
   origins: resolvePublicOrigins(process.env.TIDEPOOL_PUBLIC_ORIGINS, port),
 });
 for (const message of messages) {
@@ -330,7 +367,7 @@ for (const message of messages) {
 }
 
 const server = await startServer({
-  dbPath: process.env.TIDEPOOL_DB ?? "board.sqlite",
+  dbPath,
   credential,
   port,
   mcpPort,
@@ -366,6 +403,10 @@ const server = await startServer({
   // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
   // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
   // 再実行に依っている(ADR 0039 決定3)。
+  // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
+  // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
+  // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
+  boardState: { paths: boardState, listWorkspaces: registeredWorkspaces },
   containment: {
     sandboxCapability: () => checkSandboxCapability(platform),
     toolSurface: () => probeToolSurfaceCapability(),

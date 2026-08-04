@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { RegistryCloneBusyError } from "../src/registry-write.js";
-import { createWorkspace } from "../src/workspace-create.js";
+import { BoardStateOverlapError, createWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -162,6 +163,67 @@ describe("createWorkspace: 名前検証(#68 の assertValidWorkspaceName が入�
       createWorkspace({ mode: "register", name: "tidepool", path: "/tmp/elsewhere" }, deps),
     ).rejects.toThrow(InvalidWorkspaceNameError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+});
+
+describe("createWorkspace: 盤面の状態パスとの重なりは登録の門で即拒否(ADR 0040 / issue #149)", () => {
+  it("register モード: 明示 path が盤面の状態パスと重なれば拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+    const boardDir = await mkdtemp(join(tmpdir(), "tidepool-board-"));
+    const deps = {
+      ...(await makeDeps(registryDir)),
+      boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }],
+    };
+
+    await expect(
+      createWorkspace({ mode: "register", name: "self", path: boardDir }, deps),
+    ).rejects.toThrow(BoardStateOverlapError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("clone モード: 規約由来の clone 先(<workspacesBaseDir>/<name>)が重なれば、clone する前に拒否する", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const upstream = await makeUpstream();
+    const guarded = {
+      ...deps,
+      // worker-logs の中に workspace を掘る形 — 逆包含も同じ交差
+      boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: deps.workspacesBaseDir }],
+    };
+
+    await expect(
+      createWorkspace({ mode: "clone", name: "lagoon", repo: upstream }, guarded),
+    ).rejects.toThrow(BoardStateOverlapError);
+    // 未作成のディレクトリでも判定できる(親の realpath + 字句結合)— clone は走らない
+    expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
+  });
+
+  it("新規作成モード: 重なる clone 先なら GitHub リポジトリを作る前に拒否する(外部作用の手前で止める)", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const guarded = {
+      ...deps,
+      boardState: [{ label: "the board's own checkout (process cwd)", path: deps.workspacesBaseDir }],
+    };
+
+    await expect(createWorkspace({ mode: "create", name: "lagoon" }, guarded)).rejects.toThrow(
+      BoardStateOverlapError,
+    );
+    expect(deps.github.createdRepositories).toEqual([]);
+  });
+
+  it("交差しない登録は従来どおり通る", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const boardDir = await mkdtemp(join(tmpdir(), "tidepool-board-"));
+
+    await createWorkspace({ mode: "register", name: "sandbox", path: "/home/pi/work/sandbox" }, {
+      ...deps,
+      boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }],
+    });
+
+    expect(loadRegistry(registryDir).workspaces.sandbox).toEqual({ path: "/home/pi/work/sandbox" });
   });
 });
 

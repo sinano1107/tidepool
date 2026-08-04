@@ -885,6 +885,51 @@ describe("ClaudeCodeWorker", () => {
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
   });
 
+  it("workspace が盤面の状態パスと重なっていたら spawn せず workspace を quarantine する(issue #149 / ADR 0040)", async () => {
+    // 盤面の DB が workspace の checkout の中にある形 — worker の書き込み半径
+    // (allowWrite: [workspace.path])に盤面の状態が入る、issue #149 の本体。
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
+      { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(wsDir, "board.sqlite") }] },
+    );
+    start("task-overlap");
+    expect(calls).toEqual([]);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+    const question = listBoard(db).find((t) => t.type === "question");
+    expect(question?.purpose).toContain("board database (TIDEPOOL_DB)");
+  });
+
+  it("盤面の状態パスと交差しない workspace は spawn を止めない", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    const boardDir = await mkdtemp(join(tmpdir(), "tidepool-board-"));
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
+      { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }] },
+    );
+    start("task-no-overlap");
+    expect(calls).toHaveLength(1);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+  });
+
+  it("重なりの検査は settings ガードより先に走る(盤面自身の checkout は自前の .claude/settings.json を持つので、後だと診断名が入れ替わる)", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude"), { recursive: true });
+    await writeFile(
+      join(wsDir, ".claude", "settings.local.json"),
+      JSON.stringify({ permissions: { allow: ["Bash(strings *)"] } }),
+    );
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
+      { boardState: [{ label: "the board's own checkout (process cwd)", path: wsDir }] },
+    );
+    start("task-overlap-and-settings");
+    expect(calls).toEqual([]);
+    const question = listBoard(db).find((t) => t.type === "question");
+    expect(question?.purpose).toContain("the board's own checkout (process cwd)");
+    expect(question?.purpose).not.toContain("settings.local.json");
+  });
+
   it("sandbox を含まない通常の project settings(hooks 等)は spawn を止めない", async () => {
     const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
     await mkdir(join(wsDir, ".claude"), { recursive: true });
