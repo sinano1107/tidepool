@@ -43,7 +43,7 @@ issue #140 の再グリリング(2026-07-29)で決定。**ADR 0034 を supersede
 
 #150 の前提は**起票時点(2026-07-29)で既に偽**だった。context-vault の前には Auth0 の JWT リバースプロキシ(`context-vault-auth.service`、`express-oauth2-jwt-bearer`、RS256、`audience` と `issuer` を検証)が立っており、`journalctl` によれば **2026-07-03 から連続稼働**している。トークン無しの `POST /mcp` は **401** を返す。素の MCP(`:8091`)は **127.0.0.1 のみに bind** されており、tailnet の他ノードからは触れない。誤りの出どころは `claude mcp get context-vault` の「ヘッダ設定なし」という出力で、これは OAuth(クライアントが DCR とトークン取得を自前でやる)の姿であって無認証の証拠ではない。皮肉なことに `verify-deploy.sh` は最初から `context-vault-auth.service` の生存を毎回チェックしており、反証はこのリポジトリの中にあった。
 
-**それでも deny は残る。根拠が変わる。** 金庫は `tailscale serve` の **Funnel** で提供されている — tailnet 公開ではなく**公開インターネット**である(`:443` が Funnel on、tidepool の人間面 `:8443` は tailnet only)。したがって worker が `raspberrypi` に到達できること自体が、**盤面の中身を tailnet の外から読める永続ストアへ流し込む経路**になる。持ち出しは far end が認証するかどうかと直交する。`src/sandbox.ts` の `DENIED_TAILNET_DOMAINS` のコメントもこの根拠に差し替えてある。
+**それでも deny は残る。根拠が変わる。** 金庫は `tailscale serve` の **Funnel** で提供されている — tailnet 公開ではなく**公開インターネット**である(`:443` が Funnel on、tidepool の人間面 `:8443` は tailnet only。**確認は `tailscale serve status --json` の `AllowFunnel` を見る** — 人間向けの `serve status` は既定ポートを省くため、`:443` の行はポート表記なしで出て `:443` という文字列は現れない)。したがって worker が `raspberrypi` に到達できること自体が、**盤面の中身を tailnet の外から読める永続ストアへ流し込む経路**になる。持ち出しは far end が認証するかどうかと直交する。`src/sandbox.ts` の `DENIED_TAILNET_DOMAINS` のコメントもこの根拠に差し替えてある。
 
 **タコツボの統合方針も同時に確定した(#150)。** 「統合後は人間面の credential を共有する」という #150 の当初案は**不採用**。あの credential は tailnet 限定・盤面1台・人間1人のための単一トークンであり、タコツボの客は公開インターネット上の外部 OAuth クライアント(claude.ai / iOS / 将来 ChatGPT)だから、寄せると外部クライアントが全滅する。そして**今は統合しない** — 金庫と盤面は同じ Pi に住む無関係な隣人のままで、worker は金庫を一切見ない。構想の正本は context-vault の `projects/tidepool/future-ideas.md`。
 
