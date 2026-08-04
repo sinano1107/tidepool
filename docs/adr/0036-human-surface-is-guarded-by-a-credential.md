@@ -35,7 +35,7 @@ issue #140 の再グリリング(2026-07-29)で決定。**ADR 0034 を supersede
 
 ## ネットワークフィルタは多層の一枚へ格下げ
 
-`deniedDomains: ["*.ts.net"]` を両プロファイルに入れる。主機構ではなくなったが、入れる理由は残る — **同じ Pi の `:443` に、アプリ層の認証をまったく持たない context-vault(将来のタコツボ)が tailnet 公開されている**(#150)。tidepool 側をいくら固めても、worker から見て隣に無防備な個人ナレッジストアが立っている状態は消えない。CIDR エントリ(`100.64.0.0/10`)は**その帯に解決される名前宛のリクエストを塞がない**(実測)ので、0034 の「CGNAT 帯は全帯 deny」は名前パターンでしか表現できない。MagicDNS の短縮名が `*.ts.net` にマッチするかは未測定で、canary で恒常的に測る。
+`deniedDomains: ["*.ts.net"]` を両プロファイルに入れる。主機構ではなくなったが、入れる理由は残る — **同じ Pi の `:443` に、アプリ層の認証をまったく持たない context-vault(将来のタコツボ)が tailnet 公開されている**(#150)。tidepool 側をいくら固めても、worker から見て隣に無防備な個人ナレッジストアが立っている状態は消えない。CIDR エントリ(`100.64.0.0/10`)は**その帯に解決される名前宛のリクエストを塞がない**(実測)ので、0034 の「CGNAT 帯は全帯 deny」は名前パターンでしか表現できない。MagicDNS の短縮名が `*.ts.net` にマッチするかは未測定で、canary で恒常的に測る。**この段落の「アプリ層の認証をまったく持たない」「tailnet 公開」という前提は #150 の実測(2026-08-04)で覆った — 金庫は 2026-07-03 から Auth0 の JWT で守られており、公開されているのは tailnet ではなく Funnel(公開インターネット)である。deny は残るが根拠が変わる。下の #150 追記を参照。**
 
 **追記(#152 実装時、実機で測り直した結果、2026-07-29)**: MagicDNS の短縮名は `*.ts.net` にマッチ**しない**。`src/sandbox.ts` の `buildSandboxSettings` から実際に emit した settings を使い、実 worker と同じ spawn フラグ(`--allowedTools` なし)で計測した — 完全名 `raspberrypi.tailc0084f.ts.net:8443` への `CONNECT` はプロキシが `403 Forbidden` / `X-Proxy-Error: blocked-by-allowlist` で拒否する一方、短縮名 `raspberrypi:8443` への `CONNECT` は `200 Connection Established` でトンネルが通ってしまう(その先の TLS ハンドシェイク失敗はプロキシ層とは無関係)。`deniedDomains` に短縮名の生文字列 `"raspberrypi"` を列挙すると両方とも `403` になることを確認した(独立した2回の invocation で再現)。したがって `deniedDomains: ["*.ts.net", "raspberrypi"]` を両プロファイルに入れる。短縮名には共通の suffix がないため、パターンではなく既知のホスト名を列挙する形を採った。deploy-pi の canary(#154)は、この完全名 + 短縮名の両方を撃つ形をそのまま引き継ぐ。
 
