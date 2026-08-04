@@ -118,9 +118,15 @@ const WORKSPACE_SKILL_SUBDIR = ".claude/skills";
 const PLUGIN_ROOT = "~/.claude/plugins";
 
 /** ADR 0036: floor entry, not the primary mechanism (that's the human-surface
- *  credential) — but independently justified by #150, where an
- *  unauthenticated context-vault sits on the same Pi's tailnet. tidepool's
- *  side of the auth story doesn't close that hole; this deny does.
+ *  credential) — but independently justified by #150, where a *writable*
+ *  context-vault sits on the same Pi. The original wording said
+ *  "unauthenticated"; that was false when #150 was filed and is corrected in
+ *  ADR 0036's #150 addendum — the vault has required an Auth0 JWT since
+ *  2026-07-03. The deny survives the correction on different grounds: the
+ *  vault is served over Tailscale *Funnel*, i.e. the public internet, so a
+ *  worker that can reach `raspberrypi` at all has a route for pushing this
+ *  board's contents into a persistent store readable from outside the tailnet.
+ *  Exfiltration is orthogonal to whether the far end authenticates.
  *
  *  Name patterns, not CIDR: `deniedDomains: ["100.64.0.0/10"]` does not block
  *  a request to a name that resolves into that range (measured 2026-07-29),

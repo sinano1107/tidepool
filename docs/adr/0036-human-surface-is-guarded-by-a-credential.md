@@ -39,6 +39,14 @@ issue #140 の再グリリング(2026-07-29)で決定。**ADR 0034 を supersede
 
 **追記(#152 実装時、実機で測り直した結果、2026-07-29)**: MagicDNS の短縮名は `*.ts.net` にマッチ**しない**。`src/sandbox.ts` の `buildSandboxSettings` から実際に emit した settings を使い、実 worker と同じ spawn フラグ(`--allowedTools` なし)で計測した — 完全名 `raspberrypi.tailc0084f.ts.net:8443` への `CONNECT` はプロキシが `403 Forbidden` / `X-Proxy-Error: blocked-by-allowlist` で拒否する一方、短縮名 `raspberrypi:8443` への `CONNECT` は `200 Connection Established` でトンネルが通ってしまう(その先の TLS ハンドシェイク失敗はプロキシ層とは無関係)。`deniedDomains` に短縮名の生文字列 `"raspberrypi"` を列挙すると両方とも `403` になることを確認した(独立した2回の invocation で再現)。したがって `deniedDomains: ["*.ts.net", "raspberrypi"]` を両プロファイルに入れる。短縮名には共通の suffix がないため、パターンではなく既知のホスト名を列挙する形を採った。deploy-pi の canary(#154)は、この完全名 + 短縮名の両方を撃つ形をそのまま引き継ぐ。
 
+**追記(#150、2026-08-04 実測)— 上段の「認証をまったく持たない」は事実ではなかった。deny の根拠を差し替える。**
+
+#150 の前提は**起票時点(2026-07-29)で既に偽**だった。context-vault の前には Auth0 の JWT リバースプロキシ(`context-vault-auth.service`、`express-oauth2-jwt-bearer`、RS256、`audience` と `issuer` を検証)が立っており、`journalctl` によれば **2026-07-03 から連続稼働**している。トークン無しの `POST /mcp` は **401** を返す。素の MCP(`:8091`)は **127.0.0.1 のみに bind** されており、tailnet の他ノードからは触れない。誤りの出どころは `claude mcp get context-vault` の「ヘッダ設定なし」という出力で、これは OAuth(クライアントが DCR とトークン取得を自前でやる)の姿であって無認証の証拠ではない。皮肉なことに `verify-deploy.sh` は最初から `context-vault-auth.service` の生存を毎回チェックしており、反証はこのリポジトリの中にあった。
+
+**それでも deny は残る。根拠が変わる。** 金庫は `tailscale serve` の **Funnel** で提供されている — tailnet 公開ではなく**公開インターネット**である(`:443` が Funnel on、tidepool の人間面 `:8443` は tailnet only)。したがって worker が `raspberrypi` に到達できること自体が、**盤面の中身を tailnet の外から読める永続ストアへ流し込む経路**になる。持ち出しは far end が認証するかどうかと直交する。`src/sandbox.ts` の `DENIED_TAILNET_DOMAINS` のコメントもこの根拠に差し替えてある。
+
+**タコツボの統合方針も同時に確定した(#150)。** 「統合後は人間面の credential を共有する」という #150 の当初案は**不採用**。あの credential は tailnet 限定・盤面1台・人間1人のための単一トークンであり、タコツボの客は公開インターネット上の外部 OAuth クライアント(claude.ai / iOS / 将来 ChatGPT)だから、寄せると外部クライアントが全滅する。そして**今は統合しない** — 金庫と盤面は同じ Pi に住む無関係な隣人のままで、worker は金庫を一切見ない。構想の正本は context-vault の `projects/tidepool/future-ideas.md`。
+
 **tailnet は信頼境界ではない。** `tailscale serve` は身元ヘッダを注入できるので「tailnet 経由は身元があるから素通し」にしたくなるが、worker が走るのは開発機や Pi という tailnet ノードそのものであり、worker の WebFetch から出た要求も人間と同じノード身元を持って到着する。認証は経路を問わず一律に効かせる。
 
 ## fail-closed は ADR 0033 に相乗りする
