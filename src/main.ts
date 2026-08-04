@@ -1,55 +1,20 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { platform } from "node:process";
 import { fileURLToPath } from "node:url";
-import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
-import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
 import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
 import { boardStatePaths } from "./board-state.js";
-import { ClaudeDraftClient } from "./claude-draft-client.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
-import {
-  ClaudeCodeWorker,
-  enumerateHostSkills,
-  probeToolSurfaceCapability,
-} from "./claude-worker.js";
+import { ClaudeCodeWorker } from "./claude-worker.js";
 import { SystemClock } from "./clock.js";
-import type { DraftClient } from "./draft.js";
-import { GhCliClient } from "./github.js";
 import { loadGitHubAuth } from "./github-auth.js";
 import { parseGlossary } from "./glossary.js";
-import {
-  createProfile,
-  listProfileViews,
-  type ProfileAdmin,
-  updateProfile,
-} from "./profile-create.js";
-import { type PushClient, type VapidConfig, WebPushClient } from "./push.js";
-import {
-  type AuthorityProfile,
-  loadRegistry,
-  ownEntry,
-  type RegistryCandidates,
-  type RosterAgent,
-} from "./registry.js";
-import { checkSandboxCapability } from "./sandbox.js";
+import type { VapidConfig } from "./push.js";
 import { startServer, type WorkerFactory } from "./server.js";
 import { buildServerOptions } from "./server-options.js";
 import { DEFAULT_AUDITOR_NAME, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
-import {
-  listRegisteredWorkspaces,
-  resolveExecutionWorkspace,
-  resolveWorkspacesBaseDir,
-  type WorkspaceConfig,
-} from "./workspace.js";
-import {
-  createWorkspace,
-  listWorkspaceViews,
-  updateWorkspace,
-  type WorkspaceAdmin,
-} from "./workspace-create.js";
+import { resolveWorkspacesBaseDir } from "./workspace.js";
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
@@ -98,7 +63,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 // これまで使う場所(startServer 呼び出し / workerFactory)で env を読んでいたが、
 // 重なりガードが同じ値を見る以上、綴りが2つあると守る対象と実際の置き場が黙って
 // ずれる。既定は cwd 相対のまま残す(ADR 0040: cwd 全体が保護対象になった今、
-// 既定を動かしても罠の表面積は縮まない)。
+// 既定を動かしても罠の表面積は縮まらない)。
 const dbPath = process.env.TIDEPOOL_DB ?? "board.sqlite";
 const logDir = process.env.TIDEPOOL_WORKER_LOGS ?? "worker-logs";
 const apiTokenFile = resolveTokenFile(process.env.TIDEPOOL_API_TOKEN_FILE);
@@ -141,128 +106,6 @@ function workerFactory(): WorkerFactory {
     });
 }
 
-/** The board's own view of the workspace (branch discipline + tree rule):
- *  the same registry entry the worker runs in, resolved to its path. */
-function workspaceConfig(): WorkspaceConfig | undefined {
-  if (!registryDir) return undefined;
-  return resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, null, workspacesDir);
-}
-
-/** Resolves any task's execution workspace against the registry (issue #26 /
- *  ADR 0009): read fresh every call, never pinned to a path at pickup. Absent
- *  → every task runs against the single `workspaceConfig()` above (no
- *  registry configured at all). */
-function workspaceResolver(): ((taskWorkspace: string | null) => WorkspaceConfig) | undefined {
-  if (!registryDir) return undefined;
-  return (taskWorkspace) =>
-    resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace, workspacesDir);
-}
-
-/** ADR 0040 の boot 一斉検査の対象: 登録済み workspace 全件。他の resolver たちと
- *  同じく registry から fresh に読み直す(ADR 0009)。registry なし → workspace と
- *  いう概念自体が無い。 */
-function registeredWorkspaces(): WorkspaceConfig[] {
-  if (!registryDir) return [];
-  return listRegisteredWorkspaces(loadRegistry(registryDir), workspacesDir);
-}
-
-/** fable モデルに解決される agent 名の集合 (ADR 0030)、毎 poll registry から
- *  読み直す。CLI の --model は開かれた文字列("fable" でも "claude-fable-5"
- *  でも通る)なので、部分一致で fable 系と判定する。default agent が fable
- *  なら assignee 未設定のタスクもここに含まれる名前へ解決される(SQL 側の
- *  COALESCE)。registry なし → fable 判定は不可能、skip なし。 */
-function fableAgentsResolver(): (() => string[]) | undefined {
-  if (!registryDir) return undefined;
-  return () =>
-    Object.values(loadRegistry(registryDir).agents)
-      .filter((agent) => agent.model?.toLowerCase().includes("fable"))
-      .map((agent) => agent.name);
-}
-
-/** Resolves the executing task's own agent's authority profile (ADR 0012 /
- *  issue #36), read fresh against the registry every call from the task's own
- *  `assignee` (null → the board's default agent, `TIDEPOOL_AGENT`) — the
- *  delegation-aware successor to a single board-wide fixed profile, which
- *  every task shared regardless of who it was actually assigned to. An
- *  assignee the registry no longer knows (drift since the owning task's own
- *  session spawned) falls back to unrestricted here rather than throwing —
- *  the spawn-time gate (ClaudeCodeWorker.start) is what quarantines that.
- *  Without a registry, no agent's authority is knowable at all — unrestricted. */
-function authorityResolver(): ((assignee: string | null) => AuthorityProfile | undefined) | undefined {
-  if (!registryDir) return undefined;
-  return (assignee) => {
-    try {
-      return resolveExecutionAgent(loadRegistry(registryDir), defaultAgentName, assignee).profile;
-    } catch (err) {
-      if (!(err instanceof UnknownAgentError)) throw err;
-      return undefined;
-    }
-  };
-}
-
-/** Whether an agent name is currently registered (ADR 0012 / issue #36), read
- *  fresh against the registry — one half of an agent quarantine Confirmation
- *  question's clearance check (api.ts). Without a registry, no name is ever
- *  "back" — only "no more todo tasks depend on it" can clear it. */
-function agentRegisteredChecker(): ((name: string) => boolean) | undefined {
-  if (!registryDir) return undefined;
-  // ownEntry, not `in`: `in` walks the prototype chain, so a name like
-  // "toString" would clear an agent quarantine without any repair (issue #69)
-  return (name) => ownEntry(loadRegistry(registryDir).agents, name) !== undefined;
-}
-
-/** Whether an explicitly named workspace is protected (issue #15 layer 2 /
- *  ADR 0013), read fresh against the registry — a decompose child naming a
- *  protected workspace converts to an approval question unconditionally
- *  (mcp.ts), and a task executing against one always asks before merging its
- *  PR (tasks.ts's recordPrOpened), regardless of the registering/executing
- *  worker's authority profile. Without a registry, no workspace is ever
- *  protected. */
-function protectedWorkspaceChecker(): ((name: string) => boolean) | undefined {
-  if (!registryDir) return undefined;
-  // ownEntry for consistency with issue #69's sweep — a prototype hit would
-  // already answer "not protected", but bare bracket access on registry
-  // records is the exact pattern the sweep exists to remove
-  return (name) => ownEntry(loadRegistry(registryDir).workspaces, name)?.protected === true;
-}
-
-/** The pull half of the roster (issue #43 / ADR 0014), read fresh against the
- *  registry — same pattern as agentRegisteredChecker. Without a registry
- *  there's nothing to list beyond list_agents's own fixed `human` line. */
-function listAgentsResolver(): (() => RosterAgent[]) | undefined {
-  if (!registryDir) return undefined;
-  return () =>
-    Object.values(loadRegistry(registryDir).agents).map((agent) => ({
-      name: agent.name,
-      description: agent.description,
-    }));
-}
-
-/** Assignee/workspace candidates for the registration screen (issue #12).
- *  Without a registry there's nothing to suggest from. */
-function registryCandidates(): RegistryCandidates | undefined {
-  if (!registryDir) return undefined;
-  const registry = loadRegistry(registryDir);
-  const icons: Record<string, string> = {};
-  for (const agent of Object.values(registry.agents)) {
-    if (agent.icon !== undefined) icons[agent.name] = agent.icon;
-  }
-  return {
-    assignees: [...Object.keys(registry.agents), "human"],
-    workspaces: Object.keys(registry.workspaces),
-    icons,
-  };
-}
-
-/** DraftClient (issue #12's brain-dump-to-fields LLM draft), wired to the
- *  real Claude CLI (issue #25) only when a registry is configured — same
- *  registryDir gate as workerFactory() above. Without it there's no worker
- *  either, so the board runs the LoggingWorker with drafting off too. */
-function draftClientFactory(): DraftClient | undefined {
-  if (!registryDir) return undefined;
-  return new ClaudeDraftClient({ candidates: registryCandidates() });
-}
-
 /** CONTEXT.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
  *  for the translation client's prompt. Absent/unreadable CONTEXT.md → no
  *  glossary guidance rather than a boot failure — the glossary sharpens
@@ -276,7 +119,7 @@ function boardGlossary(): ReturnType<typeof parseGlossary> {
 }
 
 /** TranslationClient (issue #47 / ADR 0015's display-time translation),
- *  wired to the real Claude CLI. Unlike draftClientFactory, this needs no
+ *  wired to the real Claude CLI. Unlike the draft client, this needs no
  *  registry — only the `claude` CLI and the board's own CONTEXT.md — so it's
  *  always configured, never gated. */
 function translationClientFactory(): TranslationClient {
@@ -285,72 +128,14 @@ function translationClientFactory(): TranslationClient {
 
 /** Web Push (issue #14): all three VAPID env vars must be set together, or
  *  push stays off — a partial configuration would silently drop every send.
- *  The single source both pushClient() and the API's vapidPublicKey option
- *  read from, so the "all three or none" gate is never checked twice. */
+ *  The single value both the push client and the API's vapidPublicKey option
+ *  are derived from, so the "all three or none" gate is never checked twice. */
 function vapidConfig(): VapidConfig | undefined {
   const subject = process.env.TIDEPOOL_VAPID_SUBJECT;
   const publicKey = process.env.TIDEPOOL_VAPID_PUBLIC_KEY;
   const privateKey = process.env.TIDEPOOL_VAPID_PRIVATE_KEY;
   if (!subject || !publicKey || !privateKey) return undefined;
   return { subject, publicKey, privateKey };
-}
-
-function pushClient(): PushClient | undefined {
-  const vapid = vapidConfig();
-  return vapid ? new WebPushClient(vapid) : undefined;
-}
-
-// ADR 0024 / issue #50: the board's GitHub identity is the machine-user token
-// in this mode-600 secrets file — no file, no identity, and every GitHub
-// feature stays fail-closed off (the optional `github` shape below). The
-// token itself never enters process.env: workers inherit that wholesale.
-const githubAuth = loadGitHubAuth(process.env.TIDEPOOL_GITHUB_TOKEN_FILE);
-const github = githubAuth && new GhCliClient(githubAuth);
-
-/** The settings surface's workspace verbs (issue #57), bound to this board's
- *  registry clone, base dir (ADR 0018) and GitHub client here at the
- *  composition root — the API layer only ever sees the finished callbacks.
- *  Without a registry there is nowhere to administer workspaces at all. */
-function workspaceAdmin(): WorkspaceAdmin | undefined {
-  if (!registryDir) return undefined;
-  // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
-  const deps = { registryDir, workspacesBaseDir: workspacesDir, githubAuth, boardState };
-  return {
-    create: (input) => createWorkspace(input, { ...deps, github }),
-    list: () => listWorkspaceViews(deps),
-    update: (input) => updateWorkspace(input, deps),
-  };
-}
-
-/** The settings surface's agent verbs (issue #71), workspaceAdmin's twin:
- *  bound to this board's registry clone here at the composition root — the
- *  API layer only ever sees the finished callbacks. Without a registry there
- *  is nowhere to administer agents at all. */
-function agentAdmin(): AgentAdmin | undefined {
-  if (!registryDir) return undefined;
-  const deps = { registryDir, githubAuth };
-  return {
-    create: (input) => createAgent(input, deps),
-    list: () => listAgentViews(deps),
-    update: (input) => updateAgent(input, deps),
-    // registry-global, not per-agent (issue #71) — read directly here, same
-    // posture as registryCandidates()/agentRegisteredChecker() above
-    authorityProfiles: () => Object.keys(loadRegistry(registryDir).authority),
-  };
-}
-
-/** The settings surface's profile verbs (issue #77), agentAdmin's twin: bound
- *  to this board's registry clone here at the composition root. The API layer
- *  runs the confirmation gate; these verbs only persist. Without a registry
- *  there is nowhere to administer profiles at all. */
-function profileAdmin(): ProfileAdmin | undefined {
-  if (!registryDir) return undefined;
-  const deps = { registryDir, githubAuth };
-  return {
-    create: (input) => createProfile(input, deps),
-    list: () => listProfileViews(deps),
-    update: (input) => updateProfile(input, deps),
-  };
 }
 
 // ADR 0036 / issue #153: 人間面の credential。盤面が持つのはハッシュだけで、
@@ -367,55 +152,30 @@ for (const message of messages) {
   else console.log(message.text);
 }
 
-// ADR 0041 / issue #172: 口の一覧は **buildServerOptions が単独で持つ**。ここに
-// リテラルを書くと、任意フィールドを1つ渡し忘れても型が何も言わない —— watchdog が
-// 本番で一度も走っていなかったのがその形である。
+// ADR 0041 / issue #172: ここは env とホストの副作用だけを引き受ける殻で、
+// **ServerOptions の口の一覧は持たない** —— 一覧を持てば、任意フィールドを1つ
+// 渡し忘れても型もテストも何も言わない(watchdog が本番で一度も走っていなかった
+// のがその形)。口の一覧は server-options.ts が単独で持ち、テストがそれを観測する。
 const server = await startServer(
   buildServerOptions({
     dbPath,
-    credential,
     port,
     mcpPort,
+    credential,
     clock: new SystemClock(),
     worker: workerFactory(),
-    workspace: workspaceConfig(),
-    resolveWorkspace: workspaceResolver(),
-    github,
-    workspaceAdmin: workspaceAdmin(),
-    agentAdmin: agentAdmin(),
-    profileAdmin: profileAdmin(),
-    resolveAuthority: authorityResolver(),
-    agentRegistered: agentRegisteredChecker(),
-    isProtectedWorkspace: protectedWorkspaceChecker(),
-    listAgents: listAgentsResolver(),
-    // pass the provider itself, not a boot-time snapshot: the register screen's
-    // candidates must reflect agents/workspaces created live through settings
-    registryCandidates: registryCandidates,
-    draftClient: draftClientFactory(),
-    translationClient: translationClientFactory(),
-    push: pushClient(),
-    vapidPublicKey: vapidConfig()?.publicKey,
+    registryDir,
+    workspaceName,
+    workspacesDir,
+    defaultAgentName,
     auditorName,
-    // the skills picker's candidate source (issue #106): the real `claude` CLI's
-    // neutral-cwd enumeration — always available on a real host, faked in tests
-    hostSkills: enumerateHostSkills,
-    fableAgents: fableAgentsResolver(),
-    // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
-    // #154、ADR 0039 / issue #164)。ここが唯一の実検査の配線点 — テスト盤面は
-    // 封じ込める実プロセスを持たないので、このゲート自体を持たない。人間面の
-    // 自己検査は startServer が実ポートを知った後に自分で足す。
-    //
-    // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
-    // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
-    // 再実行に依っている(ADR 0039 決定3)。
-    // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
-    // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
-    // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
-    boardState: { paths: boardState, listWorkspaces: registeredWorkspaces },
-    containment: {
-      sandboxCapability: () => checkSandboxCapability(platform),
-      toolSurface: () => probeToolSurfaceCapability(),
-    },
+    boardState,
+    // ADR 0024 / issue #50: the board's GitHub identity is the machine-user
+    // token in this mode-600 secrets file — no file, no identity. The token
+    // itself never enters process.env: workers inherit that wholesale.
+    githubAuth: loadGitHubAuth(githubTokenFile),
+    vapid: vapidConfig(),
+    translationClient: translationClientFactory(),
   }),
 );
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
