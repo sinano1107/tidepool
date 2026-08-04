@@ -28,7 +28,9 @@ env に出さない理由は ADR 0037 と同じ軸である: **盤面の不変�
 
 値そのものの根拠:
 
-- **`work` = 90分。** `/etc/default/tidepool` の `CLAUDE_STREAM_IDLE_TIMEOUT_MS` は 10分(#33 / anthropics/claude-code#69238 の回避)なので、byte-idle 由来のストールは CLI 側が拾う。拾えないのは**ループに入ったセッション** — バイトを出し続けるので idle 検知が効かず、watchdog だけが backstop になる。kill は失敗 question(retry / abandon)+ push に落ちる**回復可能**な事象なので、夜の8時間のうち最大90分の損失に抑える側へ倒す。
+- **`work` = 90分。** `CLAUDE_STREAM_IDLE_TIMEOUT_MS` は 10分(#33 / anthropics/claude-code#69238 の回避)なので、byte-idle 由来のストールは CLI 側が拾う。拾えないのは**ループに入ったセッション** — バイトを出し続けるので idle 検知が効かず、watchdog だけが backstop になる。kill は失敗 question(retry / abandon)+ push に落ちる**回復可能**な事象なので、夜の8時間のうち最大90分の損失に抑える側へ倒す。
+
+  **置き場の訂正(2026-08-04 / issue #33)**: この根拠を書いた時点で 10分の idle timeout は Pi の `/etc/default/tidepool` にあった。#33 でその2本(`CLAUDE_STREAM_IDLE_TIMEOUT_MS` / `API_TIMEOUT_MS`)は adapter の spawn 時 env へ移り、ホスト側からは外れる — registry からも盤面のコードからも見えない第二の正本を残さないため(ADR 0005)。**値も適用範囲も変えていない**: 同じ 10分が、advisor の有無に依らず**全 worker セッション**に掛かる。ここで advisor on のセッションだけに絞る設計を採らなかったのは、まさにこの根拠のためである — 絞れば advisor off のセッションについて「10分の idle timeout が全セッションに掛かっている」という前提だけが静かに外れ、それらのタスクは watchdog の90分まで一切の backstop を持たなくなる。
 - **`grace` = 60秒 = 1 tick。** `WATCHDOG_TICK` が 60秒なので、それ未満の猶予は事実上1tick へ丸められる。**全ての値が分単位に量子化される**ことを前提に選ぶ。比較は `>=` なので SIGTERM の次の tick で SIGKILL が出る。
 
 ## 同種の穴の捜索(#172 やること4)
@@ -37,6 +39,8 @@ env に出さない理由は ADR 0037 と同じ軸である: **盤面の不変�
 - **`ApiRouterDeps`(任意19)/ `McpDeps`(任意10)**: `server.ts` が全件を property として転送している。ここは合成 root ではなく `ServerOptions` から機械的に降りる層なので、穴の形が違う(渡し忘れは同じ1ファイルの中で完結する)。
 - **インライン `deps: {...}` 型**: 名前付き interface だけを見ると見落とすので別途走査した。該当は `startScheduler`(任意6 — `workspace` / `resolveWorkspace` / `auditorName` / `github` / `fableAgents` / `containment`)と `startWatchdog`(任意2)と `pollNotifications`(任意1)で、いずれも `server.ts` が全件転送している。**この層は `ServerOptions` の下**なので、`buildServerOptions` が口を確保すれば穴は上から塞がる。
 - **`ClaudeWorkerOptions` の `spawn` / `pty` / `enumerateSkills`**: **#172 の類ではない。** 不在が意味するのは「機能が静かに切れる」ではなく「実物を使う」であり、テスト側が渡すのは実プロセスを差し替えるためである(ADR 0027 の fake 注入の形)。`auditorName` / `workspacesDir` / `boardState` は `main.ts` が渡している。
+
+  **この分類は当時の顔ぶれについてのみ正しい(ADR 0043 で部分的に取り消し)。** issue #33 が足した `advisorDisabled`(advisor のグローバル kill switch)は注入 seam ではなく機能そのもので、渡し忘れの壊れ方は fail-open — #172 の形がこの層で再演する。ADR 0043 が口の一覧を `buildWorkerOptions`(`server-options.ts`)へ出し、同じ実行時の突き合わせを掛けた。§1 / §4 の「`BoardComposition` は `ServerOptions` のキーを1つも含まない」という文言が文字通りには成立していないことも、そこで訂正している。
 
 ## Considered options
 

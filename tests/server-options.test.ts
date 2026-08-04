@@ -2,8 +2,14 @@ import { readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { type BoardComposition, buildServerOptions, WATCHDOG } from "../src/server-options.js";
-import { FakeClock, FakeTranslationClient, ScriptedWorker } from "./fakes.js";
+import { openDb } from "../src/db.js";
+import {
+  type BoardComposition,
+  buildServerOptions,
+  buildWorkerOptions,
+  WATCHDOG,
+} from "../src/server-options.js";
+import { FakeClock, FakeTranslationClient } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -22,8 +28,9 @@ function composition(): BoardComposition {
     mcpPort: 0,
     credential: TEST_CREDENTIAL,
     clock,
-    worker: () => new ScriptedWorker(clock),
     registryDir: undefined,
+    logDir: "/nonexistent/worker-logs",
+    advisorDisabled: false,
     workspaceName: "sandbox",
     workspacesDir: "/nonexistent/workspaces",
     defaultAgentName: "tako",
@@ -110,6 +117,67 @@ it("main.ts は buildServerOptions が組み立てたオプションで盤面を
 const dirs: string[] = [];
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
+
+/** ADR 0043 / issue #33: 同じ網羅を **worker options 層**にも掛ける。
+ *
+ *  ADR 0041 は `ClaudeWorkerOptions` を「#172 の類ではない」と除外していたが、
+ *  その根拠は当時の任意フィールドが `spawn` / `pty` / `enumerateSkills` ——
+ *  **不在 = 実物を使う**というテスト用の注入 seam —— だけだったことにある。
+ *  advisor の kill switch は機能そのもので、渡し忘れれば「緊急マスクが効かない」
+ *  形で fail-open に壊れる: 全部が健康に見えたまま advisor が止まらない。
+ *  除外一覧をテスト側に置くのは ADR 0041 §3 と同じ理由 —— 除外を1つ増やすことは
+ *  「その口は本番で永久に立たない」という宣言だからである。 */
+it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam を除いて全て組み立てられる(ADR 0043)", async () => {
+  const body = (() => {
+    const s = source("claude-worker.ts");
+    const rest = s.slice(s.indexOf("export interface ClaudeWorkerOptions {"));
+    return rest.slice(0, rest.indexOf("\n}\n"));
+  })();
+  const optional = [...body.matchAll(/^ {2}(\w+)\?:/gm)].flatMap((m) => (m[1] ? [m[1]] : []));
+  // 走査が壊れていないことの control(server 側の網羅テストと同じ形)
+  expect(optional).toEqual(expect.arrayContaining(["advisorDisabled", "spawn", "boardState"]));
+
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  const emitted = new Set(
+    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock() })),
+  );
+  // 不在が正当なのは注入 seam の3つだけ —— そこでの不在は「機能が静かに切れる」
+  // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。
+  expect(optional.filter((key) => !emitted.has(key))).toEqual(["spawn", "pty", "enumerateSkills"]);
+});
+
+/** 上の網羅は `buildWorkerOptions` の戻り値を見ている。本番の worker がその
+ *  リテラルで組まれていなければ空振りする —— ADR 0041 §4 の「テストは合成 root が
+ *  組み立てたものを観測する」を、この層にも同じ形で適用する。
+ *
+ *  経由そのものは `ServerOptions.worker` の網羅(上の #172 のテスト)が既に
+ *  押さえている: `buildServerOptions` が `buildWorkerFactory` を呼んで埋める口な
+ *  ので、そこが切れれば必須フィールドとして型が落ちる。ここが足すのは**口の一覧が
+ *  main.ts に戻っていないこと**だけ —— リテラルが向こうにあれば、上の網羅テストが
+ *  観測するのはテスト自身が書いた複製にしかならない(#172 の構図が一段ずれて再現
+ *  する)。 */
+it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", () => {
+  expect(source("main.ts")).not.toMatch(/new ClaudeCodeWorker\(/);
+  // 本番の合成が実際にその一覧を使っていること(呼び出しの**形**は主張しない)
+  expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(buildWorkerOptions\(/);
+});
+
+/** キーが揃っていることと、**どのキーに何が刺さっているか**は別の主張である
+ *  (ADR 0041 §5 と同じ線)。kill switch は真偽値1つなので、取り違えても型検査は
+ *  黙る —— しかも壊れ方が fail-open なので、黙ったまま advisor が止まらなくなる。 */
+it("kill switch は盤面の合成からそのまま worker options へ届く(判断8)", async () => {
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  const options = (advisorDisabled: boolean) =>
+    buildWorkerOptions(
+      { ...composition(), registryDir, advisorDisabled },
+      { db: openDb(":memory:"), clock: new FakeClock() },
+    );
+
+  expect(options(true).advisorDisabled).toBe(true);
+  expect(options(false).advisorDisabled).toBe(false);
 });
 
 /** 上の網羅テストは `registryDir` 未設定で走る — registry 由来の口が**すべて**
