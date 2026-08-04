@@ -6,6 +6,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
+import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCheck, openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
@@ -91,6 +92,7 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 import {
+  BoardStateOverlapError,
   GitHubIdentityMissingError,
   RegistrySelfUnprotectError,
   UnprotectNeedsConfirmationError,
@@ -512,6 +514,13 @@ export interface ApiRouterDeps {
    *  the MCP `decompose` tool's own `isProtectedWorkspace` already enforces
    *  for an agent's decompose. Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean;
+  /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
+   *  process), bound by main.ts. The quarantine answer route re-runs the
+   *  overlap check against them before it accepts a repair confirmation —
+   *  a clean tree is not a repair when the workspace still intersects the
+   *  board's own state. Absent → no state paths to protect (a board booted
+   *  without them, e.g. most test boards). */
+  boardState?: BoardStatePath[];
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -537,6 +546,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     translationClient,
     fableAgents,
     isProtectedWorkspace,
+    boardState,
   } = deps;
   const router = Router();
   router.use(json());
@@ -796,6 +806,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // flow retries later; anything else is an external step failing — 502,
       // and the retry reuses whatever orphan it left behind (issue #57)
       if (err instanceof InvalidWorkspaceNameError) {
+        res.status(400).json({ error: err.message });
+      } else if (err instanceof BoardStateOverlapError) {
+        // ADR 0040 / issue #149: 出し直せば通り得る入力の問題(別のパスを指す)
+        // なので、名前検証と同じ 400 — 盤面の故障(502)でも未設定(503)でもない
         res.status(400).json({ error: err.message });
       } else if (err instanceof RegistryCloneBusyError) {
         res.status(409).json({ error: err.message });
@@ -1285,6 +1299,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           verifyWorkspaceClean(target);
         } catch (err) {
           throw new DomainError(err instanceof Error ? err.message : String(err));
+        }
+        // ADR 0040 / issue #149: 既存の検証(registry に存在し、ツリーがクリーン)に
+        // 重ねる1枚。重なりで止めた workspace は、ツリーを掃除しただけでは直って
+        // いない — 直りは registry のエントリが別の checkout を指すこと(あるいは
+        // 盤面の状態パスが動くこと)なので、受理の直前に同じ検査を撃ち直す。
+        if (boardState) {
+          const overlap = boardStateOverlap(target.path, boardState);
+          if (overlap) throw new DomainError(overlap.reason);
         }
       }
       // the agent-name generalization of the workspace branch above (ADR

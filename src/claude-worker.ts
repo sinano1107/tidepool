@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
+import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -568,6 +569,13 @@ export interface ClaudeWorkerOptions {
   /** issue #81 / ADR 0028: the PTY boundary checkUsage scrapes /usage at.
    *  Injected so the scrape orchestration runs without a real PTY in tests. */
   pty?: PtyFn;
+  /** ADR 0040 / issue #149: the board's own state paths, fixed for the whole
+   *  process (`boardStatePaths`, built at the composition root). A task whose
+   *  workspace intersects one of them is refused here — the write radius of a
+   *  `work` session is its workspace (ADR 0033), so the board's own state
+   *  would be inside it. Absent → the board has no state paths to protect
+   *  (a worker constructed outside main.ts, e.g. in tests). */
+  boardState?: BoardStatePath[];
   /** issue #56 / ADR 0025: the skill-enumeration boundary the complement-deny
    *  ping runs at. Injected so the deny plumbing is tested without a real CLI. */
   enumerateSkills?: EnumerateSkillsFn;
@@ -1172,6 +1180,23 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // the floor in session N, walk out in N+1. A workspace that redefines the
     // floor is a broken resource — quarantined like a dirty tree, and no session
     // starts in it meanwhile.
+    // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
+    // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
+    // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
+    // 迂回)。危険なのはその workspace で走る worker だけなので、封じ込め能力の
+    // ような盤面全体停止ではなく workspace quarantine — 直下の settings ガードと
+    // 同じ形・同じ場所。
+    //
+    // **settings ガードより先に見る**: この罠が現実に当たるのは「盤面自身の
+    // checkout を workspace 登録した」瞬間で、その checkout は自分の
+    // `.claude/settings.local.json` を持っていることが多い。後ろに置くと真だが
+    // 的外れな診断(「settings が床を広げている」)が先に立ち、人間は
+    // settings を消して回ることになる。
+    const overlap = this.options.boardState && boardStateOverlap(workspace.path, this.options.boardState);
+    if (overlap) {
+      quarantineWorkspace(this.options.db, workspace.name, new Error(overlap.reason), this.options.clock.now());
+      return;
+    }
     const overriding = floorOverridingSettings(workspace.path);
     if (overriding.length > 0) {
       quarantineWorkspace(

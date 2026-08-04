@@ -5,6 +5,7 @@ import express from "express";
 import type { AgentAdmin } from "./agent-create.js";
 import { createApiRouter } from "./api.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
+import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import {
   type ContainmentCapability,
@@ -151,6 +152,19 @@ export interface ServerOptions {
    *  だけで、composition root(main.ts)には導出できないため。
    *
    *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。 */
+  /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)と、boot
+   *  時に一斉検査する登録済み workspace の列挙。Absent → 守る状態パスを持たない
+   *  盤面(実プロセスの env を持たないテスト盤面の既定形)。main.ts は常に渡す。
+   *
+   *  ここが持つのは**早く騒ぐ側**だけで、床は pickup(claude-worker.ts)にある —
+   *  workspace は WebUI から実行時に登録できるので、boot 一点では取りこぼす。
+   *  `paths` は quarantine 解除の検証(api.ts)にも同じものが渡る。 */
+  boardState?: {
+    paths: BoardStatePath[];
+    /** 登録済み workspace を registry から fresh に解決したもの。列挙が投げても
+     *  起動は続く(sweepBoardStateOverlap が握る)。 */
+    listWorkspaces: () => WorkspaceConfig[];
+  };
   containment?: {
     sandboxCapability: () => SandboxCapability;
     /** ツール面の問い(ADR 0039)。**`null` を明示すると**3つ目の問いを持たない
@@ -184,6 +198,17 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       "the server restarted while this task was in progress; no self-report is " +
         "possible (ADR 0001: a restart never drains gracefully).",
       buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
+      options.clock.now(),
+    );
+  }
+  // ADR 0040 / issue #149: 登録済み全 workspace への一斉検査。**scheduler より
+  // 前**に撃つ — 重なっている workspace のタスクが最初の poll で slot に入る前に
+  // needs-human を立てておきたい。起動は拒まない(床は pickup 側)。
+  if (options.boardState) {
+    sweepBoardStateOverlap(
+      db,
+      options.boardState.paths,
+      options.boardState.listWorkspaces,
       options.clock.now(),
     );
   }
@@ -315,6 +340,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
       isProtectedWorkspace: options.isProtectedWorkspace,
+      // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
+      // 床と同じ1つの配列(3箇所で別々に組み立てない)
+      boardState: options.boardState?.paths,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

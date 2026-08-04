@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
+import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { GitHubClient } from "./github.js";
 import { authedGit, type GitHubAuth } from "./github-auth.js";
 import {
@@ -58,6 +59,13 @@ export type CreateWorkspaceInput = {
 export interface WorkspaceAdminDeps {
   registryDir: string;
   workspacesBaseDir: string;
+  /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
+   *  process), threaded in by the composition root. The creation gate refuses
+   *  a workspace that would intersect one of them. Absent → nothing to protect
+   *  (a caller outside main.ts, e.g. a test); the pickup-side floor
+   *  (claude-worker.ts) still catches whatever gets registered anyway —
+   *  including the registry-edit PR path, which never passes this gate. */
+  boardState?: BoardStatePath[];
   /** The board's GitHub identity (ADR 0024), absent when no secrets file is
    *  configured — registry pushes and clones then run unauthenticated, the
    *  same fail-closed posture as the optional `github` client below. */
@@ -94,6 +102,29 @@ export class GitHubIdentityMissingError extends Error {
   }
 }
 
+/** The registration gate's refusal (ADR 0040 / issue #149): the checkout this
+ *  entry would point at intersects one of the board's own state paths. issue
+ *  #121 refused a registration-time check for *injectivity* because that is a
+ *  human convention and the check would be inaccurate — this one is path
+ *  containment, which is exact, and it guards a floor, so the gate may refuse
+ *  it outright. The floor itself still lives at pickup (claude-worker.ts): a
+ *  registry-edit PR never passes through here. */
+export class BoardStateOverlapError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "BoardStateOverlapError";
+  }
+}
+
+/** Where this creation's checkout will actually live — the one path the gate
+ *  judges. `register` records an explicit host path; `clone` and `create` both
+ *  land at the convention-derived location (ADR 0018), which does not exist
+ *  yet at gate time (boardStateOverlap resolves the deepest existing ancestor
+ *  and joins the rest lexically — ADR 0040). */
+function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminDeps): string {
+  return input.mode === "register" ? input.path : join(deps.workspacesBaseDir, input.name);
+}
+
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
@@ -104,6 +135,12 @@ export async function createWorkspace(
   assertRegistryCloneReady(deps.registryDir);
   const registry = loadRegistry(deps.registryDir);
   assertValidWorkspaceName(registry, input.name);
+  // ADR 0040: before any external effect — a refused registration must not
+  // leave a clone or a GitHub repository behind.
+  if (deps.boardState) {
+    const overlap = boardStateOverlap(intendedCheckoutPath(input, deps), deps.boardState);
+    if (overlap) throw new BoardStateOverlapError(overlap.reason);
+  }
   const entry = await buildEntry(input, deps);
   if (input.notes !== undefined) entry.notes = input.notes;
   if (input.protected) entry.protected = true;

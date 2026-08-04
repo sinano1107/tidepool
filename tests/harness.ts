@@ -11,6 +11,7 @@ import {
   type HumanCredential,
   hashToken,
 } from "../src/auth.js";
+import type { BoardStatePath } from "../src/board-state.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
@@ -138,6 +139,13 @@ export interface BootOptions {
    *  ゲートそのものが arm されない**(封じ込めは1つの検査であって3つのゲートでは
    *  ない)。Absent → 3つ目の問いを持たない盤面: 実 CLI を持たないテストの既定形。 */
   toolSurface?: () => Promise<ContainmentCapability>;
+  /** 盤面自身の状態パスと、boot 一斉検査の対象(ADR 0040 / issue #149)。
+   *  Absent → 守る状態パスを持たない盤面(既定): テスト盤面は実プロセスの env を
+   *  持たないので、重なりガードそのものを駆動するテストだけが渡す。 */
+  boardState?: {
+    paths: BoardStatePath[];
+    listWorkspaces: () => WorkspaceConfig[];
+  };
   /** 人間面の credential(issue #153 / ADR 0036)。Absent → 既定の
    *  `TEST_CREDENTIAL`。認証が成立しない盤面の振る舞い(fail-open と、それを
    *  検出する封じ込め能力ゲート — issue #154)を駆動するテストだけが渡す。 */
@@ -193,6 +201,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
+    boardState: options.boardState,
     containment: options.sandboxCapability && {
       sandboxCapability: options.sandboxCapability,
       // 明示の null = 3つ目の問いを持たないテスト盤面(server.ts の口が省略を許さない)
