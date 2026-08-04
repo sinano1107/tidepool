@@ -97,6 +97,26 @@ describe("ClaudeDraftClient", () => {
     expect(prompt).toContain("sandbox");
   });
 
+  // ADR 0044: 下書きは Board call であり advisor を持たない。既に渡している
+  // `--safe-mode` は advisor を塞がない —— 実測(2026-08-04)では登録画面の JIT
+  // ポーリング1回あたり opus が焼け、そのコストはどこにも記録されなかった。
+  it("advisor を閉じる env を渡す(Board call / ADR 0044)", async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const client = new ClaudeDraftClient({
+      exec: async (_command, _args, env) => {
+        envs.push(env);
+        return JSON.stringify({
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+        });
+      },
+    });
+
+    await client.draftTask("set up the greenhouse sensor", "English");
+
+    expect(envs[0]!.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+    expect(envs[0]!.PATH).toBe(process.env.PATH);
+  });
+
   it("draftTask: プロンプトにフラグメント保存 + 指定言語での散文指示が注入される(issue #46)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({

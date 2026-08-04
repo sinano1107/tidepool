@@ -136,13 +136,19 @@ function recordingSpawn() {
  *  drives data emission and process exit, and reads back the spawn recipe,
  *  what checkUsage wrote to stdin, and how many times it killed the session. */
 function recordingPty() {
-  const calls: Array<{ command: string; args: string[]; cwd: string; cols: number }> = [];
+  const calls: Array<{
+    command: string;
+    args: string[];
+    cwd: string;
+    cols: number;
+    env: NodeJS.ProcessEnv;
+  }> = [];
   const writes: string[] = [];
   const kills: Array<string | undefined> = [];
   let dataListener: ((data: string) => void) | undefined;
   let exitListener: (() => void) | undefined;
   const pty: PtyFn = (command, args, opts) => {
-    calls.push({ command, args, cwd: opts.cwd, cols: opts.cols });
+    calls.push({ command, args, cwd: opts.cwd, cols: opts.cols, env: opts.env });
     return {
       onData: (listener) => {
         dataListener = listener;
@@ -1340,6 +1346,11 @@ describe("ClaudeCodeWorker", () => {
     expect(rec.calls[0]!.cwd).toBe(process.cwd());
     // 80桁折り返しで "Current session …" 行が分断されないよう十分広く取る
     expect(rec.calls[0]!.cols).toBeGreaterThan(80);
+    // 使用量スクレイプも Board call(ADR 0044)。この呼び出しは人間のプロンプトを
+    // 1文字も送らないのでモデルターンが立たず、今日は advisor が乗りようがない ——
+    // が、それはベンダーの TUI の性質であって盤面が置いた性質ではないので、
+    // 不在は他の Board call と同じく明示的に綴る。
+    expect(rec.calls[0]!.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
     // ホストの TUI 設定に依らず fullscreen renderer を強制する(classic の
     // cursor-position 描画は ANSI 除去後に語が連結し parseUsage が読めない)
     const args = rec.calls[0]!.args;
@@ -1928,6 +1939,30 @@ describe("advisor capability (issue #33)", () => {
     const call = calls[0]!;
     expect(advisorFlag(call.args)).toBe("opus");
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
+  });
+
+  // #174 の鏡像の穴(ADR 0044 決定4)。spawn の env は盤面プロセスの env の上に組まれる
+  // ので、ホストが1行 export しているだけで —— `/etc/default/tidepool` は人間が編集し
+  // 盤面の env に直接流れ込む生きた面である —— registry が advisor を宣言した worker
+  // から advisor が消え、`worker_spawned` は advisor 名を記録し続ける。実測
+  // (2026-08-04): env は明示の `--advisor` フラグに**勝つ**ので、優先順位は理論では
+  // ない。「立てない」ではなく「消す」でなければ塞げない。
+  it("advisor があるとき、ホストが立てた CLAUDE_CODE_DISABLE_ADVISOR_TOOL を積極的に消す", async () => {
+    const previous = process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL;
+    process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = "1";
+    try {
+      const { start, calls } = await makeWorker(withAdvisor);
+      start();
+      const call = calls[0]!;
+      expect(advisorFlag(call.args)).toBe("opus");
+      expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
+      // git identity は env の上に重ねられる —— 消したキーを復活させないことと、
+      // 重ね順を変えたことで identity 側が落ちていないことを1本で見る(issue #53)
+      expect(call.env.GIT_AUTHOR_NAME).toBe("deckhand");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL;
+      else process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL = previous;
+    }
   });
 
   // 「フィールド不在 = advisor なし」を**フラグを省くだけ**で綴ると、閉じるかどうかが

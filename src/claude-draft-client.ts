@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defaultExec, type ExecFn, pinnedModelFlags } from "./claude-worker.js";
+import { boardCallEnv, defaultExec, type ExecFn, pinnedModelFlags } from "./claude-worker.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
@@ -204,26 +204,34 @@ export class ClaudeDraftClient implements DraftClient {
   /** The one-shot `claude -p` call both draftTask and draftHandoff share —
    *  only the prompt differs between them. */
   private async runDraftPrompt(prompt: string): Promise<string> {
-    const stdout = await this.exec("claude", [
-      "-p",
-      prompt,
-      "--output-format",
-      "json",
-      // a real generation task, not the trivial ping checkUsage()
-      // deliberately downgrades to haiku for
-      ...pinnedModelFlags("sonnet", "medium"),
-      // no MCP tools are configured for this call — it's a single JSON
-      // answer, not a working session, so more than one turn is a
-      // malfunction to fail loud on, not something to allow for
-      "--max-turns",
-      "1",
-      // this call runs with the board's own cwd, not a task workspace —
-      // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
-      // from leaking into what must stay a bare JSON answer. Auth/model/
-      // tools/permissions are unaffected (unlike --bare, which would force
-      // API-key-only auth)
-      "--safe-mode",
-    ]);
+    const stdout = await this.exec(
+      "claude",
+      [
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
+        // a real generation task, not the trivial ping checkUsage()
+        // deliberately downgrades to haiku for
+        ...pinnedModelFlags("sonnet", "medium"),
+        // no MCP tools are configured for this call — it's a single JSON
+        // answer, not a working session, so more than one turn is a
+        // malfunction to fail loud on, not something to allow for
+        "--max-turns",
+        "1",
+        // this call runs with the board's own cwd, not a task workspace —
+        // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
+        // from leaking into what must stay a bare JSON answer. Auth/model/
+        // tools/permissions are unaffected (unlike --bare, which would force
+        // API-key-only auth). It does **not** keep an advisor out — measured,
+        // issue #174 — which is what the env below is for.
+        "--safe-mode",
+      ],
+      // a Board call: no advisor, spelled explicitly (ADR 0044). Without it the
+      // host's own advisorModel rode along on every JIT draft poll and burned
+      // opus, unrecorded anywhere.
+      boardCallEnv(),
+    );
     const envelope: unknown = JSON.parse(stdout);
     const result = (envelope as { result?: unknown }).result;
     if (typeof result !== "string") {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defaultExec, type ExecFn, pinnedModelFlags } from "./claude-worker.js";
+import { boardCallEnv, defaultExec, type ExecFn, pinnedModelFlags } from "./claude-worker.js";
 import type { GlossaryEntry } from "./glossary.js";
 import type { TranslationClient, TranslationResult } from "./translate.js";
 
@@ -58,22 +58,29 @@ export class ClaudeTranslationClient implements TranslationClient {
   }
 
   async translate(source: string, language: string): Promise<TranslationResult> {
-    const stdout = await this.exec("claude", [
-      "-p",
-      buildPrompt(source, language, this.glossary),
-      "--output-format",
-      "json",
-      ...pinnedModelFlags("haiku", "low"),
-      // no MCP tools are configured for this call — a single translated
-      // answer, not a working session, so more than one turn is a
-      // malfunction to fail loud on
-      "--max-turns",
-      "1",
-      // this call runs with the board's own cwd, not a task workspace —
-      // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
-      // from leaking into what must stay a bare translated answer
-      "--safe-mode",
-    ]);
+    const stdout = await this.exec(
+      "claude",
+      [
+        "-p",
+        buildPrompt(source, language, this.glossary),
+        "--output-format",
+        "json",
+        ...pinnedModelFlags("haiku", "low"),
+        // no MCP tools are configured for this call — a single translated
+        // answer, not a working session, so more than one turn is a
+        // malfunction to fail loud on
+        "--max-turns",
+        "1",
+        // this call runs with the board's own cwd, not a task workspace —
+        // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
+        // from leaking into what must stay a bare translated answer
+        "--safe-mode",
+      ],
+      // a Board call: no advisor, spelled explicitly (ADR 0044). A haiku main
+      // model is no protection — measured 2026-08-04, haiku + an inherited
+      // advisorModel attaches opus to every display-time translation.
+      boardCallEnv(),
+    );
     const envelope = resultEnvelopeSchema.parse(JSON.parse(stdout));
     return {
       text: envelope.result,

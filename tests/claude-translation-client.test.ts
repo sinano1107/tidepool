@@ -47,6 +47,24 @@ describe("ClaudeTranslationClient", () => {
     expect(calls[0]!.join(" ")).toContain("--model haiku");
   });
 
+  // ADR 0044: 翻訳は Board call であり advisor を持たない。`--safe-mode` も
+  // `--model haiku` も守りにならない —— 実測(2026-08-04)では haiku main のまま
+  // ホストの `advisorModel` が opus を attach し、翻訳提示1回あたり $0.19 焼けた。
+  it("advisor を閉じる env を渡す(Board call / ADR 0044)", async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const client = new ClaudeTranslationClient({
+      exec: async (_command, _args, env) => {
+        envs.push(env);
+        return RESULT_ENVELOPE("t");
+      },
+    });
+
+    await client.translate("s", "Japanese");
+
+    expect(envs[0]!.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+    expect(envs[0]!.PATH).toBe(process.env.PATH);
+  });
+
   it("--max-turns 1 と --safe-mode を指定する(MCPツールを持たない単発呼び出し)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeTranslationClient({
