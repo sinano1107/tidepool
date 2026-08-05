@@ -25,7 +25,7 @@
 
 ## Cancel(キャンセル)
 
-人間の判断による作業の放棄。完了基準を満たさないまま終端し(Settled 参照)、記録は消さない。blocked の導出上は done と同じ完了扱い(cancelled の子は親を塞がない)— これが放棄後に親が再計画へ復帰できる根拠。v1 の cancel 経路は2本。第1は failure question への「abandon」回答 — 失敗タスクのサブツリーと計画の残り(親の未完了子孫、巻き込まれた未回答 question を含む)が一括で cancel され、親が先頭復帰して再計画する(計画ごと破棄 — 子は1つの判断に基づくため、1子の放棄は計画全体を無効にする)。第2は人間の直接 cancel(2026-07-24 の grilling、issue #130): 人間登録・未決着・実行中でないタスクを、配下の未決着子孫ごと一括で cancel する(理由の記入は任意)。「削除」は存在しない — 記録の抹消ではなく常に cancel であり、記録は何も消えない。ただしそのタスクを主題とする未回答の Tidepool 名義 question(failure question・quarantine 確認)が開いている間は直接 cancel できない — question への回答が唯一の門(abandon が運ぶ「計画ごと破棄 + 親の先頭復帰」というセットの遷移を半分だけ起こさない)。PR 昇格失敗の failure question(retry / abandon promotion)はこの族ではない — 対象タスクは既に done であり放棄すべき作業が存在しないため、「abandon promotion」は何も cancel せず、昇格の断念を decision log に記録して question を決着させるだけ。
+人間の判断による作業の放棄。完了基準を満たさないまま終端し(Settled 参照)、記録は消さない。blocked の導出上は done と同じ完了扱い(cancelled の子は親を塞がない)— これが放棄後に親が再計画へ復帰できる根拠。v1 の cancel 経路は2本。第1は failure question への「abandon」回答 — 失敗タスクのサブツリーと、**失敗タスクが乗っている分解判断から生まれた兄弟**のサブツリー(巻き込まれた未回答 question を含む)が一括で cancel され、親が先頭復帰して再計画する(**判断ごと破棄** — 1子の放棄はその判断の前提を壊すため、その判断が産んだ子だけが道連れになる。2026-08-05 の grilling、issue #180 / ADR 0048 — 旧・「計画ごと破棄」= 親の未決着の子を全部という線は撤回)。どの分解判断にも乗っていない子(異議由来の RCA review と修理タスク、完了時レビュー、escalate が登録する question)は、兄弟の abandon に巻き込まれず、それ自身が失敗して abandon されたときも倒れるのは自分のサブツリーだけである — 共有する判断が無いのだから、壊れる前提も無い。決裁権外の子は例外ではない: 承認 question 経由で実体化する子は元の分解判断を持ち越すので、自分の判断と共に倒れる。第2は人間の直接 cancel(2026-07-24 の grilling、issue #130): 人間登録・未決着・実行中でないタスクを、配下の未決着子孫ごと一括で cancel する(理由の記入は任意)。「削除」は存在しない — 記録の抹消ではなく常に cancel であり、記録は何も消えない。ただしそのタスクを主題とする未回答の Tidepool 名義 question(failure question・quarantine 確認)が開いている間は直接 cancel できない — question への回答が唯一の門(abandon が運ぶ「計画ごと破棄 + 親の先頭復帰」というセットの遷移を半分だけ起こさない)。PR 昇格失敗の failure question(retry / abandon promotion)はこの族ではない — 対象タスクは既に done であり放棄すべき作業が存在しないため、「abandon promotion」は何も cancel せず、昇格の断念を decision log に記録して question を決着させるだけ。
 
 ## Edit(編集)
 
@@ -37,7 +37,7 @@
 
 ## Held(保留)
 
-祖先に未回答の question がある間、その配下のタスクが slot に入らない導出状態(保存されない)。blocked が下(未完了の子)から塞ぐのに対し、held は上(人間の判断待ち)から凍結する。question 自身は held の影響を受けない — 人間タスクとして slot の外で回答可能。一般の question は自分の親のサブツリーを、cancel を持ち得る failure question は失敗タスクの親のサブツリー(兄弟含む)を held にする。
+祖先に未回答の question がある間、その配下のタスクが slot に入らない導出状態(保存されない)。blocked が下(未完了の子)から塞ぐのに対し、held は上(人間の判断待ち)から凍結する。question 自身は held の影響を受けない — 人間タスクとして slot の外で回答可能。一般の question は自分の親のサブツリーを、cancel を持ち得る failure question は **abandon が倒しうる範囲そのもの**(失敗タスクのサブツリーと、同じ分解判断に乗る兄弟のサブツリー)を held にする。この2つの範囲は常に一致していなければならない — cancel されうるのに held でないタスクは、走っている最中に cancel されうる(2026-08-05 の grilling、issue #180 / ADR 0048)。
 
 ## Risk flag(リスクフラグ)
 
@@ -177,7 +177,7 @@ WebUI・/api・そこに mount される管理MCP からなる、**操作の帰�
 
 ## Watchdog(ウォッチドッグ)
 
-タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で SIGTERM → 猶予 → SIGKILL の順にエージェントを回収し、slot-release tree rule を経て、tidepool 名義の failure question(retry / abandon の2択、推奨は retry)を生成する。retry は失敗タスクを先頭復帰させ、abandon は計画ごと破棄する(Cancel 参照)。自動リトライは存在しない — リトライ判断は常に人間の30秒の回答(throttle は実行中タスクに触れないため、この原則に例外はない — Throttle 参照)。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
+タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で SIGTERM → 猶予 → SIGKILL の順にエージェントを回収し、slot-release tree rule を経て、tidepool 名義の failure question(retry / abandon の2択、推奨は retry)を生成する。retry は失敗タスクを先頭復帰させ、abandon は判断ごと破棄する(Cancel 参照)。自動リトライは存在しない — リトライ判断は常に人間の30秒の回答(throttle は実行中タスクに触れないため、この原則に例外はない — Throttle 参照)。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
 
 ## Branch discipline(ブランチ規律)
 
