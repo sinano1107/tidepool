@@ -31,7 +31,8 @@ it("旧 board の task_registered から分解判断を backfill し、判断を
     },
     new Date(2),
   );
-  // task_registered の正準イベントだけに出自が残る旧 board を再現する。
+  // Recreate an old board where only the canonical task_registered event
+  // retains the task's provenance.
   legacy.exec("ALTER TABLE tasks DROP COLUMN based_on_decision");
   legacy.close();
 

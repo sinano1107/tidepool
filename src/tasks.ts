@@ -71,7 +71,7 @@ export interface Task {
   risk_flag: number;
   review_flag: number;
   parent_id: string | null;
-  /** 分解された子が乗る decision-log entry。分解判断の外なら null (ADR 0048)。 */
+  /** Decision-log entry this decomposed child rests on; null outside a decomposition decision. */
   based_on_decision: number | null;
   sort_key: number;
   handoff_doc: string | null;
@@ -253,10 +253,10 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   /** 1-4 question items (issue #30) — a single-item array is the degenerate
    *  case, not a distinct shape. */
   question?: QuestionItem[];
-  /** system internal (ADR 0006 / 0048): この選択肢への回答が通常の先頭復帰
-   *  ではなく判断単位の abandon を行うことを示す。question の選択肢の1つで
-   *  なければならない。MCP / JSON API からは設定せず、watchdog の failure
-   *  question 登録だけが設定する。 */
+  /** System-internal only (ADR 0006 / 0048): answering with this option
+   *  triggers decision-scoped abandon instead of ordinary unblock-to-head.
+   *  Must be one of the question's options. Never set via MCP or JSON API;
+   *  only the watchdog's failure-question registration sets it. */
   cancel_option?: string;
   /** System-internal only (issue #11): the would-be child of a pending-child
    *  approval question, materialized by answerQuestion on an "approve"
@@ -887,18 +887,18 @@ export interface CancelDefaults {
   auditorName?: string;
 }
 
-/** direct cancel の question gate (issue #130, CONTEXT.md の Cancel)。cancel
- *  対象 subtree を主題とする Tidepool 登録 question が開いている間は拒む。
- *  先に直接 cancel すると failure question が宙に浮き、回答だけが行えるはずの
- *  状態遷移を壊すためである。対象は次の2系統:
+/** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
+ *  Tidepool-registered question whose subject lies in the cancelled subtree
+ *  remains open, direct cancel is refused. Otherwise the question would be
+ *  stranded and its answer-only state transition broken. Two families qualify:
  *
- *   - **failure question**: `question_cancel_option` を持つ watchdog kill または
- *     issue-backed の確定的失敗で、失敗タスクが対象 subtree 内にあるもの。
- *     abandon は同じ分解判断の範囲を cancel するため、direct cancel は
- *     question を宙に浮かせる。PR promotion の failure question は対象が既に
- *     done で abandon するものがなく、cancel_option も持たないため対象外。
- *   - **quarantine Confirmation**: subtree 内のタスクが解決される資源に対する
- *     `question_quarantine_workspace` / `_agent` を持つもの。 */
+ *   - a **failure question** with `question_cancel_option` (watchdog kill or
+ *     issue-backed deterministic failure) whose failed task lies in the
+ *     subtree. Abandon cancels its decision scope, so direct cancel would
+ *     strand the question. PR-promotion failures are excluded: their target
+ *     is already done and they carry no cancel option.
+ *   - a **quarantine Confirmation** whose resource is used by a subtree task,
+ *     marked by `question_quarantine_workspace` or `_agent`. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
   const subtree = `WITH RECURSIVE subtree(id) AS (
       SELECT @root
@@ -1035,10 +1035,11 @@ export function assertAnswerable(question: Task, answers: string[]): void {
  *  reads `answers[0]` — the degenerate case of the same bundle shape, not a
  *  second code path.
  *
- *  Abandon (ADR 0006 / 0048): sole answer が question_cancel_option と一致
- *  したら、失敗タスクの subtree と同じ分解判断に乗る未決着の兄弟 subtree
- *  だけを cancel する。失敗タスクが判断を持たなければ自分の subtree だけ。
- *  親は従来どおり、未決着の子がなくなった場合だけ queue head に戻る。
+ *  Abandon (ADR 0006 / 0048): when the sole answer matches the declared
+ *  cancel option, cancel the failed task's subtree plus unfinished sibling
+ *  subtrees from the same decomposition decision. Without such provenance,
+ *  only the failed task's subtree is cancelled. Its parent returns to the
+ *  queue head only when no unfinished children remain, as before.
  *
  *  Quarantine resolution (issue #21): a Confirmation question (declared by
  *  `question_quarantine_workspace`, system-internal) takes any answer at all
@@ -1201,9 +1202,9 @@ export function answerQuestion(
   return { question: getTask(db, question.id)!, parentUnblocked, pickupResumed };
 }
 
-/** ADR 0048 の abandon / held が共有する射程。失敗タスク自身に加え、
- *  失敗タスクが判断を持つ場合だけ同じ判断の兄弟を含める。明示的な
- *  IS NOT NULL が JS の null === null と同型の事故を SQL 側でも防ぐ。 */
+/** The scope shared by abandon and held (ADR 0048): the failed task itself,
+ *  plus siblings from the same decision only when the failed task has one.
+ *  The explicit IS NOT NULL guard prevents the SQL analogue of null === null. */
 function abandonScopeSql(failedRef: string, candidateRef: string): string {
   return `(
     ${candidateRef}.status NOT IN ('done', 'cancelled')
@@ -1219,8 +1220,8 @@ function abandonScopeSql(failedRef: string, candidateRef: string): string {
   )`;
 }
 
-/** 人間向け abandon 文面に焼き込む、同じ分解判断の未決着兄弟数。cancel と
- *  held と同じ abandonScopeSql から導き、文面だけ射程がずれないようにする。 */
+/** Count of unfinished same-decision siblings baked into abandon's human-facing
+ *  text. Derived from the cancel/held scope so the wording cannot drift. */
 export function unfinishedDecisionSiblingCount(db: Db, failed: Task): number {
   if (failed.parent_id === null) return 0;
   const { count } = db
@@ -1900,12 +1901,13 @@ export function typeAwareDefaultAgentSql(
   return `CASE WHEN ${taskTypeRef} = 'review' THEN ${auditorRef} ELSE ${defaultAgentRef} END`;
 }
 
-/** Held (CONTEXT.md, ADR 0006 / 0048): 未回答 question がある間、その回答で
- *  abandon され得る集合を slot から外す。一般 question は従来どおり親の
- *  子から下を held にする。failure question は失敗タスクの子孫と、同じ
- *  分解判断に乗る未決着の兄弟自身から下だけを held にする。兄弟自身を
- *  seed に含めることで、回答直前の pickup を防ぐ。question 自身は slot 外で
- *  回答できるため held 表示から除く。集合は保存せず毎回導出する。 */
+/** Held (CONTEXT.md, ADR 0006 / 0048): while a question is unanswered, keep
+ *  everything its abandon answer could cancel out of the slot. A general
+ *  question still holds its parent's children downward. A failure question
+ *  holds the failed task's descendants plus each unfinished same-decision
+ *  sibling itself and its descendants. Seeding siblings themselves prevents
+ *  pickup immediately before the answer. Questions stay answerable outside
+ *  the slot and are excluded from held presentation. The set is derived only. */
 const HELD_IDS_CTE = `
   held_ids(id) AS (
     SELECT candidate.id
@@ -2254,9 +2256,9 @@ export function taskHistory(
     });
 }
 
-/** cancelled task の task_cancelled event は、その分解判断を破棄した abandon
- *  question を指す (ADR 0006 / 0048)。先頭復帰した親が必要とする why は、
- *  この1 hop で得られる。 */
+/** A cancelled task's `task_cancelled` event names the abandon question that
+ *  discarded its decomposition decision (ADR 0006 / 0048) — the single hop
+ *  back is the entire "why" a resumed parent needs. */
 function cancelOriginQuestion(db: Db, taskId: string): Task | undefined {
   const row = db
     .prepare("SELECT payload FROM events WHERE task_id = ? AND kind = 'task_cancelled'")

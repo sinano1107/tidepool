@@ -209,11 +209,11 @@ it("failure question が開いている間、失敗タスクと同判断の兄�
   await t.clock.advance(grace); // SIGKILL — failure question registered
 
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  // sibling 自身には未決着の子がないため、判断単位の held がなければ todo で
-  // pickup 可能。同じ分解判断に乗るので failure question の間は held になる。
+  // This sibling has no unfinished child, so it would be a pickable todo
+  // without decision-scoped held. Its shared decision keeps it held here.
   expect(board1.find((x: any) => x.id === sibling.id).status).toBe("held");
 
-  // held により、空いた slot に入らない
+  // held keeps it out of the freed slot
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["plan", "will fail"]);
 

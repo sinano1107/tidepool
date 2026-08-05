@@ -43,9 +43,10 @@ function pickedUpAt(db: Db, taskId: string): number {
   return row ? new Date(row.created_at).getTime() : 0;
 }
 
-/** failure question に焼き込む abandon の canonical English (ADR 0015 / 0048)。
- *  同じ分解判断の未決着兄弟が実在するときだけ、判断ごと破棄する規則と
- *  件数を伝える。watchdog と issue-backed の確定的失敗が共有する。 */
+/** Canonical English abandon consequence baked into failure questions
+ *  (ADR 0015 / 0048). It states the decision-discard rule and count only when
+ *  unfinished same-decision siblings exist. Shared by watchdog and issue-backed
+ *  deterministic failures so their wording cannot drift. */
 export function abandonConsequence(db: Db, task: Task): string {
   const siblingCount = unfinishedDecisionSiblingCount(db, task);
   return siblingCount > 0

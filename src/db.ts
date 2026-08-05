@@ -27,8 +27,8 @@ const TASKS_TABLE_DDL = `
       risk_flag           INTEGER NOT NULL DEFAULT 0,
       review_flag         INTEGER NOT NULL DEFAULT 0,
       parent_id           TEXT REFERENCES tasks(id),
-      -- 分解された子が乗る decision-log event。不変の出自であり、分解判断の
-      -- 外にあるタスクでは null。
+      -- Immutable provenance: the decision-log event this decomposed child
+      -- rests on. Null for tasks outside a decomposition decision.
       based_on_decision   INTEGER,
       sort_key            REAL NOT NULL,
       handoff_doc         TEXT,
@@ -47,9 +47,9 @@ const TASKS_TABLE_DDL = `
       -- submission (not per item) — recorded alongside question_answer so a
       -- resumed parent's get_current_task can carry both
       question_answer_comment  TEXT,
-      -- system internal (ADR 0006 / 0048): 唯一の item の選択肢のうち、
-      -- 通常の先頭復帰ではなく判断単位の abandon を行うもの。MCP / JSON API
-      -- からは設定せず、watchdog の failure question 登録だけが設定する。
+      -- system-internal only (ADR 0006 / 0048): the sole item's option that
+      -- triggers decision-scoped abandon instead of ordinary unblock-to-head.
+      -- Never set via MCP or JSON API; only failure-question registration does.
       question_cancel_option  TEXT,
       -- system-internal only (issue #11): a pending-child approval question's
       -- would-be child, JSON-encoded, materialized only if the human answers
