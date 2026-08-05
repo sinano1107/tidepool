@@ -2,7 +2,11 @@
   "name": "tidepool",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
+    "pretest": "node scripts/test-preflight.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
