@@ -323,6 +323,101 @@ it("commit bundles the objections into one repair task per objected task", async
   expect(repairB.purpose).toContain("keep the old key name");
 });
 
+it("異議されたエントリを event id 順の対として修理タスクへ束ね、workspace と親を継承する", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "対の修理", "非既定 workspace");
+  await t.clock.advance(HOUR);
+  const decision = await loggedEntry(t, task.id, "先に古い判断");
+  const laterDecision = await loggedEntry(t, task.id, "後の判断");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  // 異議の順はエントリ順と逆だが、出力はエントリ自身の id 順になる。
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: laterDecision.id,
+    comment: "後の判断を見直す",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: decision.id,
+    comment: "古い判断を見直す",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const repair = board.find((entry: any) => entry.title === "repair: 対の修理");
+  expect(repair.parent_id).toBe(task.id);
+  expect(repair.workspace).toBe("非既定 workspace");
+  expect(repair.purpose).toBe(
+    'objections raised against decisions of "対の修理":\n\n' +
+      "> 先に古い判断\n" +
+      "- 古い判断を見直す\n" +
+      "\n" +
+      "> 後の判断\n" +
+      "- 後の判断を見直す",
+  );
+
+  const selfReview = board.find(
+    (entry: any) => entry.title === "rca (self): 対の修理",
+  );
+  const auditorReview = board.find(
+    (entry: any) => entry.title === "rca (auditor): 対の修理",
+  );
+  expect(selfReview.purpose).toBe(
+    'objections raised against decisions fake-worker made on "対の修理":\n\n' +
+      "> 先に古い判断\n" +
+      "- 古い判断を見直す\n" +
+      "\n" +
+      "> 後の判断\n" +
+      "- 後の判断を見直す",
+  );
+  expect(auditorReview.purpose).toBe(
+    'objections raised against decisions of "対の修理":\n\n' +
+      "> 先に古い判断\n" +
+      "- 古い判断を見直す\n" +
+      "\n" +
+      "> 後の判断\n" +
+      "- 後の判断を見直す",
+  );
+});
+
+it("result が null の完了エントリへの異議には no outcome recorded を差し込む", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "完了報告なし", undefined, false, "human");
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, {});
+  const completed = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
+    (entry: any) => entry.kind === "task_completed" && entry.task_id === task.id,
+  );
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: completed.id,
+    comment: "完了報告を補う",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (entry: any) => entry.title === "repair: 完了報告なし",
+  );
+  expect(repair.purpose).toContain("> completion report: (no outcome recorded)");
+});
+
+it("元タスクの workspace が null なら修理タスクも null のままにする", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "workspace なし");
+  await t.clock.advance(HOUR);
+  const entry = await loggedEntry(t, task.id, "判断");
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: entry.id,
+    comment: "修理する",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (task: any) => task.title === "repair: workspace なし",
+  );
+  expect(repair.workspace).toBeNull();
+});
+
 it("commit also generates a self RCA review as a child of the objected task, assigned to the worker who wrote the objected decision (issue #15, layer 2)", async () => {
   t = await bootTidepool();
   const a = await registerWork(t, "work A");
