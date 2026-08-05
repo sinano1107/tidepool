@@ -28,7 +28,7 @@ const escalation = {
   questions: [{ title: "which provider?", options: ["a", "b"], recommendation: "a" }],
 };
 
-it("get_current_task の children に、回答済み question 子タスクの items/answer が含まれる", async () => {
+it("get_current_task の history に、回答済み question 子タスクの items/answer が含まれる", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR); // parent picked up
@@ -46,13 +46,17 @@ it("get_current_task の children に、回答済み question 子タスクの it
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
-    expect(payload.children).toEqual([
+    expect(payload.history).toEqual([
       {
-        title: escalation.questions[0]!.title,
-        status: "done",
-        items: escalation.questions,
-        answer: ["b"],
-        comment: null,
+        child_outside_the_decomposition: {
+          title: escalation.questions[0]!.title,
+          purpose: escalation.context,
+          completion_criteria: "a human answer is recorded",
+          status: "done",
+          items: escalation.questions,
+          answer: ["b"],
+          comment: null,
+        },
       },
     ]);
   } finally {
@@ -60,7 +64,7 @@ it("get_current_task の children に、回答済み question 子タスクの it
   }
 });
 
-it("get_current_task の children に、完了済み work 子タスクの handoff doc が全文含まれる(統合復帰)", async () => {
+it("get_current_task の history に、完了済み work 子タスクの handoff doc が全文含まれる(統合復帰)", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "toolchain");
   await t.clock.advance(HOUR); // parent picked up
@@ -88,16 +92,27 @@ it("get_current_task の children に、完了済み work 子タスクの handof
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
     const doneChild = (await api(t.baseUrl, "GET", `/api/tasks/${child.id}`)).json;
-    expect(payload.children).toEqual([
-      { title: "lexer", status: "done", handoff_doc: doneChild.handoff_doc },
+    expect(payload.history).toEqual([
+      {
+        decision: "split into one child",
+        children: [
+          {
+            title: "lexer",
+            purpose: "purpose",
+            completion_criteria: "criteria",
+            status: "done",
+            handoff_doc: doneChild.handoff_doc,
+          },
+        ],
+      },
     ]);
-    expect(payload.children[0].handoff_doc).toContain(FULL_HANDOFF.outcome);
+    expect(payload.history[0].children[0].handoff_doc).toContain(FULL_HANDOFF.outcome);
   } finally {
     await client.close();
   }
 });
 
-it("get_current_task の children に、cancelled 子タスクの発端 question の title/answer が含まれる(abandon 後の再計画)", async () => {
+it("get_current_task の history に、cancelled 子タスクの発端 question の title/answer が含まれる(abandon 後の再計画)", async () => {
   const grace = 30 * MIN;
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
@@ -140,15 +155,19 @@ it("get_current_task の children に、cancelled 子タスクの発端 question
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
-    const failingChild = payload.children.find((c: any) => c.title === "will fail");
-    const siblingChild = payload.children.find((c: any) => c.title === "sibling");
+    const failingChild = payload.history[0].children.find((c: any) => c.title === "will fail");
+    const siblingChild = payload.history[0].children.find((c: any) => c.title === "sibling");
     expect(failingChild).toEqual({
       title: "will fail",
+      purpose: "purpose",
+      completion_criteria: "criteria",
       status: "cancelled",
       origin_question: { title: question.title, answer: ["abandon"] },
     });
     expect(siblingChild).toEqual({
       title: "sibling",
+      purpose: "purpose",
+      completion_criteria: "criteria",
       status: "cancelled",
       origin_question: { title: question.title, answer: ["abandon"] },
     });
@@ -157,27 +176,34 @@ it("get_current_task の children に、cancelled 子タスクの発端 question
   }
 });
 
-it("get_current_task の children に、未決着(todo)の子タスクは含まれない", async () => {
+it("get_current_task の history に、未決着(todo)の兄弟も含まれる", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "toolchain 2");
   await t.clock.advance(HOUR); // parent picked up, still holds the slot
 
-  // a child can appear through the human door while the agent is mid-session
-  // (same setup as decision-log.test.ts's "a task with an unfinished child
-  // cannot complete" case) — the parent stays in_progress and attributed
-  await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title: "found while reviewing",
-    purpose: "purpose",
-    completion_criteria: "criteria",
-    parent_id: parent.id,
+  const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
+  await parentClient.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "split the two independent parts",
+      children: [
+        { title: "first part", purpose: "first purpose", completion_criteria: "first criteria" },
+        { title: "second part", purpose: "second purpose", completion_criteria: "second criteria" },
+      ],
+    },
   });
+  await parentClient.close();
+  await t.clock.advance(HOUR);
 
-  const client = await mcpClient(t.mcpBaseUrl, parent.id);
+  const current = t.worker.started.at(-1)!;
+  const client = await mcpClient(t.mcpBaseUrl, current.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
-    expect(payload.children).toEqual([]);
+    expect(payload.parent.history[0].children.map((child: any) => child.status)).toEqual([
+      "in_progress",
+      "todo",
+    ]);
   } finally {
     await client.close();
   }

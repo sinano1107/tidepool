@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload } from "./events.js";
+import { appendEvent, type EventPayload, taskDecisionLog } from "./events.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { RosterAgent } from "./registry.js";
 
@@ -2092,11 +2092,10 @@ export function latestChild(db: Db, parentId: string): Task | undefined {
   return row && rowToTask(row);
 }
 
-/** issue #29's `get_current_task` shape for one settled (done/cancelled)
- *  direct child — a done question's answer, a done work's handoff doc
- *  verbatim (CONTEXT.md's Handoff doc: question/review carry none), or
- *  (any type, cancelled) the abandon question that ended it. No summarizing
- *  middle layer, extended here to every settled-child shape. */
+/** The type-specific fields a settled child contributes to history: a done
+ *  question's answer, a done work's handoff doc verbatim, or the abandon
+ *  question that cancelled any child. HistoryChildContext inherits this
+ *  shape so replacing the old settled-only bundle cannot drop a field. */
 export interface SettledChildContext {
   title: string;
   status: "done" | "cancelled";
@@ -2108,6 +2107,116 @@ export interface SettledChildContext {
    *  `answer` so a resumed parent reads why, not just what. */
   comment?: string | null;
   origin_question?: { title: string; answer: string[] | null } | null;
+}
+
+export type HistoryChildContext = TaskContent &
+  Omit<SettledChildContext, "title" | "status"> & {
+    status: BoardTask["status"];
+    you?: true;
+  };
+
+export interface DecisionHistoryEntry {
+  decision: string;
+  children: HistoryChildContext[];
+}
+
+export type TaskHistoryEntry =
+  | DecisionHistoryEntry
+  | { completion: string | null }
+  | { child_outside_the_decomposition: HistoryChildContext };
+
+/** One task's worker-facing history, ordered by the event stream. */
+export function taskHistory(
+  db: Db,
+  taskId: string,
+  currentTaskId?: string,
+): TaskHistoryEntry[] {
+  type WorkingDecision = {
+    decision: string;
+    children: Array<{ eventId: number; child: HistoryChildContext }>;
+  };
+  const timeline: Array<
+    | { eventId: number; kind: "decision"; value: WorkingDecision }
+    | { eventId: number; kind: "entry"; value: TaskHistoryEntry }
+  > = [];
+  const decisions = new Map<number, WorkingDecision>();
+  for (const event of taskDecisionLog(db, taskId)) {
+    if (event.kind === "decision_logged") {
+      const decision = {
+        decision: (event.payload as Extract<EventPayload, { kind: "decision_logged" }>).line,
+        children: [],
+      };
+      decisions.set(event.id, decision);
+      timeline.push({ eventId: event.id, kind: "decision", value: decision });
+    } else if (event.kind === "task_completed") {
+      timeline.push({
+        eventId: event.id,
+        kind: "entry",
+        value: {
+          completion: (event.payload as Extract<EventPayload, { kind: "task_completed" }>).result,
+        },
+      });
+    }
+  }
+  for (const child of listChildren(db, taskId)) {
+    const registered = db
+      .prepare("SELECT id, payload FROM events WHERE task_id = ? AND kind = 'task_registered'")
+      .get(child.id) as { id: number; payload: string } | undefined;
+    if (!registered) continue;
+    const { based_on_decision } = JSON.parse(registered.payload) as Extract<
+      EventPayload,
+      { kind: "task_registered" }
+    >;
+    const context: HistoryChildContext = {
+      title: child.title,
+      purpose: child.purpose,
+      completion_criteria: child.completion_criteria,
+      status: presentTask(db, child).status,
+      ...(child.id === currentTaskId && { you: true as const }),
+      ...(child.status === "done" && child.type === "work"
+        ? { handoff_doc: child.handoff_doc }
+        : {}),
+      ...(child.status === "done" && child.type === "question"
+        ? {
+            items: child.question_items ?? [],
+            answer: child.question_answer,
+            comment: child.question_answer_comment,
+          }
+        : {}),
+      ...(child.status === "cancelled"
+        ? (() => {
+            const origin = cancelOriginQuestion(db, child.id);
+            return {
+              origin_question: origin
+                ? { title: origin.title, answer: origin.question_answer }
+                : null,
+            };
+          })()
+        : {}),
+    };
+    const decision =
+      based_on_decision === undefined ? undefined : decisions.get(based_on_decision);
+    if (decision) {
+      decision.children.push({ eventId: registered.id, child: context });
+    } else {
+      timeline.push({
+        eventId: registered.id,
+        kind: "entry",
+        value: { child_outside_the_decomposition: context },
+      });
+    }
+  }
+  return timeline
+    .sort((a, b) => a.eventId - b.eventId)
+    .map((item) => {
+      if (item.kind === "entry") return item.value;
+      return {
+        decision: item.value.decision,
+        children: item.value.children
+          .sort((a, b) => a.eventId - b.eventId)
+          .map(({ child }) => child),
+      };
+    });
 }
 
 /** A cancelled task's one `task_cancelled` event names the abandon question
@@ -2122,49 +2231,14 @@ function cancelOriginQuestion(db: Db, taskId: string): Task | undefined {
   return getTask(db, origin_question_id);
 }
 
-/** Every direct child of `parentId`, any status, in registration order (issue
- *  #129: the sibling-title list a child's AI draft is given — every existing
- *  sibling is relevant context to avoid duplicating, not just settled ones,
- *  unlike settledChildren below). */
+/** Every direct child of `parentId`, any status, in board order (issue #129's
+ *  sibling-title list for the human draft). taskHistory deliberately reorders
+ *  these by their registration event ids instead. */
 export function listChildren(db: Db, parentId: string): Task[] {
   const rows = db
     .prepare("SELECT * FROM tasks WHERE parent_id = ? ORDER BY sort_key")
     .all(parentId) as TaskRow[];
   return rows.map(rowToTask);
-}
-
-/** Settled direct children only (CONTEXT.md: 供給範囲は直接の子まで) — a
- *  todo/in_progress child is never returned (its parent isn't pickable to
- *  ask in the first place; surfacing it would only invite interference with
- *  a sibling still in flight). Registration order (sort_key), same order the
- *  children joined the queue in. */
-export function settledChildren(db: Db, parentId: string): SettledChildContext[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM tasks WHERE parent_id = ? AND status IN ('done', 'cancelled')
-       ORDER BY sort_key`,
-    )
-    .all(parentId) as TaskRow[];
-  return rows.map(rowToTask).map((child): SettledChildContext => {
-    if (child.status === "cancelled") {
-      const origin = cancelOriginQuestion(db, child.id);
-      return {
-        title: child.title,
-        status: "cancelled",
-        origin_question: origin ? { title: origin.title, answer: origin.question_answer } : null,
-      };
-    }
-    if (child.type === "question") {
-      return {
-        title: child.title,
-        status: "done",
-        items: child.question_items ?? [],
-        answer: child.question_answer,
-        comment: child.question_answer_comment,
-      };
-    }
-    return { title: child.title, status: "done", handoff_doc: child.handoff_doc };
-  });
 }
 
 /** The queue head the slot may take: lowest-sort_key todo that is

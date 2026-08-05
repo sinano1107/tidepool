@@ -12,7 +12,7 @@ import {
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("review タスクの get_current_task に、親(レビュー対象)の decision log 全行と handoff doc 全文が含まれる", async () => {
+it("review タスクの get_current_task に、親(レビュー対象)の history と handoff doc 全文が含まれる", async () => {
   t = await bootTidepool();
   const reviewed = (
     await api(t.baseUrl, "POST", "/api/tasks", {
@@ -41,17 +41,18 @@ it("review タスクの get_current_task に、親(レビュー対象)の decisi
     expect(payload.parent.handoff_doc).toBe(
       (await api(t.baseUrl, "GET", `/api/tasks/${reviewed.id}`)).json.handoff_doc,
     );
-    expect(payload.parent.decision_log.map((e: any) => e.kind)).toEqual([
-      "decision_logged",
-      "task_completed",
-    ]);
-    expect(payload.parent.decision_log[0].payload.line).toBe("kept the API surface small");
+    expect(payload.parent.history[0]).toEqual({
+      decision: "kept the API surface small",
+      children: [],
+    });
+    expect(payload.parent.history[1]).toEqual({ completion: FULL_HANDOFF.outcome });
+    expect(payload.parent.decision_log).toBeUndefined();
   } finally {
     await reviewClient.close();
   }
 });
 
-it("review でない親コンテキストには decision log / handoff doc が含まれない", async () => {
+it("review でない子にも親の history / handoff doc が同じ形で含まれる", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent 3");
   const child = (
@@ -71,7 +72,21 @@ it("review でない親コンテキストには decision log / handoff doc が�
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
     expect(payload.parent.decision_log).toBeUndefined();
-    expect(payload.parent.handoff_doc).toBeUndefined();
+    expect(payload.parent.handoff_doc).toBeNull();
+    expect(payload.parent.history).toEqual([
+      {
+        decision: "split the context child",
+        children: [
+          {
+            title: "child 3",
+            purpose: "purpose",
+            completion_criteria: "criteria",
+            status: "in_progress",
+            you: true,
+          },
+        ],
+      },
+    ]);
   } finally {
     await client.close();
   }
