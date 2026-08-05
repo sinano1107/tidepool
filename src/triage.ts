@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { appendEvent, type EventRow, HUMAN_FACING_KINDS } from "./events.js";
+import { appendEvent, type EventRow, getEvent, HUMAN_FACING_KINDS } from "./events.js";
 import {
   type BoardTask,
   getTask,
@@ -110,17 +110,55 @@ export function raiseObjection(
   });
 }
 
+type LogEntry = Omit<EventRow, "payload"> & {
+  payload: Extract<EventRow["payload"], { kind: "decision_logged" | "task_completed" }>;
+};
+
+interface ObjectionPair {
+  entry: LogEntry;
+  comments: string[];
+}
+
+/** Render the entry/comment pairs shared by repair and RCA tasks. Entries are
+ * ordered by their own event id; comments retain objection event order. */
+function renderObjectionPairs(purposeIntro: string, pairs: ObjectionPair[]): string {
+  return (
+    `${purposeIntro}:\n\n` +
+    pairs
+      .slice()
+      .sort((a: ObjectionPair, b: ObjectionPair) => a.entry.id - b.entry.id)
+      .map((pair) => {
+        const entryText =
+          pair.entry.payload.kind === "decision_logged"
+            ? pair.entry.payload.line
+            : `completion report: ${pair.entry.payload.result ?? "(no outcome recorded)"}`;
+        return `> ${entryText}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}`;
+      })
+      .join("\n\n")
+  );
+}
+
+function addObjectionComment(
+  pairs: Map<number, ObjectionPair>,
+  entry: LogEntry,
+  comment: string,
+): void {
+  const pair = pairs.get(entry.id) ?? { entry, comments: [] };
+  pair.comments.push(comment);
+  pairs.set(entry.id, pair);
+}
+
 /** One RCA review, always a child of `objected` sharing its workspace
  *  (CONTEXT.md: children inherit workspace), with the shared RCA discipline
  *  baked into `completion_criteria` (issue #15 layer 2 grilling notes: output
- *  is a diff, prose reflection is forbidden). `comments` land verbatim in
- *  `purpose` — the RCA's only supplied context beyond what get_current_task
- *  (issue #29) already carries. */
+ *  is a diff, prose reflection is forbidden). The entry/comment pairs land
+ *  verbatim in `purpose` — the RCA's only supplied context beyond what
+ *  get_current_task (issue #29) already carries. */
 function registerRcaReview(
   db: Db,
   objected: Task,
   taskId: string,
-  spec: { title: string; purposeIntro: string; comments: string[]; assignee?: string },
+  spec: { title: string; purposeIntro: string; pairs: ObjectionPair[]; assignee?: string },
   now: Date,
 ): void {
   registerTask(
@@ -128,7 +166,7 @@ function registerRcaReview(
     {
       type: "review",
       title: spec.title,
-      purpose: `${spec.purposeIntro}:\n` + spec.comments.map((c) => `- ${c}`).join("\n"),
+      purpose: renderObjectionPairs(spec.purposeIntro, spec.pairs),
       completion_criteria:
         "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
       parent_id: taskId,
@@ -173,36 +211,45 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
        ORDER BY id`,
     )
     .all(sessionId) as Array<{ task_id: string; payload: string }>;
-  const byTask = new Map<string, string[]>();
-  const byTaskWorker = new Map<string, Map<string, string[]>>();
+  const byTask = new Map<string, Map<number, ObjectionPair>>();
+  const byTaskWorker = new Map<string, Map<string, Map<number, ObjectionPair>>>();
   for (const row of rows) {
     const { comment, entry_id } = JSON.parse(row.payload) as {
       comment: string;
       entry_id: number;
     };
-    byTask.set(row.task_id, [...(byTask.get(row.task_id) ?? []), comment]);
     const entry = requireLogEntry(db, entry_id);
+    const pairs = byTask.get(row.task_id) ?? new Map<number, ObjectionPair>();
+    addObjectionComment(pairs, entry, comment);
+    byTask.set(row.task_id, pairs);
     if (entry.worker_id === HUMAN_WORKER_ID) continue;
-    const byWorker = byTaskWorker.get(row.task_id) ?? new Map<string, string[]>();
-    byWorker.set(entry.worker_id, [...(byWorker.get(entry.worker_id) ?? []), comment]);
+    const byWorker =
+      byTaskWorker.get(row.task_id) ?? new Map<string, Map<number, ObjectionPair>>();
+    const workerPairs = byWorker.get(entry.worker_id) ?? new Map<number, ObjectionPair>();
+    addObjectionComment(workerPairs, entry, comment);
+    byWorker.set(entry.worker_id, workerPairs);
     byTaskWorker.set(row.task_id, byWorker);
   }
-  for (const [taskId, comments] of byTask) {
+  for (const [taskId, pairMap] of byTask) {
     const objected = getTask(db, taskId);
     if (!objected) continue;
+    const pairs = [...pairMap.values()];
     registerTask(
       db,
       {
         type: "work",
         title: `repair: ${objected.title}`,
-        purpose:
-          `objections raised against decisions of "${objected.title}":\n` +
-          comments.map((c) => `- ${c}`).join("\n"),
+        purpose: renderObjectionPairs(
+          `objections raised against decisions of "${objected.title}"`,
+          pairs,
+        ),
         completion_criteria: "every objection direction above is addressed",
+        parent_id: taskId,
+        workspace: objected.workspace ?? undefined,
       },
       now,
     );
-    for (const [workerId, workerComments] of byTaskWorker.get(taskId) ?? []) {
+    for (const [workerId, workerPairMap] of byTaskWorker.get(taskId) ?? []) {
       registerRcaReview(
         db,
         objected,
@@ -210,7 +257,7 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
         {
           title: `rca (self): ${objected.title}`,
           purposeIntro: `objections raised against decisions ${workerId} made on "${objected.title}"`,
-          comments: workerComments,
+          pairs: [...workerPairMap.values()],
           assignee: workerId,
         },
         now,
@@ -223,7 +270,7 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
       {
         title: `rca (auditor): ${objected.title}`,
         purposeIntro: `objections raised against decisions of "${objected.title}"`,
-        comments,
+        pairs,
       },
       now,
     );
@@ -321,14 +368,12 @@ export function consumePendingDump(db: Db, id: number): void {
 }
 
 /** An event id that must point at a decision-log entry (a human-facing kind). */
-function requireLogEntry(db: Db, entryId: number): EventRow {
-  const entry = db.prepare("SELECT * FROM events WHERE id = ?").get(entryId) as
-    | EventRow
-    | undefined;
+function requireLogEntry(db: Db, entryId: number): LogEntry {
+  const entry = getEvent(db, entryId);
   if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
     throw new TriageError(`event ${entryId} is not a decision-log entry`);
   }
-  return entry;
+  return entry as LogEntry;
 }
 
 /** Record that these log entries were actually put in front of the human.
