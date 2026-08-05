@@ -543,6 +543,9 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).toContain("did not happen");
     // escalate posture (deckhand 本文が運んでいた rules of the road)
     expect(systemPrompt).toContain("Escalating is never wrong");
+    expect(systemPrompt).toContain(
+      "This may be a resumed task session: if the decision log or settled children show prior-session traces, inspect the task branch with `git log` before starting work.",
+    );
     // verb の意味論は description 側に一本化: WORKER_PROTOCOL に verb 名を複写しない
     expect(systemPrompt).not.toContain("get_current_task");
   });
