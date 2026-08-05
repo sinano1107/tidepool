@@ -27,6 +27,9 @@ const TASKS_TABLE_DDL = `
       risk_flag           INTEGER NOT NULL DEFAULT 0,
       review_flag         INTEGER NOT NULL DEFAULT 0,
       parent_id           TEXT REFERENCES tasks(id),
+      -- 分解された子が乗る decision-log event。不変の出自であり、分解判断の
+      -- 外にあるタスクでは null。
+      based_on_decision   INTEGER,
       sort_key            REAL NOT NULL,
       handoff_doc         TEXT,
       -- the PR opened for this task's completed work (issue #11), or null —
@@ -354,6 +357,26 @@ export function openDb(path: string): Db {
     "question_quarantine_sandbox",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
+  }
+  if (!cols.includes("based_on_decision")) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN based_on_decision INTEGER`);
+    db.exec(`
+      UPDATE tasks
+      SET based_on_decision = (
+        SELECT json_extract(e.payload, '$.based_on_decision')
+        FROM events e
+        WHERE e.task_id = tasks.id AND e.kind = 'task_registered'
+        ORDER BY e.id ASC
+        LIMIT 1
+      )
+      WHERE EXISTS (
+        SELECT 1
+        FROM events e
+        WHERE e.task_id = tasks.id
+          AND e.kind = 'task_registered'
+          AND json_extract(e.payload, '$.based_on_decision') IS NOT NULL
+      )
+    `);
   }
   // issue #49 / ADR 0016: title/purpose/completion_criteria's NOT NULL needs
   // relaxing (to CHECK-enforced instead) so an issue-backed task can carry

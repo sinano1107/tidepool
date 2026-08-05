@@ -71,6 +71,8 @@ export interface Task {
   risk_flag: number;
   review_flag: number;
   parent_id: string | null;
+  /** 分解された子が乗る decision-log entry。分解判断の外なら null (ADR 0048)。 */
+  based_on_decision: number | null;
   sort_key: number;
   handoff_doc: string | null;
   /** The PR opened for this task's completed work (issue #11), or null if
@@ -523,6 +525,7 @@ export function registerTask(
     risk_flag: input.risk_flag ? 1 : 0,
     review_flag: input.review_flag ? 1 : 0,
     parent_id: input.parent_id ?? null,
+    based_on_decision: input.based_on_decision ?? null,
     sort_key: maxKey + 1,
     handoff_doc: null,
     pr_number: null,
@@ -542,12 +545,12 @@ export function registerTask(
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-         risk_flag, review_flag, parent_id, sort_key, handoff_doc, pr_number,
+         risk_flag, review_flag, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_pr_promotion_task_id, question_quarantine_workspace,
          question_quarantine_agent, question_quarantine_sandbox, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
-         @risk_flag, @review_flag, @parent_id, @sort_key, @handoff_doc, @pr_number,
+         @risk_flag, @review_flag, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
          @question_quarantine_agent, @question_quarantine_sandbox, @github_issue_number, @created_at)`,
@@ -885,16 +888,15 @@ export interface CancelDefaults {
   auditorName?: string;
 }
 
-/** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
- *  Tidepool-registered question that has the cancel subtree as its subject is
- *  still open, a direct cancel is refused — answering that question is the only
- *  gate, so a direct cancel can't perform half of abandon's set transition
- *  (discard the plan + return the parent to the head). Two families qualify:
+/** direct cancel の question gate (issue #130, CONTEXT.md の Cancel)。cancel
+ *  対象 subtree を主題とする Tidepool 登録 question が開いている間は拒む。
+ *  先に直接 cancel すると failure question が宙に浮き、回答だけが行えるはずの
+ *  状態遷移を壊すためである。対象は次の2系統:
  *
  *   - a **failure question** (`question_cancel_option` set — a watchdog kill or
  *     an issue-backed deterministic failure) whose failed task lies in the
- *     subtree: answering "abandon" cancels that plan wholesale, so a direct
- *     cancel would strand the question. A PR-promotion failure question is
+ *     subtree: "abandon" は失敗タスクと同じ分解判断の範囲を cancel するため、
+ *     direct cancel は question を宙に浮かせる。A PR-promotion failure question is
  *     deliberately outside this family (CONTEXT.md) — it carries no
  *     cancel_option, since its target is already done and nothing is abandoned.
  *   - a **quarantine Confirmation** (`question_quarantine_workspace`/`_agent`
@@ -1036,13 +1038,10 @@ export function assertAnswerable(question: Task, answers: string[]): void {
  *  reads `answers[0]` — the degenerate case of the same bundle shape, not a
  *  second code path.
  *
- *  Abandon (ADR 0006): when the sole answer matches the question's declared
- *  `question_cancel_option` (system-internal, set only on the watchdog's
- *  failure questions), the failed task's plan is discarded instead of
- *  unblocked — every unfinished descendant of its parent (siblings included,
- *  the failed task's own subtree among them) is cancelled, and the parent
- *  itself returns to the queue head to replan. With no parent, the failed
- *  task's own subtree is cancelled and nothing returns to the head.
+ *  Abandon (ADR 0006 / 0048): sole answer が question_cancel_option と一致
+ *  したら、失敗タスクの subtree と同じ分解判断に乗る未決着の兄弟 subtree
+ *  だけを cancel する。失敗タスクが判断を持たなければ自分の subtree だけ。
+ *  親は従来どおり、未決着の子がなくなった場合だけ queue head に戻る。
  *
  *  Quarantine resolution (issue #21): a Confirmation question (declared by
  *  `question_quarantine_workspace`, system-internal) takes any answer at all
@@ -1144,9 +1143,13 @@ export function answerQuestion(
       if (plan) {
         const siblingIds = db
           .prepare(
-            `SELECT id FROM tasks WHERE parent_id = ? AND status NOT IN ('done', 'cancelled')`,
+            `SELECT candidate.id
+             FROM tasks candidate JOIN tasks failed ON failed.id = ?
+             WHERE candidate.parent_id = ?
+               AND candidate.status NOT IN ('done', 'cancelled')
+               AND ${abandonScopeSql("failed", "candidate")}`,
           )
-          .all(plan.id) as Array<{ id: string }>;
+          .all(failed.id, plan.id) as Array<{ id: string }>;
         for (const { id } of siblingIds) {
           cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now);
         }
@@ -1201,6 +1204,36 @@ export function answerQuestion(
     }
   })();
   return { question: getTask(db, question.id)!, parentUnblocked, pickupResumed };
+}
+
+/** ADR 0048 の abandon / held が共有する射程。失敗タスク自身に加え、
+ *  失敗タスクが判断を持つ場合だけ同じ判断の兄弟を含める。明示的な
+ *  IS NOT NULL が JS の null === null と同型の事故を SQL 側でも防ぐ。 */
+function abandonScopeSql(failedRef: string, candidateRef: string): string {
+  return `(
+    ${candidateRef}.id = ${failedRef}.id
+    OR (
+      ${failedRef}.based_on_decision IS NOT NULL
+      AND ${candidateRef}.based_on_decision = ${failedRef}.based_on_decision
+    )
+  )`;
+}
+
+/** 人間向け abandon 文面に焼き込む、同じ分解判断の未決着兄弟数。cancel と
+ *  held と同じ abandonScopeSql から導き、文面だけ射程がずれないようにする。 */
+export function unfinishedDecisionSiblingCount(db: Db, failed: Task): number {
+  if (failed.parent_id === null) return 0;
+  const { count } = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM tasks candidate JOIN tasks failed ON failed.id = ?
+       WHERE candidate.parent_id = ?
+         AND candidate.id <> failed.id
+         AND candidate.status NOT IN ('done', 'cancelled')
+         AND ${abandonScopeSql("failed", "candidate")}`,
+    )
+    .get(failed.id, failed.parent_id) as { count: number };
+  return count;
 }
 
 /** Record an in-authority decision as one log line and move on. The log is the
@@ -1869,27 +1902,33 @@ export function typeAwareDefaultAgentSql(
   return `CASE WHEN ${taskTypeRef} = 'review' THEN ${auditorRef} ELSE ${defaultAgentRef} END`;
 }
 
-/** Held (CONTEXT.md, ADR 0006): while an ancestor carries an unanswered
- *  question, its subtree stays out of the slot — a freeze from above, unlike
- *  `blocked`'s freeze from below (an unfinished child). Two tiers of root:
- *  a general question holds its own parent's subtree; a question that can
- *  cancel the plan (question_cancel_option set — the watchdog's failure
- *  question) holds its parent's *parent*'s subtree instead, siblings
- *  included, because an abandon answer may cancel the whole plan out from
- *  under them (falls back to its own parent's subtree if that parent has no
- *  parent). A question itself is never held (it stays answerable outside the
- *  slot regardless of what it's holding). Descendants are found by a
- *  recursive walk down `parent_id` from each question's held root, derived
- *  only — nothing is stored. */
+/** Held (CONTEXT.md, ADR 0006 / 0048): 未回答 question がある間、その回答で
+ *  abandon され得る集合を slot から外す。一般 question は従来どおり親の
+ *  子から下を held にする。failure question は失敗タスクの子孫と、同じ
+ *  分解判断に乗る未決着の兄弟自身から下だけを held にする。兄弟自身を
+ *  seed に含めることで、回答直前の pickup を防ぐ。question 自身は slot 外で
+ *  回答できるため held 表示から除く。集合は保存せず毎回導出する。 */
 const HELD_IDS_CTE = `
-  held_roots(root_id) AS (
-    SELECT CASE WHEN q.question_cancel_option IS NULL THEN q.parent_id
-                ELSE COALESCE(f.parent_id, f.id) END AS root_id
-    FROM tasks q JOIN tasks f ON f.id = q.parent_id
-    WHERE q.type = 'question' AND q.status = 'todo'
-  ),
   held_ids(id) AS (
-    SELECT c.id FROM tasks c JOIN held_roots r ON c.parent_id = r.root_id
+    SELECT candidate.id
+    FROM tasks q
+    JOIN tasks failed ON failed.id = q.parent_id
+    JOIN tasks candidate ON (
+      (q.question_cancel_option IS NULL AND candidate.parent_id = q.parent_id)
+      OR (
+        q.question_cancel_option IS NOT NULL
+        AND (
+          candidate.parent_id = failed.id
+          OR (
+            candidate.parent_id = failed.parent_id
+            AND candidate.id <> failed.id
+            AND candidate.status NOT IN ('done', 'cancelled')
+            AND ${abandonScopeSql("failed", "candidate")}
+          )
+        )
+      )
+    )
+    WHERE q.type = 'question' AND q.status = 'todo'
     UNION
     SELECT c.id FROM tasks c JOIN held_ids h ON c.parent_id = h.id
   )

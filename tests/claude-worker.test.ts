@@ -40,6 +40,7 @@ function makeTask(
     risk_flag: 0,
     review_flag: 0,
     parent_id: null,
+    based_on_decision: null,
     sort_key: 1,
     handoff_doc: null,
     pr_number: null,
