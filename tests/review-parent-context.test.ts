@@ -61,6 +61,7 @@ it("review でない親コンテキストには decision log / handoff doc が�
       purpose: "purpose",
       completion_criteria: "criteria",
       parent_id: parent.id,
+      decompose_reason: "split the context child",
     })
   ).json;
   await t.clock.advance(HOUR); // child picked up (parent blocked)

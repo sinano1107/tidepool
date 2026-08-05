@@ -11,6 +11,7 @@ async function registerWork(t: Tidepool, title: string, parent_id?: string) {
     purpose: `purpose of ${title}`,
     completion_criteria: `criteria of ${title}`,
     ...(parent_id && { parent_id }),
+    ...(parent_id && { decompose_reason: `split ${title} from its parent` }),
   });
   return res.json;
 }

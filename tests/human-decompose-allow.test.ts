@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -14,6 +14,7 @@ it("未決着・実行中でない親への人間の子追加は成功し、追�
     purpose: "purpose of child",
     completion_criteria: "criteria of child",
     parent_id: parent.id,
+    decompose_reason: "split the remaining work",
   });
 
   expect(res.status).toBe(201);
@@ -45,7 +46,7 @@ it("分解理由を書くと decision log エントリとして残る", async ()
   expect(decisions[0].payload.line).toBe("splitting off the edge case first");
 });
 
-it("分解理由を書かなくても登録でき、decision log エントリは残らないが子の登録イベントは残る", async () => {
+it("分解理由が空なら登録を拒否し、子も decision log も残さない", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
 
@@ -57,11 +58,34 @@ it("分解理由を書かなくても登録でき、decision log エントリは
     parent_id: parent.id,
   });
 
+  expect(res.status).toBe(400);
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   expect(log.entries.filter((e: any) => e.kind === "decision_logged")).toEqual([]);
 
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${res.json.id}/events`)).json;
-  expect(events.some((e: any) => e.kind === "task_registered")).toBe(true);
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.some((x: any) => x.title === "child")).toBe(false);
+});
+
+it("管理MCP の decompose も空の分解理由を拒否する", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.mcpBaseUrl, parent.id);
+  const res: any = await client.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "",
+      children: [
+        { title: "child", purpose: "purpose", completion_criteria: "criteria" },
+      ],
+    },
+  });
+  await client.close();
+
+  expect(res.isError).toBe(true);
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.some((x: any) => x.title === "child")).toBe(false);
 });
 
 it("人間は同じ親に複数回にわたって子を追加できる(agent の子がまだない限り)", async () => {
@@ -74,6 +98,7 @@ it("人間は同じ親に複数回にわたって子を追加できる(agent の
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: parent.id,
+    decompose_reason: "split the first child",
   });
   const second = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
@@ -81,6 +106,7 @@ it("人間は同じ親に複数回にわたって子を追加できる(agent の
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: parent.id,
+    decompose_reason: "split the second child",
   });
 
   expect(second.status).toBe(201);
@@ -97,6 +123,7 @@ it("存在しない parent_id への子追加は 404", async () => {
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: "no-such-task",
+    decompose_reason: "split the missing parent",
   });
 
   expect(res.status).toBe(404);

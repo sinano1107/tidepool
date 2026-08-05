@@ -120,12 +120,8 @@ const registerTaskSchema = z.object({
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
-  // human decompose (issue #129): the optional reason a human gives for
-  // splitting `parent_id` into this child — meaningful only alongside
-  // parent_id, ignored on a root registration. Given, it lands as a
-  // decision-log entry the same way an agent's decompose reason always has;
-  // omitted, only the ordinary task_registered event records that a human
-  // added a child.
+  // human decompose (ADR 0047 decision 7): the reason is required for a
+  // `parent_id` child and checked at the route gate; roots do not need one.
   decompose_reason: z.string().optional(),
   // shape stays permissive: the 1-4-item / 2-4-options + recommendation
   // invariants are enforced in the domain so callers get a domain error
@@ -673,6 +669,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // on the parent and no gate at all, which is exactly the gap this
       // issue closes
       if (isHumanDecomposeChild) {
+        if (
+          parsed.data.decompose_reason === undefined ||
+          parsed.data.decompose_reason.length === 0
+        ) {
+          throw new DomainError("a decomposition requires a reason");
+        }
         const parent = getTask(db, parsed.data.parent_id!);
         if (!parent) {
           res.status(404).json({ error: "parent task not found" });

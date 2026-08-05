@@ -24,6 +24,7 @@ it("parent_id 付きのドラフトには親の title/purpose/completion_criteri
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: parent.id,
+    decompose_reason: "split off the existing sibling",
   });
 
   const res = await api(t.baseUrl, "POST", "/api/tasks/draft", {

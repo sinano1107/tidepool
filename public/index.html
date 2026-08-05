@@ -369,9 +369,9 @@ function TpTideWash({ label, emoji, duration = 1250 }) {
 // — ルート登録 + 子追加の合成で足りる", no separate tree-registration mode),
 // with the type/source pickers and issue-backed path dropped (a decompose
 // child is always type work, never issue-backed — decomposeTask's own
-// ChildSpec has no such fields either) and one field added: an optional
-// free-text reason for the split, which both lands as a decision-log entry
-// when given (CONTEXT.md's Decompose point 5) and steers the child's own AI
+// ChildSpec has no such fields either) and one field added: a required
+// free-text reason for the split, which lands as a decision-log entry
+// (CONTEXT.md's Decompose point 5) and steers the child's own AI
 // draft as context (point 4).
 function RegisterScreen({ onRegister, parentTask, onClose }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -408,7 +408,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   // drift apart
   const childExtras = () =>
     childMode
-      ? { parent_id: parentTask.id, ...(reason.trim() ? { decompose_reason: reason.trim() } : {}) }
+      ? { parent_id: parentTask.id, decompose_reason: reason.trim() }
       : {};
   // the issue-number picker's open-issue list (issue #67): one fetch per
   // workspace selection, no cache/paging — the board-side rationale is the
@@ -459,7 +459,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     : issues;
   const ok = issueMode
     ? workspace.trim() && /^[0-9]+$/.test(issueNumber.trim())
-    : title.trim() && purpose.trim() && criteria.trim();
+    : title.trim() && purpose.trim() && criteria.trim() && (!childMode || reason.trim());
   const fields = () =>
     issueMode
       ? { type: 'work', workspace: workspace.trim(), github_issue_number: Number(issueNumber.trim()) }
@@ -593,10 +593,10 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
       {childMode && (
         <Card style={{ marginBottom: 14 }}>
           <Input
-            label="Reason for splitting this (optional)"
+            label="Reason for splitting this"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="left blank, only the fact that a child was added is recorded"
+            placeholder="why this work is being split"
           />
         </Card>
       )}

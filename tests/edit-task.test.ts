@@ -111,6 +111,7 @@ it("人間 decompose で足した子タスク(人間登録)も編集できる", 
       purpose: "p",
       completion_criteria: "c",
       parent_id: parent.id,
+      decompose_reason: "split the child work",
     })
   ).json;
 

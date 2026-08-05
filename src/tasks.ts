@@ -1502,18 +1502,15 @@ export function decomposeTask(
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
+  if (input.reason.length === 0) {
+    throw new DomainError("a decomposition requires a reason");
+  }
   const children: Task[] = [];
   db.transaction(() => {
-    // an agent's reason is required at the MCP schema (`z.string().min(1)`,
-    // a length check, not a content one) — gating on length here, not
-    // `.trim()`, keeps this a strict no-op for the agent path regardless of
-    // whitespace, so this is always logged for the agent path. Human
-    // decompose (issue #129) is the one caller that can reach here with a
-    // blank reason (its own optional field coerces an omitted reason to
-    // `""`), in which case only the ordinary task_registered event(s) below
-    // record the fact.
-    const decisionId =
-      input.reason.length > 0 ? logDecision(db, parent, input.reason, workerId, now) : undefined;
+    // Both human and agent decompose carry a decision. Keep this a length
+    // check rather than `.trim()` so whitespace follows the existing MCP
+    // `z.string().min(1)` contract.
+    const decisionId = logDecision(db, parent, input.reason, workerId, now);
     for (const child of input.children) {
       const reasons: string[] = [];
       if (child.risk_flag && !parent.risk_flag) {
@@ -1682,15 +1679,12 @@ export function assertHumanEditableScope(db: Db, task: Task, verb: string): void
  *  authority restrictions (CONTEXT.md's Worker: "人間は全権限を持つ
  *  worker") — `outsideAuthority`'s own "no allowlist configured means
  *  unrestricted" reading already gives this for free by passing `authority:
- *  undefined`, so no separate bypass is needed. The reason is optional
- *  (unlike an agent's, required by the MCP tool schema): given, it lands as a
- *  decision-log entry the same way decomposeTask always has; omitted, only
- *  the ordinary task_registered event(s) record that a human added a child
- *  (CONTEXT.md: "書かなくても「人間が子を追加した」事実はイベントに残る"). */
+ *  undefined`, so no separate bypass is needed. The reason is required, just
+ *  as it is for the MCP tool, because every human decompose is a decision. */
 export function humanDecomposeTask(
   db: Db,
   parent: Task,
-  input: { reason?: string; children: ChildSpec[] },
+  input: { reason: string; children: ChildSpec[] },
   now: Date,
   isProtectedWorkspace?: (name: string) => boolean,
 ): Task[] {
@@ -1698,7 +1692,7 @@ export function humanDecomposeTask(
   return decomposeTask(
     db,
     parent,
-    { reason: input.reason ?? "", children: input.children },
+    input,
     HUMAN_WORKER_ID,
     now,
     undefined,

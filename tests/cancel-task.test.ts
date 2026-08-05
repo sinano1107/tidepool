@@ -23,6 +23,7 @@ async function addChild(t: Tidepool, parentId: string, title: string, assignee?:
       purpose: "p",
       completion_criteria: "c",
       parent_id: parentId,
+      decompose_reason: `split for ${title}`,
       ...(assignee !== undefined && { assignee }),
     })
   ).json;

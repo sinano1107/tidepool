@@ -24,6 +24,7 @@ async function addChild(t: Tidepool, parentId: string, title: string, riskFlag: 
       purpose: "p",
       completion_criteria: "c",
       parent_id: parentId,
+      decompose_reason: `split ${title}`,
       risk_flag: riskFlag,
     })
   ).json;

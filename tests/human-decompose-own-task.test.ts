@@ -36,6 +36,7 @@ it("実行中でも、自分自身(assignee: human)のタスクへの子追加�
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: parent.id,
+    decompose_reason: "split off the current piece",
   });
 
   expect(res.status).toBe(201);
@@ -54,6 +55,7 @@ it("実行中の他人(agent)のタスクへの子追加は拒否される(対�
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: parent.id,
+    decompose_reason: "split the other task",
   });
 
   expect(res.status).toBe(400);
