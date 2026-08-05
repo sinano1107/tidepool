@@ -72,13 +72,17 @@ it("復帰した親の get_current_task に、reject 理由の comment が answe
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
-    expect(payload.children).toEqual([
+    expect(payload.history).toEqual([
       {
-        title: escalation.questions[0]!.title,
-        status: "done",
-        items: escalation.questions,
-        answer: ["auth0"],
-        comment: "clerk はロックインが強すぎる、auth0 で",
+        child_outside_the_decomposition: {
+          title: escalation.questions[0]!.title,
+          purpose: escalation.context,
+          completion_criteria: "a human answer is recorded",
+          status: "done",
+          items: escalation.questions,
+          answer: ["auth0"],
+          comment: "clerk はロックインが強すぎる、auth0 で",
+        },
       },
     ]);
   } finally {

@@ -15,6 +15,7 @@ it("人間タスクが親のエージェントタスクを block し、完了で
       completion_criteria: "sensor mounted and powered",
       assignee: "human",
       parent_id: parent.id,
+      decompose_reason: "delegate the physical installation",
     })
   ).json;
 

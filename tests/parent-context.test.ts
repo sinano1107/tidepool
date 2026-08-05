@@ -21,6 +21,7 @@ it("a blocked parent is skipped and get_current_task exposes the parent context"
       purpose: "parent widget needs the raw number",
       completion_criteria: "phase function passes known-date checks",
       parent_id: parent.id,
+      decompose_reason: "separate the phase calculation",
     })
   ).json;
   expect(child.parent_id).toBe(parent.id);
@@ -40,6 +41,21 @@ it("a blocked parent is skipped and get_current_task exposes the parent context"
       title: "ship the moon-phase widget",
       purpose: "surf forecast needs moon phase",
       completion_criteria: "widget renders on the dashboard",
+      handoff_doc: null,
+      history: [
+        {
+          decision: "separate the phase calculation",
+          children: [
+            {
+              title: "compute moon phase from date",
+              purpose: "parent widget needs the raw number",
+              completion_criteria: "phase function passes known-date checks",
+              status: "in_progress",
+              you: true,
+            },
+          ],
+        },
+      ],
     });
   } finally {
     await client.close();

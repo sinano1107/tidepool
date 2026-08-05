@@ -15,6 +15,7 @@ it("実行中(かつ human 自身のタスクでない)親への人間の子追�
     purpose: "purpose of child",
     completion_criteria: "criteria of child",
     parent_id: parent.id,
+    decompose_reason: "split while the parent is running",
   });
 
   expect(res.status).toBe(400);
@@ -50,6 +51,7 @@ it("agent が既に decompose 済みの親への人間の子追加は 400 で拒
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: parent.id,
+    decompose_reason: "split despite the existing agent decision",
   });
 
   expect(res.status).toBe(400);
@@ -84,6 +86,7 @@ it("done/cancelled な親への人間の子追加は 400 で拒否される", as
     purpose: "purpose",
     completion_criteria: "criteria",
     parent_id: parent.id,
+    decompose_reason: "split after completion",
   });
 
   expect(res.status).toBe(400);

@@ -4,7 +4,6 @@ import express, { Router } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { taskDecisionLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
@@ -23,8 +22,8 @@ import {
   logDecision,
   recordPrOpened,
   registerPrPromotionFailureQuestion,
-  settledChildren,
   type Task,
+  taskHistory,
 } from "./tasks.js";
 import {
   buildWorkspaceResolver,
@@ -325,28 +324,27 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
 
   server.registerTool(
     "get_current_task",
-    { description: "Fetch the context of the task occupying the slot." },
+    {
+      description:
+        "Fetch the context of the task occupying the slot, reading history from top to bottom " +
+        "in chronological order. A decision's children are the tasks registered based on that " +
+        "decision. A child_outside_the_decomposition is based on no decomposition decision, " +
+        "such as a repair task from a human objection, this task's own escalation, or a " +
+        "watchdog failure question.",
+    },
     async () =>
       runVerb(deps, attributedTaskId, async (task) => {
         const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
-        // a review task reads its parent (the reviewed task) in the reverse
-        // direction from every other seam here (issue #29's review-context
-        // addendum): the parent's own decision log and handoff doc, verbatim
-        // — the primary resource layer 2's RCA needs ("自分は何をどの順で
-        // 判断したか" has no other source than the reviewed session's own
-        // record).
         const parentContext = parent && {
           ...(await taskContext(deps, parent)),
-          ...(task.type === "review" && {
-            decision_log: taskDecisionLog(deps.db, parent.id),
-            handoff_doc: parent.handoff_doc,
-          }),
+          handoff_doc: parent.handoff_doc,
+          history: taskHistory(deps.db, parent.id, task.id),
         };
         return {
           ...(await taskContext(deps, task)),
           type: task.type,
           parent: parentContext,
-          children: settledChildren(deps.db, task.id),
+          history: taskHistory(deps.db, task.id),
         };
       }),
   );
