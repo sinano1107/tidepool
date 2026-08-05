@@ -66,7 +66,7 @@ it("分解理由が空なら登録を拒否し、子も decision log も残さ�
   expect(board.some((x: any) => x.title === "child")).toBe(false);
 });
 
-it("管理MCP の decompose も空の分解理由を拒否する", async () => {
+it("Worker MCP の decompose も空の分解理由を拒否する", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);

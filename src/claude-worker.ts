@@ -113,7 +113,7 @@ in an MCP verb, it did not happen.
 Escalating is never wrong; guessing outside your authority is. When a decision
 is outside your authority or you hit a dead end, escalate rather than guess.
 
-This may be a resumed task session: if the decision log or settled children show prior-session traces, inspect the task branch with \`git log\` before starting work.`;
+This may be a resumed task session: if the task history shows prior-session traces, inspect the task branch with \`git log\` before starting work.`;
 
 /** One roster line's text (issue #43 / ADR 0014): "name — description",
  *  shared by every entry — a registry agent's `AgentDefinition` or the
