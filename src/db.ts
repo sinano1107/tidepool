@@ -47,10 +47,9 @@ const TASKS_TABLE_DDL = `
       -- submission (not per item) — recorded alongside question_answer so a
       -- resumed parent's get_current_task can carry both
       question_answer_comment  TEXT,
-      -- system-internal only (ADR 0006): one of the (sole) item's options
-      -- that, if answered, cancels the plan instead of the ordinary
-      -- unblock-to-head path. Never set via MCP or the JSON API — only the
-      -- watchdog's failure-question registration sets it.
+      -- system internal (ADR 0006 / 0048): 唯一の item の選択肢のうち、
+      -- 通常の先頭復帰ではなく判断単位の abandon を行うもの。MCP / JSON API
+      -- からは設定せず、watchdog の failure question 登録だけが設定する。
       question_cancel_option  TEXT,
       -- system-internal only (issue #11): a pending-child approval question's
       -- would-be child, JSON-encoded, materialized only if the human answers

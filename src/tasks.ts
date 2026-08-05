@@ -253,11 +253,10 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   /** 1-4 question items (issue #30) — a single-item array is the degenerate
    *  case, not a distinct shape. */
   question?: QuestionItem[];
-  /** System-internal only (ADR 0006): declares that answering the question
-   *  with this exact option cancels the plan (see `cancelTask`) instead of
-   *  taking the ordinary unblock-to-head path. Must be one of the question's
-   *  options. Never set via MCP or the JSON API — only the watchdog's
-   *  failure-question registration sets it. */
+  /** system internal (ADR 0006 / 0048): この選択肢への回答が通常の先頭復帰
+   *  ではなく判断単位の abandon を行うことを示す。question の選択肢の1つで
+   *  なければならない。MCP / JSON API からは設定せず、watchdog の failure
+   *  question 登録だけが設定する。 */
   cancel_option?: string;
   /** System-internal only (issue #11): the would-be child of a pending-child
    *  approval question, materialized by answerQuestion on an "approve"
@@ -893,15 +892,13 @@ export interface CancelDefaults {
  *  先に直接 cancel すると failure question が宙に浮き、回答だけが行えるはずの
  *  状態遷移を壊すためである。対象は次の2系統:
  *
- *   - a **failure question** (`question_cancel_option` set — a watchdog kill or
- *     an issue-backed deterministic failure) whose failed task lies in the
- *     subtree: "abandon" は失敗タスクと同じ分解判断の範囲を cancel するため、
- *     direct cancel は question を宙に浮かせる。A PR-promotion failure question is
- *     deliberately outside this family (CONTEXT.md) — it carries no
- *     cancel_option, since its target is already done and nothing is abandoned.
- *   - a **quarantine Confirmation** (`question_quarantine_workspace`/`_agent`
- *     set) for a resource some subtree task resolves to (its own value, or the
- *     board default an unset one falls back to). */
+ *   - **failure question**: `question_cancel_option` を持つ watchdog kill または
+ *     issue-backed の確定的失敗で、失敗タスクが対象 subtree 内にあるもの。
+ *     abandon は同じ分解判断の範囲を cancel するため、direct cancel は
+ *     question を宙に浮かせる。PR promotion の failure question は対象が既に
+ *     done で abandon するものがなく、cancel_option も持たないため対象外。
+ *   - **quarantine Confirmation**: subtree 内のタスクが解決される資源に対する
+ *     `question_quarantine_workspace` / `_agent` を持つもの。 */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
   const subtree = `WITH RECURSIVE subtree(id) AS (
       SELECT @root
@@ -1145,11 +1142,9 @@ export function answerQuestion(
           .prepare(
             `SELECT candidate.id
              FROM tasks candidate JOIN tasks failed ON failed.id = ?
-             WHERE candidate.parent_id = ?
-               AND candidate.status NOT IN ('done', 'cancelled')
-               AND ${abandonScopeSql("failed", "candidate")}`,
+             WHERE ${abandonScopeSql("failed", "candidate")}`,
           )
-          .all(failed.id, plan.id) as Array<{ id: string }>;
+          .all(failed.id) as Array<{ id: string }>;
         for (const { id } of siblingIds) {
           cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now);
         }
@@ -1211,10 +1206,15 @@ export function answerQuestion(
  *  IS NOT NULL が JS の null === null と同型の事故を SQL 側でも防ぐ。 */
 function abandonScopeSql(failedRef: string, candidateRef: string): string {
   return `(
-    ${candidateRef}.id = ${failedRef}.id
-    OR (
-      ${failedRef}.based_on_decision IS NOT NULL
-      AND ${candidateRef}.based_on_decision = ${failedRef}.based_on_decision
+    ${candidateRef}.status NOT IN ('done', 'cancelled')
+    AND (
+      ${candidateRef}.id = ${failedRef}.id
+      OR (
+        ${failedRef}.based_on_decision IS NOT NULL
+        AND ${candidateRef}.parent_id = ${failedRef}.parent_id
+        AND ${candidateRef}.id <> ${failedRef}.id
+        AND ${candidateRef}.based_on_decision = ${failedRef}.based_on_decision
+      )
     )
   )`;
 }
@@ -1227,12 +1227,10 @@ export function unfinishedDecisionSiblingCount(db: Db, failed: Task): number {
     .prepare(
       `SELECT COUNT(*) AS count
        FROM tasks candidate JOIN tasks failed ON failed.id = ?
-       WHERE candidate.parent_id = ?
-         AND candidate.id <> failed.id
-         AND candidate.status NOT IN ('done', 'cancelled')
+       WHERE candidate.id <> failed.id
          AND ${abandonScopeSql("failed", "candidate")}`,
     )
-    .get(failed.id, failed.parent_id) as { count: number };
+    .get(failed.id) as { count: number };
   return count;
 }
 
@@ -1920,9 +1918,7 @@ const HELD_IDS_CTE = `
         AND (
           candidate.parent_id = failed.id
           OR (
-            candidate.parent_id = failed.parent_id
-            AND candidate.id <> failed.id
-            AND candidate.status NOT IN ('done', 'cancelled')
+            candidate.id <> failed.id
             AND ${abandonScopeSql("failed", "candidate")}
           )
         )
@@ -2258,9 +2254,9 @@ export function taskHistory(
     });
 }
 
-/** A cancelled task's one `task_cancelled` event names the abandon question
- *  that ended the whole plan (ADR 0006) — a single hop back to it is the
- *  entire "why" a resumed parent needs. */
+/** cancelled task の task_cancelled event は、その分解判断を破棄した abandon
+ *  question を指す (ADR 0006 / 0048)。先頭復帰した親が必要とする why は、
+ *  この1 hop で得られる。 */
 function cancelOriginQuestion(db: Db, taskId: string): Task | undefined {
   const row = db
     .prepare("SELECT payload FROM events WHERE task_id = ? AND kind = 'task_cancelled'")

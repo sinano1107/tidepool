@@ -22,7 +22,7 @@ afterEach(async () => {
 const MIN = 60 * 1000;
 const WORK_LIMIT = 90 * MIN;
 
-it("abandon の回答で計画ごと破棄される: 失敗タスクと兄弟が cancelled になり、親が先頭復帰して再ピックアップされる", async () => {
+it("abandon の回答で判断ごと破棄される: 失敗タスクと同判断の兄弟が cancelled になり、親が先頭復帰して再ピックアップされる", async () => {
   const grace = 30 * MIN;
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({

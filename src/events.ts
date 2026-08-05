@@ -75,9 +75,9 @@ export type EventPayload =
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join
   | { kind: "risk_flag_raised"; origin_question_id: string }
-  // ADR 0006: a task cancelled by an abandon answer's plan-scoped cascade —
-  // origin_question_id is the failure question the abandon answer came from,
-  // shared by every task the cascade touches (its own subtree included)
+  // ADR 0006 / 0048: abandon の判断単位 cascade で cancel されたタスク。
+  // origin_question_id は回答元の failure question で、失敗タスク自身の
+  // subtree を含め cascade が触れた全タスクに共通する。
   | { kind: "task_cancelled"; origin_question_id: string }
   // issue #130: a human's direct cancel — the second cancel path (CONTEXT.md's
   // Cancel), no failure question above it, so reason is the human's own free
