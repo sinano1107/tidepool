@@ -124,6 +124,7 @@ export function openDb(path: string): Db {
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id    TEXT NOT NULL REFERENCES tasks(id),
       worker_id  TEXT NOT NULL,
+      origin     TEXT NOT NULL DEFAULT 'webui',
       kind       TEXT NOT NULL,
       payload    TEXT NOT NULL,
       created_at TEXT NOT NULL
@@ -356,6 +357,15 @@ export function openDb(path: string): Db {
     "question_quarantine_sandbox",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
+  }
+  // #190 / ADR 0032: the operation route is separate from the worker identity.
+  // Existing rows predate route recording and therefore represent the only
+  // human-facing surface that existed then: the WebUI.
+  const eventCols = (db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map(
+    (c) => c.name,
+  );
+  if (!eventCols.includes("origin")) {
+    db.exec("ALTER TABLE events ADD COLUMN origin TEXT NOT NULL DEFAULT 'webui'");
   }
   if (!cols.includes("based_on_decision")) {
     db.exec(`ALTER TABLE tasks ADD COLUMN based_on_decision INTEGER`);

@@ -246,6 +246,7 @@ export function startScheduler(deps: {
           },
           BOARD_WORKER_ID,
           clock.now(),
+          "board",
         );
         return false;
       }

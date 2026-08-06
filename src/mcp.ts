@@ -168,6 +168,7 @@ export async function promoteHandoffPr(
     deps.clock.now(),
     attributedAuthority(deps, task),
     deps.isProtectedWorkspace?.(workspace.name),
+    "worker",
   );
 }
 
@@ -389,7 +390,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async ({ handoff }) => {
       let completed: Task | undefined;
       const result = runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-        const done = completeTask(deps.db, task, handoff, workerId, now);
+        const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
         completed = done;
         return { id: done.id, status: done.status };
       });
@@ -408,7 +409,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async ({ line }) =>
       runVerb(deps, attributedTaskId, (task) => {
-        logDecision(deps.db, task, line, attributedWorkerId(deps, task), deps.clock.now());
+        logDecision(deps.db, task, line, attributedWorkerId(deps, task), deps.clock.now(), "worker");
         return { logged: true };
       }),
   );
@@ -490,6 +491,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           now,
           attributedAuthority(deps, task),
           deps.isProtectedWorkspace,
+          "worker",
         );
         return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),
@@ -520,7 +522,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-        const question = escalateTask(deps.db, task, input, workerId, now);
+        const question = escalateTask(deps.db, task, input, workerId, now, "worker");
         return { question_id: question.id, parent_status: "blocked" };
       }),
   );

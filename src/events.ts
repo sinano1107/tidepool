@@ -238,11 +238,13 @@ export type EventPayload =
   | { kind: "spawn_failed"; error_code: string | null; message: string };
 
 export type EventKind = EventPayload["kind"];
+export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
   task_id: string;
   worker_id: string;
+  origin: EventOrigin;
   kind: EventKind;
   payload: EventPayload;
   created_at: string;
@@ -253,15 +255,22 @@ export interface EventRow {
  *  child pointing at the decision it rests on). */
 export function appendEvent(
   db: Db,
-  event: { taskId: string; workerId: string; payload: EventPayload; at: Date },
+  event: {
+    taskId: string;
+    workerId: string;
+    origin?: EventOrigin;
+    payload: EventPayload;
+    at: Date;
+  },
 ): number {
   const { lastInsertRowid } = db
     .prepare(
-      "INSERT INTO events (task_id, worker_id, kind, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO events (task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .run(
       event.taskId,
       event.workerId,
+      event.origin ?? "webui",
       event.payload.kind,
       JSON.stringify(event.payload),
       event.at.toISOString(),

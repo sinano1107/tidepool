@@ -105,6 +105,7 @@ export function raiseObjection(
   return appendEvent(db, {
     taskId: entry.task_id,
     workerId: HUMAN_WORKER_ID,
+    origin: "webui",
     payload: { kind: "objection_raised", entry_id: entryId, comment, session_id: open.id },
     at: now,
   });
@@ -388,6 +389,7 @@ export function recordDisplayedEntries(db: Db, entryIds: number[], now: Date): v
       appendEvent(db, {
         taskId: entry.task_id,
         workerId: HUMAN_WORKER_ID,
+        origin: "webui",
         payload: { kind: "log_entry_displayed", entry_id: entryId, session_id: open.id },
         at: now,
       });

@@ -43,6 +43,7 @@ export async function checkPendingAutoMerges(
       appendEvent(db, {
         taskId: task_id,
         workerId: HUMAN_WORKER_ID,
+        origin: "board",
         payload: { kind: "pr_merged", pr_number },
         at: now,
       });
@@ -58,6 +59,7 @@ export async function checkPendingAutoMerges(
       "hold",
       HUMAN_WORKER_ID,
       now,
+      "board",
     );
   }
 }

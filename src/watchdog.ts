@@ -90,6 +90,7 @@ export function failTask(
     },
     BOARD_WORKER_ID,
     now,
+    "board",
   );
   if (resolve) {
     const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);

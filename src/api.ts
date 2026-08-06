@@ -582,6 +582,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       },
       parsed.data,
       () => clock.now(),
+      "webui",
     );
     if (!result.ok) {
       const { kind, ...body } = result.failure;
@@ -1004,7 +1005,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (parsed.data.workspace) {
         assertWorkspaceKnown(parsed.data.workspace, resolveWorkspace, workspace);
       }
-      const edited = editTask(db, task, parsed.data, clock.now());
+      const edited = editTask(db, task, parsed.data, clock.now(), "webui");
       res.json((await presentLive([presentTask(db, edited)]))[0]);
     } catch (err) {
       if (err instanceof DomainError) {
@@ -1038,7 +1039,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         defaultWorkspaceName: workspace?.name,
         defaultAgentName,
         auditorName,
-      });
+      }, "webui");
       // cancelling can unblock the target's parent (its last unsettled child is
       // now cancelled — settled), so give the queue head a chance to advance,
       // same trigger the /complete route uses (CONTEXT.md: cancelled の親を
@@ -1090,6 +1091,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.answers,
         parsed.data.comment,
         () => clock.now(),
+        "webui",
       );
       res.json(presentTask(db, question));
     } catch (err) {
@@ -1132,7 +1134,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const done = completeTask(db, task, parsed.data.handoff, HUMAN_WORKER_ID, clock.now());
+      const done = completeTask(
+        db,
+        task,
+        parsed.data.handoff,
+        HUMAN_WORKER_ID,
+        clock.now(),
+        "webui",
+      );
       if (done.parent_id) {
         const parent = getTask(db, done.parent_id);
         if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
