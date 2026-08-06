@@ -258,7 +258,7 @@ export function appendEvent(
   event: {
     taskId: string;
     workerId: string;
-    origin?: EventOrigin;
+    origin: EventOrigin;
     payload: EventPayload;
     at: Date;
   },
@@ -270,7 +270,7 @@ export function appendEvent(
     .run(
       event.taskId,
       event.workerId,
-      event.origin ?? "webui",
+      event.origin,
       event.payload.kind,
       JSON.stringify(event.payload),
       event.at.toISOString(),

@@ -18,6 +18,7 @@ it("origin 列のない旧 board を再オープンすると、既存イベン�
   appendEvent(legacy, {
     taskId: task.id,
     workerId: "human",
+      origin: "webui",
     payload: { kind: "decision_logged", line: "existing event" },
     at: new Date(1),
   });
@@ -35,5 +36,12 @@ it("origin 列のない旧 board を再オープンすると、既存イベン�
   }>;
 
   expect(origins).toEqual([{ origin: "webui" }, { origin: "webui" }]);
+  expect(() =>
+    migrated
+      .prepare(
+        "INSERT INTO events (task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(task.id, "human", "unknown", "decision_logged", "{}", new Date(2).toISOString()),
+  ).toThrow(/CHECK constraint failed/);
   migrated.close();
 });

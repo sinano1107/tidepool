@@ -739,6 +739,7 @@ export function completeTask(
         },
         now,
         workerId,
+        origin,
       );
     }
   })();

@@ -146,6 +146,7 @@ export function quarantineContainment(db: Db, reason: string, now: Date): void {
     },
     now,
     BOARD_WORKER_ID,
+    "board",
   );
 }
 
