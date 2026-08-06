@@ -45,7 +45,7 @@ export const DEFAULT_AUDITOR_NAME = "auditor";
 
 export type TaskType = "work" | "question" | "review";
 /** `blocked` is deliberately absent: it is derived from unfinished children
- *  (CONTEXT.md), never stored. */
+ *  the parent waits for (CONTEXT.md), never stored. */
 export type TaskStatus = "todo" | "in_progress" | "done" | "cancelled";
 
 export interface Task {
@@ -688,8 +688,9 @@ export function completeTask(
       );
     }
   }
-  // completion criteria cover the whole tree: a parent completes only after
-  // every child settles (復帰型 — the resumed session integrates, then completes)
+  // completion criteria cover the decomposition tree: a parent completes only
+  // after every child it waits for settles (復帰型 — the resumed session
+  // integrates, then completes)
   if (hasUnfinishedChildren(db, task.id)) {
     throw new DomainError("a task with unfinished children cannot complete");
   }
@@ -787,7 +788,7 @@ export interface EscalateInput {
  *  2-4 choices and the registrant's recommendation (enforced at registration,
  *  like every question) — a single-item bundle is the degenerate case of the
  *  same shape (issue #30), not a distinct one. The parent returns to `todo`
- *  (blocked is derived from the unfinished child, never stored) and the slot
+ *  (blocked is derived from the unfinished question, never stored) and the slot
  *  is freed by the caller. The registered task's own `title` is the bundle's
  *  first item's — for the common single-item case this is exactly the
  *  question's own title, same as before the bundle existed. */
@@ -1039,7 +1040,7 @@ export function assertAnswerable(question: Task, answers: string[]): void {
  *  cancel option, cancel the failed task's subtree plus unfinished sibling
  *  subtrees from the same decomposition decision. Without such provenance,
  *  only the failed task's subtree is cancelled. Its parent returns to the
- *  queue head only when no unfinished children remain, as before.
+ *  queue head only when no unfinished children it waits for remain, as before.
  *
  *  Quarantine resolution (issue #21): a Confirmation question (declared by
  *  `question_quarantine_workspace`, system-internal) takes any answer at all
@@ -1851,11 +1852,15 @@ export function editTask(db: Db, task: Task, input: EditTaskInput, now: Date): T
   return getTask(db, task.id)!;
 }
 
-/** The one SQL shape of the derived-blocked rule (CONTEXT.md): a child not
- *  done/cancelled. `parentRef` is the SQL expression holding the parent's id. */
+/** The one SQL shape of the derived-blocked rule (CONTEXT.md): an unsettled
+ *  child the parent waits for — either part of a decomposition decision or an
+ *  escalation question. `parentRef` is the SQL expression holding the
+ *  parent's id. */
 export function unfinishedChildSql(parentRef: string): string {
   return `EXISTS (SELECT 1 FROM tasks c
-            WHERE c.parent_id = ${parentRef} AND c.status NOT IN ('done', 'cancelled'))`;
+            WHERE c.parent_id = ${parentRef}
+              AND c.status NOT IN ('done', 'cancelled')
+              AND (c.based_on_decision IS NOT NULL OR c.type = 'question'))`;
 }
 
 /** The one SQL shape of "this task's execution workspace is quarantined"
@@ -2280,7 +2285,7 @@ export function listChildren(db: Db, parentId: string): Task[] {
 
 /** The queue head the slot may take: lowest-sort_key todo that is
  *  agent-executable. Blocked is derived from parent/child alone — a task with
- *  an unfinished child never enters the slot — and questions never enter it
+ *  an unfinished child it waits for never enters the slot — and questions never enter it
  *  either: they are human tasks, answered outside the slot (WebUI). Slot is
  *  capacity, not identity (ADR 0012 / issue #36): every assignee but `human`
  *  takes the same slot — `human` is the one assignee that always sits outside

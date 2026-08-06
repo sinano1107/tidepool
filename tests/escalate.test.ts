@@ -52,6 +52,7 @@ it("escalate registers one question task carrying every question item, blocks th
   const question = questions[0];
   expect(question.parent_id).toBe(parent.id);
   expect(question.status).toBe("todo");
+  expect(question.based_on_decision).toBeNull();
   expect(question.question_items).toEqual(twoQuestions.questions);
 
   // blocked is derived from the unfinished child, and the board says so

@@ -79,6 +79,8 @@ it("approving a risk-approval question registers the pending child and raises th
   expect(child.type).toBe("work");
   expect(child.parent_id).toBe(parent.id);
   expect(child.risk_flag).toBe(1);
+  expect(question.based_on_decision).not.toBeNull();
+  expect(child.based_on_decision).toBe(question.based_on_decision);
 
   const updatedParent = board.find((x: any) => x.id === parent.id);
   expect(updatedParent.risk_flag).toBe(1);

@@ -21,12 +21,26 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
     );
     const stillOpen = registerTask(
       db,
-      { type: "work", title: "survey the north reef", purpose: "p", completion_criteria: "c", parent_id: parent.id },
+      {
+        type: "work",
+        title: "survey the north reef",
+        purpose: "p",
+        completion_criteria: "c",
+        parent_id: parent.id,
+        based_on_decision: 48,
+      },
       new Date(1),
     );
     const abandoned = registerTask(
       db,
-      { type: "work", title: "chase a dead lead", purpose: "p", completion_criteria: "c", parent_id: parent.id },
+      {
+        type: "work",
+        title: "chase a dead lead",
+        purpose: "p",
+        completion_criteria: "c",
+        parent_id: parent.id,
+        based_on_decision: 48,
+      },
       new Date(2),
     );
     cancelTask(db, abandoned, "origin-question", "tidepool", new Date(3));
