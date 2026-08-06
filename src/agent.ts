@@ -64,6 +64,7 @@ export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: 
     appendEvent(db, {
       taskId: existing.id,
       workerId: BOARD_WORKER_ID,
+      origin: "board",
       payload: { kind: "quarantine_refired", cause: causeMessage },
       at: now,
     });
@@ -86,6 +87,7 @@ export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: 
     },
     now,
     BOARD_WORKER_ID,
+    "board",
   );
 }
 

@@ -249,6 +249,7 @@ it("SIGKILL 後に tree rule 自体が失敗すると、failure question では�
   expect(quarantineQuestion).toBeDefined();
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${quarantineQuestion.id}/events`)).json;
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+  expect(events.find((e: any) => e.kind === "task_registered").origin).toBe("board");
 
   // needs-human の workspace はpickupを止める
   await registerWork(t, "long haul");

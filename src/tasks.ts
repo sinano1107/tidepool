@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, taskDecisionLog } from "./events.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { RosterAgent } from "./registry.js";
 
@@ -492,6 +492,7 @@ export function registerTask(
   input: RegisterTaskInput,
   now: Date,
   workerId: string = HUMAN_WORKER_ID,
+  origin: EventOrigin = "webui",
 ): Task {
   assertQuestionSpec(input);
   assertGithubRef(input);
@@ -569,6 +570,7 @@ export function registerTask(
     appendEvent(db, {
       taskId: task.id,
       workerId,
+      origin,
       payload: {
         kind: "task_registered",
         type: task.type,
@@ -650,7 +652,13 @@ export class DomainError extends Error {}
 export function pickupTask(db: Db, task: Task, workerId: string, now: Date): Task {
   db.transaction(() => {
     db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(task.id);
-    appendEvent(db, { taskId: task.id, workerId, payload: { kind: "task_picked_up" }, at: now });
+    appendEvent(db, {
+      taskId: task.id,
+      workerId,
+      origin: "board",
+      payload: { kind: "task_picked_up" },
+      at: now,
+    });
   })();
   return getTask(db, task.id)!;
 }
@@ -679,6 +687,7 @@ export function completeTask(
   handoff: Partial<HandoffDoc> | undefined,
   workerId: string,
   now: Date,
+  origin: EventOrigin = "worker",
 ): Task {
   if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
     const missing = HANDOFF_FIELDS.filter((f) => !handoff?.[f]?.trim());
@@ -704,6 +713,7 @@ export function completeTask(
     appendEvent(db, {
       taskId: task.id,
       workerId,
+      origin,
       payload: {
         kind: "task_completed",
         handoff_present: handoffDoc !== null,
@@ -729,6 +739,7 @@ export function completeTask(
         },
         now,
         workerId,
+        origin,
       );
     }
   })();
@@ -745,6 +756,7 @@ export function moveTask(
   after: Task | null,
   now: Date,
   workerId: string = HUMAN_WORKER_ID,
+  origin: EventOrigin = "webui",
 ): Task {
   const sortKey = fractionalKeyAfter(db, task, after);
   db.transaction(() => {
@@ -752,6 +764,7 @@ export function moveTask(
     appendEvent(db, {
       taskId: task.id,
       workerId,
+      origin,
       payload: { kind: "task_moved", after: after?.id ?? null },
       at: now,
     });
@@ -798,6 +811,7 @@ export function escalateTask(
   input: EscalateInput,
   workerId: string,
   now: Date,
+  origin: EventOrigin = "worker",
 ): Task {
   let question: Task;
   db.transaction(() => {
@@ -814,11 +828,13 @@ export function escalateTask(
       },
       now,
       workerId,
+      origin,
     );
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
     appendEvent(db, {
       taskId: parent.id,
       workerId,
+      origin,
       payload: { kind: "task_escalated", question_id: question.id },
       at: now,
     });
@@ -842,6 +858,7 @@ function cancelUnsettledSubtree(
   workerId: string,
   now: Date,
   payload: EventPayload,
+  origin: EventOrigin,
 ): void {
   const rows = db
     .prepare(
@@ -857,7 +874,7 @@ function cancelUnsettledSubtree(
   db.transaction(() => {
     for (const { id } of rows) {
       db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
-      appendEvent(db, { taskId: id, workerId, payload, at: now });
+      appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
     }
   })();
 }
@@ -872,11 +889,12 @@ export function cancelTask(
   originQuestionId: string,
   workerId: string,
   now: Date,
+  origin: EventOrigin = "webui",
 ): void {
   cancelUnsettledSubtree(db, task.id, workerId, now, {
     kind: "task_cancelled",
     origin_question_id: originQuestionId,
-  });
+  }, origin);
 }
 
 /** The pointers the direct-cancel question gate's quarantine half resolves an
@@ -961,13 +979,14 @@ export function cancelTaskDirectly(
   reason: string | null,
   now: Date,
   defaults: CancelDefaults,
+  origin: EventOrigin = "webui",
 ): void {
   assertHumanEditableScope(db, task, "cancelled");
   assertNoGatingQuestion(db, task.id, defaults);
   cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
     kind: "task_cancelled_directly",
     reason,
-  });
+  }, origin);
 }
 
 /** The four pure preconditions an answer submission must clear before any
@@ -1061,6 +1080,7 @@ export function answerQuestion(
    *  when absent, rather than stored as null, so an unanswered comment
    *  leaves the event shape exactly as it was before this existed. */
   comment?: string,
+  origin: EventOrigin = "webui",
 ): { question: Task; parentUnblocked: boolean; pickupResumed: boolean } {
   assertAnswerable(question, answers);
   const items = question.question_items!;
@@ -1079,6 +1099,7 @@ export function answerQuestion(
     appendEvent(db, {
       taskId: question.id,
       workerId: HUMAN_WORKER_ID,
+      origin,
       payload: {
         kind: "question_answered",
         answers: answers.map((a, i) => ({
@@ -1097,6 +1118,7 @@ export function answerQuestion(
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
+        origin,
         payload: { kind: "workspace_reinstated", workspace: wsName },
         at: now,
       });
@@ -1112,6 +1134,7 @@ export function answerQuestion(
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
+        origin,
         payload: { kind: "agent_reinstated", agent: agentName },
         at: now,
       });
@@ -1128,6 +1151,7 @@ export function answerQuestion(
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
+        origin,
         payload: { kind: "sandbox_reinstated" },
         at: now,
       });
@@ -1148,11 +1172,11 @@ export function answerQuestion(
           )
           .all(failed.id) as Array<{ id: string }>;
         for (const { id } of siblingIds) {
-          cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now);
+          cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
         }
         unblockTarget = plan;
       } else {
-        cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now);
+        cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
       }
     } else {
       // pending-child approval question (issue #11): the child (out-of-
@@ -1168,6 +1192,7 @@ export function answerQuestion(
           { type: "work", ...pending, parent_id: question.parent_id! },
           now,
           HUMAN_WORKER_ID,
+          origin,
         );
         // "beyond its parent" is evaluated against the parent's current risk
         // flag, not a decompose-time snapshot: a second, unrelated (e.g.
@@ -1179,6 +1204,7 @@ export function answerQuestion(
           appendEvent(db, {
             taskId: question.parent_id!,
             workerId: HUMAN_WORKER_ID,
+            origin,
             payload: { kind: "risk_flag_raised", origin_question_id: question.id },
             at: now,
           });
@@ -1195,7 +1221,7 @@ export function answerQuestion(
       if (stageUnblock) {
         stageUnblock(unblockTarget.id);
       } else {
-        moveTask(db, unblockTarget, null, now);
+        moveTask(db, unblockTarget, null, now, HUMAN_WORKER_ID, origin);
         parentUnblocked = true;
       }
     }
@@ -1244,10 +1270,12 @@ export function logDecision(
   line: string,
   workerId: string,
   now: Date,
+  origin: EventOrigin = "worker",
 ): number {
   return appendEvent(db, {
     taskId: task.id,
     workerId,
+    origin,
     payload: { kind: "decision_logged", line },
     at: now,
   });
@@ -1323,6 +1351,7 @@ export function registerPrPromotionFailureQuestion(
     },
     now,
     BOARD_WORKER_ID,
+    "board",
   );
 }
 
@@ -1339,6 +1368,7 @@ export function registerMergeQuestion(
   recommendation: (typeof MERGE_QUESTION_OPTIONS)[number],
   workerId: string,
   now: Date,
+  origin: EventOrigin = "worker",
 ): void {
   const title = `merge PR #${prNumber}: ${task.title}`;
   registerTask(
@@ -1359,6 +1389,7 @@ export function registerMergeQuestion(
     },
     now,
     workerId,
+    origin,
   );
 }
 
@@ -1410,12 +1441,14 @@ export function recordPrOpened(
   now: Date,
   authority?: AuthorityContext,
   isProtected?: boolean,
+  origin: EventOrigin = "worker",
 ): void {
   db.transaction(() => {
     db.prepare("UPDATE tasks SET pr_number = ? WHERE id = ?").run(prNumber, task.id);
     appendEvent(db, {
       taskId: task.id,
       workerId,
+      origin,
       payload: { kind: "pr_opened", pr_number: prNumber },
       at: now,
     });
@@ -1431,6 +1464,7 @@ export function recordPrOpened(
         "merge",
         workerId,
         now,
+        origin,
       );
     } else if (authority?.merge === "auto_if_ci_green") {
       if (task.risk_flag) {
@@ -1443,6 +1477,7 @@ export function recordPrOpened(
           "merge",
           workerId,
           now,
+          origin,
         );
       } else {
         queuePendingAutoMerge(db, task.id, prNumber);
@@ -1531,6 +1566,7 @@ export function decomposeTask(
    *  need human approval" is a resource-side invariant independent of any
    *  profile. Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean,
+  origin: EventOrigin = "worker",
 ): Task[] {
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
@@ -1543,7 +1579,7 @@ export function decomposeTask(
     // Both human and agent decompose carry a decision. Keep this a length
     // check rather than `.trim()` so whitespace follows the existing MCP
     // `z.string().min(1)` contract.
-    const decisionId = logDecision(db, parent, input.reason, workerId, now);
+    const decisionId = logDecision(db, parent, input.reason, workerId, now, origin);
     for (const child of input.children) {
       const reasons: string[] = [];
       if (child.risk_flag && !parent.risk_flag) {
@@ -1597,6 +1633,7 @@ export function decomposeTask(
           },
           now,
           workerId,
+          origin,
         );
         continue;
       }
@@ -1606,6 +1643,7 @@ export function decomposeTask(
           { type: "work", ...child, workspace, parent_id: parent.id, based_on_decision: decisionId },
           now,
           workerId,
+          origin,
         ),
       );
     }
@@ -1720,6 +1758,7 @@ export function humanDecomposeTask(
   input: { reason: string; children: ChildSpec[] },
   now: Date,
   isProtectedWorkspace?: (name: string) => boolean,
+  origin: EventOrigin = "webui",
 ): Task[] {
   assertHumanDecomposable(db, parent);
   return decomposeTask(
@@ -1730,6 +1769,7 @@ export function humanDecomposeTask(
     now,
     undefined,
     isProtectedWorkspace,
+    origin,
   );
 }
 
@@ -1789,7 +1829,13 @@ function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
  *  truth is the GitHub issue / the burned-in reference identity — CONTEXT.md);
  *  the assignee/workspace registry-resolution recheck is the caller's, mirror
  *  of registration (see api.ts), since it needs the injected registry seams. */
-export function editTask(db: Db, task: Task, input: EditTaskInput, now: Date): Task {
+export function editTask(
+  db: Db,
+  task: Task,
+  input: EditTaskInput,
+  now: Date,
+  origin: EventOrigin = "webui",
+): Task {
   assertHumanEditableScope(db, task, "edited");
   const issueBacked = task.github_issue_number !== null;
   if (issueBacked) {
@@ -1844,6 +1890,7 @@ export function editTask(db: Db, task: Task, input: EditTaskInput, now: Date): T
       appendEvent(db, {
         taskId: task.id,
         workerId: HUMAN_WORKER_ID,
+        origin,
         payload: { kind: "task_edited", field: c.field, from: c.from, to: c.to },
         at: now,
       });

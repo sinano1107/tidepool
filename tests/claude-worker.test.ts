@@ -1616,6 +1616,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: {
         kind: "worker_spawned",
         registry_commit: oldHash,
@@ -1627,12 +1628,14 @@ describe("ClaudeCodeWorker", () => {
     const decisionId = appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
     });
     appendEvent(db, {
       taskId: objected.id,
       workerId: "human",
+        origin: "webui",
       payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
       at: new FakeClock().now(),
     });
@@ -1662,18 +1665,21 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
     });
     appendEvent(db, {
       taskId: objected.id,
       workerId: "human",
+        origin: "webui",
       payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
       at: new FakeClock().now(),
     });
@@ -1689,6 +1695,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null },
       at: new FakeClock().now(),
     });
@@ -1715,12 +1722,14 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
     });
@@ -1735,12 +1744,14 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "decision_logged", line: "chose approach Y" },
       at: new FakeClock().now(),
     });
@@ -1749,6 +1760,7 @@ describe("ClaudeCodeWorker", () => {
       appendEvent(db, {
         taskId: objected.id,
         workerId: "human",
+        origin: "webui",
         payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
         at: new FakeClock().now(),
       });
@@ -1796,6 +1808,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: {
         kind: "worker_spawned",
         registry_commit: "0000000000000000000000000000000000000000",
@@ -1807,6 +1820,7 @@ describe("ClaudeCodeWorker", () => {
     const decision1 = appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
     });
@@ -1814,12 +1828,14 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "decision_logged", line: "chose approach Y" },
       at: new FakeClock().now(),
     });
@@ -1827,6 +1843,7 @@ describe("ClaudeCodeWorker", () => {
       appendEvent(db, {
         taskId: objected.id,
         workerId: "human",
+        origin: "webui",
         payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
         at: new FakeClock().now(),
       });
@@ -1865,6 +1882,7 @@ describe("ClaudeCodeWorker", () => {
     appendEvent(db, {
       taskId: objected.id,
       workerId: "deckhand",
+        origin: "webui",
       payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null },
       at: new FakeClock().now(),
     });

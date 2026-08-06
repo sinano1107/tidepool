@@ -36,6 +36,10 @@ describe("completeTask は review_flag 付き work タスクの完了で review 
     const board = listBoard(db);
     const review = board.find((t) => t.type === "review" && t.parent_id === task.id);
     expect(review).toBeDefined();
+    const event = db
+      .prepare("SELECT origin FROM events WHERE task_id = ? AND kind = 'task_registered'")
+      .get(review!.id) as { origin: string };
+    expect(event.origin).toBe("worker");
   });
 
   it("review_flag なしの work タスクの完了では review タスクは生成されない", () => {

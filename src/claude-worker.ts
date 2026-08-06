@@ -1830,6 +1830,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // #36) — not this worker's configured default, which a pre-set
       // delegation may override
       workerId: agent.name,
+      origin: "board",
       // issue #127: this records the *attempt* to spawn, not a successful
       // session — spawn() has already returned synchronously by this point,
       // but Node's "error" can still fire after this write if the process
@@ -1868,6 +1869,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,
+        origin: "board",
         payload: {
           kind: "spawn_failed",
           error_code: errno.code ?? null,
@@ -1896,6 +1898,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,
+        origin: "board",
         payload: {
           kind: "worker_exited",
           exit_code: code,

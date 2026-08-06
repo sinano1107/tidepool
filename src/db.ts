@@ -114,20 +114,33 @@ const THROTTLE_STATE_TABLE_DDL = `
       fable_resume_at    TEXT
     )`;
 
+// Shared between the fresh-board CREATE and #190's event-table rebuild. The
+// database is the audit record's final backstop, so its route vocabulary is
+// constrained here as well as by EventOrigin in TypeScript.
+const EVENTS_TABLE_DDL = `
+    CREATE TABLE events (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id    TEXT NOT NULL REFERENCES tasks(id),
+      worker_id  TEXT NOT NULL,
+      origin     TEXT NOT NULL DEFAULT 'webui' CHECK (origin IN ('webui', 'mcp', 'worker', 'board')),
+      kind       TEXT NOT NULL,
+      payload    TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`;
+
+const EVENTS_APPEND_ONLY_TRIGGERS = `
+    CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
+      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
+      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;`;
+
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.exec(`
     ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
 
-    CREATE TABLE IF NOT EXISTS events (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id    TEXT NOT NULL REFERENCES tasks(id),
-      worker_id  TEXT NOT NULL,
-      kind       TEXT NOT NULL,
-      payload    TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
+    ${EVENTS_TABLE_DDL.replace("CREATE TABLE events", "CREATE TABLE IF NOT EXISTS events")};
 
     -- the human's read position in the decision log (the log itself is the
     -- events table, never its own entity): one row, the last-read event id
@@ -327,10 +340,7 @@ export function openDb(path: string): Db {
     );
 
     -- append-only is enforced by structure, not convention
-    CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
-      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
-    CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
-      BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+    ${EVENTS_APPEND_ONLY_TRIGGERS}
   `);
   // boards created before the question fields existed get them added in place
   const cols = (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
@@ -356,6 +366,31 @@ export function openDb(path: string): Db {
     "question_quarantine_sandbox",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
+  }
+  // #190 / ADR 0032: the operation route is separate from the worker identity.
+  // Existing rows predate route recording and therefore represent the only
+  // human-facing surface that existed then: the WebUI.
+  const eventCols = (db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map(
+    (c) => c.name,
+  );
+  if (!eventCols.includes("origin")) {
+    db.exec("ALTER TABLE events ADD COLUMN origin TEXT NOT NULL DEFAULT 'webui'");
+  }
+  const eventSchema = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+    .get() as { sql: string };
+  if (!eventSchema.sql.includes("CHECK (origin IN ('webui', 'mcp', 'worker', 'board'))")) {
+    db.transaction(() => {
+      db.exec("DROP TABLE IF EXISTS events_post_issue_190;");
+      db.exec(EVENTS_TABLE_DDL.replace("CREATE TABLE events", "CREATE TABLE events_post_issue_190"));
+      db.exec(`
+        INSERT INTO events_post_issue_190 (id, task_id, worker_id, origin, kind, payload, created_at)
+        SELECT id, task_id, worker_id, origin, kind, payload, created_at FROM events;
+        DROP TABLE events;
+        ALTER TABLE events_post_issue_190 RENAME TO events;
+      `);
+    })();
+    db.exec(EVENTS_APPEND_ONLY_TRIGGERS);
   }
   if (!cols.includes("based_on_decision")) {
     db.exec(`ALTER TABLE tasks ADD COLUMN based_on_decision INTEGER`);

@@ -37,6 +37,7 @@ function logDecision(db: ReturnType<typeof openDb>, taskId: string, line: string
   appendEvent(db, {
     taskId,
     workerId: "tidepool",
+    origin: "webui",
     payload: { kind: "decision_logged", line },
     at: new Date(0),
   });

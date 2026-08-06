@@ -3,7 +3,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, type EventOrigin } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import {
   answerQuestion,
@@ -96,6 +96,7 @@ export async function registerThroughHumanDoor(
   deps: RegisterThroughHumanDoorDeps,
   input: HumanRegisterInput,
   now: () => Date,
+  origin: EventOrigin = "webui",
 ): Promise<RegisterThroughHumanDoorResult> {
   try {
     const isHumanDecomposeChild = input.parent_id !== undefined && input.type === "work";
@@ -180,12 +181,13 @@ export async function registerThroughHumanDoor(
         },
         now(),
         deps.isProtectedWorkspace,
+        origin,
       );
       const task = children[0] ?? latestChild(deps.db, parent.id);
       if (!task) throw new Error("human decompose did not register a child or approval question");
       return { ok: true, task };
     }
-    return { ok: true, task: registerTask(deps.db, input, now()) };
+    return { ok: true, task: registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "invalid", error: err.message } };
@@ -218,6 +220,7 @@ export async function submitAnswer(
   answers: string[],
   comment: string | undefined,
   now: () => Date,
+  origin: EventOrigin = "webui",
 ): Promise<Task> {
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
@@ -326,11 +329,13 @@ export async function submitAnswer(
     now(),
     session && ((taskId) => stageFrontInsert(deps.db, session.id, taskId)),
     comment,
+    origin,
   );
   if (wantsMerge) {
     appendEvent(deps.db, {
       taskId: task.id,
       workerId: HUMAN_WORKER_ID,
+      origin,
       payload: { kind: "pr_merged", pr_number: mergePr! },
       at: now(),
     });
@@ -344,6 +349,7 @@ export async function submitAnswer(
       `PR promotion abandoned for task ${promotionTaskId} — the work stays on its task branch, no PR`,
       HUMAN_WORKER_ID,
       now(),
+      origin,
     );
   }
   // An unblocked parent or reinstated quarantined resource can make the queue

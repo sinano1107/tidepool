@@ -47,9 +47,12 @@ it("every state change is appended as a typed event, readable via the events API
   const [registered, pickedUp, completed] = events;
   // registration through the bare JSON API is attributed to the human worker
   expect(registered.worker_id).toBe("human");
+  expect(registered.origin).toBe("webui");
   expect(registered.payload.type).toBe("work");
   expect(pickedUp.worker_id).toBe(t.worker.id);
+  expect(pickedUp.origin).toBe("board");
   expect(completed.worker_id).toBe(t.worker.id);
+  expect(completed.origin).toBe("worker");
   expect(completed.payload.handoff_present).toBe(true);
   // append-only trail: every event carries its task and a timestamp
   for (const e of events) {

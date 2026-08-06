@@ -57,7 +57,13 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
 
     const q1 = registerQuestion(db, "深夜の質問1", MIDNIGHT);
     const q2 = registerQuestion(db, "深夜の質問2", MIDNIGHT);
-    appendEvent(db, { taskId: q1.id, workerId: "tidepool", payload: { kind: "decision_logged", line: "a" }, at: MIDNIGHT });
+    appendEvent(db, {
+      taskId: q1.id,
+      workerId: "tidepool",
+      origin: "webui",
+      payload: { kind: "decision_logged", line: "a" },
+      at: MIDNIGHT,
+    });
 
     await tick.run(MIDNIGHT); // still quiet hours: nothing sent
     expect(push.sent).toEqual([]);
