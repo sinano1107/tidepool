@@ -1,12 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import express, { Router } from "express";
+import type { Router } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { GitHubClient } from "./github.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
+import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   assigneeNeedsApproval,
   completeTask,
@@ -232,11 +232,11 @@ function attributedAuthority(deps: McpDeps, task: Task): AuthorityProfile | unde
   return deps.resolveAuthority?.(task.assignee) ?? deps.authority;
 }
 
-function toolResult(payload: unknown) {
+export function toolResult(payload: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(payload) }] };
 }
 
-function toolError(message: string) {
+export function toolError(message: string) {
   return { isError: true, content: [{ type: "text" as const, text: message }] };
 }
 
@@ -531,20 +531,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
 }
 
 export function createMcpRouter(deps: McpDeps): Router {
-  const router = Router();
-  router.use(express.json());
-
-  router.post("/", async (req, res) => {
+  return createStatelessMcpRouter((req) => {
     const taskParam = typeof req.query.task === "string" ? req.query.task : null;
-    const server = buildMcpServer(deps, taskParam);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    res.on("close", () => {
-      void transport.close();
-      void server.close();
-    });
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+    return buildMcpServer(deps, taskParam);
   });
-
-  return router;
 }

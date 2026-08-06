@@ -82,13 +82,11 @@ it("静的資産も credential なしでは 401(issue #153)", async () => {
   }
 });
 
-// 未登録のパスすら 401 になることが「ミドルウェアが app 全体に掛かっている」の
-// 証明であり、**将来ここに mount される管理MCP(ADR 0032 / issue #131)が
-// 登録された瞬間から守られている**ことの担保でもある。404 が返るなら、それは
-// credential 検査より手前に素通りの経路があるということ。
+// Even an unregistered path returning 401 proves the middleware covers the
+// entire app. A 404 would reveal a route that bypasses credential enforcement.
 it("未登録のパスも 404 ではなく 401 を返す — 射程は app 全体(issue #153)", async () => {
   t = await bootTidepool();
-  const res = await fetch(`${t.baseUrl}/admin-mcp`, {
+  const res = await fetch(`${t.baseUrl}/not-registered`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",

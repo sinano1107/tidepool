@@ -238,6 +238,19 @@ export async function mcpClient(baseUrl: string, taskId?: string): Promise<Clien
   return client;
 }
 
+/** Real authenticated client for the human-facing Management MCP.  Keep this
+ * distinct from `mcpClient`: the worker and human surfaces are separate trust
+ * domains (ADR 0032 / ADR 0036). */
+export async function managementMcpClient(baseUrl: string): Promise<Client> {
+  const client = new Client({ name: "tidepool-management-test", version: "0.0.0" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${baseUrl}/admin-mcp`), {
+      requestInit: { headers: AUTH_HEADERS },
+    }),
+  );
+  return client;
+}
+
 /** 道具側の credential(issue #153): 盤面が受ける2つの形のうち bearer のほう。
  *  ブラウザ導線(cookie)は e2e が bootstrap URL を踏んで得る。 */
 export const AUTH_HEADERS = { authorization: `Bearer ${TEST_TOKEN}` } as const;

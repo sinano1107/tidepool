@@ -17,6 +17,7 @@ import {
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
+import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
@@ -343,6 +344,17 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
       // 床と同じ1つの配列(3箇所で別々に組み立てない)
       boardState: options.boardState?.paths,
+    }),
+  );
+  app.use(
+    "/admin-mcp",
+    createManagementMcpRouter({
+      db,
+      clock: options.clock,
+      workspace: options.workspace,
+      defaultAgentName: worker.id,
+      auditorName,
+      fableAgents: options.fableAgents,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

@@ -303,10 +303,16 @@ function loginPage(message?: string): string {
 `;
 }
 
-/** 人間面のうち「データの面」= `/api`。`startsWith("/api")` だけだと `/apiary` の
- *  ような別のパスにも当たるので、境界まで見る。 */
-function isApiPath(path: string): boolean {
-  return path === "/api" || path.startsWith("/api/");
+/** Machine-readable members of the Human surface return JSON authentication
+ * errors and require JSON request bodies for mutating methods. Match complete
+ * path segments so lookalikes such as `/apiary` do not enter this trust path. */
+function isMachineReadableHumanSurfacePath(path: string): boolean {
+  return (
+    path === "/api" ||
+    path.startsWith("/api/") ||
+    path === "/admin-mcp" ||
+    path.startsWith("/admin-mcp/")
+  );
 }
 
 /** ログインページを要る相手か。トップレベル遷移(ブラウザのアドレスバー・PWA の
@@ -315,7 +321,7 @@ function isApiPath(path: string): boolean {
  *  Accept に text/html が載っていてもデータの面として扱う。 */
 function wantsLoginPage(req: Request): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") return false;
-  if (isApiPath(req.path)) return false;
+  if (isMachineReadableHumanSurfacePath(req.path)) return false;
   return (req.headers.accept ?? "").includes("text/html");
 }
 
@@ -408,7 +414,7 @@ export function createHumanSurfaceAuth(credential: HumanCredential): HumanSurfac
   };
 
   const requireJsonContentType: RequestHandler = (req, res, next) => {
-    if (!MUTATING_METHODS.has(req.method) || !isApiPath(req.path)) {
+    if (!MUTATING_METHODS.has(req.method) || !isMachineReadableHumanSurfacePath(req.path)) {
       next();
       return;
     }
