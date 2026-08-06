@@ -17,8 +17,14 @@ import {
 } from "./display-language.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
-import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
-import { submitAnswer } from "./human-verbs.js";
+import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
+import {
+  assertAssigneeKnown,
+  assertWorkspaceKnown,
+  type GateFailure,
+  registerThroughHumanDoor,
+  submitAnswer,
+} from "./human-verbs.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { getPaceOffsets, isValidOffset, setPaceOffsets } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
@@ -36,7 +42,6 @@ import {
 import { RegistryCloneBusyError } from "./registry-write.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
-  assertNoUnsettledIssueRef,
   type BoardTask,
   cancelTaskDirectly,
   completeTask,
@@ -46,15 +51,12 @@ import {
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
   hasUnfinishedChildren,
-  humanDecomposeTask,
-  latestChild,
   listBoard,
   listChildren,
   listQueue,
   listYourTasks,
   moveTask,
   presentTask,
-  registerTask,
   type Task,
 } from "./tasks.js";
 import { getThrottleState, isFablePickupBlocked, isPickupBlocked } from "./throttle.js";
@@ -114,7 +116,7 @@ const registerTaskSchema = z.object({
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
   // human decompose (ADR 0047 decision 7): the reason is required for a
-  // `parent_id` child and checked at the route gate; roots do not need one.
+  // `parent_id` child and checked at the shared human door; roots do not need one.
   decompose_reason: z.string().optional(),
   // shape stays permissive: the 1-4-item / 2-4-options + recommendation
   // invariants are enforced in the domain so callers get a domain error
@@ -129,6 +131,21 @@ const registerTaskSchema = z.object({
     )
     .optional(),
 });
+
+function gateFailureStatus(kind: GateFailure["kind"]): 400 | 404 | 422 | 502 | 503 {
+  switch (kind) {
+    case "invalid":
+      return 400;
+    case "not_found":
+      return 404;
+    case "issue_rejected":
+      return 422;
+    case "issue_unavailable":
+      return 502;
+    case "inspection_unavailable":
+      return 503;
+  }
+}
 
 // the edit payload (issue #130): a strict subset of registerTaskSchema — only
 // the editable fields, and strict so an attempt to edit an immutable field
@@ -551,168 +568,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    try {
-      // human decompose (issue #129) claims parent_id only for a work child
-      // — decomposeTask's own ChildSpec has no `type` field and always
-      // registers "work", so that's the one shape decompose (human or agent)
-      // ever produces. A `type: "review"` (or any non-work) registration
-      // that also names a parent_id is a different, pre-existing capability
-      // (e.g. a completion-time/fix-forward review child, or these tests'
-      // own review fixtures) — left on the unchanged plain registerTask path
-      // below, ungated, exactly as before this issue.
-      const isHumanDecomposeChild =
-        parsed.data.parent_id !== undefined && parsed.data.type === "work";
-      // a decompose child is never issue-backed (the domain's ChildSpec
-      // carries no such field) — reject rather than silently dropping the
-      // requested reference
-      if (isHumanDecomposeChild && parsed.data.github_issue_number !== undefined) {
-        throw new DomainError("a child task cannot be issue-backed");
-      }
-      // an explicitly named workspace must exist in the registry (issue #26)
-      // — this is the human's own synchronous request, so an unknown name
-      // fails fast with a 400 rather than quarantining (ADR 0009); absent a
-      // real registry (single fixed `workspace` or none at all), every name
-      // is accepted, same as execution-time resolution's fallback
-      if (parsed.data.workspace !== undefined) {
-        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-        if (resolve) {
-          try {
-            resolve(parsed.data.workspace);
-          } catch (err) {
-            if (!(err instanceof UnknownWorkspaceError)) throw err;
-            throw new DomainError(`unknown workspace: ${parsed.data.workspace}`);
-          }
-        }
-      }
-      // the agent-name generalization of the workspace check above (ADR 0012
-      // / issue #36): an explicitly named assignee must exist in the
-      // registry, rejected fast with a 400 rather than registering silently
-      // and only surfacing as a pickup-time quarantine. `human` is never a
-      // registry agent (CONTEXT.md's Assignee: it names the slot-external
-      // facet, not a spawnable identity) so it's exempt — same "absent a real
-      // registry, every name is accepted" fallback when `agentRegistered`
-      // isn't configured.
-      if (
-        parsed.data.assignee !== undefined &&
-        parsed.data.assignee !== HUMAN_WORKER_ID &&
-        agentRegistered &&
-        !agentRegistered(parsed.data.assignee)
-      ) {
-        throw new DomainError(`unknown agent: ${parsed.data.assignee}`);
-      }
-      // the duplicate half of the registration gate (issue #104): board-local,
-      // so it runs before the costly GitHub fetch + LLM inspection below —
-      // registerTask enforces the same rule as the domain's own backstop,
-      // covering boards without a GitHub seam
-      if (parsed.data.github_issue_number !== undefined && parsed.data.workspace) {
-        assertNoUnsettledIssueRef(db, parsed.data.workspace, parsed.data.github_issue_number);
-      }
-      // the registration gate (issue #49 設計点4): an issue-backed
-      // registration is the human's own synchronous request (ADR 0009) —
-      // verify the referenced issue exists and is open before anything is
-      // stored, failing fast instead of quarantining or registering a task
-      // whose reference is already dead. Boards without a GitHub seam or
-      // workspace tracking skip the gate entirely (the check is one-time,
-      // never an invariant — ADR 0016).
-      if (parsed.data.github_issue_number !== undefined && github && parsed.data.workspace) {
-        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-        if (resolve) {
-          let issue;
-          try {
-            issue = await github.getIssue({
-              // resolve cannot throw here: the workspace-known check above
-              // already resolved this same name
-              path: resolve(parsed.data.workspace).path,
-              number: parsed.data.github_issue_number,
-            });
-          } catch (err) {
-            if (err instanceof IssueGoneError) throw new DomainError(err.message);
-            // 一時的失敗: retryable, so neither 4xx nor a placeholder
-            // registration — the human tries again when GitHub is back
-            res.status(502).json({ error: "could not fetch the referenced issue" });
-            return;
-          }
-          // the LLM half of the gate: can the three content fields be
-          // derived from this issue? A failing verdict carries the drafted
-          // fix (an issue comment) for the UI to show — posting it is the
-          // human's approval, never this endpoint's (issue #49 設計点4)
-          if (draftClient) {
-            let inspection;
-            try {
-              inspection = await draftClient.inspectIssue(issue);
-            } catch {
-              // same posture as /tasks/draft: an unreachable LLM is a 503,
-              // and the gate stays fail-fast rather than waving the task in
-              res.status(503).json({ error: "LLM inspection failed" });
-              return;
-            }
-            if (!inspection.ok) {
-              res.status(422).json({
-                error: "the referenced issue fails the registration gate",
-                missing: inspection.missing,
-                suggested_comment: inspection.suggested_comment,
-              });
-              return;
-            }
-          }
-        }
-      }
-      // human decompose (issue #129): a work child naming a parent_id routes
-      // registration through the gate (assertHumanDecomposable, inside
-      // humanDecomposeTask) instead of the plain registerTask a root
-      // registration uses — the existing /tasks door had accepted parent_id
-      // ungated for a work child since issue #11, with no status transition
-      // on the parent and no gate at all, which is exactly the gap this
-      // issue closes
-      if (isHumanDecomposeChild) {
-        if (
-          parsed.data.decompose_reason === undefined ||
-          parsed.data.decompose_reason.length === 0
-        ) {
-          throw new DomainError("a decomposition requires a reason");
-        }
-        const parent = getTask(db, parsed.data.parent_id!);
-        if (!parent) {
-          res.status(404).json({ error: "parent task not found" });
-          return;
-        }
-        const children = humanDecomposeTask(
-          db,
-          parent,
-          {
-            reason: parsed.data.decompose_reason,
-            children: [
-              {
-                title: parsed.data.title ?? "",
-                purpose: parsed.data.purpose ?? "",
-                completion_criteria: parsed.data.completion_criteria ?? "",
-                assignee: parsed.data.assignee,
-                workspace: parsed.data.workspace,
-                risk_flag: parsed.data.risk_flag,
-                review_flag: parsed.data.review_flag,
-              },
-            ],
-          },
-          clock.now(),
-          isProtectedWorkspace,
-        );
-        // the risk/protected-workspace machinery decomposeTask already
-        // carries can convert the child into a pending-child approval
-        // question instead of registering it outright (same as an agent's
-        // own decompose) — children is then empty, so latestChild reports
-        // back the question it registered instead, keeping this route's
-        // response the same single-Task shape either way
-        res.status(201).json(children[0] ?? latestChild(db, parent.id));
-        return;
-      }
-      res.status(201).json(registerTask(db, parsed.data, clock.now()));
-    } catch (err) {
-      if (err instanceof DomainError) {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      throw err;
+    // human-verbs is the canonical registration door shared by the WebUI and
+    // the future management MCP; this route owns only HTTP status mapping.
+    const result = await registerThroughHumanDoor(
+      {
+        db,
+        workspace,
+        resolveWorkspace,
+        github,
+        draftClient,
+        agentRegistered,
+        isProtectedWorkspace,
+      },
+      parsed.data,
+      () => clock.now(),
+    );
+    if (!result.ok) {
+      const { kind, ...body } = result.failure;
+      res.status(gateFailureStatus(kind)).json(body);
+      return;
     }
+    res.status(201).json(result.task);
   });
 
   // Appends a human-approved comment to a GitHub issue (issue #49 設計点4:
@@ -1119,27 +995,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // exempt (never a registry agent); an empty string means "unset — resolve
       // to the board default" (editTask normalizes it to null), so it's exempt
       // too; and absent a real registry every name is accepted.
-      if (
-        parsed.data.assignee &&
-        parsed.data.assignee !== HUMAN_WORKER_ID &&
-        agentRegistered &&
-        !agentRegistered(parsed.data.assignee)
-      ) {
-        throw new DomainError(`unknown agent: ${parsed.data.assignee}`);
+      if (parsed.data.assignee) {
+        assertAssigneeKnown(agentRegistered, parsed.data.assignee);
       }
       // workspace recheck (issue #26 / ADR 0009), same as registration: an
       // explicitly named workspace must exist in the registry (empty = unset,
       // exempt, same as assignee above).
       if (parsed.data.workspace) {
-        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-        if (resolve) {
-          try {
-            resolve(parsed.data.workspace);
-          } catch (err) {
-            if (!(err instanceof UnknownWorkspaceError)) throw err;
-            throw new DomainError(`unknown workspace: ${parsed.data.workspace}`);
-          }
-        }
+        assertWorkspaceKnown(parsed.data.workspace, resolveWorkspace, workspace);
       }
       const edited = editTask(db, task, parsed.data, clock.now());
       res.json((await presentLive([presentTask(db, edited)]))[0]);
