@@ -27,6 +27,9 @@ const TASKS_TABLE_DDL = `
       risk_flag           INTEGER NOT NULL DEFAULT 0,
       review_flag         INTEGER NOT NULL DEFAULT 0,
       parent_id           TEXT REFERENCES tasks(id),
+      -- Immutable provenance: the decision-log event this decomposed child
+      -- rests on. Null for tasks outside a decomposition decision.
+      based_on_decision   INTEGER,
       sort_key            REAL NOT NULL,
       handoff_doc         TEXT,
       -- the PR opened for this task's completed work (issue #11), or null —
@@ -44,10 +47,9 @@ const TASKS_TABLE_DDL = `
       -- submission (not per item) — recorded alongside question_answer so a
       -- resumed parent's get_current_task can carry both
       question_answer_comment  TEXT,
-      -- system-internal only (ADR 0006): one of the (sole) item's options
-      -- that, if answered, cancels the plan instead of the ordinary
-      -- unblock-to-head path. Never set via MCP or the JSON API — only the
-      -- watchdog's failure-question registration sets it.
+      -- system-internal only (ADR 0006 / 0048): the sole item's option that
+      -- triggers decision-scoped abandon instead of ordinary unblock-to-head.
+      -- Never set via MCP or JSON API; only failure-question registration does.
       question_cancel_option  TEXT,
       -- system-internal only (issue #11): a pending-child approval question's
       -- would-be child, JSON-encoded, materialized only if the human answers
@@ -354,6 +356,26 @@ export function openDb(path: string): Db {
     "question_quarantine_sandbox",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
+  }
+  if (!cols.includes("based_on_decision")) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN based_on_decision INTEGER`);
+    db.exec(`
+      UPDATE tasks
+      SET based_on_decision = (
+        SELECT json_extract(e.payload, '$.based_on_decision')
+        FROM events e
+        WHERE e.task_id = tasks.id AND e.kind = 'task_registered'
+        ORDER BY e.id ASC
+        LIMIT 1
+      )
+      WHERE EXISTS (
+        SELECT 1
+        FROM events e
+        WHERE e.task_id = tasks.id
+          AND e.kind = 'task_registered'
+          AND json_extract(e.payload, '$.based_on_decision') IS NOT NULL
+      )
+    `);
   }
   // issue #49 / ADR 0016: title/purpose/completion_criteria's NOT NULL needs
   // relaxing (to CHECK-enforced instead) so an issue-backed task can carry

@@ -234,7 +234,7 @@ export function startScheduler(deps: {
               `its content cannot be expanded for spawn.\n\n` +
               `"retry" re-reads the issue and restarts this task from the queue head — ` +
               `pick it after reopening or restoring the issue. ` +
-              abandonConsequence(head),
+              abandonConsequence(db, head),
             questions: [
               {
                 title: `issue reference is gone: ${head.title}`,

@@ -1,7 +1,13 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
-import { escalateTask, getTask, type Task, type TaskType } from "./tasks.js";
+import {
+  escalateTask,
+  getTask,
+  type Task,
+  type TaskType,
+  unfinishedDecisionSiblingCount,
+} from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
   BOARD_WORKER_ID,
@@ -37,19 +43,16 @@ function pickedUpAt(db: Db, taskId: string): number {
   return row ? new Date(row.created_at).getTime() : 0;
 }
 
-/** The consequence half of every failure question's context (ADR 0006's
- *  implementation note: the option label alone can't carry what "abandon"
- *  does, and this text is its only human-visible surface). Worded per shape:
- *  with a parent, abandon discards the whole plan and returns the parent to
- *  replan; parentless, there is no plan above to return to — answerQuestion's
- *  cancel branch only cancels this task's own subtree. Shared by every
- *  failure question (watchdog's failTask, the scheduler's issue pickup gate)
- *  so the wording can't drift between them. */
-export function abandonConsequence(task: Pick<Task, "parent_id">): string {
-  return task.parent_id
-    ? `"abandon" discards the rest of this plan — this task's remaining ` +
-        `work plus its parent's other unfinished children — and returns the ` +
-        `parent to the queue head to replan.`
+/** Canonical English abandon consequence baked into failure questions
+ *  (ADR 0015 / 0048). It states the decision-discard rule and count only when
+ *  unfinished same-decision siblings exist. Shared by watchdog and issue-backed
+ *  deterministic failures so their wording cannot drift. */
+export function abandonConsequence(db: Db, task: Task): string {
+  const siblingCount = unfinishedDecisionSiblingCount(db, task);
+  return siblingCount > 0
+    ? `"abandon" discards this decomposition decision — this task's remaining work plus ` +
+        `${siblingCount} unfinished ${siblingCount === 1 ? "sibling" : "siblings"} from the same ` +
+        `decomposition decision — and returns the parent to the queue head to replan.`
     : `"abandon" cancels this task and its remaining work.`;
 }
 
@@ -81,7 +84,7 @@ export function failTask(
       context:
         `${reason}\n\n` +
         `"retry" restarts this task from scratch at the queue head. ` +
-        abandonConsequence(task),
+        abandonConsequence(db, task),
       questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
       cancel_option: "abandon",
     },
