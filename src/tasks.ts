@@ -97,7 +97,7 @@ export interface Task {
   question_pending_child: PendingChildSpec | null;
   /** System-internal only (issue #11): the PR number a merge-decision
    *  question is standing in for — set only by recordPrOpened under the
-   *  `escalate` merge dial, read only by the answer route to gate the actual
+   *  `escalate` merge dial, read only by submitAnswer to gate the actual
    *  merge on a live CI check. Never set via MCP or the JSON API. */
   question_pending_merge_pr: number | null;
   /** System-internal only (issue #66): the completed work task whose failed
@@ -976,7 +976,7 @@ export function cancelTaskDirectly(
  *  question's item count, and — for a fixed-choice question — every answer
  *  is one of its item's declared options. `answerQuestion` below calls this
  *  first as its own self-defense (a direct caller, e.g. a test, gets the
- *  same rejection it always has); see its call site in api.ts's answer route
+ *  same rejection it always has); see its call site in human-verbs.ts
  *  for why this must also run there, before any side effect. */
 export function assertAnswerable(question: Task, answers: string[]): void {
   if (question.type !== "question") {
@@ -1045,7 +1045,7 @@ export function assertAnswerable(question: Task, answers: string[]): void {
  *  Quarantine resolution (issue #21): a Confirmation question (declared by
  *  `question_quarantine_workspace`, system-internal) takes any answer at all
  *  as a repair confirmation — the caller has already verified the workspace's
- *  tree is clean before this runs (see api.ts). needs_human clears at once,
+ *  tree is clean before this runs (see human-verbs.ts). needs_human clears at once,
  *  reported back as `pickupResumed` so the caller fires the immediate poll,
  *  same as `parentUnblocked`. */
 export function answerQuestion(
@@ -1351,7 +1351,7 @@ export function registerMergeQuestion(
       question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation }],
       pending_merge_pr: prNumber,
       // carries the originating work task's execution workspace (issue #26 /
-      // ADR 0009), so the answer route's live CI check and the auto-merge
+      // ADR 0009), so submitAnswer's live CI check and the auto-merge
       // poll both resolve the right registry entry, not just the board's
       // default — a plain top-level question with no parent would otherwise
       // never inherit it
@@ -1391,7 +1391,7 @@ export function clearPendingAutoMerge(db: Db, taskId: string): void {
  *  set once, paired with a pr_opened event — the invariant lives here, not in
  *  the MCP layer's PR side effect, per ADR 0002. The merge dial then decides
  *  what happens next: `escalate` always asks a human before merging, via a
- *  merge-decision question whose "merge" answer the answer route gates on a
+ *  merge-decision question whose "merge" answer submitAnswer gates on a
  *  live CI check (never performed here — this module stays free of any
  *  GitHubClient dependency). `auto_if_ci_green` asks the same way for a task
  *  that carries risk (never silently auto-merges a risky change, regardless

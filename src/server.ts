@@ -298,7 +298,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     void notificationTick.run(options.clock.now());
   }, 60 * 1000);
   // one deps object for both MCP-side promotion paths: the MCP router's
-  // completion-time attempt and the answer route's synchronous retry (issue
+  // completion-time attempt and submitAnswer's synchronous retry (issue
   // #66) — the retry is the same promotion under the same identity, so the
   // two must not drift apart field by field
   const mcpDeps = {

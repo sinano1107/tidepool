@@ -1,12 +1,12 @@
 import { json, type Response, Router } from "express";
 import { z } from "zod";
-import { UnknownAgentError, verifyAgentRepaired } from "./agent.js";
+import { UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCheck, openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
@@ -16,8 +16,9 @@ import {
   setDisplayLanguage,
 } from "./display-language.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
-import { advanceLogCursor, appendEvent, getLogCursor, listEvents, listLog } from "./events.js";
+import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, IssueGoneError, OPEN_ISSUES_LIMIT } from "./github.js";
+import { submitAnswer } from "./human-verbs.js";
 import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
 import { getPaceOffsets, isValidOffset, setPaceOffsets } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
@@ -35,8 +36,6 @@ import {
 import { RegistryCloneBusyError } from "./registry-write.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
-  answerQuestion,
-  assertAnswerable,
   assertNoUnsettledIssueRef,
   type BoardTask,
   cancelTaskDirectly,
@@ -53,10 +52,7 @@ import {
   listChildren,
   listQueue,
   listYourTasks,
-  logDecision,
-  MERGE_QUESTION_OPTIONS,
   moveTask,
-  PR_PROMOTION_FAILURE_OPTIONS,
   presentTask,
   registerTask,
   type Task,
@@ -79,16 +75,13 @@ import {
   listScratchpad,
   raiseObjection,
   recordDisplayedEntries,
-  stageFrontInsert,
   startTriage,
   TriageError,
-  triageActivity,
   triagePreview,
 } from "./triage.js";
 import {
   buildWorkspaceResolver,
   UnknownWorkspaceError,
-  verifyWorkspaceClean,
   type WorkspaceConfig,
 } from "./workspace.js";
 import {
@@ -514,7 +507,7 @@ export interface ApiRouterDeps {
    *  for an agent's decompose. Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean;
   /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
-   *  process), bound by main.ts. The quarantine answer route re-runs the
+   *  process), bound by main.ts. submitAnswer re-runs the
    *  overlap check against them before it accepts a repair confirmation —
    *  a clean tree is not a repair when the workspace still intersects the
    *  board's own state. Absent → no state paths to protect (a board booted
@@ -1203,8 +1196,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
-  // answering lives on the WebUI JSON API only, never MCP: it is the human
-  // steering channel (CONTEXT.md: escalation is answered by the 上位者)
+  // human-verbs is the canonical implementation shared by the WebUI and the
+  // future management MCP (ADR 0032 / issue #188). This route owns only the
+  // HTTP boundary: input validation, lookup, and status/response mapping.
   router.post("/tasks/:id/answer", async (req, res) => {
     const parsed = answerSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1217,159 +1211,23 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      // runs before every side effect below — promotion retry, CI check,
-      // real merge, and quarantine verification alike (issue #111; see
-      // assertAnswerable's doc for why). The same failure mode #66
-      // (9687ea1) and #105 (96e2e3e) each patched on a single
-      // answers[0]-only gate; this closes it structurally instead of
-      // gate-by-gate.
-      assertAnswerable(task, parsed.data.answers);
-
-      const promotionTaskId = task.question_pending_pr_promotion_task_id;
-      const wantsPromotionRetry =
-        promotionTaskId !== null && parsed.data.answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
-      if (wantsPromotionRetry) {
-        const promotionTask = getTask(db, promotionTaskId);
-        if (!promotionTask || !retryPrPromotion) {
-          throw new DomainError("PR promotion can no longer be retried");
-        }
-        try {
-          await retryPrPromotion(promotionTask);
-        } catch (err) {
-          throw new DomainError(err instanceof Error ? err.message : String(err));
-        }
-      }
-      // a merge-decision question's "merge" answer (issue #11) must not
-      // resolve the question until CI is actually green, checked live right
-      // now — otherwise a stale approval could merge a build that has since
-      // gone red, and once resolved the question offers no way to retry
-      const mergePr = task.question_pending_merge_pr;
-      // a merge-decision question is always length-1 (CONTEXT.md's
-      // Confirmation question — this one carries a real 2-way choice, not a
-      // confirmation, but the bundle is still a single item)
-      const wantsMerge = mergePr !== null && parsed.data.answers[0] === MERGE_QUESTION_OPTIONS[0];
-      if (wantsMerge) {
-        if (!github) {
-          throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
-        }
-        // resolved against the question's own workspace (issue #26 / ADR
-        // 0009: registerMergeQuestion carries the originating work task's
-        // workspace) rather than just the board's default
-        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-        if (!resolve) {
-          throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
-        }
-        let mergeWorkspace: WorkspaceConfig;
-        try {
-          mergeWorkspace = resolve(task.workspace);
-        } catch (err) {
-          if (!(err instanceof UnknownWorkspaceError)) throw err;
-          throw new DomainError(
-            `no workspace configured for "${err.workspaceName}" — cannot check CI or merge`,
-          );
-        }
-        const status = await github.getCiStatus({ path: mergeWorkspace.path, number: mergePr! });
-        if (status !== "success") {
-          throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
-        }
-        // the external merge runs before the question is committed answered
-        // (same ordering as openHandoffPr's PR-creation-then-recordPrOpened):
-        // if this throws, the question stays open to retry — committing the
-        // answer first would strand it "answered" with no merge and no retry
-        await github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr! });
-      }
-      // a quarantine Confirmation question's answer (issue #21) is never
-      // taken on faith: the board verifies the workspace's tree is actually
-      // clean before treating it as a repair confirmation — a dirty tree
-      // rejects the answer outright, leaving the question open
-      const quarantineWs = task.question_quarantine_workspace;
-      if (quarantineWs !== null) {
-        // resolved by name, not the task's own workspace field (quarantine
-        // is a workspace-scoped question, not a task-scoped one) — this is a
-        // human's synchronous request, so an unresolvable name fails fast
-        // with a DomainError rather than quarantining again (ADR 0009)
-        const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-        let target: WorkspaceConfig;
-        try {
-          if (!resolve) throw new UnknownWorkspaceError(quarantineWs);
-          target = resolve(quarantineWs);
-        } catch (err) {
-          if (!(err instanceof UnknownWorkspaceError)) throw err;
-          throw new DomainError(
-            `no workspace configured for "${quarantineWs}" — cannot verify repair`,
-          );
-        }
-        try {
-          verifyWorkspaceClean(target);
-        } catch (err) {
-          throw new DomainError(err instanceof Error ? err.message : String(err));
-        }
-        // ADR 0040 / issue #149: 既存の検証(registry に存在し、ツリーがクリーン)に
-        // 重ねる1枚。重なりで止めた workspace は、ツリーを掃除しただけでは直って
-        // いない — 直りは registry のエントリが別の checkout を指すこと(あるいは
-        // 盤面の状態パスが動くこと)なので、受理の直前に同じ検査を撃ち直す。
-        if (boardState) {
-          const overlap = boardStateOverlap(target.path, boardState);
-          if (overlap) throw new DomainError(overlap.reason);
-        }
-      }
-      // the agent-name generalization of the workspace branch above (ADR
-      // 0012 / issue #36): never taken on faith either — clears only if the
-      // registry has the name back, or no more todo work depends on it
-      const quarantineAgentName = task.question_quarantine_agent;
-      if (quarantineAgentName !== null) {
-        try {
-          verifyAgentRepaired(db, quarantineAgentName, agentRegistered?.(quarantineAgentName) ?? false);
-        } catch (err) {
-          throw new DomainError(err instanceof Error ? err.message : String(err));
-        }
-      }
-      // ADR 0033 / issue #60 の host-wide 版を issue #154 が広げたもの: 資源名を
-      // 持たないぶん検証は素直で、「今このホストで worker の封じ込めが成立して
-      // いるか」を回答の受理直前にもう一度測るだけ。まだ壊れていれば回答ごと拒否
-      // し、question は開いたまま残る。人間面の自己検査を含むので実 HTTP が1往復
-      // 走る(この経路は既に async)。
-      if (task.question_quarantine_sandbox !== null && containment) {
-        const capability = await containment();
-        if (!capability.available) {
-          throw new DomainError(`worker containment is still not established: ${capability.reason}`);
-        }
-      }
-      // an answer during an open triage session is activity (defers the
-      // auto-commit) and stages the unblock instead of moving the queue
-      const session = triageActivity(db, clock.now());
-      const { question, parentUnblocked, pickupResumed } = answerQuestion(
-        db,
+      const question = await submitAnswer(
+        {
+          db,
+          onQueueHeadChanged,
+          workspace,
+          resolveWorkspace,
+          github,
+          retryPrPromotion,
+          agentRegistered,
+          containment,
+          boardState,
+        },
         task,
         parsed.data.answers,
-        clock.now(),
-        session && ((taskId) => stageFrontInsert(db, session.id, taskId)),
         parsed.data.comment,
+        () => clock.now(),
       );
-      if (wantsMerge) {
-        appendEvent(db, {
-          taskId: task.id,
-          workerId: HUMAN_WORKER_ID,
-          payload: { kind: "pr_merged", pr_number: mergePr! },
-          at: clock.now(),
-        });
-      }
-      // abandoning promotion settles the question with no other trace — the
-      // spec (issue #66) wants the give-up itself on the decision log, since
-      // the completed task will forever carry work that never reached a PR
-      if (promotionTaskId !== null && parsed.data.answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
-        logDecision(
-          db,
-          question,
-          `PR promotion abandoned for task ${promotionTaskId} — the work stays on its task branch, no PR`,
-          HUMAN_WORKER_ID,
-          clock.now(),
-        );
-      }
-      // an answer that unblocked the parent, or resumed a quarantined
-      // workspace's pickup (issue #21), put something pickable at the head —
-      // "run now" either way
-      if (parentUnblocked || pickupResumed) onQueueHeadChanged();
       res.json(presentTask(db, question));
     } catch (err) {
       if (err instanceof DomainError) {
