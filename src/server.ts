@@ -17,8 +17,8 @@ import {
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
-import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
+import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
