@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
 import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
@@ -79,6 +81,27 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 });
 
 describe("updateAgent: no-change 編集(issue #70 — workspace-create の porcelain チェックの agent 版)", () => {
+  it("空白だけの advisor を未設定へ戻すと frontmatter から消し、実効構成の変更として version を進める(issue #175)", async () => {
+    const registryDir = await makeMainRegistry({
+      "agents/crab.md": "---\nversion: 3\nauthority: standard\nskills:\n  - '*'\ndescription: d\nadvisor: opus\n---\np\n",
+    });
+
+    await updateAgent(
+      {
+        name: "crab",
+        authority: "standard",
+        description: "d",
+        advisor: "  \t ",
+        skills: ["*"],
+        systemPrompt: "p",
+      },
+      { registryDir },
+    );
+
+    expect(loadRegistry(registryDir).agents.crab).toMatchObject({ version: "4", advisor: undefined });
+    expect(readFileSync(join(registryDir, "agents", "crab.md"), "utf8")).not.toContain("advisor:");
+  });
+
   it("実効フィールドが不変な再送はコミットなしの成功で、version も上がらない", async () => {
     const registryDir = await makeMainRegistry();
     // fixture の deckhand と同一内容(version は入力に存在しない)

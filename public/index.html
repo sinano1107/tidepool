@@ -841,6 +841,7 @@ function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, s
   const [authority, setAuthority] = React.useState(agent.authority);
   const [model, setModel] = React.useState(agent.model ?? '');
   const [effort, setEffort] = React.useState(agent.effort ?? '');
+  const [advisor, setAdvisor] = React.useState(agent.advisor ?? '');
   // prefilled from GET /api/agents (which already returns skills, ADR 0025) —
   // edited through the same picker the create form uses
   const [skills, setSkills] = React.useState(agent.skills ?? []);
@@ -853,6 +854,7 @@ function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, s
     authority !== agent.authority ||
     model.trim() !== (agent.model ?? '') ||
     effort.trim() !== (agent.effort ?? '') ||
+    advisor.trim() !== (agent.advisor ?? '') ||
     // order-sensitive: the allowlist is an ordered array (sameStrings, matching
     // the server's no-op detection) — a reorder is a real edit
     !sameStrings(skills, agent.skills ?? []);
@@ -867,6 +869,7 @@ function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, s
         icon: icon.trim() || undefined,
         model: model.trim() || undefined,
         effort: effort.trim() || undefined,
+        advisor: advisor.trim() || undefined,
         skills,
         systemPrompt,
       }, 'PATCH');
@@ -890,6 +893,7 @@ function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, s
         <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
       </div>
       <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
+      <Input label="Advisor model" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder="no advisor if empty" />
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={skills} onChange={setSkills} />
       {dirty && (
         <Button variant="secondary" disabled={busy || !ok} onClick={save}>
@@ -1368,6 +1372,7 @@ function SettingsScreen({ say }) {
   const [newAgentAuthority, setNewAgentAuthority] = React.useState('');
   const [newAgentModel, setNewAgentModel] = React.useState('');
   const [newAgentEffort, setNewAgentEffort] = React.useState('');
+  const [newAgentAdvisor, setNewAgentAdvisor] = React.useState('');
   // ADR 0025 決定7 / issue #106: the default agent (tako) is ["@workspace"], so
   // a new agent starts there too — a visible field, not a hidden default: the
   // author sees it and edits it before creating.
@@ -1391,12 +1396,13 @@ function SettingsScreen({ say }) {
         icon: newAgentIcon.trim() || undefined,
         model: newAgentModel.trim() || undefined,
         effort: newAgentEffort.trim() || undefined,
+        advisor: newAgentAdvisor.trim() || undefined,
         skills: newAgentSkills,
         systemPrompt: newAgentPrompt,
       });
       sayCommitResult(say, pushed, 'agent added — committed to the registry', newAgentName.trim());
       setNewAgentName(''); setNewAgentIcon(''); setNewAgentDescription('');
-      setNewAgentPrompt(''); setNewAgentAuthority(''); setNewAgentModel(''); setNewAgentEffort('');
+      setNewAgentPrompt(''); setNewAgentAuthority(''); setNewAgentModel(''); setNewAgentEffort(''); setNewAgentAdvisor('');
       setNewAgentSkills(['@workspace']);
       await loadAgents();
     } catch (err) {
@@ -1589,6 +1595,7 @@ function SettingsScreen({ say }) {
             <Input label="Model" value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)} placeholder="adapter default if empty" />
           </div>
           <Input label="Effort" value={newAgentEffort} onChange={(e) => setNewAgentEffort(e.target.value)} placeholder="adapter default if empty" />
+          <Input label="Advisor model" value={newAgentAdvisor} onChange={(e) => setNewAgentAdvisor(e.target.value)} placeholder="no advisor if empty" />
           <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={newAgentSkills} onChange={setNewAgentSkills} />
           <Button variant="primary" size="lg" full disabled={!newAgentOk || agentBusy} onClick={submitAgent}>
             {agentBusy ? 'Working…' : 'Add agent — commits to the registry'}

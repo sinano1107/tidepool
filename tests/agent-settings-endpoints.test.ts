@@ -72,6 +72,7 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
     authority: "standard",
     skills: ["*"],
     description: "Updated description",
+    advisor: "opus",
     systemPrompt: "You are Tako, updated.",
   });
 
@@ -83,6 +84,7 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
       authority: "standard",
       skills: ["*"],
       description: "Updated description",
+      advisor: "opus",
       systemPrompt: "You are Tako, updated.",
     },
   ]);

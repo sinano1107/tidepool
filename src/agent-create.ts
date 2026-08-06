@@ -31,6 +31,7 @@ export interface CreateAgentInput {
   icon?: string;
   model?: string;
   effort?: string;
+  advisor?: string;
   /** The skill allowlist (issue #56 / ADR 0025), threaded through wholesale
    *  like every other field: `skills` is a required frontmatter field, so a
    *  file the verb writes without it would fail the next `loadRegistry`. The
@@ -91,7 +92,11 @@ export async function createAgent(
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
-  commitAgentFile(deps.registryDir, { ...input, version: "1" }, `create agent ${input.name} via WebUI`);
+  commitAgentFile(
+    deps.registryDir,
+    { ...input, advisor: normalizeAdvisor(input.advisor), version: "1" },
+    `create agent ${input.name} via WebUI`,
+  );
   return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
@@ -117,14 +122,20 @@ export async function updateAgent(
   // no-change 編集はコミットなしの成功(workspace-create.ts の porcelain
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
   // 存在せず、実効フィールドが同じ再送で刻印だけ進めない
-  if (!sameEffectiveFields(existing, input)) {
+  const normalizedInput = { ...input, advisor: normalizeAdvisor(input.advisor) };
+  if (!sameEffectiveFields(existing, normalizedInput)) {
     commitAgentFile(
       deps.registryDir,
-      { ...input, version: bumpVersion(existing.version) },
+      { ...normalizedInput, version: bumpVersion(existing.version) },
       `update agent ${input.name} via WebUI`,
     );
   }
   return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
+}
+
+/** An empty advisor means the capability is absent, not a blank model name. */
+function normalizeAdvisor(advisor: string | undefined): string | undefined {
+  return advisor?.trim() || undefined;
 }
 
 /** version 以外の全フィールド(編集フォームが送るもの)の一致。systemPrompt
@@ -136,6 +147,7 @@ function sameEffectiveFields(existing: AgentDefinition, input: UpdateAgentInput)
     existing.icon === input.icon &&
     existing.model === input.model &&
     existing.effort === input.effort &&
+    existing.advisor === input.advisor &&
     sameSkills(existing.skills, input.skills) &&
     existing.systemPrompt === input.systemPrompt.trim()
   );
@@ -207,6 +219,7 @@ function serializeAgentFile(definition: AgentDefinition): string {
   if (definition.icon !== undefined) meta.icon = definition.icon;
   if (definition.model !== undefined) meta.model = definition.model;
   if (definition.effort !== undefined) meta.effort = definition.effort;
+  if (definition.advisor !== undefined) meta.advisor = definition.advisor;
   // 外側の空白は trim して書く: parseAgentFile が body.trim() で読む以上、
   // 保存できるのは trim 済みの正規形だけ — 書き込み側も同じ正規形に揃える
   // ことでラウンドトリップと no-change 判定(sameEffectiveFields)が一致する
