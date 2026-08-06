@@ -3,7 +3,7 @@ import { quarantineAgent } from "../src/agent.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { submitAnswer } from "../src/human-verbs.js";
+import { registerThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
 import {
   BOARD_WORKER_ID,
   getTask,
@@ -14,8 +14,8 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
-import { quarantineWorkspace } from "../src/workspace.js";
-import { FakeGitHubClient } from "./fakes.js";
+import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
+import { FakeDraftClient, FakeGitHubClient } from "./fakes.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
@@ -31,6 +31,358 @@ function onlyQuestion(db: Db): Task {
   if (!question) throw new Error("question disappeared from the board");
   return question;
 }
+
+it("人間の登録 door は通常タスクを登録して返す", async () => {
+  db = openDb(":memory:");
+
+  const result = await registerThroughHumanDoor(
+    { db },
+    {
+      type: "work",
+      title: "ship the feature",
+      purpose: "deliver the requested change",
+      completion_criteria: "the change is available",
+    },
+    () => NOW,
+  );
+
+  expect(result).toMatchObject({
+    ok: true,
+    task: {
+      type: "work",
+      title: "ship the feature",
+      status: "todo",
+    },
+  });
+});
+
+it("人間の登録 door は未知の assignee を GateFailure として返す", async () => {
+  db = openDb(":memory:");
+
+  const result = await registerThroughHumanDoor(
+    { db, agentRegistered: (name) => name === "deckhand" },
+    {
+      type: "work",
+      title: "delegate the work",
+      purpose: "use the right specialist",
+      completion_criteria: "the specialist finishes",
+      assignee: "not-a-real-agent",
+    },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "invalid", error: "unknown agent: not-a-real-agent" },
+  });
+  expect(listBoard(db)).toEqual([]);
+});
+
+it("人間の登録 door は未知の workspace を GateFailure として返す", async () => {
+  db = openDb(":memory:");
+
+  const result = await registerThroughHumanDoor(
+    {
+      db,
+      resolveWorkspace: (name) => {
+        if (name !== "product") throw new UnknownWorkspaceError(name ?? "product");
+        return { name, path: "/workspaces/product" };
+      },
+    },
+    {
+      type: "work",
+      title: "ship the feature",
+      purpose: "deliver the requested change",
+      completion_criteria: "the change is available",
+      workspace: "not-a-real-workspace",
+    },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "invalid", error: "unknown workspace: not-a-real-workspace" },
+  });
+  expect(listBoard(db)).toEqual([]);
+});
+
+it("人間の登録 door は workspace を assignee より先に検査する", async () => {
+  db = openDb(":memory:");
+
+  const result = await registerThroughHumanDoor(
+    {
+      db,
+      agentRegistered: () => false,
+      resolveWorkspace: (name) => {
+        throw new UnknownWorkspaceError(name ?? "default");
+      },
+    },
+    {
+      type: "work",
+      title: "invalid registration",
+      purpose: "preserve gate ordering",
+      completion_criteria: "the first failure is unchanged",
+      workspace: "unknown-workspace",
+      assignee: "unknown-agent",
+    },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "invalid", error: "unknown workspace: unknown-workspace" },
+  });
+});
+
+it("人間の登録 door は issue-backed task の生存を確認してから登録する", async () => {
+  db = openDb(":memory:");
+  const github = new FakeGitHubClient();
+  github.scriptIssue(189, {
+    title: "extract the registration gate",
+    body: "keep behavior unchanged",
+    comments: [],
+  });
+
+  const result = await registerThroughHumanDoor(
+    {
+      db,
+      github,
+      workspace: { name: "tidepool", path: "/workspaces/tidepool" },
+    },
+    { type: "work", github_issue_number: 189, workspace: "tidepool" },
+    () => NOW,
+  );
+
+  expect({ result, issueFetches: github.issueFetches }).toMatchObject({
+    result: { ok: true, task: { github_issue_number: 189, workspace: "tidepool" } },
+    issueFetches: [{ path: "/workspaces/tidepool", number: 189 }],
+  });
+});
+
+it("人間の登録 door は外部検査後の時刻で task を登録する", async () => {
+  db = openDb(":memory:");
+  const github = new FakeGitHubClient();
+  github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
+  const afterInspection = new Date(NOW.getTime() + 60_000);
+  let currentNow = NOW;
+  const getIssue = github.getIssue.bind(github);
+  github.getIssue = async (ref) => {
+    currentNow = afterInspection;
+    return getIssue(ref);
+  };
+
+  const result = await registerThroughHumanDoor(
+    {
+      db,
+      github,
+      workspace: { name: "tidepool", path: "/workspaces/tidepool" },
+    },
+    { type: "work", github_issue_number: 189, workspace: "tidepool" },
+    () => currentNow,
+  );
+
+  expect(result).toMatchObject({
+    ok: true,
+    task: { created_at: afterInspection.toISOString() },
+  });
+});
+
+it("人間の登録 door は一時的な issue 取得失敗を retryable な GateFailure として返す", async () => {
+  db = openDb(":memory:");
+  const github = new FakeGitHubClient();
+  github.scriptIssueFailure(new Error("network is down"));
+
+  const result = await registerThroughHumanDoor(
+    {
+      db,
+      github,
+      workspace: { name: "tidepool", path: "/workspaces/tidepool" },
+    },
+    { type: "work", github_issue_number: 189, workspace: "tidepool" },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "issue_unavailable", error: "could not fetch the referenced issue" },
+  });
+  expect(listBoard(db)).toEqual([]);
+});
+
+it("人間の登録 door は LLM 検査の不合格をサジェスト付き GateFailure として返す", async () => {
+  db = openDb(":memory:");
+  const github = new FakeGitHubClient();
+  github.scriptIssue(189, {
+    title: "ambiguous note",
+    body: "do something",
+    comments: [],
+  });
+  const draftClient = new FakeDraftClient();
+  draftClient.scriptInspection({
+    ok: false,
+    missing: "completion criteria cannot be derived",
+    suggested_comment: "## Completion criteria\n- the registration gate is shared",
+  });
+
+  const result = await registerThroughHumanDoor(
+    {
+      db,
+      github,
+      draftClient,
+      workspace: { name: "tidepool", path: "/workspaces/tidepool" },
+    },
+    { type: "work", github_issue_number: 189, workspace: "tidepool" },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: {
+      kind: "issue_rejected",
+      error: "the referenced issue fails the registration gate",
+      missing: "completion criteria cannot be derived",
+      suggested_comment: "## Completion criteria\n- the registration gate is shared",
+    },
+  });
+  expect(listBoard(db)).toEqual([]);
+});
+
+it("人間の登録 door は LLM 到達不能を GateFailure として返す", async () => {
+  db = openDb(":memory:");
+  const github = new FakeGitHubClient();
+  github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
+  const draftClient = new FakeDraftClient();
+  draftClient.scriptInspectionFailure(new Error("LLM is down"));
+
+  const result = await registerThroughHumanDoor(
+    {
+      db,
+      github,
+      draftClient,
+      workspace: { name: "tidepool", path: "/workspaces/tidepool" },
+    },
+    { type: "work", github_issue_number: 189, workspace: "tidepool" },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "inspection_unavailable", error: "LLM inspection failed" },
+  });
+  expect(listBoard(db)).toEqual([]);
+});
+
+it("人間の登録 door は work child を人間 decompose として登録する", async () => {
+  db = openDb(":memory:");
+  const parent = registerTask(
+    db,
+    {
+      type: "work",
+      title: "parent work",
+      purpose: "deliver the whole change",
+      completion_criteria: "all slices are integrated",
+    },
+    NOW,
+  );
+
+  const result = await registerThroughHumanDoor(
+    { db },
+    {
+      type: "work",
+      title: "child work",
+      purpose: "extract the registration gate",
+      completion_criteria: "the shared door is covered",
+      parent_id: parent.id,
+      decompose_reason: "split out the shared application seam",
+    },
+    () => NOW,
+  );
+
+  expect(result).toMatchObject({
+    ok: true,
+    task: {
+      title: "child work",
+      parent_id: parent.id,
+      based_on_decision: expect.any(Number),
+    },
+  });
+  expect(listBoard(db).find((task) => task.id === parent.id)?.status).toBe("blocked");
+});
+
+it("人間の登録 door は存在しない decompose 親を not_found として返す", async () => {
+  db = openDb(":memory:");
+
+  const result = await registerThroughHumanDoor(
+    { db },
+    {
+      type: "work",
+      title: "orphan child",
+      purpose: "split the work",
+      completion_criteria: "the slice is complete",
+      parent_id: "no-such-task",
+      decompose_reason: "split the missing parent",
+    },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "not_found", error: "parent task not found" },
+  });
+});
+
+it("人間の登録 door は decompose reason を parent の存在より先に検査する", async () => {
+  db = openDb(":memory:");
+
+  const result = await registerThroughHumanDoor(
+    { db },
+    {
+      type: "work",
+      title: "orphan child",
+      purpose: "split the work",
+      completion_criteria: "the slice is complete",
+      parent_id: "no-such-task",
+    },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "invalid", error: "a decomposition requires a reason" },
+  });
+});
+
+it("人間の登録 door は issue-backed decompose child を登録しない", async () => {
+  db = openDb(":memory:");
+  const parent = registerTask(
+    db,
+    {
+      type: "work",
+      title: "parent work",
+      purpose: "deliver the whole change",
+      completion_criteria: "all slices are integrated",
+    },
+    NOW,
+  );
+
+  const result = await registerThroughHumanDoor(
+    { db },
+    {
+      type: "work",
+      parent_id: parent.id,
+      decompose_reason: "split the issue-backed child",
+      github_issue_number: 189,
+      workspace: "tidepool",
+    },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "invalid", error: "a child task cannot be issue-backed" },
+  });
+  expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
+});
 
 it("PR promotion の retry が失敗したら question を未決着のまま残す", async () => {
   db = openDb(":memory:");

@@ -2,17 +2,23 @@ import { verifyAgentRepaired } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
+import type { DraftClient } from "./draft.js";
 import { appendEvent } from "./events.js";
-import type { GitHubClient } from "./github.js";
+import { type GitHubClient, IssueGoneError } from "./github.js";
 import {
   answerQuestion,
   assertAnswerable,
+  assertNoUnsettledIssueRef,
   DomainError,
   getTask,
   HUMAN_WORKER_ID,
+  humanDecomposeTask,
+  latestChild,
   logDecision,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
+  type RegisterTaskInput,
+  registerTask,
   type Task,
 } from "./tasks.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
@@ -22,6 +28,171 @@ import {
   verifyWorkspaceClean,
   type WorkspaceConfig,
 } from "./workspace.js";
+
+export interface RegisterThroughHumanDoorDeps {
+  db: Db;
+  agentRegistered?: (name: string) => boolean;
+  draftClient?: DraftClient;
+  github?: GitHubClient;
+  workspace?: WorkspaceConfig;
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  isProtectedWorkspace?: (name: string) => boolean;
+}
+
+export interface HumanRegisterInput extends RegisterTaskInput {
+  decompose_reason?: string;
+}
+
+export type GateFailure =
+  | { kind: "invalid"; error: string }
+  | { kind: "not_found"; error: string }
+  | { kind: "issue_unavailable"; error: string }
+  | { kind: "inspection_unavailable"; error: string }
+  | {
+      kind: "issue_rejected";
+      error: string;
+      missing: string;
+      suggested_comment: string;
+    };
+
+export type RegisterThroughHumanDoorResult =
+  | { ok: true; task: Task }
+  | { ok: false; failure: GateFailure };
+
+export function assertAssigneeKnown(
+  agentRegistered: ((name: string) => boolean) | undefined,
+  assignee: string | undefined,
+): void {
+  if (
+    assignee !== undefined &&
+    assignee !== HUMAN_WORKER_ID &&
+    agentRegistered &&
+    !agentRegistered(assignee)
+  ) {
+    throw new DomainError(`unknown agent: ${assignee}`);
+  }
+}
+
+export function assertWorkspaceKnown(
+  workspaceName: string,
+  resolveWorkspace: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
+  workspace: WorkspaceConfig | undefined,
+): void {
+  const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+  if (!resolve) return;
+  try {
+    resolve(workspaceName);
+  } catch (err) {
+    if (!(err instanceof UnknownWorkspaceError)) throw err;
+    throw new DomainError(`unknown workspace: ${workspaceName}`);
+  }
+}
+
+/**
+ * 人間名義の task 登録を実行する正準の application seam。
+ * WebUI と管理 MCP は transport の違いだけを持ち、この門を共有する。
+ */
+export async function registerThroughHumanDoor(
+  deps: RegisterThroughHumanDoorDeps,
+  input: HumanRegisterInput,
+  now: () => Date,
+): Promise<RegisterThroughHumanDoorResult> {
+  try {
+    const isHumanDecomposeChild = input.parent_id !== undefined && input.type === "work";
+    if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
+      throw new DomainError("a child task cannot be issue-backed");
+    }
+    if (input.workspace !== undefined) {
+      assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
+    }
+    assertAssigneeKnown(deps.agentRegistered, input.assignee);
+    if (input.github_issue_number !== undefined && input.workspace) {
+      assertNoUnsettledIssueRef(deps.db, input.workspace, input.github_issue_number);
+      const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+      if (deps.github && resolve) {
+        let issue;
+        try {
+          issue = await deps.github.getIssue({
+            path: resolve(input.workspace).path,
+            number: input.github_issue_number,
+          });
+        } catch (err) {
+          if (err instanceof IssueGoneError) throw new DomainError(err.message);
+          return {
+            ok: false,
+            failure: {
+              kind: "issue_unavailable",
+              error: "could not fetch the referenced issue",
+            },
+          };
+        }
+        if (deps.draftClient) {
+          let inspection;
+          try {
+            inspection = await deps.draftClient.inspectIssue(issue);
+          } catch {
+            return {
+              ok: false,
+              failure: { kind: "inspection_unavailable", error: "LLM inspection failed" },
+            };
+          }
+          if (!inspection.ok) {
+            return {
+              ok: false,
+              failure: {
+                kind: "issue_rejected",
+                error: "the referenced issue fails the registration gate",
+                missing: inspection.missing,
+                suggested_comment: inspection.suggested_comment,
+              },
+            };
+          }
+        }
+      }
+    }
+    if (isHumanDecomposeChild) {
+      if (input.decompose_reason === undefined || input.decompose_reason.length === 0) {
+        throw new DomainError("a decomposition requires a reason");
+      }
+      const parent = getTask(deps.db, input.parent_id!);
+      if (!parent) {
+        return {
+          ok: false,
+          failure: { kind: "not_found", error: "parent task not found" },
+        };
+      }
+      const children = humanDecomposeTask(
+        deps.db,
+        parent,
+        {
+          reason: input.decompose_reason,
+          children: [
+            {
+              title: input.title ?? "",
+              purpose: input.purpose ?? "",
+              completion_criteria: input.completion_criteria ?? "",
+              assignee: input.assignee,
+              workspace: input.workspace,
+              risk_flag: input.risk_flag,
+              review_flag: input.review_flag,
+            },
+          ],
+        },
+        now(),
+        deps.isProtectedWorkspace,
+      );
+      const task = children[0] ?? latestChild(deps.db, parent.id);
+      if (!task) throw new Error("human decompose did not register a child or approval question");
+      return { ok: true, task };
+    }
+    return { ok: true, task: registerTask(deps.db, input, now()) };
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return { ok: false, failure: { kind: "invalid", error: err.message } };
+    }
+    throw err;
+  }
+}
 
 export interface SubmitAnswerDeps {
   db: Db;
