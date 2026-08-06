@@ -216,6 +216,9 @@ const createAgentSchema = z.object({
   icon: z.string().optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
+  // `advisor` is an open CLI-owned model vocabulary (ADR 0042). This boundary
+  // carries its spelling but deliberately does not attempt validation here.
+  advisor: z.string().optional(),
   // skill allowlist (issue #56 / ADR 0025): required — the array shape only;
   // the vocabulary grammar (assertValidSkillAllowlist) and inventory-agnostic
   // treatment live in the domain, so callers get a domain error, not a schema

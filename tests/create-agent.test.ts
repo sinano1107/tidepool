@@ -40,6 +40,7 @@ describe("createAgent: 正常系(issue #70)", () => {
         icon: "🐙",
         model: "claude-sonnet-5",
         effort: "high",
+        advisor: "opus",
         skills: ["@workspace"],
         systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
       },
@@ -56,6 +57,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       icon: "🐙",
       model: "claude-sonnet-5",
       effort: "high",
+      advisor: "opus",
       skills: ["@workspace"],
       systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
     });
@@ -65,7 +67,7 @@ describe("createAgent: 正常系(issue #70)", () => {
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("create agent tako via WebUI");
   });
 
-  it("icon/model/effort を省略すると frontmatter にキー自体が現れず、ラウンドトリップでも undefined のまま", async () => {
+  it("icon/model/effort/advisor を省略すると frontmatter にキー自体が現れず、ラウンドトリップでも undefined のまま", async () => {
     const registryDir = await makeMainRegistry();
 
     await createAgent(
@@ -83,6 +85,7 @@ describe("createAgent: 正常系(issue #70)", () => {
     expect(raw).not.toContain("icon");
     expect(raw).not.toContain("model");
     expect(raw).not.toContain("effort");
+    expect(raw).not.toContain("advisor");
     const agent = loadRegistry(registryDir).agents.hermit;
     expect(agent).toEqual({
       name: "hermit",
@@ -92,6 +95,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       icon: undefined,
       model: undefined,
       effort: undefined,
+      advisor: undefined,
       skills: ["*"],
       systemPrompt: "You are Hermit.",
     });
