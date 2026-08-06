@@ -27,6 +27,7 @@ it("review タスクは実行 assignee 自身の authority profile がどれだ�
       assignee: "reef-crab",
     })
   ).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up
 
   const client = await mcpClient(t.mcpBaseUrl, review.id);
@@ -77,6 +78,7 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
       assignee: "auditor",
     })
   ).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up
 
   const client = await mcpClient(t.mcpBaseUrl, review.id);
@@ -134,6 +136,7 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
       assignee: "auditor",
     })
   ).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up
 
   const client = await mcpClient(t.mcpBaseUrl, review.id);

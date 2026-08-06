@@ -13,7 +13,14 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
     );
     const openChild = registerTask(
       db,
-      { type: "work", title: "survey the north reef", purpose: "p", completion_criteria: "c", parent_id: parent.id },
+      {
+        type: "work",
+        title: "survey the north reef",
+        purpose: "p",
+        completion_criteria: "c",
+        parent_id: parent.id,
+        based_on_decision: 48,
+      },
       new Date(1),
     );
     const doneChild = registerTask(

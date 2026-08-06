@@ -439,6 +439,30 @@ it("commit also generates a self RCA review as a child of the objected task, ass
   expect(selfReview.purpose).toContain("the hack corrupts state — do it properly");
 });
 
+it("an in-progress task can complete after an objection attaches repair and RCA children(issue #181)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "work under objection");
+  await t.clock.advance(HOUR);
+  const entry = await loggedEntry(t, task.id, "picked the quick hack");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: entry.id,
+    comment: "replace the hack with the durable implementation",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  const attached = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
+    (child: any) => child.parent_id === task.id,
+  );
+  expect(attached.some((child: any) => child.title.startsWith("repair:"))).toBe(true);
+  expect(attached.filter((child: any) => child.type === "review")).toHaveLength(2);
+
+  await completeVia(t, task.id);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+});
+
 it("two objected entries written by the same worker fold into one self RCA review, not two (issue #15, layer 2)", async () => {
   t = await bootTidepool();
   const a = await registerWork(t, "work A");

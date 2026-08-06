@@ -103,6 +103,7 @@ it("list_agents は review タスクでは、reviewer の assignable_to が空�
       assignee: "auditor",
     })
   ).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up
 
   const client = await mcpClient(t.mcpBaseUrl, review.id);
