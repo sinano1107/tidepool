@@ -116,7 +116,7 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
  *  Tidepool failure question, while pre-existing quarantine still skips PR
  *  promotion as it did before.
  *  question/review tasks carry no handoff doc and open no PR.
- *  strict=true is the answer route's synchronous retry (issue #66): every
+ *  strict=true is submitAnswer's synchronous retry (issue #66): every
  *  precondition that the first attempt silently skips on becomes a thrown
  *  error the human sees. */
 export async function promoteHandoffPr(

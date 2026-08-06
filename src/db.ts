@@ -60,7 +60,7 @@ const TASKS_TABLE_DDL = `
       -- recordPrOpened's escalate branch sets this.
       question_pending_merge_pr INTEGER,
       -- system-internal only (issue #66): the completed work task whose PR
-      -- promotion failed. The answer route retries it synchronously on
+      -- promotion failed. submitAnswer retries it synchronously on
       -- "retry"; never set through MCP or the JSON API.
       question_pending_pr_promotion_task_id TEXT,
       -- system-internal only (issue #21): the workspace name a quarantine
