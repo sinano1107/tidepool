@@ -9,9 +9,11 @@ import {
   answerQuestion,
   assertAnswerable,
   assertNoUnsettledIssueRef,
+  type CancelDefaults,
   DomainError,
   getTask,
   HUMAN_WORKER_ID,
+  hasUnfinishedChildren,
   humanDecomposeTask,
   latestChild,
   logDecision,
@@ -58,6 +60,47 @@ export type GateFailure =
 export type RegisterThroughHumanDoorResult =
   | { ok: true; task: Task }
   | { ok: false; failure: GateFailure };
+
+export type IssueCommentFailure =
+  | { kind: "not_configured"; error: string }
+  | { kind: "unknown_workspace"; error: string }
+  | { kind: "github_failed"; error: string };
+
+/** Shared human-surface GitHub issue-comment write. */
+export async function addIssueCommentThroughHumanDoor(
+  deps: Pick<RegisterThroughHumanDoorDeps, "github" | "workspace" | "resolveWorkspace">,
+  input: { workspace: string; github_issue_number: number; body: string },
+): Promise<{ ok: true } | { ok: false; failure: IssueCommentFailure }> {
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (!deps.github || !resolve) {
+    return {
+      ok: false,
+      failure: { kind: "not_configured", error: "GitHub or workspace tracking not configured" },
+    };
+  }
+  let path: string;
+  try {
+    path = resolve(input.workspace).path;
+  } catch (err) {
+    if (!(err instanceof UnknownWorkspaceError)) throw err;
+    return {
+      ok: false,
+      failure: { kind: "unknown_workspace", error: `unknown workspace: ${input.workspace}` },
+    };
+  }
+  try {
+    await deps.github.addIssueComment(
+      { path, number: input.github_issue_number },
+      input.body,
+    );
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      failure: { kind: "github_failed", error: "could not post the comment to the issue" },
+    };
+  }
+}
 
 export function assertAssigneeKnown(
   agentRegistered: ((name: string) => boolean) | undefined,
@@ -206,6 +249,28 @@ export interface SubmitAnswerDeps {
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
   boardState?: BoardStatePath[];
+}
+
+/** Shared human-surface defaults for direct cancel's quarantine-question gate. */
+export function humanCancelDefaults(
+  workspace: WorkspaceConfig | undefined,
+  defaultAgentName: string | undefined,
+  auditorName: string | undefined,
+): CancelDefaults {
+  return {
+    defaultWorkspaceName: workspace?.name,
+    defaultAgentName,
+    auditorName,
+  };
+}
+
+/** A settled child can make its parent immediately pickable on either human surface. */
+export function pollIfParentUnblocked(db: Db, task: Task, onQueueHeadChanged: () => void): void {
+  if (!task.parent_id) return;
+  const parent = getTask(db, task.parent_id);
+  if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
+    onQueueHeadChanged();
+  }
 }
 
 /**
