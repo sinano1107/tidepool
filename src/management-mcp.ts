@@ -117,7 +117,7 @@ const profileFieldsSchema = z.object({
   assignable_to: z.array(z.string()),
   allowed_workspaces: z.array(z.string()),
   merge: z.enum(["escalate", "auto_if_ci_green"]).optional(),
-  confirm_dangerous: z.boolean().optional(),
+  confirm_dangerous: z.boolean().default(false),
 });
 
 /** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
@@ -226,7 +226,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     { description: "List workspaces in the human-managed registry." },
     async () => {
       if (!deps.workspaceAdmin?.list) return toolError("workspace administration is not configured");
-      return toolResult({ workspaces: deps.workspaceAdmin.list() });
+      try {
+        return toolResult({ workspaces: deps.workspaceAdmin.list() });
+      } catch (err) {
+        return registryToolError(err);
+      }
     },
   );
   server.registerTool(
@@ -269,10 +273,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     { description: "List agents and available authority profiles in the human-managed registry." },
     async () => {
       if (!deps.agentAdmin?.list) return toolError("agent administration is not configured");
-      return toolResult({
-        agents: deps.agentAdmin.list(),
-        authority_profiles: deps.agentAdmin.authorityProfiles?.() ?? [],
-      });
+      try {
+        return toolResult({
+          agents: deps.agentAdmin.list(),
+          authority_profiles: deps.agentAdmin.authorityProfiles?.() ?? [],
+        });
+      } catch (err) {
+        return registryToolError(err);
+      }
     },
   );
   server.registerTool(
@@ -315,7 +323,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     { description: "List authority profiles in the human-managed registry." },
     async () => {
       if (!deps.profileAdmin?.list) return toolError("profile administration is not configured");
-      return toolResult({ profiles: deps.profileAdmin.list() });
+      try {
+        return toolResult({ profiles: deps.profileAdmin.list() });
+      } catch (err) {
+        return registryToolError(err);
+      }
     },
   );
   server.registerTool(

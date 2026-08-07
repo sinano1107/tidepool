@@ -220,6 +220,9 @@ it("管理MCP は人間の明示確認なしに危険な profile を保存しな
 
     const { tools } = await client.listTools();
     expect(tools.find((tool) => tool.name === "create_profile")?.description).toContain("human's explicit confirmation");
+    expect((tools.find((tool) => tool.name === "create_profile") as any).inputSchema.properties.confirm_dangerous.default).toBe(
+      false,
+    );
   } finally {
     await client.close();
   }
@@ -237,6 +240,19 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
       },
       update: async () => {
         throw new UnprotectNeedsConfirmationError("production");
+      },
+      list: () => {
+        throw new Error("registry read failed");
+      },
+    },
+    agentAdmin: {
+      list: () => {
+        throw new Error("registry read failed");
+      },
+    },
+    profileAdmin: {
+      list: () => {
+        throw new Error("registry read failed");
       },
     },
   });
@@ -279,6 +295,12 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
     });
     expect(protectedWorkspace.isError).toBe(true);
     expect(protectedWorkspace.content[0].text).toContain("requires confirmation");
+
+    for (const name of ["list_workspaces", "list_agents", "list_profiles"]) {
+      const result: any = await client.callTool({ name, arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("registry upstream error");
+    }
   } finally {
     await client.close();
   }
