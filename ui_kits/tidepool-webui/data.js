@@ -1,10 +1,13 @@
 // tidepool webui — shared fake data for the UI kit
 const tpData = {
   agents: [
-    { name: 'reef-crab', desc: 'implementation · sonnet + git-guardrails', icon: '🦀', authority: 'implementer', model: 'sonnet' },
-    { name: 'anemone', desc: 'review · read-only authority', icon: '🪸', authority: 'reviewer', model: 'sonnet' },
-    { name: 'hermit', desc: 'docs + registry edits', icon: '🐚', authority: 'docs-editor', model: 'sonnet' },
+    { name: 'reef-crab', desc: 'implementation · sonnet + git-guardrails', icon: '🦀', authority: 'implementer', model: 'sonnet', effort: '', advisor: '', skills: ['@workspace', '@host'], systemPrompt: 'Prefers small, reviewable commits. Never force-pushes.' },
+    { name: 'anemone', desc: 'review · read-only authority', icon: '🪸', authority: 'reviewer', model: 'sonnet', effort: 'high', advisor: 'claude-opus-5', skills: ['@workspace'], systemPrompt: '' },
+    { name: 'hermit', desc: 'docs + registry edits', icon: '🐚', authority: 'docs-editor', model: 'sonnet', effort: '', advisor: '', skills: ['@workspace', 'docs:*'], systemPrompt: '' },
   ],
+  // the host's enumerated @host skills (issue #106) — the settings screen's
+  // skill picker offers these plus the @workspace/@host scope words and "*"
+  hostSkills: ['review', 'refactor', 'docs', 'deploy'],
   // settings screen fixtures (issue #57 phase 3 kit mirror) — workspaces /
   // authorityProfiles below mirror the same registry the board-wide `settings`
   // preferences live alongside; kept separate from `agents` above only because
