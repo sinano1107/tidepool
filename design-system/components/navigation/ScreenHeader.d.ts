@@ -5,7 +5,7 @@
 export interface ScreenHeaderProps {
   title?: string;
   /** Where back goes, by name — "Settings", "Agents". */
-  backLabel?: string;
+  backLabel: string;
   /** Mono caption under the title — "agent · 1 of 3". */
   meta?: string;
   onBack?: () => void;

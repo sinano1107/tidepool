@@ -139,8 +139,7 @@ function SettingsChipListInput({ label, hint, candidates, wildcardHint, values, 
   );
 }
 
-// Always-editable inline card, WorkspaceCard's shape: name + protection Switch
-// up top, repo/path readout, editable Notes with a dirty-gated Save.// The head of a record card: identity on the left, Edit on the right while
+// The head of a record card: identity on the left, Edit on the right while
 // viewing. At most one card on the settings surface is in edit mode at a time,
 // so the button asks the screen for that slot rather than flipping local state.
 function SettingsRecordHead({ children, editing, onEdit }) {
@@ -190,7 +189,7 @@ function SettingsWorkspaceRecord({ ws, onAction, edit }) {
   useSettingsDirty(edit, open, dirty);
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <SettingsRecordHead editing={open} onEdit={() => { setNotes(ws.notes ?? ''); setProt(!!ws.protected); edit.open(id); }}>
+      <SettingsRecordHead editing={open} onEdit={() => edit.open(id, () => { setNotes(ws.notes ?? ''); setProt(!!ws.protected); })}>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{ws.name}</span>
         {ws.registrySelf && <Tag color="tide" mono>registry</Tag>}
         {ws.protected && <Tag color="sun">protected</Tag>}
@@ -225,43 +224,75 @@ function SettingsWorkspaceRecord({ ws, onAction, edit }) {
   );
 }
 
+// The agent fields an edit or a creation resubmits, as one draft. `name` is
+// absent on purpose: it is the file name, offered at creation only.
+function agentDraftOf(agent) {
+  return {
+    icon: agent.icon ?? '', description: agent.desc ?? '',
+    systemPrompt: agent.systemPrompt ?? '', authority: agent.authority ?? '',
+    model: agent.model ?? '', effort: agent.effort ?? '', advisor: agent.advisor ?? '',
+    skills: agent.skills ?? [],
+  };
+}
+
+// ADR 0025 決定7 / issue #106: the default agent (tako) is ["@workspace"], so
+// a new agent starts there too — a visible field, not a hidden default.
+const NEW_AGENT_DRAFT = {
+  icon: '', description: '', systemPrompt: '', authority: '',
+  model: '', effort: '', advisor: '', skills: ['@workspace'],
+};
+
+// Whether the draft differs from what it was primed with. The skills
+// comparison is order-sensitive — a reorder is a real edit.
+function agentDraftDirty(d, base) {
+  return d.icon !== base.icon
+    || d.description.trim() !== base.description
+    || d.systemPrompt !== base.systemPrompt
+    || d.authority !== base.authority
+    || d.model.trim() !== base.model
+    || d.effort.trim() !== base.effort
+    || d.advisor.trim() !== base.advisor
+    || !sameStrings(d.skills, base.skills);
+}
+
+// Those fields as controls, shared by the record card and the create form so
+// the two never drift.
+function SettingsAgentFields({ draft, set, authorityOptions, hostSkills }) {
+  const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <React.Fragment>
+      <SettingsIconPicker value={draft.icon} onChange={(v) => set('icon', v)} />
+      <Input label="Description" value={draft.description} onChange={(e) => set('description', e.target.value)}
+        placeholder="when a delegating agent should pick this one" />
+      <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
+        multiline rows={4} value={draft.systemPrompt} onChange={(e) => set('systemPrompt', e.target.value)} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', e.target.value)} />
+        <Input label="Model" value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="adapter default if empty" />
+      </div>
+      <Input label="Effort" value={draft.effort} onChange={(e) => set('effort', e.target.value)} placeholder="adapter default if empty" />
+      <Input label="Advisor model" value={draft.advisor} onChange={(e) => set('advisor', e.target.value)} placeholder="no advisor if empty" />
+      <SettingsSkillListInput candidates={hostSkills} values={draft.skills} onChange={(v) => set('skills', v)} />
+    </React.Fragment>
+  );
+}
+
 // One agent as a record card, SettingsWorkspaceRecord's twin: the read half is
-// FieldRows, the edit half is every field the real edit form carries.
+// FieldRows, the edit half is the draft above.
 function SettingsAgentRecord({ agent, authorityProfiles, hostSkills, onAction, edit }) {
-  const { Card, FieldRow, Input, Select, AgentChip } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, FieldRow, AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
   const open = edit.isOpen(id);
-  const [icon, setIcon] = React.useState(agent.icon ?? '');
-  const [description, setDescription] = React.useState(agent.desc ?? '');
-  const [systemPrompt, setSystemPrompt] = React.useState(agent.systemPrompt ?? '');
-  const [authority, setAuthority] = React.useState(agent.authority ?? '');
-  const [model, setModel] = React.useState(agent.model ?? '');
-  const [effort, setEffort] = React.useState(agent.effort ?? '');
-  const [advisor, setAdvisor] = React.useState(agent.advisor ?? '');
-  const [skills, setSkills] = React.useState(agent.skills ?? []);
+  const [draft, setDraft] = React.useState(() => agentDraftOf(agent));
+  const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
   const authorityOptions = authorityProfiles.map((p) => p.name);
-  const dirty =
-    icon !== (agent.icon ?? '') ||
-    description.trim() !== (agent.desc ?? '') ||
-    systemPrompt !== (agent.systemPrompt ?? '') ||
-    authority !== (agent.authority ?? '') ||
-    model.trim() !== (agent.model ?? '') ||
-    effort.trim() !== (agent.effort ?? '') ||
-    advisor.trim() !== (agent.advisor ?? '') ||
-    !sameStrings(skills, agent.skills ?? []);
-  const ok = !!description.trim() && !!authority;
+  const dirty = agentDraftDirty(draft, agentDraftOf(agent));
+  const ok = !!draft.description.trim() && !!draft.authority;
   useSettingsDirty(edit, open, dirty);
-  const startEdit = () => {
-    setIcon(agent.icon ?? ''); setDescription(agent.desc ?? '');
-    setSystemPrompt(agent.systemPrompt ?? ''); setAuthority(agent.authority ?? '');
-    setModel(agent.model ?? ''); setEffort(agent.effort ?? ''); setAdvisor(agent.advisor ?? '');
-    setSkills(agent.skills ?? []);
-    edit.open(id);
-  };
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <SettingsRecordHead editing={open} onEdit={startEdit}>
-        <AgentChip name={agent.name} icon={open ? icon : (agent.icon ?? '')} />
+      <SettingsRecordHead editing={open} onEdit={() => edit.open(id, () => setDraft(agentDraftOf(agent)))}>
+        <AgentChip name={agent.name} icon={open ? draft.icon : (agent.icon ?? '')} />
       </SettingsRecordHead>
       {!open && (
         <React.Fragment>
@@ -282,17 +313,7 @@ function SettingsAgentRecord({ agent, authorityProfiles, hostSkills, onAction, e
       )}
       {open && (
         <React.Fragment>
-          <SettingsIconPicker value={icon} onChange={setIcon} />
-          <Input label="Description" value={description} onChange={(e) => setDescription(e.target.value)} />
-          <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
-            multiline rows={4} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Select label="Authority" options={authorityOptions} value={authority} onChange={(e) => setAuthority(e.target.value)} />
-            <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
-          </div>
-          <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
-          <Input label="Advisor model" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder="no advisor if empty" />
-          <SettingsSkillListInput candidates={hostSkills} values={skills} onChange={setSkills} />
+          <SettingsAgentFields draft={draft} set={set} authorityOptions={authorityOptions} hostSkills={hostSkills} />
           <SettingsEditActions dirty={dirty} ok={ok} saveLabel="Save changes — commits to the registry"
             onSave={() => { onAction('agent updated', agent.name); edit.close(); }}
             onCancel={() => edit.close()} />
@@ -317,13 +338,12 @@ function SettingsProfileRecord({ profile, agentNames, agentIcons, workspaceNames
     !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []) ||
     (merge || '') !== (profile.merge ?? '');
   useSettingsDirty(edit, open, dirty);
-  const startEdit = () => {
+  const startEdit = () => edit.open(id, () => {
     setGuidance(profile.guidance ?? '');
     setAssignableTo(profile.assignable_to ?? []);
     setAllowedWorkspaces(profile.allowed_workspaces ?? []);
     setMerge(profile.merge ?? '');
-    edit.open(id);
-  };
+  });
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <SettingsRecordHead editing={open} onEdit={startEdit}>
@@ -372,7 +392,7 @@ function SettingsBoardCard({ id, label, view, form, dirty, ok, saveLabel, onSave
   useSettingsDirty(edit, open, dirty);
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <SettingsRecordHead editing={open} onEdit={() => { onStart(); edit.open(id); }}>
+      <SettingsRecordHead editing={open} onEdit={() => edit.open(id, onStart)}>
         <SectionLabel>{label}</SectionLabel>
       </SettingsRecordHead>
       {!open && view}
@@ -427,22 +447,17 @@ function SettingsNewWorkspaceForm({ onAction, edit }) {
   );
 }
 
+// The agent create form: `name` is its own field — it becomes agents/<name>.md
+// and is never editable afterwards; the rest is the draft the record edits.
 function SettingsNewAgentForm({ authorityProfiles, hostSkills, onAction, edit }) {
-  const { Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState('');
-  const [icon, setIcon] = React.useState('');
-  const [desc, setDesc] = React.useState('');
-  const [prompt, setPrompt] = React.useState('');
-  const [authority, setAuthority] = React.useState('');
-  const [model, setModel] = React.useState('');
-  const [effort, setEffort] = React.useState('');
-  const [advisor, setAdvisor] = React.useState('');
-  // ADR 0025 決定7 / issue #106: the default agent (tako) is ["@workspace"],
-  // so a new agent starts there too — a visible field, not a hidden default.
-  const [skills, setSkills] = React.useState(['@workspace']);
-  const dirty = !!name.trim() || !!icon || !!desc.trim() || !!prompt.trim() || !!authority
-    || !!model.trim() || !!effort.trim() || !!advisor.trim() || !sameStrings(skills, ['@workspace']);
+  const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
+  const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
+  const dirty = !!name.trim() || agentDraftDirty(draft, NEW_AGENT_DRAFT);
   useSettingsDirty(edit, true, dirty);
+  // creation offers the empty placeholder the edit form doesn't: a new agent
+  // starts without an authority, an existing one always has one
   const authorityCreateOptions = [
     { value: '', label: 'select authority…' },
     ...authorityProfiles.map((p) => ({ value: p.name, label: p.name })),
@@ -452,19 +467,8 @@ function SettingsNewAgentForm({ authorityProfiles, hostSkills, onAction, edit })
       <SectionLabel>add an agent</SectionLabel>
       <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
-      <SettingsIconPicker value={icon} onChange={setIcon} />
-      <Input label="Description" value={desc} onChange={(e) => setDesc(e.target.value)}
-        placeholder="when a delegating agent should pick this one" />
-      <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
-        multiline rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Select label="Authority" options={authorityCreateOptions} value={authority} onChange={(e) => setAuthority(e.target.value)} />
-        <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
-      </div>
-      <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
-      <Input label="Advisor model" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder="no advisor if empty" />
-      <SettingsSkillListInput candidates={hostSkills} values={skills} onChange={setSkills} />
-      <SettingsEditActions ok={!!name.trim() && !!desc.trim() && !!authority}
+      <SettingsAgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions} hostSkills={hostSkills} />
+      <SettingsEditActions ok={!!name.trim() && !!draft.description.trim() && !!draft.authority}
         saveLabel="Add agent — commits to the registry"
         onSave={() => { onAction('agent added — committed to the registry', name.trim()); edit.close(); }}
         onCancel={() => edit.close()} />
@@ -539,8 +543,15 @@ function SettingsScreen({ data, onAction }) {
   const closeEdit = () => { setEditing(null); setDirty(false); };
   const edit = {
     isOpen: (id) => editing === id,
-    open: (id) => guard(() => { setEditing(id); setDirty(false); }),
+    // `prime` fills the card's draft from the record. It runs with the open,
+    // not before it, so a parked open (another card holds unsaved work) primes
+    // only once the human has answered the discard dialog.
+    open: (id, prime) => guard(() => { if (prime) prime(); setEditing(id); setDirty(false); }),
+    // `close` is the deliberate discard behind Cancel and the exit after a
+    // save; `requestClose` is for a control that merely folds the card away
+    // (the Add toggle), which must not drop a draft silently
     close: closeEdit,
+    requestClose: () => guard(closeEdit),
     setDirty,
   };
   const go = (next) => guard(() => { setStack(next); closeEdit(); });
@@ -549,19 +560,43 @@ function SettingsScreen({ data, onAction }) {
     workspaces: {
       title: 'Workspaces', singular: 'workspace', note: 'where tasks run',
       items: data.workspaces, footnote: 'edits commit to the registry',
+      indexSummary: (items) => `${items.length} · ${items.filter((w) => w.protected).length} protected`,
+      rowIdentity: (w) => ({ label: w.name }),
       rowSummary: (w) => w.repo || w.path || '—',
+      record: (rec) => <SettingsWorkspaceRecord ws={rec} onAction={onAction} edit={edit} />,
+      createForm: () => <SettingsNewWorkspaceForm onAction={onAction} edit={edit} />,
     },
     agents: {
       title: 'Agents', singular: 'agent', note: 'who does the work',
       items: data.agents, footnote: 'edits commit to agents/<name>.md in the registry',
-      rowSummary: (a) => a.authority, asAgent: true,
+      indexSummary: (items) => `${items.length} agents`,
+      rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
+      rowSummary: (a) => a.authority,
+      record: (rec) => (
+        <SettingsAgentRecord agent={rec} authorityProfiles={data.authorityProfiles}
+          hostSkills={data.hostSkills} onAction={onAction} edit={edit} />
+      ),
+      createForm: () => (
+        <SettingsNewAgentForm authorityProfiles={data.authorityProfiles} hostSkills={data.hostSkills}
+          onAction={onAction} edit={edit} />
+      ),
     },
     profiles: {
       title: 'Authority Profiles', singular: 'authority profile',
       note: 'what the work is allowed to do',
       items: data.authorityProfiles,
       footnote: 'edits commit to authority/<name>.yaml in the registry',
+      indexSummary: (items) => `${items.length} profiles`,
+      rowIdentity: (p) => ({ label: p.name }),
       rowSummary: (p) => (p.assignable_to ?? []).join(', ') || '—',
+      record: (rec) => (
+        <SettingsProfileRecord profile={rec} agentNames={agentNames} agentIcons={agentIcons}
+          workspaceNames={workspaceNames} onAction={onAction} edit={edit} />
+      ),
+      createForm: () => (
+        <SettingsNewProfileForm agentNames={agentNames} workspaceNames={workspaceNames}
+          onAction={onAction} edit={edit} />
+      ),
     },
   };
 
@@ -576,12 +611,9 @@ function SettingsScreen({ data, onAction }) {
   if (stack.length === 0) {
     const rows = [
       { key: 'board', label: 'Board', summary: `${s.displayLanguage} · ${s.quietHours.start}–${s.quietHours.end}` },
-      {
-        key: 'workspaces', label: 'Workspaces',
-        summary: `${data.workspaces.length} · ${data.workspaces.filter((w) => w.protected).length} protected`,
-      },
-      { key: 'agents', label: 'Agents', summary: `${data.agents.length} agents` },
-      { key: 'profiles', label: 'Authority Profiles', summary: `${data.authorityProfiles.length} profiles` },
+      ...Object.keys(SECTIONS).map((key) => ({
+        key, label: SECTIONS[key].title, summary: SECTIONS[key].indexSummary(SECTIONS[key].items),
+      })),
     ];
     body = (
       <React.Fragment>
@@ -591,7 +623,7 @@ function SettingsScreen({ data, onAction }) {
         <div>
           <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Settings</h1>
           <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
-            what the pool may do while you sleep
+            the board's preferences, and the registry it works from
           </p>
         </div>
         <Card padding="0" style={{ overflow: 'hidden' }}>
@@ -665,33 +697,22 @@ function SettingsScreen({ data, onAction }) {
               </p>
             </React.Fragment>
           } />
-        <p style={SETTINGS_FOOTNOTE}>applies to every task the pool picks up</p>
+        <p style={SETTINGS_FOOTNOTE}>applies to every task the board picks up</p>
       </React.Fragment>
     );
   } else if (recordName === undefined) {
     body = (
       <React.Fragment>
         <ScreenHeader title={sec.title} backLabel="Settings" meta={`${sec.items.length} registered`} onBack={() => go([])}>
-          <Button variant="ghost" size="sm" onClick={() => (adding ? edit.close() : edit.open(addId))}>
+          <Button variant="ghost" size="sm" onClick={() => (adding ? edit.requestClose() : edit.open(addId))}>
             {adding ? 'Close' : 'Add'}
           </Button>
         </ScreenHeader>
         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>{sec.note}</p>
-        {adding && sectionKey === 'workspaces' && <SettingsNewWorkspaceForm onAction={onAction} edit={edit} />}
-        {adding && sectionKey === 'agents' && (
-          <SettingsNewAgentForm authorityProfiles={data.authorityProfiles} hostSkills={data.hostSkills}
-            onAction={onAction} edit={edit} />
-        )}
-        {adding && sectionKey === 'profiles' && (
-          <SettingsNewProfileForm agentNames={agentNames} workspaceNames={workspaceNames} onAction={onAction} edit={edit} />
-        )}
+        {adding && sec.createForm()}
         <Card padding="0" style={{ overflow: 'hidden' }}>
           {sec.items.map((it, i) => (
-            <NavRow key={it.name}
-              label={sec.asAgent ? undefined : it.name}
-              agentName={sec.asAgent ? it.name : undefined}
-              agentIcon={sec.asAgent ? (it.icon ?? '') : undefined}
-              summary={sec.rowSummary(it)}
+            <NavRow key={it.name} {...sec.rowIdentity(it)} summary={sec.rowSummary(it)}
               divider={i > 0} first={i === 0} last={i === sec.items.length - 1}
               onClick={() => go([sectionKey, it.name])} />
           ))}
@@ -707,15 +728,7 @@ function SettingsScreen({ data, onAction }) {
         <ScreenHeader title={recordName} backLabel={sec.title}
           meta={`${sec.singular} · ${idx + 1} of ${sec.items.length}`}
           onBack={() => go([sectionKey])} />
-        {sectionKey === 'workspaces' && <SettingsWorkspaceRecord ws={rec} onAction={onAction} edit={edit} />}
-        {sectionKey === 'agents' && (
-          <SettingsAgentRecord agent={rec} authorityProfiles={data.authorityProfiles}
-            hostSkills={data.hostSkills} onAction={onAction} edit={edit} />
-        )}
-        {sectionKey === 'profiles' && (
-          <SettingsProfileRecord profile={rec} agentNames={agentNames} agentIcons={agentIcons}
-            workspaceNames={workspaceNames} onAction={onAction} edit={edit} />
-        )}
+        {sec.record(rec)}
         <p style={SETTINGS_FOOTNOTE}>{sec.footnote}</p>
       </React.Fragment>
     );

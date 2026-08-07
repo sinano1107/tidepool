@@ -683,7 +683,7 @@ Object.assign(__ds_scope, { NavRow });
 
 // design-system/components/navigation/ScreenHeader.jsx
 try { (() => {
-function ScreenHeader({ title, backLabel = "Settings", meta, onBack, children, style }) {
+function ScreenHeader({ title, backLabel, meta, onBack, children, style }) {
   const [hover, setHover] = React.useState(false);
   const [press, setPress] = React.useState(false);
   const [focus, setFocus] = React.useState(false);

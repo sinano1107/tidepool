@@ -4,7 +4,7 @@
 // a 44px tap height. The h1 sets only its size — colour, weight and tracking
 // come from base.css's heading defaults, the same ones a screen title written
 // as a plain <h1> gets. `children` is an optional action slot on the title line.
-export function ScreenHeader({ title, backLabel = 'Settings', meta, onBack, children, style }) {
+export function ScreenHeader({ title, backLabel, meta, onBack, children, style }) {
   const [hover, setHover] = React.useState(false);
   const [press, setPress] = React.useState(false);
   const [focus, setFocus] = React.useState(false);
