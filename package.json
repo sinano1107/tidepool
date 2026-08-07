@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check",
     "lint:fix": "biome check --write",
-    "build:ds-bundle": "node scripts/build-ds-bundle.mjs"
+    "build:ds-bundle": "node scripts/build-ds-bundle.mjs",
+    "preview:settings": "tsx scripts/preview-settings.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
