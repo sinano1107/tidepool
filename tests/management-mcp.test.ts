@@ -1,7 +1,14 @@
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
+import { InvalidWorkspaceNameError } from "../src/registry.js";
+import { RegistryCloneBusyError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
+import {
+  BoardStateOverlapError,
+  GitHubIdentityMissingError,
+  UnprotectNeedsConfirmationError,
+} from "../src/workspace-create.js";
 import { FakeDraftClient } from "./fakes.js";
 import {
   bootTidepool,
@@ -70,6 +77,208 @@ it("管理MCP は5つの純読取 board tool を発見する(issue #191)", async
     expect(tools.filter((tool) => readToolNames.includes(tool.name)).map((tool) => tool.name).sort()).toEqual(
       readToolNames,
     );
+  } finally {
+    await client.close();
+  }
+});
+
+it("workspaceAdmin の create / list / update を管理MCP から利用できる(issue #193)", async () => {
+  const created = vi.fn(async () => ({ pushed: true }));
+  const updated = vi.fn(async () => ({ pushed: false }));
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: created,
+      list: () => [
+        { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false },
+      ],
+      update: updated,
+    },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["create_workspace", "list_workspaces", "update_workspace"]),
+    );
+
+    const create: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "harbor", mode: "register", path: "/work/harbor" },
+    });
+    expect(create.isError ?? false).toBe(false);
+    expect(readToolPayload(create)).toEqual({ pushed: true });
+    expect(created).toHaveBeenCalledWith({
+      name: "harbor",
+      mode: "register",
+      path: "/work/harbor",
+    });
+
+    const list: any = await client.callTool({ name: "list_workspaces", arguments: {} });
+    expect(readToolPayload(list)).toEqual({
+      workspaces: [
+        { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false },
+      ],
+    });
+
+    const update: any = await client.callTool({
+      name: "update_workspace",
+      arguments: { name: "tidepool", notes: "production board", protected: true },
+    });
+    expect(update.isError ?? false).toBe(false);
+    expect(readToolPayload(update)).toEqual({ pushed: false });
+    expect(updated).toHaveBeenCalledWith({ name: "tidepool", notes: "production board", protected: true });
+  } finally {
+    await client.close();
+  }
+});
+
+it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issue #193)", async () => {
+  const createAgent = vi.fn(async () => ({ pushed: true }));
+  const updateAgent = vi.fn(async () => ({ pushed: false }));
+  const createProfile = vi.fn(async () => ({ pushed: true }));
+  const updateProfile = vi.fn(async () => ({ pushed: false }));
+  t = await bootTidepool({
+    agentAdmin: {
+      create: createAgent,
+      list: () => [],
+      update: updateAgent,
+      authorityProfiles: () => ["standard"],
+    },
+    profileAdmin: { create: createProfile, list: () => [], update: updateProfile },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  const agent = {
+    name: "navigator",
+    authority: "standard",
+    description: "plans navigational work",
+    skills: ["@workspace"],
+    system_prompt: "Follow the charts.",
+  };
+  const { system_prompt, ...agentFields } = agent;
+  const profile = {
+    name: "cautious",
+    guidance: "Ask before broad changes.",
+    assignable_to: ["navigator"],
+    allowed_workspaces: ["tidepool"],
+    merge: "escalate",
+  };
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "create_agent",
+        "list_agents",
+        "update_agent",
+        "create_profile",
+        "list_profiles",
+        "update_profile",
+      ]),
+    );
+
+    expect(readToolPayload(await client.callTool({ name: "create_agent", arguments: agent }))).toEqual({ pushed: true });
+    expect(createAgent).toHaveBeenCalledWith({ ...agentFields, systemPrompt: system_prompt });
+    expect(readToolPayload(await client.callTool({ name: "list_agents", arguments: {} }))).toEqual({
+      agents: [],
+      authority_profiles: ["standard"],
+    });
+    expect(readToolPayload(await client.callTool({ name: "update_agent", arguments: agent }))).toEqual({ pushed: false });
+    expect(updateAgent).toHaveBeenCalledWith({ ...agentFields, systemPrompt: system_prompt });
+
+    expect(readToolPayload(await client.callTool({ name: "create_profile", arguments: profile }))).toEqual({ pushed: true });
+    expect(createProfile).toHaveBeenCalledWith(profile);
+    expect(readToolPayload(await client.callTool({ name: "list_profiles", arguments: {} }))).toEqual({ profiles: [] });
+    expect(readToolPayload(await client.callTool({ name: "update_profile", arguments: profile }))).toEqual({ pushed: false });
+    expect(updateProfile).toHaveBeenCalledWith(profile);
+  } finally {
+    await client.close();
+  }
+});
+
+it("管理MCP は人間の明示確認なしに危険な profile を保存しない(issue #193)", async () => {
+  const create = vi.fn(async () => ({ pushed: true }));
+  t = await bootTidepool({ profileAdmin: { create } });
+  const client = await managementMcpClient(t.baseUrl);
+  const dangerous = {
+    name: "unrestricted",
+    guidance: "operate broadly",
+    assignable_to: ["*"],
+    allowed_workspaces: ["tidepool"],
+    merge: "escalate",
+  };
+  try {
+    const denied: any = await client.callTool({ name: "create_profile", arguments: dangerous });
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0].text).toContain("human confirmation is required");
+    expect(create).not.toHaveBeenCalled();
+
+    const confirmed: any = await client.callTool({
+      name: "create_profile",
+      arguments: { ...dangerous, confirm_dangerous: true },
+    });
+    expect(confirmed.isError ?? false).toBe(false);
+    expect(create).toHaveBeenCalledWith(dangerous);
+
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "create_profile")?.description).toContain("human's explicit confirmation");
+  } finally {
+    await client.close();
+  }
+});
+
+it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue #193)", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async (input) => {
+        if (input.name === "busy") throw new RegistryCloneBusyError("/registry", "the working tree is dirty");
+        if (input.name === "invalid") throw new InvalidWorkspaceNameError(input.name, "bad characters");
+        if (input.name === "overlap") throw new BoardStateOverlapError("workspace overlaps board state");
+        if (input.name === "missing-identity") throw new GitHubIdentityMissingError();
+        throw new Error("registry remote unavailable");
+      },
+      update: async () => {
+        throw new UnprotectNeedsConfirmationError("production");
+      },
+    },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const busy: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "busy", mode: "register", path: "/work/harbor" },
+    });
+    expect(busy.isError).toBe(true);
+    expect(busy.content[0].text).toContain("retry this request");
+
+    const invalid: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "invalid", mode: "register", path: "/work/invalid" },
+    });
+    expect(invalid.content[0].text).toContain('invalid workspace name "invalid"');
+
+    const overlap: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "overlap", mode: "register", path: "/work/overlap" },
+    });
+    expect(overlap.content[0].text).toContain("workspace overlaps board state");
+
+    const missingIdentity: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "missing-identity", mode: "register", path: "/work/missing-identity" },
+    });
+    expect(missingIdentity.content[0].text).toContain("registry configuration missing");
+
+    const upstream: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "upstream", mode: "register", path: "/work/upstream" },
+    });
+    expect(upstream.content[0].text).toContain("registry upstream error");
+
+    const protectedWorkspace: any = await client.callTool({
+      name: "update_workspace",
+      arguments: { name: "production", protected: false },
+    });
+    expect(protectedWorkspace.isError).toBe(true);
+    expect(protectedWorkspace.content[0].text).toContain("requires confirmation");
   } finally {
     await client.close();
   }

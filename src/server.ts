@@ -364,6 +364,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       containment,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
+      workspaceAdmin: options.workspaceAdmin,
+      agentAdmin: options.agentAdmin,
+      profileAdmin: options.profileAdmin,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

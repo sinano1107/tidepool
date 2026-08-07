@@ -1,6 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
+import { UnknownAgentError } from "./agent.js";
+import {
+  type AgentAdmin,
+  InvalidAgentIconError,
+  UnknownAuthorityProfileError,
+} from "./agent-create.js";
 import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCheck, openContainmentQuestion } from "./containment.js";
@@ -19,6 +25,14 @@ import {
 } from "./human-verbs.js";
 import { toolError, toolResult } from "./mcp.js";
 import { isPaused } from "./pause.js";
+import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
+import {
+  InvalidAgentNameError,
+  InvalidAuthorityProfileNameError,
+  InvalidSkillAllowlistError,
+  InvalidWorkspaceNameError,
+} from "./registry.js";
+import { RegistryCloneBusyError } from "./registry-write.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   cancelTaskDirectly,
@@ -34,7 +48,14 @@ import {
   listYourTasks,
 } from "./tasks.js";
 import { isFablePickupBlocked, isPickupBlocked } from "./throttle.js";
-import type { WorkspaceConfig } from "./workspace.js";
+import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
+import {
+  BoardStateOverlapError,
+  GitHubIdentityMissingError,
+  RegistrySelfUnprotectError,
+  UnprotectNeedsConfirmationError,
+  type WorkspaceAdmin,
+} from "./workspace-create.js";
 
 export interface ManagementMcpDeps {
   db: Db;
@@ -52,6 +73,75 @@ export interface ManagementMcpDeps {
   containment?: ContainmentCheck;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
+  workspaceAdmin?: Partial<WorkspaceAdmin>;
+  agentAdmin?: Partial<AgentAdmin>;
+  profileAdmin?: Partial<ProfileAdmin>;
+}
+
+const createWorkspaceSchema = z.discriminatedUnion("mode", [
+  z.object({
+    name: z.string().min(1),
+    notes: z.string().min(1).optional(),
+    protected: z.boolean().optional(),
+    mode: z.literal("register"),
+    path: z.string().min(1),
+  }),
+  z.object({
+    name: z.string().min(1),
+    notes: z.string().min(1).optional(),
+    protected: z.boolean().optional(),
+    mode: z.literal("clone"),
+    repo: z.string().min(1),
+  }),
+  z.object({
+    name: z.string().min(1),
+    notes: z.string().min(1).optional(),
+    protected: z.boolean().optional(),
+    mode: z.literal("create"),
+  }),
+]);
+
+const agentFieldsSchema = z.object({
+  authority: z.string().min(1),
+  description: z.string().min(1),
+  icon: z.string().optional(),
+  model: z.string().optional(),
+  effort: z.string().optional(),
+  advisor: z.string().optional(),
+  skills: z.array(z.string()),
+  system_prompt: z.string(),
+});
+
+const profileFieldsSchema = z.object({
+  guidance: z.string(),
+  assignable_to: z.array(z.string()),
+  allowed_workspaces: z.array(z.string()),
+  merge: z.enum(["escalate", "auto_if_ci_green"]).optional(),
+  confirm_dangerous: z.boolean().optional(),
+});
+
+/** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
+function registryToolError(err: unknown) {
+  if (err instanceof RegistryCloneBusyError) {
+    return toolError(`registry is busy; retry this request: ${err.message}`);
+  }
+  if (err instanceof GitHubIdentityMissingError) return toolError(`registry configuration missing: ${err.message}`);
+  if (
+    err instanceof InvalidWorkspaceNameError ||
+    err instanceof BoardStateOverlapError ||
+    err instanceof UnknownWorkspaceError ||
+    err instanceof UnprotectNeedsConfirmationError ||
+    err instanceof RegistrySelfUnprotectError ||
+    err instanceof InvalidAgentNameError ||
+    err instanceof UnknownAgentError ||
+    err instanceof UnknownAuthorityProfileError ||
+    err instanceof InvalidAgentIconError ||
+    err instanceof InvalidSkillAllowlistError ||
+    err instanceof InvalidAuthorityProfileNameError
+  ) {
+    return toolError(err.message);
+  }
+  return toolError(`registry upstream error: ${err instanceof Error ? err.message : String(err)}`);
 }
 
 export const MANAGEMENT_MCP_INSTRUCTIONS = `Tidepool is a personal task board that dispatches work to autonomous AI
@@ -115,6 +205,138 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   server.registerTool("read_decision_log", { description: "Read the decision log without marking it seen." }, async () =>
     toolResult({ entries: listLog(deps.db, deps.workspace?.name), cursor: getLogCursor(deps.db) }),
+  );
+  server.registerTool(
+    "create_workspace",
+    {
+      description: "Create a workspace in the human-managed registry.",
+      inputSchema: createWorkspaceSchema,
+    },
+    async (input) => {
+      if (!deps.workspaceAdmin?.create) return toolError("workspace administration is not configured");
+      try {
+        return toolResult(await deps.workspaceAdmin.create(input));
+      } catch (err) {
+        return registryToolError(err);
+      }
+    },
+  );
+  server.registerTool(
+    "list_workspaces",
+    { description: "List workspaces in the human-managed registry." },
+    async () => {
+      if (!deps.workspaceAdmin?.list) return toolError("workspace administration is not configured");
+      return toolResult({ workspaces: deps.workspaceAdmin.list() });
+    },
+  );
+  server.registerTool(
+    "update_workspace",
+    {
+      description: "Update a workspace in the human-managed registry.",
+      inputSchema: z.object({
+        name: z.string().min(1),
+        notes: z.string().optional(),
+        protected: z.boolean().optional(),
+        confirm: z.boolean().optional(),
+      }),
+    },
+    async (input) => {
+      if (!deps.workspaceAdmin?.update) return toolError("workspace administration is not configured");
+      try {
+        return toolResult(await deps.workspaceAdmin.update(input));
+      } catch (err) {
+        return registryToolError(err);
+      }
+    },
+  );
+  server.registerTool(
+    "create_agent",
+    {
+      description: "Create an agent in the human-managed registry.",
+      inputSchema: agentFieldsSchema.extend({ name: z.string().min(1) }),
+    },
+    async ({ system_prompt, ...input }) => {
+      if (!deps.agentAdmin?.create) return toolError("agent administration is not configured");
+      try {
+        return toolResult(await deps.agentAdmin.create({ ...input, systemPrompt: system_prompt }));
+      } catch (err) {
+        return registryToolError(err);
+      }
+    },
+  );
+  server.registerTool(
+    "list_agents",
+    { description: "List agents and available authority profiles in the human-managed registry." },
+    async () => {
+      if (!deps.agentAdmin?.list) return toolError("agent administration is not configured");
+      return toolResult({
+        agents: deps.agentAdmin.list(),
+        authority_profiles: deps.agentAdmin.authorityProfiles?.() ?? [],
+      });
+    },
+  );
+  server.registerTool(
+    "update_agent",
+    {
+      description: "Update an agent in the human-managed registry.",
+      inputSchema: agentFieldsSchema.extend({ name: z.string().min(1) }),
+    },
+    async ({ system_prompt, ...input }) => {
+      if (!deps.agentAdmin?.update) return toolError("agent administration is not configured");
+      try {
+        return toolResult(await deps.agentAdmin.update({ ...input, systemPrompt: system_prompt }));
+      } catch (err) {
+        return registryToolError(err);
+      }
+    },
+  );
+  server.registerTool(
+    "create_profile",
+    {
+      description:
+        "Create an authority profile in the human-managed registry. Set confirm_dangerous to true only after obtaining the human's explicit confirmation.",
+      inputSchema: profileFieldsSchema.extend({ name: z.string().min(1) }),
+    },
+    async ({ confirm_dangerous, ...input }) => {
+      if (!deps.profileAdmin?.create) return toolError("profile administration is not configured");
+      const dangerous = dangerousValues(input);
+      if (dangerous.length > 0 && !confirm_dangerous) {
+        return toolError(`profile contains dangerous values; human confirmation is required: ${dangerous.join(", ")}`);
+      }
+      try {
+        return toolResult(await deps.profileAdmin.create(input));
+      } catch (err) {
+        return registryToolError(err);
+      }
+    },
+  );
+  server.registerTool(
+    "list_profiles",
+    { description: "List authority profiles in the human-managed registry." },
+    async () => {
+      if (!deps.profileAdmin?.list) return toolError("profile administration is not configured");
+      return toolResult({ profiles: deps.profileAdmin.list() });
+    },
+  );
+  server.registerTool(
+    "update_profile",
+    {
+      description:
+        "Update an authority profile in the human-managed registry. Set confirm_dangerous to true only after obtaining the human's explicit confirmation.",
+      inputSchema: profileFieldsSchema.extend({ name: z.string().min(1) }),
+    },
+    async ({ confirm_dangerous, ...input }) => {
+      if (!deps.profileAdmin?.update) return toolError("profile administration is not configured");
+      const dangerous = dangerousValues(input);
+      if (dangerous.length > 0 && !confirm_dangerous) {
+        return toolError(`profile contains dangerous values; human confirmation is required: ${dangerous.join(", ")}`);
+      }
+      try {
+        return toolResult(await deps.profileAdmin.update(input));
+      } catch (err) {
+        return registryToolError(err);
+      }
+    },
   );
   server.registerTool(
     "cancel_task",
