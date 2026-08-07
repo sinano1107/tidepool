@@ -60,6 +60,7 @@
 <script type="text/babel" src="board-screen.jsx"></script>
 <script type="text/babel" src="queue-screen.jsx"></script>
 <script type="text/babel" src="register-screen.jsx"></script>
+<script type="text/babel" src="settings-screen.jsx"></script>
 <script type="text/babel" src="single-question-view.jsx"></script>
 <script type="text/babel">
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -88,6 +89,7 @@ const tabs = [
   { key: 'board', label: 'Board', icon: 'columns-3' },
   { key: 'queue', label: 'Queue', icon: 'list-ordered' },
   { key: 'register', label: 'Register', icon: 'plus' },
+  { key: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
@@ -320,6 +322,7 @@ function App() {
         {tab === 'board' && <BoardScreen data={data} onOpenTask={(t) => say('info', t.title, `${t.id} · open task view`)} />}
         {tab === 'queue' && <QueueScreen data={data} slotState={t.slotState} wsAlert={t.wsAlert} onFront={moveFront} onDoneHuman={doneHuman} onReorder={(q, movedId, pos) => { setData({ ...data, queue: q }); say('info', 'queue reordered', `${movedId} → position ${pos}`); }} />}
         {tab === 'register' && <RegisterScreen data={data} onRegister={register} />}
+        {tab === 'settings' && <SettingsScreen data={data} onAction={(msg, detail) => say('info', msg, detail)} />}
         </div>
       </main>
 

@@ -1,10 +1,30 @@
 // tidepool webui — shared fake data for the UI kit
 const tpData = {
   agents: [
-    { name: 'reef-crab', desc: 'implementation · sonnet + git-guardrails' },
-    { name: 'anemone', desc: 'review · read-only authority' },
-    { name: 'hermit', desc: 'docs + registry edits' },
+    { name: 'reef-crab', desc: 'implementation · sonnet + git-guardrails', icon: '🦀', authority: 'implementer', model: 'sonnet' },
+    { name: 'anemone', desc: 'review · read-only authority', icon: '🪸', authority: 'reviewer', model: 'sonnet' },
+    { name: 'hermit', desc: 'docs + registry edits', icon: '🐚', authority: 'docs-editor', model: 'sonnet' },
   ],
+  // settings screen fixtures (issue #57 phase 3 kit mirror) — workspaces /
+  // authorityProfiles below mirror the same registry the board-wide `settings`
+  // preferences live alongside; kept separate from `agents` above only because
+  // that array predates this section and other screens already read it.
+  workspaces: [
+    { name: 'tidepool', repo: 'github.com/masaki/tidepool', notes: "the board's own registry clone — protection stays on", protected: true, registrySelf: true },
+    { name: 'registry', repo: 'github.com/masaki/tidepool-registry', notes: '' },
+    { name: 'sandbox', path: '/home/masaki/sandbox', notes: 'scratch experiments, wiped weekly' },
+  ],
+  authorityProfiles: [
+    { name: 'implementer', guidance: 'full read/write in assigned workspaces; merge requires human confirmation', assignable_to: ['reef-crab'], allowed_workspaces: ['tidepool', 'registry'], merge: 'escalate' },
+    { name: 'reviewer', guidance: 'read-only — flags issues, never edits', assignable_to: ['anemone'], allowed_workspaces: ['*'], merge: '' },
+    { name: 'docs-editor', guidance: 'may edit docs and registry entries, no code paths', assignable_to: ['hermit'], allowed_workspaces: ['registry'], merge: '' },
+  ],
+  settings: {
+    displayLanguage: 'en',
+    displayLanguageOptions: ['en', 'ja'],
+    quietHours: { start: '23:00', end: '07:00', tz: 'Asia/Tokyo' },
+    paceOffsets: { session: 20, week: 10, fable: 10 },
+  },
   // each question task carries a shared `context` (its `purpose`) plus 1-4
   // `items`, each with its own title / optional detail / options (issue
   // #30) — a single-item bundle is the degenerate, most common case; tp-0148
