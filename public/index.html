@@ -724,61 +724,125 @@ function PortalDialog(props) {
   return ReactDOM.createPortal(<Dialog {...props} />, document.body);
 }
 
-// One workspace's row on the settings surface (issue #57 phase 3): notes and
-// protected are the only editable fields — path/repo/branch re-point the
-// entry at a different checkout, which stays a manual registry edit.
-function WorkspaceCard({ ws, say, onChanged }) {
-  const { Button, Card, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
+// The head of a record card (issue #204): identity on the left, Edit on the
+// right while viewing. At most one card on the settings surface is in edit mode
+// at a time, so the button asks the screen for that slot rather than flipping
+// local state.
+function RecordCardHead({ children, editing, onEdit }) {
+  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 26 }}>
+      {children}
+      {!editing && (
+        <div style={{ marginLeft: 'auto' }}>
+          <Button variant="ghost" size="sm" onClick={onEdit}>Edit</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Every edit and create form on the settings surface ends the same way (issue
+// #204 決定6): Save always present but inert until the draft is both changed
+// and sendable, Cancel always available so an opened card is never a trap.
+function EditActions({ dirty = true, ok = true, busy, saveLabel, onSave, onCancel }) {
+  const { Button } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <React.Fragment>
+      <Button variant="primary" size="lg" full disabled={busy || !dirty || !ok} onClick={onSave}>
+        {busy ? 'Working…' : saveLabel}
+      </Button>
+      <Button variant="ghost" size="lg" full disabled={busy} onClick={onCancel}>Cancel</Button>
+    </React.Fragment>
+  );
+}
+
+// Keeps the screen's single edit slot informed of this card's draft state, so
+// anything that would leave it — another card, a back, a tab switch — can ask
+// before discarding (issue #204 決定4).
+function useDirtySignal(edit, open, dirty) {
+  React.useEffect(() => { if (open) edit.setDirty(dirty); }, [open, dirty]);
+}
+
+// One workspace as a record card (issue #57 phase 3, restructured by #204):
+// read-only until Edit, then notes + protection as a single draft — the Switch
+// no longer PATCHes the moment it is touched. path/repo/branch re-point the
+// entry at a different checkout, which stays a manual registry edit, so they
+// are shown but never editable here.
+function WorkspaceRecord({ ws, say, onChanged, edit }) {
+  const { Button, Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const id = `workspace:${ws.name}`;
+  const open = edit.isOpen(id);
   const [notes, setNotes] = React.useState(ws.notes ?? '');
+  const [prot, setProt] = React.useState(!!ws.protected);
   const [busy, setBusy] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);
-  const patch = async (body, doneMsg) => {
+  const origin = ws.repo ?? ws.path;
+  const dirty = notes.trim() !== (ws.notes ?? '') || prot !== !!ws.protected;
+  useDirtySignal(edit, open, dirty);
+
+  const startEdit = () => { setNotes(ws.notes ?? ''); setProt(!!ws.protected); edit.open(id); };
+  const commit = async (confirmed) => {
     setBusy(true);
     try {
+      // notes and protection travel as one PATCH — updateWorkspace applies both
+      // and takes the confirmation alongside them, so a save is one commit
+      const body = { notes: notes.trim() };
+      if (prot !== !!ws.protected) {
+        body.protected = prot;
+        if (!prot) body.confirm = confirmed;
+      }
       const { pushed } = await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, 'PATCH');
-      sayCommitResult(say, pushed, doneMsg, ws.name);
+      sayCommitResult(say, pushed, 'workspace updated — committed to the registry', ws.name);
+      edit.close();
       await onChanged();
     } catch (err) {
       say('danger', 'workspace update failed', String(err.message || err));
     }
     setBusy(false);
   };
-  const notesDirty = notes.trim() !== (ws.notes ?? '');
+  // only the on→off direction asks — adding protection is the safe direction
+  const save = () => { if (!!ws.protected && !prot) { setConfirming(true); return; } commit(false); };
+
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={startEdit}>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{ws.name}</span>
         {ws.registrySelf && <Tag color="tide" mono>registry</Tag>}
         {ws.protected && <Tag color="sun">protected</Tag>}
-        <div style={{ marginLeft: 'auto' }}>
-          {/* the board's own registry clone never offers the off position —
-              the server refuses it too (ADR 0013), this just keeps the UI honest */}
-          <Switch label="protected" checked={!!ws.protected} disabled={busy || (ws.registrySelf && !!ws.protected)}
-            onChange={(next) => { if (next) patch({ protected: true }, 'protection added — no confirmation needed for the safe direction'); else setConfirming(true); }} />
-        </div>
-      </div>
-      {(ws.repo || ws.path) && (
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
-          {ws.repo ?? ws.path}{ws.branch ? ` · ${ws.branch}` : ''}
-        </div>
-      )}
+      </RecordCardHead>
       {ws.registrySelf && (
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
           the board's own registry clone — protection stays on
         </div>
       )}
-      <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
-        placeholder="setup hints for humans — e.g. run npm install before first use" />
-      {notesDirty && (
-        <Button variant="secondary" disabled={busy} onClick={() => patch({ notes: notes.trim() }, 'notes updated')}>
-          Save notes — commits to the registry
-        </Button>
+      {!open && (
+        <React.Fragment>
+          <FieldRow label={ws.repo ? 'repository' : 'path'} kind={origin ? 'mono' : 'unset'}
+            value={origin ? `${origin}${ws.branch ? ` · ${ws.branch}` : ''}` : ''}
+            unsetLabel="not recorded on the entry" />
+          <FieldRow label="notes" kind={ws.notes ? 'text' : 'unset'} value={ws.notes ?? ''} unsetLabel="—" />
+          <FieldRow label="protected" kind="bool" checked={!!ws.protected}
+            onLabel="changes here always need human approval" offLabel="not protected" />
+        </React.Fragment>
+      )}
+      {open && (
+        <React.Fragment>
+          <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
+            placeholder="setup hints for humans — e.g. run npm install before first use" />
+          {/* the board's own registry clone never offers the off position —
+              the server refuses it too (ADR 0013), this just keeps the UI honest */}
+          <Switch label="protected — changes here always need human approval" checked={prot}
+            disabled={busy || (ws.registrySelf && !!ws.protected)} onChange={(next) => setProt(next)} />
+          <EditActions dirty={dirty} busy={busy} saveLabel="Save — commits to the registry"
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
       )}
       <PortalDialog open={confirming} title="Remove protection?" onClose={() => setConfirming(false)}
         footer={
           <React.Fragment>
             <Button variant="secondary" onClick={() => setConfirming(false)}>Keep protection</Button>
-            <Button variant="danger" onClick={() => { setConfirming(false); patch({ protected: false, confirm: true }, 'protection removed'); }}>
+            <Button variant="danger" onClick={() => { setConfirming(false); commit(true); }}>
               Remove protection
             </Button>
           </React.Fragment>
@@ -828,13 +892,16 @@ function AgentIconPicker({ value, onChange }) {
   );
 }
 
-// One agent's row on the settings surface (issue #72), WorkspaceCard's twin:
-// every field the edit form resubmits (agent-create.ts's UpdateAgentInput)
-// prefilled from the GET /api/agents list, `name` shown via AgentChip only —
-// renaming isn't offered here at all (it's the file name, parent issue #54).
-function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, say, onChanged }) {
-  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+// One agent as a record card (issue #72, restructured by #204),
+// WorkspaceRecord's twin: read-only until Edit, and then every field the edit
+// form resubmits (agent-create.ts's UpdateAgentInput) prefilled from the GET
+// /api/agents list. `name` is shown via AgentChip only — renaming isn't offered
+// here at all (it's the file name, parent issue #54).
+function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+  const { Card, FieldRow, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
+  const id = `agent:${agent.name}`;
+  const open = edit.isOpen(id);
   const [icon, setIcon] = React.useState(agent.icon ?? '');
   const [description, setDescription] = React.useState(agent.description);
   const [systemPrompt, setSystemPrompt] = React.useState(agent.systemPrompt ?? '');
@@ -859,6 +926,15 @@ function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, s
     // the server's no-op detection) — a reorder is a real edit
     !sameStrings(skills, agent.skills ?? []);
   const ok = !!description.trim() && !!authority;
+  useDirtySignal(edit, open, dirty);
+
+  const startEdit = () => {
+    setIcon(agent.icon ?? ''); setDescription(agent.description);
+    setSystemPrompt(agent.systemPrompt ?? ''); setAuthority(agent.authority);
+    setModel(agent.model ?? ''); setEffort(agent.effort ?? ''); setAdvisor(agent.advisor ?? '');
+    setSkills(agent.skills ?? []);
+    edit.open(id);
+  };
 
   const save = async () => {
     setBusy(true);
@@ -874,6 +950,7 @@ function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, s
         systemPrompt,
       }, 'PATCH');
       sayCommitResult(say, pushed, 'agent updated — committed to the registry', agent.name);
+      edit.close();
       await onChanged();
     } catch (err) {
       say('danger', 'agent update failed', String(err.message || err));
@@ -882,23 +959,45 @@ function AgentCard({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, s
   };
 
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <AgentChip name={agent.name} icon={icon} />
-      <AgentIconPicker value={icon} onChange={setIcon} />
-      <Input label="Description" value={description} onChange={(e) => setDescription(e.target.value)} />
-      <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
-        multiline rows={4} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Select label="Authority" options={authorityProfiles} value={authority} onChange={(e) => setAuthority(e.target.value)} />
-        <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
-      </div>
-      <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
-      <Input label="Advisor model" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder="no advisor if empty" />
-      <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={skills} onChange={setSkills} />
-      {dirty && (
-        <Button variant="secondary" disabled={busy || !ok} onClick={save}>
-          Save changes — commits to the registry
-        </Button>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={startEdit}>
+        {/* while editing, the chip previews the draft icon — picking one
+            confirms itself immediately, as it did on the flat surface */}
+        <AgentChip name={agent.name} icon={open ? icon : (agent.icon ?? '')} />
+      </RecordCardHead>
+      {!open && (
+        <React.Fragment>
+          <FieldRow label="description" kind={agent.description ? 'text' : 'unset'} value={agent.description ?? ''} unsetLabel="—" />
+          <FieldRow label="specialty" kind={agent.systemPrompt ? 'text' : 'unset'} value={agent.systemPrompt ?? ''}
+            unsetLabel="no specialty — worker protocol only" />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FieldRow label="authority" kind={agent.authority ? 'mono' : 'unset'} value={agent.authority ?? ''} unsetLabel="—" />
+            <FieldRow label="model" kind={agent.model ? 'mono' : 'unset'} value={agent.model ?? ''} unsetLabel="adapter default" />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FieldRow label="effort" kind={agent.effort ? 'mono' : 'unset'} value={agent.effort ?? ''} unsetLabel="adapter default" />
+            <FieldRow label="advisor model" kind={agent.advisor ? 'mono' : 'unset'} value={agent.advisor ?? ''} unsetLabel="no advisor" />
+          </div>
+          <FieldRow label="skills" kind={(agent.skills ?? []).length ? 'tags' : 'unset'} tags={agent.skills ?? []}
+            scheme="skills" wildcardHint="every skill" unsetLabel="no skills allowed" />
+        </React.Fragment>
+      )}
+      {open && (
+        <React.Fragment>
+          <AgentIconPicker value={icon} onChange={setIcon} />
+          <Input label="Description" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
+            multiline rows={4} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Select label="Authority" options={authorityProfiles} value={authority} onChange={(e) => setAuthority(e.target.value)} />
+            <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
+          </div>
+          <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
+          <Input label="Advisor model" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder="no advisor if empty" />
+          <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={skills} onChange={setSkills} />
+          <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save changes — commits to the registry"
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
       )}
     </Card>
   );
@@ -1156,24 +1255,35 @@ function useProfileSave(say, onDone) {
   return { busy, save, dialog };
 }
 
-// One authority profile's row on the settings surface (issue #78), AgentCard's
-// twin: the four editable fields prefilled from GET /api/profiles, `name` shown
-// read-only — it is the file name (authority/<name>.yaml), not renameable here,
-// same as agents. No delete: an agent referencing this profile would break at
-// spawn (parent issue #55).
-function ProfileCard({ profile, agentNames, workspaceNames, say, onChanged }) {
-  const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
+// One authority profile as a record card (issue #78, restructured by #204),
+// AgentRecord's twin: read-only until Edit, then the four editable fields
+// prefilled from GET /api/profiles. `name` is the file name
+// (authority/<name>.yaml), not renameable here, same as agents. No delete: an
+// agent referencing this profile would break at spawn (parent issue #55).
+function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  const id = `profile:${profile.name}`;
+  const open = edit.isOpen(id);
   const [guidance, setGuidance] = React.useState(profile.guidance ?? '');
   const [assignableTo, setAssignableTo] = React.useState(profile.assignable_to ?? []);
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState(profile.allowed_workspaces ?? []);
   const [merge, setMerge] = React.useState(profile.merge ?? '');
-  const { busy, save, dialog } = useProfileSave(say, onChanged);
+  const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onChanged(); });
 
   const dirty =
     guidance !== (profile.guidance ?? '') ||
     !sameStrings(assignableTo, profile.assignable_to ?? []) ||
     !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []) ||
     (merge || '') !== (profile.merge ?? '');
+  useDirtySignal(edit, open, dirty);
+
+  const startEdit = () => {
+    setGuidance(profile.guidance ?? '');
+    setAssignableTo(profile.assignable_to ?? []);
+    setAllowedWorkspaces(profile.allowed_workspaces ?? []);
+    setMerge(profile.merge ?? '');
+    edit.open(id);
+  };
 
   const submit = () => save(
     `/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH',
@@ -1181,71 +1291,441 @@ function ProfileCard({ profile, agentNames, workspaceNames, say, onChanged }) {
   );
 
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{profile.name}</span>
-      <ProfileFields
-        agentNames={agentNames} workspaceNames={workspaceNames}
-        guidance={guidance} setGuidance={setGuidance}
-        assignableTo={assignableTo} setAssignableTo={setAssignableTo}
-        allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
-        merge={merge} setMerge={setMerge} />
-      {dirty && (
-        <Button variant="secondary" disabled={busy} onClick={submit}>
-          Save changes — commits to the registry
-        </Button>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={startEdit}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{profile.name}</span>
+      </RecordCardHead>
+      {!open && (
+        <React.Fragment>
+          <FieldRow label="guidance" kind={profile.guidance ? 'text' : 'unset'} value={profile.guidance ?? ''} unsetLabel="—" />
+          <FieldRow label="assignable to" kind={(profile.assignable_to ?? []).length ? 'tags' : 'unset'}
+            tags={profile.assignable_to ?? []} agentIcons={agentIcons} wildcardHint="any agent"
+            unsetLabel="nobody — this authority can't be delegated" />
+          <FieldRow label="allowed workspaces" kind={(profile.allowed_workspaces ?? []).length ? 'tags' : 'unset'}
+            tags={profile.allowed_workspaces ?? []} wildcardHint="every workspace"
+            unsetLabel="no workspace — this authority can't act anywhere" />
+          <FieldRow label="merge authority" kind={profile.merge ? 'mono' : 'unset'} value={profile.merge ?? ''}
+            unsetLabel="no automatic merge decision" />
+        </React.Fragment>
+      )}
+      {open && (
+        <React.Fragment>
+          <ProfileFields
+            agentNames={agentNames} workspaceNames={workspaceNames}
+            guidance={guidance} setGuidance={setGuidance}
+            assignableTo={assignableTo} setAssignableTo={setAssignableTo}
+            allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
+            merge={merge} setMerge={setMerge} />
+          <EditActions dirty={dirty} busy={busy} saveLabel="Save changes — commits to the registry"
+            onSave={submit} onCancel={() => edit.close()} />
+        </React.Fragment>
       )}
       {dialog}
     </Card>
   );
 }
 
-// Settings — the board's admin surface (issue #57 phase 3). One tab, one
-// section per resource: display language (#46), quiet hours (#64),
-// workspaces, agents (#72) and authority profiles (#55).
-function SettingsScreen({ say }) {
-  const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
+// The footnote under a settings screen — where its edits actually land.
+const settingsFootnote = { margin: 0, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' };
 
-  // Display language (issue #46): the one board setting both the draft
-  // prompt's language instruction and a later display-time-translation
-  // feature read — a plain board-wide setting, not gated on the registry
-  // like workspaces/agents/profiles below.
-  const [displayLanguage, setDisplayLanguageField] = React.useState('');
+// The mono-caps label a settings card wears in place of a heading.
+const settingsCardLabel = {
+  fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)',
+  textTransform: 'uppercase', letterSpacing: '0.08em',
+};
+
+// Display language (issue #46) as a record card: the one board setting both the
+// draft prompt's language instruction and a later display-time-translation
+// feature read — a plain board-wide setting, not gated on the registry like the
+// workspaces/agents/profiles sections.
+function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
+  const { Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const id = 'board:language';
+  const open = edit.isOpen(id);
+  const [draft, setDraft] = React.useState(language);
+  const [busy, setBusy] = React.useState(false);
+  const dirty = draft !== language;
+  useDirtySignal(edit, open, dirty);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      // the select can only hold a canonical value, so POST sends it verbatim —
+      // no trimming/normalization here (that lives at the write boundary)
+      const { language: saved } = await api('/api/settings/display-language', { language: draft });
+      say('success', 'display language saved', saved);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'display language save failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={() => { setDraft(language); edit.open(id); }}>
+        <span style={settingsCardLabel}>display language</span>
+      </RecordCardHead>
+      {!open && <FieldRow label="language" kind={language ? 'mono' : 'unset'} value={language} unsetLabel="unset" />}
+      {open && (
+        <React.Fragment>
+          {/* options come straight from GET (display-language.ts's canonical
+              list) — the UI never hardcodes the language list, so a board that
+              adds a language needs no WebUI change (issue #115) */}
+          <Select label="Language" options={options} value={draft} onChange={(e) => setDraft(e.target.value)} />
+          <EditActions dirty={dirty} ok={!!draft} busy={busy} saveLabel="Save display language"
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
+      )}
+    </Card>
+  );
+}
+
+// Quiet hours (issue #64) as a record card: start/end only — tz is shown but is
+// only ever changed via POST /api/settings/timezone (ADR 0022), which this card
+// never calls.
+function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
+  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+  const id = 'board:quiet-hours';
+  const open = edit.isOpen(id);
+  const [draftStart, setDraftStart] = React.useState(start);
+  const [draftEnd, setDraftEnd] = React.useState(end);
+  const [busy, setBusy] = React.useState(false);
+  const dirty = draftStart !== start || draftEnd !== end;
+  const ok = !!draftStart.trim() && !!draftEnd.trim();
+  useDirtySignal(edit, open, dirty);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const saved = await api('/api/settings/quiet-hours', { start: draftStart, end: draftEnd });
+      say('success', 'quiet hours saved', `${saved.start}–${saved.end}`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'quiet hours save failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={() => { setDraftStart(start); setDraftEnd(end); edit.open(id); }}>
+        <span style={settingsCardLabel}>quiet hours</span>
+      </RecordCardHead>
+      {!open && (
+        <React.Fragment>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FieldRow label="start" kind="mono" value={start} />
+            <FieldRow label="end" kind="mono" value={end} />
+          </div>
+          <FieldRow label="timezone" kind={tz ? 'mono' : 'unset'} value={tz} unsetLabel="unset" />
+        </React.Fragment>
+      )}
+      {open && (
+        <React.Fragment>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Input label="Start" mono value={draftStart} onChange={(e) => setDraftStart(e.target.value)} placeholder="HH:MM" />
+            <Input label="End" mono value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} placeholder="HH:MM" />
+          </div>
+          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            start after end wraps past midnight (e.g. 23:00–07:00) — that's valid, not an error.
+            timezone: {tz || 'unset'} — change it from the timezone setting, not here.
+          </p>
+          <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save quiet hours"
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
+      )}
+    </Card>
+  );
+}
+
+// Pace offsets (issue #126 / ADR 0030) as a record card: the human's reserved
+// share (pt) per usage window — the board runs this far behind the elapsed-time
+// pace.
+function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
+  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+  const id = 'board:pace-offsets';
+  const open = edit.isOpen(id);
+  const [draft, setDraft] = React.useState(offsets);
+  const [busy, setBusy] = React.useState(false);
+  const keys = ['session', 'week', 'fable'];
+  const dirty = keys.some((k) => String(draft[k]) !== String(offsets[k]));
+  // the API rejects non-integers / out-of-range at the entry (ADR 0030) — the
+  // form mirrors that check so the button only enables on a sendable value
+  const validOffset = (v) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
+  const ok = keys.every((k) => validOffset(draft[k]));
+  useDirtySignal(edit, open, dirty);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const saved = await api('/api/settings/pace-offsets', {
+        session: Number(draft.session), week: Number(draft.week), fable: Number(draft.fable),
+      });
+      say('success', 'pace offsets saved', `session ${saved.session}pt · week ${saved.week}pt · fable ${saved.fable}pt`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'pace offsets save failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={() => { setDraft(offsets); edit.open(id); }}>
+        <span style={settingsCardLabel}>pace offsets</span>
+      </RecordCardHead>
+      {!open && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          {keys.map((k) => (
+            <FieldRow key={k} label={k} kind="mono" value={`${offsets[k]} pt`} />
+          ))}
+        </div>
+      )}
+      {open && (
+        <React.Fragment>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <Input label="Session" mono value={String(draft.session)} onChange={(e) => setDraft({ ...draft, session: e.target.value })} placeholder="20" />
+            <Input label="Week" mono value={String(draft.week)} onChange={(e) => setDraft({ ...draft, week: e.target.value })} placeholder="10" />
+            <Input label="Fable" mono value={String(draft.fable)} onChange={(e) => setDraft({ ...draft, fable: e.target.value })} placeholder="10" />
+          </div>
+          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            your reserved share of each usage window, in points (0–100). the board stays this far
+            behind the elapsed-time pace, leaving that slice of the budget for your own sessions.
+          </p>
+          <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save pace offsets"
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
+      )}
+    </Card>
+  );
+}
+
+// The workspace create form (issue #57 phase 3), behind Add on the Workspaces
+// screen (#204 決定7) — it takes the same single edit slot a record card does,
+// and saves and cancels by the same rules.
+function NewWorkspaceForm({ say, onCreated, edit }) {
+  const { Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [mode, setMode] = React.useState('clone');
+  const [name, setName] = React.useState('');
+  const [repo, setRepo] = React.useState('');
+  const [path, setPath] = React.useState('');
+  const [notes, setNotes] = React.useState('');
+  const [prot, setProt] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  // mirror of the server's name gate, for the disabled state only — the
+  // server's assertValidWorkspaceName stays the authority
+  const nameOk = /^[A-Za-z0-9._-]+$/.test(name.trim()) && !['.', '..'].includes(name.trim());
+  const ok = nameOk && (mode === 'clone' ? !!repo.trim() : mode === 'register' ? !!path.trim() : true);
+  const dirty = mode !== 'clone' || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
+  useDirtySignal(edit, true, dirty);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const { pushed } = await api('/api/workspaces', {
+        mode, name: name.trim(),
+        ...(mode === 'clone' ? { repo: repo.trim() } : {}),
+        ...(mode === 'register' ? { path: path.trim() } : {}),
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
+        ...(prot ? { protected: true } : {}),
+      });
+      sayCommitResult(say, pushed, 'workspace added — committed to the registry', name.trim());
+      edit.close();
+      await onCreated();
+    } catch (err) {
+      // creation is idempotent server-side — a failed attempt leaves only
+      // orphans the registry never saw, so "just press it again" is honest
+      say('danger', 'workspace creation failed — safe to retry as-is', String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const modeOptions = [
+    { value: 'clone', label: 'clone a repository' },
+    { value: 'create', label: 'create a new private repository' },
+    { value: 'register', label: 'register an existing path' },
+  ];
+  const modeHint = {
+    clone: 'clones into the workspaces directory — the entry stays host-independent',
+    create: 'creates a private GitHub repo named after the workspace, then clones it',
+    register: 'points at a checkout already on this host — the one mode that records a path',
+  }[mode];
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <span style={settingsCardLabel}>add a workspace</span>
+      <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode(e.target.value)} />
+      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{modeHint}</p>
+      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+        placeholder="letters, digits, - _ . — safe as a directory and a repo name" />
+      {mode === 'clone' && (
+        <Input label="Repository" value={repo} onChange={(e) => setRepo(e.target.value)}
+          placeholder="anything git clone accepts — recorded on the entry" />
+      )}
+      {mode === 'register' && (
+        <Input label="Path" value={path} onChange={(e) => setPath(e.target.value)}
+          placeholder="an existing checkout on this host" />
+      )}
+      <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
+        placeholder="setup hints for humans — optional" />
+      <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
+      <EditActions ok={ok} busy={busy} saveLabel="Add workspace — commits to the registry"
+        onSave={submit} onCancel={() => edit.close()} />
+    </Card>
+  );
+}
+
+// The agent create form (issue #72), NewWorkspaceForm's twin.
+function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+  const { Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [name, setName] = React.useState('');
+  const [icon, setIcon] = React.useState('');
+  const [description, setDescription] = React.useState('');
+  const [systemPrompt, setSystemPrompt] = React.useState('');
+  const [authority, setAuthority] = React.useState('');
+  const [model, setModel] = React.useState('');
+  const [effort, setEffort] = React.useState('');
+  const [advisor, setAdvisor] = React.useState('');
+  // ADR 0025 決定7 / issue #106: the default agent (tako) is ["@workspace"], so
+  // a new agent starts there too — a visible field, not a hidden default: the
+  // author sees it and edits it before creating.
+  const [skills, setSkills] = React.useState(['@workspace']);
+  const [busy, setBusy] = React.useState(false);
+  // same charset gate as the workspace name field — the server's
+  // assertValidAgentName stays the authority, this only drives the button
+  const nameOk = /^[A-Za-z0-9._-]+$/.test(name.trim()) && !['.', '..'].includes(name.trim());
+  const ok = nameOk && !!description.trim() && !!authority;
+  const dirty = !!name.trim() || !!icon || !!description.trim() || !!systemPrompt.trim()
+    || !!authority || !!model.trim() || !!effort.trim() || !!advisor.trim()
+    || !sameStrings(skills, ['@workspace']);
+  useDirtySignal(edit, true, dirty);
+  const authorityCreateOptions = [
+    { value: '', label: 'select authority…' },
+    ...authorityProfiles.map((n) => ({ value: n, label: n })),
+  ];
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const { pushed } = await api('/api/agents', {
+        name: name.trim(),
+        authority,
+        description: description.trim(),
+        icon: icon.trim() || undefined,
+        model: model.trim() || undefined,
+        effort: effort.trim() || undefined,
+        advisor: advisor.trim() || undefined,
+        skills,
+        systemPrompt,
+      });
+      sayCommitResult(say, pushed, 'agent added — committed to the registry', name.trim());
+      edit.close();
+      await onCreated();
+    } catch (err) {
+      // creation is idempotent server-side, same posture as workspace creation
+      say('danger', 'agent creation failed — safe to retry as-is', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <span style={settingsCardLabel}>add an agent</span>
+      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+        placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
+      <AgentIconPicker value={icon} onChange={setIcon} />
+      <Input label="Description" value={description} onChange={(e) => setDescription(e.target.value)}
+        placeholder="when a delegating agent should pick this one" />
+      <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
+        multiline rows={4} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Select label="Authority" options={authorityCreateOptions} value={authority} onChange={(e) => setAuthority(e.target.value)} />
+        <Input label="Model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="adapter default if empty" />
+      </div>
+      <Input label="Effort" value={effort} onChange={(e) => setEffort(e.target.value)} placeholder="adapter default if empty" />
+      <Input label="Advisor model" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder="no advisor if empty" />
+      <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={skills} onChange={setSkills} />
+      <EditActions ok={ok} busy={busy} saveLabel="Add agent — commits to the registry"
+        onSave={submit} onCancel={() => edit.close()} />
+    </Card>
+  );
+}
+
+// The authority profile create form (issue #55 phase 3) — the 409
+// confirm_required round trip rides on useProfileSave, same as the edit card.
+function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
+  const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [name, setName] = React.useState('');
+  const [guidance, setGuidance] = React.useState('');
+  const [assignableTo, setAssignableTo] = React.useState([]);
+  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState([]);
+  const [merge, setMerge] = React.useState('');
+  const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onCreated(); });
+  // mirror of the server's REGISTRY_NAME_PATTERN gate, drives the button only —
+  // assertValidAuthorityProfileName stays the authority (same as agents above)
+  const nameOk = /^[A-Za-z0-9._-]+$/.test(name.trim()) && !['.', '..'].includes(name.trim());
+  const dirty = !!name.trim() || !!guidance.trim() || assignableTo.length > 0
+    || allowedWorkspaces.length > 0 || !!merge;
+  useDirtySignal(edit, true, dirty);
+
+  const submit = () => save(
+    '/api/profiles', 'POST',
+    { name: name.trim(), ...profileBody(guidance, assignableTo, allowedWorkspaces, merge) },
+    'created', name.trim(),
+  );
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <span style={settingsCardLabel}>add an authority profile</span>
+      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+        placeholder="letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later" />
+      <ProfileFields
+        agentNames={agentNames} workspaceNames={workspaceNames}
+        guidance={guidance} setGuidance={setGuidance}
+        assignableTo={assignableTo} setAssignableTo={setAssignableTo}
+        allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
+        merge={merge} setMerge={setMerge} />
+      <EditActions ok={nameOk} busy={busy} saveLabel="Add authority profile — commits to the registry"
+        onSave={submit} onCancel={() => edit.close()} />
+      {dialog}
+    </Card>
+  );
+}
+
+// Settings — the board's admin surface (issue #57 phase 3), restructured by
+// #204 into a drilldown: an index of four sections, then a section, then one
+// record that opens read-only. Board (display language #46, quiet hours #64,
+// pace offsets #126) is the SQLite-backed half; workspaces, agents (#72) and
+// authority profiles (#55) are the registry-backed half.
+function SettingsScreen({ say, registerLeaveGuard }) {
+  const { Button, Card, NavRow, ScreenHeader } = window.TidepoolDesignSystem_8a0ead;
+
+  // The three board-wide preferences (display language #46, quiet hours #64,
+  // pace offsets #126 / ADR 0030) are loaded here and saved by their own cards
+  // on the Board screen — this level only holds the values the index summarises.
+  const [displayLanguage, setDisplayLanguage] = React.useState('');
   // options come straight from GET (display-language.ts's canonical list) —
   // the UI never hardcodes the language list, so a board that adds a language
   // needs no WebUI change (issue #115).
   const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState([]);
   const [displayLanguageLoaded, setDisplayLanguageLoaded] = React.useState(false);
-  const [displayLanguageBusy, setDisplayLanguageBusy] = React.useState(false);
   const loadDisplayLanguage = async () => {
     const { language, options } = await api('/api/settings/display-language', undefined, 'GET');
-    setDisplayLanguageField(language);
+    setDisplayLanguage(language);
     setDisplayLanguageOptions(options);
     setDisplayLanguageLoaded(true);
   };
   React.useEffect(() => { loadDisplayLanguage(); }, []);
-  const saveDisplayLanguage = async () => {
-    setDisplayLanguageBusy(true);
-    try {
-      // the select can only hold a canonical value, so POST sends it verbatim —
-      // no trimming/normalization here (that lives at the write boundary).
-      // POST returns { language } only; options stay as the initial GET's.
-      const { language } = await api('/api/settings/display-language', { language: displayLanguage });
-      setDisplayLanguageField(language);
-      say('success', 'display language saved', language);
-    } catch (err) {
-      say('danger', 'display language save failed', String(err.message || err));
-    }
-    setDisplayLanguageBusy(false);
-  };
 
-  // Quiet hours (issue #64): start/end only — tz is shown read-only here but
-  // is only ever changed via POST /api/settings/timezone (ADR 0022), which
-  // this section never calls.
+  // quiet hours: start/end are editable; tz is shown but only ever changed via
+  // POST /api/settings/timezone (ADR 0022), which this screen never calls.
   const [quietHoursStart, setQuietHoursStart] = React.useState('');
   const [quietHoursEnd, setQuietHoursEnd] = React.useState('');
   const [quietHoursTz, setQuietHoursTz] = React.useState('');
   const [quietHoursLoaded, setQuietHoursLoaded] = React.useState(false);
-  const [quietHoursBusy, setQuietHoursBusy] = React.useState(false);
   const loadQuietHours = async () => {
     const { start, end, tz } = await api('/api/settings/quiet-hours', undefined, 'GET');
     setQuietHoursStart(start);
@@ -1254,46 +1734,13 @@ function SettingsScreen({ say }) {
     setQuietHoursLoaded(true);
   };
   React.useEffect(() => { loadQuietHours(); }, []);
-  const saveQuietHours = async () => {
-    setQuietHoursBusy(true);
-    try {
-      const { start, end, tz } = await api('/api/settings/quiet-hours', { start: quietHoursStart, end: quietHoursEnd });
-      setQuietHoursStart(start);
-      setQuietHoursEnd(end);
-      setQuietHoursTz(tz);
-      say('success', 'quiet hours saved', `${start}–${end}`);
-    } catch (err) {
-      say('danger', 'quiet hours save failed', String(err.message || err));
-    }
-    setQuietHoursBusy(false);
-  };
 
-  // Pace offsets (issue #126 / ADR 0030): the human's reserved share (pt)
-  // per usage window — the board runs this far behind the elapsed-time pace.
   const [paceOffsets, setPaceOffsets] = React.useState(null); // null → still loading
-  const [paceOffsetsBusy, setPaceOffsetsBusy] = React.useState(false);
   const loadPaceOffsets = async () => {
     setPaceOffsets(await api('/api/settings/pace-offsets', undefined, 'GET'));
   };
   React.useEffect(() => { loadPaceOffsets(); }, []);
-  const setPaceOffsetField = (key) => (e) => setPaceOffsets((o) => ({ ...o, [key]: e.target.value }));
-  // the API rejects non-integers / out-of-range at the entry (ADR 0030) — the
-  // form mirrors that check so the button only enables on a sendable value
-  const validOffset = (v) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
-  const paceOffsetsValid = paceOffsets && ['session', 'week', 'fable'].every((k) => validOffset(paceOffsets[k]));
-  const savePaceOffsets = async () => {
-    setPaceOffsetsBusy(true);
-    try {
-      const saved = await api('/api/settings/pace-offsets', {
-        session: Number(paceOffsets.session), week: Number(paceOffsets.week), fable: Number(paceOffsets.fable),
-      });
-      setPaceOffsets(saved);
-      say('success', 'pace offsets saved', `session ${saved.session}pt · week ${saved.week}pt · fable ${saved.fable}pt`);
-    } catch (err) {
-      say('danger', 'pace offsets save failed', String(err.message || err));
-    }
-    setPaceOffsetsBusy(false);
-  };
+
 
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
   const [unavailable, setUnavailable] = React.useState(false); // 503 — no registry configured
@@ -1365,277 +1812,263 @@ function SettingsScreen({ say }) {
   const agentNames = (agents ?? []).map((a) => a.name);
   const workspaceNames = (workspaces ?? []).map((w) => w.name);
 
-  const [newAgentName, setNewAgentName] = React.useState('');
-  const [newAgentIcon, setNewAgentIcon] = React.useState('');
-  const [newAgentDescription, setNewAgentDescription] = React.useState('');
-  const [newAgentPrompt, setNewAgentPrompt] = React.useState('');
-  const [newAgentAuthority, setNewAgentAuthority] = React.useState('');
-  const [newAgentModel, setNewAgentModel] = React.useState('');
-  const [newAgentEffort, setNewAgentEffort] = React.useState('');
-  const [newAgentAdvisor, setNewAgentAdvisor] = React.useState('');
-  // ADR 0025 決定7 / issue #106: the default agent (tako) is ["@workspace"], so
-  // a new agent starts there too — a visible field, not a hidden default: the
-  // author sees it and edits it before creating.
-  const [newAgentSkills, setNewAgentSkills] = React.useState(['@workspace']);
-  const [agentBusy, setAgentBusy] = React.useState(false);
-  // same charset gate as the workspace name field above — the server's
-  // assertValidAgentName stays the authority, this only drives the button
-  const newAgentNameOk = /^[A-Za-z0-9._-]+$/.test(newAgentName.trim()) && !['.', '..'].includes(newAgentName.trim());
-  const newAgentOk = newAgentNameOk && !!newAgentDescription.trim() && !!newAgentAuthority;
-  const authorityCreateOptions = [
-    { value: '', label: 'select authority…' },
-    ...authorityProfiles.map((n) => ({ value: n, label: n })),
-  ];
-  const submitAgent = async () => {
-    setAgentBusy(true);
-    try {
-      const { pushed } = await api('/api/agents', {
-        name: newAgentName.trim(),
-        authority: newAgentAuthority,
-        description: newAgentDescription.trim(),
-        icon: newAgentIcon.trim() || undefined,
-        model: newAgentModel.trim() || undefined,
-        effort: newAgentEffort.trim() || undefined,
-        advisor: newAgentAdvisor.trim() || undefined,
-        skills: newAgentSkills,
-        systemPrompt: newAgentPrompt,
-      });
-      sayCommitResult(say, pushed, 'agent added — committed to the registry', newAgentName.trim());
-      setNewAgentName(''); setNewAgentIcon(''); setNewAgentDescription('');
-      setNewAgentPrompt(''); setNewAgentAuthority(''); setNewAgentModel(''); setNewAgentEffort(''); setNewAgentAdvisor('');
-      setNewAgentSkills(['@workspace']);
-      await loadAgents();
-    } catch (err) {
-      // creation is idempotent server-side, same posture as workspace creation
-      say('danger', 'agent creation failed — safe to retry as-is', String(err.message || err));
-    }
-    setAgentBusy(false);
-  };
+  // name → icon, for rendering an assignable_to entry as the agent's own chip
+  const agentIcons = {};
+  (agents ?? []).forEach((a) => { if (a.icon) agentIcons[a.name] = a.icon; });
 
-  const [newProfileName, setNewProfileName] = React.useState('');
-  const [newGuidance, setNewGuidance] = React.useState('');
-  const [newAssignableTo, setNewAssignableTo] = React.useState([]);
-  const [newAllowedWorkspaces, setNewAllowedWorkspaces] = React.useState([]);
-  const [newMerge, setNewMerge] = React.useState('');
-  const { busy: profileCreateBusy, save: saveProfileCreate, dialog: profileCreateDialog } =
-    useProfileSave(say, async () => {
-      setNewProfileName(''); setNewGuidance(''); setNewAssignableTo([]);
-      setNewAllowedWorkspaces([]); setNewMerge('');
-      await refreshAfterProfile();
-    });
-  // mirror of the server's REGISTRY_NAME_PATTERN gate, drives the button only —
-  // assertValidAuthorityProfileName stays the authority (same as agents above)
-  const newProfileNameOk =
-    /^[A-Za-z0-9._-]+$/.test(newProfileName.trim()) && !['.', '..'].includes(newProfileName.trim());
-  const submitProfile = () => saveProfileCreate(
-    '/api/profiles', 'POST',
-    { name: newProfileName.trim(), ...profileBody(newGuidance, newAssignableTo, newAllowedWorkspaces, newMerge) },
-    'created', newProfileName.trim(),
-  );
+  // --- drilldown navigation (issue #204) ----------------------------------
+  // stack: [] the index · ['board'] · ['<section>'] · ['<section>', '<name>'].
+  // A record is addressed by name, not by list position: the lists reload on
+  // every commit, and an index would silently re-point at a different entry.
+  const [stack, setStack] = React.useState([]);
+  // at most one card — record or create form — is in edit mode across the whole
+  // surface (決定4): `editing` holds its id, `dirty` whether it has unsaved work
+  const [editing, setEditing] = React.useState(null);
+  const [dirty, setDirty] = React.useState(false);
+  const [pending, setPending] = React.useState(null); // a move parked behind the discard dialog
+  // read inside `guard`, which the tab guard below keeps across renders
+  const unsaved = React.useRef(false);
+  unsaved.current = editing !== null && dirty;
 
-  const [mode, setMode] = React.useState('clone');
-  const [name, setName] = React.useState('');
-  const [repo, setRepo] = React.useState('');
-  const [path, setPath] = React.useState('');
-  const [notes, setNotes] = React.useState('');
-  const [prot, setProt] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-  // mirror of the server's name gate, for the disabled state only — the
-  // server's assertValidWorkspaceName stays the authority
-  const nameOk = /^[A-Za-z0-9._-]+$/.test(name.trim()) && !['.', '..'].includes(name.trim());
-  const ok = nameOk && (mode === 'clone' ? !!repo.trim() : mode === 'register' ? !!path.trim() : true);
-  const submit = async () => {
-    setBusy(true);
-    try {
-      const { pushed } = await api('/api/workspaces', {
-        mode, name: name.trim(),
-        ...(mode === 'clone' ? { repo: repo.trim() } : {}),
-        ...(mode === 'register' ? { path: path.trim() } : {}),
-        ...(notes.trim() ? { notes: notes.trim() } : {}),
-        ...(prot ? { protected: true } : {}),
-      });
-      sayCommitResult(say, pushed, 'workspace added — committed to the registry', name.trim());
-      setName(''); setRepo(''); setPath(''); setNotes(''); setProt(false);
-      await load();
-    } catch (err) {
-      // creation is idempotent server-side — a failed attempt leaves only
-      // orphans the registry never saw, so "just press it again" is honest
-      say('danger', 'workspace creation failed — safe to retry as-is', String(err.message || err));
-    }
-    setBusy(false);
+  // Runs `move` now, or parks it behind the discard dialog when the open card
+  // has unsaved changes. Returns true when it parked it — the tab guard reads
+  // that to hold the tab switch until the human answers.
+  const guard = (move) => {
+    if (unsaved.current) { setPending({ move }); return true; }
+    move();
+    return false;
   };
-  const modeOptions = [
-    { value: 'clone', label: 'clone a repository' },
-    { value: 'create', label: 'create a new private repository' },
-    { value: 'register', label: 'register an existing path' },
-  ];
-  const modeHint = {
-    clone: 'clones into the workspaces directory — the entry stays host-independent',
-    create: 'creates a private GitHub repo named after the workspace, then clones it',
-    register: 'points at a checkout already on this host — the one mode that records a path',
-  }[mode];
+  const closeEdit = () => { setEditing(null); setDirty(false); };
+  // the one edit slot, handed to every card that can enter edit mode
+  const edit = {
+    isOpen: (id) => editing === id,
+    open: (id) => guard(() => { setEditing(id); setDirty(false); }),
+    close: closeEdit,
+    setDirty,
+  };
+  const go = (next) => guard(() => { setStack(next); closeEdit(); });
+
+  // a tab switch unmounts this screen, so it has to ask too (決定4)
+  React.useEffect(() => {
+    registerLeaveGuard((move) => guard(move));
+    return () => registerLeaveGuard(null);
+  }, []);
+
+  // The three registry-backed sections, in one shape so the list level and the
+  // record level read the same regardless of which one you drilled into.
+  const SECTIONS = {
+    workspaces: {
+      title: 'Workspaces', singular: 'workspace', note: 'where tasks run',
+      items: workspaces, unavailable, reload: load,
+      addLabel: 'add a workspace', footnote: 'edits commit to the registry',
+      rowSummary: (w) => w.repo || w.path || '—',
+    },
+    agents: {
+      title: 'Agents', singular: 'agent', note: 'who does the work',
+      items: agents, unavailable: agentsUnavailable, reload: loadAgents,
+      addLabel: 'add an agent', footnote: 'edits commit to agents/<name>.md in the registry',
+      rowSummary: (a) => a.authority, asAgent: true,
+    },
+    profiles: {
+      title: 'Authority Profiles', singular: 'authority profile',
+      note: 'what the work is allowed to do',
+      items: profiles, unavailable: profilesUnavailable, reload: refreshAfterProfile,
+      addLabel: 'add an authority profile',
+      footnote: 'edits commit to authority/<name>.yaml in the registry',
+      rowSummary: (p) => (p.assignable_to ?? []).join(', ') || '—',
+    },
+  };
+  // a section's own summary line, on the index and again as the header's meta
+  const sectionSummary = (sec) =>
+    sec.unavailable ? 'no registry configured'
+      : sec.items === null ? 'loading…'
+        : `${sec.items.length} registered`;
+
+  const sectionKey = stack[0];
+  const recordName = stack[1];
+  const sec = SECTIONS[sectionKey];
+  const addId = `new:${sectionKey}`;
+  const adding = editing === addId;
+
+  let body;
+
+  if (stack.length === 0) {
+    // --- level 1: the index. Each row states its section's current state, so
+    // the whole surface reads without opening anything.
+    const rows = [
+      {
+        key: 'board', label: 'Board',
+        summary: displayLanguageLoaded && quietHoursLoaded
+          ? `${displayLanguage} · ${quietHoursStart}–${quietHoursEnd}`
+          : 'loading…',
+      },
+      {
+        key: 'workspaces', label: 'Workspaces',
+        summary: unavailable ? 'no registry configured'
+          : workspaces === null ? 'loading…'
+            : `${workspaces.length} · ${workspaces.filter((w) => w.protected).length} protected`,
+        alert: unavailable,
+      },
+      {
+        key: 'agents', label: 'Agents',
+        summary: agentsUnavailable ? 'no registry configured'
+          : agents === null ? 'loading…' : `${agents.length} agents`,
+        alert: agentsUnavailable,
+      },
+      {
+        key: 'profiles', label: 'Authority Profiles',
+        summary: profilesUnavailable ? 'no registry configured'
+          : profiles === null ? 'loading…' : `${profiles.length} profiles`,
+        alert: profilesUnavailable,
+      },
+    ];
+    body = (
+      <React.Fragment>
+        {/* the top of the stack keeps the screen-title shape every other tab
+            uses; the levels below it wear ScreenHeader, whose h1 is the same
+            size and inherits the same base.css heading treatment */}
+        <div>
+          <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Settings</h1>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
+            what the pool may do while you sleep
+          </p>
+        </div>
+        <Card padding="0" style={{ overflow: 'hidden' }}>
+          {rows.map((r, i) => (
+            <NavRow key={r.key} label={r.label} summary={r.summary}
+              summaryTone={r.alert ? 'alert' : 'muted'}
+              divider={i > 0} first={i === 0} last={i === rows.length - 1}
+              onClick={() => go([r.key])} />
+          ))}
+        </Card>
+      </React.Fragment>
+    );
+  } else if (sectionKey === 'board') {
+    // --- level 2 (board): the SQLite-backed preferences, one card each
+    body = (
+      <React.Fragment>
+        <ScreenHeader title="Board" backLabel="Settings" meta="board-wide preferences" onBack={() => go([])} />
+        {displayLanguageLoaded && (
+          <DisplayLanguageCard language={displayLanguage} options={displayLanguageOptions}
+            say={say} onSaved={loadDisplayLanguage} edit={edit} />
+        )}
+        {quietHoursLoaded && (
+          <QuietHoursCard start={quietHoursStart} end={quietHoursEnd} tz={quietHoursTz}
+            say={say} onSaved={loadQuietHours} edit={edit} />
+        )}
+        {paceOffsets && (
+          <PaceOffsetsCard offsets={paceOffsets} say={say} onSaved={loadPaceOffsets} edit={edit} />
+        )}
+        {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets) && (
+          <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
+        )}
+        <p style={settingsFootnote}>applies to every task the pool picks up</p>
+      </React.Fragment>
+    );
+  } else if (!sec) {
+    body = <ScreenHeader title="Settings" backLabel="Settings" onBack={() => go([])} />;
+  } else if (recordName === undefined) {
+    // --- level 2 (a registry section): the names, with the create form behind Add
+    body = (
+      <React.Fragment>
+        <ScreenHeader title={sec.title} backLabel="Settings" meta={sectionSummary(sec)} onBack={() => go([])}>
+          {!sec.unavailable && sec.items && (
+            <Button variant="ghost" size="sm" onClick={() => (adding ? edit.close() : edit.open(addId))}>
+              {adding ? 'Close' : 'Add'}
+            </Button>
+          )}
+        </ScreenHeader>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>{sec.note}</p>
+        {sec.unavailable && (
+          <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+            no registry configured on this board — {sec.title.toLowerCase()} need one
+          </Card>
+        )}
+        {adding && sectionKey === 'workspaces' && (
+          <NewWorkspaceForm say={say} onCreated={sec.reload} edit={edit} />
+        )}
+        {adding && sectionKey === 'agents' && (
+          <NewAgentForm authorityProfiles={authorityProfiles} hostSkills={hostSkills}
+            hostSkillsDegraded={hostSkillsDegraded} say={say} onCreated={sec.reload} edit={edit} />
+        )}
+        {adding && sectionKey === 'profiles' && (
+          <NewProfileForm agentNames={agentNames} workspaceNames={workspaceNames}
+            say={say} onCreated={sec.reload} edit={edit} />
+        )}
+        {!sec.unavailable && sec.items === null && (
+          <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
+        )}
+        {!sec.unavailable && sec.items && sec.items.length === 0 && (
+          <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+            none registered yet — Add is above
+          </Card>
+        )}
+        {!sec.unavailable && sec.items && sec.items.length > 0 && (
+          <Card padding="0" style={{ overflow: 'hidden' }}>
+            {sec.items.map((it, i) => (
+              <NavRow key={it.name}
+                label={sec.asAgent ? undefined : it.name}
+                agentName={sec.asAgent ? it.name : undefined}
+                agentIcon={sec.asAgent ? (it.icon ?? '') : undefined}
+                summary={sec.rowSummary(it)}
+                divider={i > 0} first={i === 0} last={i === sec.items.length - 1}
+                onClick={() => go([sectionKey, it.name])} />
+            ))}
+          </Card>
+        )}
+        <p style={settingsFootnote}>{sec.footnote}</p>
+      </React.Fragment>
+    );
+  } else {
+    // --- level 3: one record, read-only until Edit
+    const items = sec.items ?? [];
+    const idx = items.findIndex((x) => x.name === recordName);
+    const rec = idx === -1 ? null : items[idx];
+    body = (
+      <React.Fragment>
+        <ScreenHeader title={recordName} backLabel={sec.title}
+          meta={rec ? `${sec.singular} · ${idx + 1} of ${items.length}` : sec.singular}
+          onBack={() => go([sectionKey])} />
+        {!rec && sec.items === null && (
+          <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
+        )}
+        {!rec && sec.items !== null && (
+          <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+            no longer in the registry — it may have been removed outside the board
+          </Card>
+        )}
+        {rec && sectionKey === 'workspaces' && (
+          <WorkspaceRecord ws={rec} say={say} onChanged={sec.reload} edit={edit} />
+        )}
+        {rec && sectionKey === 'agents' && (
+          <AgentRecord agent={rec} authorityProfiles={authorityProfiles} hostSkills={hostSkills}
+            hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={sec.reload} edit={edit} />
+        )}
+        {rec && sectionKey === 'profiles' && (
+          <ProfileRecord profile={rec} agentNames={agentNames} agentIcons={agentIcons}
+            workspaceNames={workspaceNames} say={say} onChanged={sec.reload} edit={edit} />
+        )}
+        <p style={settingsFootnote}>{sec.footnote}</p>
+      </React.Fragment>
+    );
+  }
+
   return (
     <div style={{ padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div>
-        <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Settings</h1>
-        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
-          workspaces — where tasks run
+      {body}
+      <PortalDialog open={!!pending} title="Discard unsaved changes?" onClose={() => setPending(null)}
+        footer={
+          <React.Fragment>
+            <Button variant="secondary" onClick={() => setPending(null)}>Keep editing</Button>
+            <Button variant="danger" onClick={() => { const p = pending; setPending(null); closeEdit(); p.move(); }}>
+              Discard
+            </Button>
+          </React.Fragment>
+        }>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
+          The card you're editing has changes that were never saved. Leaving now drops them.
         </p>
-      </div>
-      {displayLanguageLoaded && (
-        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            display language
-          </span>
-          <Select label="Language" options={displayLanguageOptions} value={displayLanguage} onChange={(e) => setDisplayLanguageField(e.target.value)} />
-          <Button variant="primary" size="lg" full disabled={!displayLanguage || displayLanguageBusy} onClick={saveDisplayLanguage}>
-            {displayLanguageBusy ? 'Working…' : 'Save display language'}
-          </Button>
-        </Card>
-      )}
-      {quietHoursLoaded && (
-        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            quiet hours
-          </span>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input label="Start" mono value={quietHoursStart} onChange={(e) => setQuietHoursStart(e.target.value)} placeholder="HH:MM" />
-            <Input label="End" mono value={quietHoursEnd} onChange={(e) => setQuietHoursEnd(e.target.value)} placeholder="HH:MM" />
-          </div>
-          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            start after end wraps past midnight (e.g. 23:00–07:00) — that's valid, not an error.
-            timezone: {quietHoursTz || 'unset'} — change it from the timezone setting, not here.
-          </p>
-          <Button variant="primary" size="lg" full disabled={!quietHoursStart.trim() || !quietHoursEnd.trim() || quietHoursBusy} onClick={saveQuietHours}>
-            {quietHoursBusy ? 'Working…' : 'Save quiet hours'}
-          </Button>
-        </Card>
-      )}
-      {paceOffsets && (
-        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            pace offsets
-          </span>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Input label="Session" mono value={String(paceOffsets.session)} onChange={setPaceOffsetField('session')} placeholder="20" />
-            <Input label="Week" mono value={String(paceOffsets.week)} onChange={setPaceOffsetField('week')} placeholder="10" />
-            <Input label="Fable" mono value={String(paceOffsets.fable)} onChange={setPaceOffsetField('fable')} placeholder="10" />
-          </div>
-          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            your reserved share of each usage window, in points (0–100). the board stays this far
-            behind the elapsed-time pace, leaving that slice of the budget for your own sessions.
-          </p>
-          <Button variant="primary" size="lg" full disabled={!paceOffsetsValid || paceOffsetsBusy} onClick={savePaceOffsets}>
-            {paceOffsetsBusy ? 'Working…' : 'Save pace offsets'}
-          </Button>
-        </Card>
-      )}
-      {unavailable && (
-        <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-          no registry configured on this board — workspace settings need one
-        </Card>
-      )}
-      {(workspaces ?? []).map((ws) => (
-        <WorkspaceCard key={ws.name} ws={ws} say={say} onChanged={load} />
-      ))}
-      {!unavailable && workspaces && (
-        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            add a workspace
-          </span>
-          <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode(e.target.value)} />
-          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{modeHint}</p>
-          <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
-            placeholder="letters, digits, - _ . — safe as a directory and a repo name" />
-          {mode === 'clone' && (
-            <Input label="Repository" value={repo} onChange={(e) => setRepo(e.target.value)}
-              placeholder="anything git clone accepts — recorded on the entry" />
-          )}
-          {mode === 'register' && (
-            <Input label="Path" value={path} onChange={(e) => setPath(e.target.value)}
-              placeholder="an existing checkout on this host" />
-          )}
-          <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
-            placeholder="setup hints for humans — optional" />
-          <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
-          <Button variant="primary" size="lg" full disabled={!ok || busy} onClick={submit}>
-            {busy ? 'Working…' : 'Add workspace — commits to the registry'}
-          </Button>
-        </Card>
-      )}
-      <div style={{ marginTop: 8 }}>
-        <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Agents</h2>
-        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
-          who does the work
-        </p>
-      </div>
-      {agentsUnavailable && (
-        <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-          no registry configured on this board — agent settings need one
-        </Card>
-      )}
-      {(agents ?? []).map((agent) => (
-        <AgentCard key={agent.name} agent={agent} authorityProfiles={authorityProfiles}
-          hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} />
-      ))}
-      {!agentsUnavailable && agents && (
-        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            add an agent
-          </span>
-          <Input label="Name" value={newAgentName} onChange={(e) => setNewAgentName(e.target.value)}
-            placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
-          <AgentIconPicker value={newAgentIcon} onChange={setNewAgentIcon} />
-          <Input label="Description" value={newAgentDescription} onChange={(e) => setNewAgentDescription(e.target.value)}
-            placeholder="when a delegating agent should pick this one" />
-          <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
-            multiline rows={4} value={newAgentPrompt} onChange={(e) => setNewAgentPrompt(e.target.value)} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Select label="Authority" options={authorityCreateOptions} value={newAgentAuthority} onChange={(e) => setNewAgentAuthority(e.target.value)} />
-            <Input label="Model" value={newAgentModel} onChange={(e) => setNewAgentModel(e.target.value)} placeholder="adapter default if empty" />
-          </div>
-          <Input label="Effort" value={newAgentEffort} onChange={(e) => setNewAgentEffort(e.target.value)} placeholder="adapter default if empty" />
-          <Input label="Advisor model" value={newAgentAdvisor} onChange={(e) => setNewAgentAdvisor(e.target.value)} placeholder="no advisor if empty" />
-          <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={newAgentSkills} onChange={setNewAgentSkills} />
-          <Button variant="primary" size="lg" full disabled={!newAgentOk || agentBusy} onClick={submitAgent}>
-            {agentBusy ? 'Working…' : 'Add agent — commits to the registry'}
-          </Button>
-        </Card>
-      )}
-      <div style={{ marginTop: 8 }}>
-        <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Authority Profiles</h2>
-        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: 0 }}>
-          what the work is allowed to do
-        </p>
-      </div>
-      {profilesUnavailable && (
-        <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-          no registry configured on this board — authority profiles need one
-        </Card>
-      )}
-      {(profiles ?? []).map((p) => (
-        <ProfileCard key={p.name} profile={p} agentNames={agentNames} workspaceNames={workspaceNames}
-          say={say} onChanged={refreshAfterProfile} />
-      ))}
-      {!profilesUnavailable && profiles && (
-        <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            add an authority profile
-          </span>
-          <Input label="Name" value={newProfileName} onChange={(e) => setNewProfileName(e.target.value)}
-            placeholder="letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later" />
-          <ProfileFields
-            agentNames={agentNames} workspaceNames={workspaceNames}
-            guidance={newGuidance} setGuidance={setNewGuidance}
-            assignableTo={newAssignableTo} setAssignableTo={setNewAssignableTo}
-            allowedWorkspaces={newAllowedWorkspaces} setAllowedWorkspaces={setNewAllowedWorkspaces}
-            merge={newMerge} setMerge={setNewMerge} />
-          <Button variant="primary" size="lg" full disabled={!newProfileNameOk || profileCreateBusy} onClick={submitProfile}>
-            {profileCreateBusy ? 'Working…' : 'Add authority profile — commits to the registry'}
-          </Button>
-        </Card>
-      )}
-      {profileCreateDialog}
+      </PortalDialog>
     </div>
   );
 }
@@ -1961,12 +2394,20 @@ function App() {
   const refreshFull = () => fetchData().then(setData).catch(() => {});
 
   // every tab entry takes a fresh snapshot; screens remount per tab (key)
-  const setTab = (next) => {
+  const applyTab = (next) => {
     setTabRaw((prev) => {
       if (next !== prev) setTabDir(tabOrder.indexOf(next) > tabOrder.indexOf(prev) ? 'right' : 'left');
       return next;
     });
     refreshFull();
+  };
+  // a tab switch unmounts the screen it leaves, so a screen holding an open
+  // editor with unsaved changes gets to ask first (issue #204 決定4). The guard
+  // returns true when it parked the switch behind its own dialog.
+  const leaveGuard = React.useRef(null);
+  const setTab = (next) => {
+    if (leaveGuard.current && leaveGuard.current(() => applyTab(next))) return;
+    applyTab(next);
   };
 
   React.useEffect(() => {
@@ -2340,7 +2781,7 @@ function App() {
         {tab === 'board' && <BoardScreen data={data} onOpenTask={openTask} />}
         {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
-        {tab === 'settings' && <SettingsScreen say={say} />}
+        {tab === 'settings' && <SettingsScreen say={say} registerLeaveGuard={(fn) => { leaveGuard.current = fn; }} />}
         </div>
       </main>
 
