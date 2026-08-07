@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"design-system/components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"design-system/components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"design-system/components/board/AgentChip.jsx"},{"name":"IdChip","sourcePath":"design-system/components/board/IdChip.jsx"},{"name":"LogEntry","sourcePath":"design-system/components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"design-system/components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"design-system/components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"design-system/components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"design-system/components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"design-system/components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"design-system/components/forms/Checkbox.jsx"},{"name":"Input","sourcePath":"design-system/components/forms/Input.jsx"},{"name":"Select","sourcePath":"design-system/components/forms/Select.jsx"},{"name":"Switch","sourcePath":"design-system/components/forms/Switch.jsx"},{"name":"Card","sourcePath":"design-system/components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"design-system/components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"design-system/components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"design-system/components/surfaces/Toast.jsx"}]} */
+/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"design-system/components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"design-system/components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"design-system/components/board/AgentChip.jsx"},{"name":"IdChip","sourcePath":"design-system/components/board/IdChip.jsx"},{"name":"LogEntry","sourcePath":"design-system/components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"design-system/components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"design-system/components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"design-system/components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"design-system/components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"design-system/components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"design-system/components/forms/Checkbox.jsx"},{"name":"FieldRow","sourcePath":"design-system/components/forms/FieldRow.jsx"},{"name":"Input","sourcePath":"design-system/components/forms/Input.jsx"},{"name":"Select","sourcePath":"design-system/components/forms/Select.jsx"},{"name":"Switch","sourcePath":"design-system/components/forms/Switch.jsx"},{"name":"NavRow","sourcePath":"design-system/components/navigation/NavRow.jsx"},{"name":"ScreenHeader","sourcePath":"design-system/components/navigation/ScreenHeader.jsx"},{"name":"Card","sourcePath":"design-system/components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"design-system/components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"design-system/components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"design-system/components/surfaces/Toast.jsx"}]} */
 
 (() => {
 
@@ -393,6 +393,73 @@ function Checkbox({ label, checked = false, onChange, disabled = false, style })
 Object.assign(__ds_scope, { Checkbox });
 })(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/Checkbox.jsx", error: String((e && e.message) || e) }); }
 
+// design-system/components/forms/FieldRow.jsx
+try { (() => {
+const rowLabel = {
+  display: "block",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--text-2xs)",
+  fontWeight: "var(--weight-medium)",
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  color: "var(--text-muted)",
+  lineHeight: "19.5px",
+  marginBottom: 6
+};
+function tagColor(value, scheme) {
+  if (value === "*") return "sun";
+  if (scheme === "skills" && value.charAt(0) === "@") return "grass";
+  return "tide";
+}
+function FieldRow({
+  label,
+  kind = "text",
+  value,
+  tags = [],
+  agentIcons = {},
+  scheme = "plain",
+  wildcardHint = "any",
+  checked = false,
+  onLabel = "yes",
+  offLabel = "no",
+  unsetLabel = "\u2014",
+  style
+}) {
+  const band = { padding: "9px 0", fontSize: "var(--text-md)", lineHeight: "var(--leading-normal)" };
+  let body = null;
+  if (kind === "text") {
+    body = /* @__PURE__ */ React.createElement("div", { style: { ...band, color: "var(--text-body)", wordBreak: "break-word", whiteSpace: "pre-wrap" } }, value);
+  } else if (kind === "mono") {
+    body = /* @__PURE__ */ React.createElement("div", { style: { padding: "9px 0", fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)", lineHeight: 1.62, color: "var(--text-body)", overflowWrap: "anywhere" } }, value);
+  } else if (kind === "tags") {
+    const plain = tags.filter((t) => t !== "*");
+    const wild = tags.includes("*");
+    body = /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "8px 0", minHeight: 26 } }, plain.map((t) => /* @__PURE__ */ React.createElement("span", { key: t, style: { display: "inline-flex" } }, agentIcons[t] ? /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: t, icon: agentIcons[t] }) : /* @__PURE__ */ React.createElement(__ds_scope.Tag, { color: tagColor(t, scheme), mono: true }, t))), wild && /* @__PURE__ */ React.createElement(__ds_scope.Tag, { color: "sun", mono: true }, `* \u2014 ${wildcardHint}`));
+  } else if (kind === "bool") {
+    body = /* @__PURE__ */ React.createElement("div", { style: { ...band, display: "flex", alignItems: "center", gap: "var(--space-2)", color: checked ? "var(--text-body)" : "var(--text-muted)" } }, /* @__PURE__ */ React.createElement(
+      "svg",
+      {
+        width: "17",
+        height: "17",
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: checked ? "var(--tide-4)" : "var(--rock-4)",
+        strokeWidth: "2",
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        "aria-hidden": "true",
+        style: { flexShrink: 0 }
+      },
+      checked ? /* @__PURE__ */ React.createElement("path", { d: "M20 6 9 17l-5-5" }) : /* @__PURE__ */ React.createElement("path", { d: "M18 6 6 18M6 6l12 12" })
+    ), /* @__PURE__ */ React.createElement("span", null, checked ? onLabel : offLabel));
+  } else {
+    body = /* @__PURE__ */ React.createElement("div", { style: { ...band, color: "var(--text-muted)" } }, unsetLabel);
+  }
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "block", width: "100%", boxSizing: "border-box", ...style } }, /* @__PURE__ */ React.createElement("span", { style: rowLabel }, label), body);
+}
+Object.assign(__ds_scope, { FieldRow });
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/FieldRow.jsx", error: String((e && e.message) || e) }); }
+
 // design-system/components/forms/Input.jsx
 try { (() => {
 const fieldLabel = {
@@ -511,6 +578,171 @@ function Switch({ label, checked = false, onChange, disabled = false, style }) {
 }
 Object.assign(__ds_scope, { Switch });
 })(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/Switch.jsx", error: String((e && e.message) || e) }); }
+
+// design-system/components/navigation/NavRow.jsx
+try { (() => {
+function NavRow({
+  label,
+  summary,
+  summaryTone = "muted",
+  agentName,
+  agentIcon,
+  divider = false,
+  first = false,
+  last = false,
+  onClick,
+  style
+}) {
+  const [hover, setHover] = React.useState(false);
+  const [press, setPress] = React.useState(false);
+  const [focus, setFocus] = React.useState(false);
+  const go = () => onClick && onClick();
+  const corner = (on) => on ? "var(--radius-lg)" : "0";
+  return /* @__PURE__ */ React.createElement(React.Fragment, null, divider && /* @__PURE__ */ React.createElement("div", { style: { height: 1, background: "var(--border-hairline)", marginLeft: "var(--space-4)" } }), /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      role: "button",
+      tabIndex: 0,
+      onClick: go,
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          go();
+        }
+      },
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => {
+        setHover(false);
+        setPress(false);
+      },
+      onMouseDown: () => setPress(true),
+      onMouseUp: () => setPress(false),
+      onFocus: () => setFocus(true),
+      onBlur: () => setFocus(false),
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--space-3)",
+        width: "100%",
+        boxSizing: "border-box",
+        minHeight: 52,
+        padding: "var(--space-3) var(--space-4)",
+        background: press ? "var(--tide-1)" : hover ? "var(--surface-hover)" : "var(--surface-card)",
+        borderRadius: `${corner(first)} ${corner(first)} ${corner(last)} ${corner(last)}`,
+        boxShadow: focus ? "inset 0 0 0 2px var(--tide-4)" : "none",
+        cursor: "pointer",
+        outline: "none",
+        WebkitTapHighlightColor: "transparent",
+        transition: "background var(--duration-quick) var(--ease-tidal)",
+        ...style
+      }
+    },
+    agentName ? /* @__PURE__ */ React.createElement("span", { style: { flex: "0 0 auto", minWidth: 0 } }, /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agentName, icon: agentIcon })) : /* @__PURE__ */ React.createElement("span", { style: {
+      flex: "0 1 auto",
+      minWidth: "5.5em",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      fontSize: "var(--text-md)",
+      fontWeight: "var(--weight-medium)",
+      color: "var(--text-heading)",
+      letterSpacing: "var(--tracking-tight)"
+    } }, label),
+    /* @__PURE__ */ React.createElement("span", { title: summary || void 0, style: {
+      flex: "1 1 auto",
+      minWidth: 0,
+      textAlign: "right",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      direction: "rtl",
+      fontFamily: "var(--font-mono)",
+      fontSize: "var(--text-sm)",
+      color: summaryTone === "alert" ? "var(--sun-4)" : "var(--text-muted)"
+    } }, /* @__PURE__ */ React.createElement("span", { style: { direction: "ltr", unicodeBidi: "embed" } }, summary)),
+    /* @__PURE__ */ React.createElement(
+      "svg",
+      {
+        width: "18",
+        height: "18",
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "var(--rock-4)",
+        strokeWidth: "1.5",
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        "aria-hidden": "true",
+        style: { flexShrink: 0, marginRight: -2 }
+      },
+      /* @__PURE__ */ React.createElement("path", { d: "m9 18 6-6-6-6" })
+    )
+  ));
+}
+Object.assign(__ds_scope, { NavRow });
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/navigation/NavRow.jsx", error: String((e && e.message) || e) }); }
+
+// design-system/components/navigation/ScreenHeader.jsx
+try { (() => {
+function ScreenHeader({ title, backLabel = "Settings", meta, onBack, children, style }) {
+  const [hover, setHover] = React.useState(false);
+  const [press, setPress] = React.useState(false);
+  const [focus, setFocus] = React.useState(false);
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "var(--space-1)", width: "100%", boxSizing: "border-box", ...style } }, /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      onClick: () => onBack && onBack(),
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => {
+        setHover(false);
+        setPress(false);
+      },
+      onMouseDown: () => setPress(true),
+      onMouseUp: () => setPress(false),
+      onFocus: () => setFocus(true),
+      onBlur: () => setFocus(false),
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 2,
+        alignSelf: "flex-start",
+        minHeight: 44,
+        marginLeft: -10,
+        padding: "0 10px",
+        border: "none",
+        borderRadius: "var(--radius-full)",
+        background: press ? "var(--tide-1)" : hover ? "var(--surface-hover)" : "transparent",
+        fontFamily: "var(--font-ui)",
+        fontSize: "var(--text-sm)",
+        fontWeight: "var(--weight-medium)",
+        color: hover || press ? "var(--tide-5)" : "var(--tide-4)",
+        boxShadow: focus ? "var(--shadow-focus)" : "none",
+        cursor: "pointer",
+        outline: "none",
+        WebkitTapHighlightColor: "transparent",
+        transition: "background var(--duration-quick) var(--ease-tidal), color var(--duration-quick) var(--ease-tidal)"
+      }
+    },
+    /* @__PURE__ */ React.createElement(
+      "svg",
+      {
+        width: "18",
+        height: "18",
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: "1.5",
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        "aria-hidden": "true"
+      },
+      /* @__PURE__ */ React.createElement("path", { d: "m15 18-6-6 6-6" })
+    ),
+    /* @__PURE__ */ React.createElement("span", null, backLabel)
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "flex-end", gap: "var(--space-3)" } }, /* @__PURE__ */ React.createElement("h1", { style: { margin: 0, fontSize: "var(--text-xl)", overflowWrap: "anywhere" } }, title), children && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "var(--space-2)", flexShrink: 0 } }, children)), meta && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, meta));
+}
+Object.assign(__ds_scope, { ScreenHeader });
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/navigation/ScreenHeader.jsx", error: String((e && e.message) || e) }); }
 
 // design-system/components/surfaces/Card.jsx
 try { (() => {
@@ -660,11 +892,17 @@ __ds_ns.TypeBadge = __ds_scope.TypeBadge;
 
 __ds_ns.Checkbox = __ds_scope.Checkbox;
 
+__ds_ns.FieldRow = __ds_scope.FieldRow;
+
 __ds_ns.Input = __ds_scope.Input;
 
 __ds_ns.Select = __ds_scope.Select;
 
 __ds_ns.Switch = __ds_scope.Switch;
+
+__ds_ns.NavRow = __ds_scope.NavRow;
+
+__ds_ns.ScreenHeader = __ds_scope.ScreenHeader;
 
 __ds_ns.Card = __ds_scope.Card;
 
