@@ -120,7 +120,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "cancel_task",
     {
       description: "Cancel a human-registered task and its unsettled descendants.",
-      inputSchema: { task_id: z.string(), reason: z.string().min(1).optional() },
+      inputSchema: { task_id: z.string(), reason: z.string().optional() },
     },
     async ({ task_id, reason }) => {
       const task = getTask(deps.db, task_id);
@@ -148,9 +148,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description: "Edit the unconsumed fields of a human-registered task.",
       inputSchema: {
         task_id: z.string(),
-        title: z.string().min(1).optional(),
-        purpose: z.string().min(1).optional(),
-        completion_criteria: z.string().min(1).optional(),
+        title: z.string().optional(),
+        purpose: z.string().optional(),
+        completion_criteria: z.string().optional(),
         assignee: z.string().optional(),
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
@@ -178,12 +178,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description: "Split a human task into child tasks in one recorded decision.",
       inputSchema: {
         task_id: z.string(),
-        reason: z.string().min(1),
+        reason: z.string(),
         children: z.array(
           z.object({
-            title: z.string().min(1),
-            purpose: z.string().min(1),
-            completion_criteria: z.string().min(1),
+            title: z.string(),
+            purpose: z.string(),
+            completion_criteria: z.string(),
             risk_flag: z.boolean().optional(),
             assignee: z.string().optional(),
             workspace: z.string().optional(),
@@ -249,9 +249,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description: "Add a human-approved comment to a GitHub issue.",
       inputSchema: {
-        workspace: z.string().min(1),
-        github_issue_number: z.number().int().positive(),
-        body: z.string().min(1),
+        workspace: z.string(),
+        github_issue_number: z.number(),
+        body: z.string(),
       },
     },
     async (input) => {
@@ -271,11 +271,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description: "Register a human work or review task, optionally backed by a GitHub issue.",
       inputSchema: {
-        type: z.enum(["work", "review"]),
-        title: z.string().min(1).optional(),
-        purpose: z.string().min(1).optional(),
-        completion_criteria: z.string().min(1).optional(),
-        github_issue_number: z.number().int().positive().optional(),
+        type: z.string(),
+        title: z.string().optional(),
+        purpose: z.string().optional(),
+        completion_criteria: z.string().optional(),
+        github_issue_number: z.number().optional(),
         parent_id: z.string().optional(),
         assignee: z.string().optional(),
         workspace: z.string().optional(),
@@ -295,7 +295,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           agentRegistered: deps.agentRegistered,
           isProtectedWorkspace: deps.isProtectedWorkspace,
         },
-        input,
+        input as import("./human-verbs.js").HumanRegisterInput,
         () => deps.clock.now(),
         "mcp",
       );
@@ -309,7 +309,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: {
         task_id: z.string(),
         answers: z.array(z.string()),
-        comment: z.string().min(1).optional(),
+        comment: z.string().optional(),
       },
     },
     async ({ task_id, answers, comment }) => {

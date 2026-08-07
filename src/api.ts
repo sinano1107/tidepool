@@ -611,6 +611,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     );
     if (!result.ok) {
       switch (result.failure.kind) {
+        case "invalid":
+          res.status(400).json({ error: result.failure.error });
+          return;
         case "not_configured":
           res.status(503).json({ error: result.failure.error });
           return;

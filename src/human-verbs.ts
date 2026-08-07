@@ -62,6 +62,7 @@ export type RegisterThroughHumanDoorResult =
   | { ok: false; failure: GateFailure };
 
 export type IssueCommentFailure =
+  | { kind: "invalid"; error: string }
   | { kind: "not_configured"; error: string }
   | { kind: "unknown_workspace"; error: string }
   | { kind: "github_failed"; error: string };
@@ -71,6 +72,17 @@ export async function addIssueCommentThroughHumanDoor(
   deps: Pick<RegisterThroughHumanDoorDeps, "github" | "workspace" | "resolveWorkspace">,
   input: { workspace: string; github_issue_number: number; body: string },
 ): Promise<{ ok: true } | { ok: false; failure: IssueCommentFailure }> {
+  if (
+    input.workspace.length === 0 ||
+    !Number.isInteger(input.github_issue_number) ||
+    input.github_issue_number <= 0 ||
+    input.body.length === 0
+  ) {
+    return {
+      ok: false,
+      failure: { kind: "invalid", error: "an issue comment requires a workspace, positive issue number, and body" },
+    };
+  }
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!deps.github || !resolve) {
     return {
@@ -142,6 +154,9 @@ export async function registerThroughHumanDoor(
   origin: EventOrigin = "webui",
 ): Promise<RegisterThroughHumanDoorResult> {
   try {
+    if (input.type !== "work" && input.type !== "review") {
+      throw new DomainError("a human can register only work or review tasks");
+    }
     const isHumanDecomposeChild = input.parent_id !== undefined && input.type === "work";
     if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
       throw new DomainError("a child task cannot be issue-backed");

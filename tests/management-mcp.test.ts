@@ -291,6 +291,53 @@ it("decompose_task は人間名義かつ mcp origin で子を一括登録する(
   }
 });
 
+it("decompose_task は空の reason を protocol error ではなく domain tool error で拒否する(issue #192)", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "modernize tide data");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "decompose_task",
+      arguments: {
+        task_id: parent.id,
+        reason: "",
+        children: [{ title: "import observations", purpose: "import data", completion_criteria: "data is queryable" }],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe("a decomposition requires a reason");
+  } finally {
+    await client.close();
+  }
+});
+
+it("register_task は空の content を protocol error ではなく domain tool error で拒否する(issue #192)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "register_task",
+      arguments: {
+        type: "work",
+        title: "",
+        purpose: "make historical tides searchable",
+        completion_criteria: "a query returns chart rows",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toEqual(
+      expect.objectContaining({
+        kind: "invalid",
+        error: "a task requires title, purpose, and completion_criteria unless it is issue-backed",
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
 it("complete_task は human assignee の task だけを mcp origin で完了する(issue #192)", async () => {
   t = await bootTidepool();
   const humanTask = await registerWork(t, "confirm the tide gauge licence", undefined, undefined, "human");
