@@ -2,15 +2,25 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
+import { FakeDraftClient } from "./fakes.js";
 import {
   bootTidepool,
   managementMcpClient,
+  registerQuestion,
   registerWork,
   type Tidepool,
 } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+const readToolNames = [
+  "get_task",
+  "list_board",
+  "list_queue",
+  "list_your_tasks",
+  "read_decision_log",
+];
 
 function readToolPayload(result: any): unknown {
   return JSON.parse(result.content[0].text);
@@ -57,13 +67,9 @@ it("管理MCP は5つの純読取 board tool を発見する(issue #191)", async
   const client = await managementMcpClient(t.baseUrl);
   try {
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name).sort()).toEqual([
-      "get_task",
-      "list_board",
-      "list_queue",
-      "list_your_tasks",
-      "read_decision_log",
-    ]);
+    expect(tools.filter((tool) => readToolNames.includes(tool.name)).map((tool) => tool.name).sort()).toEqual(
+      readToolNames,
+    );
   } finally {
     await client.close();
   }
@@ -77,7 +83,7 @@ it("管理MCP の読取 tool は盤面データを返して DB を変えない(i
     const before = dumpDb(join(t.dir, "board.sqlite"));
     const { tools } = await client.listTools();
     const results = await Promise.all(
-      tools.map((tool) =>
+      tools.filter((tool) => readToolNames.includes(tool.name)).map((tool) =>
         client.callTool({
           name: tool.name,
           arguments: tool.name === "get_task" ? { task_id: task.id } : {},
@@ -126,6 +132,342 @@ it("管理MCP は issue-backed content を保存済みプレースホルダー�
           github_issue_number: 49,
         }),
       ]),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("register_task は人間名義かつ mcp origin で work task を登録する(issue #192)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "register_task",
+      arguments: {
+        type: "work",
+        title: "index the tide charts",
+        purpose: "make historical tides searchable",
+        completion_criteria: "a query returns chart rows",
+      },
+    });
+
+    expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
+    const task = readToolPayload(result) as { id: string };
+    const events = (await client.callTool({ name: "get_task", arguments: { task_id: task.id } })) as any;
+    expect(readToolPayload(events)).toEqual(
+      expect.objectContaining({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "task_registered", worker_id: "human", origin: "mcp" }),
+        ]),
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("answer_question は人間名義かつ mcp origin で question を回答する(issue #192)", async () => {
+  t = await bootTidepool();
+  const question = registerQuestion(t, {
+    title: "which tide gauge?",
+    purpose: "choose the data source",
+    completion_criteria: "one source is selected",
+    question: [{ title: "source", options: ["NOAA", "JMA"], recommendation: "JMA" }],
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "answer_question",
+      arguments: { task_id: question.id, answers: ["JMA"] },
+    });
+
+    expect(result.isError ?? false).toBe(false);
+    expect(readToolPayload(result)).toEqual(expect.objectContaining({ id: question.id, status: "done" }));
+    const events = (await client.callTool({ name: "get_task", arguments: { task_id: question.id } })) as any;
+    expect(readToolPayload(events)).toEqual(
+      expect.objectContaining({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "question_answered", worker_id: "human", origin: "mcp" }),
+        ]),
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("cancel_task は人間名義かつ mcp origin で human task を cancel する(issue #192)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "retire the old tide gauge");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "cancel_task",
+      arguments: { task_id: task.id, reason: "the upstream data source closed" },
+    });
+
+    expect(result.isError ?? false).toBe(false);
+    expect(readToolPayload(result)).toEqual(expect.objectContaining({ id: task.id, status: "cancelled" }));
+    const events = (await client.callTool({ name: "get_task", arguments: { task_id: task.id } })) as any;
+    expect(readToolPayload(events)).toEqual(
+      expect.objectContaining({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "task_cancelled_directly", worker_id: "human", origin: "mcp" }),
+        ]),
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("edit_task は人間名義かつ mcp origin で未消費フィールドを更新する(issue #192)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index tide charts");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "edit_task",
+      arguments: { task_id: task.id, title: "index historic tide charts" },
+    });
+
+    expect(result.isError ?? false).toBe(false);
+    expect(readToolPayload(result)).toEqual(
+      expect.objectContaining({ id: task.id, title: "index historic tide charts" }),
+    );
+    const events = (await client.callTool({ name: "get_task", arguments: { task_id: task.id } })) as any;
+    expect(readToolPayload(events)).toEqual(
+      expect.objectContaining({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "task_edited", worker_id: "human", origin: "mcp" }),
+        ]),
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("decompose_task は人間名義かつ mcp origin で子を一括登録する(issue #192)", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "modernize tide data");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "decompose_task",
+      arguments: {
+        task_id: parent.id,
+        reason: "the migration has two independently deployable parts",
+        children: [
+          {
+            title: "import observations",
+            purpose: "bring historic measurements into the new store",
+            completion_criteria: "one month of data is queryable",
+          },
+          {
+            title: "migrate query endpoint",
+            purpose: "serve the imported observations",
+            completion_criteria: "the endpoint returns the new records",
+          },
+        ],
+      },
+    });
+
+    expect(result.isError ?? false, JSON.stringify(result)).toBe(false);
+    const payload = readToolPayload(result) as { child_ids: string[]; parent_status: string };
+    expect(payload.child_ids).toHaveLength(2);
+    expect(payload.parent_status).toBe("blocked");
+    const child = (await client.callTool({ name: "get_task", arguments: { task_id: payload.child_ids[0] } })) as any;
+    expect(readToolPayload(child)).toEqual(
+      expect.objectContaining({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "task_registered", worker_id: "human", origin: "mcp" }),
+        ]),
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("decompose_task は空の reason を protocol error ではなく domain tool error で拒否する(issue #192)", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "modernize tide data");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "decompose_task",
+      arguments: {
+        task_id: parent.id,
+        reason: "",
+        children: [{ title: "import observations", purpose: "import data", completion_criteria: "data is queryable" }],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe("a decomposition requires a reason");
+  } finally {
+    await client.close();
+  }
+});
+
+it("register_task は空の content を protocol error ではなく domain tool error で拒否する(issue #192)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "register_task",
+      arguments: {
+        type: "work",
+        title: "",
+        purpose: "make historical tides searchable",
+        completion_criteria: "a query returns chart rows",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toEqual(
+      expect.objectContaining({
+        kind: "invalid",
+        error: "a task requires title, purpose, and completion_criteria unless it is issue-backed",
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("complete_task は human assignee の task だけを mcp origin で完了する(issue #192)", async () => {
+  t = await bootTidepool();
+  const humanTask = await registerWork(t, "confirm the tide gauge licence", undefined, undefined, "human");
+  const db = openDb(join(t.dir, "board.sqlite"));
+  let agentTask!: ReturnType<typeof registerTask>;
+  try {
+    agentTask = registerTask(
+      db,
+      {
+        type: "work",
+        title: "agent-owned task",
+        purpose: "exercise the completion gate",
+        completion_criteria: "the management MCP refuses it",
+        assignee: "fake-worker",
+      },
+      t.clock.now(),
+      "fake-worker",
+    );
+  } finally {
+    db.close();
+  }
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const done: any = await client.callTool({ name: "complete_task", arguments: { task_id: humanTask.id } });
+    expect(done.isError ?? false).toBe(false);
+    expect(readToolPayload(done)).toEqual(expect.objectContaining({ id: humanTask.id, status: "done" }));
+
+    const rejected: any = await client.callTool({ name: "complete_task", arguments: { task_id: agentTask.id } });
+    expect(rejected.isError).toBe(true);
+    expect(rejected.content[0].text).toContain("only a human-assignee task can be completed here");
+
+    const events = (await client.callTool({ name: "get_task", arguments: { task_id: humanTask.id } })) as any;
+    expect(readToolPayload(events)).toEqual(
+      expect.objectContaining({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "task_completed", worker_id: "human", origin: "mcp" }),
+        ]),
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("add_issue_comment は解決した workspace の GitHub issue にコメントを追記する(issue #192)", async () => {
+  t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "add_issue_comment",
+      arguments: {
+        workspace: "tidepool",
+        github_issue_number: 192,
+        body: "## Completion criteria\n- the management API accepts task writes",
+      },
+    });
+
+    expect(result.isError ?? false).toBe(false);
+    expect(t.github.issueComments).toEqual([
+      {
+        ref: { path: "/fake/path", number: 192 },
+        body: "## Completion criteria\n- the management API accepts task writes",
+      },
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("register_task は LLM 登録ゲートの suggested_comment を tool error に含める(issue #192)", async () => {
+  const draftClient = new FakeDraftClient();
+  draftClient.scriptInspection({
+    ok: false,
+    missing: "completion criteria are absent",
+    suggested_comment: "## Completion criteria\n- the tide charts are searchable",
+  });
+  t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" }, draftClient });
+  t.github.scriptIssue(192, { title: "vague tide work", body: "improve it", comments: [] });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "register_task",
+      arguments: { type: "work", workspace: "tidepool", github_issue_number: 192 },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toEqual(
+      expect.objectContaining({
+        kind: "issue_rejected",
+        suggested_comment: "## Completion criteria\n- the tide charts are searchable",
+      }),
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+it("cancel_task は open failure question を迂回できない(issue #192)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "failed tide migration");
+  registerQuestion(t, {
+    title: "failure",
+    purpose: "the migration failed",
+    completion_criteria: "a human answers",
+    parent_id: task.id,
+    question: [{ title: "retry or abandon?", options: ["retry", "abandon"], recommendation: "retry" }],
+    cancel_option: "abandon",
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({ name: "cancel_task", arguments: { task_id: task.id } });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("open failure question");
+  } finally {
+    await client.close();
+  }
+});
+
+it("register_task は同じ issue reference の未決着二重登録を拒否する(issue #192)", async () => {
+  t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
+  t.github.scriptIssue(192, { title: "tide task", body: "do it", comments: [] });
+  const client = await managementMcpClient(t.baseUrl);
+  const input = { type: "work", workspace: "tidepool", github_issue_number: 192 };
+  try {
+    const first: any = await client.callTool({ name: "register_task", arguments: input });
+    expect(first.isError ?? false).toBe(false);
+    const duplicate: any = await client.callTool({ name: "register_task", arguments: input });
+    expect(duplicate.isError).toBe(true);
+    expect(JSON.parse(duplicate.content[0].text)).toEqual(
+      expect.objectContaining({ kind: "invalid", error: expect.stringContaining("already referenced") }),
     );
   } finally {
     await client.close();

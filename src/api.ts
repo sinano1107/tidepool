@@ -19,9 +19,12 @@ import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import {
+  addIssueCommentThroughHumanDoor,
   assertAssigneeKnown,
   assertWorkspaceKnown,
   type GateFailure,
+  humanCancelDefaults,
+  pollIfParentUnblocked,
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -50,7 +53,6 @@ import {
   getTask,
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
-  hasUnfinishedChildren,
   listBoard,
   listChildren,
   listQueue,
@@ -603,29 +605,25 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-    if (!github || !resolve) {
-      res.status(503).json({ error: "GitHub or workspace tracking not configured" });
-      return;
-    }
-    let path: string;
-    try {
-      // the human's own synchronous request — an unknown name fails fast
-      // with a 400 (ADR 0009), same as registration's workspace check
-      path = resolve(parsed.data.workspace).path;
-    } catch (err) {
-      if (!(err instanceof UnknownWorkspaceError)) throw err;
-      res.status(400).json({ error: `unknown workspace: ${parsed.data.workspace}` });
-      return;
-    }
-    try {
-      await github.addIssueComment(
-        { path, number: parsed.data.github_issue_number },
-        parsed.data.body,
-      );
-    } catch {
-      res.status(502).json({ error: "could not post the comment to the issue" });
-      return;
+    const result = await addIssueCommentThroughHumanDoor(
+      { github, workspace, resolveWorkspace },
+      parsed.data,
+    );
+    if (!result.ok) {
+      switch (result.failure.kind) {
+        case "invalid":
+          res.status(400).json({ error: result.failure.error });
+          return;
+        case "not_configured":
+          res.status(503).json({ error: result.failure.error });
+          return;
+        case "unknown_workspace":
+          res.status(400).json({ error: result.failure.error });
+          return;
+        case "github_failed":
+          res.status(502).json({ error: result.failure.error });
+          return;
+      }
     }
     res.status(201).json({});
   });
@@ -1035,21 +1033,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      cancelTaskDirectly(db, task, parsed.data.reason ?? null, clock.now(), {
-        defaultWorkspaceName: workspace?.name,
-        defaultAgentName,
-        auditorName,
-      }, "webui");
+      cancelTaskDirectly(
+        db,
+        task,
+        parsed.data.reason ?? null,
+        clock.now(),
+        humanCancelDefaults(workspace, defaultAgentName, auditorName),
+        "webui",
+      );
       // cancelling can unblock the target's parent (its last unsettled child is
       // now cancelled — settled), so give the queue head a chance to advance,
       // same trigger the /complete route uses (CONTEXT.md: cancelled の親を
       // 塞がない導出は既存機構をそのまま使う).
-      if (task.parent_id) {
-        const parent = getTask(db, task.parent_id);
-        if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
-          onQueueHeadChanged();
-        }
-      }
+      pollIfParentUnblocked(db, task, onQueueHeadChanged);
       res.json(presentTask(db, getTask(db, task.id)!));
     } catch (err) {
       if (err instanceof DomainError) {
@@ -1142,12 +1138,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         clock.now(),
         "webui",
       );
-      if (done.parent_id) {
-        const parent = getTask(db, done.parent_id);
-        if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
-          onQueueHeadChanged();
-        }
-      }
+      pollIfParentUnblocked(db, done, onQueueHeadChanged);
       res.json(presentTask(db, done));
     } catch (err) {
       if (err instanceof DomainError) {

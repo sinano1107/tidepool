@@ -351,9 +351,18 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     createManagementMcpRouter({
       db,
       clock: options.clock,
+      onQueueHeadChanged: () => scheduler.pollNow(),
       workspace: options.workspace,
+      resolveWorkspace: options.resolveWorkspace,
+      github: options.github,
+      retryPrPromotion: (task) => promoteHandoffPr(mcpDeps, task),
+      draftClient: options.draftClient,
       defaultAgentName: worker.id,
       auditorName,
+      agentRegistered: options.agentRegistered,
+      isProtectedWorkspace: options.isProtectedWorkspace,
+      containment,
+      boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
     }),
   );

@@ -356,6 +356,9 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
  *  silently repoint it at another repo's same-numbered issue). */
 function assertGithubRef(input: RegisterTaskInput): void {
   if (input.github_issue_number !== undefined) {
+    if (!Number.isInteger(input.github_issue_number) || input.github_issue_number <= 0) {
+      throw new DomainError("an issue-backed task requires a positive issue number");
+    }
     // CONTEXT.md defines the issue-backed task as a *work* task (issue #49
     // 設計点8) — the restriction is the definition's, not any one door's
     if (input.type !== "work") {
@@ -1837,6 +1840,13 @@ export function editTask(
   origin: EventOrigin = "webui",
 ): Task {
   assertHumanEditableScope(db, task, "edited");
+  if (
+    input.title === "" ||
+    input.purpose === "" ||
+    input.completion_criteria === ""
+  ) {
+    throw new DomainError("task content fields cannot be empty");
+  }
   const issueBacked = task.github_issue_number !== null;
   if (issueBacked) {
     if (
