@@ -377,16 +377,16 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   app.use(express.static(join(root, "public")));
   // the WebUI is the design-synced UI kit: screens come straight from the kit
   // (single source, the /kit mock stays runnable), tokens and the compiled
-  // component bundle from the design-system mirror at the repo root
+  // component bundle from design-system/ at the repo root
   app.use("/kit", express.static(join(root, "ui_kits", "tidepool-webui")));
-  app.use("/tokens", express.static(join(root, "tokens")));
+  app.use("/tokens", express.static(join(root, "design-system", "tokens")));
   // sendFile with the `root` option (not a pre-joined absolute path): Express's
   // `send` then dotfile-checks only the URL's relative segment, so a board booted
   // from a checkout under a dot-directory (a git worktree in `.claude/…`) still
   // serves these. A pre-joined absolute path gets the whole path dotfile-checked
   // and `dotfiles: 'ignore'` 404s it (issue #108) — same `root`-option path
   // express.static above already relies on.
-  app.get("/styles.css", (_req, res) => res.sendFile("styles.css", { root }));
+  app.get("/styles.css", (_req, res) => res.sendFile("design-system/styles.css", { root }));
   app.get("/_ds_bundle.js", (_req, res) => res.sendFile("_ds_bundle.js", { root }));
 
   const listener = await new Promise<import("node:http").Server>((resolve) => {

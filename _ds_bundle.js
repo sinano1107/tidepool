@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"components/board/AgentChip.jsx"},{"name":"IdChip","sourcePath":"components/board/IdChip.jsx"},{"name":"LogEntry","sourcePath":"components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"components/forms/Checkbox.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"Select","sourcePath":"components/forms/Select.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"},{"name":"Card","sourcePath":"components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"components/surfaces/Toast.jsx"}]} */
+/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"design-system/components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"design-system/components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"design-system/components/board/AgentChip.jsx"},{"name":"IdChip","sourcePath":"design-system/components/board/IdChip.jsx"},{"name":"LogEntry","sourcePath":"design-system/components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"design-system/components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"design-system/components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"design-system/components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"design-system/components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"design-system/components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"design-system/components/forms/Checkbox.jsx"},{"name":"Input","sourcePath":"design-system/components/forms/Input.jsx"},{"name":"Select","sourcePath":"design-system/components/forms/Select.jsx"},{"name":"Switch","sourcePath":"design-system/components/forms/Switch.jsx"},{"name":"Card","sourcePath":"design-system/components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"design-system/components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"design-system/components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"design-system/components/surfaces/Toast.jsx"}]} */
 
 (() => {
 
@@ -8,7 +8,7 @@ const __ds_scope = {};
 
 (__ds_ns.__errors = __ds_ns.__errors || []);
 
-// components/actions/Button.jsx
+// design-system/components/actions/Button.jsx
 try { (() => {
 const btnBase = {
   fontFamily: "var(--font-ui)",
@@ -63,9 +63,9 @@ function Button({ variant = "primary", size = "md", full = false, disabled = fal
   );
 }
 Object.assign(__ds_scope, { Button });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/actions/Button.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/actions/Button.jsx", error: String((e && e.message) || e) }); }
 
-// components/actions/IconButton.jsx
+// design-system/components/actions/IconButton.jsx
 try { (() => {
 function IconButton({ label, size = "md", variant = "ghost", disabled = false, children, onClick, style }) {
   const [hover, setHover] = React.useState(false);
@@ -101,9 +101,9 @@ function IconButton({ label, size = "md", variant = "ghost", disabled = false, c
   );
 }
 Object.assign(__ds_scope, { IconButton });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/actions/IconButton.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/actions/IconButton.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/AgentChip.jsx
+// design-system/components/board/AgentChip.jsx
 try { (() => {
 const chipPalette = ["var(--tide-3)", "var(--sun-3)", "var(--coral-3)", "var(--grass-3)", "var(--rock-5)"];
 function isSingleGrapheme(value) {
@@ -134,9 +134,9 @@ function AgentChip({ name = "", icon, human = false, size = "md", style }) {
   } }, glyph || initials), size !== "sm" && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, human ? "you" : name));
 }
 Object.assign(__ds_scope, { AgentChip });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/AgentChip.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/AgentChip.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/IdChip.jsx
+// design-system/components/board/IdChip.jsx
 try { (() => {
 function IdChip({ id, style }) {
   return /* @__PURE__ */ React.createElement(
@@ -155,9 +155,9 @@ function IdChip({ id, style }) {
   );
 }
 Object.assign(__ds_scope, { IdChip });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/IdChip.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/IdChip.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/LogEntry.jsx
+// design-system/components/board/LogEntry.jsx
 try { (() => {
 const kindColors = {
   decision: "var(--text-body)",
@@ -202,9 +202,9 @@ function LogEntry({ entry = {}, onObject, active = false, style }) {
   );
 }
 Object.assign(__ds_scope, { LogEntry });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/LogEntry.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/LogEntry.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/QueueItem.jsx
+// design-system/components/board/QueueItem.jsx
 try { (() => {
 function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes on reset", frontInserted = false, flash = false, isHead = false, onFront, style }) {
   const { id, title, assignee, assigneeIcon } = task;
@@ -261,9 +261,9 @@ function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes
   );
 }
 Object.assign(__ds_scope, { QueueItem });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/QueueItem.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/QueueItem.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/RiskFlag.jsx
+// design-system/components/board/RiskFlag.jsx
 try { (() => {
 function RiskFlag({ style }) {
   return /* @__PURE__ */ React.createElement("span", { style: {
@@ -282,9 +282,9 @@ function RiskFlag({ style }) {
   } }, /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true" }, "\u26A0"), " risk");
 }
 Object.assign(__ds_scope, { RiskFlag });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/RiskFlag.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/RiskFlag.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/StatusBadge.jsx
+// design-system/components/board/StatusBadge.jsx
 try { (() => {
 const statusStyles = {
   todo: { color: "var(--status-todo-fg)", background: "var(--status-todo-bg)", boxShadow: "0 2px 8px rgba(29, 106, 102, 0.10)" },
@@ -310,9 +310,9 @@ function StatusBadge({ status = "todo", style }) {
   } }, status);
 }
 Object.assign(__ds_scope, { StatusBadge });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/StatusBadge.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/StatusBadge.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/TaskCard.jsx
+// design-system/components/board/TaskCard.jsx
 try { (() => {
 function TaskCard({ task = {}, onClick, style }) {
   const { id, title, status = "todo", type = "work", assignee, assigneeIcon, human = false, risk = false, children: childCount = 0 } = task;
@@ -348,9 +348,9 @@ function TaskCard({ task = {}, onClick, style }) {
   );
 }
 Object.assign(__ds_scope, { TaskCard });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/TaskCard.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/TaskCard.jsx", error: String((e && e.message) || e) }); }
 
-// components/board/TypeBadge.jsx
+// design-system/components/board/TypeBadge.jsx
 try { (() => {
 const typeStyles = {
   work: { color: "var(--type-work-fg)", symbol: "\u25CF" },
@@ -371,9 +371,9 @@ function TypeBadge({ type = "work", showLabel = true, style }) {
   } }, /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", style: { fontSize: 10 } }, t.symbol), showLabel && type);
 }
 Object.assign(__ds_scope, { TypeBadge });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/board/TypeBadge.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/board/TypeBadge.jsx", error: String((e && e.message) || e) }); }
 
-// components/forms/Checkbox.jsx
+// design-system/components/forms/Checkbox.jsx
 try { (() => {
 function Checkbox({ label, checked = false, onChange, disabled = false, style }) {
   return /* @__PURE__ */ React.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 9, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.45 : 1, ...style } }, /* @__PURE__ */ React.createElement("span", { style: {
@@ -391,9 +391,9 @@ function Checkbox({ label, checked = false, onChange, disabled = false, style })
   } }, checked && /* @__PURE__ */ React.createElement("svg", { width: "11", height: "11", viewBox: "0 0 12 12", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("path", { d: "M2.5 6.5L5 9L9.5 3.5", stroke: "#fff", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }))), /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked, onChange, disabled, style: { position: "absolute", opacity: 0, width: 0, height: 0 } }), label && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)" } }, label));
 }
 Object.assign(__ds_scope, { Checkbox });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/forms/Checkbox.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/Checkbox.jsx", error: String((e && e.message) || e) }); }
 
-// components/forms/Input.jsx
+// design-system/components/forms/Input.jsx
 try { (() => {
 const fieldLabel = {
   display: "block",
@@ -436,9 +436,9 @@ function Input({ label, hint, error, multiline = false, mono = false, value, def
   ), error ? /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, error) : hint && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, hint));
 }
 Object.assign(__ds_scope, { Input });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/forms/Input.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/Input.jsx", error: String((e && e.message) || e) }); }
 
-// components/forms/Select.jsx
+// design-system/components/forms/Select.jsx
 try { (() => {
 function Select({ label, options = [], value, onChange, disabled = false, style }) {
   const [focus, setFocus] = React.useState(false);
@@ -475,9 +475,9 @@ function Select({ label, options = [], value, onChange, disabled = false, style 
   ), /* @__PURE__ */ React.createElement("span", { style: { position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--text-muted)", fontSize: 10 } }, "\u25BE")));
 }
 Object.assign(__ds_scope, { Select });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/forms/Select.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/Select.jsx", error: String((e && e.message) || e) }); }
 
-// components/forms/Switch.jsx
+// design-system/components/forms/Switch.jsx
 try { (() => {
 function Switch({ label, checked = false, onChange, disabled = false, style }) {
   return /* @__PURE__ */ React.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 10, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.45 : 1, ...style } }, /* @__PURE__ */ React.createElement(
@@ -510,9 +510,9 @@ function Switch({ label, checked = false, onChange, disabled = false, style }) {
   ), label && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)" } }, label));
 }
 Object.assign(__ds_scope, { Switch });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/forms/Switch.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/forms/Switch.jsx", error: String((e && e.message) || e) }); }
 
-// components/surfaces/Card.jsx
+// design-system/components/surfaces/Card.jsx
 try { (() => {
 function Card({ children, padding = "var(--space-4)", interactive = false, selected = false, onClick, style }) {
   const [hover, setHover] = React.useState(false);
@@ -537,9 +537,9 @@ function Card({ children, padding = "var(--space-4)", interactive = false, selec
   );
 }
 Object.assign(__ds_scope, { Card });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/surfaces/Card.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/surfaces/Card.jsx", error: String((e && e.message) || e) }); }
 
-// components/surfaces/Dialog.jsx
+// design-system/components/surfaces/Dialog.jsx
 try { (() => {
 function Dialog({ open = true, title, children, footer, onClose, width = 420 }) {
   if (!open) return null;
@@ -581,9 +581,9 @@ function Dialog({ open = true, title, children, footer, onClose, width = 420 }) 
   );
 }
 Object.assign(__ds_scope, { Dialog });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/surfaces/Dialog.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/surfaces/Dialog.jsx", error: String((e && e.message) || e) }); }
 
-// components/surfaces/Tag.jsx
+// design-system/components/surfaces/Tag.jsx
 try { (() => {
 const tagColors = {
   neutral: { color: "var(--rock-5)", background: "var(--rock-1)" },
@@ -608,9 +608,9 @@ function Tag({ color = "neutral", mono = false, children, style }) {
   } }, children);
 }
 Object.assign(__ds_scope, { Tag });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/surfaces/Tag.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/surfaces/Tag.jsx", error: String((e && e.message) || e) }); }
 
-// components/surfaces/Toast.jsx
+// design-system/components/surfaces/Toast.jsx
 try { (() => {
 const toastKinds = {
   info: { border: "var(--tide-3)", icon: "var(--tide-4)" },
@@ -636,7 +636,7 @@ function Toast({ kind = "info", children, detail, onDismiss, style }) {
   } }, /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", style: { width: 8, height: 8, borderRadius: "50%", background: k.icon, marginTop: 6, flexShrink: 0 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", null, children), detail && /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginTop: 3, fontWeight: 400 } }, detail)), onDismiss && /* @__PURE__ */ React.createElement("button", { onClick: onDismiss, "aria-label": "Dismiss", style: { background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 14, padding: 0, lineHeight: 1, alignSelf: "center", flexShrink: 0 } }, "\u2715"));
 }
 Object.assign(__ds_scope, { Toast });
-})(); } catch (e) { __ds_ns.__errors.push({ path: "components/surfaces/Toast.jsx", error: String((e && e.message) || e) }); }
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/surfaces/Toast.jsx", error: String((e && e.message) || e) }); }
 
 __ds_ns.Button = __ds_scope.Button;
 

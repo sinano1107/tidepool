@@ -36,7 +36,7 @@ async function main(): Promise<void> {
       }
     }
   };
-  const watcher = watch("components", { recursive: true }, () => void rebuild());
+  const watcher = watch("design-system/components", { recursive: true }, () => void rebuild());
 
   let stopping = false;
   process.once("SIGINT", () => {

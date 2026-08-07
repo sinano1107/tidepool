@@ -15,8 +15,8 @@ e2e/*.scratch.spec.ts
 # design-sync converter: staged scripts, build output, machine state
 /.ds-sync/
 /ds-bundle/
-/design-system/dist/
-/design-system/styles.css
+/design-system/pkg/dist/
+/design-system/pkg/styles.css
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules

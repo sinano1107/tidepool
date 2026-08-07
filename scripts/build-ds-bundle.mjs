@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Builds _ds_bundle.js from the real component sources under components/.
+// Builds _ds_bundle.js from the real component sources under design-system/components/.
 // This repo now holds the Tidepool Design System's real component source
 // (pulled from the Claude Design project on 2026-07-11 — see issue #18);
 // this script is the local equivalent of the design-sync "converter" for
@@ -14,27 +14,28 @@ import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const DS_SRC = 'design-system/components';
 
 // Order and grouping mirror the manifest already shipped in _ds_bundle.js.
 const COMPONENTS = [
-  ['Button', 'components/actions/Button.jsx'],
-  ['IconButton', 'components/actions/IconButton.jsx'],
-  ['AgentChip', 'components/board/AgentChip.jsx'],
-  ['IdChip', 'components/board/IdChip.jsx'],
-  ['LogEntry', 'components/board/LogEntry.jsx'],
-  ['QueueItem', 'components/board/QueueItem.jsx'],
-  ['RiskFlag', 'components/board/RiskFlag.jsx'],
-  ['StatusBadge', 'components/board/StatusBadge.jsx'],
-  ['TaskCard', 'components/board/TaskCard.jsx'],
-  ['TypeBadge', 'components/board/TypeBadge.jsx'],
-  ['Checkbox', 'components/forms/Checkbox.jsx'],
-  ['Input', 'components/forms/Input.jsx'],
-  ['Select', 'components/forms/Select.jsx'],
-  ['Switch', 'components/forms/Switch.jsx'],
-  ['Card', 'components/surfaces/Card.jsx'],
-  ['Dialog', 'components/surfaces/Dialog.jsx'],
-  ['Tag', 'components/surfaces/Tag.jsx'],
-  ['Toast', 'components/surfaces/Toast.jsx'],
+  ['Button', `${DS_SRC}/actions/Button.jsx`],
+  ['IconButton', `${DS_SRC}/actions/IconButton.jsx`],
+  ['AgentChip', `${DS_SRC}/board/AgentChip.jsx`],
+  ['IdChip', `${DS_SRC}/board/IdChip.jsx`],
+  ['LogEntry', `${DS_SRC}/board/LogEntry.jsx`],
+  ['QueueItem', `${DS_SRC}/board/QueueItem.jsx`],
+  ['RiskFlag', `${DS_SRC}/board/RiskFlag.jsx`],
+  ['StatusBadge', `${DS_SRC}/board/StatusBadge.jsx`],
+  ['TaskCard', `${DS_SRC}/board/TaskCard.jsx`],
+  ['TypeBadge', `${DS_SRC}/board/TypeBadge.jsx`],
+  ['Checkbox', `${DS_SRC}/forms/Checkbox.jsx`],
+  ['Input', `${DS_SRC}/forms/Input.jsx`],
+  ['Select', `${DS_SRC}/forms/Select.jsx`],
+  ['Switch', `${DS_SRC}/forms/Switch.jsx`],
+  ['Card', `${DS_SRC}/surfaces/Card.jsx`],
+  ['Dialog', `${DS_SRC}/surfaces/Dialog.jsx`],
+  ['Tag', `${DS_SRC}/surfaces/Tag.jsx`],
+  ['Toast', `${DS_SRC}/surfaces/Toast.jsx`],
 ];
 
 function compileComponent(name, relPath) {

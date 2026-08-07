@@ -1,6 +1,7 @@
 // Barrel entry for the design-sync converter. Re-exports the real component
-// source under components/** — this file introduces no new source, it only
-// gives the converter a package-shaped entry point to build from.
+// source under design-system/components/** — this file introduces no new
+// source, it only gives the converter a package-shaped entry point to build
+// from.
 export { Button } from '../../components/actions/Button.jsx';
 export { IconButton } from '../../components/actions/IconButton.jsx';
 export { AgentChip } from '../../components/board/AgentChip.jsx';
