@@ -29,9 +29,12 @@ const COMPONENTS = [
   ['TaskCard', `${DS_SRC}/board/TaskCard.jsx`],
   ['TypeBadge', `${DS_SRC}/board/TypeBadge.jsx`],
   ['Checkbox', `${DS_SRC}/forms/Checkbox.jsx`],
+  ['FieldRow', `${DS_SRC}/forms/FieldRow.jsx`],
   ['Input', `${DS_SRC}/forms/Input.jsx`],
   ['Select', `${DS_SRC}/forms/Select.jsx`],
   ['Switch', `${DS_SRC}/forms/Switch.jsx`],
+  ['NavRow', `${DS_SRC}/navigation/NavRow.jsx`],
+  ['ScreenHeader', `${DS_SRC}/navigation/ScreenHeader.jsx`],
   ['Card', `${DS_SRC}/surfaces/Card.jsx`],
   ['Dialog', `${DS_SRC}/surfaces/Dialog.jsx`],
   ['Tag', `${DS_SRC}/surfaces/Tag.jsx`],
@@ -48,14 +51,14 @@ function compileComponent(name, relPath) {
     format: 'esm',
   });
 
-  // Local imports (./Other.jsx) become references into the shared __ds_scope
-  // object — every component in the bundle runs in one shared IIFE scope,
-  // not as separate modules.
+  // Local imports (./Other.jsx, ../group/Other.jsx) become references into the
+  // shared __ds_scope object — every component in the bundle runs in one shared
+  // IIFE scope, not as separate modules, so only the imported name matters.
   const importedNames = [];
   code = code
     .split('\n')
     .filter((line) => {
-      const m = line.match(/^import \{ (\w+) \} from ['"]\.\/[^'"]+['"];?$/);
+      const m = line.match(/^import \{ (\w+) \} from ['"]\.\.?\/[^'"]+['"];?$/);
       if (m) { importedNames.push(m[1]); return false; }
       return true;
     })
