@@ -9,7 +9,7 @@ import {
   authorityProfileSchema,
   loadRegistry,
   ownEntry,
-  type RegistryMode,
+  type RegistrySource,
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
@@ -51,10 +51,10 @@ export function dangerousValues(
  *  `authority/<name>.yaml` into and commit — threaded in by the composition
  *  root, same shape as AgentAdminDeps. */
 export interface ProfileAdminDeps {
-  registryDir: string;
-  /** ADR 0052 決定1: 検証・一覧・書き込みが揃って読む正本(#210 で書き込みも
-   *  移った)。 */
-  registryMode: RegistryMode;
+  /** どの registry clone を検証・一覧・書き込みに使うか、そのクローンが remote
+   *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
+   *  (issue #210 レビュー — AgentAdminDeps と共有する Data Clumps だった)。 */
+  registry: RegistrySource;
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
    *  決定1: 失敗は致命 — #210), absent when no secrets file is configured —
    *  same shape as AgentAdminDeps. */
@@ -65,8 +65,8 @@ export interface ProfileAdminDeps {
  *  a WebUI-initiated registry change is the human's explicit act. */
 export async function createProfile(input: CreateProfileInput, deps: ProfileAdminDeps): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4) — agent-create.ts と同じ二段検査
-  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidAuthorityProfileName(registry, input.name);
   commitProfileFile(deps, input, `create authority profile ${input.name} via WebUI`);
 }
@@ -79,8 +79,8 @@ export async function createProfile(input: CreateProfileInput, deps: ProfileAdmi
 export type UpdateProfileInput = CreateProfileInput;
 
 export async function updateProfile(input: UpdateProfileInput, deps: ProfileAdminDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.authority, input.name);
   if (!existing) throw new UnknownAuthorityProfileError(input.name);
   // no-change 編集はコミットなしの成功(updateAgent の sameEffectiveFields と
@@ -95,7 +95,7 @@ export async function updateProfile(input: UpdateProfileInput, deps: ProfileAdmi
 export type ProfileView = AuthorityProfile;
 
 export function listProfileViews(deps: ProfileAdminDeps): ProfileView[] {
-  return Object.values(loadRegistry(deps.registryDir, deps.registryMode).authority);
+  return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).authority);
 }
 
 export type CreateProfileFn = (input: CreateProfileInput) => Promise<void>;
@@ -144,8 +144,7 @@ function serializeProfileFile(profile: AuthorityProfile): string {
  *  profile-admin's commitAgentFile. */
 function commitProfileFile(deps: ProfileAdminDeps, profile: AuthorityProfile, message: string): void {
   commitToRegistry(
-    deps.registryDir,
-    deps.registryMode,
+    deps.registry,
     deps.githubAuth,
     (worktreeDir) => {
       const file = join("authority", `${profile.name}.yaml`);

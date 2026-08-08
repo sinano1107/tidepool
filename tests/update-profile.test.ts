@@ -30,7 +30,7 @@ describe("updateProfile: 正常系(issue #76 — ファイル全体の書き直�
         allowed_workspaces: ["tidepool"],
         merge: "escalate",
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     const profile = loadRegistry(registryDir, "purely-local").authority.standard;
@@ -62,7 +62,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
         assignable_to: ["deckhand"],
         allowed_workspaces: ["tidepool"],
       },
-      { registryDir, registryMode: "remote-backed" },
+      { registry: { dir: registryDir, mode: "remote-backed" } },
     );
 
     expect(loadRegistry(registryDir, "remote-backed").authority.standard?.guidance).toBe(
@@ -87,7 +87,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
           assignable_to: ["deckhand"],
           allowed_workspaces: ["tidepool"],
         },
-        { registryDir, registryMode: "remote-backed" },
+        { registry: { dir: registryDir, mode: "remote-backed" } },
       ),
     ).rejects.toThrow(RegistryPushFailedError);
 
@@ -110,7 +110,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await updateProfile(same, { registryDir, registryMode: "purely-local" });
+    await updateProfile(same, { registry: { dir: registryDir, mode: "purely-local" } });
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
@@ -129,7 +129,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         assignable_to: ["deckhand", "tako"],
         allowed_workspaces: ["tidepool"],
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -149,7 +149,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         assignable_to: ["tako"],
         allowed_workspaces: ["tidepool"],
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).not.toBe(before);
@@ -165,7 +165,7 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
     await expect(
       updateProfile(
         { name: "ghost", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] },
-        { registryDir, registryMode: "purely-local" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);

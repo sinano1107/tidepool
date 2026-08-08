@@ -172,11 +172,10 @@ export function buildWorkerOptions(
   return {
     db: session.db,
     clock: session.clock,
-    registryDir: board.registryDir,
     // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
     // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
     // 「人間の merge を通った内容が spawn に効く」は成立しない。
-    registryMode: board.registryMode,
+    registry: { dir: board.registryDir, mode: board.registryMode },
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
     workspace: board.workspaceName,
@@ -421,8 +420,7 @@ function workspaceAdmin(
   if (!registryDir) return undefined;
   // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
   const deps = {
-    registryDir,
-    registryMode: board.registryMode,
+    registry: { dir: registryDir, mode: board.registryMode },
     workspacesBaseDir: board.workspacesDir,
     githubAuth,
     boardState,
@@ -441,7 +439,7 @@ function workspaceAdmin(
 function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
   const { registryDir, githubAuth } = board;
   if (!registryDir) return undefined;
-  const deps = { registryDir, registryMode: board.registryMode, githubAuth };
+  const deps = { registry: { dir: registryDir, mode: board.registryMode }, githubAuth };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -459,7 +457,7 @@ function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
 function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
   const { registryDir, githubAuth } = board;
   if (!registryDir) return undefined;
-  const deps = { registryDir, registryMode: board.registryMode, githubAuth };
+  const deps = { registry: { dir: registryDir, mode: board.registryMode }, githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),

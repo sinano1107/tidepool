@@ -17,7 +17,7 @@ import {
   loadRegistry,
   ownEntry,
   type Registry,
-  type RegistryMode,
+  type RegistrySource,
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
@@ -759,14 +759,15 @@ function toUsage(result: StreamResultEvent, observed: AdvisorObservation): Worke
 export interface ClaudeWorkerOptions {
   db: Db;
   clock: Clock;
-  /** Local clone of the agent registry repository. */
-  registryDir: string;
-  /** ADR 0052 決定1: その clone のどの ref が正本か。**spawn がここを読む** —
-   *  盤面側の resolver だけをリモートへ移しても、worker が local main を読む限り
-   *  「人間の merge を通った内容が spawn に効く」は成立しない。ADR 0052 決定2 の
-   *  「観測点と refresh 点は同じでなければならない」は、pickup 直前の fetch と
-   *  この読み取りが同じ ref を指して初めて満たされる。 */
-  registryMode: RegistryMode;
+  /** どの registry clone を spawn が読むか、そのクローンが remote 正本を持つか
+   *  (ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした(issue #210
+   *  レビュー — AgentAdminDeps / ProfileAdminDeps / WorkspaceAdminDeps と共有
+   *  する Data Clumps だった)。**spawn がここを読む** — 盤面側の resolver だけ
+   *  をリモートへ移しても、worker が local main を読む限り「人間の merge を
+   *  通った内容が spawn に効く」は成立しない。ADR 0052 決定2 の「観測点と
+   *  refresh 点は同じでなければならない」は、pickup 直前の fetch とこの読み取り
+   *  が同じ ref を指して初めて満たされる。 */
+  registry: RegistrySource;
   /** Agent name in the registry (`agents/<name>.md`). */
   agent: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
@@ -1331,7 +1332,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
-    this.validateDefaults(loadRegistry(options.registryDir, options.registryMode));
+    this.validateDefaults(loadRegistry(options.registry.dir, options.registry.mode));
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
@@ -1407,7 +1408,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     }
     const resolved: Array<{ commit: string; entryIds: number[]; body: string }> = [];
     for (const [commit, entryIds] of byCommit) {
-      const body = agentBodyAtCommit(this.options.registryDir, commit, task.assignee);
+      const body = agentBodyAtCommit(this.options.registry.dir, commit, task.assignee);
       if (body === undefined) unresolved.push(...entryIds);
       else resolved.push({ commit, entryIds, body });
     }
@@ -1453,7 +1454,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // loaded per pickup so a registry update takes effect on the next task —
     // remote-backed 盤面では、直前の pickup ゲートが撃った fetch で更新された
     // `origin/main` を読む(ADR 0052 決定2: 観測点と refresh 点は同じ ref)
-    const registry = loadRegistry(this.options.registryDir, this.options.registryMode);
+    const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
     // ADR 0020 part 2: `main` is read as a code constant, so verify it is still
     // the clone's real default branch (origin/HEAD) — a mismatch drops the
     // registry workspace into quarantine rather than silently trusting a
@@ -1462,7 +1463,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     guardRegistryDefaultBranch(
       this.options.db,
       registry,
-      this.options.registryDir,
+      this.options.registry.dir,
       this.workspacesDir,
       this.options.clock.now(),
     );

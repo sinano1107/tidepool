@@ -8,7 +8,7 @@ import {
   assertValidWorkspaceName,
   loadRegistry,
   ownEntry,
-  type RegistryMode,
+  type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
 import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
@@ -49,10 +49,11 @@ export type CreateWorkspaceInput = {
  *  and the base directory path-omitting entries derive from (ADR 0018) —
  *  both threaded in by the composition root, never read from env here. */
 export interface WorkspaceAdminDeps {
-  registryDir: string;
-  /** ADR 0052 決定1: workspaces.yaml の検証・一覧・書き込みが揃って読む正本
-   *  (#210 で書き込みも移った)。 */
-  registryMode: RegistryMode;
+  /** どの registry clone を検証・一覧・書き込みに使うか、そのクローンが remote
+   *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
+   *  (issue #210 レビュー — AgentAdminDeps / ProfileAdminDeps と共有する
+   *  Data Clumps だった)。 */
+  registry: RegistrySource;
   workspacesBaseDir: string;
   /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
    *  process), threaded in by the composition root. The creation gate refuses
@@ -127,8 +128,8 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
 export async function createWorkspace(input: CreateWorkspaceInput, deps: CreateWorkspaceDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
   // ADR 0040: before any external effect — a refused registration must not
   // leave a clone or a GitHub repository behind.
@@ -180,8 +181,8 @@ export class RegistrySelfUnprotectError extends Error {
 
 
 export async function updateWorkspace(input: UpdateWorkspaceInput, deps: WorkspaceAdminDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const next: WorkspaceEntry = { ...entry };
@@ -197,7 +198,7 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
       // request gets the honest "never here", not another confirm loop. It
       // also ignores the entry's current flag: the floor must not depend on
       // the very state it protects
-      if (resolvesToRegistryClone(entry, input.name, deps.registryDir, deps.workspacesBaseDir)) {
+      if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
         throw new RegistrySelfUnprotectError(input.name);
       }
       if (entry.protected === true && input.confirm !== true) {
@@ -254,11 +255,11 @@ export interface WorkspaceView extends WorkspaceEntry {
 }
 
 export function listWorkspaceViews(deps: WorkspaceAdminDeps): WorkspaceView[] {
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   return Object.entries(registry.workspaces).map(([name, entry]) => ({
     ...entry,
     name,
-    registrySelf: resolvesToRegistryClone(entry, name, deps.registryDir, deps.workspacesBaseDir),
+    registrySelf: resolvesToRegistryClone(entry, name, deps.registry.dir, deps.workspacesBaseDir),
   }));
 }
 
@@ -277,8 +278,7 @@ function commitWorkspaceEntry(
   message: string,
 ): void {
   commitToRegistry(
-    deps.registryDir,
-    deps.registryMode,
+    deps.registry,
     deps.githubAuth,
     (worktreeDir) => {
       const file = join(worktreeDir, "workspaces.yaml");

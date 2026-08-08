@@ -332,6 +332,16 @@ export const REGISTRY_BRANCH = "main";
  *  のも同じ理由で、`loadRegistry` の引数を必須にしてある。 */
 export type RegistryMode = "remote-backed" | "purely-local";
 
+/** `registryDir` と `registryMode` は必ず一緒に運ばれる(issue #210 レビュー —
+ *  `AgentAdminDeps` / `ProfileAdminDeps` / `WorkspaceAdminDeps` /
+ *  `ClaudeWorkerOptions` の4つが両方を持つ Data Clumps だった)。どの clone を
+ *  読み書きするかは「パス」と「そのパスが remote 正本を持つか」の組でしか
+ *  意味を持たないので、1つの型にまとめる。 */
+export interface RegistrySource {
+  dir: string;
+  mode: RegistryMode;
+}
+
 /** `mode` が指す、盤面が registry を読み書きする1つの ref — remote-tracking
  *  main（remote-backed)か、ローカル main そのもの(purely-local)。`loadRegistry`
  *  の読みと `registry-write.ts` の書き込みが同じ関数を呼ぶことで、両者が同じ

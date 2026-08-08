@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { authedGit, type GitHubAuth } from "./github-auth.js";
-import { REGISTRY_BRANCH, type RegistryMode, refreshRegistry, registryRef } from "./registry.js";
+import { REGISTRY_BRANCH, type RegistrySource, refreshRegistry, registryRef } from "./registry.js";
 import { git, TIDEPOOL_GIT_IDENTITY } from "./workspace.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
@@ -24,13 +24,9 @@ export class RegistryFetchFailedError extends Error {
  *  リポジトリ作成・clone)を await で挟むため、その間に別の書き込みが先に着地
  *  すれば ref は動きうる —— その場合は worktree がより新しい内容から fork する
  *  だけで、着地時の fast-forward 検査(`commitToRegistry`)が壊れた状態を防ぐ。 */
-export function refreshRegistryForWrite(
-  registryDir: string,
-  registryMode: RegistryMode,
-  auth: GitHubAuth | undefined,
-): void {
-  if (registryMode !== "remote-backed") return;
-  const reachability = refreshRegistry(registryDir, auth);
+export function refreshRegistryForWrite(registry: RegistrySource, auth: GitHubAuth | undefined): void {
+  if (registry.mode !== "remote-backed") return;
+  const reachability = refreshRegistry(registry.dir, auth);
   if (!reachability.available) {
     throw new RegistryFetchFailedError(reachability.reason ?? "registry remote is unreachable");
   }
@@ -62,45 +58,38 @@ export class RegistryPushFailedError extends Error {
  *  (別の書き込みが先に着地した)双方とも拒否するので、並行書き込みは黙って
  *  上書きされず、致命の再試行可能な失敗になる(issue #57 の冪等性)。 */
 export function commitToRegistry(
-  registryDir: string,
-  registryMode: RegistryMode,
+  registry: RegistrySource,
   auth: GitHubAuth | undefined,
   write: (worktreeDir: string) => void,
   message: string,
 ): void {
   // プロセス死で残った前回の worktree 管理情報の掃除(issue #210 やること4) —
   // 掃除してから add しないと、同じパスが使用中と誤認されることがある
-  git(registryDir, "worktree", "prune");
-  const base = registryRef(registryMode);
-  const baseSha = git(registryDir, "rev-parse", base);
+  git(registry.dir, "worktree", "prune");
+  const base = registryRef(registry.mode);
+  const baseSha = git(registry.dir, "rev-parse", base);
   const worktreeDir = mkdtempSync(join(tmpdir(), "tidepool-registry-wt-"));
   try {
-    git(registryDir, "worktree", "add", "--detach", worktreeDir, base);
+    git(registry.dir, "worktree", "add", "--detach", worktreeDir, base);
     write(worktreeDir);
     if (git(worktreeDir, "status", "--porcelain") === "") return;
     git(worktreeDir, "add", "-A");
     git(worktreeDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
-    land(registryDir, registryMode, worktreeDir, baseSha, auth);
+    land(registry, worktreeDir, baseSha, auth);
   } finally {
     // ベストエフォート: ここで投げると、push/CAS が投げた本当の失敗を隠してしまう。
     // 消し損ねた分は次回の呼び出しの冒頭の `worktree prune` が拾う。
     try {
-      git(registryDir, "worktree", "remove", "--force", worktreeDir);
+      git(registry.dir, "worktree", "remove", "--force", worktreeDir);
     } catch (err) {
       console.warn(`[registry-write] worktree cleanup failed (non-fatal): ${worktreeDir}`, err);
     }
   }
 }
 
-function land(
-  registryDir: string,
-  registryMode: RegistryMode,
-  worktreeDir: string,
-  baseSha: string,
-  auth: GitHubAuth | undefined,
-): void {
+function land(registry: RegistrySource, worktreeDir: string, baseSha: string, auth: GitHubAuth | undefined): void {
   try {
-    if (registryMode === "remote-backed") {
+    if (registry.mode === "remote-backed") {
       authedGit(auth, worktreeDir, "push", "origin", `HEAD:${REGISTRY_BRANCH}`);
     } else {
       const newSha = git(worktreeDir, "rev-parse", "HEAD");
@@ -108,9 +97,9 @@ function land(
       // ブランチを指し clean なら、着地の前に見ておいて、着地後に揃える
       // (/code-review 指摘: 揃えないと、その checkout で次に走る commit が
       // 今回の着地を静かに削除してしまう)
-      const syncCheckout = isCleanCheckoutOfBranch(registryDir, REGISTRY_BRANCH);
-      git(registryDir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha);
-      if (syncCheckout) git(registryDir, "reset", "--hard", newSha);
+      const syncCheckout = isCleanCheckoutOfBranch(registry.dir, REGISTRY_BRANCH);
+      git(registry.dir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha);
+      if (syncCheckout) git(registry.dir, "reset", "--hard", newSha);
     }
   } catch (err) {
     throw new RegistryPushFailedError(String(err));

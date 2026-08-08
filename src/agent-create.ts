@@ -11,7 +11,7 @@ import {
   loadRegistry,
   ownEntry,
   type Registry,
-  type RegistryMode,
+  type RegistrySource,
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
@@ -66,11 +66,13 @@ function assertValidIcon(icon: string | undefined): void {
  *  `agents/<name>.md` into and commit — threaded in by the composition root,
  *  never read from env here (same shape as WorkspaceAdminDeps). */
 export interface AgentAdminDeps {
-  registryDir: string;
-  /** ADR 0052 決定1: 検証・一覧・書き込みが揃って読む正本(#210 で書き込みも
-   *  移った) — 検証がリモートに対して行われ、その直後に切る worktree も同じ
-   *  ref から fork するので、両者が食い違うことはない。 */
-  registryMode: RegistryMode;
+  /** どの registry clone を検証・一覧・書き込みに使うか、そのクローンが remote
+   *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
+   *  (issue #210 レビュー — WorkspaceAdminDeps / ProfileAdminDeps /
+   *  ClaudeWorkerOptions と共有する Data Clumps だった)。検証がこの `mode` に
+   *  対して行われ、その直後に切る worktree も同じ ref から fork するので、
+   *  両者が食い違うことはない。 */
+  registry: RegistrySource;
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
    *  決定1: 失敗は致命 — #210), absent when no secrets file is configured —
    *  same shape as WorkspaceAdminDeps. */
@@ -82,8 +84,8 @@ export interface AgentAdminDeps {
 export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4): fetch できなければ push もでき
   // ず、その編集は最初から成立していない — workspace-create と同じ二段検査
-  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidAgentName(registry, input.name);
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
@@ -104,8 +106,8 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
 export type UpdateAgentInput = CreateAgentInput;
 
 export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
   assertKnownAuthority(registry, input.authority);
@@ -157,7 +159,7 @@ function sameSkills(existing: string[], input: string[]): boolean {
 export type AgentView = AgentDefinition;
 
 export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
-  return Object.values(loadRegistry(deps.registryDir, deps.registryMode).agents);
+  return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents);
 }
 
 export type CreateAgentFn = (input: CreateAgentInput) => Promise<void>;
@@ -223,8 +225,7 @@ function serializeAgentFile(definition: AgentDefinition): string {
  *  registry clone's own working tree is never touched. */
 function commitAgentFile(deps: AgentAdminDeps, definition: AgentDefinition, message: string): void {
   commitToRegistry(
-    deps.registryDir,
-    deps.registryMode,
+    deps.registry,
     deps.githubAuth,
     (worktreeDir) => {
       const file = join("agents", `${definition.name}.md`);
