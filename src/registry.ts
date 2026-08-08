@@ -354,9 +354,13 @@ export const REGISTRY_FETCH_TIMEOUT_MS = 30_000;
 // swallows it by design).
 const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
 
-/** Refresh の実体。`execFileSync` なので同期であり、**合成 root の起動時 refresh は
- *  これを直接呼ぶ** —— `buildServerOptions` は同期で、しかも自分が読むより前に
- *  撃たなければ意味がないため(下の非同期の面では間に合わない)。
+/** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
+ *  `execFileSync` なので同期である —— 起動時の refresh は `buildServerOptions` が
+ *  自分で registry を読むより前に撃たなければ意味がなく、そこは同期の文脈だから。
+ *  非同期の面が要る口(`RegistryReachabilityCheck` は `ContainmentCheck` と型を
+ *  揃えてある)は呼び出し側が `async () => refreshRegistry(...)` で包む —— 1回の
+ *  fetch に輸出名を2つ与えると、ADR と CONTEXT.md が「refresh」1語で呼ぶものの
+ *  語彙が割れる。
  *
  *  **machine user 名義で撃つ**(ADR 0024 / CONTEXT.md の GitHub identity:
  *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
@@ -372,7 +376,7 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *
  *  Failure is returned as data so the caller can quarantine or warn instead of
  *  throwing. */
-export function fetchRegistryRef(
+export function refreshRegistry(
   dir: string,
   auth: GitHubAuth | undefined,
 ): RegistryReachability {
@@ -393,16 +397,6 @@ export function fetchRegistryRef(
       reason: `the registry remote main could not be refreshed (${String(err)})`,
     };
   }
-}
-
-/** 上と同じ1回の fetch を、pickup ゲートと回答時の検証が使う**非同期の面**として
- *  出したもの。型を `ContainmentCheck` と揃えてあるのは、封じ込め能力と同じ器に
- *  乗る兄弟だからである(ADR 0052 決定5 — 束ねはしないが形は同じ)。 */
-export async function refreshRegistry(
-  dir: string,
-  auth: GitHubAuth | undefined,
-): Promise<RegistryReachability> {
-  return fetchRegistryRef(dir, auth);
 }
 
 /** Read one committed file's content at `ref` — `git show ref:path`. The board

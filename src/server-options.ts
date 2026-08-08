@@ -24,7 +24,6 @@ import {
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
-  fetchRegistryRef,
   loadRegistry,
   ownEntry,
   type RegistryCandidates,
@@ -243,8 +242,9 @@ export function declaredRegistryMode(registryDir: string | undefined): RegistryM
  *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
  *  出ることである。 */
 function bootRefresh(board: BoardComposition): void {
-  if (!board.registryDir || board.registryMode !== "remote-backed") return;
-  const reachability = fetchRegistryRef(board.registryDir, board.githubAuth);
+  const registryDir = remoteBackedRegistryDir(board);
+  if (!registryDir) return;
+  const reachability = refreshRegistry(registryDir, board.githubAuth);
   if (reachability.available) return;
   console.error(
     "[registry] startup refresh failed; the board is starting anyway and the next pickup " +
@@ -252,14 +252,22 @@ function bootRefresh(board: BoardComposition): void {
   );
 }
 
+/** fetch する先を持つ盤面の registry clone、無ければ undefined。**宣言だけで
+ *  決まる** —— clone を覗かないのが ADR 0052 決定3 の線であり、3つの refresh 点が
+ *  同じ1つの判定を共有するための場所でもある。 */
+function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
+  return board.registryMode === "remote-backed" ? board.registryDir : undefined;
+}
+
 /** ADR 0052 決定2 の pickup / 回答時の refresh 点。remote 正本を宣言していない
- *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
+ *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。同期の
+ *  `refreshRegistry` を非同期の口の形に合わせるのはここ。 */
 function registryReachabilityCheck(
   board: BoardComposition,
 ): (() => Promise<RegistryReachability>) | undefined {
-  const { registryDir } = board;
-  if (!registryDir || board.registryMode !== "remote-backed") return undefined;
-  return () => refreshRegistry(registryDir, board.githubAuth);
+  const registryDir = remoteBackedRegistryDir(board);
+  if (!registryDir) return undefined;
+  return async () => refreshRegistry(registryDir, board.githubAuth);
 }
 
 /** The board's own view of the workspace (branch discipline + tree rule):

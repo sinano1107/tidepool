@@ -1,10 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
-import { fetchRegistryRef } from "../src/registry.js";
+import { refreshRegistry } from "../src/registry.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 /** 本物の `git` を PATH で差し替えて、盤面が実際に渡した argv と env を捕まえる。
@@ -32,10 +33,17 @@ async function gitShim(): Promise<{ cwd: string; record: string; restore: () => 
     cwd,
     record,
     restore: () => {
-      process.env.PATH = path;
+      if (path === undefined) delete process.env.PATH;
+      else process.env.PATH = path;
       delete process.env.TIDEPOOL_GIT_SHIM_RECORD;
     },
   };
+}
+
+function gitOut(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+    .toString()
+    .trim();
 }
 
 function observed(record: string): { args: string[]; env: Record<string, string> } {
@@ -71,7 +79,7 @@ it("盤面の registry fetch は machine user の token で撃たれ、ホスト
   const shim = await gitShim();
   restoreShim = shim.restore;
 
-  fetchRegistryRef(shim.cwd, new GitHubAuth(await tokenFile("machine-user-token")));
+  refreshRegistry(shim.cwd, new GitHubAuth(await tokenFile("machine-user-token")));
 
   const { args, env } = observed(shim.record);
   // 空の helper が先頭に来ることが要点である。これは「認証を足す」だけでなく
@@ -101,7 +109,7 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
   const shim = await gitShim();
   restoreShim = shim.restore;
 
-  fetchRegistryRef(shim.cwd, undefined);
+  refreshRegistry(shim.cwd, undefined);
 
   const { args, env } = observed(shim.record);
   expect({ args, token: env.GH_TOKEN }).toEqual({
@@ -114,12 +122,17 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
 // の push / clone と同じ型)。token が盤面自身の process.env へ漏れないことも見る。
 it("認証つき fetch が実際に origin/main を更新し、token は process.env に残らない", async () => {
   const { registryDir, publish } = await makeRemoteBackedRegistry();
-  publish("agents/deckhand.md", "---\nname: deckhand\n---\nstub\n", "merged on remote");
+  const before = gitOut(registryDir, "rev-parse", "refs/remotes/origin/main");
+  const merged = publish("agents/deckhand.md", "---\nname: deckhand\n---\nstub\n", "merged on remote");
 
-  const result = fetchRegistryRef(registryDir, new GitHubAuth(await tokenFile("tok")));
+  const result = refreshRegistry(registryDir, new GitHubAuth(await tokenFile("tok")));
 
-  expect({ available: result.available, leaked: process.env.GH_TOKEN }).toEqual({
-    available: true,
-    leaked: undefined,
-  });
+  // 「落ちなかった」ではなく「**ref が動いた**」を見る: refspec を間違えても
+  // exit 0 は返るので、available だけでは題目を検証したことにならない
+  expect({
+    available: result.available,
+    movedTo: gitOut(registryDir, "rev-parse", "refs/remotes/origin/main"),
+    wasStale: before !== merged,
+    leaked: process.env.GH_TOKEN,
+  }).toEqual({ available: true, movedTo: merged, wasStale: true, leaked: undefined });
 });

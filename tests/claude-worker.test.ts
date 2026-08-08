@@ -17,10 +17,11 @@ import {
 } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
+import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeTask(
   id = "task-1",
@@ -1607,21 +1608,18 @@ describe("ClaudeCodeWorker", () => {
   // ローカル main を意図的に古いまま残すのが要点で、remote 側だけが進んでいる状態は
   // 「GitHub 上で PR が merge されたが、ホストの checkout はまだ動いていない」の形。
   it("remote-backed 盤面の spawn は、ローカル main ではなく origin/main の定義と hash で走る(ADR 0052)", async () => {
-    const registryDir = await makeRegistry();
+    const { registryDir, publish } = await makeRemoteBackedRegistry();
     const git = registryGit(registryDir);
     const staleLocal = git("rev-parse", "main");
-    // merge はリモート上の出来事: 別ブランチで進めて origin/main だけをそこへ向け、
-    // ローカル main は据え置く(fetch 済みの remote-tracking ref を再現する)
-    git("checkout", "-q", "-b", "merged-on-remote");
-    await writeFile(
-      join(registryDir, "agents", "deckhand.md"),
+    // merge はリモート上の出来事。その後 pickup ゲートが fetch を撃つところまでが
+    // spawn の手前で起きること —— ローカル main はどちらでも動かない
+    const mergedOnRemote = publish(
+      "agents/deckhand.md",
       `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand, MERGED on the remote.\n`,
+      "merged registry change",
     );
-    git("add", "-A");
-    git("commit", "-m", "merged registry change");
-    const mergedOnRemote = git("rev-parse", "HEAD");
-    git("update-ref", "refs/remotes/origin/main", mergedOnRemote);
-    git("checkout", "-q", "main");
+    refreshRegistry(registryDir, undefined);
+    expect(git("rev-parse", "main")).toBe(staleLocal);
 
     const db = openDb(":memory:");
     const recorder = recordingSpawn();

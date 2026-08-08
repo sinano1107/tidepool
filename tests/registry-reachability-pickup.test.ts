@@ -1,7 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { loadRegistry, refreshRegistry } from "../src/registry.js";
@@ -10,44 +6,21 @@ import { Slot } from "../src/slot.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 import { FakeClock, healthyUsageText, ScriptedWorker } from "./fakes.js";
-import { makeRegistry } from "./registry-fixture.js";
-
-async function remoteRegistryWithUnfetchedMerge(): Promise<string> {
-  const registryDir = await makeRegistry();
-  const remote = await mkdtemp(join(tmpdir(), "tidepool-registry-remote-"));
-  const publisher = await mkdtemp(join(tmpdir(), "tidepool-registry-publisher-"));
-  execFileSync("git", ["init", "--bare", "-b", "main"], { cwd: remote });
-  execFileSync("git", ["remote", "add", "origin", remote], { cwd: registryDir });
-  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: registryDir });
-  execFileSync("git", ["clone", remote, publisher]);
-  await writeFile(
-    join(publisher, "agents", "deckhand.md"),
-    `---\nname: deckhand\ndescription: Definition merged on remote\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nRemote definition.\n`,
-  );
-  execFileSync("git", ["add", "agents/deckhand.md"], { cwd: publisher });
-  execFileSync(
-    "git",
-    [
-      "-c",
-      "user.name=test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "merged registry change",
-    ],
-    { cwd: publisher },
-  );
-  execFileSync("git", ["push", "origin", "main"], { cwd: publisher });
-  return registryDir;
-}
+import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 // ここが測るのは**ゲートが spawn の手前で実際に fetch を撃つこと**である。worker は
 // fake なので、実 worker がどの ref を読むかはここでは測れない —— それは
 // tests/claude-worker.test.ts の「remote-backed 盤面の spawn は…」が測る。2つ揃って
 // 初めて ADR 0052 決定2 の「観測点と refresh 点は同じ」が閉じる。
 it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)", async () => {
-  const registryDir = await remoteRegistryWithUnfetchedMerge();
+  // リモートにだけ merge が載り、clone の origin/main はまだ古い —— ゲートが
+  // fetch を撃たなければ spawn は古い定義を読む、という状態を作る
+  const { registryDir, publish } = await makeRemoteBackedRegistry();
+  publish(
+    "agents/deckhand.md",
+    `---\nname: deckhand\ndescription: Definition merged on remote\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nRemote definition.\n`,
+    "merged registry change",
+  );
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const spawnedVersions: string[] = [];
@@ -67,7 +40,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     slot: new Slot(),
     worker,
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
-    registryReachability: () => refreshRegistry(registryDir, undefined),
+    registryReachability: async () => refreshRegistry(registryDir, undefined),
   });
   registerTask(
     db,
