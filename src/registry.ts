@@ -324,12 +324,36 @@ const agentFrontmatterSchema = z.looseObject({
  *  discipline moves the checkout's HEAD onto a registry-edit task branch, so a
  *  working-tree read would let unmerged content take effect on spawn. */
 export const REGISTRY_BRANCH = "main";
+export type RegistryMode = "remote-backed" | "purely-local";
+export interface RegistryReachability {
+  available: boolean;
+  reason?: string;
+}
+export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 
 // stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
 // message still rides the thrown error for callers that want it (agentBodyAtCommit
 // swallows it by design).
 const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
+
+/** Refresh the remote-tracking ref immediately before the board trusts it for
+ *  a pickup (ADR 0052). Failure is returned as data so the scheduler can put
+ *  the board into the registry-reachability quarantine instead of throwing. */
+export async function refreshRegistry(dir: string): Promise<RegistryReachability> {
+  try {
+    execFileSync("git", ["fetch", "--quiet", "origin", REGISTRY_BRANCH], {
+      cwd: dir,
+      stdio: GIT_STDIO,
+    });
+    return { available: true };
+  } catch (err) {
+    return {
+      available: false,
+      reason: `the registry remote main could not be refreshed (${String(err)})`,
+    };
+  }
+}
 
 /** Read one committed file's content at `ref` — `git show ref:path`. The board
  *  reads the registry from the committed branch, never the working tree. */
@@ -554,12 +578,13 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-/** Load the registry from committed `main` (ADR 0020) — never the working tree.
- *  Every read (agent definitions, authority profiles, workspaces.yaml) and the
- *  provenance `commit` come from the same ref, so the recorded hash and the
- *  content actually read agree by construction (no dirty flag needed). */
-export function loadRegistry(dir: string): Registry {
-  const ref = REGISTRY_BRANCH;
+/** Load the registry from its declared committed source (ADR 0020 / ADR 0052)
+ *  — remote-tracking main for a remote-backed board, local main for a
+ *  purely-local board, and never the working tree. Every content read and the
+ *  provenance `commit` use the same ref, so they agree by construction. */
+export function loadRegistry(dir: string, mode: RegistryMode = "purely-local"): Registry {
+  const ref =
+    mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
   const agents: Record<string, AgentDefinition> = {};
   for (const path of gitListDir(dir, ref, "agents")) {
     if (!path.endsWith(".md")) continue;

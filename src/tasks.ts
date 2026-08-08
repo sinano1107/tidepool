@@ -119,6 +119,8 @@ export interface Task {
    *  agent — so pickup stops board-wide while it stands. Never set via MCP or
    *  the JSON API. */
   question_quarantine_sandbox: number | null;
+  /** System-internal only (ADR 0052): registry reachability quarantine. */
+  question_quarantine_registry: number | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to, or null for an ordinary task.
    *  `workspace` doubles as the repo half of the reference for such a task. */
@@ -282,6 +284,8 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  question that stands in for an unusable worker sandbox. Never set via
    *  MCP or the JSON API — only quarantineSandbox sets this. */
   quarantine_sandbox?: boolean;
+  /** System-internal only (ADR 0052): registry reachability Confirmation. */
+  quarantine_registry?: boolean;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -323,7 +327,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   const minOptions =
     input.quarantine_workspace !== undefined ||
     input.quarantine_agent !== undefined ||
-    input.quarantine_sandbox !== undefined
+    input.quarantine_sandbox !== undefined ||
+    input.quarantine_registry !== undefined
       ? 1
       : 2;
   for (const item of items) {
@@ -542,6 +547,7 @@ export function registerTask(
     question_quarantine_workspace: input.quarantine_workspace ?? null,
     question_quarantine_agent: input.quarantine_agent ?? null,
     question_quarantine_sandbox: input.quarantine_sandbox ? 1 : null,
+    question_quarantine_registry: input.quarantine_registry ? 1 : null,
     github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
   };
@@ -551,12 +557,12 @@ export function registerTask(
          risk_flag, review_flag, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, question_quarantine_sandbox, github_issue_number, created_at)
+         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @question_quarantine_sandbox, @github_issue_number, @created_at)`,
+         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @github_issue_number, @created_at)`,
     ).run({
       ...task,
       // the stored row keeps title/purpose/completion_criteria genuinely
@@ -1156,6 +1162,18 @@ export function answerQuestion(
         workerId: HUMAN_WORKER_ID,
         origin,
         payload: { kind: "sandbox_reinstated" },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
+
+    if (question.question_quarantine_registry !== null) {
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        origin,
+        payload: { kind: "registry_reinstated" },
         at: now,
       });
       pickupResumed = true;

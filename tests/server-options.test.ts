@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
@@ -35,6 +36,7 @@ function composition(): BoardComposition {
     credential: TEST_CREDENTIAL,
     clock,
     registryDir: undefined,
+    registryMode: "purely-local",
     logDir: "/nonexistent/worker-logs",
     advisorDisabled: false,
     workspaceName: "sandbox",
@@ -47,6 +49,52 @@ function composition(): BoardComposition {
     translationClient: new FakeTranslationClient(),
   };
 }
+
+it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 0052)", async () => {
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "main"], {
+    cwd: registryDir,
+  });
+
+  const options = buildServerOptions({
+    ...composition(),
+    registryDir,
+    registryMode: "remote-backed",
+    workspaceName: "tidepool",
+  });
+
+  expect(options.registryReachability).toBeTypeOf("function");
+});
+
+it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0052)", async () => {
+  const registryDir = await makeRegistry();
+  dirs.push(registryDir);
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
+      { cwd: registryDir },
+    );
+  git("checkout", "-b", "remote-main-update");
+  await writeFile(
+    join(registryDir, "agents", "deckhand.md"),
+    `---\nname: deckhand\ndescription: Definition from remote main\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nRemote definition.\n`,
+  );
+  git("add", "agents/deckhand.md");
+  git("commit", "-m", "remote registry definition");
+  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  git("checkout", "main");
+
+  const options = buildServerOptions({
+    ...composition(),
+    registryDir,
+    registryMode: "remote-backed",
+    workspaceName: "tidepool",
+  });
+
+  expect(options.listAgents?.()[0]?.description).toBe("Definition from remote main");
+});
 
 const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8");
 

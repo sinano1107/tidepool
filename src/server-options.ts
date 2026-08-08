@@ -27,7 +27,9 @@ import {
   loadRegistry,
   ownEntry,
   type RegistryCandidates,
+  type RegistryMode,
   type RosterAgent,
+  refreshRegistry,
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
@@ -96,6 +98,8 @@ export interface BoardComposition {
   clock: Clock;
   /** agent registry のローカルクローン。未設定 → registry 由来の口はすべて不在。 */
   registryDir: string | undefined;
+  /** ADR 0052: declares the registry source without inspecting the clone. */
+  registryMode: RegistryMode;
   /** worker の stream-json トランスクリプトと spawn 時 MCP config の置き場。
    *  ディレクトリの作成そのものはホストの副作用なので合成 root 側に残る。 */
   logDir: string;
@@ -191,12 +195,19 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   return ({ db, clock }) => new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock }));
 }
 
+/** One spelling for every registry-derived composition seam: mode is resolved
+ *  once at the root and no resolver is allowed to fall back to local main. */
+function loadBoardRegistry(board: BoardComposition) {
+  if (!board.registryDir) throw new Error("no registry configured");
+  return loadRegistry(board.registryDir, board.registryMode);
+}
+
 /** The board's own view of the workspace (branch discipline + tree rule):
  *  the same registry entry the worker runs in, resolved to its path. */
 function workspaceConfig(board: BoardComposition): WorkspaceConfig | undefined {
   if (!board.registryDir) return undefined;
   return resolveExecutionWorkspace(
-    loadRegistry(board.registryDir),
+    loadBoardRegistry(board),
     board.workspaceName,
     null,
     board.workspacesDir,
@@ -213,7 +224,7 @@ function workspaceResolver(
   const { registryDir, workspaceName, workspacesDir } = board;
   if (!registryDir) return undefined;
   return (taskWorkspace) =>
-    resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace, workspacesDir);
+    resolveExecutionWorkspace(loadBoardRegistry(board), workspaceName, taskWorkspace, workspacesDir);
 }
 
 /** ADR 0040 の boot 一斉検査の対象: 登録済み workspace 全件。他の resolver たちと
@@ -221,7 +232,7 @@ function workspaceResolver(
  *  いう概念自体が無い。 */
 function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
   if (!board.registryDir) return [];
-  return listRegisteredWorkspaces(loadRegistry(board.registryDir), board.workspacesDir);
+  return listRegisteredWorkspaces(loadBoardRegistry(board), board.workspacesDir);
 }
 
 /** fable モデルに解決される agent 名の集合 (ADR 0030)、毎 poll registry から
@@ -233,7 +244,7 @@ function fableAgentsResolver(board: BoardComposition): (() => string[]) | undefi
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
-    Object.values(loadRegistry(registryDir).agents)
+    Object.values(loadBoardRegistry(board).agents)
       .filter((agent) => agent.model?.toLowerCase().includes("fable"))
       .map((agent) => agent.name);
 }
@@ -254,7 +265,7 @@ function authorityResolver(
   if (!registryDir) return undefined;
   return (assignee) => {
     try {
-      return resolveExecutionAgent(loadRegistry(registryDir), defaultAgentName, assignee).profile;
+      return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee).profile;
     } catch (err) {
       if (!(err instanceof UnknownAgentError)) throw err;
       return undefined;
@@ -271,7 +282,7 @@ function agentRegisteredChecker(board: BoardComposition): ((name: string) => boo
   if (!registryDir) return undefined;
   // ownEntry, not `in`: `in` walks the prototype chain, so a name like
   // "toString" would clear an agent quarantine without any repair (issue #69)
-  return (name) => ownEntry(loadRegistry(registryDir).agents, name) !== undefined;
+  return (name) => ownEntry(loadBoardRegistry(board).agents, name) !== undefined;
 }
 
 /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
@@ -289,7 +300,7 @@ function protectedWorkspaceChecker(
   // ownEntry for consistency with issue #69's sweep — a prototype hit would
   // already answer "not protected", but bare bracket access on registry
   // records is the exact pattern the sweep exists to remove
-  return (name) => ownEntry(loadRegistry(registryDir).workspaces, name)?.protected === true;
+  return (name) => ownEntry(loadBoardRegistry(board).workspaces, name)?.protected === true;
 }
 
 /** The pull half of the roster (issue #43 / ADR 0014), read fresh against the
@@ -299,7 +310,7 @@ function listAgentsResolver(board: BoardComposition): (() => RosterAgent[]) | un
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
-    Object.values(loadRegistry(registryDir).agents).map((agent) => ({
+    Object.values(loadBoardRegistry(board).agents).map((agent) => ({
       name: agent.name,
       description: agent.description,
     }));
@@ -309,7 +320,7 @@ function listAgentsResolver(board: BoardComposition): (() => RosterAgent[]) | un
  *  Without a registry there's nothing to suggest from. */
 function registryCandidates(board: BoardComposition): RegistryCandidates | undefined {
   if (!board.registryDir) return undefined;
-  const registry = loadRegistry(board.registryDir);
+  const registry = loadBoardRegistry(board);
   const icons: Record<string, string> = {};
   for (const agent of Object.values(registry.agents)) {
     if (agent.icon !== undefined) icons[agent.name] = agent.icon;
@@ -363,7 +374,7 @@ function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
     update: (input) => updateAgent(input, deps),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
-    authorityProfiles: () => Object.keys(loadRegistry(registryDir).authority),
+    authorityProfiles: () => Object.keys(loadBoardRegistry(board).authority),
   };
 }
 
@@ -424,6 +435,10 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
+    registryReachability:
+      board.registryDir && board.registryMode === "remote-backed"
+        ? () => refreshRegistry(board.registryDir!)
+        : undefined,
     // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。

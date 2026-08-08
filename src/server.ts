@@ -22,7 +22,13 @@ import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
+import type {
+  AuthorityProfile,
+  RegistryCandidates,
+  RegistryReachabilityCheck,
+  RosterAgent,
+} from "./registry.js";
+import { quarantineRegistryReachability } from "./registry-reachability.js";
 import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
@@ -116,6 +122,8 @@ export interface ServerOptions {
    *  the scheduler's fable line and the queue view. Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
+  /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
+  registryReachability?: RegistryReachabilityCheck;
   /** The pull half of the roster (issue #43 / ADR 0014), read fresh against
    *  the registry by the caller — same pattern as `agentRegistered`. Absent
    *  → no registry configured, so `list_agents` reports only `human`. */
@@ -184,6 +192,19 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
+  // ADR 0052: refresh once at boot so a quiet board still reports a broken
+  // registry remote promptly. This is deliberately fail-open for the human
+  // surface: failure creates the same Confirmation question as pickup and is
+  // logged loudly, but never rejects server startup. The pickup gate remains
+  // the enforcement floor.
+  if (options.registryReachability) {
+    const reachability = await options.registryReachability();
+    if (!reachability.available) {
+      const reason = reachability.reason ?? "registry remote is unreachable";
+      console.error(`[registry] startup refresh failed; pickup is stopped: ${reason}`);
+      quarantineRegistryReachability(db, reason, options.clock.now());
+    }
+  }
   // a restart interrupts any running task (ADR 0001): it drops into the same
   // failure-escalation path as a watchdog kill, so the slot never wedges past
   // a restart (#9) — no graceful-drain machinery exists or is needed
@@ -253,6 +274,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     github: options.github,
     fableAgents: options.fableAgents,
     containment,
+    registryReachability: options.registryReachability,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
@@ -332,6 +354,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
       containment,
+      registryReachability: options.registryReachability,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin: options.workspaceAdmin,
@@ -362,6 +385,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
       containment,
+      registryReachability: options.registryReachability,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
       workspaceAdmin: options.workspaceAdmin,

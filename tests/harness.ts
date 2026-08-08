@@ -16,7 +16,12 @@ import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
-import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "../src/registry.js";
+import type {
+  AuthorityProfile,
+  RegistryCandidates,
+  RegistryReachabilityCheck,
+  RosterAgent,
+} from "../src/registry.js";
 import type { SandboxCapability } from "../src/sandbox.js";
 import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
@@ -128,6 +133,8 @@ export interface BootOptions {
    *  by the scheduler's fable line and the queue view. Absent → no fable
    *  model resolution, so the fable line never skips anything. */
   fableAgents?: () => string[];
+  /** ADR 0052: remote-backed registry reachability seam. */
+  registryReachability?: RegistryReachabilityCheck;
   /** 封じ込め能力ゲートの fs 半分(ADR 0033 / issue #60)。**渡すとゲートごと
    *  arm される**ので、人間面の自己検査(ADR 0036 / issue #154)も一緒に効く。
    *  Absent → ゲートを持たない盤面(既定): テストの spawn は ScriptedWorker で、
@@ -201,6 +208,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
+    registryReachability: options.registryReachability,
     boardState: options.boardState,
     containment: options.sandboxCapability && {
       sandboxCapability: options.sandboxCapability,

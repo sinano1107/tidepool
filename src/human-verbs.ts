@@ -5,6 +5,7 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
+import type { RegistryReachabilityCheck } from "./registry.js";
 import {
   answerQuestion,
   assertAnswerable,
@@ -263,6 +264,7 @@ export interface SubmitAnswerDeps {
   retryPrPromotion?: (task: Task) => Promise<void>;
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
+  registryReachability?: RegistryReachabilityCheck;
   boardState?: BoardStatePath[];
 }
 
@@ -395,6 +397,15 @@ export async function submitAnswer(
     if (!capability.available) {
       throw new DomainError(
         `worker containment is still not established: ${capability.reason}`,
+      );
+    }
+  }
+
+  if (task.question_quarantine_registry !== null && deps.registryReachability) {
+    const reachability = await deps.registryReachability();
+    if (!reachability.available) {
+      throw new DomainError(
+        `registry remote is still unreachable: ${reachability.reason ?? "refresh failed"}`,
       );
     }
   }

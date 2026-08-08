@@ -26,6 +26,7 @@ import {
 import { toolError, toolResult } from "./mcp.js";
 import { isPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
+import type { RegistryReachabilityCheck } from "./registry.js";
 import {
   InvalidAgentNameError,
   InvalidAuthorityProfileNameError,
@@ -71,6 +72,7 @@ export interface ManagementMcpDeps {
   agentRegistered?: (name: string) => boolean;
   isProtectedWorkspace?: (name: string) => boolean;
   containment?: ContainmentCheck;
+  registryReachability?: RegistryReachabilityCheck;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
   workspaceAdmin?: Partial<WorkspaceAdmin>;
@@ -561,6 +563,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               retryPrPromotion: deps.retryPrPromotion,
               agentRegistered: deps.agentRegistered,
               containment: deps.containment,
+              registryReachability: deps.registryReachability,
               boardState: deps.boardState,
             },
             task,

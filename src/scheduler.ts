@@ -4,6 +4,8 @@ import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
+import type { RegistryReachabilityCheck } from "./registry.js";
+import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
@@ -118,6 +120,8 @@ export function startScheduler(deps: {
    *  1往復するので非同期。Absent → ゲートそのものを持たない盤面 — 実 CLI を
    *  持たないテストの既定形で、本番の配線(server.ts)は常に実検査を渡す。 */
   containment?: ContainmentCheck;
+  /** ADR 0052: refreshes remote main only when a pickup candidate exists. */
+  registryReachability?: RegistryReachabilityCheck;
 }): Scheduler {
   const {
     db,
@@ -130,6 +134,7 @@ export function startScheduler(deps: {
     github,
     fableAgents,
     containment,
+    registryReachability,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimer(clock, pollNow);
@@ -282,6 +287,11 @@ export function startScheduler(deps: {
         if (fableWindow?.throttled && fableWindow.resumeAt) resumeTimer.schedule(fableWindow.resumeAt);
         return;
       }
+      if (
+        registryReachability &&
+        (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))
+      )
+        return;
       if (!(await issuePickupGate(head))) return;
       pickup(head);
     } finally {

@@ -41,6 +41,7 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   type RegistryCandidates,
+  type RegistryReachabilityCheck,
 } from "./registry.js";
 import { RegistryCloneBusyError } from "./registry-write.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
@@ -476,6 +477,8 @@ export interface ApiRouterDeps {
    *  fs 側の成立だけで解除できてしまってはならない。
    *  Absent → そのゲートを持たない盤面。 */
   containment?: ContainmentCheck;
+  /** ADR 0052: re-runs refresh before accepting a registry quarantine answer. */
+  registryReachability?: RegistryReachabilityCheck;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -548,6 +551,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     defaultAgentName,
     agentRegistered,
     containment,
+    registryReachability,
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
@@ -1081,6 +1085,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           retryPrPromotion,
           agentRegistered,
           containment,
+          registryReachability,
           boardState,
         },
         task,

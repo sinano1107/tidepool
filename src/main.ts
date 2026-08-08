@@ -130,6 +130,7 @@ const server = await startServer(
     credential,
     clock: new SystemClock(),
     registryDir,
+    registryMode: registryDir ? "remote-backed" : "purely-local",
     logDir,
     advisorDisabled,
     workspaceName,

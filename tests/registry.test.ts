@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -54,6 +55,49 @@ describe("assertValidWorkspaceName", () => {
 });
 
 describe("loadRegistry", () => {
+  it("remote-backed はローカル main ではなく更新済み origin/main を読む(ADR 0052)", async () => {
+    const dir = await makeRegistry();
+    const remote = await mkdtemp(join(tmpdir(), "tidepool-registry-remote-"));
+    const publisher = await mkdtemp(join(tmpdir(), "tidepool-registry-publisher-"));
+    execFileSync("git", ["init", "--bare", "-b", "main"], { cwd: remote });
+    execFileSync("git", ["remote", "add", "origin", remote], { cwd: dir });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: dir });
+    execFileSync("git", ["clone", remote, publisher]);
+    await writeFile(
+      join(publisher, "agents", "deckhand.md"),
+      `---\nname: deckhand\ndescription: Merged registry definition\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are the merged Deckhand.\n`,
+    );
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "add",
+        "agents/deckhand.md",
+      ],
+      { cwd: publisher },
+    );
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "merged registry change",
+      ],
+      { cwd: publisher },
+    );
+    execFileSync("git", ["push", "origin", "main"], { cwd: publisher });
+    execFileSync("git", ["fetch", "origin", "main"], { cwd: dir });
+
+    expect(loadRegistry(dir, "remote-backed").agents.deckhand!.version).toBe("0.4.0");
+  });
+
   it("agent 定義を読み込む: frontmatter の version と authority 参照、本文がシステムプロンプト", async () => {
     const dir = await makeRegistry();
     const registry = loadRegistry(dir);
