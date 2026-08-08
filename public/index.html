@@ -706,15 +706,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   );
 }
 
-// One toast shape for every registry commit outcome (create and edit share
-// it). A push failure is no longer a soft warning here — it throws, and the
-// caller's own catch block shows it as an error (ADR 0052 決定1: landing on
-// the remote main is the definition of "took effect", issue #57's non-fatal
-// push is withdrawn) — this only narrates the success path.
-function sayCommitResult(say, msg, name) {
-  say('success', msg, name);
-}
-
 // The client-side mirror of the server's REGISTRY_NAME_PATTERN gate, shared by
 // the workspace / agent / profile create forms — the name becomes a directory
 // or a file name in the registry, so the three share one rule. It drives the
@@ -803,7 +794,7 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
         if (!prot) body.confirm = confirmed;
       }
       await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, 'PATCH');
-      sayCommitResult(say, 'workspace updated — committed to the registry', ws.name);
+      say('success', 'workspace updated — committed to the registry', ws.name);
       edit.close();
       await onChanged();
     } catch (err) {
@@ -998,7 +989,7 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
     setBusy(true);
     try {
       await api(`/api/agents/${encodeURIComponent(agent.name)}`, agentBody(draft), 'PATCH');
-      sayCommitResult(say, 'agent updated — committed to the registry', agent.name);
+      say('success', 'agent updated — committed to the registry', agent.name);
       edit.close();
       await onChanged();
     } catch (err) {
@@ -1258,7 +1249,7 @@ function useProfileSave(say, onDone) {
       try {
         await api(path, confirmDangerous ? { ...body, confirmDangerous: true } : body, method);
         setConfirm(null);
-        sayCommitResult(say, `profile ${verb} — committed to the registry`, name);
+        say('success', `profile ${verb} — committed to the registry`, name);
         await onDone();
       } catch (err) {
         // the #77 confirmation 409 is distinguished from any other failure
@@ -1570,7 +1561,7 @@ function NewWorkspaceForm({ say, onCreated, edit }) {
         ...(notes.trim() ? { notes: notes.trim() } : {}),
         ...(prot ? { protected: true } : {}),
       });
-      sayCommitResult(say, 'workspace added — committed to the registry', name.trim());
+      say('success', 'workspace added — committed to the registry', name.trim());
       edit.close();
       await onCreated();
     } catch (err) {
@@ -1638,7 +1629,7 @@ function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, 
     setBusy(true);
     try {
       await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
-      sayCommitResult(say, 'agent added — committed to the registry', name.trim());
+      say('success', 'agent added — committed to the registry', name.trim());
       edit.close();
       await onCreated();
     } catch (err) {

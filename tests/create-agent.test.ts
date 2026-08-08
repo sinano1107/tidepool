@@ -207,6 +207,20 @@ describe("createAgent: checkout の位置に依存しない書き込み(ADR 0052
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
   });
 
+  it("純ローカル registry で HEAD が main のまま書き込んでも、クローン自身の checkout に中途半端な状態を残さない(/code-review 指摘)", async () => {
+    const registryDir = await makeMainRegistry();
+    // HEAD はデフォルトで main — このまま(task ブランチへ逃がさず)書き込む
+
+    await createAgent(input, { registryDir, registryMode: "purely-local" });
+
+    expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeDefined();
+    // update-ref はローカル `main` の位置だけを動かし working tree/index を
+    // 素通りする — HEAD が main を指したままだと index が新しい tip を知らず、
+    // 次にこの checkout で走る commit(release の WIP commit や手編集)が
+    // 今回追加した agents/tako.md を静かに削除してしまう窓が開く
+    expect(git(registryDir, "status", "--porcelain")).toBe("");
+  });
+
   it("入口の fetch が検証に効く — リモートで先に merge された同名エージェントを見逃さない(issue #210 レビュー — 決定4)", async () => {
     const { registryDir, publish } = await makeRemoteBackedRegistry();
     // 人間の merge を模す: ローカルの remote-tracking ref が知らないうちに

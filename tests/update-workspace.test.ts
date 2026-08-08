@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadRegistry } from "../src/registry.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import {
   listWorkspaceViews,
   RegistrySelfUnprotectError,
@@ -155,6 +156,22 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
       "update workspace tidepool via WebUI",
     );
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const deps = { ...(await makeDeps(registryDir)), registryMode: "remote-backed" as const };
+    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+    await expect(
+      updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps),
+    ).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).not.toBe(
+      "the registry clone itself",
+    );
   });
 });
 

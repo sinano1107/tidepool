@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { updateProfile } from "../src/profile-create.js";
 import { loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -71,6 +72,29 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
       "update authority profile standard via WebUI",
     );
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+    await expect(
+      updateProfile(
+        {
+          name: "standard",
+          guidance: "Rewritten guidance.",
+          assignable_to: ["deckhand"],
+          allowed_workspaces: ["tidepool"],
+        },
+        { registryDir, registryMode: "remote-backed" },
+      ),
+    ).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(loadRegistry(registryDir, "remote-backed").authority.standard?.guidance).not.toBe(
+      "Rewritten guidance.",
+    );
   });
 });
 

@@ -77,9 +77,8 @@ export interface AgentAdminDeps {
   githubAuth?: GitHubAuth;
 }
 
-/** ADR 0020's agent half: write `agents/<name>.md` to the registry clone and
- *  commit it to local main directly — a WebUI-initiated registry change is
- *  the human's explicit act. */
+/** ADR 0020's agent half: write `agents/<name>.md` to the registry — a
+ *  WebUI-initiated registry change is the human's explicit act. */
 export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4): fetch できなければ push もでき
   // ず、その編集は最初から成立していない — workspace-create と同じ二段検査

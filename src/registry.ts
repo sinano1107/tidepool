@@ -332,6 +332,15 @@ export const REGISTRY_BRANCH = "main";
  *  のも同じ理由で、`loadRegistry` の引数を必須にしてある。 */
 export type RegistryMode = "remote-backed" | "purely-local";
 
+/** `mode` が指す、盤面が registry を読み書きする1つの ref — remote-tracking
+ *  main（remote-backed)か、ローカル main そのもの(purely-local)。`loadRegistry`
+ *  の読みと `registry-write.ts` の書き込みが同じ関数を呼ぶことで、両者が同じ
+ *  ref を指す(`refreshRegistryForWrite` が支えたい不変条件そのもの)ことを
+ *  2箇所の複製ではなく1箇所の共有で保証する。 */
+export function registryRef(mode: RegistryMode): string {
+  return mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
+}
+
 export interface RegistryReachability {
   available: boolean;
   reason?: string;
@@ -634,8 +643,7 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
  *  フォールバックなので、必須にして tsc に全呼び出しを名指しさせる
  *  (containment.ts の「省略 = 無制限という footgun は作らない」と同じ線)。 */
 export function loadRegistry(dir: string, mode: RegistryMode): Registry {
-  const ref =
-    mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
+  const ref = registryRef(mode);
   const agents: Record<string, AgentDefinition> = {};
   for (const path of gitListDir(dir, ref, "agents")) {
     if (!path.endsWith(".md")) continue;

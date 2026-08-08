@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
 import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
 import { loadRegistry } from "../src/registry.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -102,6 +103,30 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
       "update agent deckhand via WebUI",
     );
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+    await expect(
+      updateAgent(
+        {
+          name: "deckhand",
+          authority: "standard",
+          description: "Rewritten description",
+          skills: ["@workspace"],
+          systemPrompt: "You are Deckhand, rewritten.",
+        },
+        { registryDir, registryMode: "remote-backed" },
+      ),
+    ).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(loadRegistry(registryDir, "remote-backed").agents.deckhand?.description).not.toBe(
+      "Rewritten description",
+    );
   });
 });
 
