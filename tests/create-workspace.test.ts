@@ -43,6 +43,14 @@ async function makeUpstream(defaultBranch = "main"): Promise<string> {
   return dir;
 }
 
+/** register モードが登録する「ホスト上に既にある checkout」— origin を持つ実クローン。 */
+async function makeExistingCheckout(upstream: string): Promise<string> {
+  const parent = await mkdtemp(join(tmpdir(), "tidepool-existing-"));
+  const dir = join(parent, "checkout");
+  git(parent, "clone", "--quiet", upstream, dir);
+  return dir;
+}
+
 async function makeDeps(registryDir: string) {
   return {
     registry: { dir: registryDir, mode: "purely-local" as const },
@@ -113,6 +121,38 @@ describe("createWorkspace: register モード(issue #57)", () => {
     // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
     // (ADR 0052 決定6: clone の working tree は正本ではないので触れない)
     expect(git(registryDir, "log", "-1", "--format=%an")).toBe("tidepool");
+  });
+
+  // ADR 0052 決定3 / issue #211: `repo` は機械が読むフィールドへ昇格した ——
+  // 「この workspace はリモートの正本を持つ」の宣言である。register モードは今日
+  // `{ path }` しか書かないので、盤面が checkout の origin URL を読んで焼く。
+  // 焼かなければ、既存 checkout として登録された remote 付き workspace は
+  // purely-local と宣言され続け、merge 済みの成果が見えない地点からタスクが始まる。
+  it("origin を持つ既存 checkout の登録では、その URL が repo として焼かれる", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const upstream = await makeUpstream();
+    const checkout = await makeExistingCheckout(upstream);
+
+    await createWorkspace({ mode: "register", name: "sandbox", path: checkout }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({
+      path: checkout,
+      repo: upstream,
+    });
+  });
+
+  // 逆向き。remote を持たない checkout に `repo` を書けば、その宣言と実態のずれが
+  // pickup で quarantine に落ちる —— 登録がその状態を自分で作ってはならない。
+  it("origin を持たない既存 checkout の登録では repo を書かない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const checkout = await mkdtemp(join(tmpdir(), "tidepool-local-only-"));
+    git(checkout, "init", "-b", "main");
+
+    await createWorkspace({ mode: "register", name: "sandbox", path: checkout }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: checkout });
   });
 });
 

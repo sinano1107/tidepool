@@ -29,6 +29,7 @@ import {
   type RegistryCandidates,
   type RegistryMode,
   type RegistryReachability,
+  type RegistrySource,
   type RosterAgent,
   refreshRegistry,
 } from "./registry.js";
@@ -175,6 +176,7 @@ export function buildWorkerOptions(
     // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
     // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
     // 「人間の merge を通った内容が spawn に効く」は成立しない。
+    // 組を書き下す2箇所目にして最後(理由は `registrySource` の doc comment)
     registry: { dir: board.registryDir, mode: board.registryMode },
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
@@ -221,6 +223,20 @@ function loadBoardRegistry(board: BoardComposition) {
  *  分かるまで本番の口は開けない。 */
 export function declaredRegistryMode(registryDir: string | undefined): RegistryMode {
   return registryDir ? "remote-backed" : "purely-local";
+}
+
+/** この盤面が読み書きする registry を1つの `RegistrySource` として。**組を組み立てる
+ *  唯一の場所**である —— `RegistrySource` 自身の doc comment が「必ず一緒に運ばれる
+ *  ので1つの型にまとめる」と言っているのに、合成 root が `{ dir, mode }` を各所で
+ *  書き下すと型を作った意味が薄れる(/code-review Standards 軸の指摘)。registry が
+ *  無ければ registry という概念自体が無い盤面なので undefined —— 呼び出し側の
+ *  `registryDir` ゲートはこの不在の検査そのものに置き換わる。
+ *
+ *  `buildWorkerOptions` だけはここを通らない: あちらの `board` は型で
+ *  `registryDir: string` に絞られており、`ClaudeWorkerOptions.registry` は任意では
+ *  ない口なので、undefined を許す面と噛み合わない。 */
+function registrySource(board: BoardComposition): RegistrySource | undefined {
+  return board.registryDir ? { dir: board.registryDir, mode: board.registryMode } : undefined;
 }
 
 /** ADR 0052 決定2 の**起動時**の refresh 点。`buildServerOptions` の先頭で、
@@ -416,14 +432,14 @@ function workspaceAdmin(
   board: BoardComposition,
   github: ServerOptions["github"],
 ): WorkspaceAdmin | undefined {
-  const { registryDir, githubAuth, boardState } = board;
-  if (!registryDir) return undefined;
+  const registry = registrySource(board);
+  if (!registry) return undefined;
   // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
   const deps = {
-    registry: { dir: registryDir, mode: board.registryMode },
+    registry,
     workspacesBaseDir: board.workspacesDir,
-    githubAuth,
-    boardState,
+    githubAuth: board.githubAuth,
+    boardState: board.boardState,
   };
   return {
     create: (input) => createWorkspace(input, { ...deps, github }),
@@ -437,9 +453,9 @@ function workspaceAdmin(
  *  finished callbacks. Without a registry there is nowhere to administer
  *  agents at all. */
 function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
-  const { registryDir, githubAuth } = board;
-  if (!registryDir) return undefined;
-  const deps = { registry: { dir: registryDir, mode: board.registryMode }, githubAuth };
+  const registry = registrySource(board);
+  if (!registry) return undefined;
+  const deps = { registry, githubAuth: board.githubAuth };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -455,9 +471,9 @@ function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
  *  these verbs only persist. Without a registry there is nowhere to administer
  *  profiles at all. */
 function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
-  const { registryDir, githubAuth } = board;
-  if (!registryDir) return undefined;
-  const deps = { registry: { dir: registryDir, mode: board.registryMode }, githubAuth };
+  const registry = registrySource(board);
+  if (!registry) return undefined;
+  const deps = { registry, githubAuth: board.githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),
@@ -511,6 +527,13 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
     registryReachability: registryReachabilityCheck(board),
+    // ADR 0024 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
+    // machine user 名義で撃つ。落とすと private な remote の workspace が黙って
+    // quarantine に落ち続ける(fail-closed だが理由が「認証が無い」になる)。
+    githubAuth: board.githubAuth,
+    // ADR 0052 決定3 / issue #211: registry clone が workspace としても登録されている
+    // ときの「2つの宣言」の突き合わせ先。registry が無い盤面には食い違う相手が無い。
+    registry: registrySource(board),
     // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。

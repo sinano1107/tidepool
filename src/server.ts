@@ -17,6 +17,7 @@ import {
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
@@ -26,6 +27,7 @@ import type {
   AuthorityProfile,
   RegistryCandidates,
   RegistryReachabilityCheck,
+  RegistrySource,
   RosterAgent,
 } from "./registry.js";
 import type { SandboxCapability } from "./sandbox.js";
@@ -123,6 +125,17 @@ export interface ServerOptions {
   fableAgents?: () => string[];
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0024 / issue #211: the board's GitHub identity, for the pickup-time
+   *  fetch of a remote-backed workspace (ADR 0052 決定2). Absent → the board
+   *  declares no GitHub identity and that fetch runs bare, the same posture as
+   *  the optional `github` client above. */
+  githubAuth?: GitHubAuth;
+  /** ADR 0052 決定3 / issue #211: which registry clone the board reads, plus its
+   *  remote-source-of-truth declaration. Needed at pickup because the registry
+   *  clone can also be a registered workspace, and then it carries **two**
+   *  declarations whose disagreement quarantines it. Absent → no registry at
+   *  all, so there is no second declaration to disagree with. */
+  registry?: RegistrySource;
   /** The pull half of the roster (issue #43 / ADR 0014), read fresh against
    *  the registry by the caller — same pattern as `agentRegistered`. Absent
    *  → no registry configured, so `list_agents` reports only `human`. */
@@ -266,6 +279,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     fableAgents: options.fableAgents,
     containment,
     registryReachability: options.registryReachability,
+    githubAuth: options.githubAuth,
+    registry: options.registry,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger

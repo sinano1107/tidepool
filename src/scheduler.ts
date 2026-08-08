@@ -2,9 +2,10 @@ import type { Clock } from "./clock.js";
 import { type ContainmentCheck, containmentPickupBlocked } from "./containment.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
-import type { RegistryReachabilityCheck } from "./registry.js";
+import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
@@ -23,7 +24,7 @@ import type { WorkerAdapter } from "./worker.js";
 import {
   BOARD_WORKER_ID,
   buildWorkspaceResolver,
-  ensureTaskBranch,
+  prepareWorkspaceAtPickup,
   quarantineWorkspace,
   resolveOrQuarantine,
   type WorkspaceConfig,
@@ -122,6 +123,16 @@ export function startScheduler(deps: {
   containment?: ContainmentCheck;
   /** ADR 0052: refreshes remote main only when a pickup candidate exists. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0024 / issue #211: 盤面の GitHub 身元。remote 正本を宣言した workspace の
+   *  pickup 直前の fetch(ADR 0052 決定2)がこの名義で撃つ。Absent → 盤面が GitHub
+   *  身元を持たない宣言なので fetch は素の git に委ねる —— private な remote なら
+   *  そこで失敗し、その workspace の quarantine が人間を呼ぶ。 */
+  githubAuth?: GitHubAuth;
+  /** ADR 0052 決定3 / issue #211: どの registry clone を読むか + その remote 正本の
+   *  宣言。pickup で要るのは、registry clone が workspace としても登録されていると
+   *  **2つの宣言**を持ち、その食い違いが quarantine になるからである。Absent →
+   *  registry を持たない盤面なので、食い違う相手の宣言そのものが無い。 */
+  registry?: RegistrySource;
 }): Scheduler {
   const {
     db,
@@ -135,6 +146,8 @@ export function startScheduler(deps: {
     fableAgents,
     containment,
     registryReachability,
+    githubAuth,
+    registry,
   } = deps;
   let inFlight = false;
   const resumeTimer = createResumeTimer(clock, pollNow);
@@ -180,9 +193,11 @@ export function startScheduler(deps: {
       // for the watchdog (the picked task itself isn't the failure), but the
       // *workspace* is quarantined immediately rather than surfacing only as
       // a console.error, so a human sees an actionable repair question and
-      // no other task aimed at this workspace gets picked up meanwhile
+      // no other task aimed at this workspace gets picked up meanwhile.
+      // ADR 0052 / issue #211: remote 正本の宣言と実態のずれ、そしてその refresh の
+      // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
       try {
-        ensureTaskBranch(resolved, picked.id);
+        prepareWorkspaceAtPickup(resolved, picked.id, { githubAuth, registry });
       } catch (err) {
         quarantineWorkspace(db, resolved.name, err, clock.now());
         return;

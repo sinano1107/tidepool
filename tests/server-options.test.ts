@@ -4,6 +4,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
+import { GitHubAuth } from "../src/github-auth.js";
 import {
   type BoardComposition,
   buildServerOptions,
@@ -89,6 +90,9 @@ it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 
   });
 
   expect(options.registryReachability).toBeTypeOf("function");
+  // 上の purely-local な1本との対(ADR 0041 §5 の「解決子ごとに別々の答え」): pickup が
+  // 読む `registry` の mode は**宣言から**来ていて、clone を覗いた結果ではない
+  expect(options.registry).toEqual({ dir: registryDir, mode: "remote-backed" });
 });
 
 // Codex のレビュー指摘そのものの筋書き。`git remote remove` は remote-tracking ref
@@ -343,10 +347,14 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   });
   dirs.push(registryDir);
   const workspacesDir = "/base/workspaces";
+  // ADR 0024: 盤面の GitHub 身元。token ファイルは読まれるまで触られないので、実在
+  // しないパスでも「身元を持つ盤面」を組める(同一性だけを見る下の assertion 用)
+  const githubAuth = new GitHubAuth("/nonexistent/github-token");
   const options = buildServerOptions({
     ...composition(),
     registryDir,
     workspacesDir,
+    githubAuth,
     // `workspaceName` と `defaultAgentName` と `auditorName` はどれも string で、
     // 取り違えても型検査は黙る。fixture に実在するのは前2つが指す名前だけなので、
     // 入れ替われば下の解決がそのまま失敗する。
@@ -381,4 +389,13 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.profileAdmin).toBeDefined();
   const swept = options.boardState?.listWorkspaces().map((ws) => ws.name);
   expect(swept?.sort()).toEqual(["derived", "guarded", "tidepool"]);
+  // ADR 0052 決定3 / issue #211: pickup が registry clone の2宣言を突き合わせるのに
+  // 使う口。`registryDir` ゲートで初めて立つので、上の網羅(registry 未設定)では
+  // `undefined` のままキーだけが揃い、何が刺さっているかは分からない。dir と宣言
+  // された mode の**組**を名指しで要求する(下の remote-backed の1本と対で、mode が
+  // 宣言から来ていることまで見る)
+  expect(options.registry).toEqual({ dir: registryDir, mode: "purely-local" });
+  // ADR 0024: workspace の pickup 時 fetch がこの名義で撃つ。落とすと private remote の
+  // workspace が「認証が無い」理由で黙って quarantine に落ち続ける
+  expect(options.githubAuth).toBe(githubAuth);
 });
