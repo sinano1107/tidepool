@@ -93,3 +93,27 @@ it("ローカルの保護ブランチが分岐していて ff できなければ
   // 人間の帯域外コミットは消えていない
   expect(git(workspace.path, "show", "main:by-hand.txt")).toBe("committed on the host");
 });
+
+// 分岐の**片側だけ**の姿。ローカルが先行しているだけならリモートへの ff は「もう最新」
+// として通ってしまうが、休止位置としては嘘である —— そこに載っているのは push されて
+// いないローカル専用のコミットで、リモートを見ている人間の理解と食い違う。決定7 が
+// 求めているのは「ff コマンドが成功したこと」ではなく「リモートへ追従していること」
+// なので、検査は位置の一致で行う(/code-review Spec 軸の指摘)。
+it("ローカルの保護ブランチがリモートより先行しているだけでも quarantine に落ちる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  // 帯域外の手作業: ホスト上でローカル main に直接コミットしたが push していない。
+  // リモートは動いていないので、ff は「もう最新」として黙って成功する
+  writeFileSync(join(workspace.path, "by-hand.txt"), "committed on the host\n");
+  git(workspace.path, "add", "-A");
+  git(workspace.path, "commit", "-m", "out-of-band local work, never pushed");
+
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "runs on a clone that is ahead");
+  await t.clock.advance(HOUR);
+  await complete(t, task.id);
+
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const question = list.find((x: any) => x.type === "question");
+  expect(question?.title).toContain("workspace sandbox needs human attention");
+  expect(git(workspace.path, "show", "main:by-hand.txt")).toBe("committed on the host");
+});

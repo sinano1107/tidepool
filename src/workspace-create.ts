@@ -12,7 +12,13 @@ import {
   type WorkspaceEntry,
 } from "./registry.js";
 import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
-import { conventionCheckoutPath, git, resolvesToRegistryClone, UnknownWorkspaceError } from "./workspace.js";
+import {
+  conventionCheckoutPath,
+  git,
+  originUrl,
+  resolvesToRegistryClone,
+  UnknownWorkspaceError,
+} from "./workspace.js";
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
  *  resulting Workspace — the mode is a circumstance of creation, not a kind
@@ -242,11 +248,8 @@ async function buildEntry(
  *  validated that (a checkout can be placed after the entry), so the absent
  *  declaration is the honest one to write. */
 function registerExistingCheckout(path: string): WorkspaceEntry {
-  try {
-    return { path, repo: git(path, "remote", "get-url", "origin") };
-  } catch {
-    return { path };
-  }
+  const repo = originUrl(path);
+  return repo === undefined ? { path } : { path, repo };
 }
 
 /** The clone mode's external half: a checkout at the convention-derived

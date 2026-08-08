@@ -354,13 +354,22 @@ export interface RegistrySource {
   mode: RegistryMode;
 }
 
+/** リモート側のブランチを指す remote-tracking ref の**綴り**。ADR 0052 のもとで
+ *  「リモートの正本を読む」は registry の役(`registryRef` の下)と workspace の役
+ *  (`protectedBranchRef`)の2箇所に現れるが、綴りそのものは1つでなければならない
+ *  —— 2つ持つと、片方だけを直したときに黙ってずれる(/code-review Standards 軸の
+ *  指摘)。どちらの ref を読むかの判断は各役の宣言が持ち、ここは綴りだけを持つ。 */
+export function remoteTrackingRef(branch: string): string {
+  return `refs/remotes/origin/${branch}`;
+}
+
 /** `mode` が指す、盤面が registry を読み書きする1つの ref — remote-tracking
  *  main（remote-backed)か、ローカル main そのもの(purely-local)。`loadRegistry`
  *  の読みと `registry-write.ts` の書き込みが同じ関数を呼ぶことで、両者が同じ
  *  ref を指す(`refreshRegistryForWrite` が支えたい不変条件そのもの)ことを
  *  2箇所の複製ではなく1箇所の共有で保証する。 */
 export function registryRef(mode: RegistryMode): string {
-  return mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
+  return mode === "remote-backed" ? remoteTrackingRef(REGISTRY_BRANCH) : REGISTRY_BRANCH;
 }
 
 export interface RegistryReachability {

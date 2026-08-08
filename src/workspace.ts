@@ -10,6 +10,7 @@ import {
   REGISTRY_BRANCH,
   type Registry,
   type RegistrySource,
+  remoteTrackingRef,
   type WorkspaceEntry,
 } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
@@ -64,21 +65,22 @@ export function protectedBranch(workspace: WorkspaceConfig): string {
 
 /** ADR 0052 決定3: この workspace が remote の正本を持つと**宣言している**か。
  *  clone を覗く関数ではない —— `repo` の有無だけを読む。 */
-export function isRemoteBacked(workspace: WorkspaceConfig): boolean {
+function isRemoteBacked(workspace: WorkspaceConfig): boolean {
   return workspace.repo !== undefined;
 }
 
 /** 盤面が保護ブランチを**参照として**読むときの1つの ref —— remote 正本を宣言した
  *  workspace ではリモート側の remote-tracking ref、そうでなければローカルの同名
- *  ブランチ(`registryRef(mode)` と同じ形を workspace 側に置いたもの)。
+ *  ブランチ(`registryRef(mode)` の workspace 側の対、綴りは `remoteTrackingRef` を
+ *  共有する)。
  *
  *  `protectedBranch` の返す**名前**とは役が違う: PR の base や直接書き込み禁止の
  *  対象はリモートのブランチ名そのものなので今も名前を使い、「今この保護ブランチは
  *  どのコミットか」を訊く側だけがこの ref を使う(タスクブランチの fork 元、
  *  slot 解放後の休止位置の追従先)。 */
-export function protectedBranchRef(workspace: WorkspaceConfig): string {
+function protectedBranchRef(workspace: WorkspaceConfig): string {
   const branch = protectedBranch(workspace);
-  return isRemoteBacked(workspace) ? `refs/remotes/origin/${branch}` : branch;
+  return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : branch;
 }
 
 /** The board's own git identity: the author on the tree rule's WIP commits
@@ -195,6 +197,21 @@ export function ensureTaskBranch(workspace: WorkspaceConfig, taskId: string): vo
   git(workspace.path, "checkout", branch);
 }
 
+/** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を
+ *  訊く1つの問いで、`repo` の宣言と突き合わせる側(下の
+ *  `assertRemoteDeclarationMatchesClone`)と、既存 checkout の登録時に宣言を焼く側
+ *  (`workspace-create.ts` の `registerExistingCheckout`)が同じ関数で訊く ——
+ *  2箇所が別々に訊くと、登録が自分で作った宣言を pickup が「ずれている」と読む余地が
+ *  残る(/code-review Standards 軸の指摘)。git repository でないパスも「remote 無し」
+ *  として同じ undefined に落ちる。 */
+export function originUrl(checkoutPath: string): string | undefined {
+  try {
+    return git(checkoutPath, "remote", "get-url", "origin");
+  } catch {
+    return undefined;
+  }
+}
+
 /** ADR 0052 決定3 の対偶(issue #211 やること5): 宣言は clone を覗いた推測ではないので、
  *  宣言と実態がずれていたら**どこかが赤くならなければならない**。
  *
@@ -207,13 +224,7 @@ export function ensureTaskBranch(workspace: WorkspaceConfig, taskId: string): vo
  *  別名)を照合しても同じリモートを別物と読む誤検出しか増えず、`repo` は人間向けの
  *  provenance でもあるため厳密な一致を要求できない。 */
 function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
-  let hasOrigin: boolean;
-  try {
-    git(workspace.path, "remote", "get-url", "origin");
-    hasOrigin = true;
-  } catch {
-    hasOrigin = false;
-  }
+  const hasOrigin = originUrl(workspace.path) !== undefined;
   if (isRemoteBacked(workspace) === hasOrigin) return;
   throw new Error(
     isRemoteBacked(workspace)
@@ -237,7 +248,7 @@ function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
  *  失敗は投げる —— 呼び出し元(pickup)がその workspace を quarantine する。registry の
  *  到達不能と違って盤面全体は止めない: これは特定 workspace の性質なので、資源単位の
  *  原則がそのまま適用できる(ADR 0052 決定5)。 */
-export function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
+function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
   if (!isRemoteBacked(workspace)) return;
   authedGitBounded(
     auth,
@@ -324,20 +335,28 @@ export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
  *
  *  追従は **ff-only** で撃つ。`checkout -B <protected> <remote ref>` なら常に成功するが、
  *  それは帯域外の手作業でローカルに載ったコミットを黙って捨てる —— quarantine すべき
- *  食い違いを、無かったことにする形で通してしまう。ff できないことは「人間がホスト上で
- *  何かした」の唯一の徴候なので、投げて quarantine に落とす(呼び出し元の
+ *  食い違いを、無かったことにする形で通してしまう。
+ *
+ *  **成立の判定は ff コマンドの成否ではなく位置の一致で行う**(/code-review Spec 軸の
+ *  指摘)。ローカルがリモートより**先行しているだけ**のとき `merge --ff-only` は
+ *  「もう最新」として exit 0 で通るが、その休止位置は嘘である —— そこに載っているのは
+ *  push されていないローカル専用のコミットで、リモートを見ている人間の理解と食い違う。
+ *  決定7 が求めるのは「追従していること」なので、ff のあと HEAD がリモートの ref と
+ *  同じコミットを指していることまで要求する。分岐(両側に差がある)は merge 自身が
+ *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
  *  `releaseWorkspace` が受ける)。 */
 function parkOnProtectedBranch(workspace: WorkspaceConfig): void {
-  git(workspace.path, "checkout", protectedBranch(workspace));
+  const branch = protectedBranch(workspace);
+  git(workspace.path, "checkout", branch);
   if (!isRemoteBacked(workspace)) return;
+  const ref = protectedBranchRef(workspace);
   // identity を渡すのは ff が commit を作らない場合でも git が要求しうるため —
   // 盤面が打つ git はすべて Tidepool 名義という線(issue #53)をここでも切らない
-  git(
-    workspace.path,
-    ...TIDEPOOL_GIT_IDENTITY,
-    "merge",
-    "--ff-only",
-    protectedBranchRef(workspace),
+  git(workspace.path, ...TIDEPOOL_GIT_IDENTITY, "merge", "--ff-only", ref);
+  if (git(workspace.path, "rev-parse", "HEAD") === git(workspace.path, "rev-parse", ref)) return;
+  throw new Error(
+    `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +
+      "commits were never pushed, so parking here would show a state the remote does not have",
   );
 }
 
@@ -453,7 +472,7 @@ export function resolvesToRegistryClone(
  *  `WorkspaceConfig` carries (issue #211's pickup-time crosscheck). The entry-shaped
  *  face above stands in front of it for the callers that still hold an entry and a
  *  base dir (ADR 0018's derivation). */
-export function pathIsRegistryClone(checkoutPath: string, registryDir: string): boolean {
+function pathIsRegistryClone(checkoutPath: string, registryDir: string): boolean {
   return safeRealpath(checkoutPath) === safeRealpath(registryDir);
 }
 
