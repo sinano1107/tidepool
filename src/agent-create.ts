@@ -14,12 +14,7 @@ import {
   type RegistryMode,
   UnknownAuthorityProfileError,
 } from "./registry.js";
-import {
-  assertRegistryCloneReady,
-  pushRegistry,
-  type RegistryCommitResult,
-} from "./registry-write.js";
-import { git, TIDEPOOL_GIT_IDENTITY } from "./workspace.js";
+import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
 
 /** The WebUI's agent-creation verb (issue #70, #54 phase 1): every field an
  *  agent definition carries except `version` — that one is machine-stamped
@@ -72,38 +67,33 @@ function assertValidIcon(icon: string | undefined): void {
  *  never read from env here (same shape as WorkspaceAdminDeps). */
 export interface AgentAdminDeps {
   registryDir: string;
-  /** ADR 0052 決定1: 検証と一覧が読む正本。**読みだけがリモートへ移る** —
-   *  書き込みはまだローカル main へコミットする(worktree 化と push 失敗の
-   *  致命化は #210)。人間に見せる一覧が盤面の spawn する内容と食い違わない
-   *  ことを優先しており、書き込み側の非対称は #210 が消す。 */
+  /** ADR 0052 決定1: 検証・一覧・書き込みが揃って読む正本(#210 で書き込みも
+   *  移った) — 検証がリモートに対して行われ、その直後に切る worktree も同じ
+   *  ref から fork するので、両者が食い違うことはない。 */
   registryMode: RegistryMode;
-  /** The board's GitHub identity (ADR 0024) for the best-effort registry
-   *  push, absent when no secrets file is configured — same shape as
-   *  WorkspaceAdminDeps. */
+  /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
+   *  決定1: 失敗は致命 — #210), absent when no secrets file is configured —
+   *  same shape as WorkspaceAdminDeps. */
   githubAuth?: GitHubAuth;
 }
 
 /** ADR 0020's agent half: write `agents/<name>.md` to the registry clone and
  *  commit it to local main directly — a WebUI-initiated registry change is
  *  the human's explicit act. */
-export async function createAgent(
-  input: CreateAgentInput,
-  deps: AgentAdminDeps,
-): Promise<RegistryCommitResult> {
-  // 入口で検査してから読む: dirty tree の registry を検証の根拠にしない
-  // (ADR 0020 の committed-main 読み取り規律 — workspace-create と同じ二段検査)
-  assertRegistryCloneReady(deps.registryDir);
+export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps): Promise<void> {
+  // 入口で fetch してから読む(ADR 0052 決定2/4): fetch できなければ push もでき
+  // ず、その編集は最初から成立していない — workspace-create と同じ二段検査
+  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
   const registry = loadRegistry(deps.registryDir, deps.registryMode);
   assertValidAgentName(registry, input.name);
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
   commitAgentFile(
-    deps.registryDir,
+    deps,
     { ...input, advisor: normalizeAdvisor(input.advisor), version: "1" },
     `create agent ${input.name} via WebUI`,
   );
-  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** The edit half (issue #70): the same fields as creation — the form
@@ -114,11 +104,8 @@ export async function createAgent(
  *  numeric segment of the stored version + 1. */
 export type UpdateAgentInput = CreateAgentInput;
 
-export async function updateAgent(
-  input: UpdateAgentInput,
-  deps: AgentAdminDeps,
-): Promise<RegistryCommitResult> {
-  assertRegistryCloneReady(deps.registryDir);
+export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps): Promise<void> {
+  refreshRegistryForWrite(deps.registryDir, deps.registryMode, deps.githubAuth);
   const registry = loadRegistry(deps.registryDir, deps.registryMode);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
@@ -131,12 +118,11 @@ export async function updateAgent(
   const normalizedInput = { ...input, advisor: normalizeAdvisor(input.advisor) };
   if (!sameEffectiveFields(existing, normalizedInput)) {
     commitAgentFile(
-      deps.registryDir,
+      deps,
       { ...normalizedInput, version: bumpVersion(existing.version) },
       `update agent ${input.name} via WebUI`,
     );
   }
-  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
 }
 
 /** An empty advisor means the capability is absent, not a blank model name. */
@@ -175,8 +161,8 @@ export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
   return Object.values(loadRegistry(deps.registryDir, deps.registryMode).agents);
 }
 
-export type CreateAgentFn = (input: CreateAgentInput) => Promise<RegistryCommitResult>;
-export type UpdateAgentFn = (input: UpdateAgentInput) => Promise<RegistryCommitResult>;
+export type CreateAgentFn = (input: CreateAgentInput) => Promise<void>;
+export type UpdateAgentFn = (input: UpdateAgentInput) => Promise<void>;
 
 /** The settings surface's agent verbs as one bundle, WorkspaceAdmin's twin
  *  (issue #70): they exist together or not at all (a registry is configured,
@@ -232,14 +218,19 @@ function serializeAgentFile(definition: AgentDefinition): string {
   return `---\n${stringifyYaml(meta)}---\n${definition.systemPrompt.trim()}\n`;
 }
 
-/** Writes `agents/<name>.md` and commits it under the board's own identity
- *  (ADR 0020) — the workspace admin's commitWorkspaceEntry, for agents.
- *  commitWorkspaceEntry と違い clone 検査の再実行はない: 入口の
- *  assertRegistryCloneReady からここまで await を挟まない同期処理で、
- *  workspace 側の「遅い外部手順の間にブランチが動く」窓が存在しない。 */
-function commitAgentFile(registryDir: string, definition: AgentDefinition, message: string): void {
-  const file = join("agents", `${definition.name}.md`);
-  writeFileSync(join(registryDir, file), serializeAgentFile(definition));
-  git(registryDir, "add", file);
-  git(registryDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
+/** Writes `agents/<name>.md` inside a disposable worktree and lands it under
+ *  the board's own identity (ADR 0020 / ADR 0052 決定6) — the workspace
+ *  admin's commitWorkspaceEntry, for agents. Checkout-independent: the
+ *  registry clone's own working tree is never touched. */
+function commitAgentFile(deps: AgentAdminDeps, definition: AgentDefinition, message: string): void {
+  commitToRegistry(
+    deps.registryDir,
+    deps.registryMode,
+    deps.githubAuth,
+    (worktreeDir) => {
+      const file = join("agents", `${definition.name}.md`);
+      writeFileSync(join(worktreeDir, file), serializeAgentFile(definition));
+    },
+    message,
+  );
 }

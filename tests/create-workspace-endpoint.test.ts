@@ -1,19 +1,18 @@
 import { afterEach, expect, it } from "vitest";
 import { InvalidWorkspaceNameError } from "../src/registry.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { BoardStateOverlapError, type CreateWorkspaceInput } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("POST /api/workspaces は検証済み入力を createWorkspace オーケストレーションへ渡し、201 で pushed を返す(issue #57)", async () => {
+it("POST /api/workspaces は検証済み入力を createWorkspace オーケストレーションへ渡し、201 を返す(issue #57)", async () => {
   const calls: CreateWorkspaceInput[] = [];
   t = await bootTidepool({
     workspaceAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -26,7 +25,7 @@ it("POST /api/workspaces は検証済み入力を createWorkspace オーケス�
   });
 
   expect(res.status).toBe(201);
-  expect(res.json).toEqual({ pushed: true });
+  expect(res.json).toEqual({});
   expect(calls).toEqual([
     {
       mode: "clone",
@@ -55,7 +54,6 @@ it("スキーマ違反(clone モードに repo なし)は 400 で、オーケス
     workspaceAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -107,11 +105,11 @@ it("盤面の状態パスと重なる登録(BoardStateOverlapError)は 400 で�
   expect(res.json.error).toContain("board database (TIDEPOOL_DB)");
 });
 
-it("registry クローンが busy(RegistryCloneBusyError)なら 409 — リトライは冪等なので後で叩き直せばよい", async () => {
+it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 決定1)", async () => {
   t = await bootTidepool({
     workspaceAdmin: {
       create: async () => {
-        throw new RegistryCloneBusyError("/registry", "HEAD is on 'task/x', not 'main'");
+        throw new RegistryPushFailedError("non-fast-forward");
       },
     },
   });
@@ -121,7 +119,7 @@ it("registry クローンが busy(RegistryCloneBusyError)なら 409 — リト�
     name: "lagoon",
   });
 
-  expect(res.status).toBe(409);
+  expect(res.status).toBe(502);
 });
 
 it("その他の外部失敗(clone 失敗など)は 502", async () => {

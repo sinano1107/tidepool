@@ -3,12 +3,12 @@ import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
+import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { BoardStateOverlapError, createWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -110,8 +110,9 @@ describe("createWorkspace: register モード(issue #57)", () => {
 
     const registry = loadRegistry(registryDir, "purely-local");
     expect(registry.workspaces.sandbox).toEqual({ path: "/home/pi/work/sandbox" });
-    // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する
-    expect(git(registryDir, "status", "--porcelain")).toBe("");
+    // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する。
+    // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
+    // (ADR 0052 決定6: clone の working tree は正本ではないので触れない)
     expect(git(registryDir, "log", "-1", "--format=%an")).toBe("tidepool");
   });
 });
@@ -228,87 +229,69 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
   });
 });
 
-describe("createWorkspace: registry への push(issue #57: Tidepool 名義でコミット + push)", () => {
-  it("origin リモートがあれば registry コミットが push される", async () => {
-    const registryDir = await makeMainRegistry();
-    const bare = await mkdtemp(join(tmpdir(), "tidepool-registry-origin-"));
-    git(bare, "init", "--bare");
-    git(registryDir, "remote", "add", "origin", bare);
-    git(registryDir, "push", "-u", "origin", "main");
-    const deps = await makeDeps(registryDir);
-
-    const result = await createWorkspace(
-      { mode: "register", name: "sandbox", path: "/tmp/sandbox" },
-      deps,
-    );
-
-    expect(result.pushed).toBe(true);
-    expect(git(bare, "log", "-1", "--format=%s", "main")).toBe("add workspace sandbox via WebUI");
-  });
-
-  it("push の失敗は非致命 — エントリのコミットは成功し、pushed: false と警告ログだけが残る(盤面はローカルクローンを読むので機能に支障なし)", async () => {
-    const registryDir = await makeMainRegistry();
-    git(registryDir, "remote", "add", "origin", "/no/such/remote");
-    const deps = await makeDeps(registryDir);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const result = await createWorkspace(
-        { mode: "register", name: "sandbox", path: "/tmp/sandbox" },
-        deps,
-      );
-
-      expect(result.pushed).toBe(false);
-      expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: "/tmp/sandbox" });
-      expect(warn).toHaveBeenCalledOnce();
-      expect(warn.mock.calls[0]![0]).toContain("push");
-    } finally {
-      warn.mockRestore();
-    }
-  });
-});
-
-describe("createWorkspace: registry コミットの前提条件(ADR 0020: WebUI 発はローカル main へ直接コミット)", () => {
-  it("外部処理の最中に registry クローンのブランチが動いたら、コミット直前の再検査で失敗しタスクブランチに積まない(/code-review TOCTOU 指摘)", async () => {
-    const registryDir = await makeMainRegistry();
-    const deps = await makeDeps(registryDir);
+describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
+  it("外部処理(リポジトリ作成)の最中に registry クローンのブランチが動いても、着地先は影響を受けない(/code-review TOCTOU 指摘)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    const deps = { ...(await makeDeps(registryDir)), registryMode: "remote-backed" as const };
     const upstream = await makeUpstream();
     deps.github.scriptNextRepositoryUrl(upstream);
-    // 冒頭検査は通るが、遅い外部手順(リポジトリ作成)の間に registry-edit
-    // タスクがブランチを checkout する — その瞬間を fake の中で再現する
+    // 遅い外部手順(リポジトリ作成)の間に registry-edit タスクがブランチを
+    // checkout する — worktree は毎回その場で切るので、この移動に影響されない
     const inner = deps.github.createRepository.bind(deps.github);
     deps.github.createRepository = async (name) => {
       git(registryDir, "checkout", "-b", "task/registry-edit-1");
       return inner(name);
     };
 
-    await expect(createWorkspace({ mode: "create", name: "lagoon" }, deps)).rejects.toThrow(
-      RegistryCloneBusyError,
-    );
-    expect(git(registryDir, "log", "--format=%s", "task/registry-edit-1")).toBe(
-      "registry fixture",
+    await createWorkspace({ mode: "create", name: "lagoon" }, deps);
+
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.lagoon).toEqual({ repo: upstream });
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("registry クローンが registry-edit タスクのブランチに居ても、リモート main へエントリが着地する", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "checkout", "-b", "task/registry-edit-1");
+    const deps = { ...(await makeDeps(registryDir)), registryMode: "remote-backed" as const };
+
+    await createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps);
+
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.sandbox).toEqual({ path: "/tmp/sandbox" });
+    expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
+      "add workspace sandbox via WebUI",
     );
   });
-  it("registry クローンの HEAD が main 以外(registry-edit タスクのブランチ移動中)なら失敗し、エントリを積まない", async () => {
+
+  it("push が失敗すると致命 — リモートにもコミットが残らない", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const deps = { ...(await makeDeps(registryDir)), registryMode: "remote-backed" as const };
+
+    await expect(
+      createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps),
+    ).rejects.toThrow(RegistryPushFailedError);
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.sandbox).toBeUndefined();
+  });
+
+  it("入口の fetch が失敗すると致命 — コミットを一切積まない", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "origin", "/no/such/remote");
+    const deps = { ...(await makeDeps(registryDir)), registryMode: "remote-backed" as const };
+
+    await expect(
+      createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps),
+    ).rejects.toThrow(RegistryFetchFailedError);
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.sandbox).toBeUndefined();
+  });
+
+  it("純ローカル registry(remote なし)でも、タスクブランチに居る状態から書き込みが通る", async () => {
     const registryDir = await makeMainRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
     const deps = await makeDeps(registryDir);
 
-    await expect(
-      createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps),
-    ).rejects.toThrow(RegistryCloneBusyError);
-    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
-  });
+    await createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps);
 
-  it("registry クローンが dirty なら失敗し、コミットを積まない", async () => {
-    const registryDir = await makeMainRegistry();
-    const before = git(registryDir, "rev-parse", "HEAD");
-    execFileSync("sh", ["-c", `echo drift >> ${join(registryDir, "workspaces.yaml")}`]);
-    const deps = await makeDeps(registryDir);
-
-    await expect(
-      createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps),
-    ).rejects.toThrow(RegistryCloneBusyError);
-    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: "/tmp/sandbox" });
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
   });
 });

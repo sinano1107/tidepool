@@ -5,7 +5,7 @@ import {
   UnknownAuthorityProfileError,
   type UpdateAgentInput,
 } from "../src/agent-create.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -57,13 +57,12 @@ it("GET /api/agents は registry 未設定なら 503", async () => {
   expect((await api(t.baseUrl, "GET", "/api/agents")).status).toBe(503);
 });
 
-it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し、200 で pushed を返す", async () => {
+it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し、200 を返す", async () => {
   const calls: UpdateAgentInput[] = [];
   t = await bootTidepool({
     agentAdmin: {
       update: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -77,7 +76,7 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
   });
 
   expect(res.status).toBe(200);
-  expect(res.json).toEqual({ pushed: true });
+  expect(res.json).toEqual({});
   expect(calls).toEqual([
     {
       name: "tako",
@@ -96,7 +95,6 @@ it("systemPrompt が空文字は 200(ADR 0017: 空 specialty は正規形、issu
     agentAdmin: {
       update: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -178,11 +176,11 @@ it("不正 icon(InvalidAgentIconError)は 400", async () => {
   expect(res.status).toBe(400);
 });
 
-it("registry クローンが busy(RegistryCloneBusyError)なら 409", async () => {
+it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 決定1)", async () => {
   t = await bootTidepool({
     agentAdmin: {
       update: async () => {
-        throw new RegistryCloneBusyError("/registry", "HEAD is on 'task/x', not 'main'");
+        throw new RegistryPushFailedError("non-fast-forward");
       },
     },
   });
@@ -194,7 +192,7 @@ it("registry クローンが busy(RegistryCloneBusyError)なら 409", async () =
     systemPrompt: "p",
   });
 
-  expect(res.status).toBe(409);
+  expect(res.status).toBe(502);
 });
 
 it("その他の外部失敗は 502", async () => {

@@ -1,49 +1,113 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { authedGit, type GitHubAuth } from "./github-auth.js";
-import { git } from "./workspace.js";
+import { REGISTRY_BRANCH, type RegistryMode, refreshRegistry } from "./registry.js";
+import { git, TIDEPOOL_GIT_IDENTITY } from "./workspace.js";
 
-/** The registry clone can't take the board's direct-to-main commit right now
- *  (ADR 0020): HEAD is off main (a registry-edit task branch is checked out)
- *  or the tree is dirty. Fail-fast and let the human retry — the creation
- *  flow is idempotent (issue #57). */
-export class RegistryCloneBusyError extends Error {
-  constructor(registryDir: string, reason: string) {
-    super(`registry clone at ${registryDir} cannot take a commit: ${reason}`);
-    this.name = "RegistryCloneBusyError";
+/** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
+ *  push もできず、push 成功が「効いた」の定義である以上、その編集は最初から
+ *  成立していない。 */
+export class RegistryFetchFailedError extends Error {
+  constructor(reason: string) {
+    super(`registry could not be refreshed before the write: ${reason}`);
+    this.name = "RegistryFetchFailedError";
   }
 }
 
-/** ADR 0020's write half presumes main: checked before any external effect
- *  (not just before the final commit), so a predictable failure never leaves
- *  orphan clones or repositories behind. */
-export function assertRegistryCloneReady(registryDir: string): void {
-  const head = git(registryDir, "rev-parse", "--abbrev-ref", "HEAD");
-  if (head !== "main") {
-    throw new RegistryCloneBusyError(registryDir, `HEAD is on '${head}', not 'main'`);
-  }
-  if (git(registryDir, "status", "--porcelain") !== "") {
-    throw new RegistryCloneBusyError(registryDir, "the working tree is dirty");
+/** 3つの admin verb(agent/profile/workspace)がコミットより前に呼ぶ、書き込み
+ *  入口の refresh 点(ADR 0052 決定2)。purely-local な盤面には fetch する先が
+ *  無いので何もしない。ここで読んだ remote-tracking ref の値は、この後
+ *  `commitToRegistry` が worktree を切るまでの間に動かない(registry の refresh は
+ *  この3点だけでタイマーは無い — 決定2)ので、`loadRegistry` が検証した内容と
+ *  worktree が実際に fork する内容は常に一致する。 */
+export function refreshRegistryForWrite(
+  registryDir: string,
+  registryMode: RegistryMode,
+  auth: GitHubAuth | undefined,
+): void {
+  if (registryMode !== "remote-backed") return;
+  const reachability = refreshRegistry(registryDir, auth);
+  if (!reachability.available) {
+    throw new RegistryFetchFailedError(reachability.reason ?? "registry remote is unreachable");
   }
 }
 
-/** What every registry-writing verb (create, update) reports back. */
-export interface RegistryCommitResult {
-  /** The registry commit reached the remote. False is non-fatal (issue #57):
-   *  the board reads its local clone, so the entry already works — the push
-   *  catches up with the next successful one. */
-  pushed: boolean;
+/** ADR 0052 決定1: push(または purely-local での着地)の成功が「効いた」の定義
+ *  ——失敗はここで投げる。issue #57 が非致命とした根拠(「盤面はローカル clone を
+ *  読むのだから、エントリは既に効いている」)は S1 で読み取りがリモートへ移った
+ *  ことで消えたため、その判断は撤回される。フローは冪等なので人間はリトライできる。 */
+export class RegistryPushFailedError extends Error {
+  constructor(reason: string) {
+    super(`registry commit could not be landed: ${reason}`);
+    this.name = "RegistryPushFailedError";
+  }
 }
 
-/** Best-effort push of the registry commit (issue #57: push failure is a
- *  warning, never a rollback — the local clone is what the board reads).
- *  With a board GitHub identity configured the push runs as the machine user
- *  (ADR 0024); without one it falls back to whatever git's own config still
- *  authenticates — likely nothing, which lands in the non-fatal warning. */
-export function pushRegistry(registryDir: string, auth?: GitHubAuth): boolean {
+function baseRef(registryMode: RegistryMode): string {
+  return registryMode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
+}
+
+/** ADR 0052 決定6: `write` を使い捨ての detached worktree — registry の現在の
+ *  tip から切ったもの — の中だけで実行し、commit してから着地させる。registry
+ *  クローン自身の working tree には一切触れない。ローカル `main` の位置も HEAD の
+ *  位置も書き込みに関係しなくなり、`assertRegistryCloneReady` が守っていたものは
+ *  何も無くなる(読み取りは元から working tree を見ない)。
+ *
+ *  `write` が何も変更しなければ(no-change 編集)着地せず、コミットも積まない —
+ *  既存の admin verb が持つ no-op-resubmit の形をそのまま踏襲する。
+ *
+ *  着地は remote-backed なら push、purely-local(push 先が無い)ならローカル
+ *  ブランチへの fast-forward-only な ref 更新 —— どちらも worktree を切った時点
+ *  からの前進を要求する。fork してから着地するまでの間に base が動いていれば
+ *  (別の書き込みが先に着地した)双方とも拒否するので、並行書き込みは黙って
+ *  上書きされず、致命の再試行可能な失敗になる(issue #57 の冪等性)。 */
+export function commitToRegistry(
+  registryDir: string,
+  registryMode: RegistryMode,
+  auth: GitHubAuth | undefined,
+  write: (worktreeDir: string) => void,
+  message: string,
+): void {
+  // プロセス死で残った前回の worktree 管理情報の掃除(issue #210 やること4) —
+  // 掃除してから add しないと、同じパスが使用中と誤認されることがある
+  git(registryDir, "worktree", "prune");
+  const base = baseRef(registryMode);
+  const baseSha = git(registryDir, "rev-parse", base);
+  const worktreeDir = mkdtempSync(join(tmpdir(), "tidepool-registry-wt-"));
   try {
-    authedGit(auth, registryDir, "push", "origin", "main");
-    return true;
+    git(registryDir, "worktree", "add", "--detach", worktreeDir, base);
+    write(worktreeDir);
+    if (git(worktreeDir, "status", "--porcelain") === "") return;
+    git(worktreeDir, "add", "-A");
+    git(worktreeDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
+    land(registryDir, registryMode, worktreeDir, baseSha, auth);
+  } finally {
+    // ベストエフォート: ここで投げると、push/CAS が投げた本当の失敗を隠してしまう。
+    // 消し損ねた分は次回の呼び出しの冒頭の `worktree prune` が拾う。
+    try {
+      git(registryDir, "worktree", "remove", "--force", worktreeDir);
+    } catch (err) {
+      console.warn(`[registry-write] worktree cleanup failed (non-fatal): ${worktreeDir}`, err);
+    }
+  }
+}
+
+function land(
+  registryDir: string,
+  registryMode: RegistryMode,
+  worktreeDir: string,
+  baseSha: string,
+  auth: GitHubAuth | undefined,
+): void {
+  try {
+    if (registryMode === "remote-backed") {
+      authedGit(auth, worktreeDir, "push", "origin", `HEAD:${REGISTRY_BRANCH}`);
+    } else {
+      const newSha = git(worktreeDir, "rev-parse", "HEAD");
+      git(registryDir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha);
+    }
   } catch (err) {
-    console.warn("[registry-write] registry push failed (non-fatal):", err);
-    return false;
+    throw new RegistryPushFailedError(String(err));
   }
 }

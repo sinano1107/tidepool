@@ -1,11 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
 import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
 import { loadRegistry } from "../src/registry.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -48,7 +46,8 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       skills: ["@workspace"],
       systemPrompt: "You are Deckhand, rewritten.",
     });
-    expect(git(registryDir, "status", "--porcelain")).toBe("");
+    // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
+    // (ADR 0052 決定6)
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("update agent deckhand via WebUI");
     expect(git(registryDir, "log", "-1", "--format=%an")).toBe("tidepool");
   });
@@ -80,6 +79,32 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
   });
 });
 
+describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
+  it("registry クローンが registry-edit タスクのブランチに居ても、編集がリモート main へ着地する", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "checkout", "-b", "task/registry-edit-1");
+
+    await updateAgent(
+      {
+        name: "deckhand",
+        authority: "standard",
+        description: "Rewritten description",
+        skills: ["@workspace"],
+        systemPrompt: "You are Deckhand, rewritten.",
+      },
+      { registryDir, registryMode: "remote-backed" },
+    );
+
+    expect(loadRegistry(registryDir, "remote-backed").agents.deckhand?.description).toBe(
+      "Rewritten description",
+    );
+    expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
+      "update agent deckhand via WebUI",
+    );
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+});
+
 describe("updateAgent: no-change 編集(issue #70 — workspace-create の porcelain チェックの agent 版)", () => {
   it("空白だけの advisor を未設定へ戻すと frontmatter から消し、実効構成の変更として version を進める(issue #175)", async () => {
     const registryDir = await makeMainRegistry({
@@ -99,7 +124,8 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", advisor: undefined });
-    expect(readFileSync(join(registryDir, "agents", "crab.md"), "utf8")).not.toContain("advisor:");
+    // registryDir 自身の working tree ではなく着地先の ref から読む(ADR 0052 決定6)
+    expect(git(registryDir, "show", "main:agents/crab.md")).not.toContain("advisor:");
   });
 
   it("実効フィールドが不変な再送はコミットなしの成功で、version も上がらない", async () => {
@@ -115,7 +141,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await expect(updateAgent(same, { registryDir, registryMode: "purely-local" })).resolves.toBeDefined();
+    await updateAgent(same, { registryDir, registryMode: "purely-local" });
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.version).toBe("0.3.1");

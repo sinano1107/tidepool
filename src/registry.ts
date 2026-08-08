@@ -370,9 +370,10 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *  ホストに人間の helper が居ると認証なしでも fetch が通ってしまうため、実機で
  *  成功したことはこの条件の証拠にならない(issue #209 の実測)。
  *
- *  `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、push(`pushRegistry`)
- *  と同じく bare な git に委ねる。private な remote ならそこで失敗し、レジストリ
- *  到達性の quarantine が人間を呼ぶ。
+ *  `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、書き込み側の
+ *  push(`registry-write.ts` の `commitToRegistry`)と同じく bare な git に
+ *  委ねる。private な remote ならそこで失敗し、レジストリ到達性の quarantine が
+ *  人間を呼ぶ。
  *
  *  Failure is returned as data so the caller can quarantine or warn instead of
  *  throwing. */
