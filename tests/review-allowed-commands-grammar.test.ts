@@ -19,7 +19,7 @@ describe("workspaces.yaml の review_allowed_commands 文法検証", () => {
     - git log
 `,
     });
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.workspaces.tidepool?.review_allowed_commands).toEqual(["npm test", "git log"]);
   });
 
@@ -33,7 +33,7 @@ describe("workspaces.yaml の review_allowed_commands 文法検証", () => {
     - "npm test,rm -rf /"
 `,
     });
-    expect(() => loadRegistry(dir)).toThrow(/review_allowed_commands/);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/review_allowed_commands/);
   });
 
   it("CLI のパターン綴り(* や括弧)を持ち込むエントリは拒否する", async () => {
@@ -46,7 +46,7 @@ describe("workspaces.yaml の review_allowed_commands 文法検証", () => {
     - "Bash(npm test*)"
 `,
     });
-    expect(() => loadRegistry(dir)).toThrow(/review_allowed_commands/);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/review_allowed_commands/);
   });
 
   it("空文字のエントリは拒否する — Bash(*) になって全部開いてしまう", async () => {
@@ -57,7 +57,7 @@ describe("workspaces.yaml の review_allowed_commands 文法検証", () => {
     - ""
 `,
     });
-    expect(() => loadRegistry(dir)).toThrow(/review_allowed_commands/);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/review_allowed_commands/);
   });
 
   it("改行を含むエントリは拒否する — diff で1行に見えて2行を運ぶ", async () => {
@@ -68,12 +68,12 @@ describe("workspaces.yaml の review_allowed_commands 文法検証", () => {
     - "npm test\\nrm -rf /"
 `,
     });
-    expect(() => loadRegistry(dir)).toThrow(/review_allowed_commands/);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/review_allowed_commands/);
   });
 
   it("フィールドを持たない workspace は空として通る(既存 registry を壊さない)", async () => {
     const dir = await makeRegistry();
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.workspaces.tidepool?.review_allowed_commands).toBeUndefined();
   });
 });

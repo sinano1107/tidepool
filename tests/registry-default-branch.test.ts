@@ -26,7 +26,7 @@ async function setup(originHeadBranch: string | null): Promise<{ dir: string; db
 }
 
 function guard(dir: string, db: Db): void {
-  guardRegistryDefaultBranch(db, loadRegistry(dir), dir, "/unused-base", new FakeClock().now());
+  guardRegistryDefaultBranch(db, loadRegistry(dir, "purely-local"), dir, "/unused-base", new FakeClock().now());
 }
 
 describe("guardRegistryDefaultBranch (ADR 0020 part 2)", () => {

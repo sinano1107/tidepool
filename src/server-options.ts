@@ -27,7 +27,10 @@ import {
   loadRegistry,
   ownEntry,
   type RegistryCandidates,
+  type RegistryMode,
+  type RegistryReachability,
   type RosterAgent,
+  refreshRegistry,
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
@@ -96,6 +99,8 @@ export interface BoardComposition {
   clock: Clock;
   /** agent registry のローカルクローン。未設定 → registry 由来の口はすべて不在。 */
   registryDir: string | undefined;
+  /** ADR 0052: declares the registry source without inspecting the clone. */
+  registryMode: RegistryMode;
   /** worker の stream-json トランスクリプトと spawn 時 MCP config の置き場。
    *  ディレクトリの作成そのものはホストの副作用なので合成 root 側に残る。 */
   logDir: string;
@@ -168,6 +173,10 @@ export function buildWorkerOptions(
     db: session.db,
     clock: session.clock,
     registryDir: board.registryDir,
+    // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
+    // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
+    // 「人間の merge を通った内容が spawn に効く」は成立しない。
+    registryMode: board.registryMode,
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
     workspace: board.workspaceName,
@@ -191,12 +200,82 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   return ({ db, clock }) => new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock }));
 }
 
+/** One spelling for every registry-derived composition seam: mode is resolved
+ *  once at the root and no resolver is allowed to fall back to local main.
+ *  呼び出し側はどれも先に `registryDir` を検査しているが、その絞り込みはここまで
+ *  流れてこないので、型を閉じるためだけの throw を置く。 */
+function loadBoardRegistry(board: BoardComposition) {
+  if (!board.registryDir) throw new Error("no registry configured");
+  return loadRegistry(board.registryDir, board.registryMode);
+}
+
+/** ADR 0052 決定3 の宣言そのもの: `TIDEPOOL_REGISTRY` を設定した盤面は remote
+ *  正本を持つ。**clone を覗かない** — remote の有無を見て切り替えると、remote が
+ *  失われた瞬間に「merge が spawn に効かない」旧挙動へ静かに戻り、どこも赤く
+ *  ならない(ADR 0052 が名指しで却下した道)。
+ *
+ *  `purely-local` を env で選ばせないのは意図的である。それは盤面を静かに壊せる
+ *  スイッチになり、Pi で誤って立てれば ADR 0052 が直した穴がそのまま戻る —— 却下
+ *  した推測と同じ形の footgun を、今度は設定として作ることになる。純ローカル盤面
+ *  (`workspace.ts` の `guardRegistryDefaultBranch` が認める構成)は、テストが
+ *  `BoardComposition` を直接組んで宣言する経路で表現できており、そちらが要ると
+ *  分かるまで本番の口は開けない。 */
+export function declaredRegistryMode(registryDir: string | undefined): RegistryMode {
+  return registryDir ? "remote-backed" : "purely-local";
+}
+
+/** ADR 0052 決定2 の**起動時**の refresh 点。`buildServerOptions` の先頭で、
+ *  registry を1文字も読む前に撃つ。
+ *
+ *  順序がこの関数の本体である。合成 root は `workspace`(workspaceConfig)と
+ *  draft の candidates を**その場で**読むので、refresh を後ろに置くと —— 例えば
+ *  `startServer` の中に置くと —— remote-tracking ref が欠けた盤面では読みのほうが
+ *  先に落ち、fail-open が働く前に起動が終わる。`git remote remove` は tracking ref
+ *  も一緒に消すため、これは机上の話ではない: quarantine question 自身が人間に促す
+ *  修理(remote の張り直し)の直後がまさにその状態であり、そこで起動を拒むと
+ *  ADR 0036 が復旧経路と定めた人間面ごと開かなくなる。
+ *
+ *  決定4 の fail-open: 失敗しても騒ぐだけで、起動は拒まず quarantine も立てない
+ *  (床は pickup ゲートの1枚)。fetch が失敗し**かつ** ref も無ければ直後の読みが
+ *  throw するが、それは「registry が読めない盤面は起動しない」という ADR 0052
+ *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
+ *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
+ *  出ることである。 */
+function bootRefresh(board: BoardComposition): void {
+  const registryDir = remoteBackedRegistryDir(board);
+  if (!registryDir) return;
+  const reachability = refreshRegistry(registryDir, board.githubAuth);
+  if (reachability.available) return;
+  console.error(
+    "[registry] startup refresh failed; the board is starting anyway and the next pickup " +
+      `will stop the board if this stands: ${reachability.reason ?? "registry remote is unreachable"}`,
+  );
+}
+
+/** fetch する先を持つ盤面の registry clone、無ければ undefined。**宣言だけで
+ *  決まる** —— clone を覗かないのが ADR 0052 決定3 の線であり、3つの refresh 点が
+ *  同じ1つの判定を共有するための場所でもある。 */
+function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
+  return board.registryMode === "remote-backed" ? board.registryDir : undefined;
+}
+
+/** ADR 0052 決定2 の pickup / 回答時の refresh 点。remote 正本を宣言していない
+ *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。同期の
+ *  `refreshRegistry` を非同期の口の形に合わせるのはここ。 */
+function registryReachabilityCheck(
+  board: BoardComposition,
+): (() => Promise<RegistryReachability>) | undefined {
+  const registryDir = remoteBackedRegistryDir(board);
+  if (!registryDir) return undefined;
+  return async () => refreshRegistry(registryDir, board.githubAuth);
+}
+
 /** The board's own view of the workspace (branch discipline + tree rule):
  *  the same registry entry the worker runs in, resolved to its path. */
 function workspaceConfig(board: BoardComposition): WorkspaceConfig | undefined {
   if (!board.registryDir) return undefined;
   return resolveExecutionWorkspace(
-    loadRegistry(board.registryDir),
+    loadBoardRegistry(board),
     board.workspaceName,
     null,
     board.workspacesDir,
@@ -213,7 +292,7 @@ function workspaceResolver(
   const { registryDir, workspaceName, workspacesDir } = board;
   if (!registryDir) return undefined;
   return (taskWorkspace) =>
-    resolveExecutionWorkspace(loadRegistry(registryDir), workspaceName, taskWorkspace, workspacesDir);
+    resolveExecutionWorkspace(loadBoardRegistry(board), workspaceName, taskWorkspace, workspacesDir);
 }
 
 /** ADR 0040 の boot 一斉検査の対象: 登録済み workspace 全件。他の resolver たちと
@@ -221,7 +300,7 @@ function workspaceResolver(
  *  いう概念自体が無い。 */
 function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
   if (!board.registryDir) return [];
-  return listRegisteredWorkspaces(loadRegistry(board.registryDir), board.workspacesDir);
+  return listRegisteredWorkspaces(loadBoardRegistry(board), board.workspacesDir);
 }
 
 /** fable モデルに解決される agent 名の集合 (ADR 0030)、毎 poll registry から
@@ -233,7 +312,7 @@ function fableAgentsResolver(board: BoardComposition): (() => string[]) | undefi
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
-    Object.values(loadRegistry(registryDir).agents)
+    Object.values(loadBoardRegistry(board).agents)
       .filter((agent) => agent.model?.toLowerCase().includes("fable"))
       .map((agent) => agent.name);
 }
@@ -254,7 +333,7 @@ function authorityResolver(
   if (!registryDir) return undefined;
   return (assignee) => {
     try {
-      return resolveExecutionAgent(loadRegistry(registryDir), defaultAgentName, assignee).profile;
+      return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee).profile;
     } catch (err) {
       if (!(err instanceof UnknownAgentError)) throw err;
       return undefined;
@@ -271,7 +350,7 @@ function agentRegisteredChecker(board: BoardComposition): ((name: string) => boo
   if (!registryDir) return undefined;
   // ownEntry, not `in`: `in` walks the prototype chain, so a name like
   // "toString" would clear an agent quarantine without any repair (issue #69)
-  return (name) => ownEntry(loadRegistry(registryDir).agents, name) !== undefined;
+  return (name) => ownEntry(loadBoardRegistry(board).agents, name) !== undefined;
 }
 
 /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
@@ -289,7 +368,7 @@ function protectedWorkspaceChecker(
   // ownEntry for consistency with issue #69's sweep — a prototype hit would
   // already answer "not protected", but bare bracket access on registry
   // records is the exact pattern the sweep exists to remove
-  return (name) => ownEntry(loadRegistry(registryDir).workspaces, name)?.protected === true;
+  return (name) => ownEntry(loadBoardRegistry(board).workspaces, name)?.protected === true;
 }
 
 /** The pull half of the roster (issue #43 / ADR 0014), read fresh against the
@@ -299,7 +378,7 @@ function listAgentsResolver(board: BoardComposition): (() => RosterAgent[]) | un
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
-    Object.values(loadRegistry(registryDir).agents).map((agent) => ({
+    Object.values(loadBoardRegistry(board).agents).map((agent) => ({
       name: agent.name,
       description: agent.description,
     }));
@@ -309,7 +388,7 @@ function listAgentsResolver(board: BoardComposition): (() => RosterAgent[]) | un
  *  Without a registry there's nothing to suggest from. */
 function registryCandidates(board: BoardComposition): RegistryCandidates | undefined {
   if (!board.registryDir) return undefined;
-  const registry = loadRegistry(board.registryDir);
+  const registry = loadBoardRegistry(board);
   const icons: Record<string, string> = {};
   for (const agent of Object.values(registry.agents)) {
     if (agent.icon !== undefined) icons[agent.name] = agent.icon;
@@ -341,7 +420,13 @@ function workspaceAdmin(
   const { registryDir, githubAuth, boardState } = board;
   if (!registryDir) return undefined;
   // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
-  const deps = { registryDir, workspacesBaseDir: board.workspacesDir, githubAuth, boardState };
+  const deps = {
+    registryDir,
+    registryMode: board.registryMode,
+    workspacesBaseDir: board.workspacesDir,
+    githubAuth,
+    boardState,
+  };
   return {
     create: (input) => createWorkspace(input, { ...deps, github }),
     list: () => listWorkspaceViews(deps),
@@ -356,14 +441,14 @@ function workspaceAdmin(
 function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
   const { registryDir, githubAuth } = board;
   if (!registryDir) return undefined;
-  const deps = { registryDir, githubAuth };
+  const deps = { registryDir, registryMode: board.registryMode, githubAuth };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
     update: (input) => updateAgent(input, deps),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
-    authorityProfiles: () => Object.keys(loadRegistry(registryDir).authority),
+    authorityProfiles: () => Object.keys(loadBoardRegistry(board).authority),
   };
 }
 
@@ -374,7 +459,7 @@ function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
 function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
   const { registryDir, githubAuth } = board;
   if (!registryDir) return undefined;
-  const deps = { registryDir, githubAuth };
+  const deps = { registryDir, registryMode: board.registryMode, githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),
@@ -390,6 +475,9 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
  *  ADR 0027 の線には触れない: server 境界の**上**にある合成の検査であって、
  *  境界の下に新しいテスト層を作る話ではない。 */
 export function buildServerOptions(board: BoardComposition): ServerOptions {
+  // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
+  // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
+  bootRefresh(board);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
@@ -424,6 +512,7 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
+    registryReachability: registryReachabilityCheck(board),
     // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。

@@ -36,6 +36,7 @@ async function makeMainRegistry(): Promise<string> {
 async function makeDeps(registryDir: string) {
   return {
     registryDir,
+    registryMode: "purely-local" as const,
     workspacesBaseDir: await mkdtemp(join(tmpdir(), "tidepool-ws-base-")),
   };
 }
@@ -50,7 +51,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
       deps,
     );
 
-    expect(loadRegistry(registryDir).workspaces.tidepool?.notes).toBe(
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.notes).toBe(
       "the registry clone itself",
     );
     expect(git(registryDir, "log", "-1", "--format=%an %s")).toBe(
@@ -65,7 +66,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
 
     await updateWorkspace({ name: "tidepool", protected: true }, deps);
 
-    expect(loadRegistry(registryDir).workspaces.tidepool?.protected).toBe(true);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.protected).toBe(true);
   });
 
   it("protected の解除は confirm がなければ拒否され、コミットを積まない(#55 と同型の確認ステップ)", async () => {
@@ -78,7 +79,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
       UnprotectNeedsConfirmationError,
     );
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-    expect(loadRegistry(registryDir).workspaces.lagoon?.protected).toBe(true);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon?.protected).toBe(true);
   });
 
   it("protected の解除は confirm: true で通り、エントリから protected が消える", async () => {
@@ -88,7 +89,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
 
     await updateWorkspace({ name: "lagoon", protected: false, confirm: true }, deps);
 
-    expect(loadRegistry(registryDir).workspaces.lagoon).toEqual({
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({
       path: "/home/pi/work/lagoon",
     });
   });
@@ -125,7 +126,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     await expect(
       updateWorkspace({ name: "registry", protected: false, confirm: true }, deps),
     ).rejects.toThrow(RegistrySelfUnprotectError);
-    expect(loadRegistry(registryDir).workspaces.registry?.protected).toBe(true);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.registry?.protected).toBe(true);
   });
 
   it("いま未保護でも registry 自身への protected: false は拒否される — 床が現在のフラグ値に依存しない(/code-review 指摘)", async () => {

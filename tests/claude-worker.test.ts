@@ -17,10 +17,11 @@ import {
 } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
+import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeTask(
   id = "task-1",
@@ -54,6 +55,7 @@ function makeTask(
     question_quarantine_workspace: null,
     question_quarantine_agent: null,
     question_quarantine_sandbox: null,
+    question_quarantine_registry: null,
     github_issue_number: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
@@ -183,6 +185,7 @@ async function makeUsageWorker(pty: PtyFn) {
     db: openDb(":memory:"),
     clock: new FakeClock(),
     registryDir,
+    registryMode: "purely-local",
     agent: "deckhand",
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -204,6 +207,7 @@ async function makeWorker(
     db,
     clock: new FakeClock(),
     registryDir,
+    registryMode: "purely-local",
     agent: "deckhand",
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1103,6 +1107,7 @@ describe("ClaudeCodeWorker", () => {
         db,
         clock: new FakeClock(),
         registryDir,
+        registryMode: "purely-local",
         agent: "deckhand",
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1162,6 +1167,7 @@ describe("ClaudeCodeWorker", () => {
           db: openDb(":memory:"),
           clock: new FakeClock(),
           registryDir,
+          registryMode: "purely-local",
           agent: "deckhand",
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1182,6 +1188,7 @@ describe("ClaudeCodeWorker", () => {
           db: openDb(":memory:"),
           clock: new FakeClock(),
           registryDir,
+          registryMode: "purely-local",
           agent: "deckhand",
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1202,6 +1209,7 @@ describe("ClaudeCodeWorker", () => {
           db: openDb(":memory:"),
           clock: new FakeClock(),
           registryDir,
+          registryMode: "purely-local",
           agent: "deckhand",
           workspace: "no-such-workspace",
           mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1592,6 +1600,62 @@ describe("ClaudeCodeWorker", () => {
       registry_commit: main,
       definition_version: "0.3.1",
     });
+  });
+
+  // ADR 0052 決定1 の核心。盤面側の resolver(server-options.ts)だけをリモートへ
+  // 移しても、spawn がローカル main を読む限り「人間の merge を通った内容が spawn に
+  // 効く」は成立しない —— **ここが本番で読む ref を測る唯一のテスト**である。
+  // ローカル main を意図的に古いまま残すのが要点で、remote 側だけが進んでいる状態は
+  // 「GitHub 上で PR が merge されたが、ホストの checkout はまだ動いていない」の形。
+  it("remote-backed 盤面の spawn は、ローカル main ではなく origin/main の定義と hash で走る(ADR 0052)", async () => {
+    const { registryDir, publish } = await makeRemoteBackedRegistry();
+    const git = registryGit(registryDir);
+    const staleLocal = git("rev-parse", "main");
+    // merge はリモート上の出来事。その後 pickup ゲートが fetch を撃つところまでが
+    // spawn の手前で起きること —— ローカル main はどちらでも動かない
+    const mergedOnRemote = publish(
+      "agents/deckhand.md",
+      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand, MERGED on the remote.\n`,
+      "merged registry change",
+    );
+    refreshRegistry(registryDir, undefined);
+    expect(git("rev-parse", "main")).toBe(staleLocal);
+
+    const db = openDb(":memory:");
+    const recorder = recordingSpawn();
+    const worker = new ClaudeCodeWorker({
+      db,
+      clock: new FakeClock(),
+      registryDir,
+      registryMode: "remote-backed",
+      agent: "deckhand",
+      workspace: "tidepool",
+      mcpUrl: "http://127.0.0.1:4589/mcp",
+      logDir: await mkdtemp(join(tmpdir(), "tidepool-worker-logs-")),
+      spawn: recorder.spawn,
+    });
+    const task = makeTask("task-remote", null, "deckhand", "work");
+    insertTask(db, task);
+    worker.start(task);
+
+    const spawned = listEvents(db, "task-remote").find((e) => e.kind === "worker_spawned");
+    const args = recorder.calls[0]!.args;
+    expect({
+      provenance: spawned!.payload,
+      systemPrompt: args[args.indexOf("--append-system-prompt") + 1]!.includes(
+        "MERGED on the remote",
+      ),
+    }).toMatchObject({
+      provenance: {
+        kind: "worker_spawned",
+        registry_commit: mergedOnRemote,
+        definition_version: "0.4.0",
+      },
+      systemPrompt: true,
+    });
+    // ADR 0020 が刻む hash と、pickup 直前の refresh が更新する ref は同じでなければ
+    // ならない(ADR 0052 決定2)。ローカル main を刻んでいたら、その一致が壊れている。
+    expect(spawned!.payload).not.toMatchObject({ registry_commit: staleLocal });
   });
 
   it("当事者レビュー(self RCA)の spawn には、記録 hash 時点の agent 定義本文を証拠として注入する(ADR 0020 part 4)", async () => {

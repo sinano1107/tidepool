@@ -8,6 +8,7 @@ import {
   assertValidWorkspaceName,
   loadRegistry,
   ownEntry,
+  type RegistryMode,
   type WorkspaceEntry,
 } from "./registry.js";
 import {
@@ -59,6 +60,9 @@ export type CreateWorkspaceInput = {
  *  both threaded in by the composition root, never read from env here. */
 export interface WorkspaceAdminDeps {
   registryDir: string;
+  /** ADR 0052 決定1: workspaces.yaml の検証と一覧が読む正本。読みだけがリモート
+   *  へ移り、書き込みはまだローカル main へコミットする(#210)。 */
+  registryMode: RegistryMode;
   workspacesBaseDir: string;
   /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
    *  process), threaded in by the composition root. The creation gate refuses
@@ -136,7 +140,7 @@ export async function createWorkspace(
   deps: CreateWorkspaceDeps,
 ): Promise<RegistryCommitResult> {
   assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir, deps.registryMode);
   assertValidWorkspaceName(registry, input.name);
   // ADR 0040: before any external effect — a refused registration must not
   // leave a clone or a GitHub repository behind.
@@ -198,7 +202,7 @@ export async function updateWorkspace(
   deps: WorkspaceAdminDeps,
 ): Promise<RegistryCommitResult> {
   assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir, deps.registryMode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const next: WorkspaceEntry = { ...entry };
@@ -277,7 +281,7 @@ export interface WorkspaceView extends WorkspaceEntry {
 }
 
 export function listWorkspaceViews(deps: WorkspaceAdminDeps): WorkspaceView[] {
-  const registry = loadRegistry(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir, deps.registryMode);
   return Object.entries(registry.workspaces).map(([name, entry]) => ({
     ...entry,
     name,

@@ -22,7 +22,12 @@ import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import type { AuthorityProfile, RegistryCandidates, RosterAgent } from "./registry.js";
+import type {
+  AuthorityProfile,
+  RegistryCandidates,
+  RegistryReachabilityCheck,
+  RosterAgent,
+} from "./registry.js";
 import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
@@ -116,6 +121,8 @@ export interface ServerOptions {
    *  the scheduler's fable line and the queue view. Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
+  /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
+  registryReachability?: RegistryReachabilityCheck;
   /** The pull half of the roster (issue #43 / ADR 0014), read fresh against
    *  the registry by the caller — same pattern as `agentRegistered`. Absent
    *  → no registry configured, so `list_agents` reports only `human`. */
@@ -184,6 +191,11 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
+  // ADR 0052 決定2 の起動時 refresh は**ここには無い**。合成 root
+  // (`buildServerOptions`)が registry を読む前に撃つ —— そこより後ろに置くと、
+  // remote-tracking ref が欠けた盤面では合成側の読みが先に落ち、fail-open が
+  // 働く前に起動が終わってしまう。`registryReachability` はこの下の pickup
+  // ゲートと、回答時の検証つき解除のために運ばれる。
   // a restart interrupts any running task (ADR 0001): it drops into the same
   // failure-escalation path as a watchdog kill, so the slot never wedges past
   // a restart (#9) — no graceful-drain machinery exists or is needed
@@ -253,6 +265,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     github: options.github,
     fableAgents: options.fableAgents,
     containment,
+    registryReachability: options.registryReachability,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
   // auto-commits it past the timeout, and the commit is a "run now" trigger
@@ -332,6 +345,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
       containment,
+      registryReachability: options.registryReachability,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin: options.workspaceAdmin,
@@ -362,6 +376,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
       containment,
+      registryReachability: options.registryReachability,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
       workspaceAdmin: options.workspaceAdmin,

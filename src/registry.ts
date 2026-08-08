@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { authedGitBounded, type GitHubAuth } from "./github-auth.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -325,11 +326,78 @@ const agentFrontmatterSchema = z.looseObject({
  *  working-tree read would let unmerged content take effect on spawn. */
 export const REGISTRY_BRANCH = "main";
 
+/** ADR 0052 決定3: この盤面の registry が remote 正本を持つか。**宣言であって
+ *  推測ではない** — clone を覗いて切り替えると、remote が失われた瞬間に ADR 0052
+ *  が直した壊れ方(merge が spawn に効かない)へ静かに戻る。既定値を持たせない
+ *  のも同じ理由で、`loadRegistry` の引数を必須にしてある。 */
+export type RegistryMode = "remote-backed" | "purely-local";
+
+export interface RegistryReachability {
+  available: boolean;
+  reason?: string;
+}
+export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
+
+/** この盤面で唯一ネットワークへ出る git 呼び出しの上限。`execFileSync` は同期
+ *  なので、black-hole した接続を無制限に待つと event loop ごと止まり、ADR 0036
+ *  が復旧経路と定めた人間面まで応答しなくなる —— fail-closed より悪い状態
+ *  (containment.ts)。timeout は「到達不能」= fail-closed 側に読む。
+ *
+ *  他の probe(`CAPABILITY_PROBE_TIMEOUT_MS` = 5秒)より桁が大きいのは、あれが
+ *  ローカルのバイナリを叩くのに対しこちらは実ネットワーク往復だからで、同じ数を
+ *  共有すると正常な fetch を落とす。 */
+export const REGISTRY_FETCH_TIMEOUT_MS = 30_000;
+
 // stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
 // message still rides the thrown error for callers that want it (agentBodyAtCommit
 // swallows it by design).
 const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
+
+/** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
+ *  `execFileSync` なので同期である —— 起動時の refresh は `buildServerOptions` が
+ *  自分で registry を読むより前に撃たなければ意味がなく、そこは同期の文脈だから。
+ *  非同期の面が要る口(`RegistryReachabilityCheck` は `ContainmentCheck` と型を
+ *  揃えてある)は呼び出し側が `async () => refreshRegistry(...)` で包む —— 1回の
+ *  fetch に輸出名を2つ与えると、ADR と CONTEXT.md が「refresh」1語で呼ぶものの
+ *  語彙が割れる。
+ *
+ *  **machine user 名義で撃つ**(ADR 0024 / CONTEXT.md の GitHub identity:
+ *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
+ *  registry は private なので認証が要り、しかも `authedGit` の credential 引数は
+ *  ホストに設定済みの helper を**先にクリアする** —— つまりこの1行は「認証を足す」
+ *  だけでなく「人間の `gh` ログインに寄りかからない」ことを同時に成立させる。
+ *  ホストに人間の helper が居ると認証なしでも fetch が通ってしまうため、実機で
+ *  成功したことはこの条件の証拠にならない(issue #209 の実測)。
+ *
+ *  `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、push(`pushRegistry`)
+ *  と同じく bare な git に委ねる。private な remote ならそこで失敗し、レジストリ
+ *  到達性の quarantine が人間を呼ぶ。
+ *
+ *  Failure is returned as data so the caller can quarantine or warn instead of
+ *  throwing. */
+export function refreshRegistry(
+  dir: string,
+  auth: GitHubAuth | undefined,
+): RegistryReachability {
+  try {
+    authedGitBounded(
+      auth,
+      dir,
+      REGISTRY_FETCH_TIMEOUT_MS,
+      "fetch",
+      "--quiet",
+      "origin",
+      REGISTRY_BRANCH,
+    );
+    return { available: true };
+  } catch (err) {
+    return {
+      available: false,
+      reason: `the registry remote main could not be refreshed (${String(err)})`,
+    };
+  }
+}
 
 /** Read one committed file's content at `ref` — `git show ref:path`. The board
  *  reads the registry from the committed branch, never the working tree. */
@@ -554,12 +622,19 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-/** Load the registry from committed `main` (ADR 0020) — never the working tree.
- *  Every read (agent definitions, authority profiles, workspaces.yaml) and the
- *  provenance `commit` come from the same ref, so the recorded hash and the
- *  content actually read agree by construction (no dirty flag needed). */
-export function loadRegistry(dir: string): Registry {
-  const ref = REGISTRY_BRANCH;
+/** Load the registry from its declared committed source (ADR 0020 / ADR 0052)
+ *  — remote-tracking main for a remote-backed board, local main for a
+ *  purely-local board, and never the working tree. Every content read and the
+ *  provenance `commit` use the same ref, so they agree by construction.
+ *
+ *  `mode` に既定値を置かない。既定があると、渡し忘れた呼び出しが**静かに**
+ *  ローカル main へ落ちる —— remote 正本を宣言した盤面でも spawn の入力だけが
+ *  古いまま、どこも赤くならない。ADR 0052 決定3 が推測を却下した理由と同じ形の
+ *  フォールバックなので、必須にして tsc に全呼び出しを名指しさせる
+ *  (containment.ts の「省略 = 無制限という footgun は作らない」と同じ線)。 */
+export function loadRegistry(dir: string, mode: RegistryMode): Registry {
+  const ref =
+    mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
   const agents: Record<string, AgentDefinition> = {};
   for (const path of gitListDir(dir, ref, "agents")) {
     if (!path.endsWith(".md")) continue;

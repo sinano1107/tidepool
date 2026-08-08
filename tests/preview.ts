@@ -33,9 +33,14 @@ export async function bootPreview(): Promise<Preview> {
     git(remoteDir, "init", "--bare");
     git(registryDir, "remote", "add", "origin", remoteDir);
 
-    const workspaceDeps = { registryDir, workspacesBaseDir: workspacesDir };
-    const agentDeps = { registryDir };
-    const profileDeps = { registryDir };
+    // ADR 0052: purely-local。ここの `origin` は**push 先の封じ込め**として在る
+    // のであって読み取りの正本ではない(bare repo は空で、`origin/main` はまだ
+    // 存在しない)。preview board は authoring 用であって検証用ではないので
+    // (ADR 0050)、リモート正本という役をそもそも持たない。
+    const registryMode = "purely-local" as const;
+    const workspaceDeps = { registryDir, registryMode, workspacesBaseDir: workspacesDir };
+    const agentDeps = { registryDir, registryMode };
+    const profileDeps = { registryDir, registryMode };
     const board = await bootTidepool({
       workspaceAdmin: {
         create: (input) => createWorkspace(input, workspaceDeps),
@@ -46,7 +51,7 @@ export async function bootPreview(): Promise<Preview> {
         create: (input) => createAgent(input, agentDeps),
         list: () => listAgentViews(agentDeps),
         update: (input) => updateAgent(input, agentDeps),
-        authorityProfiles: () => Object.keys(loadRegistry(registryDir).authority),
+        authorityProfiles: () => Object.keys(loadRegistry(registryDir, "purely-local").authority),
       },
       profileAdmin: {
         create: (input) => createProfile(input, profileDeps),

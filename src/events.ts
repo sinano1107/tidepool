@@ -155,6 +155,9 @@ export type EventPayload =
   // resumes board-wide. It names no resource because the sandbox belongs to the
   // host the board runs on, not to a workspace or an agent.
   | { kind: "sandbox_reinstated" }
+  // ADR 0052: registry remote reachability was rechecked successfully when
+  // its Confirmation question was answered, so board-wide pickup resumes.
+  | { kind: "registry_reinstated" }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill); the event itself is

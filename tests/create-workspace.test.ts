@@ -46,6 +46,7 @@ async function makeUpstream(defaultBranch = "main"): Promise<string> {
 async function makeDeps(registryDir: string) {
   return {
     registryDir,
+    registryMode: "purely-local" as const,
     workspacesBaseDir: await mkdtemp(join(tmpdir(), "tidepool-ws-base-")),
     github: new FakeGitHubClient(),
   };
@@ -64,7 +65,7 @@ describe("createWorkspace: 新規作成モード(issue #57)", () => {
     expect(deps.github.createdRepositories).toEqual(["lagoon"]);
     const cloneDir = join(deps.workspacesBaseDir, "lagoon");
     expect(git(cloneDir, "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
-    expect(loadRegistry(registryDir).workspaces.lagoon).toEqual({ repo: upstream });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
   });
 
   it("notes と protected は作成フォームからエントリへそのまま載る(protected を付けるのは安全方向なので確認なし)", async () => {
@@ -77,7 +78,7 @@ describe("createWorkspace: 新規作成モード(issue #57)", () => {
       deps,
     );
 
-    expect(loadRegistry(registryDir).workspaces.lagoon).toEqual({
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({
       repo: upstream,
       notes: "run npm install",
       protected: true,
@@ -93,7 +94,7 @@ describe("createWorkspace: 新規作成モード(issue #57)", () => {
     await createWorkspace({ mode: "create", name: "lagoon" }, deps);
 
     expect(deps.github.createdRepositories).toEqual([]);
-    expect(loadRegistry(registryDir).workspaces.lagoon).toEqual({ repo: upstream });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
   });
 });
 
@@ -107,7 +108,7 @@ describe("createWorkspace: register モード(issue #57)", () => {
       deps,
     );
 
-    const registry = loadRegistry(registryDir);
+    const registry = loadRegistry(registryDir, "purely-local");
     expect(registry.workspaces.sandbox).toEqual({ path: "/home/pi/work/sandbox" });
     // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する
     expect(git(registryDir, "status", "--porcelain")).toBe("");
@@ -125,7 +126,7 @@ describe("createWorkspace: clone モード(issue #57)", () => {
 
     const cloneDir = join(deps.workspacesBaseDir, "lagoon");
     expect(git(cloneDir, "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
-    expect(loadRegistry(registryDir).workspaces.lagoon).toEqual({ repo: upstream });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
   });
 
   it("default branch が main 以外なら branch: に自動記録される — 最初の pickup が quarantine で死なない(issue #27 統合)", async () => {
@@ -135,7 +136,7 @@ describe("createWorkspace: clone モード(issue #57)", () => {
 
     await createWorkspace({ mode: "clone", name: "lagoon", repo: upstream }, deps);
 
-    expect(loadRegistry(registryDir).workspaces.lagoon).toEqual({
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({
       repo: upstream,
       branch: "trunk",
     });
@@ -149,7 +150,7 @@ describe("createWorkspace: clone モード(issue #57)", () => {
 
     await createWorkspace({ mode: "clone", name: "lagoon", repo: upstream }, deps);
 
-    expect(loadRegistry(registryDir).workspaces.lagoon).toEqual({ repo: upstream });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
   });
 });
 
@@ -223,7 +224,7 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
       boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }],
     });
 
-    expect(loadRegistry(registryDir).workspaces.sandbox).toEqual({ path: "/home/pi/work/sandbox" });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: "/home/pi/work/sandbox" });
   });
 });
 
@@ -258,7 +259,7 @@ describe("createWorkspace: registry への push(issue #57: Tidepool 名義でコ
       );
 
       expect(result.pushed).toBe(false);
-      expect(loadRegistry(registryDir).workspaces.sandbox).toEqual({ path: "/tmp/sandbox" });
+      expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: "/tmp/sandbox" });
       expect(warn).toHaveBeenCalledOnce();
       expect(warn.mock.calls[0]![0]).toContain("push");
     } finally {
@@ -296,7 +297,7 @@ describe("createWorkspace: registry コミットの前提条件(ADR 0020: WebUI 
     await expect(
       createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps),
     ).rejects.toThrow(RegistryCloneBusyError);
-    expect(loadRegistry(registryDir).workspaces.sandbox).toBeUndefined();
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
   });
 
   it("registry クローンが dirty なら失敗し、コミットを積まない", async () => {
