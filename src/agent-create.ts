@@ -221,8 +221,10 @@ function serializeAgentFile(definition: AgentDefinition): string {
 
 /** Writes `agents/<name>.md` inside a disposable worktree and lands it under
  *  the board's own identity (ADR 0020 / ADR 0052 決定6) — the workspace
- *  admin's commitWorkspaceEntry, for agents. Checkout-independent: the
- *  registry clone's own working tree is never touched. */
+ *  admin's commitWorkspaceEntry, for agents. Checkout-independent: the write
+ *  itself never depends on the registry clone's own checkout — landing may
+ *  additionally sync it back in line as a courtesy (registry-write.ts's
+ *  `syncCheckoutIfOnBranch`), never as a requirement. */
 function commitAgentFile(deps: AgentAdminDeps, definition: AgentDefinition, message: string): void {
   commitToRegistry(
     deps.registry,

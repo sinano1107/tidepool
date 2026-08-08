@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createAgent,
@@ -219,6 +220,41 @@ describe("createAgent: checkout の位置に依存しない書き込み(ADR 0052
     // 次にこの checkout で走る commit(release の WIP commit や手編集)が
     // 今回追加した agents/tako.md を静かに削除してしまう窓が開く
     expect(git(registryDir, "status", "--porcelain")).toBe("");
+  });
+
+  it("純ローカル registry で HEAD が main かつ dirty でも、書き込みと衝突しないローカルの未コミット変更は破壊されない(/code-review 再指摘 — reset --hard ではなく read-tree -m -u)", async () => {
+    const registryDir = await makeMainRegistry();
+    // 今回の書き込みが触らないファイルへの、コミットされていないローカル編集
+    // (registry-edit タスクの途中経過や手編集を模す)
+    writeFileSync(join(registryDir, "workspaces.yaml"), "tidepool:\n  path: /local/wip/edit\n");
+
+    await createAgent(input, { registry: { dir: registryDir, mode: "purely-local" } });
+
+    expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeDefined();
+    // ローカルの未コミット編集は消えていない(reset --hard なら失われていた)
+    expect(readFileSync(join(registryDir, "workspaces.yaml"), "utf8")).toBe(
+      "tidepool:\n  path: /local/wip/edit\n",
+    );
+    expect(git(registryDir, "status", "--porcelain", "--", "workspaces.yaml")).toContain("workspaces.yaml");
+  });
+
+  it("checkout の同期が衝突で失敗しても、書き込み自体は成功のまま報告される(ref の着地と同期のベストエフォートは別の失敗ドメイン)", async () => {
+    const registryDir = await makeMainRegistry();
+    // 今回書き込む agents/tako.md と同じパスに、untracked な別内容を置く —
+    // read-tree -m -u が安全に諦める(working tree を書き換えない)条件を再現
+    execFileSync("mkdir", ["-p", join(registryDir, "agents")]);
+    writeFileSync(join(registryDir, "agents", "tako.md"), "untracked local draft, not tako's real body");
+
+    // 例外を投げない = ref の着地(書き込みの成立)自体は失敗として報告されない
+    await createAgent(input, { registry: { dir: registryDir, mode: "purely-local" } });
+
+    // 盤面が読む内容(committed ref 経由)は正しく更新されている
+    expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeDefined();
+    // 同期だけがベストエフォートで諦めた結果、untracked のローカル内容は
+    // 上書きされずに残る(read-tree -m -u が working tree を変更しなかった証拠)
+    expect(readFileSync(join(registryDir, "agents", "tako.md"), "utf8")).toBe(
+      "untracked local draft, not tako's real body",
+    );
   });
 
   it("入口の fetch が検証に効く — リモートで先に merge された同名エージェントを見逃さない(issue #210 レビュー — 決定4)", async () => {

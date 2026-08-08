@@ -45,9 +45,13 @@ export class RegistryPushFailedError extends Error {
 
 /** ADR 0052 決定6: `write` を使い捨ての detached worktree — registry の現在の
  *  tip から切ったもの — の中だけで実行し、commit してから着地させる。registry
- *  クローン自身の working tree には一切触れない。ローカル `main` の位置も HEAD の
- *  位置も書き込みに関係しなくなり、`assertRegistryCloneReady` が守っていたものは
- *  何も無くなる(読み取りは元から working tree を見ない)。
+ *  クローン自身の working tree は書き込みの間ずっと無関係のまま —— ローカル
+ *  `main` の位置も HEAD の位置も書き込みの成否に関係しなくなり、
+ *  `assertRegistryCloneReady` が守っていたものは何も無くなる(読み取りは元から
+ *  working tree を見ない)。purely-local な着地だけは、clone 自身がその
+ *  ブランチを指しているとき例外的に working tree/index へ触れる —
+ *  `syncCheckoutIfOnBranch` 参照(ベストエフォートの後始末であって、書き込みの
+ *  成立条件ではない)。
  *
  *  `write` が何も変更しなければ(no-change 編集)着地せず、コミットも積まない —
  *  既存の admin verb が持つ no-op-resubmit の形をそのまま踏襲する。
@@ -93,31 +97,45 @@ function land(registry: RegistrySource, worktreeDir: string, baseSha: string, au
       authedGit(auth, worktreeDir, "push", "origin", `HEAD:${REGISTRY_BRANCH}`);
     } else {
       const newSha = git(worktreeDir, "rev-parse", "HEAD");
-      // update-ref は working tree/index を素通りする — clone 自身がその
-      // ブランチを指し clean なら、着地の前に見ておいて、着地後に揃える
-      // (/code-review 指摘: 揃えないと、その checkout で次に走る commit が
-      // 今回の着地を静かに削除してしまう)
-      const syncCheckout = isCleanCheckoutOfBranch(registry.dir, REGISTRY_BRANCH);
       git(registry.dir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha);
-      if (syncCheckout) git(registry.dir, "reset", "--hard", newSha);
+      syncCheckoutIfOnBranch(registry.dir, REGISTRY_BRANCH, baseSha, newSha);
     }
   } catch (err) {
     throw new RegistryPushFailedError(String(err));
   }
 }
 
-/** clone 自身が `branch` を checkout していて、かつ dirty でないか。purely-local
- *  な着地(`update-ref`)の後に working tree/index を揃えてよいかの判定 — dirty
- *  だった、または他ブランチ(registry-edit タスク中など)に居た場合は触れない。
- *  その状態はこの書き込みより前から在ったかもしれず、黙って捨てる先例を
- *  作らないため。detached HEAD(このモジュール自身の worktree 書き込み中を
- *  含む一時状態)も false — symbolic-ref が非0で落ちる。 */
-function isCleanCheckoutOfBranch(registryDir: string, branch: string): boolean {
+/** update-ref は working tree/index を素通りする — clone 自身がその
+ *  ブランチを指しているなら、着地後に `read-tree -m -u <base> <new>`(2-tree
+ *  マージ)で working tree/index を揃える(/code-review 指摘: 揃えないと、
+ *  その checkout で次に走る commit が今回の着地を静かに削除してしまう)。
+ *
+ *  事前に clean かどうかを判定して丸ごとスキップする形は採らない —— それだと
+ *  「今回の着地と衝突しない dirty」まで一律で古いままにしてしまう
+ *  (/code-review 再指摘)。`read-tree -m -u` は base→new の差分に触れていない
+ *  ローカルの未コミット変更(index にも working tree にも)を保持したまま
+ *  反映し、ローカル編集が着地内容と衝突する場合(または衝突する untracked
+ *  ファイルがある場合)だけ working tree を一切変更せずに失敗する —— 実測済み。
+ *  失敗はベストエフォート: 着地(ref の更新)自体は既に成立しているので、
+ *  揃え損ねても書き込みの成否には影響しない(read-tree の失敗はここで
+ *  catch して警告するだけ — 呼び出し元の `land` まで投げない。投げてしまうと
+ *  「ref の更新は成功したのに致命エラーとして報告される」という、決定1が
+ *  一致させたいはずの「着地成功 = 効いた」を自ら壊す)。clone が detached
+ *  HEAD、または registry-edit タスクのブランチなど別ブランチを指している
+ *  場合は symbolic-ref か branch 比較で弾かれ、何もしない —— このモジュール
+ *  自身が切る使い捨て worktree は clone とは別ディレクトリなので、clone 側の
+ *  HEAD をこの関数が detached にすることはない。 */
+function syncCheckoutIfOnBranch(registryDir: string, branch: string, baseSha: string, newSha: string): void {
   let head: string;
   try {
     head = git(registryDir, "symbolic-ref", "--quiet", "HEAD");
   } catch {
-    return false;
+    return;
   }
-  return head === `refs/heads/${branch}` && git(registryDir, "status", "--porcelain") === "";
+  if (head !== `refs/heads/${branch}`) return;
+  try {
+    git(registryDir, "read-tree", "-m", "-u", baseSha, newSha);
+  } catch (err) {
+    console.warn(`[registry-write] checkout sync skipped (non-fatal): ${registryDir}`, err);
+  }
 }
