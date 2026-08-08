@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { authedGitBounded, type GitHubAuth } from "./github-auth.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -357,15 +358,34 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *  これを直接呼ぶ** —— `buildServerOptions` は同期で、しかも自分が読むより前に
  *  撃たなければ意味がないため(下の非同期の面では間に合わない)。
  *
+ *  **machine user 名義で撃つ**(ADR 0024 / CONTEXT.md の GitHub identity:
+ *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
+ *  registry は private なので認証が要り、しかも `authedGit` の credential 引数は
+ *  ホストに設定済みの helper を**先にクリアする** —— つまりこの1行は「認証を足す」
+ *  だけでなく「人間の `gh` ログインに寄りかからない」ことを同時に成立させる。
+ *  ホストに人間の helper が居ると認証なしでも fetch が通ってしまうため、実機で
+ *  成功したことはこの条件の証拠にならない(issue #209 の実測)。
+ *
+ *  `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、push(`pushRegistry`)
+ *  と同じく bare な git に委ねる。private な remote ならそこで失敗し、レジストリ
+ *  到達性の quarantine が人間を呼ぶ。
+ *
  *  Failure is returned as data so the caller can quarantine or warn instead of
  *  throwing. */
-export function fetchRegistryRef(dir: string): RegistryReachability {
+export function fetchRegistryRef(
+  dir: string,
+  auth: GitHubAuth | undefined,
+): RegistryReachability {
   try {
-    execFileSync("git", ["fetch", "--quiet", "origin", REGISTRY_BRANCH], {
-      cwd: dir,
-      stdio: GIT_STDIO,
-      timeout: REGISTRY_FETCH_TIMEOUT_MS,
-    });
+    authedGitBounded(
+      auth,
+      dir,
+      REGISTRY_FETCH_TIMEOUT_MS,
+      "fetch",
+      "--quiet",
+      "origin",
+      REGISTRY_BRANCH,
+    );
     return { available: true };
   } catch (err) {
     return {
@@ -378,8 +398,11 @@ export function fetchRegistryRef(dir: string): RegistryReachability {
 /** 上と同じ1回の fetch を、pickup ゲートと回答時の検証が使う**非同期の面**として
  *  出したもの。型を `ContainmentCheck` と揃えてあるのは、封じ込め能力と同じ器に
  *  乗る兄弟だからである(ADR 0052 決定5 — 束ねはしないが形は同じ)。 */
-export async function refreshRegistry(dir: string): Promise<RegistryReachability> {
-  return fetchRegistryRef(dir);
+export async function refreshRegistry(
+  dir: string,
+  auth: GitHubAuth | undefined,
+): Promise<RegistryReachability> {
+  return fetchRegistryRef(dir, auth);
 }
 
 /** Read one committed file's content at `ref` — `git show ref:path`. The board

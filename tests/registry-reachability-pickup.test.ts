@@ -66,7 +66,8 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     clock,
     slot: new Slot(),
     worker,
-    registryReachability: () => refreshRegistry(registryDir),
+    // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
+    registryReachability: () => refreshRegistry(registryDir, undefined),
   });
   registerTask(
     db,

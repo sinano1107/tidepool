@@ -46,10 +46,37 @@ export const GIT_CREDENTIAL_ARGS = [
  *  override, no env injection — deferring to whatever git config remains,
  *  so a board without a secrets file keeps its pre-#50 behavior. */
 export function authedGit(auth: GitHubAuth | undefined, cwd: string, ...args: string[]): string {
+  return runAuthedGit(auth, cwd, args);
+}
+
+/** `authedGit` の上限つきの面。registry の refresh(ADR 0052)だけが使う ——
+ *  あれは pickup ゲートの手前に立つ probe なので、詰まったら poll ごと止めては
+ *  ならない(sandbox.ts の probe 境界の規律)。
+ *
+ *  別関数にしてでも `runAuthedGit` を共有するのは、この module の約束
+ *  ——「credentials take effect in exactly one place」—— を守るためである。
+ *  呼び出し側で credential 引数を組み直せば、ambient な identity を消す責務が
+ *  2箇所に分かれ、片方が欠けても誰も気づかない。 */
+export function authedGitBounded(
+  auth: GitHubAuth | undefined,
+  cwd: string,
+  timeoutMs: number,
+  ...args: string[]
+): string {
+  return runAuthedGit(auth, cwd, args, timeoutMs);
+}
+
+function runAuthedGit(
+  auth: GitHubAuth | undefined,
+  cwd: string,
+  args: string[],
+  timeoutMs?: number,
+): string {
   return execFileSync("git", auth ? [...GIT_CREDENTIAL_ARGS, ...args] : args, {
     cwd,
     env: auth?.env(),
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
   })
     .toString()
     .trim();

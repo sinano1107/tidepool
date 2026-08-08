@@ -244,7 +244,7 @@ export function declaredRegistryMode(registryDir: string | undefined): RegistryM
  *  出ることである。 */
 function bootRefresh(board: BoardComposition): void {
   if (!board.registryDir || board.registryMode !== "remote-backed") return;
-  const reachability = fetchRegistryRef(board.registryDir);
+  const reachability = fetchRegistryRef(board.registryDir, board.githubAuth);
   if (reachability.available) return;
   console.error(
     "[registry] startup refresh failed; the board is starting anyway and the next pickup " +
@@ -259,7 +259,7 @@ function registryReachabilityCheck(
 ): (() => Promise<RegistryReachability>) | undefined {
   const { registryDir } = board;
   if (!registryDir || board.registryMode !== "remote-backed") return undefined;
-  return () => refreshRegistry(registryDir);
+  return () => refreshRegistry(registryDir, board.githubAuth);
 }
 
 /** The board's own view of the workspace (branch discipline + tree rule):
