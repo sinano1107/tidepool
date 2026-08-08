@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { authedGitBounded, type GitHubAuth } from "./github-auth.js";
+import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -98,6 +98,18 @@ const workspaceEntrySchema = z.object({
    *  other host's absolute path. Explicit `path` stays for hand-placed
    *  checkouts (the registry itself, existing-path registration mode). */
   path: z.string().optional(),
+  /** **この workspace のリモート正本の宣言**(ADR 0052 決定3 / issue #211)。以前は
+   *  「手でセットアップするための clone URL」という散文だったが、機械が読む
+   *  フィールドへ昇格した —— あり = remote 正本を持つ、無し = purely-local。
+   *
+   *  宣言を持つ workspace では、タスクブランチの fork 元も slot 解放後の休止位置も
+   *  リモート側の保護ブランチ(`refs/remotes/origin/<branch>`)を基準に取り、pickup
+   *  の直前に fetch される。clone を覗いて remote の有無で推測することはしない ——
+   *  推測はリモートが失われた瞬間に「merge が spawn に効かない」旧挙動へ静かに戻る
+   *  道であり、宣言と実態のずれ(どちら向きでも)は quarantine に落ちる。
+   *
+   *  盤面が読むのは有無だけで、値(clone URL)は人間向けの provenance のまま ——
+   *  URL の綴り(ssh / https)で実態と突き合わせることはしない。 */
   repo: z.string().optional(),
   notes: z.string().optional(),
   /** Protected workspace (issue #15 layer 2 / ADR 0013): a decompose child
@@ -357,16 +369,6 @@ export interface RegistryReachability {
 }
 export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 
-/** この盤面で唯一ネットワークへ出る git 呼び出しの上限。`execFileSync` は同期
- *  なので、black-hole した接続を無制限に待つと event loop ごと止まり、ADR 0036
- *  が復旧経路と定めた人間面まで応答しなくなる —— fail-closed より悪い状態
- *  (containment.ts)。timeout は「到達不能」= fail-closed 側に読む。
- *
- *  他の probe(`CAPABILITY_PROBE_TIMEOUT_MS` = 5秒)より桁が大きいのは、あれが
- *  ローカルのバイナリを叩くのに対しこちらは実ネットワーク往復だからで、同じ数を
- *  共有すると正常な fetch を落とす。 */
-export const REGISTRY_FETCH_TIMEOUT_MS = 30_000;
-
 // stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
 // message still rides the thrown error for callers that want it (agentBodyAtCommit
@@ -404,7 +406,7 @@ export function refreshRegistry(
     authedGitBounded(
       auth,
       dir,
-      REGISTRY_FETCH_TIMEOUT_MS,
+      GIT_NETWORK_TIMEOUT_MS,
       "fetch",
       "--quiet",
       "origin",

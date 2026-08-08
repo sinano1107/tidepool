@@ -220,12 +220,33 @@ async function buildEntry(
   input: CreateWorkspaceInput,
   deps: CreateWorkspaceDeps,
 ): Promise<WorkspaceEntry> {
-  if (input.mode === "register") return { path: input.path };
+  if (input.mode === "register") return registerExistingCheckout(input.path);
   if (input.mode === "clone") return cloneAndDescribe(input.name, input.repo, deps);
   if (!deps.github) throw new GitHubIdentityMissingError();
   const existing = await deps.github.getRepository(input.name);
   const repository = existing ?? (await deps.github.createRepository(input.name));
   return cloneAndDescribe(input.name, repository.url, deps);
+}
+
+/** The register mode's half: the entry records the explicit host path, plus the
+ *  checkout's own `origin` URL as its **remote-source-of-truth declaration**
+ *  (ADR 0052 決定3 / issue #211). Reading it here is what makes the declaration a
+ *  declaration at all — the clone/create modes get it for free because they were
+ *  handed the URL, and the board must not be left inferring it from the clone at
+ *  every use (the fallback ADR 0052 rejected by name).
+ *
+ *  No remote → no `repo`: a checkout that is nobody's clone is a legitimate,
+ *  purely-local workspace, and writing `repo` anyway would manufacture exactly
+ *  the declaration/reality mismatch that pickup quarantines. A path that isn't a
+ *  git repository at all lands here too — the registration gate has never
+ *  validated that (a checkout can be placed after the entry), so the absent
+ *  declaration is the honest one to write. */
+function registerExistingCheckout(path: string): WorkspaceEntry {
+  try {
+    return { path, repo: git(path, "remote", "get-url", "origin") };
+  } catch {
+    return { path };
+  }
 }
 
 /** The clone mode's external half: a checkout at the convention-derived

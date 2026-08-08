@@ -4,7 +4,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { ownEntry, REGISTRY_BRANCH, type Registry, type WorkspaceEntry } from "./registry.js";
+import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
+import {
+  ownEntry,
+  REGISTRY_BRANCH,
+  type Registry,
+  type RegistrySource,
+  type WorkspaceEntry,
+} from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
@@ -20,6 +27,15 @@ export interface WorkspaceConfig {
    *  the pre-#27 shape for a `WorkspaceConfig` built outside the registry
    *  (main.ts's fixed single-workspace fallback, test fixtures). */
   branch?: string;
+  /** ADR 0052 決定3 / issue #211: この workspace が**リモートの正本を持つ**という
+   *  宣言(`workspaces.yaml` の `repo`)。あり = remote-backed、無し = purely-local。
+   *  値そのものは clone URL だが、盤面が読むのは有無だけである —— 「宣言であって
+   *  推測ではない」ため、clone を覗いて remote の有無で切り替えることはしない
+   *  (remote が失われた瞬間に「merge が spawn に効かない」旧挙動へ静かに戻る道を
+   *  残さない)。`branch` と同じく registry から毎回読み直され、registry の外で
+   *  組まれた `WorkspaceConfig`(main.ts の単一 workspace fallback、テスト fixture)
+   *  では不在 = purely-local の宣言になる。 */
+  repo?: string;
   /** Command prefixes a review session may run despite the `manual` write
    *  floor (issue #144 / ADR 0035), passed through from the registry entry the
    *  same way `branch` is. Absent → none: a `WorkspaceConfig` built outside the
@@ -44,6 +60,25 @@ export function resolveWorkspacesBaseDir(configured: string | undefined): string
  *  task branch actually forked from. */
 export function protectedBranch(workspace: WorkspaceConfig): string {
   return workspace.branch ?? MAIN_BRANCH;
+}
+
+/** ADR 0052 決定3: この workspace が remote の正本を持つと**宣言している**か。
+ *  clone を覗く関数ではない —— `repo` の有無だけを読む。 */
+export function isRemoteBacked(workspace: WorkspaceConfig): boolean {
+  return workspace.repo !== undefined;
+}
+
+/** 盤面が保護ブランチを**参照として**読むときの1つの ref —— remote 正本を宣言した
+ *  workspace ではリモート側の remote-tracking ref、そうでなければローカルの同名
+ *  ブランチ(`registryRef(mode)` と同じ形を workspace 側に置いたもの)。
+ *
+ *  `protectedBranch` の返す**名前**とは役が違う: PR の base や直接書き込み禁止の
+ *  対象はリモートのブランチ名そのものなので今も名前を使い、「今この保護ブランチは
+ *  どのコミットか」を訊く側だけがこの ref を使う(タスクブランチの fork 元、
+ *  slot 解放後の休止位置の追従先)。 */
+export function protectedBranchRef(workspace: WorkspaceConfig): string {
+  const branch = protectedBranch(workspace);
+  return isRemoteBacked(workspace) ? `refs/remotes/origin/${branch}` : branch;
 }
 
 /** The board's own git identity: the author on the tree rule's WIP commits
@@ -95,7 +130,13 @@ export function resolveExecutionWorkspace(
   // the "main" default lives solely in protectedBranch — entry.branch passes
   // through as-is (possibly absent) rather than getting normalized here too
   const path = entryCheckoutPath(entry, name, workspacesBaseDir);
-  return { name, path, branch: entry.branch, review_allowed_commands: entry.review_allowed_commands };
+  return {
+    name,
+    path,
+    branch: entry.branch,
+    repo: entry.repo,
+    review_allowed_commands: entry.review_allowed_commands,
+  };
 }
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
@@ -129,6 +170,7 @@ export function listRegisteredWorkspaces(
     name,
     path: entryCheckoutPath(entry, name, workspacesBaseDir),
     branch: entry.branch,
+    repo: entry.repo,
     review_allowed_commands: entry.review_allowed_commands,
   }));
 }
@@ -145,9 +187,107 @@ export function ensureTaskBranch(workspace: WorkspaceConfig, taskId: string): vo
   try {
     git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
   } catch {
-    git(workspace.path, "branch", branch, protectedBranch(workspace));
+    // fork 元は保護ブランチの**参照**(ADR 0052 決定1 / issue #211): remote 正本を
+    // 宣言した workspace ではリモート側 —— 直前のタスクの成果が merge 済みなら、
+    // 次のタスクはそれを踏まえた地点から始まる
+    git(workspace.path, "branch", branch, protectedBranchRef(workspace));
   }
   git(workspace.path, "checkout", branch);
+}
+
+/** ADR 0052 決定3 の対偶(issue #211 やること5): 宣言は clone を覗いた推測ではないので、
+ *  宣言と実態がずれていたら**どこかが赤くならなければならない**。
+ *
+ *  ずれは両向きに害がある。宣言があって remote が無い側は fetch も fork も撃てない。
+ *  宣言が無くて remote がある側のほうが危険で、黙って通れば fork 元はローカルの保護
+ *  ブランチのままなので、merge 済みの成果が見えない地点からタスクが始まり続け、症状は
+ *  「PR が毎回コンフリクトする」という遠い場所に出る。
+ *
+ *  突き合わせるのは `origin` の**有無だけ**である。URL の綴り(ssh / https / ホスト名の
+ *  別名)を照合しても同じリモートを別物と読む誤検出しか増えず、`repo` は人間向けの
+ *  provenance でもあるため厳密な一致を要求できない。 */
+function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
+  let hasOrigin: boolean;
+  try {
+    git(workspace.path, "remote", "get-url", "origin");
+    hasOrigin = true;
+  } catch {
+    hasOrigin = false;
+  }
+  if (isRemoteBacked(workspace) === hasOrigin) return;
+  throw new Error(
+    isRemoteBacked(workspace)
+      ? `workspace ${workspace.name} declares a remote source of truth (repo: ${workspace.repo}) ` +
+        "but its checkout has no 'origin' remote"
+      : `workspace ${workspace.name} declares no remote source of truth (no repo) ` +
+        "but its checkout has an 'origin' remote",
+  );
+}
+
+/** ADR 0052 決定2 の pickup 直前の refresh を workspace 側にも(issue #211 やること4)。
+ *  remote 正本を宣言した workspace だけが fetch する —— 宣言の無い workspace には
+ *  fetch する先が無い。
+ *
+ *  **machine user 名義で撃つ**(ADR 0024): workspace の remote も private でありうる
+ *  し、`authedGit` の credential 引数はホストに設定済みの helper を先にクリアする ——
+ *  「人間の `gh` ログインに寄りかからない」がここでも同時に成立する。上限つきの面を
+ *  使うのは、詰まった接続が同期呼び出しで event loop ごと止めてはならないからである
+ *  (`GIT_NETWORK_TIMEOUT_MS`)。
+ *
+ *  失敗は投げる —— 呼び出し元(pickup)がその workspace を quarantine する。registry の
+ *  到達不能と違って盤面全体は止めない: これは特定 workspace の性質なので、資源単位の
+ *  原則がそのまま適用できる(ADR 0052 決定5)。 */
+export function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
+  if (!isRemoteBacked(workspace)) return;
+  authedGitBounded(
+    auth,
+    workspace.path,
+    GIT_NETWORK_TIMEOUT_MS,
+    "fetch",
+    "--quiet",
+    "origin",
+    protectedBranch(workspace),
+  );
+}
+
+/** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する
+ *  `RegistryMode`)と「workspace」(`workspaces.yaml` の `repo`)の**両方**の役を持つので
+ *  宣言を2つ持つ。1本化はできない —— workspace エントリを読むには先に registry を読む
+ *  必要があり循環する —— ので、pickup の瞬間に突き合わせる。
+ *
+ *  上の `assertRemoteDeclarationMatchesClone` では捕まらない食い違いがある: 双方の
+ *  宣言が clone の実態とは一致していて、互いにだけ食い違っている場合(remote を持たない
+ *  clone を registry として remote-backed と宣言した、など)である。 */
+function assertRegistryRoleAgrees(
+  workspace: WorkspaceConfig,
+  registry: RegistrySource | undefined,
+): void {
+  if (!registry || !pathIsRegistryClone(workspace.path, registry.dir)) return;
+  const asRegistry = registry.mode === "remote-backed";
+  if (asRegistry === isRemoteBacked(workspace)) return;
+  throw new Error(
+    `workspace ${workspace.name} is the board's own registry clone and its two declarations ` +
+      `disagree: as the registry it declares '${registry.mode}', as a workspace it declares ` +
+      (isRemoteBacked(workspace) ? `a remote source of truth (repo: ${workspace.repo})` : "none"),
+  );
+}
+
+/** pickup が checkout に対して行うことの全体(issue #211): 宣言どうし・宣言と実態を
+ *  突き合わせ、remote 正本を宣言していれば refresh し、それからブランチ規律を敷く。
+ *
+ *  1つの関数にまとめてあるのは、どれが失敗しても行き先が同じ —— その workspace の
+ *  quarantine —— だからである(scheduler 側の try/catch 1つが全部受ける)。順序は
+ *  意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
+ *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
+export function prepareWorkspaceAtPickup(
+  workspace: WorkspaceConfig,
+  taskId: string,
+  board: { githubAuth?: GitHubAuth; registry?: RegistrySource },
+): void {
+  assertRegistryRoleAgrees(workspace, board.registry);
+  assertRemoteDeclarationMatchesClone(workspace);
+  refreshWorkspace(workspace, board.githubAuth);
+  ensureTaskBranch(workspace, taskId);
 }
 
 /** The slot-release tree rule: whatever the session left behind is stashed as
@@ -172,6 +312,33 @@ export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
   if (git(workspace.path, "status", "--porcelain") !== "") {
     throw new Error(`workspace ${workspace.name} still dirty after WIP commit`);
   }
+}
+
+/** ADR 0052 決定7: 「クリーンに戻す」には**休止位置**も含まれる —— 退避のあと checkout を
+ *  保護ブランチへ戻し、remote 正本を宣言した workspace ではリモートへ追従させてから戻す。
+ *
+ *  理由は盤面の正しさではなく**人間の誤読**である。盤面はもう checkout の位置を読まない
+ *  (fork 元も読み取りもリモートの ref)が、人間はホスト上でその checkout を覗く。最後に
+ *  走ったタスクのブランチが居座った clone は、覗いた人間に「今この workspace はこう
+ *  なっている」と嘘をつく(#210 のグリリング中、実際に一度その誤読が起きた)。
+ *
+ *  追従は **ff-only** で撃つ。`checkout -B <protected> <remote ref>` なら常に成功するが、
+ *  それは帯域外の手作業でローカルに載ったコミットを黙って捨てる —— quarantine すべき
+ *  食い違いを、無かったことにする形で通してしまう。ff できないことは「人間がホスト上で
+ *  何かした」の唯一の徴候なので、投げて quarantine に落とす(呼び出し元の
+ *  `releaseWorkspace` が受ける)。 */
+function parkOnProtectedBranch(workspace: WorkspaceConfig): void {
+  git(workspace.path, "checkout", protectedBranch(workspace));
+  if (!isRemoteBacked(workspace)) return;
+  // identity を渡すのは ff が commit を作らない場合でも git が要求しうるため —
+  // 盤面が打つ git はすべて Tidepool 名義という線(issue #53)をここでも切らない
+  git(
+    workspace.path,
+    ...TIDEPOOL_GIT_IDENTITY,
+    "merge",
+    "--ff-only",
+    protectedBranchRef(workspace),
+  );
 }
 
 /** Quarantine resolution's verification gate (issue #21, CONTEXT.md): the
@@ -279,7 +446,15 @@ export function resolvesToRegistryClone(
   registryDir: string,
   workspacesBaseDir: string,
 ): boolean {
-  return safeRealpath(entryCheckoutPath(entry, name, workspacesBaseDir)) === safeRealpath(registryDir);
+  return pathIsRegistryClone(entryCheckoutPath(entry, name, workspacesBaseDir), registryDir);
+}
+
+/** The same comparison for a checkout path that is **already resolved** — what a
+ *  `WorkspaceConfig` carries (issue #211's pickup-time crosscheck). The entry-shaped
+ *  face above stands in front of it for the callers that still hold an entry and a
+ *  base dir (ADR 0018's derivation). */
+export function pathIsRegistryClone(checkoutPath: string, registryDir: string): boolean {
+  return safeRealpath(checkoutPath) === safeRealpath(registryDir);
 }
 
 /** The registry clone is itself a tracked workspace (a protected entry whose
@@ -368,7 +543,10 @@ export function resolveOrQuarantine(
 
 /** Every slot release runs the tree rule and falls back to quarantine on its
  *  failure — the shared shape behind the releasing MCP verbs (complete,
- *  escalate, decompose) and the watchdog/restart failure path alike (#9). */
+ *  escalate, decompose) and the watchdog/restart failure path alike (#9).
+ *  「クリーンに戻す」の後半 —— 休止位置(ADR 0052 決定7)—— も同じ try の中で走る:
+ *  失敗の行き先が同じ quarantine であり、どちらが欠けても人間が覗く clone は
+ *  嘘をつく。 */
 export function releaseWorkspace(
   db: Db,
   workspace: WorkspaceConfig,
@@ -377,6 +555,7 @@ export function releaseWorkspace(
 ): void {
   try {
     releaseTree(workspace, taskId);
+    parkOnProtectedBranch(workspace);
   } catch (err) {
     quarantineWorkspace(db, workspace.name, err, now);
   }

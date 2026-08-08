@@ -49,9 +49,23 @@ export function authedGit(auth: GitHubAuth | undefined, cwd: string, ...args: st
   return runAuthedGit(auth, cwd, args);
 }
 
-/** `authedGit` の上限つきの面。registry の refresh(ADR 0052)だけが使う ——
- *  あれは pickup ゲートの手前に立つ probe なので、詰まったら poll ごと止めては
- *  ならない(sandbox.ts の probe 境界の規律)。
+/** ネットワークへ出る git 呼び出しの上限(ADR 0052)。`execFileSync` は同期なので、
+ *  black-hole した接続を無制限に待つと event loop ごと止まり、ADR 0036 が復旧経路と
+ *  定めた人間面まで応答しなくなる —— fail-closed より悪い状態(containment.ts)。
+ *  timeout は「到達不能」= fail-closed 側に読む。
+ *
+ *  他の probe(`CAPABILITY_PROBE_TIMEOUT_MS` = 5秒)より桁が大きいのは、あれが
+ *  ローカルのバイナリを叩くのに対しこちらは実ネットワーク往復だからで、同じ数を
+ *  共有すると正常な fetch を落とす。
+ *
+ *  registry の refresh と workspace の refresh が**同じ1つの上限**を共有するのは、
+ *  根拠がどちらも「同期の実ネットワーク往復が poll を止めてはならない」1つだから
+ *  である —— 資源ごとに数を分けると、片方だけを動かしたときに理由のほうが割れる。 */
+export const GIT_NETWORK_TIMEOUT_MS = 30_000;
+
+/** `authedGit` の上限つきの面。ネットワークへ出る refresh(registry: ADR 0052 決定2、
+ *  workspace: issue #211)が使う —— どちらも pickup ゲートの手前に立つ probe なので、
+ *  詰まったら poll ごと止めてはならない(sandbox.ts の probe 境界の規律)。
  *
  *  別関数にしてでも `runAuthedGit` を共有するのは、この module の約束
  *  ——「credentials take effect in exactly one place」—— を守るためである。

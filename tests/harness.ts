@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ import type {
   AuthorityProfile,
   RegistryCandidates,
   RegistryReachabilityCheck,
+  RegistrySource,
   RosterAgent,
 } from "../src/registry.js";
 import type { SandboxCapability } from "../src/sandbox.js";
@@ -72,6 +74,10 @@ export interface BootOptions {
   dir?: string;
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
+  /** ADR 0052 / issue #211: どの registry clone を読み書きするか + remote 正本の宣言。
+   *  registry clone が workspace としても登録されているときの「2つの宣言」の
+   *  突き合わせだけがこれを要る。Absent → registry を持たない盤面 = 突き合わせ無し。 */
+  registry?: RegistrySource;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009). Absent → every task runs against the single `workspace`
    *  above. */
@@ -209,6 +215,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
     registryReachability: options.registryReachability,
+    registry: options.registry,
     boardState: options.boardState,
     containment: options.sandboxCapability && {
       sandboxCapability: options.sandboxCapability,
@@ -317,6 +324,49 @@ export async function makeWorkspace(dirs: string[], name: string): Promise<Works
   git(path, "add", "-A");
   git(path, "commit", "-m", "initial");
   return { name, path };
+}
+
+/** `makeWorkspace` の remote 正本つきの姿(ADR 0052 / issue #211): bare な origin を
+ *  持つ checkout と、そこへ**人間の merge を模して**書き込む publisher を組む。
+ *  返す `WorkspaceConfig` の `repo` が「この workspace はリモートの正本を持つ」の
+ *  宣言そのもので、値としては bare な origin のパス —— 盤面が読むのは有無だけである。
+ *
+ *  `makeWorkspace` に remote を足さないのは意図的で、remote を持たない workspace は
+ *  正当な構成(既存の全テストがその形)だから。remote が要るテストだけがこれを使う。 */
+export async function makeRemoteBackedWorkspace(
+  dirs: string[],
+  name: string,
+): Promise<{
+  workspace: WorkspaceConfig;
+  /** origin の保護ブランチへ直接コミットして push する = リモートで merge が起きた
+   *  状態を作る。clone 側の `refs/remotes/origin/main` は fetch するまで動かない ——
+   *  そこが測りたい差である。 */
+  publish: (file: string, body: string, message: string) => void;
+}> {
+  const workspace = await makeWorkspace(dirs, name);
+  const origin = await mkdtemp(join(tmpdir(), `tidepool-${name}-origin-`));
+  const publisher = await mkdtemp(join(tmpdir(), `tidepool-${name}-publisher-`));
+  dirs.push(origin, publisher);
+  // stderr は piped: clone / push の進捗は成否に関係なく stderr へ出るので、素通しすると
+  // テスト出力が git のノイズで埋まる(registry-fixture.ts と同じ規律)
+  const netGit = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  netGit(origin, "init", "--bare", "-b", "main");
+  netGit(workspace.path, "remote", "add", "origin", origin);
+  netGit(workspace.path, "push", "-u", "origin", "main");
+  netGit(publisher, "clone", "--quiet", origin, ".");
+  return {
+    workspace: { ...workspace, repo: origin },
+    publish: (file, body, message) => {
+      writeFileSync(join(publisher, file), body);
+      netGit(publisher, "add", file);
+      netGit(publisher, "commit", "-m", message);
+      netGit(publisher, "push", "origin", "main");
+    },
+  };
 }
 
 export async function registerWork(

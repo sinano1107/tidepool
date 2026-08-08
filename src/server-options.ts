@@ -511,6 +511,13 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
     registryReachability: registryReachabilityCheck(board),
+    // ADR 0024 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
+    // machine user 名義で撃つ。落とすと private な remote の workspace が黙って
+    // quarantine に落ち続ける(fail-closed だが理由が「認証が無い」になる)。
+    githubAuth: board.githubAuth,
+    // ADR 0052 決定3 / issue #211: registry clone が workspace としても登録されている
+    // ときの「2つの宣言」の突き合わせ先。registry が無い盤面には食い違う相手が無い。
+    registry: board.registryDir ? { dir: board.registryDir, mode: board.registryMode } : undefined,
     // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
