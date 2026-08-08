@@ -2,19 +2,18 @@ import { afterEach, expect, it } from "vitest";
 import type { CreateAgentInput } from "../src/agent-create.js";
 import { InvalidAgentIconError, UnknownAuthorityProfileError } from "../src/agent-create.js";
 import { InvalidAgentNameError } from "../src/registry.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("POST /api/agents は検証済み入力を createAgent オーケストレーションへ渡し、201 で pushed を返す(issue #71)", async () => {
+it("POST /api/agents は検証済み入力を createAgent オーケストレーションへ渡し、201 を返す(issue #71)", async () => {
   const calls: CreateAgentInput[] = [];
   t = await bootTidepool({
     agentAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -30,7 +29,7 @@ it("POST /api/agents は検証済み入力を createAgent オーケストレー�
   });
 
   expect(res.status).toBe(201);
-  expect(res.json).toEqual({ pushed: true });
+  expect(res.json).toEqual({});
   expect(calls).toEqual([
     {
       name: "tako",
@@ -64,7 +63,6 @@ it("スキーマ違反(systemPrompt なし)は 400 で、オーケストレー�
     agentAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -86,7 +84,6 @@ it("systemPrompt が空文字は 201(ADR 0017: 空 specialty は正規形、issu
     agentAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -175,11 +172,11 @@ it("不正 icon(InvalidAgentIconError)は 400 でメッセージを返す", asyn
   expect(res.json.error).toContain("icon");
 });
 
-it("registry クローンが busy(RegistryCloneBusyError)なら 409 — リトライは冪等なので後で叩き直せばよい", async () => {
+it("registry の push 失敗(RegistryPushFailedError)は致命 — 502 でリトライは冪等(ADR 0052 決定1)", async () => {
   t = await bootTidepool({
     agentAdmin: {
       create: async () => {
-        throw new RegistryCloneBusyError("/registry", "HEAD is on 'task/x', not 'main'");
+        throw new RegistryPushFailedError("non-fast-forward");
       },
     },
   });
@@ -192,7 +189,7 @@ it("registry クローンが busy(RegistryCloneBusyError)なら 409 — リト�
     systemPrompt: "You are Tako.",
   });
 
-  expect(res.status).toBe(409);
+  expect(res.status).toBe(502);
 });
 
 it("その他の外部失敗は 502", async () => {

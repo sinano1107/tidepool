@@ -34,13 +34,12 @@ it("GET /api/workspaces は registry 未設定なら 503", async () => {
   expect((await api(t.baseUrl, "GET", "/api/workspaces")).status).toBe(503);
 });
 
-it("PATCH /api/workspaces/:name は URL の名前と body を updateWorkspace へ渡し、200 で pushed を返す", async () => {
+it("PATCH /api/workspaces/:name は URL の名前と body を updateWorkspace へ渡し、200 を返す", async () => {
   const calls: UpdateWorkspaceInput[] = [];
   t = await bootTidepool({
     workspaceAdmin: {
       update: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -51,7 +50,7 @@ it("PATCH /api/workspaces/:name は URL の名前と body を updateWorkspace �
   });
 
   expect(res.status).toBe(200);
-  expect(res.json).toEqual({ pushed: true });
+  expect(res.json).toEqual({});
   expect(calls).toEqual([{ name: "lagoon", notes: "run npm install", protected: true }]);
 });
 

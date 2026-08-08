@@ -332,6 +332,25 @@ export const REGISTRY_BRANCH = "main";
  *  のも同じ理由で、`loadRegistry` の引数を必須にしてある。 */
 export type RegistryMode = "remote-backed" | "purely-local";
 
+/** `registryDir` と `registryMode` は必ず一緒に運ばれる(issue #210 レビュー —
+ *  `AgentAdminDeps` / `ProfileAdminDeps` / `WorkspaceAdminDeps` /
+ *  `ClaudeWorkerOptions` の4つが両方を持つ Data Clumps だった)。どの clone を
+ *  読み書きするかは「パス」と「そのパスが remote 正本を持つか」の組でしか
+ *  意味を持たないので、1つの型にまとめる。 */
+export interface RegistrySource {
+  dir: string;
+  mode: RegistryMode;
+}
+
+/** `mode` が指す、盤面が registry を読み書きする1つの ref — remote-tracking
+ *  main（remote-backed)か、ローカル main そのもの(purely-local)。`loadRegistry`
+ *  の読みと `registry-write.ts` の書き込みが同じ関数を呼ぶことで、両者が同じ
+ *  ref を指す(`refreshRegistryForWrite` が支えたい不変条件そのもの)ことを
+ *  2箇所の複製ではなく1箇所の共有で保証する。 */
+export function registryRef(mode: RegistryMode): string {
+  return mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
+}
+
 export interface RegistryReachability {
   available: boolean;
   reason?: string;
@@ -370,9 +389,10 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *  ホストに人間の helper が居ると認証なしでも fetch が通ってしまうため、実機で
  *  成功したことはこの条件の証拠にならない(issue #209 の実測)。
  *
- *  `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、push(`pushRegistry`)
- *  と同じく bare な git に委ねる。private な remote ならそこで失敗し、レジストリ
- *  到達性の quarantine が人間を呼ぶ。
+ *  `auth` 不在は「盤面が GitHub 身元を持たない」の宣言であり、書き込み側の
+ *  push(`registry-write.ts` の `commitToRegistry`)と同じく bare な git に
+ *  委ねる。private な remote ならそこで失敗し、レジストリ到達性の quarantine が
+ *  人間を呼ぶ。
  *
  *  Failure is returned as data so the caller can quarantine or warn instead of
  *  throwing. */
@@ -633,8 +653,7 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
  *  フォールバックなので、必須にして tsc に全呼び出しを名指しさせる
  *  (containment.ts の「省略 = 無制限という footgun は作らない」と同じ線)。 */
 export function loadRegistry(dir: string, mode: RegistryMode): Registry {
-  const ref =
-    mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
+  const ref = registryRef(mode);
   const agents: Record<string, AgentDefinition> = {};
   for (const path of gitListDir(dir, ref, "agents")) {
     if (!path.endsWith(".md")) continue;

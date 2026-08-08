@@ -1,11 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
 import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
 import { loadRegistry } from "../src/registry.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -33,7 +32,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
         skills: ["@workspace"],
         systemPrompt: "You are Deckhand, rewritten.",
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     const agent = loadRegistry(registryDir, "purely-local").agents.deckhand;
@@ -48,7 +47,8 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       skills: ["@workspace"],
       systemPrompt: "You are Deckhand, rewritten.",
     });
-    expect(git(registryDir, "status", "--porcelain")).toBe("");
+    // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
+    // (ADR 0052 決定6)
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("update agent deckhand via WebUI");
     expect(git(registryDir, "log", "-1", "--format=%an")).toBe("tidepool");
   });
@@ -60,7 +60,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
     await updateAgent(
       { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.crab!.version).toBe("4");
@@ -73,10 +73,60 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
     await updateAgent(
       { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.crab!.version).toBe("1");
+  });
+});
+
+describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
+  it("registry クローンが registry-edit タスクのブランチに居ても、編集がリモート main へ着地する", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "checkout", "-b", "task/registry-edit-1");
+
+    await updateAgent(
+      {
+        name: "deckhand",
+        authority: "standard",
+        description: "Rewritten description",
+        skills: ["@workspace"],
+        systemPrompt: "You are Deckhand, rewritten.",
+      },
+      { registry: { dir: registryDir, mode: "remote-backed" } },
+    );
+
+    expect(loadRegistry(registryDir, "remote-backed").agents.deckhand?.description).toBe(
+      "Rewritten description",
+    );
+    expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
+      "update agent deckhand via WebUI",
+    );
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+    await expect(
+      updateAgent(
+        {
+          name: "deckhand",
+          authority: "standard",
+          description: "Rewritten description",
+          skills: ["@workspace"],
+          systemPrompt: "You are Deckhand, rewritten.",
+        },
+        { registry: { dir: registryDir, mode: "remote-backed" } },
+      ),
+    ).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(loadRegistry(registryDir, "remote-backed").agents.deckhand?.description).not.toBe(
+      "Rewritten description",
+    );
   });
 });
 
@@ -95,11 +145,12 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         skills: ["*"],
         systemPrompt: "p",
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", advisor: undefined });
-    expect(readFileSync(join(registryDir, "agents", "crab.md"), "utf8")).not.toContain("advisor:");
+    // registryDir 自身の working tree ではなく着地先の ref から読む(ADR 0052 決定6)
+    expect(git(registryDir, "show", "main:agents/crab.md")).not.toContain("advisor:");
   });
 
   it("実効フィールドが不変な再送はコミットなしの成功で、version も上がらない", async () => {
@@ -115,7 +166,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await expect(updateAgent(same, { registryDir, registryMode: "purely-local" })).resolves.toBeDefined();
+    await updateAgent(same, { registry: { dir: registryDir, mode: "purely-local" } });
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.version).toBe("0.3.1");
@@ -134,7 +185,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         systemPrompt:
           "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.\n",
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -150,7 +201,7 @@ describe("updateAgent: authority 検証(issue #70 — 編集でも既存プロ�
     await expect(
       updateAgent(
         { name: "deckhand", authority: "no-such-profile", description: "d", skills: ["*"], systemPrompt: "p" },
-        { registryDir, registryMode: "purely-local" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -165,7 +216,7 @@ describe("updateAgent: 存在しないエージェント(issue #70 — 編集は
     await expect(
       updateAgent(
         { name: "ghost", authority: "standard", description: "d", skills: ["*"], systemPrompt: "p" },
-        { registryDir, registryMode: "purely-local" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAgentError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);

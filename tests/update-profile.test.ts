@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { updateProfile } from "../src/profile-create.js";
 import { loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -29,7 +30,7 @@ describe("updateProfile: 正常系(issue #76 — ファイル全体の書き直�
         allowed_workspaces: ["tidepool"],
         merge: "escalate",
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     const profile = loadRegistry(registryDir, "purely-local").authority.standard;
@@ -40,11 +41,60 @@ describe("updateProfile: 正常系(issue #76 — ファイル全体の書き直�
       allowed_workspaces: ["tidepool"],
       merge: "escalate",
     });
-    expect(git(registryDir, "status", "--porcelain")).toBe("");
+    // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
+    // (ADR 0052 決定6)
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe(
       "update authority profile standard via WebUI",
     );
     expect(git(registryDir, "log", "-1", "--format=%an")).toBe("tidepool");
+  });
+});
+
+describe("updateProfile: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
+  it("registry クローンが registry-edit タスクのブランチに居ても、編集がリモート main へ着地する", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "checkout", "-b", "task/registry-edit-1");
+
+    await updateProfile(
+      {
+        name: "standard",
+        guidance: "Rewritten guidance.",
+        assignable_to: ["deckhand"],
+        allowed_workspaces: ["tidepool"],
+      },
+      { registry: { dir: registryDir, mode: "remote-backed" } },
+    );
+
+    expect(loadRegistry(registryDir, "remote-backed").authority.standard?.guidance).toBe(
+      "Rewritten guidance.",
+    );
+    expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
+      "update authority profile standard via WebUI",
+    );
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+    await expect(
+      updateProfile(
+        {
+          name: "standard",
+          guidance: "Rewritten guidance.",
+          assignable_to: ["deckhand"],
+          allowed_workspaces: ["tidepool"],
+        },
+        { registry: { dir: registryDir, mode: "remote-backed" } },
+      ),
+    ).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(loadRegistry(registryDir, "remote-backed").authority.standard?.guidance).not.toBe(
+      "Rewritten guidance.",
+    );
   });
 });
 
@@ -60,7 +110,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await expect(updateProfile(same, { registryDir, registryMode: "purely-local" })).resolves.toBeDefined();
+    await updateProfile(same, { registry: { dir: registryDir, mode: "purely-local" } });
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
@@ -79,7 +129,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         assignable_to: ["deckhand", "tako"],
         allowed_workspaces: ["tidepool"],
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -99,7 +149,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         assignable_to: ["tako"],
         allowed_workspaces: ["tidepool"],
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).not.toBe(before);
@@ -115,7 +165,7 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
     await expect(
       updateProfile(
         { name: "ghost", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] },
-        { registryDir, registryMode: "purely-local" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);

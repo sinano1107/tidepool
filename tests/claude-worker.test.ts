@@ -184,8 +184,7 @@ async function makeUsageWorker(pty: PtyFn) {
   return new ClaudeCodeWorker({
     db: openDb(":memory:"),
     clock: new FakeClock(),
-    registryDir,
-    registryMode: "purely-local",
+    registry: { dir: registryDir, mode: "purely-local" },
     agent: "deckhand",
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -206,8 +205,7 @@ async function makeWorker(
   const worker = new ClaudeCodeWorker({
     db,
     clock: new FakeClock(),
-    registryDir,
-    registryMode: "purely-local",
+    registry: { dir: registryDir, mode: "purely-local" },
     agent: "deckhand",
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1106,8 +1104,7 @@ describe("ClaudeCodeWorker", () => {
       const worker = new ClaudeCodeWorker({
         db,
         clock: new FakeClock(),
-        registryDir,
-        registryMode: "purely-local",
+        registry: { dir: registryDir, mode: "purely-local" },
         agent: "deckhand",
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1166,8 +1163,7 @@ describe("ClaudeCodeWorker", () => {
         new ClaudeCodeWorker({
           db: openDb(":memory:"),
           clock: new FakeClock(),
-          registryDir,
-          registryMode: "purely-local",
+          registry: { dir: registryDir, mode: "purely-local" },
           agent: "deckhand",
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1187,8 +1183,7 @@ describe("ClaudeCodeWorker", () => {
         new ClaudeCodeWorker({
           db: openDb(":memory:"),
           clock: new FakeClock(),
-          registryDir,
-          registryMode: "purely-local",
+          registry: { dir: registryDir, mode: "purely-local" },
           agent: "deckhand",
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1208,8 +1203,7 @@ describe("ClaudeCodeWorker", () => {
         new ClaudeCodeWorker({
           db: openDb(":memory:"),
           clock: new FakeClock(),
-          registryDir,
-          registryMode: "purely-local",
+          registry: { dir: registryDir, mode: "purely-local" },
           agent: "deckhand",
           workspace: "no-such-workspace",
           mcpUrl: "http://127.0.0.1:4589/mcp",
@@ -1626,8 +1620,7 @@ describe("ClaudeCodeWorker", () => {
     const worker = new ClaudeCodeWorker({
       db,
       clock: new FakeClock(),
-      registryDir,
-      registryMode: "remote-backed",
+      registry: { dir: registryDir, mode: "remote-backed" },
       agent: "deckhand",
       workspace: "tidepool",
       mcpUrl: "http://127.0.0.1:4589/mcp",

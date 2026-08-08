@@ -1,13 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createProfile, listProfileViews } from "../src/profile-create.js";
 import { InvalidAuthorityProfileNameError, loadRegistry } from "../src/registry.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -36,7 +32,7 @@ describe("createProfile: 正常系(issue #76)", () => {
         allowed_workspaces: ["tidepool"],
         merge: "auto_if_ci_green",
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
     const profile = loadRegistry(registryDir, "purely-local").authority.risky;
@@ -47,8 +43,9 @@ describe("createProfile: 正常系(issue #76)", () => {
       allowed_workspaces: ["tidepool"],
       merge: "auto_if_ci_green",
     });
-    // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する
-    expect(git(registryDir, "status", "--porcelain")).toBe("");
+    // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する。
+    // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
+    // (ADR 0052 決定6: clone の working tree は正本ではないので触れない)
     expect(git(registryDir, "log", "-1", "--format=%an")).toBe("tidepool");
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("create authority profile risky via WebUI");
   });
@@ -63,10 +60,12 @@ describe("createProfile: 正常系(issue #76)", () => {
         assignable_to: ["*"],
         allowed_workspaces: ["*"],
       },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
-    const raw = readFileSync(join(registryDir, "authority", "readonly.yaml"), "utf8");
+    // ADR 0052 決定6: 書き込みは使い捨て worktree の中で起こる — registryDir 自身
+    // の working tree ではなく着地先の ref から読む(loadRegistry と同じ規律)
+    const raw = git(registryDir, "show", "main:authority/readonly.yaml");
     expect(raw).not.toContain("merge");
     expect(raw).not.toContain("name");
     const profile = loadRegistry(registryDir, "purely-local").authority.readonly;
@@ -93,7 +92,7 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
       const registryDir = await makeMainRegistry();
       const before = git(registryDir, "rev-parse", "HEAD");
 
-      await expect(createProfile({ ...base, name }, { registryDir, registryMode: "purely-local" })).rejects.toThrow(
+      await expect(createProfile({ ...base, name }, { registry: { dir: registryDir, mode: "purely-local" } })).rejects.toThrow(
         InvalidAuthorityProfileNameError,
       );
       expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -105,7 +104,7 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
-      createProfile({ ...base, name: "standard" }, { registryDir, registryMode: "purely-local" }),
+      createProfile({ ...base, name: "standard" }, { registry: { dir: registryDir, mode: "purely-local" } }),
     ).rejects.toThrow(InvalidAuthorityProfileNameError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     // fixture の standard はそのまま(assignable_to は "*" のみ)
@@ -113,62 +112,54 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
   });
 });
 
-describe("createProfile: registry コミットの前提条件(ADR 0020 — agent-create.ts と共有の検査)", () => {
+describe("createProfile: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
   const input = { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] };
 
-  it("registry クローンの HEAD が main 以外なら RegistryCloneBusyError で失敗し、コミットを積まない", async () => {
+  it("registry クローンが registry-edit タスクのブランチに居ても、リモート main へコミットが着地する", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "checkout", "-b", "task/registry-edit-1");
+
+    await createProfile(input, { registry: { dir: registryDir, mode: "remote-backed" } });
+
+    expect(loadRegistry(registryDir, "remote-backed").authority.risky).toBeDefined();
+    expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
+      "create authority profile risky via WebUI",
+    );
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("push が失敗すると致命 — リモートにもコミットが残らない", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+    await expect(
+      createProfile(input, { registry: { dir: registryDir, mode: "remote-backed" } }),
+    ).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(loadRegistry(registryDir, "remote-backed").authority.risky).toBeUndefined();
+  });
+
+  it("入口の fetch が失敗すると致命 — コミットを一切積まない", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "origin", "/no/such/remote");
+
+    await expect(
+      createProfile(input, { registry: { dir: registryDir, mode: "remote-backed" } }),
+    ).rejects.toThrow(RegistryFetchFailedError);
+
+    expect(loadRegistry(registryDir, "remote-backed").authority.risky).toBeUndefined();
+  });
+
+  it("純ローカル registry(remote なし)でも、タスクブランチに居る状態から書き込みが通る", async () => {
     const registryDir = await makeMainRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
 
-    await expect(createProfile(input, { registryDir, registryMode: "purely-local" })).rejects.toThrow(RegistryCloneBusyError);
-    expect(git(registryDir, "log", "--format=%s", "task/registry-edit-1")).toBe(
-      "registry fixture",
-    );
-  });
+    await createProfile(input, { registry: { dir: registryDir, mode: "purely-local" } });
 
-  it("registry クローンが dirty なら失敗し、コミットを積まない", async () => {
-    const registryDir = await makeMainRegistry();
-    const before = git(registryDir, "rev-parse", "HEAD");
-    writeFileSync(join(registryDir, "workspaces.yaml"), "[:::invalid yaml", { flag: "a" });
-
-    await expect(createProfile(input, { registryDir, registryMode: "purely-local" })).rejects.toThrow(RegistryCloneBusyError);
-    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-  });
-});
-
-describe("createProfile: registry への push(issue #76 — ベストエフォート)", () => {
-  const input = { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] };
-
-  it("origin リモートがあれば registry コミットが push され、pushed: true", async () => {
-    const registryDir = await makeMainRegistry();
-    const bare = await mkdtemp(join(tmpdir(), "tidepool-registry-origin-"));
-    git(bare, "init", "--bare");
-    git(registryDir, "remote", "add", "origin", bare);
-    git(registryDir, "push", "-u", "origin", "main");
-
-    const result = await createProfile(input, { registryDir, registryMode: "purely-local" });
-
-    expect(result.pushed).toBe(true);
-    expect(git(bare, "log", "-1", "--format=%s", "main")).toBe(
-      "create authority profile risky via WebUI",
-    );
-  });
-
-  it("push の失敗は非致命 — コミットは成功し、pushed: false と警告ログだけが残る", async () => {
-    const registryDir = await makeMainRegistry();
-    git(registryDir, "remote", "add", "origin", "/no/such/remote");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const result = await createProfile(input, { registryDir, registryMode: "purely-local" });
-
-      expect(result.pushed).toBe(false);
-      expect(loadRegistry(registryDir, "purely-local").authority.risky).toBeDefined();
-      expect(warn).toHaveBeenCalledOnce();
-      expect(warn.mock.calls[0]![0]).toContain("push");
-    } finally {
-      warn.mockRestore();
-    }
+    expect(loadRegistry(registryDir, "purely-local").authority.risky).toBeDefined();
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
   });
 });
 
@@ -177,10 +168,10 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
     const registryDir = await makeMainRegistry();
     await createProfile(
       { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] },
-      { registryDir, registryMode: "purely-local" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
-    const views = listProfileViews({ registryDir, registryMode: "purely-local" });
+    const views = listProfileViews({ registry: { dir: registryDir, mode: "purely-local" } });
 
     expect(views.map((v) => v.name).sort()).toEqual(["risky", "standard"]);
     expect(views.find((v) => v.name === "risky")).toEqual({

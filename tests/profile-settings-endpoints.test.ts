@@ -1,19 +1,18 @@
 import { afterEach, expect, it } from "vitest";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { InvalidAuthorityProfileNameError, UnknownAuthorityProfileError } from "../src/registry.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("POST /api/profiles は profile を createProfile へ渡し、201 で pushed を返す", async () => {
+it("POST /api/profiles は profile を createProfile へ渡し、201 を返す", async () => {
   const calls: CreateProfileInput[] = [];
   t = await bootTidepool({
     profileAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -26,7 +25,7 @@ it("POST /api/profiles は profile を createProfile へ渡し、201 で pushed 
   });
 
   expect(res.status).toBe(201);
-  expect(res.json).toEqual({ pushed: true });
+  expect(res.json).toEqual({});
   expect(calls).toEqual([
     {
       name: "restricted",
@@ -79,7 +78,6 @@ it("危険値 + confirmDangerous なしは 409 で理由コードを返し、保
     profileAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -105,7 +103,7 @@ it("危険値 + confirmDangerous なしは 409 で理由コードを返し、保
 
 it("assignable_to の wildcard も confirm なしは 409 で対応コードを返す", async () => {
   t = await bootTidepool({
-    profileAdmin: { create: async () => ({ pushed: true }) },
+    profileAdmin: { create: async () => {} },
   });
 
   const res = await api(t.baseUrl, "POST", "/api/profiles", {
@@ -121,7 +119,7 @@ it("assignable_to の wildcard も confirm なしは 409 で対応コードを�
 
 it("allowed_workspaces の wildcard も confirm なしは 409 で対応コードを返す", async () => {
   t = await bootTidepool({
-    profileAdmin: { create: async () => ({ pushed: true }) },
+    profileAdmin: { create: async () => {} },
   });
 
   const res = await api(t.baseUrl, "POST", "/api/profiles", {
@@ -141,7 +139,6 @@ it("危険値 + confirmDangerous: true は保存が通り、フラグは domain 
     profileAdmin: {
       create: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -156,7 +153,7 @@ it("危険値 + confirmDangerous: true は保存が通り、フラグは domain 
   });
 
   expect(res.status).toBe(201);
-  expect(res.json).toEqual({ pushed: true });
+  expect(res.json).toEqual({});
   expect(calls).toEqual([
     {
       name: "powerful",
@@ -168,13 +165,12 @@ it("危険値 + confirmDangerous: true は保存が通り、フラグは domain 
   ]);
 });
 
-it("PATCH /api/profiles/:name は URL の名前と body を updateProfile へ渡し、200 で pushed を返す", async () => {
+it("PATCH /api/profiles/:name は URL の名前と body を updateProfile へ渡し、200 を返す", async () => {
   const calls: UpdateProfileInput[] = [];
   t = await bootTidepool({
     profileAdmin: {
       update: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -186,7 +182,7 @@ it("PATCH /api/profiles/:name は URL の名前と body を updateProfile へ渡
   });
 
   expect(res.status).toBe(200);
-  expect(res.json).toEqual({ pushed: true });
+  expect(res.json).toEqual({});
   expect(calls).toEqual([
     {
       name: "restricted",
@@ -203,7 +199,6 @@ it("編集でも危険値 + confirm なしは 409 で拒否し、保存しない
     profileAdmin: {
       update: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -225,7 +220,6 @@ it("編集でも confirmDangerous: true なら保存が通る", async () => {
     profileAdmin: {
       update: async (input) => {
         calls.push(input);
-        return { pushed: true };
       },
     },
   });
@@ -269,8 +263,8 @@ it("編集対象の未知 name(UnknownAuthorityProfileError)は 404", async () =
 it("不正入力は 400(POST/PATCH とも zod で拒否)", async () => {
   t = await bootTidepool({
     profileAdmin: {
-      create: async () => ({ pushed: true }),
-      update: async () => ({ pushed: true }),
+      create: async () => {},
+      update: async () => {},
     },
   });
 
@@ -291,11 +285,11 @@ it("不正入力は 400(POST/PATCH とも zod で拒否)", async () => {
   ).toBe(400);
 });
 
-it("registry クローンが busy(RegistryCloneBusyError)なら 409", async () => {
+it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 決定1)", async () => {
   t = await bootTidepool({
     profileAdmin: {
       create: async () => {
-        throw new RegistryCloneBusyError("/registry", "HEAD is on 'task/x', not 'main'");
+        throw new RegistryPushFailedError("non-fast-forward");
       },
     },
   });
@@ -307,7 +301,7 @@ it("registry クローンが busy(RegistryCloneBusyError)なら 409", async () =
     allowed_workspaces: [],
   });
 
-  expect(res.status).toBe(409);
+  expect(res.status).toBe(502);
 });
 
 it("POST/PATCH は profileAdmin 未設定なら 503", async () => {

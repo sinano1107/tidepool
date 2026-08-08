@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadRegistry } from "../src/registry.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import {
   listWorkspaceViews,
   RegistrySelfUnprotectError,
   UnprotectNeedsConfirmationError,
   updateWorkspace,
 } from "../src/workspace-create.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 /** protected な一般 workspace を1つ足した fixture。 */
 const WORKSPACES_WITH_PROTECTED = `tidepool:
@@ -35,8 +36,7 @@ async function makeMainRegistry(): Promise<string> {
 
 async function makeDeps(registryDir: string) {
   return {
-    registryDir,
-    registryMode: "purely-local" as const,
+    registry: { dir: registryDir, mode: "purely-local" as const },
     workspacesBaseDir: await mkdtemp(join(tmpdir(), "tidepool-ws-base-")),
   };
 }
@@ -46,10 +46,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
 
-    const result = await updateWorkspace(
-      { name: "tidepool", notes: "the registry clone itself" },
-      deps,
-    );
+    await updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.notes).toBe(
       "the registry clone itself",
@@ -57,7 +54,6 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     expect(git(registryDir, "log", "-1", "--format=%an %s")).toBe(
       "tidepool update workspace tidepool via WebUI",
     );
-    expect(result.pushed).toBe(false);
   });
 
   it("protected の付与は confirm なしで通る(付けるのは安全方向、issue #57)", async () => {
@@ -100,12 +96,8 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     const before = git(registryDir, "rev-parse", "HEAD");
 
     // fixture の tidepool エントリは notes を既に持つ — 同じ値を送る
-    const result = await updateWorkspace(
-      { name: "tidepool", notes: "run npm install before first use" },
-      deps,
-    );
+    await updateWorkspace({ name: "tidepool", notes: "run npm install before first use" }, deps);
 
-    expect(result.pushed).toBe(false);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
@@ -145,6 +137,40 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     await expect(
       updateWorkspace({ name: "registry", protected: false, confirm: true }, deps),
     ).rejects.toThrow(RegistrySelfUnprotectError);
+  });
+});
+
+describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
+  it("registry クローンが registry-edit タスクのブランチに居ても、編集がリモート main へ着地する", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "checkout", "-b", "task/registry-edit-1");
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+
+    await updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps);
+
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).toBe(
+      "the registry clone itself",
+    );
+    expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
+      "update workspace tidepool via WebUI",
+    );
+    expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+
+  it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
+    const { registryDir } = await makeRemoteBackedRegistry();
+    git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+    await expect(
+      updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps),
+    ).rejects.toThrow(RegistryPushFailedError);
+
+    expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.tidepool?.notes).not.toBe(
+      "the registry clone itself",
+    );
   });
 });
 

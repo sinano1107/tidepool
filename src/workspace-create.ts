@@ -8,21 +8,11 @@ import {
   assertValidWorkspaceName,
   loadRegistry,
   ownEntry,
-  type RegistryMode,
+  type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import {
-  assertRegistryCloneReady,
-  pushRegistry,
-  type RegistryCommitResult,
-} from "./registry-write.js";
-import {
-  conventionCheckoutPath,
-  git,
-  resolvesToRegistryClone,
-  TIDEPOOL_GIT_IDENTITY,
-  UnknownWorkspaceError,
-} from "./workspace.js";
+import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
+import { conventionCheckoutPath, git, resolvesToRegistryClone, UnknownWorkspaceError } from "./workspace.js";
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
  *  resulting Workspace — the mode is a circumstance of creation, not a kind
@@ -59,10 +49,11 @@ export type CreateWorkspaceInput = {
  *  and the base directory path-omitting entries derive from (ADR 0018) —
  *  both threaded in by the composition root, never read from env here. */
 export interface WorkspaceAdminDeps {
-  registryDir: string;
-  /** ADR 0052 決定1: workspaces.yaml の検証と一覧が読む正本。読みだけがリモート
-   *  へ移り、書き込みはまだローカル main へコミットする(#210)。 */
-  registryMode: RegistryMode;
+  /** どの registry clone を検証・一覧・書き込みに使うか、そのクローンが remote
+   *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
+   *  (issue #210 レビュー — AgentAdminDeps / ProfileAdminDeps と共有する
+   *  Data Clumps だった)。 */
+  registry: RegistrySource;
   workspacesBaseDir: string;
   /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
    *  process), threaded in by the composition root. The creation gate refuses
@@ -71,9 +62,10 @@ export interface WorkspaceAdminDeps {
    *  (claude-worker.ts) still catches whatever gets registered anyway —
    *  including the registry-edit PR path, which never passes this gate. */
   boardState?: BoardStatePath[];
-  /** The board's GitHub identity (ADR 0024), absent when no secrets file is
-   *  configured — registry pushes and clones then run unauthenticated, the
-   *  same fail-closed posture as the optional `github` client below. */
+  /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
+   *  決定1: 失敗は致命 — #210) and clone/repository calls, absent when no
+   *  secrets file is configured — clones then run unauthenticated, the same
+   *  fail-closed posture as the optional `github` client below. */
   githubAuth?: GitHubAuth;
 }
 
@@ -83,8 +75,8 @@ export interface CreateWorkspaceDeps extends WorkspaceAdminDeps {
   github?: GitHubClient;
 }
 
-export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<RegistryCommitResult>;
-export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<RegistryCommitResult>;
+export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<void>;
+export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
 
 /** The settings surface's workspace verbs as one bundle (issue #57): they
  *  exist together or not at all (a registry is configured, or none is), so
@@ -135,12 +127,9 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
-export async function createWorkspace(
-  input: CreateWorkspaceInput,
-  deps: CreateWorkspaceDeps,
-): Promise<RegistryCommitResult> {
-  assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+export async function createWorkspace(input: CreateWorkspaceInput, deps: CreateWorkspaceDeps): Promise<void> {
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
   // ADR 0040: before any external effect — a refused registration must not
   // leave a clone or a GitHub repository behind.
@@ -151,13 +140,7 @@ export async function createWorkspace(
   const entry = await buildEntry(input, deps);
   if (input.notes !== undefined) entry.notes = input.notes;
   if (input.protected) entry.protected = true;
-  commitWorkspaceEntry(
-    deps.registryDir,
-    input.name,
-    entry,
-    `add workspace ${input.name} via WebUI`,
-  );
-  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
+  commitWorkspaceEntry(deps, input.name, entry, `add workspace ${input.name} via WebUI`);
 }
 
 /** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
@@ -197,12 +180,9 @@ export class RegistrySelfUnprotectError extends Error {
 }
 
 
-export async function updateWorkspace(
-  input: UpdateWorkspaceInput,
-  deps: WorkspaceAdminDeps,
-): Promise<RegistryCommitResult> {
-  assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+export async function updateWorkspace(input: UpdateWorkspaceInput, deps: WorkspaceAdminDeps): Promise<void> {
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const next: WorkspaceEntry = { ...entry };
@@ -218,7 +198,7 @@ export async function updateWorkspace(
       // request gets the honest "never here", not another confirm loop. It
       // also ignores the entry's current flag: the floor must not depend on
       // the very state it protects
-      if (resolvesToRegistryClone(entry, input.name, deps.registryDir, deps.workspacesBaseDir)) {
+      if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
         throw new RegistrySelfUnprotectError(input.name);
       }
       if (entry.protected === true && input.confirm !== true) {
@@ -229,13 +209,7 @@ export async function updateWorkspace(
       delete next.protected;
     }
   }
-  commitWorkspaceEntry(
-    deps.registryDir,
-    input.name,
-    next,
-    `update workspace ${input.name} via WebUI`,
-  );
-  return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
+  commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
 }
 
 /** Each mode's external half, ordered so the registry commit stays last.
@@ -281,38 +255,37 @@ export interface WorkspaceView extends WorkspaceEntry {
 }
 
 export function listWorkspaceViews(deps: WorkspaceAdminDeps): WorkspaceView[] {
-  const registry = loadRegistry(deps.registryDir, deps.registryMode);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   return Object.entries(registry.workspaces).map(([name, entry]) => ({
     ...entry,
     name,
-    registrySelf: resolvesToRegistryClone(entry, name, deps.registryDir, deps.workspacesBaseDir),
+    registrySelf: resolvesToRegistryClone(entry, name, deps.registry.dir, deps.workspacesBaseDir),
   }));
 }
 
-/** Appends the entry to workspaces.yaml and commits it under the board's own
- *  identity (ADR 0020: a WebUI-initiated registry change is the human's
- *  explicit act — the board commits it to local main directly). The yaml
- *  Document API keeps the hand-edited file's comments and formatting. */
+/** Appends the entry to workspaces.yaml inside a disposable worktree and
+ *  lands it under the board's own identity (ADR 0020 / ADR 0052 決定6). The
+ *  yaml Document API keeps the hand-edited file's comments and formatting.
+ *  Reads the file from the worktree, not the registry clone's own working
+ *  tree — the clone's checkout is a cache the write never depends on, so the
+ *  content this merges into is always the one the worktree actually forked
+ *  from. A no-change edit (the same notes resubmitted) is a successful no-op
+ *  — `commitToRegistry` skips landing when `write` leaves the tree clean. */
 function commitWorkspaceEntry(
-  registryDir: string,
+  deps: WorkspaceAdminDeps,
   name: string,
   entry: WorkspaceEntry,
   message: string,
 ): void {
-  // re-checked here, not just at the entrance: the external steps in between
-  // (clone, repository creation) are slow, and a registry-edit task moving
-  // the clone's HEAD meanwhile must not get the board's commit on its branch.
-  // This same guarantee (on main + clean) is also what lets the write below
-  // read the working tree without violating ADR 0020's committed-main rule.
-  assertRegistryCloneReady(registryDir);
-  const file = join(registryDir, "workspaces.yaml");
-  const doc = parseDocument(readFileSync(file, "utf8"));
-  doc.set(name, entry);
-  writeFileSync(file, doc.toString());
-  git(registryDir, "add", "workspaces.yaml");
-  // a no-change edit (the same notes resubmitted) is a successful no-op, not
-  // a "nothing to commit" git failure surfacing as a 502
-  if (git(registryDir, "status", "--porcelain") !== "") {
-    git(registryDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
-  }
+  commitToRegistry(
+    deps.registry,
+    deps.githubAuth,
+    (worktreeDir) => {
+      const file = join(worktreeDir, "workspaces.yaml");
+      const doc = parseDocument(readFileSync(file, "utf8"));
+      doc.set(name, entry);
+      writeFileSync(file, doc.toString());
+    },
+    message,
+  );
 }

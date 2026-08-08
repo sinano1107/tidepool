@@ -37,10 +37,10 @@ export async function bootPreview(): Promise<Preview> {
     // のであって読み取りの正本ではない(bare repo は空で、`origin/main` はまだ
     // 存在しない)。preview board は authoring 用であって検証用ではないので
     // (ADR 0050)、リモート正本という役をそもそも持たない。
-    const registryMode = "purely-local" as const;
-    const workspaceDeps = { registryDir, registryMode, workspacesBaseDir: workspacesDir };
-    const agentDeps = { registryDir, registryMode };
-    const profileDeps = { registryDir, registryMode };
+    const registry = { dir: registryDir, mode: "purely-local" as const };
+    const workspaceDeps = { registry, workspacesBaseDir: workspacesDir };
+    const agentDeps = { registry };
+    const profileDeps = { registry };
     const board = await bootTidepool({
       workspaceAdmin: {
         create: (input) => createWorkspace(input, workspaceDeps),

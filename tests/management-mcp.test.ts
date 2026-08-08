@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { InvalidWorkspaceNameError } from "../src/registry.js";
-import { RegistryCloneBusyError } from "../src/registry-write.js";
+import { RegistryPushFailedError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
@@ -83,8 +83,8 @@ it("管理MCP は5つの純読取 board tool を発見する(issue #191)", async
 });
 
 it("workspaceAdmin の create / list / update を管理MCP から利用できる(issue #193)", async () => {
-  const created = vi.fn(async () => ({ pushed: true }));
-  const updated = vi.fn(async () => ({ pushed: false }));
+  const created = vi.fn(async () => {});
+  const updated = vi.fn(async () => {});
   t = await bootTidepool({
     workspaceAdmin: {
       create: created,
@@ -106,7 +106,7 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
       arguments: { name: "harbor", mode: "register", path: "/work/harbor" },
     });
     expect(create.isError ?? false).toBe(false);
-    expect(readToolPayload(create)).toEqual({ pushed: true });
+    expect(readToolPayload(create)).toEqual({});
     expect(created).toHaveBeenCalledWith({
       name: "harbor",
       mode: "register",
@@ -125,7 +125,7 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
       arguments: { name: "tidepool", notes: "production board", protected: true },
     });
     expect(update.isError ?? false).toBe(false);
-    expect(readToolPayload(update)).toEqual({ pushed: false });
+    expect(readToolPayload(update)).toEqual({});
     expect(updated).toHaveBeenCalledWith({ name: "tidepool", notes: "production board", protected: true });
   } finally {
     await client.close();
@@ -133,10 +133,10 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
 });
 
 it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issue #193)", async () => {
-  const createAgent = vi.fn(async () => ({ pushed: true }));
-  const updateAgent = vi.fn(async () => ({ pushed: false }));
-  const createProfile = vi.fn(async () => ({ pushed: true }));
-  const updateProfile = vi.fn(async () => ({ pushed: false }));
+  const createAgent = vi.fn(async () => {});
+  const updateAgent = vi.fn(async () => {});
+  const createProfile = vi.fn(async () => {});
+  const updateProfile = vi.fn(async () => {});
   t = await bootTidepool({
     agentAdmin: {
       create: createAgent,
@@ -175,19 +175,19 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
       ]),
     );
 
-    expect(readToolPayload(await client.callTool({ name: "create_agent", arguments: agent }))).toEqual({ pushed: true });
+    expect(readToolPayload(await client.callTool({ name: "create_agent", arguments: agent }))).toEqual({});
     expect(createAgent).toHaveBeenCalledWith({ ...agentFields, systemPrompt: system_prompt });
     expect(readToolPayload(await client.callTool({ name: "list_agents", arguments: {} }))).toEqual({
       agents: [],
       authority_profiles: ["standard"],
     });
-    expect(readToolPayload(await client.callTool({ name: "update_agent", arguments: agent }))).toEqual({ pushed: false });
+    expect(readToolPayload(await client.callTool({ name: "update_agent", arguments: agent }))).toEqual({});
     expect(updateAgent).toHaveBeenCalledWith({ ...agentFields, systemPrompt: system_prompt });
 
-    expect(readToolPayload(await client.callTool({ name: "create_profile", arguments: profile }))).toEqual({ pushed: true });
+    expect(readToolPayload(await client.callTool({ name: "create_profile", arguments: profile }))).toEqual({});
     expect(createProfile).toHaveBeenCalledWith(profile);
     expect(readToolPayload(await client.callTool({ name: "list_profiles", arguments: {} }))).toEqual({ profiles: [] });
-    expect(readToolPayload(await client.callTool({ name: "update_profile", arguments: profile }))).toEqual({ pushed: false });
+    expect(readToolPayload(await client.callTool({ name: "update_profile", arguments: profile }))).toEqual({});
     expect(updateProfile).toHaveBeenCalledWith(profile);
   } finally {
     await client.close();
@@ -195,7 +195,7 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
 });
 
 it("管理MCP は人間の明示確認なしに危険な profile を保存しない(issue #193)", async () => {
-  const create = vi.fn(async () => ({ pushed: true }));
+  const create = vi.fn(async () => {});
   t = await bootTidepool({ profileAdmin: { create } });
   const client = await managementMcpClient(t.baseUrl);
   const dangerous = {
@@ -232,7 +232,7 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
   t = await bootTidepool({
     workspaceAdmin: {
       create: async (input) => {
-        if (input.name === "busy") throw new RegistryCloneBusyError("/registry", "the working tree is dirty");
+        if (input.name === "push-failed") throw new RegistryPushFailedError("non-fast-forward");
         if (input.name === "invalid") throw new InvalidWorkspaceNameError(input.name, "bad characters");
         if (input.name === "overlap") throw new BoardStateOverlapError("workspace overlaps board state");
         if (input.name === "missing-identity") throw new GitHubIdentityMissingError();
@@ -258,12 +258,14 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
   });
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const busy: any = await client.callTool({
+    // registry の push 失敗(ADR 0052 決定1)は他の「registry upstream error」と
+    // 同じ扱いに畳む — busy という状態自体が worktree 化で消えた(issue #210)
+    const pushFailed: any = await client.callTool({
       name: "create_workspace",
-      arguments: { name: "busy", mode: "register", path: "/work/harbor" },
+      arguments: { name: "push-failed", mode: "register", path: "/work/harbor" },
     });
-    expect(busy.isError).toBe(true);
-    expect(busy.content[0].text).toContain("retry this request");
+    expect(pushFailed.isError).toBe(true);
+    expect(pushFailed.content[0].text).toContain("registry upstream error");
 
     const invalid: any = await client.callTool({
       name: "create_workspace",

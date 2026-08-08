@@ -74,7 +74,7 @@ it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043
     { db: openDb(":memory:"), clock },
   );
 
-  expect(options.registryMode).toBe("remote-backed");
+  expect(options.registry.mode).toBe("remote-backed");
 });
 
 it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 0052)", async () => {

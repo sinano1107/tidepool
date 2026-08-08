@@ -33,7 +33,6 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
 } from "./registry.js";
-import { RegistryCloneBusyError } from "./registry-write.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   cancelTaskDirectly,
@@ -124,9 +123,6 @@ const profileFieldsSchema = z.object({
 
 /** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
 function registryToolError(err: unknown) {
-  if (err instanceof RegistryCloneBusyError) {
-    return toolError(`registry is busy; retry this request: ${err.message}`);
-  }
   if (err instanceof GitHubIdentityMissingError) return toolError(`registry configuration missing: ${err.message}`);
   if (
     err instanceof InvalidWorkspaceNameError ||
@@ -217,7 +213,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) => {
       if (!deps.workspaceAdmin?.create) return toolError("workspace administration is not configured");
       try {
-        return toolResult(await deps.workspaceAdmin.create(input));
+        await deps.workspaceAdmin.create(input);
+        return toolResult({});
       } catch (err) {
         return registryToolError(err);
       }
@@ -249,7 +246,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) => {
       if (!deps.workspaceAdmin?.update) return toolError("workspace administration is not configured");
       try {
-        return toolResult(await deps.workspaceAdmin.update(input));
+        await deps.workspaceAdmin.update(input);
+        return toolResult({});
       } catch (err) {
         return registryToolError(err);
       }
@@ -264,7 +262,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async ({ system_prompt, ...input }) => {
       if (!deps.agentAdmin?.create) return toolError("agent administration is not configured");
       try {
-        return toolResult(await deps.agentAdmin.create({ ...input, systemPrompt: system_prompt }));
+        await deps.agentAdmin.create({ ...input, systemPrompt: system_prompt });
+        return toolResult({});
       } catch (err) {
         return registryToolError(err);
       }
@@ -294,7 +293,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async ({ system_prompt, ...input }) => {
       if (!deps.agentAdmin?.update) return toolError("agent administration is not configured");
       try {
-        return toolResult(await deps.agentAdmin.update({ ...input, systemPrompt: system_prompt }));
+        await deps.agentAdmin.update({ ...input, systemPrompt: system_prompt });
+        return toolResult({});
       } catch (err) {
         return registryToolError(err);
       }
@@ -314,7 +314,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         return toolError(`profile contains dangerous values; human confirmation is required: ${dangerous.join(", ")}`);
       }
       try {
-        return toolResult(await deps.profileAdmin.create(input));
+        await deps.profileAdmin.create(input);
+        return toolResult({});
       } catch (err) {
         return registryToolError(err);
       }
@@ -346,7 +347,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         return toolError(`profile contains dangerous values; human confirmation is required: ${dangerous.join(", ")}`);
       }
       try {
-        return toolResult(await deps.profileAdmin.update(input));
+        await deps.profileAdmin.update(input);
+        return toolResult({});
       } catch (err) {
         return registryToolError(err);
       }

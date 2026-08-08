@@ -706,14 +706,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   );
 }
 
-// One toast shape for every registry commit outcome (create and edit share
-// it): push failure is a warning, never an error — the local clone is what
-// the board reads (issue #57).
-function sayCommitResult(say, pushed, msg, name) {
-  say(pushed ? 'success' : 'warn', msg,
-    pushed ? name : `${name} · push failed — the local clone is what the board reads, the next push catches up`);
-}
-
 // The client-side mirror of the server's REGISTRY_NAME_PATTERN gate, shared by
 // the workspace / agent / profile create forms — the name becomes a directory
 // or a file name in the registry, so the three share one rule. It drives the
@@ -801,8 +793,8 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
         body.protected = prot;
         if (!prot) body.confirm = confirmed;
       }
-      const { pushed } = await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, 'PATCH');
-      sayCommitResult(say, pushed, 'workspace updated — committed to the registry', ws.name);
+      await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, 'PATCH');
+      say('success', 'workspace updated — committed to the registry', ws.name);
       edit.close();
       await onChanged();
     } catch (err) {
@@ -996,8 +988,8 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
   const save = async () => {
     setBusy(true);
     try {
-      const { pushed } = await api(`/api/agents/${encodeURIComponent(agent.name)}`, agentBody(draft), 'PATCH');
-      sayCommitResult(say, pushed, 'agent updated — committed to the registry', agent.name);
+      await api(`/api/agents/${encodeURIComponent(agent.name)}`, agentBody(draft), 'PATCH');
+      say('success', 'agent updated — committed to the registry', agent.name);
       edit.close();
       await onChanged();
     } catch (err) {
@@ -1255,13 +1247,14 @@ function useProfileSave(say, onDone) {
     const attempt = async (confirmDangerous) => {
       setBusy(true);
       try {
-        const { pushed } = await api(path, confirmDangerous ? { ...body, confirmDangerous: true } : body, method);
+        await api(path, confirmDangerous ? { ...body, confirmDangerous: true } : body, method);
         setConfirm(null);
-        sayCommitResult(say, pushed, `profile ${verb} — committed to the registry`, name);
+        say('success', `profile ${verb} — committed to the registry`, name);
         await onDone();
       } catch (err) {
-        // the #77 confirmation 409 is distinguished from a busy-clone 409 by its
-        // confirm_required flag — only the former opens the dialog for a resend
+        // the #77 confirmation 409 is distinguished from any other failure
+        // (bad input, a push that never landed — ADR 0052 決定1) by its
+        // confirm_required flag — only that one opens the dialog for a resend
         if (err.status === 409 && err.detail?.confirm_required) {
           setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
         } else {
@@ -1561,14 +1554,14 @@ function NewWorkspaceForm({ say, onCreated, edit }) {
   const submit = async () => {
     setBusy(true);
     try {
-      const { pushed } = await api('/api/workspaces', {
+      await api('/api/workspaces', {
         mode, name: name.trim(),
         ...(mode === 'clone' ? { repo: repo.trim() } : {}),
         ...(mode === 'register' ? { path: path.trim() } : {}),
         ...(notes.trim() ? { notes: notes.trim() } : {}),
         ...(prot ? { protected: true } : {}),
       });
-      sayCommitResult(say, pushed, 'workspace added — committed to the registry', name.trim());
+      say('success', 'workspace added — committed to the registry', name.trim());
       edit.close();
       await onCreated();
     } catch (err) {
@@ -1635,8 +1628,8 @@ function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, 
   const submit = async () => {
     setBusy(true);
     try {
-      const { pushed } = await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
-      sayCommitResult(say, pushed, 'agent added — committed to the registry', name.trim());
+      await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
+      say('success', 'agent added — committed to the registry', name.trim());
       edit.close();
       await onCreated();
     } catch (err) {

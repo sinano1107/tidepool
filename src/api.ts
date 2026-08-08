@@ -43,7 +43,6 @@ import {
   type RegistryCandidates,
   type RegistryReachabilityCheck,
 } from "./registry.js";
-import { RegistryCloneBusyError } from "./registry-write.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
@@ -676,19 +675,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      res.status(201).json(await workspaceAdmin.create(parsed.data));
+      await workspaceAdmin.create(parsed.data);
+      res.status(201).json({});
     } catch (err) {
       // the human's own synchronous request fails fast (ADR 0009): a bad name
-      // is the caller's 400; a busy registry clone is a 409 the idempotent
-      // flow retries later; anything else is an external step failing — 502,
-      // and the retry reuses whatever orphan it left behind (issue #57)
+      // is the caller's 400; anything else — including a fetch/push that
+      // failed to land (ADR 0052 決定1: that means the edit never happened,
+      // issue #57 の非致命は撤回)— is an external step failing, 502, and the
+      // retry reuses whatever orphan it left behind (issue #57)
       // 400 の2つ: 名前が使えない(#68)と、指した checkout が盤面自身の状態パスと
       // 重なる(ADR 0040 / issue #149)。どちらも出し直せば通り得る呼び出し側の
       // 入力の問題であって、盤面の故障(502)でも未設定(503)でもない
       if (err instanceof InvalidWorkspaceNameError || err instanceof BoardStateOverlapError) {
         res.status(400).json({ error: err.message });
-      } else if (err instanceof RegistryCloneBusyError) {
-        res.status(409).json({ error: err.message });
       } else if (err instanceof GitHubIdentityMissingError) {
         // same "not configured" family as the workspaceAdmin?.create gate
         // above — the board simply has no GitHub identity (ADR 0024)
@@ -718,7 +717,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      res.json(await workspaceAdmin.update({ name: req.params.name, ...parsed.data }));
+      await workspaceAdmin.update({ name: req.params.name, ...parsed.data });
+      res.json({});
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
         res.status(404).json({ error: err.message });
@@ -730,8 +730,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (err instanceof RegistrySelfUnprotectError) {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)
         res.status(403).json({ error: err.message });
-      } else if (err instanceof RegistryCloneBusyError) {
-        res.status(409).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -749,11 +747,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      res.status(201).json(await agentAdmin.create(parsed.data));
+      await agentAdmin.create(parsed.data);
+      res.status(201).json({});
     } catch (err) {
       // same posture as /workspaces' create: the human's own synchronous
-      // request fails fast on a bad input (400), a busy registry clone is a
-      // 409 the idempotent flow retries later, anything else is 502
+      // request fails fast on a bad input (400), anything else — including a
+      // fetch/push that failed to land — is 502 (ADR 0052 決定1)
       if (
         err instanceof InvalidAgentNameError ||
         err instanceof UnknownAuthorityProfileError ||
@@ -761,8 +760,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof InvalidSkillAllowlistError
       ) {
         res.status(400).json({ error: err.message });
-      } else if (err instanceof RegistryCloneBusyError) {
-        res.status(409).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -809,7 +806,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      res.json(await agentAdmin.update({ name: req.params.name, ...parsed.data }));
+      await agentAdmin.update({ name: req.params.name, ...parsed.data });
+      res.json({});
     } catch (err) {
       if (err instanceof UnknownAgentError) {
         res.status(404).json({ error: err.message });
@@ -819,8 +817,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof InvalidSkillAllowlistError
       ) {
         res.status(400).json({ error: err.message });
-      } else if (err instanceof RegistryCloneBusyError) {
-        res.status(409).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -842,12 +838,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const { confirmDangerous, ...profile } = parsed.data;
     if (rejectUnconfirmedDanger(res, profile, confirmDangerous)) return;
     try {
-      res.status(201).json(await profileAdmin.create(profile));
+      await profileAdmin.create(profile);
+      res.status(201).json({});
     } catch (err) {
       if (err instanceof InvalidAuthorityProfileNameError) {
         res.status(400).json({ error: err.message });
-      } else if (err instanceof RegistryCloneBusyError) {
-        res.status(409).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -879,12 +874,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const profile = { name: req.params.name, ...fields };
     if (rejectUnconfirmedDanger(res, profile, confirmDangerous)) return;
     try {
-      res.json(await profileAdmin.update(profile));
+      await profileAdmin.update(profile);
+      res.json({});
     } catch (err) {
       if (err instanceof UnknownAuthorityProfileError) {
         res.status(404).json({ error: err.message });
-      } else if (err instanceof RegistryCloneBusyError) {
-        res.status(409).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
