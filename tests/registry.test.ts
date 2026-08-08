@@ -100,7 +100,7 @@ describe("loadRegistry", () => {
 
   it("agent 定義を読み込む: frontmatter の version と authority 参照、本文がシステムプロンプト", async () => {
     const dir = await makeRegistry();
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     const agent = registry.agents.deckhand!;
     expect(agent.version).toBe("0.3.1");
     expect(agent.authority).toBe("standard");
@@ -117,7 +117,7 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry({
       "agents/tako.md": `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nskills:\n  - "*"\nicon: \u{1F419}\n---\n`,
     });
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.agents.tako!.systemPrompt).toBe("");
     expect(registry.agents.tako!.icon).toBe("\u{1F419}");
   });
@@ -126,21 +126,21 @@ describe("loadRegistry", () => {
     const withModel = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withModel).agents.deckhand!.model).toBe("opus");
+    expect(loadRegistry(withModel, "purely-local").agents.deckhand!.model).toBe("opus");
     const without = await makeRegistry();
-    expect(loadRegistry(without).agents.deckhand!.model).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").agents.deckhand!.model).toBeUndefined();
   });
 
   it("frontmatter の description は必須: 欠落は登録時にエラーになる(roster の1行を担う散文 — issue #43 / ADR 0014)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand.\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/description/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/description/i);
   });
 
   it("agent 定義の description を読み込む: roster の1行に載る散文(issue #43)", async () => {
     const dir = await makeRegistry();
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.agents.deckhand!.description).toBe(
       "General work agent for the tidepool board",
     );
@@ -150,9 +150,9 @@ describe("loadRegistry", () => {
     const withEffort = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\neffort: high\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withEffort).agents.deckhand!.effort).toBe("high");
+    expect(loadRegistry(withEffort, "purely-local").agents.deckhand!.effort).toBe("high");
     const without = await makeRegistry();
-    expect(loadRegistry(without).agents.deckhand!.effort).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").agents.deckhand!.effort).toBeUndefined();
   });
 
   // issue #33 / 判断4: `model` と同じ**開いた集合**なので、値の妥当性はここで
@@ -161,9 +161,9 @@ describe("loadRegistry", () => {
     const withAdvisor = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: opus\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withAdvisor).agents.deckhand!.advisor).toBe("opus");
+    expect(loadRegistry(withAdvisor, "purely-local").agents.deckhand!.advisor).toBe("opus");
     const without = await makeRegistry();
-    expect(loadRegistry(without).agents.deckhand!.advisor).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").agents.deckhand!.advisor).toBeUndefined();
   });
 
   // ADR 0042: 具体 id も同じ口を通る。「エイリアスだけ」と読める形にしない —
@@ -172,30 +172,30 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: claude-opus-5\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(dir).agents.deckhand!.advisor).toBe("claude-opus-5");
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.advisor).toBe("claude-opus-5");
   });
 
   it("frontmatter の icon は optional: あれば読み、なければ undefined", async () => {
     const withIcon = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withIcon).agents.deckhand!.icon).toBe("\u{1F419}");
+    expect(loadRegistry(withIcon, "purely-local").agents.deckhand!.icon).toBe("\u{1F419}");
     const without = await makeRegistry();
-    expect(loadRegistry(without).agents.deckhand!.icon).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").agents.deckhand!.icon).toBeUndefined();
   });
 
   it("frontmatter の icon が複数文字(絵文字2つ)の場合は登録時にエラーになる(ADR 0026: 単一グラフェム制約)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\u{1F980}\n---\nYou are Deckhand.\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/icon/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/icon/i);
   });
 
   it("frontmatter の icon が絵文字以外の文字の場合は登録時にエラーになる", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: a\n---\nYou are Deckhand.\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/icon/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/icon/i);
   });
 
   it("frontmatter の icon が Twemoji 収録範囲外の絵文字の場合は登録時にエラーになる(ADR 0026)", async () => {
@@ -205,21 +205,21 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1FADD}\n---\nYou are Deckhand.\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/icon/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/icon/i);
   });
 
   it("frontmatter の skills 許可リストを読み込む(CONTEXT.md: エージェント = ベース AI + skills + ...・issue #56 / ADR 0025)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nskills:\n  - "@workspace"\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(dir).agents.deckhand!.skills).toEqual(["@workspace"]);
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.skills).toEqual(["@workspace"]);
   });
 
   it("frontmatter の skills は必須: 欠落は登録時にエラーになる(省略=無制限のフットガンを作らない・issue #41 の線 / ADR 0025)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\n---\nYou are Deckhand.\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/skills/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/skills/i);
   });
 
   /** A deckhand definition whose `skills` frontmatter is the given YAML block —
@@ -231,28 +231,28 @@ describe("loadRegistry", () => {
 
   it("skills の '*' は単独時のみ有効: 他の語と併記されるとエラー(glob は '*' 単独と '名前:*' の2形だけ・ADR 0025)", async () => {
     const dir = await withSkills(`  - "*"\n  - code-review\n`);
-    expect(() => loadRegistry(dir)).toThrow(/skill/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/skill/i);
   });
 
   it("skills の @ スコープ語は {@workspace, @host} の閉集合: 実在しないスコープ語はエラー(語の typo を検出する・ADR 0025)", async () => {
     const good = await withSkills(`  - "@workspace"\n  - "@host"\n`);
-    expect(loadRegistry(good).agents.deckhand!.skills).toEqual(["@workspace", "@host"]);
+    expect(loadRegistry(good, "purely-local").agents.deckhand!.skills).toEqual(["@workspace", "@host"]);
     const typo = await withSkills(`  - "@wrokspace"\n`);
-    expect(() => loadRegistry(typo)).toThrow(/skill/i);
+    expect(() => loadRegistry(typo, "purely-local")).toThrow(/skill/i);
   });
 
   it("skills の glob は '名前:*' の形のみ: 'foo*' や '*bar' のような部分 glob はエラー(ADR 0025)", async () => {
     const pluginGlob = await withSkills(`  - "myplugin:*"\n`);
-    expect(loadRegistry(pluginGlob).agents.deckhand!.skills).toEqual(["myplugin:*"]);
+    expect(loadRegistry(pluginGlob, "purely-local").agents.deckhand!.skills).toEqual(["myplugin:*"]);
     for (const bad of ["foo*", "*bar", "pre*fix"]) {
       const dir = await withSkills(`  - "${bad}"\n`);
-      expect(() => loadRegistry(dir)).toThrow(/skill/i);
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(/skill/i);
     }
   });
 
   it("skills の個別名・plugin:skill・実在しない参照は在庫非依存で通る(許可リストは参照であって在庫の主張ではない・ADR 0023 の線)", async () => {
     const dir = await withSkills(`  - code-review\n  - "myplugin:deploy"\n  - does-not-exist-anywhere\n`);
-    expect(loadRegistry(dir).agents.deckhand!.skills).toEqual([
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.skills).toEqual([
       "code-review",
       "myplugin:deploy",
       "does-not-exist-anywhere",
@@ -261,12 +261,12 @@ describe("loadRegistry", () => {
 
   it("skills の空リストは全禁止として有効(ADR 0025: 全禁止は空リストで綴る)", async () => {
     const dir = await withSkills(`  []\n`);
-    expect(loadRegistry(dir).agents.deckhand!.skills).toEqual([]);
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.skills).toEqual([]);
   });
 
   it("authority プロファイルを読み込む: guidance の prose が取れる", async () => {
     const dir = await makeRegistry();
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.authority.standard!.guidance).toContain("Prefer reversible actions");
   });
 
@@ -274,14 +274,14 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry({
       "authority/standard.yaml": `guidance: be careful\nallowed_workspaces:\n  - "*"\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/assignable_to/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/assignable_to/i);
   });
 
   it("allowed_workspaces を省略した authority profile は registry ロード時にエラーになる(issue #41: 省略=無制限のフットガンを潰す)", async () => {
     const dir = await makeRegistry({
       "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/allowed_workspaces/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/allowed_workspaces/i);
   });
 
   it("エスカレーション権らしきフィールドを持つプロファイルは読み込み自体を拒否する", async () => {
@@ -290,12 +290,12 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry({
       "authority/standard.yaml": `guidance: be careful\nescalation: forbidden\n`,
     });
-    expect(() => loadRegistry(dir)).toThrow(/escalation|unrecognized/i);
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/escalation|unrecognized/i);
   });
 
   it("workspaces.yaml を読み込む: 名前 → パス・repo URL・セットアップメモ", async () => {
     const dir = await makeRegistry();
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     const ws = registry.workspaces.tidepool!;
     expect(ws.path).toBe("/home/pi/work/tidepool");
     expect(ws.repo).toBe("https://github.com/sinano1107/tidepool.git");
@@ -306,32 +306,32 @@ describe("loadRegistry", () => {
     const withProtected = await makeRegistry({
       "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\n  protected: true\n`,
     });
-    expect(loadRegistry(withProtected).workspaces.tidepool!.protected).toBe(true);
+    expect(loadRegistry(withProtected, "purely-local").workspaces.tidepool!.protected).toBe(true);
     const without = await makeRegistry();
-    expect(loadRegistry(without).workspaces.tidepool!.protected).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").workspaces.tidepool!.protected).toBeUndefined();
   });
 
   it("workspaces.yaml の branch は optional: あれば読み、省略時は undefined(issue #27)", async () => {
     const withBranch = await makeRegistry({
       "workspaces.yaml": `tidepool:\n  path: /home/pi/work/tidepool\n  branch: master\n`,
     });
-    expect(loadRegistry(withBranch).workspaces.tidepool!.branch).toBe("master");
+    expect(loadRegistry(withBranch, "purely-local").workspaces.tidepool!.branch).toBe("master");
     const without = await makeRegistry();
-    expect(loadRegistry(without).workspaces.tidepool!.branch).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").workspaces.tidepool!.branch).toBeUndefined();
   });
 
   it("workspaces.yaml の path は optional: 省略しても読み込みエラーにならず undefined になる(ADR 0018)", async () => {
     const dir = await makeRegistry({
       "workspaces.yaml": `sandbox:\n  notes: created by the board\n`,
     });
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.workspaces.sandbox!.path).toBeUndefined();
   });
 
   it("使用中の clone の HEAD commit hash を持つ(どのバージョンの判断か、の来歴)", async () => {
     const dir = await makeRegistry();
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir }).toString().trim();
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.commit).toBe(head);
     expect(registry.commit).toMatch(/^[0-9a-f]{40}$/);
   });
@@ -351,7 +351,7 @@ describe("loadRegistry", () => {
     );
     git("add", "-A");
     git("commit", "-m", "unmerged edit on a task branch");
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     // main's version and prose, never the task branch's
     expect(registry.agents.deckhand!.version).toBe("0.3.1");
     expect(registry.agents.deckhand!.description).toBe("General work agent for the tidepool board");
@@ -367,7 +367,7 @@ describe("loadRegistry", () => {
       join(dir, "workspaces.yaml"),
       `tidepool:\n  path: /tmp/hijacked\n  branch: attacker\n`,
     );
-    const registry = loadRegistry(dir);
+    const registry = loadRegistry(dir, "purely-local");
     expect(registry.workspaces.tidepool!.path).toBe("/home/pi/work/tidepool");
     expect(registry.workspaces.tidepool!.branch).toBeUndefined();
   });

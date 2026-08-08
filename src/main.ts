@@ -9,7 +9,7 @@ import { loadGitHubAuth } from "./github-auth.js";
 import { parseGlossary } from "./glossary.js";
 import type { VapidConfig } from "./push.js";
 import { startServer } from "./server.js";
-import { buildServerOptions } from "./server-options.js";
+import { buildServerOptions, declaredRegistryMode } from "./server-options.js";
 import { DEFAULT_AUDITOR_NAME } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import { resolveWorkspacesBaseDir } from "./workspace.js";
@@ -130,7 +130,7 @@ const server = await startServer(
     credential,
     clock: new SystemClock(),
     registryDir,
-    registryMode: registryDir ? "remote-backed" : "purely-local",
+    registryMode: declaredRegistryMode(registryDir),
     logDir,
     advisorDisabled,
     workspaceName,

@@ -44,10 +44,10 @@ describe("createAgent: 正常系(issue #70)", () => {
         skills: ["@workspace"],
         systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
-    const agent = loadRegistry(registryDir).agents.tako;
+    const agent = loadRegistry(registryDir, "purely-local").agents.tako;
     expect(agent).toEqual({
       name: "tako",
       // 作成時の version は機械刻印 — 呼び出し側は渡せない(入力型に version がない)
@@ -78,7 +78,7 @@ describe("createAgent: 正常系(issue #70)", () => {
         skills: ["*"],
         systemPrompt: "You are Hermit.",
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
     const raw = readFileSync(join(registryDir, "agents", "hermit.md"), "utf8");
@@ -86,7 +86,7 @@ describe("createAgent: 正常系(issue #70)", () => {
     expect(raw).not.toContain("model");
     expect(raw).not.toContain("effort");
     expect(raw).not.toContain("advisor");
-    const agent = loadRegistry(registryDir).agents.hermit;
+    const agent = loadRegistry(registryDir, "purely-local").agents.hermit;
     expect(agent).toEqual({
       name: "hermit",
       version: "1",
@@ -116,7 +116,7 @@ describe("createAgent: name 検証(issue #70 — assertValidWorkspaceName と同
       const registryDir = await makeMainRegistry();
       const before = git(registryDir, "rev-parse", "HEAD");
 
-      await expect(createAgent({ ...base, name }, { registryDir })).rejects.toThrow(
+      await expect(createAgent({ ...base, name }, { registryDir, registryMode: "purely-local" })).rejects.toThrow(
         InvalidAgentNameError,
       );
       expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -128,11 +128,11 @@ describe("createAgent: name 検証(issue #70 — assertValidWorkspaceName と同
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
-      createAgent({ ...base, name: "deckhand" }, { registryDir }),
+      createAgent({ ...base, name: "deckhand" }, { registryDir, registryMode: "purely-local" }),
     ).rejects.toThrow(InvalidAgentNameError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     // fixture の deckhand はそのまま
-    expect(loadRegistry(registryDir).agents.deckhand!.version).toBe("0.3.1");
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.version).toBe("0.3.1");
   });
 });
 
@@ -144,7 +144,7 @@ describe("createAgent: authority 検証(issue #70 — 既存プロファイル�
     await expect(
       createAgent(
         { name: "tako", authority: "no-such-profile", description: "d", skills: ["*"], systemPrompt: "p" },
-        { registryDir },
+        { registryDir, registryMode: "purely-local" },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -158,7 +158,7 @@ describe("createAgent: registry コミットの前提条件(ADR 0020 — workspa
     const registryDir = await makeMainRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
 
-    await expect(createAgent(input, { registryDir })).rejects.toThrow(RegistryCloneBusyError);
+    await expect(createAgent(input, { registryDir, registryMode: "purely-local" })).rejects.toThrow(RegistryCloneBusyError);
     expect(git(registryDir, "log", "--format=%s", "task/registry-edit-1")).toBe(
       "registry fixture",
     );
@@ -169,7 +169,7 @@ describe("createAgent: registry コミットの前提条件(ADR 0020 — workspa
     const before = git(registryDir, "rev-parse", "HEAD");
     writeFileSync(join(registryDir, "workspaces.yaml"), "[:::invalid yaml", { flag: "a" });
 
-    await expect(createAgent(input, { registryDir })).rejects.toThrow(RegistryCloneBusyError);
+    await expect(createAgent(input, { registryDir, registryMode: "purely-local" })).rejects.toThrow(RegistryCloneBusyError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 });
@@ -184,7 +184,7 @@ describe("createAgent: registry への push(issue #70 — ベストエフォー�
     git(registryDir, "remote", "add", "origin", bare);
     git(registryDir, "push", "-u", "origin", "main");
 
-    const result = await createAgent(input, { registryDir });
+    const result = await createAgent(input, { registryDir, registryMode: "purely-local" });
 
     expect(result.pushed).toBe(true);
     expect(git(bare, "log", "-1", "--format=%s", "main")).toBe("create agent tako via WebUI");
@@ -196,10 +196,10 @@ describe("createAgent: registry への push(issue #70 — ベストエフォー�
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     try {
-      const result = await createAgent(input, { registryDir });
+      const result = await createAgent(input, { registryDir, registryMode: "purely-local" });
 
       expect(result.pushed).toBe(false);
-      expect(loadRegistry(registryDir).agents.tako).toBeDefined();
+      expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeDefined();
       expect(warn).toHaveBeenCalledOnce();
       expect(warn.mock.calls[0]![0]).toContain("push");
     } finally {
@@ -218,12 +218,12 @@ describe("createAgent: icon 検証(ADR 0026 — loadRegistry を壊す書き込�
       await expect(
         createAgent(
           { name: "tako", authority: "standard", description: "d", icon, skills: ["*"], systemPrompt: "p" },
-          { registryDir },
+          { registryDir, registryMode: "purely-local" },
         ),
       ).rejects.toThrow(InvalidAgentIconError);
       expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
       // 不正 icon が書き込まれていれば loadRegistry ごと落ちる — それが起きていない
-      expect(loadRegistry(registryDir).agents.tako).toBeUndefined();
+      expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeUndefined();
     },
   );
 });
@@ -238,12 +238,12 @@ describe("createAgent: skills 検証(ADR 0025 — loadRegistry を壊す許可�
       await expect(
         createAgent(
           { name: "tako", authority: "standard", description: "d", skills, systemPrompt: "p" },
-          { registryDir },
+          { registryDir, registryMode: "purely-local" },
         ),
       ).rejects.toThrow(InvalidSkillAllowlistError);
       expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
       // 不正 allowlist が書き込まれていれば loadRegistry ごと落ちる — それが起きていない
-      expect(loadRegistry(registryDir).agents.tako).toBeUndefined();
+      expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeUndefined();
     },
   );
 });
@@ -253,10 +253,10 @@ describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
     const registryDir = await makeMainRegistry();
     await createAgent(
       { name: "tako", authority: "standard", description: "General agent", icon: "🐙", skills: ["*"], systemPrompt: "You are Tako." },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
-    const views = listAgentViews({ registryDir });
+    const views = listAgentViews({ registryDir, registryMode: "purely-local" });
 
     expect(views.map((v) => v.name).sort()).toEqual(["deckhand", "tako"]);
     expect(views.find((v) => v.name === "tako")).toEqual({

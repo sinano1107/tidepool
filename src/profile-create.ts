@@ -9,6 +9,7 @@ import {
   authorityProfileSchema,
   loadRegistry,
   ownEntry,
+  type RegistryMode,
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import {
@@ -56,6 +57,9 @@ export function dangerousValues(
  *  root, same shape as AgentAdminDeps. */
 export interface ProfileAdminDeps {
   registryDir: string;
+  /** ADR 0052 決定1: 検証と一覧が読む正本。読みだけがリモートへ移り、書き込みは
+   *  まだローカル main へコミットする(#210)。 */
+  registryMode: RegistryMode;
   /** The board's GitHub identity (ADR 0024) for the best-effort registry
    *  push, absent when no secrets file is configured — same shape as
    *  AgentAdminDeps. */
@@ -72,7 +76,7 @@ export async function createProfile(
   // 入口で検査してから読む: dirty tree の registry を検証の根拠にしない
   // (ADR 0020 の committed-main 読み取り規律 — agent-create.ts と同じ二段検査)
   assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir, deps.registryMode);
   assertValidAuthorityProfileName(registry, input.name);
   commitProfileFile(deps.registryDir, input, `create authority profile ${input.name} via WebUI`);
   return { pushed: pushRegistry(deps.registryDir, deps.githubAuth) };
@@ -90,7 +94,7 @@ export async function updateProfile(
   deps: ProfileAdminDeps,
 ): Promise<RegistryCommitResult> {
   assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir, deps.registryMode);
   const existing = ownEntry(registry.authority, input.name);
   if (!existing) throw new UnknownAuthorityProfileError(input.name);
   // no-change 編集はコミットなしの成功(updateAgent の sameEffectiveFields と
@@ -106,7 +110,7 @@ export async function updateProfile(
 export type ProfileView = AuthorityProfile;
 
 export function listProfileViews(deps: ProfileAdminDeps): ProfileView[] {
-  return Object.values(loadRegistry(deps.registryDir).authority);
+  return Object.values(loadRegistry(deps.registryDir, deps.registryMode).authority);
 }
 
 export type CreateProfileFn = (input: CreateProfileInput) => Promise<RegistryCommitResult>;

@@ -28,7 +28,6 @@ import type {
   RegistryReachabilityCheck,
   RosterAgent,
 } from "./registry.js";
-import { quarantineRegistryReachability } from "./registry-reachability.js";
 import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
@@ -192,19 +191,11 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
-  // ADR 0052: refresh once at boot so a quiet board still reports a broken
-  // registry remote promptly. This is deliberately fail-open for the human
-  // surface: failure creates the same Confirmation question as pickup and is
-  // logged loudly, but never rejects server startup. The pickup gate remains
-  // the enforcement floor.
-  if (options.registryReachability) {
-    const reachability = await options.registryReachability();
-    if (!reachability.available) {
-      const reason = reachability.reason ?? "registry remote is unreachable";
-      console.error(`[registry] startup refresh failed; pickup is stopped: ${reason}`);
-      quarantineRegistryReachability(db, reason, options.clock.now());
-    }
-  }
+  // ADR 0052 決定2 の起動時 refresh は**ここには無い**。合成 root
+  // (`buildServerOptions`)が registry を読む前に撃つ —— そこより後ろに置くと、
+  // remote-tracking ref が欠けた盤面では合成側の読みが先に落ち、fail-open が
+  // 働く前に起動が終わってしまう。`registryReachability` はこの下の pickup
+  // ゲートと、回答時の検証つき解除のために運ばれる。
   // a restart interrupts any running task (ADR 0001): it drops into the same
   // failure-escalation path as a watchdog kill, so the slot never wedges past
   // a restart (#9) — no graceful-drain machinery exists or is needed

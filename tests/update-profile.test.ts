@@ -29,10 +29,10 @@ describe("updateProfile: 正常系(issue #76 — ファイル全体の書き直�
         allowed_workspaces: ["tidepool"],
         merge: "escalate",
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
-    const profile = loadRegistry(registryDir).authority.standard;
+    const profile = loadRegistry(registryDir, "purely-local").authority.standard;
     expect(profile).toEqual({
       name: "standard",
       guidance: "Rewritten guidance.",
@@ -60,7 +60,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await expect(updateProfile(same, { registryDir })).resolves.toBeDefined();
+    await expect(updateProfile(same, { registryDir, registryMode: "purely-local" })).resolves.toBeDefined();
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
@@ -79,7 +79,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         assignable_to: ["deckhand", "tako"],
         allowed_workspaces: ["tidepool"],
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -99,11 +99,11 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         assignable_to: ["tako"],
         allowed_workspaces: ["tidepool"],
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).not.toBe(before);
-    expect(loadRegistry(registryDir).authority.reviewer!.assignable_to).toEqual(["tako"]);
+    expect(loadRegistry(registryDir, "purely-local").authority.reviewer!.assignable_to).toEqual(["tako"]);
   });
 });
 
@@ -115,10 +115,10 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
     await expect(
       updateProfile(
         { name: "ghost", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] },
-        { registryDir },
+        { registryDir, registryMode: "purely-local" },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-    expect(loadRegistry(registryDir).authority.ghost).toBeUndefined();
+    expect(loadRegistry(registryDir, "purely-local").authority.ghost).toBeUndefined();
   });
 });

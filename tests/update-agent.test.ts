@@ -33,10 +33,10 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
         skills: ["@workspace"],
         systemPrompt: "You are Deckhand, rewritten.",
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
-    const agent = loadRegistry(registryDir).agents.deckhand;
+    const agent = loadRegistry(registryDir, "purely-local").agents.deckhand;
     expect(agent).toEqual({
       name: "deckhand",
       version: "0.3.2",
@@ -60,10 +60,10 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
     await updateAgent(
       { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
-    expect(loadRegistry(registryDir).agents.crab!.version).toBe("4");
+    expect(loadRegistry(registryDir, "purely-local").agents.crab!.version).toBe("4");
   });
 
   it("数値セグメントが一つもない version は 1 に振り直す — 刻印は常に前へ進む", async () => {
@@ -73,10 +73,10 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
     await updateAgent(
       { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
-    expect(loadRegistry(registryDir).agents.crab!.version).toBe("1");
+    expect(loadRegistry(registryDir, "purely-local").agents.crab!.version).toBe("1");
   });
 });
 
@@ -95,10 +95,10 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         skills: ["*"],
         systemPrompt: "p",
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
-    expect(loadRegistry(registryDir).agents.crab).toMatchObject({ version: "4", advisor: undefined });
+    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", advisor: undefined });
     expect(readFileSync(join(registryDir, "agents", "crab.md"), "utf8")).not.toContain("advisor:");
   });
 
@@ -115,10 +115,10 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await expect(updateAgent(same, { registryDir })).resolves.toBeDefined();
+    await expect(updateAgent(same, { registryDir, registryMode: "purely-local" })).resolves.toBeDefined();
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-    expect(loadRegistry(registryDir).agents.deckhand!.version).toBe("0.3.1");
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.version).toBe("0.3.1");
   });
 
   it("末尾改行付き systemPrompt の再送も no-change — parseAgentFile が trim して読む以上、外側の空白は保存されない正規形で比較する", async () => {
@@ -134,11 +134,11 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         systemPrompt:
           "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.\n",
       },
-      { registryDir },
+      { registryDir, registryMode: "purely-local" },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-    expect(loadRegistry(registryDir).agents.deckhand!.version).toBe("0.3.1");
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.version).toBe("0.3.1");
   });
 });
 
@@ -150,7 +150,7 @@ describe("updateAgent: authority 検証(issue #70 — 編集でも既存プロ�
     await expect(
       updateAgent(
         { name: "deckhand", authority: "no-such-profile", description: "d", skills: ["*"], systemPrompt: "p" },
-        { registryDir },
+        { registryDir, registryMode: "purely-local" },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -165,10 +165,10 @@ describe("updateAgent: 存在しないエージェント(issue #70 — 編集は
     await expect(
       updateAgent(
         { name: "ghost", authority: "standard", description: "d", skills: ["*"], systemPrompt: "p" },
-        { registryDir },
+        { registryDir, registryMode: "purely-local" },
       ),
     ).rejects.toThrow(UnknownAgentError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-    expect(loadRegistry(registryDir).agents.ghost).toBeUndefined();
+    expect(loadRegistry(registryDir, "purely-local").agents.ghost).toBeUndefined();
   });
 });

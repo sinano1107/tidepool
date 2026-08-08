@@ -24,10 +24,12 @@ import {
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
+  fetchRegistryRef,
   loadRegistry,
   ownEntry,
   type RegistryCandidates,
   type RegistryMode,
+  type RegistryReachability,
   type RosterAgent,
   refreshRegistry,
 } from "./registry.js";
@@ -172,6 +174,10 @@ export function buildWorkerOptions(
     db: session.db,
     clock: session.clock,
     registryDir: board.registryDir,
+    // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
+    // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
+    // 「人間の merge を通った内容が spawn に効く」は成立しない。
+    registryMode: board.registryMode,
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
     workspace: board.workspaceName,
@@ -196,10 +202,64 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
 }
 
 /** One spelling for every registry-derived composition seam: mode is resolved
- *  once at the root and no resolver is allowed to fall back to local main. */
+ *  once at the root and no resolver is allowed to fall back to local main.
+ *  呼び出し側はどれも先に `registryDir` を検査しているが、その絞り込みはここまで
+ *  流れてこないので、型を閉じるためだけの throw を置く。 */
 function loadBoardRegistry(board: BoardComposition) {
   if (!board.registryDir) throw new Error("no registry configured");
   return loadRegistry(board.registryDir, board.registryMode);
+}
+
+/** ADR 0052 決定3 の宣言そのもの: `TIDEPOOL_REGISTRY` を設定した盤面は remote
+ *  正本を持つ。**clone を覗かない** — remote の有無を見て切り替えると、remote が
+ *  失われた瞬間に「merge が spawn に効かない」旧挙動へ静かに戻り、どこも赤く
+ *  ならない(ADR 0052 が名指しで却下した道)。
+ *
+ *  `purely-local` を env で選ばせないのは意図的である。それは盤面を静かに壊せる
+ *  スイッチになり、Pi で誤って立てれば ADR 0052 が直した穴がそのまま戻る —— 却下
+ *  した推測と同じ形の footgun を、今度は設定として作ることになる。純ローカル盤面
+ *  (`workspace.ts` の `guardRegistryDefaultBranch` が認める構成)は、テストが
+ *  `BoardComposition` を直接組んで宣言する経路で表現できており、そちらが要ると
+ *  分かるまで本番の口は開けない。 */
+export function declaredRegistryMode(registryDir: string | undefined): RegistryMode {
+  return registryDir ? "remote-backed" : "purely-local";
+}
+
+/** ADR 0052 決定2 の**起動時**の refresh 点。`buildServerOptions` の先頭で、
+ *  registry を1文字も読む前に撃つ。
+ *
+ *  順序がこの関数の本体である。合成 root は `workspace`(workspaceConfig)と
+ *  draft の candidates を**その場で**読むので、refresh を後ろに置くと —— 例えば
+ *  `startServer` の中に置くと —— remote-tracking ref が欠けた盤面では読みのほうが
+ *  先に落ち、fail-open が働く前に起動が終わる。`git remote remove` は tracking ref
+ *  も一緒に消すため、これは机上の話ではない: quarantine question 自身が人間に促す
+ *  修理(remote の張り直し)の直後がまさにその状態であり、そこで起動を拒むと
+ *  ADR 0036 が復旧経路と定めた人間面ごと開かなくなる。
+ *
+ *  決定4 の fail-open: 失敗しても騒ぐだけで、起動は拒まず quarantine も立てない
+ *  (床は pickup ゲートの1枚)。fetch が失敗し**かつ** ref も無ければ直後の読みが
+ *  throw するが、それは「registry が読めない盤面は起動しない」という ADR 0052
+ *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
+ *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
+ *  出ることである。 */
+function bootRefresh(board: BoardComposition): void {
+  if (!board.registryDir || board.registryMode !== "remote-backed") return;
+  const reachability = fetchRegistryRef(board.registryDir);
+  if (reachability.available) return;
+  console.error(
+    "[registry] startup refresh failed; the board is starting anyway and the next pickup " +
+      `will stop the board if this stands: ${reachability.reason ?? "registry remote is unreachable"}`,
+  );
+}
+
+/** ADR 0052 決定2 の pickup / 回答時の refresh 点。remote 正本を宣言していない
+ *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
+function registryReachabilityCheck(
+  board: BoardComposition,
+): (() => Promise<RegistryReachability>) | undefined {
+  const { registryDir } = board;
+  if (!registryDir || board.registryMode !== "remote-backed") return undefined;
+  return () => refreshRegistry(registryDir);
 }
 
 /** The board's own view of the workspace (branch discipline + tree rule):
@@ -352,7 +412,13 @@ function workspaceAdmin(
   const { registryDir, githubAuth, boardState } = board;
   if (!registryDir) return undefined;
   // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
-  const deps = { registryDir, workspacesBaseDir: board.workspacesDir, githubAuth, boardState };
+  const deps = {
+    registryDir,
+    registryMode: board.registryMode,
+    workspacesBaseDir: board.workspacesDir,
+    githubAuth,
+    boardState,
+  };
   return {
     create: (input) => createWorkspace(input, { ...deps, github }),
     list: () => listWorkspaceViews(deps),
@@ -367,7 +433,7 @@ function workspaceAdmin(
 function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
   const { registryDir, githubAuth } = board;
   if (!registryDir) return undefined;
-  const deps = { registryDir, githubAuth };
+  const deps = { registryDir, registryMode: board.registryMode, githubAuth };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -385,7 +451,7 @@ function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
 function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
   const { registryDir, githubAuth } = board;
   if (!registryDir) return undefined;
-  const deps = { registryDir, githubAuth };
+  const deps = { registryDir, registryMode: board.registryMode, githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),
@@ -401,6 +467,9 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
  *  ADR 0027 の線には触れない: server 境界の**上**にある合成の検査であって、
  *  境界の下に新しいテスト層を作る話ではない。 */
 export function buildServerOptions(board: BoardComposition): ServerOptions {
+  // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
+  // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
+  bootRefresh(board);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
@@ -435,10 +504,7 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
-    registryReachability:
-      board.registryDir && board.registryMode === "remote-backed"
-        ? () => refreshRegistry(board.registryDir!)
-        : undefined,
+    registryReachability: registryReachabilityCheck(board),
     // ADR 0040 / issue #149: boot 時の一斉検査(該当を最初から needs-human に
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。

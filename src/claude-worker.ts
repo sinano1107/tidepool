@@ -17,6 +17,7 @@ import {
   loadRegistry,
   ownEntry,
   type Registry,
+  type RegistryMode,
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
@@ -760,6 +761,12 @@ export interface ClaudeWorkerOptions {
   clock: Clock;
   /** Local clone of the agent registry repository. */
   registryDir: string;
+  /** ADR 0052 決定1: その clone のどの ref が正本か。**spawn がここを読む** —
+   *  盤面側の resolver だけをリモートへ移しても、worker が local main を読む限り
+   *  「人間の merge を通った内容が spawn に効く」は成立しない。ADR 0052 決定2 の
+   *  「観測点と refresh 点は同じでなければならない」は、pickup 直前の fetch と
+   *  この読み取りが同じ ref を指して初めて満たされる。 */
+  registryMode: RegistryMode;
   /** Agent name in the registry (`agents/<name>.md`). */
   agent: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
@@ -1324,7 +1331,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
-    this.validateDefaults(loadRegistry(options.registryDir));
+    this.validateDefaults(loadRegistry(options.registryDir, options.registryMode));
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
@@ -1443,8 +1450,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   }
 
   start(task: Task): void {
-    // loaded per pickup so a registry update takes effect on the next task
-    const registry = loadRegistry(this.options.registryDir);
+    // loaded per pickup so a registry update takes effect on the next task —
+    // remote-backed 盤面では、直前の pickup ゲートが撃った fetch で更新された
+    // `origin/main` を読む(ADR 0052 決定2: 観測点と refresh 点は同じ ref)
+    const registry = loadRegistry(this.options.registryDir, this.options.registryMode);
     // ADR 0020 part 2: `main` is read as a code constant, so verify it is still
     // the clone's real default branch (origin/HEAD) — a mismatch drops the
     // registry workspace into quarantine rather than silently trusting a

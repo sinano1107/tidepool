@@ -11,6 +11,7 @@ import {
   loadRegistry,
   ownEntry,
   type Registry,
+  type RegistryMode,
   UnknownAuthorityProfileError,
 } from "./registry.js";
 import {
@@ -71,6 +72,11 @@ function assertValidIcon(icon: string | undefined): void {
  *  never read from env here (same shape as WorkspaceAdminDeps). */
 export interface AgentAdminDeps {
   registryDir: string;
+  /** ADR 0052 決定1: 検証と一覧が読む正本。**読みだけがリモートへ移る** —
+   *  書き込みはまだローカル main へコミットする(worktree 化と push 失敗の
+   *  致命化は #210)。人間に見せる一覧が盤面の spawn する内容と食い違わない
+   *  ことを優先しており、書き込み側の非対称は #210 が消す。 */
+  registryMode: RegistryMode;
   /** The board's GitHub identity (ADR 0024) for the best-effort registry
    *  push, absent when no secrets file is configured — same shape as
    *  WorkspaceAdminDeps. */
@@ -87,7 +93,7 @@ export async function createAgent(
   // 入口で検査してから読む: dirty tree の registry を検証の根拠にしない
   // (ADR 0020 の committed-main 読み取り規律 — workspace-create と同じ二段検査)
   assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir, deps.registryMode);
   assertValidAgentName(registry, input.name);
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
@@ -113,7 +119,7 @@ export async function updateAgent(
   deps: AgentAdminDeps,
 ): Promise<RegistryCommitResult> {
   assertRegistryCloneReady(deps.registryDir);
-  const registry = loadRegistry(deps.registryDir);
+  const registry = loadRegistry(deps.registryDir, deps.registryMode);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
   assertKnownAuthority(registry, input.authority);
@@ -166,7 +172,7 @@ function sameSkills(existing: string[], input: string[]): boolean {
 export type AgentView = AgentDefinition;
 
 export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
-  return Object.values(loadRegistry(deps.registryDir).agents);
+  return Object.values(loadRegistry(deps.registryDir, deps.registryMode).agents);
 }
 
 export type CreateAgentFn = (input: CreateAgentInput) => Promise<RegistryCommitResult>;

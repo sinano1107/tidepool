@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -154,6 +155,40 @@ export async function makeRegistry(
   git("add", "-A");
   git("commit", "-m", "registry fixture");
   return dir;
+}
+
+/** ADR 0052 の remote-backed 盤面の fixture: bare な origin を持ち、`main` を
+ *  push 済みの registry clone と、そこへ**人間の merge を模して**書き込むための
+ *  publisher clone を返す。
+ *
+ *  `makeRegistry` に remote を足さないのは ADR 0052 が明示した線である —— 純
+ *  ローカル盤面は正当な構成なので、14 ファイルが依存する既定の fixture は remote
+ *  を持たないまま無傷で通らなければならない。remote が要るテストだけがこれを使う。 */
+export async function makeRemoteBackedRegistry(): Promise<{
+  registryDir: string;
+  /** origin/main へ直接コミットして push する = リモートで merge が起きた状態を作る。 */
+  publish: (path: string, body: string, message: string) => void;
+}> {
+  const registryDir = await makeRegistry();
+  const remote = await mkdtemp(join(tmpdir(), "tidepool-registry-remote-"));
+  const publisher = await mkdtemp(join(tmpdir(), "tidepool-registry-publisher-"));
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
+      cwd,
+    });
+  git(remote, "init", "--bare", "-b", "main");
+  git(registryDir, "remote", "add", "origin", remote);
+  git(registryDir, "push", "-u", "origin", "main");
+  git(process.cwd(), "clone", "--quiet", remote, publisher);
+  return {
+    registryDir,
+    publish: (path, body, message) => {
+      writeFileSync(join(publisher, path), body);
+      git(publisher, "add", path);
+      git(publisher, "commit", "-m", message);
+      git(publisher, "push", "origin", "main");
+    },
+  };
 }
 
 /** A realistic registry for a human authoring preview, rebuilt for every run. */

@@ -1,18 +1,19 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import {
   type BoardComposition,
   buildServerOptions,
   buildWorkerOptions,
+  declaredRegistryMode,
   WATCHDOG,
 } from "../src/server-options.js";
 import { FakeClock, FakeTranslationClient } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 /** 盤面1台ぶんの入力。渡すのは env 由来のスカラと、合成 root でしか作れない
  *  部品だけで、**口の一覧はここには無い** —— 一覧を持つのは `buildServerOptions`
@@ -50,12 +51,35 @@ function composition(): BoardComposition {
   };
 }
 
-it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 0052)", async () => {
+// ADR 0052 決定3 の宣言そのもの。main.ts の三項をここへ引き出してあるのは、
+// **main.ts が import した瞬間に盤面が起動する top-level await のスクリプト**で、
+// 向こうに置いた分岐はどのテストからも触れないからである(ADR 0041 §1 と同じ理由)。
+it("registryDir を設定した盤面は remote-backed を宣言する。clone は覗かない(ADR 0052)", () => {
+  expect({
+    configured: declaredRegistryMode("/some/registry/clone"),
+    absent: declaredRegistryMode(undefined),
+  }).toEqual({ configured: "remote-backed", absent: "purely-local" });
+});
+
+// spawn がどの ref を読むかは worker options の口に載っていなければ決まらない
+// (ADR 0043: 口の一覧を持つ唯一の場所)。落とすと worker はローカル main へ落ち、
+// 盤面側の resolver だけが remote を読む——という ADR 0052 が直した壊れ方に戻る。
+it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043)", async () => {
   const registryDir = await makeRegistry();
   dirs.push(registryDir);
-  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "main"], {
-    cwd: registryDir,
-  });
+  const clock = new FakeClock();
+
+  const options = buildWorkerOptions(
+    { ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "tidepool" },
+    { db: openDb(":memory:"), clock },
+  );
+
+  expect(options.registryMode).toBe("remote-backed");
+});
+
+it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 0052)", async () => {
+  const { registryDir } = await makeRemoteBackedRegistry();
+  dirs.push(registryDir);
 
   const options = buildServerOptions({
     ...composition(),
@@ -67,24 +91,67 @@ it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 
   expect(options.registryReachability).toBeTypeOf("function");
 });
 
-it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0052)", async () => {
-  const registryDir = await makeRegistry();
+// Codex のレビュー指摘そのものの筋書き。`git remote remove` は remote-tracking ref
+// も一緒に消すので、**quarantine question 自身が人間に促す修理**(credential や URL
+// を直すための remote の張り直し)の直後がこの状態になる。ここで起動を拒むと、
+// ADR 0036 が復旧経路と定めた人間面ごと開かない —— 機能が指示した修理手順を機能
+// 自身が塞ぐ。起動時 refresh を `startServer` ではなく合成 root の先頭に置くのは
+// このためで、`workspace` と draft の candidates はここで即座に registry を読む。
+it("origin/main がまだ無い remote-backed 盤面でも、起動時 refresh が先に走って合成できる(ADR 0052)", async () => {
+  const { registryDir } = await makeRemoteBackedRegistry();
   dirs.push(registryDir);
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args],
-      { cwd: registryDir },
-    );
-  git("checkout", "-b", "remote-main-update");
-  await writeFile(
-    join(registryDir, "agents", "deckhand.md"),
+  // remote は生きているが tracking ref だけが無い = 張り直した直後の姿
+  execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: registryDir });
+
+  const options = buildServerOptions({
+    ...composition(),
+    registryDir,
+    registryMode: "remote-backed",
+    workspaceName: "tidepool",
+  });
+
+  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand"]);
+});
+
+// 決定4 の fail-open。remote へ届かないこと自体は起動を拒む理由にならない —— 床は
+// pickup ゲートの1枚だけで、ここは騒ぐだけである。
+it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ警告する(ADR 0052)", async () => {
+  const { registryDir } = await makeRemoteBackedRegistry();
+  dirs.push(registryDir);
+  execFileSync("git", ["remote", "set-url", "origin", "/nonexistent/registry-remote"], {
+    cwd: registryDir,
+  });
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const options = buildServerOptions({
+    ...composition(),
+    registryDir,
+    registryMode: "remote-backed",
+    workspaceName: "tidepool",
+  });
+
+  expect({
+    composed: options.listAgents?.().map((agent) => agent.name),
+    warnings: error.mock.calls.length,
+    warning: error.mock.calls.flat().join(" "),
+  }).toMatchObject({
+    composed: ["deckhand"],
+    warnings: 1,
+    warning: expect.stringContaining("[registry] startup refresh failed"),
+  });
+  error.mockRestore();
+});
+
+// ローカル `main` は fixture のまま据え置き、変更はリモートにだけ載せる —— PR が
+// GitHub 上で merge され、ホストの checkout はまだ動いていない状態そのもの。
+it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0052)", async () => {
+  const { registryDir, publish } = await makeRemoteBackedRegistry();
+  dirs.push(registryDir);
+  publish(
+    "agents/deckhand.md",
     `---\nname: deckhand\ndescription: Definition from remote main\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nRemote definition.\n`,
+    "remote registry definition",
   );
-  git("add", "agents/deckhand.md");
-  git("commit", "-m", "remote registry definition");
-  git("update-ref", "refs/remotes/origin/main", "HEAD");
-  git("checkout", "main");
 
   const options = buildServerOptions({
     ...composition(),

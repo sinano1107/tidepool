@@ -42,7 +42,11 @@ async function remoteRegistryWithUnfetchedMerge(): Promise<string> {
   return registryDir;
 }
 
-it("次の pickup は registry を refresh してから remote main の定義で spawn する(ADR 0052)", async () => {
+// ここが測るのは**ゲートが spawn の手前で実際に fetch を撃つこと**である。worker は
+// fake なので、実 worker がどの ref を読むかはここでは測れない —— それは
+// tests/claude-worker.test.ts の「remote-backed 盤面の spawn は…」が測る。2つ揃って
+// 初めて ADR 0052 決定2 の「観測点と refresh 点は同じ」が閉じる。
+it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)", async () => {
   const registryDir = await remoteRegistryWithUnfetchedMerge();
   const db = openDb(":memory:");
   const clock = new FakeClock();

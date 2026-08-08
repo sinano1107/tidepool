@@ -324,12 +324,28 @@ const agentFrontmatterSchema = z.looseObject({
  *  discipline moves the checkout's HEAD onto a registry-edit task branch, so a
  *  working-tree read would let unmerged content take effect on spawn. */
 export const REGISTRY_BRANCH = "main";
+
+/** ADR 0052 決定3: この盤面の registry が remote 正本を持つか。**宣言であって
+ *  推測ではない** — clone を覗いて切り替えると、remote が失われた瞬間に ADR 0052
+ *  が直した壊れ方(merge が spawn に効かない)へ静かに戻る。既定値を持たせない
+ *  のも同じ理由で、`loadRegistry` の引数を必須にしてある。 */
 export type RegistryMode = "remote-backed" | "purely-local";
+
 export interface RegistryReachability {
   available: boolean;
   reason?: string;
 }
 export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
+
+/** この盤面で唯一ネットワークへ出る git 呼び出しの上限。`execFileSync` は同期
+ *  なので、black-hole した接続を無制限に待つと event loop ごと止まり、ADR 0036
+ *  が復旧経路と定めた人間面まで応答しなくなる —— fail-closed より悪い状態
+ *  (containment.ts)。timeout は「到達不能」= fail-closed 側に読む。
+ *
+ *  他の probe(`CAPABILITY_PROBE_TIMEOUT_MS` = 5秒)より桁が大きいのは、あれが
+ *  ローカルのバイナリを叩くのに対しこちらは実ネットワーク往復だからで、同じ数を
+ *  共有すると正常な fetch を落とす。 */
+export const REGISTRY_FETCH_TIMEOUT_MS = 30_000;
 
 // stderr piped (not inherited), same as workspace.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
@@ -337,14 +353,18 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 // swallows it by design).
 const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
 
-/** Refresh the remote-tracking ref immediately before the board trusts it for
- *  a pickup (ADR 0052). Failure is returned as data so the scheduler can put
- *  the board into the registry-reachability quarantine instead of throwing. */
-export async function refreshRegistry(dir: string): Promise<RegistryReachability> {
+/** Refresh の実体。`execFileSync` なので同期であり、**合成 root の起動時 refresh は
+ *  これを直接呼ぶ** —— `buildServerOptions` は同期で、しかも自分が読むより前に
+ *  撃たなければ意味がないため(下の非同期の面では間に合わない)。
+ *
+ *  Failure is returned as data so the caller can quarantine or warn instead of
+ *  throwing. */
+export function fetchRegistryRef(dir: string): RegistryReachability {
   try {
     execFileSync("git", ["fetch", "--quiet", "origin", REGISTRY_BRANCH], {
       cwd: dir,
       stdio: GIT_STDIO,
+      timeout: REGISTRY_FETCH_TIMEOUT_MS,
     });
     return { available: true };
   } catch (err) {
@@ -353,6 +373,13 @@ export async function refreshRegistry(dir: string): Promise<RegistryReachability
       reason: `the registry remote main could not be refreshed (${String(err)})`,
     };
   }
+}
+
+/** 上と同じ1回の fetch を、pickup ゲートと回答時の検証が使う**非同期の面**として
+ *  出したもの。型を `ContainmentCheck` と揃えてあるのは、封じ込め能力と同じ器に
+ *  乗る兄弟だからである(ADR 0052 決定5 — 束ねはしないが形は同じ)。 */
+export async function refreshRegistry(dir: string): Promise<RegistryReachability> {
+  return fetchRegistryRef(dir);
 }
 
 /** Read one committed file's content at `ref` — `git show ref:path`. The board
@@ -581,8 +608,14 @@ export function ownEntry<T>(record: Record<string, T>, key: string): T | undefin
 /** Load the registry from its declared committed source (ADR 0020 / ADR 0052)
  *  — remote-tracking main for a remote-backed board, local main for a
  *  purely-local board, and never the working tree. Every content read and the
- *  provenance `commit` use the same ref, so they agree by construction. */
-export function loadRegistry(dir: string, mode: RegistryMode = "purely-local"): Registry {
+ *  provenance `commit` use the same ref, so they agree by construction.
+ *
+ *  `mode` に既定値を置かない。既定があると、渡し忘れた呼び出しが**静かに**
+ *  ローカル main へ落ちる —— remote 正本を宣言した盤面でも spawn の入力だけが
+ *  古いまま、どこも赤くならない。ADR 0052 決定3 が推測を却下した理由と同じ形の
+ *  フォールバックなので、必須にして tsc に全呼び出しを名指しさせる
+ *  (containment.ts の「省略 = 無制限という footgun は作らない」と同じ線)。 */
+export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   const ref =
     mode === "remote-backed" ? `refs/remotes/origin/${REGISTRY_BRANCH}` : REGISTRY_BRANCH;
   const agents: Record<string, AgentDefinition> = {};
