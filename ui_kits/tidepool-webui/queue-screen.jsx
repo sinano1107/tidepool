@@ -125,7 +125,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, hea
              isHead is an id match against the true queue head, not a position/baseIndex computation: a sliced
              view (e.g. the triage preview's previewQueue, offset by baseIndex) would otherwise mislabel the
              actual head whenever it isn't rendered at index 0 of *this* slice. */}
-          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} skipReason={skipReason} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} onFront={onFront ? () => onFront(t.id) : undefined} />
+          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} skipReason={skipReason} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>

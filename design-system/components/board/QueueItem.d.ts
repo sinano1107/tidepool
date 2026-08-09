@@ -1,5 +1,5 @@
 /**
- * One row of the TODO queue — drag handle, position, task, assignee.
+ * One row of the TODO queue — position, task, assignee, and an optional drag handle.
  * "Run now" (tide-colored) is only the head row's action; every other row's
  * "↑ front" reorders to the head without triggering an immediate poll.
  * Skipped rows render dashed (throttle/pause pickup-block, auto-recovers).
@@ -21,6 +21,8 @@ export interface QueueItemProps {
   /** True queue head (by id, not rendered position) — colors the "↑ front"
    *  action as "run now" instead of plain reorder. */
   isHead?: boolean;
+  /** Shows the drag handle when this row can be reordered. */
+  draggable?: boolean;
   /** Shows the hover "↑ front" action. */
   onFront?: () => void;
   style?: React.CSSProperties;

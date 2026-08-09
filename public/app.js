@@ -122,7 +122,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, hea
         opacity: t.blocked ? 0.55 : void 0
       }
     },
-    /* @__PURE__ */ React.createElement(QueueItem, { position: baseIndex + i + 1, task: t, skipped: t.skipped, skipReason, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, onFront: onFront ? () => onFront(t.id) : void 0 })
+    /* @__PURE__ */ React.createElement(QueueItem, { position: baseIndex + i + 1, task: t, skipped: t.skipped, skipReason, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
   )));
 }
 const TP_SLOT_STATES = {
@@ -500,7 +500,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const heads = [
     { step: "1 / 3 \u2014 questions", title: `The tide brought ${nQuestions} question${nQuestions === 1 ? "" : "s"}.`, sub: "answers persist at once; unblocked parents surface at the front on commit.", next: answered === nQuestions ? "Log skim" : `Log skim (${nQuestions - answered} unanswered)` },
     { step: nQuestions ? "2 / 3 \u2014 decision log" : "2 / 3 \u2014 decision log \xB7 no questions today", title: `${unread.length} decisions made overnight.`, sub: "silence is consent \u2014 tap an entry to object.", next: "Queue check" },
-    { step: "3 / 3 \u2014 queue", title: "The tide is going out.", sub: loadPreview ? "front-inserted by this session highlighted. the queue applies at commit." : "front-inserted by this session highlighted. reorder is optional.", next: "Commit" }
+    { step: "3 / 3 \u2014 queue", title: "The tide is going out.", sub: loadPreview ? "front-inserted by this session highlighted. read-only \u2014 reorder on the Queue screen. applies at commit." : "front-inserted by this session highlighted. reorder is optional.", next: "Commit" }
   ];
   const cur = heads[section];
   const scratchResolved = () => [

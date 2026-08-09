@@ -2,7 +2,7 @@ import { AgentChip } from './AgentChip.jsx';
 import { IdChip } from './IdChip.jsx';
 import { RiskFlag } from './RiskFlag.jsx';
 
-export function QueueItem({ position, task = {}, skipped = false, skipReason = 'resumes on reset', frontInserted = false, flash = false, isHead = false, onFront, style }) {
+export function QueueItem({ position, task = {}, skipped = false, skipReason = 'resumes on reset', frontInserted = false, flash = false, isHead = false, draggable = false, onFront, style }) {
   const { id, title, assignee, assigneeIcon } = task;
   // hover styling lives in CSS (.tp-queue-item) — JS mouseenter state gets stuck
   // when rows are reordered under a stationary pointer.
@@ -20,7 +20,7 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason = '
         ...style,
       }}
     >
-      <span aria-hidden="true" style={{ color: 'var(--rock-3)', cursor: 'grab', fontSize: 14, lineHeight: 1, letterSpacing: '-2px' }}>⠿</span>
+      {draggable && <span aria-hidden="true" data-testid="queue-drag-handle" style={{ color: 'var(--rock-3)', cursor: 'grab', fontSize: 14, lineHeight: 1, letterSpacing: '-2px' }}>⠿</span>}
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', background: frontInserted ? 'var(--surface-card)' : 'var(--tide-1)', borderRadius: 'var(--radius-full)', padding: '2px 8px', flexShrink: 0 }}>{position}</span>
       <IdChip id={id} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
       <span style={{ flex: 1, fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-medium)', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
