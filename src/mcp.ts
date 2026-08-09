@@ -22,12 +22,14 @@ import {
   HUMAN_WORKER_ID,
   logDecision,
   recordPrOpened,
+  registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
   type Task,
   taskHistory,
 } from "./tasks.js";
 import {
   buildWorkspaceResolver,
+  isRemoteBacked,
   lineageTaskBranch,
   protectedBranch,
   releaseWorkspace,
@@ -129,8 +131,8 @@ export async function promoteHandoffPr(
   task: Task,
   strict = true,
 ): Promise<void> {
-  if (task.type !== "work" || !deps.github) {
-    if (strict) throw new Error("GitHub is not configured for PR promotion");
+  if (task.type !== "work") {
+    if (strict) throw new Error("only work tasks can be promoted");
     return;
   }
   // resolved against the task's own execution workspace (issue #26 / ADR
@@ -158,6 +160,24 @@ export async function promoteHandoffPr(
     }
     return;
   }
+  if (!isRemoteBacked(workspace)) {
+    if (strict) {
+      throw new Error("purely-local work lands through a merge question, not PR promotion");
+    }
+    const purpose =
+      attributedAuthority(deps, task)?.merge === "auto_if_ci_green"
+        ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
+          `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
+          `protected branch now?`
+        : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
+          `for "${task.title}". Land its task branch on the protected branch now?`;
+    registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now());
+    return;
+  }
+  if (!deps.github) {
+    if (strict) throw new Error("GitHub is not configured for PR promotion");
+    return;
+  }
   // an issue-backed task's stored title is only the "#N" placeholder
   // (rowToTask) — the PR title is another of ADR 0016's real use-moments,
   // so it resolves the live issue instead when there is one.
@@ -182,7 +202,7 @@ export async function promoteHandoffPr(
 }
 
 async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
-  if (task.type !== "work" || !deps.github) return;
+  if (task.type !== "work") return;
   try {
     await promoteHandoffPr(deps, task, false);
   } catch (err) {

@@ -6,6 +6,7 @@ import {
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -91,7 +92,7 @@ const MINUTE = 60 * 1000;
 
 it("completing a low-risk task in a protected workspace under auto_if_ci_green asks for merge approval immediately, instead of queueing for auto-merge", async () => {
   const sandbox = await makeWorkspace(dirs, "sandbox");
-  const registry = await makeWorkspace(dirs, "registry");
+  const { workspace: registry } = await makeRemoteBackedWorkspace(dirs, "registry");
   const workspaces: Record<string, WorkspaceConfig> = { sandbox, registry };
   t = await bootTidepool({
     workspace: sandbox,

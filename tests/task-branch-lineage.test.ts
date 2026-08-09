@@ -43,7 +43,7 @@ async function decompose(taskId: string, title: string): Promise<void> {
   await client.close();
 }
 
-it("decompose の子は親ブランチから切られ、完了すると親ブランチへ戻って PR を開かない", async () => {
+it("decompose の子は親ブランチから切られ、完了すると親ブランチへ戻って PR も着地 question も作らない", async () => {
   const workspace = await makeWorkspace(dirs, "lineage");
   t = await bootTidepool({ workspace });
   const parent = await registerWork(t, "integrate the feature");
@@ -77,6 +77,11 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
 
   expect(git(workspace.path, "show", `task/${parent.id}:child.txt`)).toBe("child work");
   expect(t.github.requests).toEqual([]);
+  expect(
+    (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
+      (task: any) => task.type === "question",
+    ),
+  ).toEqual([]);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
 });
 
@@ -128,7 +133,7 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
 });
 
 it("review の修理は元 PR が未 merge なら被レビュー work へ戻り、PR を増やさない", async () => {
-  const workspace = await makeWorkspace(dirs, "open-pr-repair");
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "open-pr-repair");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship repairable work", undefined, true);
   await t.clock.advance(HOUR);
@@ -156,13 +161,13 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
 });
 
 it("review の修理は元 PR が merge 済みなら保護ブランチから切られ、自分の PR を開く", async () => {
-  const workspace = await makeWorkspace(dirs, "merged-pr-repair");
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "merged-pr-repair");
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship merged work", undefined, true);
   await t.clock.advance(HOUR);
   writeFileSync(join(workspace.path, "reviewed.txt"), "merged work\n");
   await complete(reviewed.id);
-  git(workspace.path, "merge", "--no-ff", `task/${reviewed.id}`, "-m", "merge reviewed work");
+  git(workspace.path, "push", "origin", `task/${reviewed.id}:main`);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.type === "review" && task.parent_id === reviewed.id,

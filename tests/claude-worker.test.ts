@@ -51,6 +51,7 @@ function makeTask(
     question_cancel_option: null,
     question_pending_child: null,
     question_pending_merge_pr: null,
+    question_pending_local_merge_task_id: null,
     question_pending_pr_promotion_task_id: null,
     question_quarantine_workspace: null,
     question_quarantine_agent: null,

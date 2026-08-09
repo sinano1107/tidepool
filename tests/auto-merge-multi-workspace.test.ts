@@ -6,6 +6,7 @@ import {
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -23,7 +24,7 @@ const MINUTE = 60 * 1000;
 
 it("prod workspace の低リスクタスクの auto_if_ci_green poll は、CI チェックと merge を prod の checkout に対して行う", async () => {
   const sandbox = await makeWorkspace(dirs, "sandbox");
-  const prod = await makeWorkspace(dirs, "prod");
+  const { workspace: prod } = await makeRemoteBackedWorkspace(dirs, "prod");
   const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,

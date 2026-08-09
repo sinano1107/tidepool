@@ -7,6 +7,7 @@ import {
   bootTidepool,
   git,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
   registerQuestion,
@@ -31,7 +32,7 @@ const fullHandoff = {
 };
 
 it("work タスクの complete_task 成立後、タスクブランチから PR が作成される", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
@@ -54,7 +55,7 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
 });
 
 it("PR 本文がハンドオフドキュメントの6項目を反映している", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write the report");
   await t.clock.advance(HOUR);
@@ -79,7 +80,7 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
 });
 
 it("PR 作成が失敗しても complete_task 自体は成立し、ツリーはクリーンなまま", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
