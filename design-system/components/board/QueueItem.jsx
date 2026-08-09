@@ -28,7 +28,7 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason = '
       {skipped && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)' }}>skipped · {skipReason}</span>}
       {frontInserted && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)' }}>front-inserted</span>}
       <AgentChip name={assignee} icon={assigneeIcon} size="sm" />
-      {onFront && !skipped && (
+      {onFront && (
         // the head row's button is "run now" (tide fill, immediate-poll
         // trigger); every other row is pure reordering — same tide hue so
         // both read as "the queue action," but outlined instead of filled

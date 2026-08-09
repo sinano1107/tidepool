@@ -5,13 +5,13 @@ import type { ThrottleDecision, WindowDecision } from "./usage.js";
  *  extended by ADR 0030 with the per-window pace verdicts: which line is hit
  *  and its catch-up instant. A NULL *_throttled column records that the
  *  window went unobserved (fail-closed input), distinct from "not throttled". */
-export function reportThrottle(db: Db, decision: ThrottleDecision): void {
+export function reportThrottle(db: Db, decision: ThrottleDecision, observedAt: Date): void {
   db.prepare(
     `INSERT INTO throttle_state (
        id, throttled, resets_at,
        session_throttled, session_resume_at, week_throttled, week_resume_at,
-       fable_throttled, fable_resume_at
-     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+       fable_throttled, fable_resume_at, observed_at
+     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        throttled = excluded.throttled,
        resets_at = excluded.resets_at,
@@ -20,13 +20,15 @@ export function reportThrottle(db: Db, decision: ThrottleDecision): void {
        week_throttled = excluded.week_throttled,
        week_resume_at = excluded.week_resume_at,
        fable_throttled = excluded.fable_throttled,
-       fable_resume_at = excluded.fable_resume_at`,
+       fable_resume_at = excluded.fable_resume_at,
+       observed_at = excluded.observed_at`,
   ).run(
     decision.throttled ? 1 : 0,
     decision.resetsAt?.toISOString() ?? null,
     ...windowColumns(decision.windows.session),
     ...windowColumns(decision.windows.week),
     ...windowColumns(decision.windows.fable),
+    observedAt.toISOString(),
   );
 }
 
@@ -44,6 +46,7 @@ interface ThrottleStateRow {
   week_resume_at: string | null;
   fable_throttled: number | null;
   fable_resume_at: string | null;
+  observed_at: string | null;
 }
 
 function readThrottleState(db: Db): ThrottleStateRow | undefined {
@@ -51,7 +54,7 @@ function readThrottleState(db: Db): ThrottleStateRow | undefined {
     .prepare(
       `SELECT throttled, resets_at,
               session_throttled, session_resume_at, week_throttled, week_resume_at,
-              fable_throttled, fable_resume_at
+              fable_throttled, fable_resume_at, observed_at
        FROM throttle_state WHERE id = 1`,
     )
     .get() as ThrottleStateRow | undefined;
@@ -90,6 +93,7 @@ export function isFablePickupBlocked(db: Db, now: Date): boolean {
 export interface ThrottleState {
   throttled: boolean;
   resetsAt: string | null;
+  observedAt: string | null;
   windows: {
     session: WindowThrottleState | null;
     week: WindowThrottleState | null;
@@ -113,12 +117,14 @@ export function getThrottleState(db: Db): ThrottleState {
     return {
       throttled: false,
       resetsAt: null,
+      observedAt: null,
       windows: { session: null, week: null, fable: null },
     };
   }
   return {
     throttled: !!row.throttled,
     resetsAt: row.resets_at,
+    observedAt: row.observed_at,
     windows: {
       session: windowState(row.session_throttled, row.session_resume_at),
       week: windowState(row.week_throttled, row.week_resume_at),

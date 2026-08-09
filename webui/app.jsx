@@ -167,8 +167,8 @@ function mapData(board, log, pause, icons = {}) {
   // resets_at null while throttled is the fail-closed case (#79's lesson):
   // usage itself could not be observed, not merely "over threshold" — the
   // slot must say so rather than showing a bogus/absent resume time
-  const throttleFailClosed = throttled && !throttle.resetsAt;
-  const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resetsAt) : null;
+  const throttleFailClosed = throttled && !throttle.resumesAt;
+  const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resumesAt) : null;
   // ADR 0030: which pace line is hit (session/week), and the fable line's own
   // per-task state — resets_at is now the catch-up ("resumes") instant, and a
   // fable-only excess shows here while the board itself keeps flowing
@@ -178,6 +178,52 @@ function mapData(board, log, pause, icons = {}) {
   const fableThrottled = !!fableWindow?.throttled;
   const fableResumesAt =
     fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
+  const throttleObservedAt = throttle?.observedAt ? fmtTime(throttle.observedAt) : null;
+  const halt = (slot, kind, msg, detail) => ({ slot, toast: { kind, msg, detail } });
+  const pickupHalt = pause.triageActive
+    ? halt(
+        { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'commit triage to resume', taskId: null },
+        'warn', 'moved to front — pickup blocked', 'triage in progress — commit it to resume')
+    : paused
+    ? halt(
+        { color: 'var(--tide-4)', line: 'pickup paused — nothing starts until resumed', meta: '', taskId: null },
+        'warn', 'moved to front — pickup is paused', 'resume to run it')
+    : pause.containmentBlocked
+    ? halt(
+        { color: 'var(--coral-4)', line: 'worker containment unavailable · nothing starts', meta: 'see the repair question', taskId: null },
+        'warn', 'moved to front — pickup blocked', 'worker containment is not established')
+    : pause.registryReachabilityBlocked
+    ? halt(
+        { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
+        'warn', 'moved to front — pickup blocked', 'registry remote is unreachable')
+    : throttle?.revalidating
+    ? halt(
+        {
+          color: 'var(--sun-4)', line: 'usage re-evaluation in progress · nothing starts', taskId: null,
+          meta: throttleObservedAt ? `last observed ${throttleObservedAt}` : 'no observation yet',
+        },
+        'info', 'moved to front — usage is being re-evaluated', 'waiting for a fresh observation')
+    : throttled
+    ? halt(
+        {
+          color: 'var(--coral-4)', taskId: null,
+          ...(throttleFailClosed
+            ? {
+                line: 'usage check unavailable · nothing starts',
+                meta: `fail-closed — check usage check logs${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
+              }
+            : {
+                line: 'usage pace · nothing starts',
+                // which line is hit (ADR 0030) — an old pre-window row (no
+                // windows persisted yet) falls back to the plain resume text
+                meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${throttleResumesAt}${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
+              }),
+        },
+        'warn', 'moved to front — pickup blocked',
+        throttleFailClosed
+          ? 'usage check unavailable — nothing starts until a fresh reading arrives'
+          : `usage limit · resumes ${throttleResumesAt}`)
+    : null;
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -185,18 +231,8 @@ function mapData(board, log, pause, icons = {}) {
   // at pickup-decision time, so mid-run it may already be stale.
   const slot = running
     ? { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
-    : throttled
-    ? {
-        color: 'var(--coral-4)', taskId: null,
-        ...(throttleFailClosed
-          ? { line: 'usage check unavailable · nothing starts', meta: 'fail-closed — check usage check logs' }
-          : {
-              line: 'usage pace · nothing starts',
-              // which line is hit (ADR 0030) — an old pre-window row (no
-              // windows persisted yet) falls back to the plain resume text
-              meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${throttleResumesAt}`,
-            }),
-      }
+    : pickupHalt
+    ? pickupHalt.slot
     : fableThrottled
     ? {
         // fable line only (ADR 0030): the board keeps flowing — fable-model
@@ -216,10 +252,14 @@ function mapData(board, log, pause, icons = {}) {
     // empty until their domain slices exist: human tasks / agent registry /
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
-    slot, running: !!running, paused: !!paused,
+    slot, pickupHalt, running: !!running, paused: !!paused,
+    triageActive: !!pause.triageActive,
+    containmentBlocked: !!pause.containmentBlocked,
+    registryReachabilityBlocked: !!pause.registryReachabilityBlocked,
     // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
     spendDown: pause.spendDown ?? null,
     throttled, throttleFailClosed, throttleResumesAt,
+    throttleRevalidating: !!throttle?.revalidating,
     fableThrottled, fableResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
   };
@@ -2355,6 +2395,21 @@ function App() {
     return fresh;
   };
 
+  // ADR 0058: only follow a JIT usage observation while the human is waiting
+  // for this specific result. The false response clears the interval; the
+  // ordinary 15s board refresh remains independent.
+  React.useEffect(() => {
+    if (!data?.throttleRevalidating) return;
+    const iv = setInterval(() => {
+      void refresh()
+        .then((fresh) => {
+          if (!fresh.throttleRevalidating) clearInterval(iv);
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [data?.throttleRevalidating]);
+
   // S1 — the last tap in a bundle persists every item's answer atomically;
   // the unblocked parent is staged server-side (issue #30: `a` is one answer
   // per item, in item order)
@@ -2469,13 +2524,9 @@ function App() {
       const fresh = await refresh();
       if (!wasHead) {
         say('info', 'moved to front', 'reordered only — press ↑ again to run it now');
-      } else if (fresh.paused) {
-        say('warn', 'moved to front — pickup is paused', 'resume to run it');
-      } else if (fresh.throttled) {
-        say('warn', 'moved to front — pickup blocked',
-          fresh.throttleFailClosed
-            ? 'usage check unavailable — nothing starts until a fresh reading arrives'
-            : `usage limit · resumes ${fresh.throttleResumesAt}`);
+      } else if (fresh.pickupHalt) {
+        const { kind, msg, detail } = fresh.pickupHalt.toast;
+        say(kind, msg, detail);
       } else {
         say('success', 'moved to front — immediate poll fired', id);
       }
@@ -2636,6 +2687,15 @@ function App() {
           {data.paused ? 'pickup paused · ' : ''}{data.questions.length} questions · {unreadCount} new log · queue {data.queue.length}
         </span>
       </header>
+
+      {data.triageActive && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--sun-2)', background: 'var(--sun-1)' }}>
+          <span style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>
+            triage in progress — pickup is stopped
+          </span>
+          <Button variant="secondary" onClick={() => commitTriage({}, {}, [])}>commit triage</Button>
+        </div>
+      )}
 
       {notifPermission === 'default' && 'serviceWorker' in navigator && 'PushManager' in window && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--border-hairline)', background: 'var(--rock-2)' }}>

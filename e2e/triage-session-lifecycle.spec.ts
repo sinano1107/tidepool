@@ -51,3 +51,25 @@ test("Triage の最初の回答でセッションが開き pickup が止まる(i
   await api(t.baseUrl, "POST", `/api/tasks/${work.id}/move`, { after: null });
   expect(t.worker.started).toEqual([]);
 });
+
+test("開いている triage session 中に queue の ↑ を押すと、停止理由と解除口が全タブで見える(#225 / ADR 0058)", async ({
+  boot,
+  page,
+}) => {
+  const t = await boot();
+  await registerWork(t, "blocked by the active triage");
+  await api(t.baseUrl, "POST", "/api/triage/start");
+
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Queue" }).click();
+  await expect(page.getByText("triage in progress · nothing starts")).toBeVisible();
+  await page.getByRole("button", { name: "↑", exact: true }).click();
+
+  await expect(page.getByText("moved to front — pickup blocked")).toBeVisible();
+  await expect(page.getByText("triage in progress — commit it to resume")).toBeVisible();
+  await expect(page.getByText("triage in progress — pickup is stopped")).toBeVisible();
+  await page.getByRole("button", { name: "Board" }).click();
+  await expect(page.getByText("triage in progress — pickup is stopped")).toBeVisible();
+  await page.getByRole("button", { name: "commit triage" }).click();
+  await expect(page.getByText("triage in progress — pickup is stopped")).not.toBeVisible();
+});

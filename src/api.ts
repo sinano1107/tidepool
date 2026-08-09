@@ -43,6 +43,7 @@ import {
   type RegistryCandidates,
   type RegistryReachabilityCheck,
 } from "./registry.js";
+import { openRegistryReachabilityQuestion } from "./registry-reachability.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
@@ -431,6 +432,8 @@ export interface ApiRouterDeps {
   db: Db;
   clock: Clock;
   onQueueHeadChanged: () => void;
+  /** Just-in-time usage observation in flight; absent for API-only tests. */
+  throttleRevalidating?: () => boolean;
   /** The board's workspace path — where `gh` runs for the merge dial's live
    *  CI check (issue #11). Absent → a merge-decision "merge" answer can't
    *  check CI and is rejected. */
@@ -542,6 +545,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     db,
     clock,
     onQueueHeadChanged,
+    throttleRevalidating = () => false,
     workspace,
     resolveWorkspace,
     github,
@@ -1348,7 +1352,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   }
 
   router.get("/pause", (_req, res) => {
-    res.json({ paused: isPaused(db), throttle: getThrottleState(db), spendDown: spendDownJson() });
+    const { resetsAt: resumesAt, ...throttle } = getThrottleState(db);
+    res.json({
+      paused: isPaused(db),
+      triageActive: activeTriageSession(db) !== undefined,
+      containmentBlocked: openContainmentQuestion(db) !== undefined,
+      registryReachabilityBlocked: openRegistryReachabilityQuestion(db) !== undefined,
+      throttle: { ...throttle, resumesAt, revalidating: throttleRevalidating() },
+      spendDown: spendDownJson(),
+    });
   });
 
   router.post("/spend-down", (req, res) => {

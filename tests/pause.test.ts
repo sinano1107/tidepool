@@ -100,7 +100,16 @@ it("pause 状態はサーバー再起動を跨いで維持される", async () =
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json).toEqual({
     paused: true,
-    throttle: { throttled: false, resetsAt: null, windows: { session: null, week: null, fable: null } },
+    triageActive: false,
+    containmentBlocked: false,
+    registryReachabilityBlocked: false,
+    throttle: {
+      throttled: false,
+      resumesAt: null,
+      observedAt: null,
+      revalidating: false,
+      windows: { session: null, week: null, fable: null },
+    },
     spendDown: null,
   });
   await t.clock.advance(HOUR);
@@ -125,4 +134,27 @@ it("pause は triage session と直交する: pause 中のコミットは pickup
 
   await api(t.baseUrl, "POST", "/api/pause", { paused: false });
   expect(t.worker.started.map((x: any) => x.id)).toEqual([task.id]);
+});
+
+it("GET /api/pause は開いている triage session を盤面全体の停止として返す(ADR 0058)", async () => {
+  t = await bootTidepool();
+  await api(t.baseUrl, "POST", "/api/triage/start");
+
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.triageActive).toBe(true);
+});
+
+it("GET /api/pause は封じ込め能力の不成立を盤面全体の停止として返す(ADR 0058)", async () => {
+  t = await bootTidepool({ sandboxCapability: () => ({ available: false, reason: "no sandbox" }) });
+
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.containmentBlocked).toBe(true);
+});
+
+it("GET /api/pause は registry 到達性の不成立を盤面全体の停止として返す(ADR 0058)", async () => {
+  t = await bootTidepool({
+    registryReachability: async () => ({ available: false, reason: "origin is unreachable" }),
+  });
+  await registerWork(t, "waits for the registry");
+  await t.clock.advance(HOUR);
+
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.registryReachabilityBlocked).toBe(true);
 });
