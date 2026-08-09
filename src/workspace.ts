@@ -13,7 +13,7 @@ import {
   remoteTrackingRef,
   type WorkspaceEntry,
 } from "./registry.js";
-import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
+import { BOARD_WORKER_ID, getTask, registerTask, type Task } from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
 
@@ -23,8 +23,8 @@ export { BOARD_WORKER_ID } from "./tasks.js";
 export interface WorkspaceConfig {
   name: string;
   path: string;
-  /** The protected branch (issue #27 / ADR 0023): task-branch fork point,
-   *  PR base, and direct-write-ban target, all one field. Absent → "main" —
+  /** The protected branch (issue #27 / ADR 0023): lineage bottom, PR base,
+   *  and direct-write-ban target, all one field. Absent → "main" —
    *  the pre-#27 shape for a `WorkspaceConfig` built outside the registry
    *  (main.ts's fixed single-workspace fallback, test fixtures). */
   branch?: string;
@@ -181,18 +181,61 @@ export function taskBranch(taskId: string): string {
   return `task/${taskId}`;
 }
 
-/** Branch discipline at pickup: work never happens on main. A fresh task gets
- *  a new branch off main; a resumed task (e.g. returning from escalation) just
- *  checks its own branch out again, WIP intact. */
-export function ensureTaskBranch(workspace: WorkspaceConfig, taskId: string): void {
-  const branch = taskBranch(taskId);
+function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
   try {
-    git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
+    git(workspace.path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
+    return true;
   } catch {
-    // fork 元は保護ブランチの**参照**(ADR 0052 決定1 / issue #211): remote 正本を
-    // 宣言した workspace ではリモート側 —— 直前のタスクの成果が merge 済みなら、
-    // 次のタスクはそれを踏まえた地点から始まる
-    git(workspace.path, "branch", branch, protectedBranchRef(workspace));
+    return false;
+  }
+}
+
+/** ADR 0053: the nearest work branch in the task's live lineage, or undefined
+ *  when the protected branch is the bottom of that lineage. */
+export function lineageTaskBranch(
+  db: Db,
+  workspace: WorkspaceConfig,
+  task: Task,
+): string | undefined {
+  if (task.type === "review") {
+    return task.parent_id && taskBranchExists(workspace, task.parent_id)
+      ? taskBranch(task.parent_id)
+      : undefined;
+  }
+
+  const ancestors: Task[] = [];
+  for (let parent = task.parent_id ? getTask(db, task.parent_id) : undefined; parent; ) {
+    ancestors.unshift(parent);
+    parent = parent.parent_id ? getTask(db, parent.parent_id) : undefined;
+  }
+
+  let candidate: string | undefined;
+  for (const ancestor of ancestors) {
+    if (ancestor.type !== "work") continue;
+    const branch = taskBranch(ancestor.id);
+    const base = candidate ?? protectedBranchRef(workspace);
+    if (
+      (ancestor.status !== "done" && ancestor.status !== "cancelled") ||
+      Number(git(workspace.path, "rev-list", "--count", `${base}..${branch}`)) > 0
+    ) {
+      candidate = branch;
+    }
+  }
+  return candidate;
+}
+
+/** Branch discipline at pickup: work never happens on the protected branch.
+ *  A fresh task forks from its live lineage; a resumed task only checks its
+ *  existing branch out again, WIP intact. */
+export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
+  const branch = taskBranch(task.id);
+  if (!taskBranchExists(workspace, task.id)) {
+    git(
+      workspace.path,
+      "branch",
+      branch,
+      lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace),
+    );
   }
   git(workspace.path, "checkout", branch);
 }
@@ -245,9 +288,9 @@ function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
  *  使うのは、詰まった接続が同期呼び出しで event loop ごと止めてはならないからである
  *  (`GIT_NETWORK_TIMEOUT_MS`)。
  *
- *  失敗は投げる —— 呼び出し元(pickup)がその workspace を quarantine する。registry の
- *  到達不能と違って盤面全体は止めない: これは特定 workspace の性質なので、資源単位の
- *  原則がそのまま適用できる(ADR 0052 決定5)。 */
+ *  失敗は投げる —— 呼び出し元(pickup / completion release)がその workspace を
+ *  quarantine する。registry の到達不能と違って盤面全体は止めない: これは特定
+ *  workspace の性質なので、資源単位の原則がそのまま適用できる(ADR 0052 決定5)。 */
 function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
   if (!isRemoteBacked(workspace)) return;
   authedGitBounded(
@@ -291,14 +334,15 @@ function assertRegistryRoleAgrees(
  *  意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
  *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
 export function prepareWorkspaceAtPickup(
+  db: Db,
   workspace: WorkspaceConfig,
-  taskId: string,
+  task: Task,
   board: { githubAuth?: GitHubAuth; registry?: RegistrySource },
 ): void {
   assertRegistryRoleAgrees(workspace, board.registry);
   assertRemoteDeclarationMatchesClone(workspace);
   refreshWorkspace(workspace, board.githubAuth);
-  ensureTaskBranch(workspace, taskId);
+  ensureTaskBranch(db, workspace, task);
 }
 
 /** The slot-release tree rule: whatever the session left behind is stashed as
@@ -561,19 +605,28 @@ export function resolveOrQuarantine(
 }
 
 /** Every slot release runs the tree rule and falls back to quarantine on its
- *  failure — the shared shape behind the releasing MCP verbs (complete,
- *  escalate, decompose) and the watchdog/restart failure path alike (#9).
- *  「クリーンに戻す」の後半 —— 休止位置(ADR 0052 決定7)—— も同じ try の中で走る:
- *  失敗の行き先が同じ quarantine であり、どちらが欠けても人間が覗く clone は
- *  嘘をつく。 */
+ *  failure — the shared shape behind the releasing MCP verbs and the
+ *  watchdog/restart failure path alike (#9). Work completion alone may merge
+ *  the task back into the ancestor branch selected from its live lineage (ADR
+ *  0053); escalation, decomposition, and failure leave the WIP on the task
+ *  branch. Parking (ADR 0052 decision 7) stays in the same try because every
+ *  failure in this sequence has the same quarantine destination. */
 export function releaseWorkspace(
   db: Db,
   workspace: WorkspaceConfig,
-  taskId: string,
+  task: Task,
   now: Date,
+  mergeBack = false,
+  githubAuth?: GitHubAuth,
 ): void {
   try {
-    releaseTree(workspace, taskId);
+    releaseTree(workspace, task.id);
+    if (mergeBack) refreshWorkspace(workspace, githubAuth);
+    const target = mergeBack && lineageTaskBranch(db, workspace, task);
+    if (target) {
+      git(workspace.path, "checkout", target);
+      git(workspace.path, ...TIDEPOOL_GIT_IDENTITY, "merge", taskBranch(task.id));
+    }
     parkOnProtectedBranch(workspace);
   } catch (err) {
     quarantineWorkspace(db, workspace.name, err, now);

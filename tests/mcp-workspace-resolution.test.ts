@@ -32,11 +32,11 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
       { type: "work", title: "prod work", purpose: "p", completion_criteria: "c", workspace: "prod" },
       clock.now(),
     );
-    pickupTask(db, task, "deckhand", clock.now());
+    const picked = pickupTask(db, task, "deckhand", clock.now());
     slot.occupy(task.id);
     // as the scheduler's pickup() would have done: the task branch is
     // already checked out on prod, not sandbox, by the time the worker runs
-    ensureTaskBranch(prod, task.id);
+    ensureTaskBranch(db, prod, picked);
 
     const app = express();
     app.use(

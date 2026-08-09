@@ -94,7 +94,7 @@ export function failTask(
   );
   if (resolve) {
     const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);
-    if (resolved) releaseWorkspace(db, resolved, task.id, now);
+    if (resolved) releaseWorkspace(db, resolved, task, now);
   }
 }
 

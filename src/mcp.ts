@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import type { GitHubClient } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -27,6 +28,7 @@ import {
 } from "./tasks.js";
 import {
   buildWorkspaceResolver,
+  lineageTaskBranch,
   protectedBranch,
   releaseWorkspace,
   resolveOrQuarantine,
@@ -49,6 +51,8 @@ export interface McpDeps {
    *  to a PR through here. Absent → no PR is ever opened (e.g. a workspaceless
    *  board). */
   github?: GitHubClient;
+  /** The board's machine-user identity for completion-time workspace refresh. */
+  githubAuth?: GitHubAuth;
   /** This board's one configured worker's authority profile (issue #11).
    *  Absent → assignable_to and allowed_workspaces are both unrestricted.
    *  Superseded by `resolveAuthority` below when both are given. */
@@ -106,8 +110,8 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
   return doc ? `${doc}\n\n${closes}` : closes;
 }
 
-/** Work-task completion → PR (issue #19): by the time this runs, the tree
- *  rule has either stashed the work as a WIP commit on the task branch, or
+/** Root work-task completion → PR (issue #19 / ADR 0053): by the time this
+ *  runs, the tree rule has either stashed the work as a WIP commit on the task branch, or
  *  failed and quarantined the workspace (releaseWorkspace swallows that
  *  failure so the completion itself still stands) — in the latter case the
  *  task branch may carry none of the finished work, so no PR is attempted.
@@ -115,7 +119,8 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
  *  completion that already landed — a real creation failure becomes a
  *  Tidepool failure question, while pre-existing quarantine still skips PR
  *  promotion as it did before.
- *  question/review tasks carry no handoff doc and open no PR.
+ *  Work returning to an ancestor task branch, question tasks, and review
+ *  tasks open no PR.
  *  strict=true is submitAnswer's synchronous retry (issue #66): every
  *  precondition that the first attempt silently skips on becomes a thrown
  *  error the human sees. */
@@ -141,6 +146,10 @@ export async function promoteHandoffPr(
   const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
   if (!workspace) {
     if (strict) throw new Error("workspace is unavailable for PR promotion");
+    return;
+  }
+  if (lineageTaskBranch(deps.db, workspace, task)) {
+    if (strict) throw new Error("task completion lands on an ancestor task branch, not a PR");
     return;
   }
   if (workspaceNeedsHuman(deps.db, workspace.name)) {
@@ -272,12 +281,14 @@ async function runVerb(
 }
 
 /** Verbs that end the slot session (complete, decompose, escalate): run the
- *  domain verb attributed to the slot worker, then free the slot. A domain
- *  error keeps the slot — the session continues. */
+ *  domain verb attributed to the slot worker, then free the slot. Work
+ *  completion opts into lineage merge-back; every other release only stashes
+ *  WIP. A domain error keeps the slot — the session continues. */
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
   verb: (task: Task, workerId: string, now: Date) => unknown,
+  mergeBack = false,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
     const result = verb(task, attributedWorkerId(deps, task), deps.clock.now());
@@ -291,7 +302,16 @@ function runReleasingVerb(
     const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     if (resolve) {
       const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-      if (resolved) releaseWorkspace(deps.db, resolved, task.id, deps.clock.now());
+      if (resolved) {
+        releaseWorkspace(
+          deps.db,
+          resolved,
+          task,
+          deps.clock.now(),
+          mergeBack && task.type === "work",
+          deps.githubAuth,
+        );
+      }
     }
     deps.slot.release();
     return result;
@@ -389,11 +409,16 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async ({ handoff }) => {
       let completed: Task | undefined;
-      const result = runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-        const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
-        completed = done;
-        return { id: done.id, status: done.status };
-      });
+      const result = runReleasingVerb(
+        deps,
+        attributedTaskId,
+        (task, workerId, now) => {
+          const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
+          completed = done;
+          return { id: done.id, status: done.status };
+        },
+        true,
+      );
       if (completed) await openHandoffPr(deps, completed);
       return result;
     },
