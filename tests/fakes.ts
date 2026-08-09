@@ -125,14 +125,16 @@ export class FakeClock implements Clock {
 /** Scripted stand-in at the WorkerAdapter seam: records what it was asked to
  *  start and killed, in call order. */
 export class ScriptedWorker implements WorkerAdapter {
-  readonly id = "fake-worker";
   readonly started: Task[] = [];
   readonly killed: Array<{ taskId: string; signal: KillSignal }> = [];
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
 
-  constructor(private readonly clock: Clock) {}
+  constructor(
+    private readonly clock: Clock,
+    readonly id = "fake-worker",
+  ) {}
 
   start(task: Task): void {
     this.started.push(task);
