@@ -4,9 +4,14 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker, type SpawnFn } from "../src/claude-worker.js";
+import { openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
+import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
+import { Slot } from "../src/slot.js";
+import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, healthyUsageText } from "./fakes.js";
+import { FakeClock, healthyUsageText, ScriptedWorker } from "./fakes.js";
 import { api, HOUR, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -109,4 +114,28 @@ You are Fugu.
     { kind: "task_picked_up", worker_id: "fugu" },
     { kind: "worker_spawned", worker_id: "fugu" },
   ]);
+});
+
+it("startScheduler を直接構築しても、省略された Auditor は既定ポインタへ解決される(issue #223)", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  const scheduler = startScheduler({ db, clock, slot: new Slot(), worker });
+  const review = registerTask(
+    db,
+    {
+      type: "review",
+      title: "review with the implicit Auditor",
+      purpose: "preserve attribution outside the server composition root",
+      completion_criteria: "pickup is attributed to the default Auditor pointer",
+    },
+    clock.now(),
+  );
+
+  await clock.advance(HOURLY);
+
+  const pickedUp = listEvents(db, review.id).find((event) => event.kind === "task_picked_up");
+  scheduler.stop();
+  db.close();
+  expect(pickedUp?.worker_id).toBe(DEFAULT_AUDITOR_NAME);
 });

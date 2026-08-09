@@ -11,6 +11,7 @@ import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import {
   contentSourceFor,
+  DEFAULT_AUDITOR_NAME,
   escalateTask,
   nextSlotTask,
   pickupTask,
@@ -108,8 +109,7 @@ export function startScheduler(deps: {
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), the
    *  fallback a `review` task's unset assignee resolves to instead of
    *  `worker.id` (issue #42: `nextSlotTask`'s own type-aware gate). Absent →
-   *  that gate is skipped for review tasks, same as `worker.id`'s own
-   *  "no agent tracking" fallback. */
+   *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset. */
   auditorName?: string;
   /** The GitHub seam, for the issue-backed pickup gate (issue #49 / ADR
    *  0016's failure taxonomy): an issue-backed head's content is expanded
@@ -148,7 +148,7 @@ export function startScheduler(deps: {
     worker,
     workspace,
     resolveWorkspace,
-    auditorName,
+    auditorName = DEFAULT_AUDITOR_NAME,
     github,
     fableAgents,
     containment,
