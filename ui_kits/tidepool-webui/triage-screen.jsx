@@ -348,9 +348,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     logListRef.current.querySelectorAll('[data-entry-id]').forEach((el) => io.observe(el));
     return () => io.disconnect();
   }, [section]);
-  // completion rows carry a handoff doc: tap unfolds it in place (the log's
-  // link back to the deliverable) and the objection entry point moves inside
-  // the expansion. decision rows keep tap = object.
+  // completion rows carry a handoff doc behind their own chevron. Row taps
+  // always open the same objection path, regardless of entry kind.
   // per-entry state is keyed by the entry's stable id (falling back to
   // `sourceIndex` for id-less mock data) so a log refresh can't retarget an
   // objection at a different line, and grouping/reordering can't either.
@@ -493,7 +492,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
           return (
             <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
-              <LogEntry entry={{ ...l, objection: objections[k] }} active={objecting === k} onObject={() => (hasHandoff ? toggleHandoff(k, l) : toggleObjecting(k))} />
+              <LogEntry entry={{ ...l, objection: objections[k] }} active={objecting === k} onObject={() => toggleObjecting(k)} onExpand={hasHandoff ? () => toggleHandoff(k, l) : undefined} />
               {logTranslateOn && logTranslations[k] && logTranslations[k].status !== 'throttled' && (
                 <div style={{ padding: '2px 14px 10px', background: 'var(--surface-recessed)' }}>
                   {logTranslations[k].status === 'translated'
@@ -516,7 +515,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
                       : <div style={{ marginTop: 8 }}><TpTranslationNote result={handoffTranslations[k]} /></div>
                   )}
                   {objecting !== k && (
-                    <button onClick={() => toggleObjecting(k)} style={{ background: 'none', border: 'none', color: 'var(--coral-4)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '8px 0 0', display: 'block' }}>object to this completion…</button>
+                    <button onClick={() => toggleObjecting(k)} style={{ background: 'none', border: 'none', color: 'var(--coral-4)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '8px 0 0', display: 'block' }}>object to this entry…</button>
                   )}
                 </div>
               )}
@@ -538,6 +537,9 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         };
         return (
           <div>
+            <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '0 0 10px' }}>
+              tap an entry to object · use a completion’s chevron to read its handoff
+            </p>
             {onTranslate && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                 {logThrottled && <TpTranslationNote result={{ status: 'throttled' }} />}

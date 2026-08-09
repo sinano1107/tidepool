@@ -165,25 +165,16 @@ const kindColors = {
   escalation: "var(--sun-4)",
   objection: "var(--coral-4)"
 };
-function LogEntry({ entry = {}, onObject, active = false, style }) {
+function LogEntry({ entry = {}, onObject, onExpand, active = false, style }) {
   const { time, taskId, agent, agentIcon, kind = "decision", text, objection, unread = false } = entry;
   const completion = kind === "completion";
-  const clickable = !!onObject && !objection;
+  const clickable = !!onObject;
   return /* @__PURE__ */ React.createElement(
     "div",
     {
       className: "tp-log-entry",
       "data-clickable": clickable ? "" : void 0,
       "data-active": active ? "" : void 0,
-      onClick: clickable ? onObject : void 0,
-      role: clickable ? "button" : void 0,
-      tabIndex: clickable ? 0 : void 0,
-      onKeyDown: clickable ? (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onObject();
-        }
-      } : void 0,
       style: {
         display: "flex",
         alignItems: "flex-start",
@@ -195,10 +186,36 @@ function LogEntry({ entry = {}, onObject, active = false, style }) {
         ...style
       }
     },
-    /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", paddingTop: 2, flexShrink: 0 } }, time),
-    /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, size: "sm", style: { paddingTop: 1 } }),
-    /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginRight: 6 } }, taskId), completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text), objection && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, padding: "6px 10px", background: "var(--coral-1)", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, "objection: ", objection)),
-    active && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", paddingTop: 3, flexShrink: 0 } }, "objecting\u2026")
+    /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        onClick: clickable ? onObject : void 0,
+        role: clickable ? "button" : void 0,
+        tabIndex: clickable ? 0 : void 0,
+        onKeyDown: clickable ? (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onObject();
+          }
+        } : void 0,
+        style: { display: "flex", alignItems: "flex-start", gap: 10, flex: 1, minWidth: 0 }
+      },
+      /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", paddingTop: 2, flexShrink: 0 } }, time),
+      /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: agent, icon: agentIcon, size: "sm", style: { paddingTop: 1 } }),
+      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: kindColors[kind], lineHeight: "var(--leading-normal)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginRight: 6 } }, taskId), completion && /* @__PURE__ */ React.createElement("strong", { style: { fontWeight: "var(--weight-semibold)", marginRight: 4 } }, "done \u2014"), text), objection && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, padding: "6px 10px", background: "var(--coral-1)", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, "objection: ", objection)),
+      active && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", paddingTop: 3, flexShrink: 0 } }, "objecting\u2026")
+    ),
+    onExpand && /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        "aria-label": "Expand handoff",
+        title: "Expand handoff",
+        onClick: onExpand,
+        style: { flexShrink: 0, padding: "2px 4px", border: "none", background: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: "var(--text-sm)", lineHeight: 1 }
+      },
+      "\u2304"
+    )
   );
 }
 Object.assign(__ds_scope, { LogEntry });
