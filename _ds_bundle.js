@@ -591,7 +591,8 @@ function NavRow({
   first = false,
   last = false,
   onClick,
-  style
+  style,
+  testId
 }) {
   const [hover, setHover] = React.useState(false);
   const [press, setPress] = React.useState(false);
@@ -603,6 +604,7 @@ function NavRow({
     {
       role: "button",
       tabIndex: 0,
+      "data-testid": testId,
       onClick: go,
       onKeyDown: (e) => {
         if (e.key === "Enter" || e.key === " ") {

@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures.js";
 
-// 使い捨て(issue #204 の実装確認)。目次 → 各セクション → レコード → Edit → Cancel、
-// および unavailable の見え方と未保存破棄ガードを実ブラウザで通す。
+// Issue #208 で昇格した恒久 smoke。目次 → 各セクション → レコード → Edit → Cancel、
+// unavailable の見え方と未保存破棄ガードを実ブラウザで通す。
 
 const WORKSPACES = [
   {
@@ -70,26 +70,24 @@ test("index → section → record → edit → cancel", async ({ boot, page }) 
 
   // level 1: 4 行の目次。各行が現在値の要約を持つ
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^Board/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Workspaces.*2 · 1 protected/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Agents.*2 agents/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Authority Profiles.*2 profiles/ })).toBeVisible();
+  await expect(page.getByTestId("settings-section-board")).toBeVisible();
+  await expect(page.getByTestId("settings-section-workspaces")).toContainText("2 · 1 protected");
+  await expect(page.getByTestId("settings-section-agents")).toContainText("2 agents");
+  await expect(page.getByTestId("settings-section-profiles")).toContainText("2 profiles");
   expect(scriptRequests.filter((url) => new URL(url).origin !== boardOrigin)).toEqual([]);
 
   // 閲覧が主: 目次に入力部品は一切無い
   expect(await page.locator("input, select, textarea").count()).toBe(0);
 
   // level 2: Agents
-  await page.getByRole("button", { name: /Agents.*2 agents/ }).click();
+  await page.getByTestId("settings-section-agents").click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
-  await expect(page.getByText("who does the work")).toBeVisible();
-  await expect(page.getByRole("button", { name: /reef-crab.*implementer/ })).toBeVisible();
+  await expect(page.getByTestId("settings-record-agents-reef-crab")).toBeVisible();
   expect(await page.locator("input, select, textarea").count()).toBe(0);
 
   // level 3: 1 レコード。閲覧表示のみで入力部品は無い
-  await page.getByRole("button", { name: /reef-crab.*implementer/ }).click();
+  await page.getByTestId("settings-record-agents-reef-crab").click();
   await expect(page.getByRole("heading", { name: "reef-crab" })).toBeVisible();
-  await expect(page.getByText("agent · 1 of 2")).toBeVisible();
   await expect(page.getByText("implementation work")).toBeVisible();
   await expect(page.getByText("Prefers small commits.")).toBeVisible();
   await expect(page.getByText("adapter default").first()).toBeVisible(); // model 未設定
@@ -113,14 +111,14 @@ test("index → section → record → edit → cancel", async ({ boot, page }) 
   await page.getByRole("button", { name: "Agents" }).first().click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
   await page.getByRole("button", { name: "Settings" }).first().click();
-  await expect(page.getByRole("button", { name: /Workspaces/ })).toBeVisible();
+  await expect(page.getByTestId("settings-section-workspaces")).toBeVisible();
 });
 
 test("workspace record shows origin, protection and the add form behind Add", async ({ boot, page }) => {
   const t = await boot(seams);
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: /Workspaces/ }).click();
+  await page.getByTestId("settings-section-workspaces").click();
 
   // Add は作成フォームを開く(常時開放の作成フォームは廃止)
   expect(await page.locator("input, select, textarea").count()).toBe(0);
@@ -130,9 +128,9 @@ test("workspace record shows origin, protection and the add form behind Add", as
   expect(await page.locator("input, select, textarea").count()).toBe(0);
 
   // レコード: repo · branch と protected の読み取り表示
-  await page.getByRole("button", { name: /tidepool/ }).click();
+  await page.getByTestId("settings-record-workspaces-tidepool").click();
   await expect(page.getByText("github.com/masaki/tidepool · main")).toBeVisible();
-  await expect(page.getByText("changes here always need human approval")).toBeVisible();
+  await expect(page.getByText("protected", { exact: true }).first()).toBeVisible();
   expect(await page.locator("input, select, textarea").count()).toBe(0);
 });
 
@@ -140,19 +138,19 @@ test("profile record renders tags and the wildcard", async ({ boot, page }) => {
   const t = await boot(seams);
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: /Authority Profiles/ }).click();
-  await page.getByRole("button", { name: /reviewer/ }).click();
+  await page.getByTestId("settings-section-profiles").click();
+  await page.getByTestId("settings-record-profiles-reviewer").click();
   await expect(page.getByText("read-only")).toBeVisible();
   await expect(page.getByText("* — every workspace")).toBeVisible();
-  await expect(page.getByText("no automatic merge decision")).toBeVisible();
+  await expect(page.getByText("merge authority", { exact: true })).toBeVisible();
 });
 
 test("an unreachable registry says so on the index, not behind a lie", async ({ boot, page }) => {
   const t = await boot(); // seam 無し → registry 未設定
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByRole("button", { name: /Workspaces.*no registry configured/ })).toBeVisible();
-  await page.getByRole("button", { name: /Workspaces.*no registry configured/ }).click();
+  await expect(page.getByTestId("settings-section-workspaces")).toContainText("no registry configured");
+  await page.getByTestId("settings-section-workspaces").click();
   await expect(page.getByText(/no registry configured on this board/)).toBeVisible();
   // Add は出さない
   await expect(page.getByRole("button", { name: "Add" })).toHaveCount(0);
@@ -162,8 +160,8 @@ test("a tab switch with unsaved changes asks first", async ({ boot, page }) => {
   const t = await boot(seams);
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: /Authority Profiles/ }).click();
-  await page.getByRole("button", { name: /implementer/ }).click();
+  await page.getByTestId("settings-section-profiles").click();
+  await page.getByTestId("settings-record-profiles-implementer").click();
   await page.getByRole("button", { name: "Edit" }).click();
   await page.getByPlaceholder("how an agent carrying this authority should act").fill("changed");
 
@@ -183,8 +181,8 @@ test("keep editing leaves the slot intact for the next move", async ({ boot, pag
   const t = await boot(seams);
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: /Authority Profiles/ }).click();
-  await page.getByRole("button", { name: /implementer/ }).click();
+  await page.getByTestId("settings-section-profiles").click();
+  await page.getByTestId("settings-record-profiles-implementer").click();
   await page.getByRole("button", { name: "Edit" }).click();
   await page.getByPlaceholder("how an agent carrying this authority should act").fill("changed");
 

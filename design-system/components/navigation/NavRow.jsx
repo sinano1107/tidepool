@@ -9,7 +9,7 @@ export function NavRow({
   label, summary, summaryTone = 'muted',
   agentName, agentIcon,
   divider = false, first = false, last = false,
-  onClick, style,
+  onClick, style, testId,
 }) {
   const [hover, setHover] = React.useState(false);
   const [press, setPress] = React.useState(false);
@@ -20,7 +20,7 @@ export function NavRow({
     <React.Fragment>
       {divider && <div style={{ height: 1, background: 'var(--border-hairline)', marginLeft: 'var(--space-4)' }} />}
       <div
-        role="button" tabIndex={0}
+        role="button" tabIndex={0} data-testid={testId}
         onClick={go}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } }}
         onMouseEnter={() => setHover(true)}

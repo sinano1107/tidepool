@@ -9,10 +9,12 @@ describe("生成済みアセット", () => {
   it.each([
     ["WebUI", "public/app.js", "scripts/build-webui-bundle.mjs"],
     ["Design System", "_ds_bundle.js", "scripts/build-ds-bundle.mjs"],
-  ])("%s の --check は stale な生成物を検出して書き換えない", (_name, output, script) => {
+  ])("%s の --check は fresh / stale を判定して書き換えない", (_name, output, script) => {
     const outputPath = join(ROOT, output);
     const original = readFileSync(outputPath, "utf8");
     const stale = `${original}\n// stale`;
+
+    expect(spawnSync(process.execPath, [script, "--check"], { cwd: ROOT }).status).toBe(0);
     writeFileSync(outputPath, stale);
 
     try {

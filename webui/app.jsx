@@ -1849,6 +1849,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         <Card padding="0" style={{ overflow: 'hidden' }}>
           {rows.map((r, i) => (
             <NavRow key={r.key} label={r.label} summary={r.summary}
+              testId={`settings-section-${r.key}`}
               summaryTone={r.alert ? 'alert' : 'muted'}
               divider={i > 0} first={i === 0} last={i === rows.length - 1}
               onClick={() => go([r.key])} />
@@ -1910,6 +1911,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
           <Card padding="0" style={{ overflow: 'hidden' }}>
             {sec.items.map((it, i) => (
               <NavRow key={it.name} {...sec.rowIdentity(it)} summary={sec.rowSummary(it)}
+                testId={`settings-record-${sectionKey}-${it.name}`}
                 divider={i > 0} first={i === 0} last={i === sec.items.length - 1}
                 onClick={() => go([sectionKey, it.name])} />
             ))}

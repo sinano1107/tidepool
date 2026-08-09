@@ -47,7 +47,8 @@ The first paint waits on: local vendor scripts → DS bundle → prebuilt app �
   so the CSS `text-transform` uppercase mismatch is gone.
 - Japanese UI copy changes (the quality bar is high, issue #48). Do **not** couple a
   lasting spec to wording. For fragile critical-path elements, add a `data-testid` to
-  `public/index.html` and target that.
+  the owning JSX source (`webui/app.jsx`, a shared component under `design-system/components/`,
+  or a kit-only component under `ui_kits/`) and target that.
 - `fill()` / `type()` dispatch the events React's `onChange` needs — no native
   value-setter tricks.
 
