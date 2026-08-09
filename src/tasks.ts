@@ -2001,6 +2001,17 @@ export function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string)
             WHERE a.name = COALESCE(${taskAssigneeRef}, ${defaultRef}) AND a.needs_human = 1)`;
 }
 
+/** CONTEXT.md's Assignee/Auditor resolution in TypeScript — the twin of
+ * `typeAwareDefaultAgentSql` below. Callers supply their own final fallback
+ * names; only the task-type rule is shared here. */
+export function resolveTaskAgent(
+  task: Pick<Task, "type" | "assignee">,
+  defaultAgentName: string,
+  auditorName: string,
+): string {
+  return task.assignee ?? (task.type === "review" ? auditorName : defaultAgentName);
+}
+
 /** The type-aware fallback pointer behind `agentQuarantinedSql`'s `defaultRef`
  *  (issue #42 / CONTEXT.md's Auditor): an unset assignee on a `review` task
  *  resolves to the board's Auditor pointer, every other type to the board's

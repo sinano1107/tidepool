@@ -24,6 +24,7 @@ import {
   recordPrOpened,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
+  resolveTaskAgent,
   type Task,
   taskHistory,
 } from "./tasks.js";
@@ -222,9 +223,11 @@ async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
  *  review task's unset assignee attributes to the Auditor pointer instead,
  *  which — unlike `defaultAgentName` — always resolves to a value. */
 function attributedWorkerId(deps: McpDeps, task: Task): string {
-  if (task.assignee) return task.assignee;
-  if (task.type === "review") return deps.auditorName ?? DEFAULT_AUDITOR_NAME;
-  return deps.defaultAgentName ?? HUMAN_WORKER_ID;
+  return resolveTaskAgent(
+    task,
+    deps.defaultAgentName ?? HUMAN_WORKER_ID,
+    deps.auditorName ?? DEFAULT_AUDITOR_NAME,
+  );
 }
 
 /** The reviewer profile (ADR 0013 / issue #15 layer 2): read-only is a

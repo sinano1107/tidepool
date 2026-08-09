@@ -9,7 +9,14 @@ import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
-import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
+import {
+  contentSourceFor,
+  escalateTask,
+  nextSlotTask,
+  pickupTask,
+  resolveTaskAgent,
+  type Task,
+} from "./tasks.js";
 import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
@@ -175,8 +182,14 @@ export function startScheduler(deps: {
   function pickup(task: Task): void {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
-    // describes: pre-set name as-is, unspecified to the board's default agent
-    const picked = pickupTask(db, task, task.assignee ?? worker.id, clock.now());
+    // describes: pre-set name as-is, unspecified review to the Auditor pointer,
+    // every other unspecified task to the board's default agent
+    const picked = pickupTask(
+      db,
+      task,
+      resolveTaskAgent(task, worker.id, auditorName ?? worker.id),
+      clock.now(),
+    );
     slot.occupy(picked.id);
     // branch discipline is the board's own, not the worker's: by the time
     // the worker starts, the workspace already sits on the task branch
