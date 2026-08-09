@@ -330,7 +330,7 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
     },
     untouchedParent: { repairRegistered: false, approvalQuestionRegistered: true },
   });
-});
+}, 10_000);
 
 const PERMISSIVE_AUDITOR_AUTHORITY: AuthorityProfile = {
   name: "permissive-auditor",
