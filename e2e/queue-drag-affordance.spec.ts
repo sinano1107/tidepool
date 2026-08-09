@@ -20,6 +20,7 @@ test("triage の読み取り専用 preview はドラッグ可能に見せず、Q
   await page.getByRole("button", { name: "Queue check" }).click();
 
   await expect(page.getByText("The tide is going out.")).toBeVisible();
+  await expect(page.getByText("a queue row")).toBeVisible();
   await expect(page.getByTestId("queue-drag-handle")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Queue" }).click();
