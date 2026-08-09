@@ -34,10 +34,10 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
   const [overrideText, setOverrideText] = React.useState('');
   return (
     <div>
-      <div style={{ fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', marginBottom: item.detail ? 3 : 8 }}>{item.title}</div>
-      {translated && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)', marginBottom: item.detail ? 3 : 8 }}>{translated.title}</div>}
-      {item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8 }}>{item.detail}</div>}
-      {translated && item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--tide-5)', marginBottom: 8 }}>{translated.detail}</div>}
+      <div style={{ fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', marginBottom: item.detail ? 3 : 8, whiteSpace: 'pre-wrap' }}>{item.title}</div>
+      {translated && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)', marginBottom: item.detail ? 3 : 8, whiteSpace: 'pre-wrap' }}>{translated.title}</div>}
+      {item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{item.detail}</div>}
+      {translated && item.detail && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--tide-5)', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{translated.detail}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {item.options.map((o) => {
           const picked = value === o.label;
@@ -155,10 +155,10 @@ function TpQuestionCard({ q, answer, onAnswer, locked, onTranslate }) {
           <Switch label="訳を添える" checked={translateOn} onChange={setTranslateOn} />
         </div>
       )}
-      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: q.note ? 6 : 14 }}>{q.context}</div>
+      <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: q.note ? 6 : 14, whiteSpace: 'pre-wrap' }}>{q.context}</div>
       {translateOn && translation && (
         translation.status === 'translated'
-          ? <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)', marginBottom: q.note ? 6 : 14 }}>{translation.purpose}</div>
+          ? <div style={{ fontSize: 'var(--text-sm)', color: 'var(--tide-5)', marginBottom: q.note ? 6 : 14, whiteSpace: 'pre-wrap' }}>{translation.purpose}</div>
           : <div style={{ marginBottom: q.note ? 6 : 14 }}><TpTranslationNote result={translation} /></div>
       )}
       {q.note && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)', marginBottom: 14 }}>⚠ {q.note}</div>}
