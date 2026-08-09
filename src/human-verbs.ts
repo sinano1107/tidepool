@@ -270,6 +270,22 @@ export interface SubmitAnswerDeps {
   boardState?: BoardStatePath[];
 }
 
+function resolveWorkspaceForAnswer(
+  deps: Pick<SubmitAnswerDeps, "workspace" | "resolveWorkspace">,
+  taskWorkspace: string | null,
+  action: string,
+  missingResource = "workspace",
+): WorkspaceConfig {
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (!resolve) throw new DomainError(`no ${missingResource} configured — ${action}`);
+  try {
+    return resolve(taskWorkspace);
+  } catch (err) {
+    if (!(err instanceof UnknownWorkspaceError)) throw err;
+    throw new DomainError(`no workspace configured for "${err.workspaceName}" — ${action}`);
+  }
+}
+
 /** Shared human-surface defaults for direct cancel's quarantine-question gate. */
 export function humanCancelDefaults(
   workspace: WorkspaceConfig | undefined,
@@ -330,19 +346,11 @@ export async function submitAnswer(
   const wantsLocalMerge =
     localMergeTaskId !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsLocalMerge) {
-    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-    if (!resolve) {
-      throw new DomainError("no workspace configured — cannot land the task branch");
-    }
-    let mergeWorkspace: WorkspaceConfig;
-    try {
-      mergeWorkspace = resolve(task.workspace);
-    } catch (err) {
-      if (!(err instanceof UnknownWorkspaceError)) throw err;
-      throw new DomainError(
-        `no workspace configured for "${err.workspaceName}" — cannot land the task branch`,
-      );
-    }
+    const mergeWorkspace = resolveWorkspaceForAnswer(
+      deps,
+      task.workspace,
+      "cannot land the task branch",
+    );
     try {
       mergeTaskToProtected(mergeWorkspace, localMergeTaskId);
     } catch (err) {
@@ -357,19 +365,12 @@ export async function submitAnswer(
     if (!deps.github) {
       throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
     }
-    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-    if (!resolve) {
-      throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
-    }
-    let mergeWorkspace: WorkspaceConfig;
-    try {
-      mergeWorkspace = resolve(task.workspace);
-    } catch (err) {
-      if (!(err instanceof UnknownWorkspaceError)) throw err;
-      throw new DomainError(
-        `no workspace configured for "${err.workspaceName}" — cannot check CI or merge`,
-      );
-    }
+    const mergeWorkspace = resolveWorkspaceForAnswer(
+      deps,
+      task.workspace,
+      "cannot check CI or merge",
+      "GitHub/workspace",
+    );
     const status = await deps.github.getCiStatus({ path: mergeWorkspace.path, number: mergePr });
     if (status !== "success") {
       throw new DomainError(`CI is not green yet (status: ${status}) — cannot merge`);
