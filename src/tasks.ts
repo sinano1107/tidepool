@@ -1566,31 +1566,41 @@ function outsideAuthority(value: string | undefined, allowlist: string[] | undef
   );
 }
 
-/** The one assignee a review task's `assignable_to` can never restrict (ADR
- *  0013): the reviewed task's own executor — a review's repair children may
- *  always target them, since that's part of what a review *is*, not a
- *  delegation the reviewer happens to hold. Exported so callers that need to
- *  predict decomposeTask's own verdict (mcp.ts's `list_agents`, issue #43 /
- *  ADR 0014) share this exact lookup rather than reimplementing it and
+/** The one executor a review task's `assignable_to` can never restrict (ADR
+ *  0013 / 0054): the reviewed task's own executor — a review's repair
+ *  children may always target them, since that's part of what a review *is*,
+ *  not a delegation the reviewer happens to hold. Exported so callers that
+ *  need to predict decomposeTask's own verdict (mcp.ts's `list_agents`, issue
+ *  #43 / ADR 0014) share this exact lookup rather than reimplementing it and
  *  risking drift from decomposeTask's actual check below. */
-export function reviewedTaskAssignee(db: Db, task: Task): string | undefined {
-  return task.type === "review" && task.parent_id
-    ? (getTask(db, task.parent_id)?.assignee ?? undefined)
-    : undefined;
+export function reviewedTaskExecutor(db: Db, task: Task): string | undefined {
+  if (task.type !== "review" || !task.parent_id) return undefined;
+  const reviewed = getTask(db, task.parent_id);
+  if (!reviewed) return undefined;
+  if (reviewed.assignee !== null) return reviewed.assignee;
+  return (
+    db
+      .prepare(
+        `SELECT worker_id FROM events
+         WHERE task_id = ? AND kind IN ('task_completed', 'task_picked_up')
+         ORDER BY CASE kind WHEN 'task_completed' THEN 0 ELSE 1 END, id DESC LIMIT 1`,
+      )
+      .get(task.parent_id) as { worker_id: string } | undefined
+  )?.worker_id;
 }
 
 /** Whether assigning `name` from `task` would need a human approval question
  *  rather than registering outright — the single source decomposeTask's own
  *  per-child check below and mcp.ts's `list_agents` roster marking (issue
  *  #43 / ADR 0014) both call, so the two can never diverge: the ADR 0013
- *  reviewed-assignee exemption first, then the plain `assignable_to` check. */
+ *  reviewed-executor exemption first, then the plain `assignable_to` check. */
 export function assigneeNeedsApproval(
   db: Db,
   task: Task,
   name: string | undefined,
   authority: AuthorityContext | undefined,
 ): boolean {
-  if (name !== undefined && name === reviewedTaskAssignee(db, task)) return false;
+  if (name !== undefined && name === reviewedTaskExecutor(db, task)) return false;
   return outsideAuthority(name, authority?.assignable_to);
 }
 
