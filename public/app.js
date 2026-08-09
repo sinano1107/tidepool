@@ -122,7 +122,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, hea
         opacity: t.blocked ? 0.55 : void 0
       }
     },
-    /* @__PURE__ */ React.createElement(QueueItem, { position: baseIndex + i + 1, task: t, skipped: t.skipped, skipReason, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, onFront: onFront ? () => onFront(t.id) : void 0 })
+    /* @__PURE__ */ React.createElement(QueueItem, { position: baseIndex + i + 1, task: t, skipped: t.skipped, skipReason, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
   )));
 }
 const TP_SLOT_STATES = {

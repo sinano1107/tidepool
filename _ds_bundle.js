@@ -223,7 +223,7 @@ Object.assign(__ds_scope, { LogEntry });
 
 // design-system/components/board/QueueItem.jsx
 try { (() => {
-function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes on reset", frontInserted = false, flash = false, isHead = false, onFront, style }) {
+function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes on reset", frontInserted = false, flash = false, isHead = false, draggable = false, onFront, style }) {
   const { id, title, assignee, assigneeIcon } = task;
   return /* @__PURE__ */ React.createElement(
     "div",
@@ -242,7 +242,7 @@ function QueueItem({ position, task = {}, skipped = false, skipReason = "resumes
         ...style
       }
     },
-    /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", style: { color: "var(--rock-3)", cursor: "grab", fontSize: 14, lineHeight: 1, letterSpacing: "-2px" } }, "\u283F"),
+    draggable && /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", "data-testid": "queue-drag-handle", style: { color: "var(--rock-3)", cursor: "grab", fontSize: 14, lineHeight: 1, letterSpacing: "-2px" } }, "\u283F"),
     /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", background: frontInserted ? "var(--surface-card)" : "var(--tide-1)", borderRadius: "var(--radius-full)", padding: "2px 8px", flexShrink: 0 } }, position),
     /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }),
     /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
