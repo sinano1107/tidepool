@@ -1,5 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
+const scratch = Boolean(process.env.PLAYWRIGHT_SCRATCH);
+
 // WebUI ブラウザ確認の土台(ADR 0027 / docs/webui-e2e-harness.md)。サーバーは
 // `webServer` で別プロセス起動せず、各テストが e2e/fixtures.ts の `boot` で
 // bootTidepool を in-process 起動して seam フェイクを差す。だからここには
@@ -10,7 +12,8 @@ import { defineConfig } from "@playwright/test";
 // 恒久回帰や CI を赤くしない。
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: process.env.PLAYWRIGHT_SCRATCH ? undefined : /.*\.scratch\.spec\.ts/,
+  testMatch: scratch ? /.*\.scratch\.spec\.ts/ : undefined,
+  testIgnore: scratch ? undefined : /.*\.scratch\.spec\.ts/,
   // 各テストが自前のサーバーを ephemeral port で起動する。ポート衝突は無いが、
   // 並列数は控えめにして in-process サーバーの多重起動を抑える。
   workers: process.env.CI ? 2 : 4,
