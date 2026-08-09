@@ -9,7 +9,14 @@ import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
-import { contentSourceFor, escalateTask, nextSlotTask, pickupTask, type Task } from "./tasks.js";
+import {
+  contentSourceFor,
+  escalateTask,
+  nextSlotTask,
+  pickupTask,
+  resolveTaskAgent,
+  type Task,
+} from "./tasks.js";
 import { reportThrottle } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 import {
@@ -180,7 +187,7 @@ export function startScheduler(deps: {
     const picked = pickupTask(
       db,
       task,
-      task.assignee ?? (task.type === "review" ? auditorName ?? worker.id : worker.id),
+      resolveTaskAgent(task, worker.id, auditorName ?? worker.id),
       clock.now(),
     );
     slot.occupy(picked.id);

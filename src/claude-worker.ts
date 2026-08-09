@@ -22,7 +22,13 @@ import {
   SKILL_WILDCARD,
 } from "./registry.js";
 import { buildSandboxSettings, floorOverridingSettings } from "./sandbox.js";
-import { AUTHORITY_WILDCARD, DEFAULT_AUDITOR_NAME, HUMAN_ROSTER_AGENT, type Task } from "./tasks.js";
+import {
+  AUTHORITY_WILDCARD,
+  DEFAULT_AUDITOR_NAME,
+  HUMAN_ROSTER_AGENT,
+  resolveTaskAgent,
+  type Task,
+} from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
   guardRegistryDefaultBranch,
@@ -1528,12 +1534,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // Auditor: independent review's value is its distance from the original
     // judgment, so it must never fall back to the same agent that did the
     // work) — every other type keeps resolving to `this.options.agent`.
-    const defaultAgentName =
-      task.type === "review" ? this.options.auditorName ?? DEFAULT_AUDITOR_NAME : this.options.agent;
+    const taskAgent = resolveTaskAgent(
+      task,
+      this.options.agent,
+      this.options.auditorName ?? DEFAULT_AUDITOR_NAME,
+    );
     const agent = resolveAgentOrQuarantine(
       this.options.db,
-      (taskAssignee) => resolveExecutionAgent(registry, defaultAgentName, taskAssignee),
-      task.assignee,
+      (taskAssignee) => resolveExecutionAgent(registry, this.options.agent, taskAssignee),
+      taskAgent,
       this.options.clock.now(),
     );
     if (!agent) return;
