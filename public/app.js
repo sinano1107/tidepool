@@ -181,7 +181,7 @@ function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false
     borderRadius: 1,
     marginBottom: 14,
     background: paused ? "repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)" : slot.color
-  } }), onSpendDown && (spendDown ? /* @__PURE__ */ React.createElement("div", { key: "spend-down-active", style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 14, background: "var(--sun-1)", border: "1px solid var(--sun-2)", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "spend-down \xB7 burning the ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, spendDown.window), " budget to the 100% cap"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }, "expires at reset"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(null) }, "cancel")) : /* @__PURE__ */ React.createElement("div", { key: "spend-down-idle", style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down"), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "burn what's left of a window before it expires"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("session") }, "session"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("week") }, "week"))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: queue, onReorder, onFront: paused ? void 0 : onFront, skipReason, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
+  } }), onSpendDown && (spendDown ? /* @__PURE__ */ React.createElement("div", { key: "spend-down-active", style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 14, background: "var(--sun-1)", border: "1px solid var(--sun-2)", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "spend-down \xB7 burning the ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, spendDown.window), " budget to the 100% cap"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }, "expires at reset"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(null) }, "cancel")) : /* @__PURE__ */ React.createElement("div", { key: "spend-down-idle", style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down"), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "burn what's left of a window before it expires"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("session") }, "session"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("week") }, "week"))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: queue, onReorder, onFront, skipReason, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
 }
 Object.assign(window, { QueueScreen, TpQueueList });
 
@@ -792,21 +792,31 @@ function mapData(board, log, pause, icons = {}) {
   }
   const running = board.find((t) => t.status === "in_progress");
   const throttled = !!throttle?.throttled;
-  const throttleFailClosed = throttled && !throttle.resetsAt;
-  const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resetsAt) : null;
+  const throttleFailClosed = throttled && !throttle.resumesAt;
+  const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resumesAt) : null;
   const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
   const hitLines = ["session", "week", "fable"].filter((w) => throttleWindows[w]?.throttled);
   const fableWindow = throttleWindows.fable;
   const fableThrottled = !!fableWindow?.throttled;
   const fableResumesAt = fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
-  const slot = running ? { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : throttled ? {
+  const throttleObservedAt = throttle?.observedAt ? fmtTime(throttle.observedAt) : null;
+  const boardHaltSlot = pause.triageActive ? { color: "var(--sun-4)", line: "triage in progress \xB7 nothing starts", meta: "commit triage to resume", taskId: null } : pause.containmentBlocked ? { color: "var(--coral-4)", line: "worker containment unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null } : pause.registryReachabilityBlocked ? { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null } : throttle?.revalidating ? {
+    color: "var(--sun-4)",
+    line: "usage re-evaluation in progress \xB7 nothing starts",
+    taskId: null,
+    meta: throttleObservedAt ? `last observed ${throttleObservedAt}` : "no observation yet"
+  } : null;
+  const slot = running ? { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : boardHaltSlot ? boardHaltSlot : throttled ? {
     color: "var(--coral-4)",
     taskId: null,
-    ...throttleFailClosed ? { line: "usage check unavailable \xB7 nothing starts", meta: "fail-closed \u2014 check usage check logs" } : {
+    ...throttleFailClosed ? {
+      line: "usage check unavailable \xB7 nothing starts",
+      meta: `fail-closed \u2014 check usage check logs${throttleObservedAt ? ` \xB7 observed ${throttleObservedAt}` : ""}`
+    } : {
       line: "usage pace \xB7 nothing starts",
       // which line is hit (ADR 0030) — an old pre-window row (no
       // windows persisted yet) falls back to the plain resume text
-      meta: `${hitLines.length ? `${hitLines.join(" + ")} line \xB7 ` : ""}resumes ${throttleResumesAt}`
+      meta: `${hitLines.length ? `${hitLines.join(" + ")} line \xB7 ` : ""}resumes ${throttleResumesAt}${throttleObservedAt ? ` \xB7 observed ${throttleObservedAt}` : ""}`
     }
   } : fableThrottled ? {
     // fable line only (ADR 0030): the board keeps flowing — fable-model
@@ -836,11 +846,16 @@ function mapData(board, log, pause, icons = {}) {
     slot,
     running: !!running,
     paused: !!paused,
+    triageActive: !!pause.triageActive,
+    containmentBlocked: !!pause.containmentBlocked,
+    registryReachabilityBlocked: !!pause.registryReachabilityBlocked,
     // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
     spendDown: pause.spendDown ?? null,
     throttled,
     throttleFailClosed,
     throttleResumesAt,
+    throttleObservedAt: throttle?.observedAt ?? null,
+    throttleRevalidating: !!throttle?.revalidating,
     fableThrottled,
     fableResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null
@@ -2512,6 +2527,16 @@ function App() {
     setData((d) => tab === "triage" && d ? { ...fresh, questions: d.questions, log: d.log, lastLogId: d.lastLogId } : fresh);
     return fresh;
   };
+  React.useEffect(() => {
+    if (!data?.throttleRevalidating) return;
+    const iv = setInterval(() => {
+      void refresh().then((fresh) => {
+        if (!fresh.throttleRevalidating) clearInterval(iv);
+      }).catch(() => {
+      });
+    }, 1e3);
+    return () => clearInterval(iv);
+  }, [data?.throttleRevalidating]);
   const answerNow = async (q, a) => {
     try {
       await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true });
@@ -2606,8 +2631,16 @@ function App() {
       const fresh = await refresh();
       if (!wasHead) {
         say("info", "moved to front", "reordered only \u2014 press \u2191 again to run it now");
+      } else if (fresh.triageActive) {
+        say("warn", "moved to front \u2014 pickup blocked", "triage in progress \u2014 commit it to resume");
       } else if (fresh.paused) {
         say("warn", "moved to front \u2014 pickup is paused", "resume to run it");
+      } else if (fresh.containmentBlocked) {
+        say("warn", "moved to front \u2014 pickup blocked", "worker containment is not established");
+      } else if (fresh.registryReachabilityBlocked) {
+        say("warn", "moved to front \u2014 pickup blocked", "registry remote is unreachable");
+      } else if (fresh.throttleRevalidating) {
+        say("info", "moved to front \u2014 usage is being re-evaluated", "waiting for a fresh observation");
       } else if (fresh.throttled) {
         say(
           "warn",
@@ -2721,7 +2754,7 @@ function App() {
     return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)" } }, "tidepool"));
   }
   const unreadCount = data.log.filter((l) => l.unread).length;
-  return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", background: "var(--surface-page)", boxShadow: "0 0 40px rgba(23,33,30,0.12)", position: "relative", overflow: "hidden" } }, wash && /* @__PURE__ */ React.createElement(TpTideWash, { label: wash.label, emoji: wash.emoji, duration: WASH_MS }), /* @__PURE__ */ React.createElement("header", { style: { display: "flex", alignItems: "center", gap: 8, padding: "14px 16px 10px", borderBottom: "1px solid var(--border-hairline)", position: "sticky", top: 0, background: "var(--surface-page)", zIndex: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: 22, color: "var(--tide-5)" } }, "tidepool"), /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: data.paused ? "var(--rock-4)" : "var(--text-muted)" } }, data.paused ? "pickup paused \xB7 " : "", data.questions.length, " questions \xB7 ", unreadCount, " new log \xB7 queue ", data.queue.length)), notifPermission === "default" && "serviceWorker" in navigator && "PushManager" in window && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border-hairline)", background: "var(--rock-2)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "Enable notifications to get questions outside quiet hours the moment they're asked."), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: enableNotifications }, "Enable")), /* @__PURE__ */ React.createElement("main", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowY: tab === "board" ? "hidden" : "auto", paddingBottom: tab === "board" ? 56 : 76, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { key: tab, className: tabDir === "right" ? "tp-tab-right" : "tp-tab-left", style: tab === "board" ? { height: "100%" } : { minHeight: "100%" } }, tab === "triage" && (data.questions.length || unreadCount ? /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", background: "var(--surface-page)", boxShadow: "0 0 40px rgba(23,33,30,0.12)", position: "relative", overflow: "hidden" } }, wash && /* @__PURE__ */ React.createElement(TpTideWash, { label: wash.label, emoji: wash.emoji, duration: WASH_MS }), /* @__PURE__ */ React.createElement("header", { style: { display: "flex", alignItems: "center", gap: 8, padding: "14px 16px 10px", borderBottom: "1px solid var(--border-hairline)", position: "sticky", top: 0, background: "var(--surface-page)", zIndex: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: 22, color: "var(--tide-5)" } }, "tidepool"), /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: data.paused ? "var(--rock-4)" : "var(--text-muted)" } }, data.paused ? "pickup paused \xB7 " : "", data.questions.length, " questions \xB7 ", unreadCount, " new log \xB7 queue ", data.queue.length)), data.triageActive && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--sun-2)", background: "var(--sun-1)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "triage in progress \u2014 pickup is stopped"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: () => commitTriage({}, {}, []) }, "commit triage")), notifPermission === "default" && "serviceWorker" in navigator && "PushManager" in window && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border-hairline)", background: "var(--rock-2)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "Enable notifications to get questions outside quiet hours the moment they're asked."), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: enableNotifications }, "Enable")), /* @__PURE__ */ React.createElement("main", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowY: tab === "board" ? "hidden" : "auto", paddingBottom: tab === "board" ? 56 : 76, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { key: tab, className: tabDir === "right" ? "tp-tab-right" : "tp-tab-left", style: tab === "board" ? { height: "100%" } : { minHeight: "100%" } }, tab === "triage" && (data.questions.length || unreadCount ? /* @__PURE__ */ React.createElement(
     TriageScreen,
     {
       data,

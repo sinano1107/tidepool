@@ -260,7 +260,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
       )}
 
       <div style={{ marginBottom: 28 }}>
-        <TpQueueList tasks={queue} onReorder={onReorder} onFront={paused ? undefined : onFront} skipReason={skipReason} headId={headId} />
+        <TpQueueList tasks={queue} onReorder={onReorder} onFront={onFront} skipReason={skipReason} headId={headId} />
       </div>
 
       <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Your tasks</h2>

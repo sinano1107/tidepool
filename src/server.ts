@@ -352,6 +352,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       db,
       clock: options.clock,
       onQueueHeadChanged: () => scheduler.pollNow(),
+      pickupRevalidating: () => scheduler.isPolling(),
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,

@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { healthyUsageText, usagePanelText } from "./fakes.js";
 import {
   api,
@@ -208,8 +208,9 @@ it("throttled 中は GET /api/pause が throttle 状態(再開見込み時刻と
 
   const res = await api(t.baseUrl, "GET", "/api/pause");
   expect(res.json.throttle.throttled).toBe(true);
+  expect(res.json.throttle.observedAt).toBe(t.clock.now().toISOString());
   // 85+20 ≥ 100% なので再開見込みはリセット時刻そのもの
-  expect(res.json.throttle.resetsAt).toBe(resetsAt.toISOString());
+  expect(res.json.throttle.resumesAt).toBe(resetsAt.toISOString());
   // どの線に当たっているかの内訳 (ADR 0030): session の線、week は健全
   expect(res.json.throttle.windows.session).toEqual({
     throttled: true,
@@ -218,7 +219,25 @@ it("throttled 中は GET /api/pause が throttle 状態(再開見込み時刻と
   expect(res.json.throttle.windows.week).toEqual({ throttled: false, resumeAt: null });
 });
 
-it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・resetsAt=null・内訳なしを運ぶ — fail-closed の可視化(issue #82)", async () => {
+it("usage 再評価を待たず GET /api/pause は revalidating=true を返し、観測完了後に false へ戻る(ADR 0058)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "waits for the usage observation");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.worker.scriptUsageGate(gate);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
+
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(true);
+  release();
+  await vi.waitFor(async () => {
+    expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(false);
+  });
+});
+
+it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・resumesAt=null・内訳なしを運ぶ — fail-closed の可視化(issue #82)", async () => {
   t = await bootTidepool();
   await registerWork(t, "long haul");
 
@@ -228,7 +247,9 @@ it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・r
   const res = await api(t.baseUrl, "GET", "/api/pause");
   expect(res.json.throttle).toEqual({
     throttled: true,
-    resetsAt: null,
+    resumesAt: null,
+    observedAt: t.clock.now().toISOString(),
+    revalidating: false,
     windows: { session: null, week: null, fable: null },
   });
 });

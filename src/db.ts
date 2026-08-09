@@ -118,7 +118,8 @@ const THROTTLE_STATE_TABLE_DDL = `
       week_throttled     INTEGER,
       week_resume_at     TEXT,
       fable_throttled    INTEGER,
-      fable_resume_at    TEXT
+      fable_resume_at    TEXT,
+      observed_at        TEXT
     )`;
 
 // Shared between the fresh-board CREATE and #190's event-table rebuild. The
@@ -521,6 +522,11 @@ export function openDb(path: string): Db {
       ALTER TABLE throttle_state ADD COLUMN fable_throttled INTEGER;
       ALTER TABLE throttle_state ADD COLUMN fable_resume_at TEXT;
     `);
+  }
+  if (!throttleCols.includes("state") && !throttleCols.includes("observed_at")) {
+    // ADR 0058: pre-existing last-observed rows have no honest observation
+    // timestamp. NULL keeps that distinction until the next JIT poll.
+    db.exec(`ALTER TABLE throttle_state ADD COLUMN observed_at TEXT`);
   }
   return db;
 }

@@ -130,6 +130,7 @@ export class ScriptedWorker implements WorkerAdapter {
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
+  private usageGate: Promise<void> | null = null;
 
   constructor(
     private readonly clock: Clock,
@@ -145,6 +146,7 @@ export class ScriptedWorker implements WorkerAdapter {
   }
 
   async checkUsage(): Promise<string | null> {
+    if (this.usageGate) await this.usageGate;
     return this.usageText === undefined ? healthyUsageText(this.clock.now()) : this.usageText;
   }
 
@@ -153,6 +155,11 @@ export class ScriptedWorker implements WorkerAdapter {
    *  null to script a check failure (fail-closed). */
   scriptUsage(resultText: string | null): void {
     this.usageText = resultText;
+  }
+
+  /** Holds checkUsage in flight so tests observe the real PTY-latency race. */
+  scriptUsageGate(gate: Promise<void>): void {
+    this.usageGate = gate;
   }
 }
 

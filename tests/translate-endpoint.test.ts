@@ -89,7 +89,7 @@ it("throttled 中は翻訳を実行せず、応答が throttled と区別でき�
   t = await bootTidepool({ translationClient });
 
   const db = (await import("../src/db.js")).openDb(`${t.dir}/board.sqlite`);
-  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } });
+  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, t.clock.now());
   db.close();
 
   const question = registerQuestion(t, {

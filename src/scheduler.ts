@@ -59,7 +59,7 @@ async function checkThrottle(db: Db, clock: Clock, worker: WorkerAdapter): Promi
     spendDown = null;
   }
   const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now(), spendDown);
-  reportThrottle(db, decision);
+  reportThrottle(db, decision, clock.now());
   return decision;
 }
 
@@ -92,6 +92,8 @@ export interface Scheduler {
   /** Immediate poll, fired by human-input-originated queue-head changes.
    *  Same poll as the hourly tick: a no-op while the slot is occupied. */
   pollNow: () => void;
+  /** Whether the just-in-time pickup observation is currently running. */
+  isPolling: () => boolean;
 }
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
@@ -339,5 +341,6 @@ export function startScheduler(deps: {
       resumeTimer.cancel();
     },
     pollNow,
+    isPolling: () => inFlight,
   };
 }

@@ -56,7 +56,7 @@ it("同じソース+言語の2回目の呼び出しはキャッシュから返�
 
 it("throttled 中はクライアントを呼ばず、区別可能な throttled 応答を返す(完了基準)", async () => {
   const db = await freshDb();
-  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } });
+  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, NOW);
   const client = new FakeTranslationClient();
 
   const outcome = await translateSource(db, client, "never called", "Japanese", NOW);
@@ -92,7 +92,7 @@ it("throttled 中でも既にキャッシュ済みのソースは翻訳を返す
   client.scriptTranslation("訳文");
   await translateSource(db, client, "same text", "Japanese", NOW);
 
-  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } });
+  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, NOW);
   const outcome = await translateSource(db, client, "same text", "Japanese", NOW);
 
   expect(outcome).toEqual({ status: "translated", text: "訳文", cached: true });

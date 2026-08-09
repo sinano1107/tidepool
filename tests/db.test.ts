@@ -27,7 +27,7 @@ it("throttle_state の旧スキーマ(state/utilization)を持つ既存 board �
 
   // must be writable/readable under the new single-`throttled` shape without
   // tripping the old CHECK/NOT NULL constraints
-  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } });
+  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, new Date());
   expect(isPickupBlocked(db, new Date())).toBe(true);
   db.close();
 });
@@ -56,6 +56,7 @@ it("ADR 0030 以前の throttle_state(throttled/resets_at のみ)は再オープ
   expect(getThrottleState(db)).toEqual({
     throttled: true,
     resetsAt: "2026-07-22T13:00:00.000Z",
+    observedAt: null,
     windows: { session: null, week: null, fable: null },
   });
   reportThrottle(db, {
@@ -66,7 +67,7 @@ it("ADR 0030 以前の throttle_state(throttled/resets_at のみ)は再オープ
       week: { throttled: false, resumeAt: null },
       fable: null,
     },
-  });
+  }, new Date("2026-07-22T14:00:00.000Z"));
   expect(getThrottleState(db).windows.session).toEqual({ throttled: false, resumeAt: null });
   db.close();
 });
