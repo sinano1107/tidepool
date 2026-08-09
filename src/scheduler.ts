@@ -197,7 +197,7 @@ export function startScheduler(deps: {
       // ADR 0052 / issue #211: remote 正本の宣言と実態のずれ、そしてその refresh の
       // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
       try {
-        prepareWorkspaceAtPickup(resolved, picked.id, { githubAuth, registry });
+        prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
       } catch (err) {
         quarantineWorkspace(db, resolved.name, err, clock.now());
         return;

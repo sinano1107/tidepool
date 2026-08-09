@@ -35,8 +35,8 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
       { type: "work", title: "prod work", purpose: "p", completion_criteria: "c", workspace: "prod" },
       clock0.now(),
     );
-    pickupTask(seedDb, task, "deckhand", clock0.now());
-    ensureTaskBranch(prod, task.id);
+    const picked = pickupTask(seedDb, task, "deckhand", clock0.now());
+    ensureTaskBranch(seedDb, prod, picked);
     await import("node:fs").then((fs) =>
       fs.writeFileSync(join(prod.path, "stuck.txt"), "interrupted mid-write\n"),
     );

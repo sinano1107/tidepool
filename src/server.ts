@@ -125,10 +125,10 @@ export interface ServerOptions {
   fableAgents?: () => string[];
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
   registryReachability?: RegistryReachabilityCheck;
-  /** ADR 0024 / issue #211: the board's GitHub identity, for the pickup-time
-   *  fetch of a remote-backed workspace (ADR 0052 決定2). Absent → the board
-   *  declares no GitHub identity and that fetch runs bare, the same posture as
-   *  the optional `github` client above. */
+  /** ADR 0024 / issues #211 and #236: the board's GitHub identity, for
+   *  pickup- and completion-time fetches of a remote-backed workspace. Absent
+   *  → the board declares no GitHub identity and those fetches run bare, the
+   *  same posture as the optional `github` client above. */
   githubAuth?: GitHubAuth;
   /** ADR 0052 決定3 / issue #211: which registry clone the board reads, plus its
    *  remote-source-of-truth declaration. Needed at pickup because the registry
@@ -337,6 +337,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github,
+    githubAuth: options.githubAuth,
     authority: options.authority,
     resolveAuthority: options.resolveAuthority,
     defaultAgentName: worker.id,

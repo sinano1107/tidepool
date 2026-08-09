@@ -218,7 +218,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
   expect(question.question_items[0].recommendation).toBe("hold");
 });
 
-it("a risky task under auto_if_ci_green asks for merge approval immediately instead of queueing for auto-merge", async () => {
+it("a risky decomposed child merges back, then its root integration PR asks for approval instead of auto-merge", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
@@ -257,7 +257,18 @@ it("a risky task under auto_if_ci_green asks for merge approval immediately inst
   await childClient.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await childClient.close();
 
-  // asked right away — never queued for the unattended poll
+  // The child returns to the parent's integration branch without its own PR.
+  expect(t.github.requests).toEqual([]);
+
+  await t.clock.advance(HOUR); // parent resumes for integration
+  const resumedParent = await mcpClient(t.mcpBaseUrl, parent.id);
+  await resumedParent.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await resumedParent.close();
+
+  // The approved child's risk propagated to the parent, so the one integration
+  // PR asks right away and is never queued for the unattended poll.
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.requests[0]?.branch).toBe(`task/${parent.id}`);
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const mergeQuestion = board.find(
     (x: any) => x.type === "question" && x.title.startsWith("merge PR"),
