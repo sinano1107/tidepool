@@ -10,6 +10,7 @@ import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, listEvents } from "./events.js";
+import { REVIEWER_AUTHORITY_PROFILE } from "./mcp.js";
 import {
   type AgentDefinition,
   agentBodyAtCommit,
@@ -27,6 +28,7 @@ import {
   DEFAULT_AUDITOR_NAME,
   HUMAN_ROSTER_AGENT,
   resolveTaskAgent,
+  reviewedTaskExecutor,
   type Task,
 } from "./tasks.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
@@ -1630,6 +1632,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     },
   ): void {
     const { definition, profile } = agent;
+    const authorityProfile = task.type === "review" ? REVIEWER_AUTHORITY_PROFILE : profile;
+    const reviewExecutor =
+      task.type === "review" ? reviewedTaskExecutor(this.options.db, task) : undefined;
+    const rosterAssignableTo =
+      task.type === "review" && reviewExecutor !== undefined
+        ? [reviewExecutor]
+        : authorityProfile.assignable_to;
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
     const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);
@@ -1778,12 +1787,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // the capability check are for.
         "--settings",
         sandboxSettingsPath,
-        // who the agent is (registry definition body) and what its authority
-        // sounds like (profile guidance prose), stitched at spawn time. A party
-        // review (self RCA) additionally carries the 当時版 definition as
-        // evidence (ADR 0020 part 4), appended last.
+        // who the agent is (registry definition body) and what this task type's
+        // authority sounds like (ADR 0056: review overrides the registry profile),
+        // stitched at spawn time. A party review (self RCA) additionally carries
+        // the 当時版 definition as evidence (ADR 0020 part 4), appended last.
         "--append-system-prompt",
-        `${definition.systemPrompt}\n\n## Authority\n\n${profile.guidance}${rosterSection(buildRoster(registry, profile.assignable_to))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}${this.historicalDefinitionSection(task)}`,
+        `${definition.systemPrompt}\n\n## Authority\n\n${authorityProfile.guidance}${rosterSection(buildRoster(registry, rosterAssignableTo))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}${this.historicalDefinitionSection(task)}`,
       ],
       // the agent's own commits are stamped with the agent's identity (issue
       // #53), merged over the inherited env — never a token (ADR 0024). The

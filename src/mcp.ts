@@ -240,15 +240,17 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
  *  every explicit workspace target; `assignable_to: []` blocks every
  *  explicit assignee except the one structural exception decomposeTask
  *  carves out for a review's own repair children (the reviewed task's own
- *  assignee — ADR 0013). The ADR 0013 addendum (issue #59) carries the same
- *  "task type overrides profile" line one layer down, at the CLI harness
- *  itself: `reviewToolDenials` (claude-worker.ts) reads `task.type` directly
- *  rather than this profile object, since the deny needs to exist before
- *  spawn ever resolves an authority profile — same task-type-not-agent
+ *  assignee — ADR 0013). The same "task type overrides profile" line reaches
+ *  both spawn layers: ADR 0056's system-prompt assembly imports this exact
+ *  profile for `## Authority`, while the CLI harness's `reviewToolDenials`
+ *  (claude-worker.ts) reads `task.type` directly because the deny needs to
+ *  exist before spawn resolves an authority profile — same task-type-not-agent
  *  principle, adapter-side enforcement primitive (ADR 0005). */
-const REVIEWER_AUTHORITY_PROFILE: AuthorityProfile = {
+export const REVIEWER_AUTHORITY_PROFILE: AuthorityProfile = {
   name: "reviewer",
-  guidance: "You are reviewing read-only. Never fix directly — findings become repair tasks.",
+  guidance:
+    "You are reviewing read-only. Never fix directly — findings become repair tasks.\n" +
+    "Assign a repair to the worker in your roster: they executed the task you are reviewing.",
   assignable_to: [],
   allowed_workspaces: [],
 };
