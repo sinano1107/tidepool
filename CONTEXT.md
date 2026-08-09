@@ -165,7 +165,9 @@ assignee 未指定のタスクが解決される先。特別な種類のエー�
 
 ## Roster(ロースター)
 
-agent が委譲判断の材料として受け取る worker の一覧。各行は名前と description(その worker がいつ委譲先として適するかを registry の著者が書く1行の散文)からなり、モデル名などベンダー固有の語彙は決して含まれない — tier や得意分野の伝達も description の散文が担う。2つの形で提示される: 自分の assignable_to を解決した「直接委譲できる相手」(spawn 時に与えられる)と、registry 全体の照会(assignable_to 外の worker は承認 question への変換を要することがマークされる)。human は registry に定義を持たないが、委譲可能な worker として roster には現れる。
+agent が委譲判断の材料として受け取る worker の一覧。各行は名前と description(その worker がいつ委譲先として適するかを registry の著者が書く1行の散文)からなり、モデル名などベンダー固有の語彙は決して含まれない — tier や得意分野の伝達も description の散文が担う。2つの形で提示される: 「直接委譲できる相手」(spawn 時に与えられる)と、registry 全体の照会(直接委譲できない worker は承認 question への変換を要することがマークされる)。human は registry に定義を持たないが、委譲可能な worker として roster には現れる。
+
+「直接委譲できる相手」の中身は type で決まる。通常は自分の assignable_to を解決したものだが、**review タスクでは被レビュータスクの Executor ただ1人**である(2026-08-09 の grilling、issue #218 / ADR 0056) — read-only が行為の性質である以上その authority も盤面固定であり(ADR 0013)、そこで常時許可される委譲先は「修理の宛先 = レビュー対象を実行した本人」という免除1つだけだからである。したがって roster の入力は registry だけではなく、event log(Executor 参照)にも及ぶ。ルート review には被レビュータスクが存在せず、roster は空になる。「なぜこの名前が並ぶのか」を roster の行は説明しない — 行の形は常に `名前 — description` であり、由来を言うのは authority の散文の役目である。
 
 ## Worker session(ワーカーセッション)
 
