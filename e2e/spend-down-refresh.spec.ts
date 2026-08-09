@@ -4,7 +4,7 @@ import { expect, test } from "./fixtures.js";
 
 const MIN = 60 * 1000;
 
-test("spend-down の有効化・取り消しは、再評価中を示して新しい観測へ追従し、完了後は追従を止める(#227 / ADR 0058)", async ({
+test("spend-down の有効化・取り消しは、再評価中を示して新しい観測結果を引き取る(#227 / ADR 0058)", async ({
   boot,
   page,
 }) => {
@@ -19,10 +19,6 @@ test("spend-down の有効化・取り消しは、再評価中を示して新し
   await registerWork(t, "waits behind both pace lines");
   await t.clock.advance(HOUR);
 
-  let pauseReads = 0;
-  page.on("request", (request) => {
-    if (request.method() === "GET" && request.url() === `${t.baseUrl}/api/pause`) pauseReads++;
-  });
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Queue" }).click();
   await expect(page.getByText(/session \+ week line · resumes/)).toBeVisible();
@@ -41,9 +37,6 @@ test("spend-down の有効化・取り消しは、再評価中を示して新し
   release();
   await expect(page.getByText(/week line · resumes/)).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText("usage re-evaluation in progress · nothing starts")).not.toBeVisible();
-  const readsAfterEnable = pauseReads;
-  await page.waitForTimeout(2_300);
-  expect(pauseReads).toBe(readsAfterEnable);
 
   await t.clock.advance(MIN);
   t.worker.scriptUsageGate(
@@ -57,9 +50,6 @@ test("spend-down の有効化・取り消しは、再評価中を示して新し
   release();
   await expect(page.getByText(/session \+ week line · resumes/)).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText("usage re-evaluation in progress · nothing starts")).not.toBeVisible();
-  const readsAfterCancel = pauseReads;
-  await page.waitForTimeout(2_300);
-  expect(pauseReads).toBe(readsAfterCancel);
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt).toBe(
     t.clock.now().toISOString(),

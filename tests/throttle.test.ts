@@ -237,6 +237,32 @@ it("usage 再評価を待たず GET /api/pause は revalidating=true を返し�
   });
 });
 
+it("usage 観測後の registry 検査中は GET /api/pause が revalidating=false を返す(ADR 0058)", async () => {
+  let enterRegistry!: () => void;
+  let releaseRegistry!: () => void;
+  const registryEntered = new Promise<void>((resolve) => {
+    enterRegistry = resolve;
+  });
+  const registryGate = new Promise<void>((resolve) => {
+    releaseRegistry = resolve;
+  });
+  t = await bootTidepool({
+    registryReachability: async () => {
+      enterRegistry();
+      await registryGate;
+      return { available: true };
+    },
+  });
+  const task = await registerWork(t, "waits for the registry observation");
+
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
+  await registryEntered;
+
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(false);
+  releaseRegistry();
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
+});
+
 it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・resumesAt=null・内訳なしを運ぶ — fail-closed の可視化(issue #82)", async () => {
   t = await bootTidepool();
   await registerWork(t, "long haul");

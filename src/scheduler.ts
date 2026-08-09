@@ -92,8 +92,8 @@ export interface Scheduler {
   /** Immediate poll, fired by human-input-originated queue-head changes.
    *  Same poll as the hourly tick: a no-op while the slot is occupied. */
   pollNow: () => void;
-  /** Whether the just-in-time pickup observation is currently running. */
-  isPolling: () => boolean;
+  /** Whether the just-in-time usage observation is currently running. */
+  isThrottleRevalidating: () => boolean;
 }
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
@@ -159,6 +159,7 @@ export function startScheduler(deps: {
     registry,
   } = deps;
   let inFlight = false;
+  let throttleRevalidating = false;
   const resumeTimer = createResumeTimer(clock, pollNow);
 
   async function pickupBlocked(): Promise<boolean> {
@@ -301,7 +302,13 @@ export function startScheduler(deps: {
     inFlight = true;
     try {
       if (await pickupBlocked()) return;
-      const decision = await checkThrottle(db, clock, worker);
+      let decision: ThrottleDecision;
+      throttleRevalidating = true;
+      try {
+        decision = await checkThrottle(db, clock, worker);
+      } finally {
+        throttleRevalidating = false;
+      }
       if (decision.throttled) {
         if (decision.resetsAt) resumeTimer.schedule(decision.resetsAt);
         return;
@@ -341,6 +348,6 @@ export function startScheduler(deps: {
       resumeTimer.cancel();
     },
     pollNow,
-    isPolling: () => inFlight,
+    isThrottleRevalidating: () => throttleRevalidating,
   };
 }

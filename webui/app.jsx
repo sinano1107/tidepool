@@ -179,17 +179,50 @@ function mapData(board, log, pause, icons = {}) {
   const fableResumesAt =
     fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
   const throttleObservedAt = throttle?.observedAt ? fmtTime(throttle.observedAt) : null;
-  const boardHaltSlot = pause.triageActive
-    ? { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'commit triage to resume', taskId: null }
+  const halt = (slot, kind, msg, detail) => ({ slot, toast: { kind, msg, detail } });
+  const pickupHalt = pause.triageActive
+    ? halt(
+        { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'commit triage to resume', taskId: null },
+        'warn', 'moved to front — pickup blocked', 'triage in progress — commit it to resume')
+    : paused
+    ? halt(
+        { color: 'var(--tide-4)', line: 'pickup paused — nothing starts until resumed', meta: '', taskId: null },
+        'warn', 'moved to front — pickup is paused', 'resume to run it')
     : pause.containmentBlocked
-    ? { color: 'var(--coral-4)', line: 'worker containment unavailable · nothing starts', meta: 'see the repair question', taskId: null }
+    ? halt(
+        { color: 'var(--coral-4)', line: 'worker containment unavailable · nothing starts', meta: 'see the repair question', taskId: null },
+        'warn', 'moved to front — pickup blocked', 'worker containment is not established')
     : pause.registryReachabilityBlocked
-    ? { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null }
+    ? halt(
+        { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
+        'warn', 'moved to front — pickup blocked', 'registry remote is unreachable')
     : throttle?.revalidating
-    ? {
-        color: 'var(--sun-4)', line: 'usage re-evaluation in progress · nothing starts', taskId: null,
-        meta: throttleObservedAt ? `last observed ${throttleObservedAt}` : 'no observation yet',
-      }
+    ? halt(
+        {
+          color: 'var(--sun-4)', line: 'usage re-evaluation in progress · nothing starts', taskId: null,
+          meta: throttleObservedAt ? `last observed ${throttleObservedAt}` : 'no observation yet',
+        },
+        'info', 'moved to front — usage is being re-evaluated', 'waiting for a fresh observation')
+    : throttled
+    ? halt(
+        {
+          color: 'var(--coral-4)', taskId: null,
+          ...(throttleFailClosed
+            ? {
+                line: 'usage check unavailable · nothing starts',
+                meta: `fail-closed — check usage check logs${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
+              }
+            : {
+                line: 'usage pace · nothing starts',
+                // which line is hit (ADR 0030) — an old pre-window row (no
+                // windows persisted yet) falls back to the plain resume text
+                meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${throttleResumesAt}${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
+              }),
+        },
+        'warn', 'moved to front — pickup blocked',
+        throttleFailClosed
+          ? 'usage check unavailable — nothing starts until a fresh reading arrives'
+          : `usage limit · resumes ${throttleResumesAt}`)
     : null;
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
@@ -198,23 +231,8 @@ function mapData(board, log, pause, icons = {}) {
   // at pickup-decision time, so mid-run it may already be stale.
   const slot = running
     ? { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
-    : boardHaltSlot
-    ? boardHaltSlot
-    : throttled
-    ? {
-        color: 'var(--coral-4)', taskId: null,
-        ...(throttleFailClosed
-          ? {
-              line: 'usage check unavailable · nothing starts',
-              meta: `fail-closed — check usage check logs${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
-            }
-          : {
-              line: 'usage pace · nothing starts',
-              // which line is hit (ADR 0030) — an old pre-window row (no
-              // windows persisted yet) falls back to the plain resume text
-              meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${throttleResumesAt}${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
-            }),
-      }
+    : pickupHalt
+    ? pickupHalt.slot
     : fableThrottled
     ? {
         // fable line only (ADR 0030): the board keeps flowing — fable-model
@@ -234,7 +252,7 @@ function mapData(board, log, pause, icons = {}) {
     // empty until their domain slices exist: human tasks / agent registry /
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
-    slot, running: !!running, paused: !!paused,
+    slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: !!pause.triageActive,
     containmentBlocked: !!pause.containmentBlocked,
     registryReachabilityBlocked: !!pause.registryReachabilityBlocked,
@@ -2506,21 +2524,9 @@ function App() {
       const fresh = await refresh();
       if (!wasHead) {
         say('info', 'moved to front', 'reordered only — press ↑ again to run it now');
-      } else if (fresh.triageActive) {
-        say('warn', 'moved to front — pickup blocked', 'triage in progress — commit it to resume');
-      } else if (fresh.paused) {
-        say('warn', 'moved to front — pickup is paused', 'resume to run it');
-      } else if (fresh.containmentBlocked) {
-        say('warn', 'moved to front — pickup blocked', 'worker containment is not established');
-      } else if (fresh.registryReachabilityBlocked) {
-        say('warn', 'moved to front — pickup blocked', 'registry remote is unreachable');
-      } else if (fresh.throttleRevalidating) {
-        say('info', 'moved to front — usage is being re-evaluated', 'waiting for a fresh observation');
-      } else if (fresh.throttled) {
-        say('warn', 'moved to front — pickup blocked',
-          fresh.throttleFailClosed
-            ? 'usage check unavailable — nothing starts until a fresh reading arrives'
-            : `usage limit · resumes ${fresh.throttleResumesAt}`);
+      } else if (fresh.pickupHalt) {
+        const { kind, msg, detail } = fresh.pickupHalt.toast;
+        say(kind, msg, detail);
       } else {
         say('success', 'moved to front — immediate poll fired', id);
       }

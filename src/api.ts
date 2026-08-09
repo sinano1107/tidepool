@@ -432,8 +432,8 @@ export interface ApiRouterDeps {
   db: Db;
   clock: Clock;
   onQueueHeadChanged: () => void;
-  /** Scheduler observation in flight; absent for API-only tests. */
-  pickupRevalidating?: () => boolean;
+  /** Just-in-time usage observation in flight; absent for API-only tests. */
+  throttleRevalidating?: () => boolean;
   /** The board's workspace path — where `gh` runs for the merge dial's live
    *  CI check (issue #11). Absent → a merge-decision "merge" answer can't
    *  check CI and is rejected. */
@@ -545,7 +545,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     db,
     clock,
     onQueueHeadChanged,
-    pickupRevalidating = () => false,
+    throttleRevalidating = () => false,
     workspace,
     resolveWorkspace,
     github,
@@ -1358,7 +1358,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       triageActive: activeTriageSession(db) !== undefined,
       containmentBlocked: openContainmentQuestion(db) !== undefined,
       registryReachabilityBlocked: openRegistryReachabilityQuestion(db) !== undefined,
-      throttle: { ...throttle, resumesAt, revalidating: pickupRevalidating() },
+      throttle: { ...throttle, resumesAt, revalidating: throttleRevalidating() },
       spendDown: spendDownJson(),
     });
   });
