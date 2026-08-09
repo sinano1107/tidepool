@@ -59,6 +59,9 @@ const TASKS_TABLE_DDL = `
       -- question stands in for. Never set via MCP or the JSON API — only
       -- recordPrOpened's escalate branch sets this.
       question_pending_merge_pr INTEGER,
+      -- system-internal only (ADR 0053): the completed work task whose
+      -- purely-local task branch awaits a human merge/hold decision.
+      question_pending_local_merge_task_id TEXT,
       -- system-internal only (issue #66): the completed work task whose PR
       -- promotion failed. submitAnswer retries it synchronously on
       -- "retry"; never set through MCP or the JSON API.
@@ -356,6 +359,7 @@ export function openDb(path: string): Db {
     "question_answer_comment",
     "question_cancel_option",
     "question_pending_child",
+    "question_pending_local_merge_task_id",
     "question_pending_pr_promotion_task_id",
     "question_quarantine_workspace",
     "question_quarantine_agent",

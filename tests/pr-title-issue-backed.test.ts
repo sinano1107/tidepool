@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
-import { bootTidepool, HOUR, makeWorkspace, mcpClient, type Tidepool } from "./harness.js";
+import {
+  bootTidepool,
+  HOUR,
+  makeRemoteBackedWorkspace,
+  mcpClient,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
@@ -22,7 +28,7 @@ const fullHandoff = {
 };
 
 it("issue参照タスクの complete_task 成立後、PR の title は GitHub の issue タイトルを解決したものになる(issue #49, ADR 0016: PR titleでのlive展開)", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
 
   const db = openDb(join(t.dir, "board.sqlite"));

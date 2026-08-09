@@ -65,7 +65,7 @@ export function protectedBranch(workspace: WorkspaceConfig): string {
 
 /** ADR 0052 決定3: この workspace が remote の正本を持つと**宣言している**か。
  *  clone を覗く関数ではない —— `repo` の有無だけを読む。 */
-function isRemoteBacked(workspace: WorkspaceConfig): boolean {
+export function isRemoteBacked(workspace: WorkspaceConfig): boolean {
   return workspace.repo !== undefined;
 }
 
@@ -631,4 +631,21 @@ export function releaseWorkspace(
   } catch (err) {
     quarantineWorkspace(db, workspace.name, err, now);
   }
+}
+
+/** ADR 0053 decision 3: apply an approved landing decision for a purely-local
+ *  task. The protected branch may only move by fast-forward; divergence means
+ *  an out-of-band write changed the base while the decision was pending. */
+export function mergeTaskToProtected(workspace: WorkspaceConfig, taskId: string): void {
+  if (isRemoteBacked(workspace)) {
+    throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
+  }
+  git(workspace.path, "checkout", protectedBranch(workspace));
+  git(
+    workspace.path,
+    ...TIDEPOOL_GIT_IDENTITY,
+    "merge",
+    "--ff-only",
+    taskBranch(taskId),
+  );
 }

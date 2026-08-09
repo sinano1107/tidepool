@@ -6,7 +6,7 @@ import {
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
-  makeWorkspace,
+  makeRemoteBackedWorkspace,
   mcpClient,
   registerWork,
   type Tidepool,
@@ -21,8 +21,9 @@ afterEach(async () => {
 
 describe("issue #27: workspace ごとの保護ブランチ設定", () => {
   it("branch: master な workspace のタスクは master 起点で fork され、master base で PR が開く", async () => {
-    const prod = await makeWorkspace(dirs, "prod");
+    const { workspace: prod } = await makeRemoteBackedWorkspace(dirs, "prod");
     git(prod.path, "branch", "master");
+    git(prod.path, "push", "origin", "master");
     const registry: Record<string, WorkspaceConfig> = {
       prod: { ...prod, branch: "master" },
     };

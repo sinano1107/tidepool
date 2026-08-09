@@ -27,6 +27,8 @@ import {
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import {
   buildWorkspaceResolver,
+  mergeTaskToProtected,
+  quarantineWorkspace,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
   type WorkspaceConfig,
@@ -320,6 +322,31 @@ export async function submitAnswer(
     try {
       await deps.retryPrPromotion(promotionTask);
     } catch (err) {
+      throw new DomainError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  const localMergeTaskId = task.question_pending_local_merge_task_id;
+  const wantsLocalMerge =
+    localMergeTaskId !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
+  if (wantsLocalMerge) {
+    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+    if (!resolve) {
+      throw new DomainError("no workspace configured — cannot land the task branch");
+    }
+    let mergeWorkspace: WorkspaceConfig;
+    try {
+      mergeWorkspace = resolve(task.workspace);
+    } catch (err) {
+      if (!(err instanceof UnknownWorkspaceError)) throw err;
+      throw new DomainError(
+        `no workspace configured for "${err.workspaceName}" — cannot land the task branch`,
+      );
+    }
+    try {
+      mergeTaskToProtected(mergeWorkspace, localMergeTaskId);
+    } catch (err) {
+      quarantineWorkspace(deps.db, mergeWorkspace.name, err, now());
       throw new DomainError(err instanceof Error ? err.message : String(err));
     }
   }

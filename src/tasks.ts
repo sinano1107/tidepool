@@ -100,6 +100,9 @@ export interface Task {
    *  `escalate` merge dial, read only by submitAnswer to gate the actual
    *  merge on a live CI check. Never set via MCP or the JSON API. */
   question_pending_merge_pr: number | null;
+  /** System-internal only (ADR 0053): the completed work task whose
+   *  purely-local task branch awaits a human merge/hold decision. */
+  question_pending_local_merge_task_id: string | null;
   /** System-internal only (issue #66): the completed work task whose failed
    *  PR promotion this failure question can retry. */
   question_pending_pr_promotion_task_id: string | null;
@@ -269,6 +272,9 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  question stands in for. Never set via MCP or the JSON API — only
    *  recordPrOpened's `escalate` branch sets this. */
   pending_merge_pr?: number;
+  /** System-internal only (ADR 0053): the completed work task whose
+   *  purely-local branch awaits a merge/hold answer. */
+  pending_local_merge_task_id?: string;
   /** System-internal only (issue #66): the completed work task whose failed
    *  PR promotion this question can retry. */
   pending_pr_promotion_task_id?: string;
@@ -543,6 +549,7 @@ export function registerTask(
     question_cancel_option: input.cancel_option ?? null,
     question_pending_child: input.pending_child ?? null,
     question_pending_merge_pr: input.pending_merge_pr ?? null,
+    question_pending_local_merge_task_id: input.pending_local_merge_task_id ?? null,
     question_pending_pr_promotion_task_id: input.pending_pr_promotion_task_id ?? null,
     question_quarantine_workspace: input.quarantine_workspace ?? null,
     question_quarantine_agent: input.quarantine_agent ?? null,
@@ -556,12 +563,12 @@ export function registerTask(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
-         question_pending_child, question_pending_merge_pr, question_pending_pr_promotion_task_id, question_quarantine_workspace,
+         question_pending_child, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
          question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
-         @question_pending_child, @question_pending_merge_pr, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
+         @question_pending_child, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
          @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @github_issue_number, @created_at)`,
     ).run({
       ...task,
@@ -1031,6 +1038,7 @@ export function assertAnswerable(question: Task, answers: string[]): void {
   // Quarantine) — neither carries this kind of consequence.
   const isFixedChoiceQuestion =
     question.question_pending_merge_pr !== null ||
+    question.question_pending_local_merge_task_id !== null ||
     question.question_pending_pr_promotion_task_id !== null ||
     question.question_pending_child !== null ||
     question.question_cancel_option !== null;
@@ -1411,6 +1419,35 @@ export function registerMergeQuestion(
     now,
     workerId,
     origin,
+  );
+}
+
+/** ADR 0053 decision 3: a purely-local root completion has no PR surface, so
+ *  the board asks whether to fast-forward its task branch onto the protected
+ *  branch or leave it there permanently. The task id is deliberately stored
+ *  separately from question_pending_merge_pr: one names a local branch while
+ *  the other names a GitHub PR. */
+export function registerLocalMergeQuestion(
+  db: Db,
+  task: Task,
+  purpose: string,
+  now: Date,
+): void {
+  const title = `land completed task: ${task.title}`;
+  registerTask(
+    db,
+    {
+      type: "question",
+      title,
+      purpose,
+      completion_criteria: "a human decides whether to land the completed task branch",
+      question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation: "merge" }],
+      pending_local_merge_task_id: task.id,
+      workspace: task.workspace ?? undefined,
+    },
+    now,
+    BOARD_WORKER_ID,
+    "board",
   );
 }
 

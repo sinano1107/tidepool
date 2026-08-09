@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
-import { bootTidepool, HOUR, makeWorkspace, mcpClient, type Tidepool } from "./harness.js";
+import {
+  bootTidepool,
+  HOUR,
+  makeRemoteBackedWorkspace,
+  mcpClient,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
@@ -22,7 +28,7 @@ const fullHandoff = {
 };
 
 it("issue参照タスクの complete_task 成立後、PR body の末尾に空行区切りで `Closes #N` が付与される(issue #49, ADR 0016 設計点7)", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
 
   const db = openDb(join(t.dir, "board.sqlite"));
@@ -56,7 +62,7 @@ it("issue参照タスクの complete_task 成立後、PR body の末尾に空行
 });
 
 it("通常タスク(github_issue_number なし)の complete_task 成立後、PR body に Closes 行は付与されない", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
 
   const db = openDb(join(t.dir, "board.sqlite"));

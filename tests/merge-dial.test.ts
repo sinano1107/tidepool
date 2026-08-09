@@ -5,7 +5,7 @@ import {
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
   HOUR,
-  makeWorkspace,
+  makeRemoteBackedWorkspace,
   mcpClient,
   registerWork,
   type Tidepool,
@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 it("completing a work task under the escalate merge dial registers a merge-decision question referencing the opened PR", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -48,7 +48,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
 });
 
 it("completing a work task with no merge dial configured opens the PR without any merge-decision question (pre-#11 baseline)", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -77,7 +77,7 @@ async function completeUnderEscalate(t: Tidepool) {
 }
 
 it("answering a merge-decision question with \"merge\" while CI is green performs the actual merge", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -98,7 +98,7 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
 });
 
 it("answering \"merge\" while CI is not green is rejected, and the question stays open to retry", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -118,7 +118,7 @@ it("answering \"merge\" while CI is not green is rejected, and the question stay
 });
 
 it("a malformed POST (answer count mismatch) to an open merge question is rejected before any CI check or merge (issue #111)", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -142,7 +142,7 @@ it("a malformed POST (answer count mismatch) to an open merge question is reject
 });
 
 it("answering \"hold\" resolves the question without checking CI or merging", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
@@ -161,7 +161,7 @@ it("answering \"hold\" resolves the question without checking CI or merging", as
 const MINUTE = 60 * 1000;
 
 it("a low-risk task under auto_if_ci_green queues for auto-merge instead of asking, then merges once the poll sees CI green", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -195,7 +195,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
 });
 
 it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge into an escalation question instead of merging", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -219,7 +219,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
 });
 
 it("a risky decomposed child merges back, then its root integration PR asks for approval instead of auto-merge", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
@@ -281,7 +281,7 @@ it("a risky decomposed child merges back, then its root integration PR asks for 
 });
 
 it("a settled merge-decision question cannot be re-answered into a merge", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },

@@ -5,6 +5,7 @@ import {
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -20,7 +21,7 @@ afterEach(async () => {
 
 it("prod workspace のタスクを complete すると、PR は sandbox ではなく prod の checkout に向けて作られる", async () => {
   const sandbox = await makeWorkspace(dirs, "sandbox");
-  const prod = await makeWorkspace(dirs, "prod");
+  const { workspace: prod } = await makeRemoteBackedWorkspace(dirs, "prod");
   const registry: Record<string, WorkspaceConfig> = { sandbox, prod };
   t = await bootTidepool({
     workspace: sandbox,
