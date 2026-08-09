@@ -51,19 +51,24 @@ export function startTriage(db: Db, now: Date): TriageSession {
   return session!;
 }
 
-/** Every human touch (answer, objection, scratchpad) defers the auto-commit. */
+/** Every human touch (answer, objection, scratchpad, displayed entry) defers
+ *  the auto-commit. */
 export function touchTriage(db: Db, now: Date): void {
   db.prepare(
     "UPDATE triage_sessions SET last_activity_at = ? WHERE committed_at IS NULL",
   ).run(now.toISOString());
 }
 
-/** A human triage action happened: touch the open session (deferring the
- *  auto-commit) and return it, or undefined when no session is open. The one
- *  entry point for routes that behave differently mid-triage. */
-export function triageActivity(db: Db, now: Date): TriageSession | undefined {
+/** A human triage action happened: open the session when this action belongs
+ *  to the triage flow, otherwise touch and return an already-open session. */
+export function triageActivity(
+  db: Db,
+  now: Date,
+  openIfNeeded = false,
+): TriageSession | undefined {
   const open = activeTriageSession(db);
-  if (open) touchTriage(db, now);
+  if (!open) return openIfNeeded ? startTriage(db, now) : undefined;
+  touchTriage(db, now);
   return open;
 }
 
@@ -95,13 +100,9 @@ export function raiseObjection(
   comment: string,
   now: Date,
 ): number {
-  const open = activeTriageSession(db);
-  if (!open) {
-    throw new TriageError("objections are raised inside an open triage session");
-  }
   if (!comment.trim()) throw new TriageError("an objection carries a direction comment");
   const entry = requireLogEntry(db, entryId);
-  touchTriage(db, now);
+  const open = triageActivity(db, now, true)!;
   return appendEvent(db, {
     taskId: entry.task_id,
     workerId: HUMAN_WORKER_ID,
@@ -286,9 +287,7 @@ export interface ScratchpadLine {
 
 /** Jot one line on the shared scratchpad — durable at once, from any screen. */
 export function addScratchpadLine(db: Db, line: string, now: Date): ScratchpadLine {
-  const open = activeTriageSession(db);
-  if (!open) throw new TriageError("the scratchpad lives inside an open triage session");
-  touchTriage(db, now);
+  const open = triageActivity(db, now, true)!;
   const { lastInsertRowid } = db
     .prepare("INSERT INTO triage_scratchpad (session_id, line) VALUES (?, ?)")
     .run(open.id, line);
@@ -382,15 +381,19 @@ function requireLogEntry(db: Db, entryId: number): LogEntry {
  *  so the objection-rate denominator counts only what flows through here. */
 export function recordDisplayedEntries(db: Db, entryIds: number[], now: Date): void {
   const open = activeTriageSession(db);
-  if (!open) throw new TriageError("displayed entries are recorded inside an open triage session");
   db.transaction(() => {
+    if (open) touchTriage(db, now);
     for (const entryId of entryIds) {
       const entry = requireLogEntry(db, entryId);
       appendEvent(db, {
         taskId: entry.task_id,
         workerId: HUMAN_WORKER_ID,
         origin: "webui",
-        payload: { kind: "log_entry_displayed", entry_id: entryId, session_id: open.id },
+        payload: {
+          kind: "log_entry_displayed",
+          entry_id: entryId,
+          ...(open && { session_id: open.id }),
+        },
         at: now,
       });
     }

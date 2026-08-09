@@ -2512,19 +2512,9 @@ function App() {
     setData((d) => tab === "triage" && d ? { ...fresh, questions: d.questions, log: d.log, lastLogId: d.lastLogId } : fresh);
     return fresh;
   };
-  const dataLoaded = data !== null;
-  React.useEffect(() => {
-    if (tab === "triage" && data && (data.questions.length || data.log.some((l) => l.unread))) {
-      api("/api/triage/start", {}).catch((err) => say(
-        "danger",
-        "triage session failed to open \u2014 answers would apply immediately; reload before answering",
-        String(err.message || err)
-      ));
-    }
-  }, [tab, dataLoaded]);
   const answerNow = async (q, a) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answers: a });
+      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true });
     } catch (err) {
       say("danger", "answer failed", String(err.message || err));
       throw err;

@@ -2355,26 +2355,12 @@ function App() {
     return fresh;
   };
 
-  // The triage session (issue #6): entering the skim opens it server-side —
-  // pickup pauses, and answers/objections/scratchpad persist at once but stage
-  // their queue effects until commit (or the abandonment timeout). A failed
-  // open must be loud: without a session, answers would apply to the queue
-  // immediately and the atomic-commit guarantee would silently degrade.
-  const dataLoaded = data !== null; // effect dep: re-fire once the first snapshot lands
-  React.useEffect(() => {
-    if (tab === 'triage' && data && (data.questions.length || data.log.some((l) => l.unread))) {
-      api('/api/triage/start', {}).catch((err) =>
-        say('danger', 'triage session failed to open — answers would apply immediately; reload before answering',
-          String(err.message || err)));
-    }
-  }, [tab, dataLoaded]);
-
   // S1 — the last tap in a bundle persists every item's answer atomically;
   // the unblocked parent is staged server-side (issue #30: `a` is one answer
   // per item, in item order)
   const answerNow = async (q, a) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answers: a });
+      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true });
     } catch (err) {
       say('danger', 'answer failed', String(err.message || err));
       throw err;

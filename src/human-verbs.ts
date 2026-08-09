@@ -321,6 +321,7 @@ export async function submitAnswer(
   comment: string | undefined,
   now: () => Date,
   origin: EventOrigin = "webui",
+  openTriage = false,
 ): Promise<Task> {
   // Every special-case side effect below must come after this validation.
   // Otherwise a malformed answer can retry promotion, inspect/merge a PR, or
@@ -440,7 +441,7 @@ export async function submitAnswer(
 
   // An answer during triage is durable immediately, but its parent unblock is
   // staged until commit. The activity touch also defers triage auto-commit.
-  const session = triageActivity(deps.db, now());
+  const session = triageActivity(deps.db, now(), openTriage);
   const { question, parentUnblocked, pickupResumed } = answerQuestion(
     deps.db,
     task,
