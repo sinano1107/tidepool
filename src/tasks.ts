@@ -2022,21 +2022,21 @@ export function resolveTaskAgent(
   return task.assignee ?? (task.type === "review" ? auditorName : defaultAgentName);
 }
 
-/** The type-aware fallback pointer behind `agentQuarantinedSql`'s `defaultRef`
- *  (issue #42 / CONTEXT.md's Auditor): an unset assignee on a `review` task
- *  resolves to the board's Auditor pointer, every other type to the board's
- *  default agent — same COALESCE-based "unset = live reference" shape either
- *  way (ADR 0011), just a different pointer depending on task type. Absent
- *  the relevant pointer for a given row's type, that row's `defaultRef`
- *  evaluates to NULL, which `agentQuarantinedSql`'s COALESCE/`=` already
- *  treats as "no fallback, gate only an explicit assignee" — no separate
- *  null-guard needed here. */
+/** The type-aware execution fallback pointer behind `agentQuarantinedSql`'s
+ *  `defaultRef` (issue #42 / #242 / CONTEXT.md's Auditor): a question has no
+ *  executor, an unset review resolves to the Auditor pointer, and an unset
+ *  work task resolves to the board's default agent. Absent pointers evaluate
+ *  to NULL, which `agentQuarantinedSql`'s COALESCE/`=` already treats as "no
+ *  fallback, gate only an explicit assignee" — no separate null-guard needed
+ *  here. */
 export function typeAwareDefaultAgentSql(
   taskTypeRef: string,
   defaultAgentRef: string,
   auditorRef: string,
 ): string {
-  return `CASE WHEN ${taskTypeRef} = 'review' THEN ${auditorRef} ELSE ${defaultAgentRef} END`;
+  return `CASE WHEN ${taskTypeRef} = 'question' THEN NULL
+               WHEN ${taskTypeRef} = 'review' THEN ${auditorRef}
+               ELSE ${defaultAgentRef} END`;
 }
 
 /** Held (CONTEXT.md, ADR 0006 / 0048): while a question is unanswered, keep
@@ -2115,6 +2115,7 @@ export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
  *  takes precedence when both apply: it names the more local reason. */
 export type BoardTask = Omit<Task, "status"> & {
   status: TaskStatus | "blocked" | "held" | "skipped";
+  raw_assignee?: string | null;
 };
 
 function isHeld(db: Db, taskId: string): boolean {
@@ -2139,10 +2140,13 @@ function boardRows(
   extraCase: string,
   params: unknown[] = [],
 ): Array<Omit<TaskRow, "status"> & { status: TaskStatus | "blocked" | "held" | "skipped" }> {
+  const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   return db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}, ${SETTLED_TREE_CTE}
-       SELECT *,
+       SELECT tasks.*, tasks.assignee AS raw_assignee,
+         CASE WHEN tasks.type = 'question' THEN '${HUMAN_WORKER_ID}'
+              ELSE COALESCE(tasks.assignee, ${fallback}) END AS assignee,
          CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
               WHEN status = 'todo' AND ${heldSql("tasks.id")} THEN 'held'
               ${extraCase}
@@ -2158,8 +2162,12 @@ function boardRows(
 
 /** The whole board in one query — the list view derives blocked/held in SQL
  *  rather than issuing one probe per row. */
-export function listBoard(db: Db): BoardTask[] {
-  const rows = boardRows(db, "");
+export function listBoard(
+  db: Db,
+  defaultAgentName?: string,
+  auditorName: string = DEFAULT_AUDITOR_NAME,
+): BoardTask[] {
+  const rows = boardRows(db, "", [{ defaultAgentName: defaultAgentName ?? null, auditorName }]);
   return rows.map((row) => ({
     ...fillContentPlaceholder(row),
     question_items: parseJson<QuestionItem[]>(row.question_items),

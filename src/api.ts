@@ -1393,7 +1393,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     res.json({
       session,
-      queue: triagePreview(db, session.id),
+      queue: triagePreview(db, session.id, defaultAgentName, auditorName),
       scratchpad: listScratchpad(db, session.id),
     });
   });
@@ -1515,7 +1515,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     );
 
   router.get("/tasks", async (_req, res) => {
-    res.json(await presentLive(listBoard(db)));
+    res.json(await presentLive(listBoard(db, defaultAgentName, auditorName)));
   });
 
   // the persistent your-tasks list (issue #13): every unsettled human-

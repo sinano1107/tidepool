@@ -41,7 +41,8 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board.find((x: any) => x.type === "question");
   expect(question).toMatchObject({
-    assignee: null,
+    assignee: "human",
+    raw_assignee: null,
     question_items: [
       {
         options: ["retry", "abandon promotion"],

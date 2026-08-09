@@ -410,9 +410,14 @@ export type PreviewTask = BoardTask & { front_inserted: boolean };
 /** The S3 staged-queue preview: the queue as commit will leave it — this
  *  session's front-inserts on top (highlighted), the rest in live order. The
  *  live queue itself stays untouched until commit. */
-export function triagePreview(db: Db, sessionId: number): PreviewTask[] {
+export function triagePreview(
+  db: Db,
+  sessionId: number,
+  defaultAgentName?: string,
+  auditorName?: string,
+): PreviewTask[] {
   const staged = stagedFrontInserts(db, sessionId);
-  const queue = listBoard(db).filter(
+  const queue = listBoard(db, defaultAgentName, auditorName).filter(
     (task) => task.status === "todo" || task.status === "blocked",
   );
   const fronts = staged

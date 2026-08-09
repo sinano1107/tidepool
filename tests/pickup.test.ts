@@ -21,9 +21,9 @@ it("the hourly tick hands the queue head to the worker and marks it in_progress"
   expect(byId[first.id].status).toBe("in_progress");
   // an unspecified assignee is never baked in at pickup (ADR 0012 / issue
   // #36): it stays a live reference to the board's default agent, resolved
-  // fresh wherever it's used, not pinned to the worker that happened to pick
-  // it up
-  expect(byId[first.id].assignee).toBeNull();
+  // Board shows the current resolved assignee, while raw_assignee proves it
+  // remains a live reference rather than a name baked at pickup.
+  expect(byId[first.id]).toMatchObject({ assignee: "fake-worker", raw_assignee: null });
   expect(byId[second.id].status).toBe("todo");
 
   // slot is busy (concurrency = 1): the next tick starts nothing new

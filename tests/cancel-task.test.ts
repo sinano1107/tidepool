@@ -158,3 +158,43 @@ it("そのタスクの資源に対する未回答の quarantine 確認が開い�
   const res = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/cancel`, {});
   expect(res.status).toBe(400);
 });
+
+it("assignee 未設定の question だけを含む subtree は、default agent の quarantine 中でも直接 cancel できる(issue #242)", async () => {
+  t = await bootTidepool({ workerId: "quarantined-agent" });
+  const parent = await registerWork(t, "human plan", undefined, undefined, "human");
+  registerQuestion(t, {
+    title: "a human decision",
+    purpose: "does not run as an agent",
+    completion_criteria: "a human answers",
+    parent_id: parent.id,
+    question: [{ title: "choose", options: ["yes", "no"], recommendation: "yes" }],
+  });
+  registerQuestion(t, {
+    title: "quarantined-agent needs human",
+    purpose: "agent quarantine",
+    completion_criteria: "repaired by hand",
+    question: [{ title: "repaired?", options: ["repaired by hand"], recommendation: "repaired by hand" }],
+    quarantine_agent: "quarantined-agent",
+  });
+
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/cancel`, {});
+
+  expect(res.status).toBe(200);
+});
+
+it("default agent に解決される task を含む subtree は、quarantine 中は直接 cancel できない(issue #242)", async () => {
+  t = await bootTidepool({ workerId: "quarantined-agent" });
+  const parent = await registerWork(t, "human plan", undefined, undefined, "human");
+  await addChild(t, parent.id, "runs as the default agent");
+  registerQuestion(t, {
+    title: "quarantined-agent needs human",
+    purpose: "agent quarantine",
+    completion_criteria: "repaired by hand",
+    question: [{ title: "repaired?", options: ["repaired by hand"], recommendation: "repaired by hand" }],
+    quarantine_agent: "quarantined-agent",
+  });
+
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/cancel`, {});
+
+  expect(res.status).toBe(400);
+});
