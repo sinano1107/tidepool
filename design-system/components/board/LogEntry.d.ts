@@ -1,6 +1,6 @@
 /**
  * One decision-log line for the morning skim. Silence = approval; tapping a
- * clickable row (onObject given, no objection yet) toggles the objection
+ * clickable row (onObject given) toggles the objection
  * composer — works on touch, no hover required. Completions get a grass fill.
  */
 export interface LogEntryProps {
@@ -18,6 +18,8 @@ export interface LogEntryProps {
   };
   /** Tap/click handler — row becomes the Object affordance. */
   onObject?: () => void;
+  /** Completion handoff toggle, kept separate from the row's Object affordance. */
+  onExpand?: () => void;
   /** Objection composer open for this row (coral tint + "objecting…" marker). */
   active?: boolean;
   style?: React.CSSProperties;
