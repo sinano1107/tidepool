@@ -854,7 +854,6 @@ function mapData(board, log, pause, icons = {}) {
     throttled,
     throttleFailClosed,
     throttleResumesAt,
-    throttleObservedAt: throttle?.observedAt ?? null,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled,
     fableResumesAt,

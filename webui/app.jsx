@@ -241,7 +241,6 @@ function mapData(board, log, pause, icons = {}) {
     // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
     spendDown: pause.spendDown ?? null,
     throttled, throttleFailClosed, throttleResumesAt,
-    throttleObservedAt: throttle?.observedAt ?? null,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled, fableResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
