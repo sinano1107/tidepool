@@ -183,7 +183,8 @@ export function startScheduler(deps: {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor pointer,
-    // every other unspecified task to the board's default agent
+    // and unspecified work to the board's default agent. Questions never enter
+    // the execution slot.
     const picked = pickupTask(
       db,
       task,

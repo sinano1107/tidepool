@@ -2011,14 +2011,15 @@ export function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string)
             WHERE a.name = COALESCE(${taskAssigneeRef}, ${defaultRef}) AND a.needs_human = 1)`;
 }
 
-/** CONTEXT.md's Assignee/Auditor resolution in TypeScript — the twin of
- * `typeAwareDefaultAgentSql` below. Callers supply their own final fallback
- * names; only the task-type rule is shared here. */
+/** Resolve the execution agent for a task that can enter the slot
+ * (CONTEXT.md's Assignee/Auditor). Questions are answered by a human and have
+ * no execution agent; accepting one here would hide a broken execution path. */
 export function resolveTaskAgent(
   task: Pick<Task, "type" | "assignee">,
   defaultAgentName: string,
   auditorName: string,
 ): string {
+  if (task.type === "question") throw new Error("question tasks have no execution agent");
   return task.assignee ?? (task.type === "review" ? auditorName : defaultAgentName);
 }
 
@@ -2189,8 +2190,9 @@ export function listBoard(
  *  `defaultAgentName`/`auditorName` are the same gate over the agent-name
  *  generalization of quarantine (ADR 0012 / issue #36: `task.assignee ?? the
  *  board's default agent`), made type-aware (issue #42 / CONTEXT.md's
- *  Auditor): a `review` task's unset assignee falls back to `auditorName`,
- *  every other type to `defaultAgentName` — `nextSlotTask`'s own
+ *  Auditor): a `review` task's unset assignee falls back to `auditorName`, a
+ *  `work` task to `defaultAgentName`, and a `question` has no fallback —
+ *  `nextSlotTask`'s own
  *  `typeAwareDefaultAgentSql`, bound the same way via named `@auditorName`/
  *  `@defaultAgentName` params (better-sqlite3 allows mixing named params into
  *  an otherwise-positional statement) so the fragment can be spliced into the
