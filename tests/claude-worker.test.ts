@@ -490,6 +490,83 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain("You are Deckhand");
   });
 
+  it("review タスクの system prompt は task-type 固定の authority guidance を使い、registry profile の guidance を使わない(ADR 0056 / issue #249)", async () => {
+    const registryGuidance = "Registry authority guidance must not appear in a review.";
+    const { start, calls } = await makeWorker({
+      "authority/standard.yaml":
+        `guidance: ${registryGuidance}\nassignable_to:\n  - \"*\"\nallowed_workspaces:\n  - \"*\"\n`,
+      "agents/keeper.md": KEEPER_MD,
+    });
+    start("task-review-authority", null, "keeper", "review");
+
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain(
+      "You are reviewing read-only. Never fix directly — findings become repair tasks.\n" +
+        "Assign a repair to the worker in your roster: they executed the task you are reviewing.",
+    );
+    expect(systemPrompt).not.toContain(registryGuidance);
+  });
+
+  it("review タスクの roster は registry profile が全員への委譲を許していても被レビュータスクの executor 1名だけを示す(ADR 0056 / issue #249)", async () => {
+    const { worker, calls, db } = await makeWorker({
+      "agents/keeper.md": KEEPER_MD,
+      "agents/navigator.md": NAVIGATOR_MD,
+    });
+    const reviewed = makeTask("task-reviewed", null, null);
+    insertTask(db, reviewed);
+    appendEvent(db, {
+      taskId: reviewed.id,
+      workerId: "deckhand",
+      origin: "worker",
+      payload: { kind: "task_completed", handoff_present: true, result: "done" },
+      at: new FakeClock().now(),
+    });
+    const review: Task = {
+      ...makeTask("task-review-roster", null, "keeper", "review"),
+      parent_id: reviewed.id,
+    };
+    insertTask(db, review);
+    worker.start(review);
+
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const roster = systemPrompt.split("## Roster\n\n")[1]?.split("\n\n## Board doctrine")[0];
+    expect(roster).toBe("deckhand — General work agent for the tidepool board");
+  });
+
+  it("親を持たないルート review の system prompt には roster セクションを出さない(ADR 0056 / issue #249)", async () => {
+    const { start, calls } = await makeWorker({ "agents/keeper.md": KEEPER_MD });
+    start("task-root-review", null, "keeper", "review");
+
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).not.toContain("## Roster");
+  });
+
+  it("被レビュータスクの executor が registry から drift していれば review の roster セクションを出さない(ADR 0056 / issue #249)", async () => {
+    const { worker, calls, db } = await makeWorker({ "agents/keeper.md": KEEPER_MD });
+    const reviewed = makeTask("task-reviewed-by-drifted-agent", null, null);
+    insertTask(db, reviewed);
+    appendEvent(db, {
+      taskId: reviewed.id,
+      workerId: "ghost",
+      origin: "worker",
+      payload: { kind: "task_completed", handoff_present: true, result: "done" },
+      at: new FakeClock().now(),
+    });
+    const review: Task = {
+      ...makeTask("task-review-drifted-executor", null, "keeper", "review"),
+      parent_id: reviewed.id,
+    };
+    insertTask(db, review);
+    worker.start(review);
+
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).not.toContain("## Roster");
+  });
+
   it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {
     const { start, db } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-attributed", null, "navigator");
