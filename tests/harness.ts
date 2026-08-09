@@ -72,6 +72,8 @@ export interface Tidepool {
 export interface BootOptions {
   /** Existing board dir to reboot on — for restart tests. */
   dir?: string;
+  /** Override the scripted WorkerAdapter identity across board restarts. */
+  workerId?: string;
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
   /** ADR 0052 / issue #211: どの registry clone を読み書きするか + remote 正本の宣言。
@@ -181,7 +183,7 @@ function normalizeCandidates(
 export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
   const clock = new FakeClock();
-  const worker = new ScriptedWorker(clock);
+  const worker = new ScriptedWorker(clock, options.workerId);
   const github = new FakeGitHubClient();
   const push = new FakePushClient();
   const server = await startServer({

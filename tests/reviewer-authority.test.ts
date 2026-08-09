@@ -177,7 +177,7 @@ it("assignee 未設定の完了タスクを review すると、記録された e
 });
 
 it("task_completed が無ければ最後の pickup executor を修理先にでき、pickup 自体が無ければ免除は成立しない(ADR 0054 / issue #217)", async () => {
-  t = await bootTidepool();
+  t = await bootTidepool({ workerId: "first-worker" });
   const pickedParent = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "work",
@@ -186,7 +186,27 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
       completion_criteria: "criteria",
     })
   ).json;
-  await t.clock.advance(HOUR); // picked up as fake-worker, but never completed
+  await t.clock.advance(HOUR); // first pickup, never completed
+  const firstWorkerClient = await mcpClient(t.mcpBaseUrl, pickedParent.id);
+  await firstWorkerClient.callTool({
+    name: "escalate",
+    arguments: {
+      context: "pause before retrying with another worker",
+      questions: [
+        { title: "retry?", options: ["continue", "stop"], recommendation: "continue" },
+      ],
+    },
+  });
+  await firstWorkerClient.close();
+  const retryQuestion = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (task: any) => task.type === "question" && task.parent_id === pickedParent.id,
+  );
+  await t.stopServer();
+  t = await bootTidepool({ dir: t.dir, workerId: "second-worker" });
+  await api(t.baseUrl, "POST", `/api/tasks/${retryQuestion.id}/answer`, {
+    answers: ["continue"],
+  }); // immediate poll records the second pickup
+
   const parentClient = await mcpClient(t.mcpBaseUrl, pickedParent.id);
   await parentClient.callTool({
     name: "log_decision",
@@ -224,10 +244,16 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
       reason: "return the repair to the recorded executor",
       children: [
         {
-          title: "repair unfinished work",
+          title: "repair by the latest executor",
           purpose: "p",
           completion_criteria: "c",
-          assignee: "fake-worker",
+          assignee: "second-worker",
+        },
+        {
+          title: "repair by the earlier executor",
+          purpose: "p",
+          completion_criteria: "c",
+          assignee: "first-worker",
         },
       ],
     },
@@ -235,7 +261,12 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
   await pickedReviewClient.close();
   const pickedBoard = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const pickedParentVerdict = {
-    repairRegistered: pickedBoard.some((task: any) => task.title === "repair unfinished work"),
+    latestRepairRegistered: pickedBoard.some(
+      (task: any) => task.title === "repair by the latest executor",
+    ),
+    earlierRepairRegistered: pickedBoard.some(
+      (task: any) => task.title === "repair by the earlier executor",
+    ),
     approvalQuestionRegistered: pickedBoard.some(
       (task: any) => task.type === "question" && task.parent_id === pickedParentReview.id,
     ),
@@ -292,7 +323,11 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
       ),
     },
   }).toEqual({
-    pickedParent: { repairRegistered: true, approvalQuestionRegistered: false },
+    pickedParent: {
+      latestRepairRegistered: true,
+      earlierRepairRegistered: false,
+      approvalQuestionRegistered: true,
+    },
     untouchedParent: { repairRegistered: false, approvalQuestionRegistered: true },
   });
 });
