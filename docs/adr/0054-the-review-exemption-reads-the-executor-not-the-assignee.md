@@ -51,16 +51,46 @@ ADR 0020(当事者レビューに**当時版**の agent 定義を注入する)�
 
 ## 全域性
 
-この2段解決は**全域**である。`reviewedTaskExecutor` が呼ばれるのは、親を持つ review タスクの
-decompose 時に限られる。親を持つ review の入口は2つ:
+この2段解決は**全域**である —— ただし「どちらも無い」が起こらないからではなく、**「まだ実行者が
+存在しない」もこの規則の正当な答え**(`undefined` = 免除は成立しない)だからである。
 
-- **完了時レビュー**(`completeTask` の中で登録される、`src/tasks.ts:740`)—— 親は必ず `task_completed` を持つ。
+`reviewedTaskExecutor` が呼ばれるのは、親を持つ review タスクの decompose 時に限られる。親を持つ
+review の入口は3つ:
+
+- **完了時レビュー**(`completeTask` の中で登録される、`src/tasks.ts:740`)—— 親は必ず
+  `task_completed` を持つ。1段目で解決する。
 - **異議由来の RCA review**(`bundleObjections`、`src/triage.ts:195`)—— objection の対象になれる
   log entry は `decision_logged | task_completed` の2種だけ(`src/triage.ts:114`)。`decision_logged` は
-  worker session が書くものなので、その親は必ず pickup されている。
+  worker session が書くものなので、その親は必ず pickup されている。1段目か2段目で解決する。
+- **人間が親を名指して直接登録した review 子**(`src/human-verbs.ts:160`、ADR 0049 が数える4つ目の
+  付帯子)—— `type: "review"` は `humanDecomposeTask` を通らないので、**一度も pickup されていない
+  親**に付けられる。既定エージェントが quarantine されて親が止まっている間に、健全な Auditor へ
+  解決される review 子が先に走る、という到達経路がある。
 
-したがって「どちらも無い」は起こらず、免除が黙って落ちる穴はない。ルート review(親なし)は
-従来どおり `undefined` —— 独立監査に被レビュータスクは存在しない。
+3つ目で `undefined` になるのは正しい。**誰もそのタスクを実行していないのだから、実行者は存在
+しない。** 免除は「レビューとは対象を実行した者に直させるものだ」という一点で正当化されており、
+その者が居ないなら免除も無い —— 修理子は通常どおり人間承認 question になる。ルート review
+(親なし)が `undefined` になるのと同じ理由である。
+
+## #223 との関係
+
+被レビュータスクは work とは限らない。`log_decision` は task type で絞られておらず
+(`src/mcp.ts:448`)、`HUMAN_FACING_KINDS` は `decision_logged` を含む(`src/events.ts:286`)ため、
+**review タスクの決定ログにも異議は打て**、RCA review の親が review になりうる。
+
+したがって本 ADR の実装は issue #223 に**部分的に依存する**。
+
+- **1段目(`task_completed`)は汚染されていない。** worker MCP の完了は
+  `attributedWorkerId`(`src/mcp.ts:224`)を通り、review type を Auditor へ解決している。
+- **2段目(`task_picked_up`)は review 親について汚染されている。** `src/scheduler.ts:179` が
+  type-aware でないため、未設定 assignee の review は既定エージェント名で記録される(#223)。
+
+噛むのは「**未完了の review を親に持つ RCA review**」という狭い交差だけだが、#223 を先に直す。
+#223 は3件で最も軽く(server boundary テストのみ、ハーネス不要)、順序に無理がない。
+
+**既に書かれてしまった誤った `task_picked_up` は直さない。** event log は append-only であり、
+盤面の原則は「自己申告に依らない機械観測」—— 観測した内容が誤っていた事実自体も記録である。
+遡及修正は、修正の正しさを誰も機械観測できないという、より悪い性質を持ち込む。
 
 `task_completed.worker_id` が `human` になることもない。人間が完了を書ける経路は2本
 (`src/api.ts:1125`、`src/management-mcp.ts:470`)で、どちらも `assignee === 'human'` でなければ
