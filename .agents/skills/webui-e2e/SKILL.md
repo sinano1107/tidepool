@@ -26,7 +26,7 @@ Unless the user explicitly asks to promote, every check is **throwaway**:
    requires a credential (ADR 0036 / issue #153), but `boot()` already walks the
    bootstrap URL to set the cookie — a spec that wants the *unauthenticated* view calls
    `page.context().clearCookies()` first.
-4. Run `npm run e2e` (add `<name>.scratch` to target just yours).
+4. Run `npm run e2e:scratch -- <name>.scratch.spec.ts`.
 
 ```ts
 import { expect, test } from "./fixtures.js";

@@ -5,12 +5,12 @@ import { defineConfig } from "@playwright/test";
 // bootTidepool を in-process 起動して seam フェイクを差す。だからここには
 // baseURL も webServer も無い。
 //
-// 実行は 2 系統を同じ config で回す:
-//   - e2e/*.spec.ts         昇格済みスモーク(git 管理・CI 対象)
-//   - e2e/*.scratch.spec.ts 使い捨ての突発確認(.gitignore 済み)
-// どちらも `.spec.ts` 終端なので default testMatch がそのまま拾う。
+// 通常の `npm run e2e` は昇格済みスモークだけを回す。使い捨ての突発確認は
+// `npm run e2e:scratch -- <file>` で明示的に含めるので、ローカルの scratch が
+// 恒久回帰や CI を赤くしない。
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: process.env.PLAYWRIGHT_SCRATCH ? undefined : /.*\.scratch\.spec\.ts/,
   // 各テストが自前のサーバーを ephemeral port で起動する。ポート衝突は無いが、
   // 並列数は控えめにして in-process サーバーの多重起動を抑える。
   workers: process.env.CI ? 2 : 4,
