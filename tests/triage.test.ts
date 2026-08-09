@@ -57,12 +57,13 @@ async function escalatedBoard(t: Tidepool) {
 it("an answer during triage persists at once but reaches the queue only at commit", async () => {
   t = await bootTidepool();
   const { question } = await escalatedBoard(t);
-  await api(t.baseUrl, "POST", "/api/triage/start");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["left"],
+    triage: true,
   });
   expect(res.status).toBe(200);
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).not.toBe(null);
 
   // the answer itself is durable at once — abandoning the session cannot lose it
   const answered = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
@@ -113,7 +114,6 @@ it("an objection needs a direction comment and lands durably on the log entry", 
   const task = await registerWork(t, "logged work");
   await t.clock.advance(HOUR); // into the slot so it can log a decision
   const entry = await loggedEntry(t, task.id, "went with plan B");
-  await api(t.baseUrl, "POST", "/api/triage/start");
 
   // silence is approval — the only explicit action carries a direction
   const bare = await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entry.id });
@@ -124,6 +124,7 @@ it("an objection needs a direction comment and lands durably on the log entry", 
     comment: "plan B breaks the fixtures — go back to plan A",
   });
   expect(res.status).toBe(201);
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).not.toBe(null);
 
   // durable at once, as an annotation on the entry's task
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
@@ -183,7 +184,6 @@ it("activity keeps an open session alive past the timeout window", async () => {
 
 it("scratchpad lines are shared during triage and triaged at commit", async () => {
   t = await bootTidepool();
-  await api(t.baseUrl, "POST", "/api/triage/start");
   const lines = [
     "the agent keeps renaming things",
     "fix the flaky seed script",
@@ -195,6 +195,7 @@ it("scratchpad lines are shared during triage and triaged at commit", async () =
     expect(res.status).toBe(201);
     ids.push(res.json.id);
   }
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).not.toBe(null);
 
   // the pad is shared across the triage screens: every screen reads it back
   const pad = (await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad;
@@ -273,12 +274,12 @@ it("showing a log entry to the human is itself a recorded event", async () => {
   const task = await registerWork(t, "logged work");
   await t.clock.advance(HOUR); // into the slot so it can log a decision
   const entry = await loggedEntry(t, task.id, "went with plan B");
-  await api(t.baseUrl, "POST", "/api/triage/start");
 
   const res = await api(t.baseUrl, "POST", "/api/triage/displayed", {
     entry_ids: [entry.id],
   });
   expect(res.status).toBe(201);
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBe(null);
 
   // the denominator of the objection rate: an unread entry is neither
   // approved nor rejected — only a displayed one counts
@@ -286,7 +287,22 @@ it("showing a log entry to the human is itself a recorded event", async () => {
   const displayed = events.filter((e: any) => e.kind === "log_entry_displayed");
   expect(displayed).toHaveLength(1);
   expect(displayed[0].payload.entry_id).toBe(entry.id);
+  expect(displayed[0].payload).not.toHaveProperty("session_id");
   expect(displayed[0].worker_id).toBe("human");
+});
+
+it("displaying a new log entry keeps an open triage session alive", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "long log skim");
+  await t.clock.advance(HOUR);
+  const entry = await loggedEntry(t, task.id, "a late decision");
+  await api(t.baseUrl, "POST", "/api/triage/start");
+
+  await t.clock.advance(TRIAGE_TIMEOUT / 2);
+  await api(t.baseUrl, "POST", "/api/triage/displayed", { entry_ids: [entry.id] });
+  await t.clock.advance(TRIAGE_TIMEOUT / 2);
+
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).not.toBe(null);
 });
 
 it("commit bundles the objections into one repair task per objected task", async () => {

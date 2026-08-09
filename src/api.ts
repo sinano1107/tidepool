@@ -296,6 +296,7 @@ const completeTaskSchema = z.object({
 // get a domain error, not a schema error, on a partial submission
 const answerSchema = z.object({
   answers: z.array(z.string().min(1)).min(1),
+  triage: z.boolean().optional(),
   // the steering channel for a reject's reason (issue #40) — never required
   // (silence is fine on approve, and a reject often needs no more than the
   // option name), carried through verbatim onto the question_answered event
@@ -1087,6 +1088,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.comment,
         () => clock.now(),
         "webui",
+        parsed.data.triage,
       );
       res.json(presentTask(db, question));
     } catch (err) {

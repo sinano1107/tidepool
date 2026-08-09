@@ -109,7 +109,7 @@ export type EventPayload =
   | { kind: "objection_raised"; entry_id: number; comment: string; session_id: number }
   // "this entry was put in front of the human" — the denominator of the
   // objection rate; an entry never displayed is unobserved, not approved
-  | { kind: "log_entry_displayed"; entry_id: number; session_id: number }
+  | { kind: "log_entry_displayed"; entry_id: number; session_id?: number }
   // full provenance of an agent run. registry_commit is THE strict agent
   // version (ADR 0001: commit hash = agent version); definition_version is
   // only the human-readable stamp from the definition's frontmatter. The
