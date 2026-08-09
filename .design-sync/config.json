@@ -4,6 +4,11 @@
   "projectId": "8a0ead19-062f-4cea-9ffa-7bd7c545f8bc",
   "shape": "package",
   "buildCmd": "node scripts/build-ds-package.mjs",
+  "overrides": {
+    "FieldRow": { "cardMode": "column" },
+    "NavRow": { "cardMode": "column" },
+    "ScreenHeader": { "cardMode": "column" }
+  },
   "componentSrcMap": {
     "Button": "../components/actions/Button.jsx",
     "IconButton": "../components/actions/IconButton.jsx",
