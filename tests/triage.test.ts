@@ -571,8 +571,7 @@ it("the independent auditor RCA registers with assignee unset — a live Auditor
     (x: any) => x.type === "review" && x.parent_id === a.id && x.title.startsWith("rca (auditor):"),
   );
   expect(auditorReview).toBeDefined();
-  // unset, not baked — resolved fresh at pickup/attribution the way an unset
-  // assignee always is (ADR 0011), not pinned to whichever name was live at
-  // commit time
-  expect(auditorReview.assignee).toBeNull();
+  // Board presents the current Auditor, while raw_assignee proves it remains
+  // an unset, live reference rather than a name baked at commit time.
+  expect(auditorReview).toMatchObject({ assignee: "keeper-of-the-code", raw_assignee: null });
 });

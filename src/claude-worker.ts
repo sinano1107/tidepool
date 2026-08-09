@@ -1533,7 +1533,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // this worker's configured default agent (issue #42 / CONTEXT.md's
     // Auditor: independent review's value is its distance from the original
     // judgment, so it must never fall back to the same agent that did the
-    // work) — every other type keeps resolving to `this.options.agent`.
+    // work) — work keeps resolving to `this.options.agent`; questions have no
+    // execution agent and must never reach this worker path.
     const taskAgent = resolveTaskAgent(
       task,
       this.options.agent,

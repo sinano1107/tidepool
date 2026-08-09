@@ -174,7 +174,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     { instructions: MANAGEMENT_MCP_INSTRUCTIONS },
   );
   server.registerTool("list_board", { description: "List the current task board." }, async () =>
-    toolResult(listBoard(deps.db)),
+    toolResult(listBoard(deps.db, deps.defaultAgentName, deps.auditorName)),
   );
   server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () =>
     toolResult(

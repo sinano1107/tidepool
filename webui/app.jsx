@@ -147,15 +147,15 @@ function mapData(board, log, pause, icons = {}) {
     if (!cols[t.status]) continue; // e.g. held/skipped have no column of their own
     cols[t.status].push({
       id: t.id, title: liveTitle(t), type: t.type,
-      assignee: t.assignee ?? (t.type === 'question' ? 'you' : undefined),
+      assignee: t.assignee === 'human' ? 'you' : t.assignee ?? undefined,
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined,
-      human: t.type === 'question', risk: !!t.risk_flag, children: openChildren[t.id],
+      human: t.assignee === 'human', risk: !!t.risk_flag, children: openChildren[t.id],
       // the card's raw column status + assignee (issue #129's Add-child
       // dialog gates on these client-side — a display convenience only, the
       // API's own assertHumanDecomposable is the real gate) — kept separate
-      // from `assignee` above, which already substitutes 'you'/undefined for
-      // display and would misrepresent an unset assignee here
-      status: t.status, rawAssignee: t.assignee,
+      // from `assignee` above, which is resolved for display and would
+      // misrepresent an unset assignee here
+      status: t.status, rawAssignee: t.raw_assignee,
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate

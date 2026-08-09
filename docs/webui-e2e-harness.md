@@ -15,9 +15,9 @@ Playwright でこの確認まで担う(ADR 0029)。この doc は、その確認
 - `e2e/*.spec.ts` — **昇格済みスモーク**。git 管理し、CI(の e2e job)で回す恒久資産。
 - `e2e/*.scratch.spec.ts` — **使い捨ての突発確認**。`.gitignore` 済み。資産にしない。
 
-どちらも `.spec.ts` 終端なので Playwright の default testMatch が両方拾う。実行は
-`npm run e2e`(= `playwright test`)。既定は **scratch を書いて回すだけ**。昇格は下記の
-条件を満たしたうえで、ユーザーが明示的に指示したときだけ行う。
+`npm run e2e`(= `playwright test`) は昇格済みスモークだけを実行する。scratch は
+`npm run e2e:scratch -- <file>` で明示的に実行する。昇格は下記の条件を満たしたうえで、
+ユーザーが明示的に指示したときだけ行う。
 
 ## 土台の型
 
