@@ -9,5 +9,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "tests", "scripts"]
+  "include": ["src", "tests", "scripts", "e2e"],
+  "exclude": ["e2e/*.scratch.spec.ts"]
 }

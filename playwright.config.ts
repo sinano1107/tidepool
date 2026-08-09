@@ -18,17 +18,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? "list" : "line",
   use: {
-    // システムに入っている Chrome を使う(Chromium バイナリの DL 不要)。
-    channel: "chrome",
+    // @playwright/test と同じ lockfile で pin された同梱 Chromium を使う。
+    // CI もローカルも `npx playwright install chromium` で同じ browser を得る。
     headless: true,
     // 失敗した突発確認を目視するための痕跡。
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },
-  // public/index.html は React / Babel standalone / lucide を unpkg CDN から読み、
-  // 全 .jsx を in-browser で Babel コンパイルしてからマウントする。初回描画は
-  // ミリ秒でなく秒単位になり得るので、locator の待ちは寛容に取る。
-  // (この CDN 依存が「CI で回す資産」への昇格前提: docs/webui-e2e-harness.md)
+  // 15s / 45s は最初の昇格時点では据え置く(ADR 0055)。事前ビルドで描画は
+  // 速くなったが、CI の実測を見ずに timeout まで同時に変えない。
   expect: { timeout: 15_000 },
   timeout: 45_000,
 });
