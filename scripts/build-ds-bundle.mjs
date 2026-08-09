@@ -8,7 +8,7 @@
 //
 // Usage: node scripts/build-ds-bundle.mjs
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
@@ -97,5 +97,15 @@ const out =
   exportsBlock + '\n\n' +
   `})();\n`;
 
-writeFileSync(join(ROOT, '_ds_bundle.js'), out);
-console.log(`built _ds_bundle.js from ${COMPONENTS.length} components`);
+const outputPath = join(ROOT, '_ds_bundle.js');
+if (process.argv.includes('--check')) {
+  if (!existsSync(outputPath) || readFileSync(outputPath, 'utf8') !== out) {
+    console.error('stale generated asset: _ds_bundle.js');
+    process.exitCode = 1;
+  } else {
+    console.log('_ds_bundle.js is fresh');
+  }
+} else {
+  writeFileSync(outputPath, out);
+  console.log(`built _ds_bundle.js from ${COMPONENTS.length} components`);
+}
