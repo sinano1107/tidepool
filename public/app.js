@@ -1149,44 +1149,61 @@ function useDirtySignal(edit, open, dirty) {
     if (open) edit.setDirty(dirty);
   }, [open, dirty]);
 }
+function ReviewCommandsInput({ values, onChange }) {
+  const { Input, Button, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const [free, setFree] = React.useState("");
+  const addFree = () => {
+    const v = free.trim();
+    if (!v || values.includes(v)) return;
+    onChange([...values, v]);
+    setFree("");
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "Review allowed commands"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty)."), values.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, values.map((v) => /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      key: v,
+      type: "button",
+      title: "remove",
+      onClick: () => onChange(values.filter((x) => x !== v)),
+      style: { border: "none", background: "none", padding: 0, cursor: "pointer" }
+    },
+    /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, v, " \u2715")
+  ))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-start" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      value: free,
+      mono: true,
+      onChange: (e) => {
+        setFree(e.target.value);
+      },
+      placeholder: 'command prefix \u2014 e.g. "npm test"'
+    }
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !free.trim(), onClick: addFree }, "Add")));
+}
 function WorkspaceRecord({ ws, say, onChanged, edit }) {
-  const { Button, Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   const id = `workspace:${ws.name}`;
   const open = edit.isOpen(id);
   const [notes, setNotes] = React.useState(ws.notes ?? "");
   const [prot, setProt] = React.useState(!!ws.protected);
-  const [busy, setBusy] = React.useState(false);
-  const [confirming, setConfirming] = React.useState(false);
+  const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected;
+  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []);
   useDirtySignal(edit, open, dirty);
+  const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => {
+    edit.close();
+    await onChanged();
+  });
   const startEdit = () => edit.open(id, () => {
     setNotes(ws.notes ?? "");
     setProt(!!ws.protected);
+    setCmds(ws.review_allowed_commands ?? []);
   });
-  const commit = async (confirmed) => {
-    setBusy(true);
-    try {
-      const body = { notes: notes.trim() };
-      if (prot !== !!ws.protected) {
-        body.protected = prot;
-        if (!prot) body.confirm = confirmed;
-      }
-      await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, "PATCH");
-      say("success", "workspace updated \u2014 committed to the registry", ws.name);
-      edit.close();
-      await onChanged();
-    } catch (err) {
-      say("danger", "workspace update failed", String(err.message || err));
-    }
-    setBusy(false);
-  };
   const save = () => {
-    if (!!ws.protected && !prot) {
-      setConfirming(true);
-      return;
-    }
-    commit(false);
+    const body = { notes: notes.trim() };
+    if (prot !== !!ws.protected) body.protected = prot;
+    if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
+    submit(`/api/workspaces/${encodeURIComponent(ws.name)}`, "PATCH", body, "updated", ws.name);
   };
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, ws.name), ws.registrySelf && /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, "registry"), ws.protected && /* @__PURE__ */ React.createElement(Tag, { color: "sun" }, "protected")), ws.registrySelf && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the board's own registry clone \u2014 protection stays on"), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     FieldRow,
@@ -1205,6 +1222,14 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       onLabel: "changes here always need human approval",
       offLabel: "not protected"
     }
+  ), /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "review allowed commands",
+      kind: (ws.review_allowed_commands ?? []).length ? "tags" : "unset",
+      tags: ws.review_allowed_commands ?? [],
+      unsetLabel: "no extra commands allowed \u2014 review stays read-only"
+    }
   )), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -1221,7 +1246,7 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       disabled: busy || ws.registrySelf && !!ws.protected,
       onChange: (next) => setProt(next)
     }
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(ReviewCommandsInput, { values: cmds, onChange: setCmds }), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -1230,19 +1255,7 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       onSave: save,
       onCancel: () => edit.close()
     }
-  )), /* @__PURE__ */ React.createElement(
-    PortalDialog,
-    {
-      open: confirming,
-      title: "Remove protection?",
-      onClose: () => setConfirming(false),
-      footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: () => setConfirming(false) }, "Keep protection"), /* @__PURE__ */ React.createElement(Button, { variant: "danger", onClick: () => {
-        setConfirming(false);
-        commit(true);
-      } }, "Remove protection"))
-    },
-    /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, "Tasks targeting ", /* @__PURE__ */ React.createElement("b", null, ws.name), " will stop converting to approval questions, and its PRs will follow the merge dial without waiting for you.")
-  ));
+  )), dialog);
 }
 const AGENT_ICON_SEA = ["\u{1F419}", "\u{1F980}", "\u{1F990}", "\u{1F99E}", "\u{1F991}", "\u{1F9AA}", "\u{1F41A}", "\u{1F421}", "\u{1F420}", "\u{1F41F}", "\u{1F42C}", "\u{1F433}", "\u{1F988}", "\u{1F9AD}", "\u{1F422}", "\u{1FABC}", "\u{1FAB8}"];
 const AGENT_ICON_LAND = ["\u{1F9A6}", "\u{1F415}", "\u{1F408}", "\u{1F98A}", "\u{1F43B}", "\u{1F43C}", "\u{1F428}", "\u{1F981}", "\u{1F42F}", "\u{1F42E}", "\u{1F437}", "\u{1F438}", "\u{1F435}", "\u{1F414}", "\u{1F427}", "\u{1F989}", "\u{1F985}", "\u{1F434}", "\u{1F98B}", "\u{1F41D}"];
@@ -1404,7 +1417,9 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
 const DANGEROUS_REASON_LABEL = {
   merge_auto_if_ci_green: "Merge is auto_if_ci_green \u2014 a PR under this authority merges unattended once CI is green, with no human in the loop.",
   assignable_to_wildcard: 'Assignable-to carries the wildcard "*" \u2014 an agent with this authority may delegate to any agent.',
-  allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.'
+  allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.',
+  unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
+  review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default."
 };
 const MERGE_OPTIONS = [
   { value: "", label: "no automatic merge decision (default)" },
@@ -1541,24 +1556,24 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
     }
   ), /* @__PURE__ */ React.createElement(Select, { label: "Merge authority", options: MERGE_OPTIONS, value: merge, onChange: (e) => setMerge(e.target.value) }));
 }
-function useProfileSave(say, onDone) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null);
   const save = async (path, method, body, verb, name) => {
-    const attempt = async (confirmDangerous) => {
+    const attempt = async (confirmed) => {
       setBusy(true);
       try {
-        await api(path, confirmDangerous ? { ...body, confirmDangerous: true } : body, method);
+        await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
         setConfirm(null);
-        say("success", `profile ${verb} \u2014 committed to the registry`, name);
+        say("success", `${noun} ${verb} \u2014 committed to the registry`, name);
         await onDone();
       } catch (err) {
         if (err.status === 409 && err.detail?.confirm_required) {
           setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say("danger", `profile ${verb} failed`, String(err.message || err));
+          say("danger", `${noun} ${verb} failed`, String(err.message || err));
         }
       }
       setBusy(false);
@@ -1569,14 +1584,30 @@ function useProfileSave(say, onDone) {
     PortalDialog,
     {
       open: !!confirm,
-      title: "Save a profile with broad power?",
+      title: dialogTitle,
       onClose: () => setConfirm(null),
       footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: busy, onClick: () => setConfirm(null) }, "Cancel"), /* @__PURE__ */ React.createElement(Button, { variant: "danger", disabled: busy, onClick: () => confirm && confirm.resend() }, "Save anyway"))
     },
-    /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 8px", fontSize: "var(--text-sm)" } }, "This profile grants broad power. Review before saving:"),
+    /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 8px", fontSize: "var(--text-sm)" } }, dialogLead),
     /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, fontSize: "var(--text-sm)", display: "flex", flexDirection: "column", gap: 6 } }, (confirm?.reasons ?? []).map((r) => /* @__PURE__ */ React.createElement("li", { key: r }, DANGEROUS_REASON_LABEL[r] ?? r)))
   );
   return { busy, save, dialog };
+}
+function useProfileSave(say, onDone) {
+  return useDangerousSave(say, onDone, {
+    noun: "profile",
+    confirmKey: "confirmDangerous",
+    dialogTitle: "Save a profile with broad power?",
+    dialogLead: "This profile grants broad power. Review before saving:"
+  });
+}
+function useWorkspaceSave(say, onDone) {
+  return useDangerousSave(say, onDone, {
+    noun: "workspace",
+    confirmKey: "confirm",
+    dialogTitle: "Save a change that widens what agents may do?",
+    dialogLead: "This change widens what agents may do here. Review before saving:"
+  });
 }
 function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;

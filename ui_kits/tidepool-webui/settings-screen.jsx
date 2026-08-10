@@ -6,10 +6,11 @@
 // Add. Structural recreation of public/index.html's SettingsScreen for design
 // review — runs on mock data, no API calls; Save/Add report through `onAction`
 // instead of persisting, since this kit owns no registry. Deliberately
-// dropped: the real screen's two confirmation flows (removing workspace
-// protection, the two-phase "dangerous value" 409 confirm on authority
-// profiles) — those gate a real backend consequence this kit has none of — and
-// the real screen's tab-switch guard, which lives in its App shell, not here.
+// dropped: the real screen's two-phase "dangerous value" 409 confirm dialog
+// (workspace protection removal / non-empty review_allowed_commands / broad
+// authority profiles, ADR 0061 決定1) — that gates a real backend consequence
+// this kit has none of — and the real screen's tab-switch guard, which lives
+// in its App shell, not here.
 // The in-screen discard guard (leaving an edited card) is recreated.
 const SETTINGS_MERGE_OPTIONS = [
   { value: '', label: 'no automatic merge decision (default)' },
@@ -107,6 +108,46 @@ function SettingsSkillListInput({ candidates, values, onChange }) {
   );
 }
 
+// Free-entry-only chip list for review_allowed_commands (ADR 0061 / issue
+// #265) — unlike SettingsChipListInput there is no candidate list: the board
+// has no visibility into what commands exist on a host, so this is the free
+// entry half of SettingsSkillListInput with the picker dropped.
+function SettingsReviewCommandsInput({ values, onChange }) {
+  const { Input, Button, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const [free, setFree] = React.useState('');
+  const addFree = () => {
+    const v = free.trim();
+    if (!v || values.includes(v)) return;
+    onChange([...values, v]);
+    setFree('');
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <SectionLabel>Review allowed commands</SectionLabel>
+      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+        command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty).
+      </p>
+      {values.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {values.map((v) => (
+            <button key={v} type="button" title="remove" onClick={() => onChange(values.filter((x) => x !== v))}
+              style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+              <Tag color="tide" mono>{v} ✕</Tag>
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+        <div style={{ flex: 1 }}>
+          <Input value={free} mono onChange={(e) => setFree(e.target.value)}
+            placeholder='command prefix — e.g. "npm test"' />
+        </div>
+        <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
+      </div>
+    </div>
+  );
+}
+
 // Shared chip-list shape for "assignable to" / "allowed workspaces" — pick
 // from candidates or "*" (wildcard). Mirrors ProfileListInput's tag coloring
 // (no grass here — only skills carry scope words).
@@ -184,12 +225,17 @@ function SettingsWorkspaceRecord({ ws, onAction, edit }) {
   const open = edit.isOpen(id);
   const [notes, setNotes] = React.useState(ws.notes ?? '');
   const [prot, setProt] = React.useState(!!ws.protected);
+  const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? '') || prot !== !!ws.protected;
+  const dirty = notes.trim() !== (ws.notes ?? '')
+    || prot !== !!ws.protected
+    || !sameStrings(cmds, ws.review_allowed_commands ?? []);
   useSettingsDirty(edit, open, dirty);
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <SettingsRecordHead editing={open} onEdit={() => edit.open(id, () => { setNotes(ws.notes ?? ''); setProt(!!ws.protected); })}>
+      <SettingsRecordHead editing={open} onEdit={() => edit.open(id, () => {
+        setNotes(ws.notes ?? ''); setProt(!!ws.protected); setCmds(ws.review_allowed_commands ?? []);
+      })}>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{ws.name}</span>
         {ws.registrySelf && <Tag color="tide" mono>registry</Tag>}
         {ws.protected && <Tag color="sun">protected</Tag>}
@@ -207,6 +253,8 @@ function SettingsWorkspaceRecord({ ws, onAction, edit }) {
           <FieldRow label="notes" kind={ws.notes ? 'text' : 'unset'} value={ws.notes ?? ''} unsetLabel="—" />
           <FieldRow label="protected" kind="bool" checked={!!ws.protected}
             onLabel="changes here always need human approval" offLabel="not protected" />
+          <FieldRow label="review allowed commands" kind={(ws.review_allowed_commands ?? []).length ? 'tags' : 'unset'}
+            tags={ws.review_allowed_commands ?? []} unsetLabel="no extra commands allowed — review stays read-only" />
         </React.Fragment>
       )}
       {open && (
@@ -215,6 +263,7 @@ function SettingsWorkspaceRecord({ ws, onAction, edit }) {
             placeholder="setup hints for humans — e.g. run npm install before first use" />
           <Switch label="protected — changes here always need human approval" checked={prot}
             disabled={ws.registrySelf && !!ws.protected} onChange={(next) => setProt(next)} />
+          <SettingsReviewCommandsInput values={cmds} onChange={setCmds} />
           <SettingsEditActions dirty={dirty} saveLabel="Save — commits to the registry"
             onSave={() => { onAction('workspace updated', ws.name); edit.close(); }}
             onCancel={() => edit.close()} />

@@ -14,7 +14,7 @@ const tpData = {
   // that array predates this section and other screens already read it.
   workspaces: [
     { name: 'tidepool', repo: 'github.com/masaki/tidepool', notes: "the board's own registry clone — protection stays on", protected: true, registrySelf: true },
-    { name: 'registry', repo: 'github.com/masaki/tidepool-registry', notes: '' },
+    { name: 'registry', repo: 'github.com/masaki/tidepool-registry', notes: '', review_allowed_commands: ['npm test'] },
     { name: 'sandbox', path: '/home/masaki/sandbox', notes: 'scratch experiments, wiped weekly' },
   ],
   authorityProfiles: [
