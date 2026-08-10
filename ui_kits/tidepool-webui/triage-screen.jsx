@@ -78,12 +78,21 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
 // one of this diff's 4 result shapes — {status: 'loading'|'throttled'|
 // 'error'|'translated', ...} — the one seam all 3 toggle sites (question
 // card, log skim, handoff expansion) route through, so the request/catch
-// shape is written once.
-function runTranslate(onTranslate, target, setState) {
+// shape is written once. `opts.signal` (ADR 0063 決定4) is optional — only
+// the log skim passes one, along with `opts.onAbort` to unwind its own
+// bookkeeping when a not-yet-sent request is cancelled instead of folding
+// the cancellation into `setState` as a 5th state.
+function runTranslate(onTranslate, target, setState, opts) {
   setState({ status: 'loading' });
-  onTranslate(target)
+  onTranslate(target, opts && opts.signal ? { signal: opts.signal } : undefined)
     .then(setState)
-    .catch((err) => setState({ status: 'error', message: String(err.message || err) }));
+    .catch((err) => {
+      if (err && err.name === 'AbortError') {
+        if (opts && opts.onAbort) opts.onAbort();
+        return;
+      }
+      setState({ status: 'error', message: String(err.message || err) });
+    });
 }
 
 // The non-'translated' states of a translation result (issue #47) — the
@@ -110,9 +119,9 @@ function TpTranslationNote({ result }) {
 // 0015), a POST /api/translate caller — absent in the standalone kit (no
 // toggle rendered), passed through by both TriageScreen (section 0) and
 // TpSingleQuestion (single-question-view.jsx)'s push-answer flow, since both
-// render this same card. The question card's own toggle (one of CONTEXT.md's
-// 3 per-face toggles): translates `purpose`/items' title+detail, never the
-// options an answer is picked from.
+// render this same card. The question card's own toggle (one of the 3
+// switches ADR 0063's table enumerates): translates `purpose`/items'
+// title+detail, never the options an answer is picked from.
 function TpQuestionCard({ q, answer, onAnswer, locked, onTranslate }) {
   const { Card, AgentChip, Switch } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
@@ -367,9 +376,17 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [showFullyReadWorkspaces, setShowFullyReadWorkspaces] = React.useState(false);
   const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
   const fullyReadGroups = allLogGroups.filter((g) => g.unreadCount === 0);
-  const logGroups = showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
-  // the log skim's own toggle (CONTEXT.md's per-face toggles, issue #47):
-  // one switch governs every entry currently rendered in this section — not
+  // memoized (not a bare .filter() per render): renderedLogEntries below
+  // depends on this, and an unstable reference here would defeat that
+  // useMemo on every unrelated re-render — including the very re-renders a
+  // translation result landing causes (see the note above the fanout effect).
+  const logGroups = React.useMemo(
+    () => (showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0)),
+    [allLogGroups, showFullyReadWorkspaces],
+  );
+  // the log skim's own toggle (one of the 3 switches ADR 0063's table
+  // enumerates, issue #47): one switch governs every entry currently
+  // rendered in this section — not
   // just unread — keyed by logKey so a fold/reveal never re-requests an
   // entry already translated this session. `renderedLogEntries` mirrors
   // exactly what the two .map calls below actually paint (visible-read +
@@ -386,14 +403,54 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     }
     return rendered;
   }, [logGroups, revealedRead]);
+  // ADR 0063 決定4: the AbortController's lifecycle is the *toggle*
+  // (logTranslateOn alone), not the fanout below — deliberately narrower
+  // than renderedLogEntries' own deps. Before `logGroups` above was
+  // memoized, its identity was unstable across *any* re-render of this
+  // component, including the one `setLogTranslations` itself causes when a
+  // translation lands; keying the controller to renderedLogEntries too
+  // (measured, via browser console instrumentation) turned that instability
+  // into a self-sustaining loop: a result arrives → re-render → new
+  // renderedLogEntries identity → cleanup aborts whatever is still queued →
+  // onAbort deletes its key → re-scan re-queues it → repeat. `logGroups` is
+  // fixed now, but the controller's own deps stay narrow regardless — cancel
+  // belongs only to "スイッチを戻した", not to every re-render, memoized or
+  // not. The fanout effect below reads the current controller via a ref and
+  // carries no cleanup of its own — re-running it on a re-render is harmless
+  // (it just skips already-requested keys).
+  const logTranslateAbort = React.useRef(null);
+  React.useEffect(() => {
+    if (!logTranslateOn) return;
+    const controller = new AbortController();
+    logTranslateAbort.current = controller;
+    return () => controller.abort();
+  }, [logTranslateOn]);
+  // Toggling off cancels this cycle's not-yet-sent requests (the controller
+  // above) — already-dispatched ones ignore it and run to completion
+  // (translateTarget's own gate). The trap: a cancelled key must come back
+  // out of `logTranslateRequested`, or turning the switch back on never
+  // re-requests it and the row stays on 'loading' forever.
   React.useEffect(() => {
     if (!logTranslateOn || !onTranslate) return;
+    const signal = logTranslateAbort.current.signal;
     for (const entry of renderedLogEntries) {
       const k = logKey(entry);
       if (entry.id == null || logTranslateRequested.current.has(k)) continue;
       logTranslateRequested.current.add(k);
-      runTranslate(onTranslate, { type: 'log_entry', event_id: entry.id }, (result) =>
-        setLogTranslations((prev) => ({ ...prev, [k]: result })));
+      runTranslate(onTranslate, { type: 'log_entry', event_id: entry.id },
+        (result) => setLogTranslations((prev) => ({ ...prev, [k]: result })),
+        {
+          signal,
+          onAbort: () => {
+            logTranslateRequested.current.delete(k);
+            setLogTranslations((prev) => {
+              if (!(k in prev)) return prev;
+              const next = { ...prev };
+              delete next[k];
+              return next;
+            });
+          },
+        });
     }
   }, [logTranslateOn, renderedLogEntries]);
   // one switch covers a whole morning's worth of entries — a throttled
@@ -401,6 +458,18 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   // to the switch rather than once per row (a real skim can have many
   // unread entries; N identical notes would just be noise).
   const logThrottled = logTranslateOn && Object.values(logTranslations).some((v) => v && v.status === 'throttled');
+  // ADR 0063 決定3: one number next to the switch, derived from state the
+  // kit already holds — no new wiring. Not a progress bar (7.4s/entry is too
+  // coarse to read as motion, and it can't distinguish "stalled" from "slow").
+  const logTranslateTotal = logTranslateOn
+    ? renderedLogEntries.filter((entry) => entry.id != null).length
+    : 0;
+  const logTranslateDone = logTranslateOn
+    ? renderedLogEntries.filter((entry) => {
+        const v = logTranslations[logKey(entry)];
+        return entry.id != null && v && v.status !== 'loading';
+      }).length
+    : 0;
   // iOS Safari has no CSS overflow-anchor: revealing an older batch inserts
   // content above the reader's current position, which would otherwise jump
   // the viewport by the inserted height. Captured synchronously in the click
@@ -426,9 +495,9 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   };
   const [handoffOpen, setHandoffOpen] = React.useState({});
   const handoffCache = React.useRef({});
-  // the handoff expansion's own toggle (CONTEXT.md's per-face toggles, issue
-  // #47) — one instance per expanded entry (its own on/off + cached result),
-  // keyed the same as handoffOpen.
+  // the handoff expansion's own toggle (one of the 3 switches ADR 0063's
+  // table enumerates, issue #47) — one instance per expanded entry (its own
+  // on/off + cached result), keyed the same as handoffOpen.
   const [handoffTranslateOn, setHandoffTranslateOn] = React.useState({});
   const [handoffTranslations, setHandoffTranslations] = React.useState({});
   const handoffTranslateRequested = React.useRef(new Set());
@@ -542,6 +611,9 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
             </p>
             {onTranslate && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                {logTranslateOn && logTranslateTotal > 0 && (
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{logTranslateDone} / {logTranslateTotal}</span>
+                )}
                 {logThrottled && <TpTranslationNote result={{ status: 'throttled' }} />}
                 <Switch label="訳を添える" checked={logTranslateOn} onChange={setLogTranslateOn} />
               </div>

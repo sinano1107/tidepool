@@ -232,9 +232,15 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
     setOverrideText("");
   } }, "Set")) : /* @__PURE__ */ React.createElement("button", { onClick: () => setOverride(true), style: { background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-xs)", cursor: "pointer", textAlign: "left", padding: "2px 0" } }, "override with free text\u2026")));
 }
-function runTranslate(onTranslate, target, setState) {
+function runTranslate(onTranslate, target, setState, opts) {
   setState({ status: "loading" });
-  onTranslate(target).then(setState).catch((err) => setState({ status: "error", message: String(err.message || err) }));
+  onTranslate(target, opts && opts.signal ? { signal: opts.signal } : void 0).then(setState).catch((err) => {
+    if (err && err.name === "AbortError") {
+      if (opts && opts.onAbort) opts.onAbort();
+      return;
+    }
+    setState({ status: "error", message: String(err.message || err) });
+  });
 }
 function TpTranslationNote({ result }) {
   if (result.status === "loading") return /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "\u2026");
@@ -428,7 +434,10 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [showFullyReadWorkspaces, setShowFullyReadWorkspaces] = React.useState(false);
   const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
   const fullyReadGroups = allLogGroups.filter((g) => g.unreadCount === 0);
-  const logGroups = showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
+  const logGroups = React.useMemo(
+    () => showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0),
+    [allLogGroups, showFullyReadWorkspaces]
+  );
   const [logTranslateOn, setLogTranslateOn] = React.useState(false);
   const [logTranslations, setLogTranslations] = React.useState({});
   const logTranslateRequested = React.useRef(/* @__PURE__ */ new Set());
@@ -441,16 +450,45 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     }
     return rendered;
   }, [logGroups, revealedRead]);
+  const logTranslateAbort = React.useRef(null);
+  React.useEffect(() => {
+    if (!logTranslateOn) return;
+    const controller = new AbortController();
+    logTranslateAbort.current = controller;
+    return () => controller.abort();
+  }, [logTranslateOn]);
   React.useEffect(() => {
     if (!logTranslateOn || !onTranslate) return;
+    const signal = logTranslateAbort.current.signal;
     for (const entry of renderedLogEntries) {
       const k = logKey(entry);
       if (entry.id == null || logTranslateRequested.current.has(k)) continue;
       logTranslateRequested.current.add(k);
-      runTranslate(onTranslate, { type: "log_entry", event_id: entry.id }, (result) => setLogTranslations((prev) => ({ ...prev, [k]: result })));
+      runTranslate(
+        onTranslate,
+        { type: "log_entry", event_id: entry.id },
+        (result) => setLogTranslations((prev) => ({ ...prev, [k]: result })),
+        {
+          signal,
+          onAbort: () => {
+            logTranslateRequested.current.delete(k);
+            setLogTranslations((prev) => {
+              if (!(k in prev)) return prev;
+              const next = { ...prev };
+              delete next[k];
+              return next;
+            });
+          }
+        }
+      );
     }
   }, [logTranslateOn, renderedLogEntries]);
   const logThrottled = logTranslateOn && Object.values(logTranslations).some((v) => v && v.status === "throttled");
+  const logTranslateTotal = logTranslateOn ? renderedLogEntries.filter((entry) => entry.id != null).length : 0;
+  const logTranslateDone = logTranslateOn ? renderedLogEntries.filter((entry) => {
+    const v = logTranslations[logKey(entry)];
+    return entry.id != null && v && v.status !== "loading";
+  }).length : 0;
   const scrollContainer = () => logListRef.current && logListRef.current.closest(".tp-scroll");
   const pendingScrollFix = React.useRef(null);
   React.useLayoutEffect(() => {
@@ -523,7 +561,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         setObjecting(null);
       } }, "Object")));
     };
-    return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 10px" } }, "tap an entry to object \xB7 use a completion\u2019s chevron to read its handoff"), onTranslate && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 10 } }, logThrottled && /* @__PURE__ */ React.createElement(TpTranslationNote, { result: { status: "throttled" } }), /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: logTranslateOn, onChange: setLogTranslateOn })), fullyReadGroups.length > 0 && /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 10px" } }, "tap an entry to object \xB7 use a completion\u2019s chevron to read its handoff"), onTranslate && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 10 } }, logTranslateOn && logTranslateTotal > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, logTranslateDone, " / ", logTranslateTotal), logThrottled && /* @__PURE__ */ React.createElement(TpTranslationNote, { result: { status: "throttled" } }), /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: logTranslateOn, onChange: setLogTranslateOn })), fullyReadGroups.length > 0 && /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => setShowFullyReadWorkspaces((v) => !v),
@@ -681,7 +719,34 @@ async function api(path, body, method = "POST") {
   }
   return res.json();
 }
-const translateTarget = (target) => api("/api/translate", target);
+const MAX_CONCURRENT_TRANSLATIONS = 2;
+let translationsInFlight = 0;
+const translationQueue = [];
+function paceTranslation(run, signal) {
+  return new Promise((resolve, reject) => {
+    const dispatch = () => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      translationsInFlight += 1;
+      run().then(resolve, reject).finally(() => {
+        translationsInFlight -= 1;
+        const next = translationQueue.shift();
+        if (next) next();
+      });
+    };
+    const onAbort = () => {
+      const i = translationQueue.indexOf(dispatch);
+      if (i !== -1) translationQueue.splice(i, 1);
+      reject(new DOMException("translation cancelled", "AbortError"));
+    };
+    if (translationsInFlight < MAX_CONCURRENT_TRANSLATIONS) {
+      dispatch();
+    } else {
+      if (signal) signal.addEventListener("abort", onAbort);
+      translationQueue.push(dispatch);
+    }
+  });
+}
+const translateTarget = (target, { signal } = {}) => paceTranslation(() => api("/api/translate", target), signal);
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - base64String.length % 4) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
