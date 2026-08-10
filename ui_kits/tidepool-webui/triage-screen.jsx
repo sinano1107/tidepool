@@ -141,7 +141,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked, onTranslate }) {
     <Card style={{ marginBottom: 12 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{q.id}</span>
-        <AgentChip name={q.agent} icon={q.agentIcon} size="sm" />
+        <AgentChip name={q.agent} icon={q.agentIcon} board={q.board} size="sm" />
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>{q.agent}</span>
         {q.parent && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>blocks {q.parent}</span>}
       </div>

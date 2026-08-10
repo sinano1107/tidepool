@@ -9,6 +9,8 @@ export interface LogEntryProps {
     time?: string;
     taskId?: string;
     agent?: string;
+    /** The user — 🧍, labeled "you" (issue #261). */
+    human?: boolean;
     kind?: 'decision' | 'completion' | 'escalation' | 'objection';
     text?: string;
     /** Existing objection comment, rendered as a coral annotation. */
