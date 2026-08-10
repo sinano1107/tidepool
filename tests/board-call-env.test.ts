@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardCallEnv, initPingSpawnOptions } from "../src/claude-worker.js";
+import { boardCallEnv, boardCallEnvWithoutThinking, initPingSpawnOptions } from "../src/claude-worker.js";
 
 /** Board call(盤面呼び出し / ADR 0044): 盤面が自分の機能のために回す CLI 呼び出しは
  *  worker session ではなく、したがって advisor を持たない。ここが見張るのは
@@ -45,6 +45,15 @@ describe("Board call の env", () => {
   // EnumerateToolsFn)が probe 全体を差し替える高さにあるため、テストからは
   // 子プロセスに渡した物が見えない。spawn オプションを純粋関数として名前を与えた
   // のはそのためで、残る review 依存は runInitPing の1行の配線だけになる。
+  // ADR 0062 決定2: 「推論しない」は全 Board call について真ではないので
+  // `boardCallEnv()` には畳み込まず、上に重ねる形で綴る。重ねる側が advisor の
+  // 宣言を落とせば ADR 0044 が黙って失効するので、そこをここで見張る。
+  it("推論を閉じる env は Board call の env の上に重なる(advisor の宣言を落とさない)", () => {
+    expect(boardCallEnvWithoutThinking().MAX_THINKING_TOKENS).toBe("0");
+    expect(boardCallEnvWithoutThinking().CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+    expect(boardCallEnvWithoutThinking().PATH).toBe(process.env.PATH);
+  });
+
   it("/usage ping の spawn オプションが Board call の env を運ぶ", () => {
     const options = initPingSpawnOptions("/tmp/some-workspace");
     expect(options.cwd).toBe("/tmp/some-workspace");

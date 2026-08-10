@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 
 const RESULT_ENVELOPE = (result: string) =>
@@ -65,6 +65,29 @@ describe("ClaudeTranslationClient", () => {
     expect(envs[0]!.PATH).toBe(process.env.PATH);
   });
 
+  // ADR 0062 決定1/2: 空のツール面と推論の不在を、呼び出しごとに明示的に宣言する。
+  // 実測(本番 Pi / 2026-08-10)ではこの2つで $0.0163 → $0.0021、14.0s → 7.4s。
+  it("--tools \"\" と推論を閉じる env を渡す(ADR 0062 決定1/2)", async () => {
+    const calls: string[][] = [];
+    const envs: NodeJS.ProcessEnv[] = [];
+    const client = new ClaudeTranslationClient({
+      exec: async (_command, args, env) => {
+        calls.push(args);
+        envs.push(env);
+        return RESULT_ENVELOPE("t");
+      },
+    });
+
+    await client.translate("s", "Japanese");
+
+    const args = calls[0]!;
+    const at = args.indexOf("--tools");
+    expect(args[at + 1]).toBe("");
+    // `--tools <tools...>` は可変長 —— 値を空にした分だけ次の引数を食う余地がある
+    expect(args[at + 2]).toMatch(/^--/);
+    expect(envs[0]!.MAX_THINKING_TOKENS).toBe("0");
+  });
+
   it("--max-turns 1 と --safe-mode を指定する(MCPツールを持たない単発呼び出し)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeTranslationClient({
@@ -79,6 +102,34 @@ describe("ClaudeTranslationClient", () => {
     const argLine = calls[0]!.join(" ");
     expect(argLine).toContain("--max-turns 1");
     expect(argLine).toContain("--safe-mode");
+  });
+
+  // ADR 0062 決定3: 翻訳の要求は自前のシステムプロンプトが持ち、user prompt は
+  // 対象言語と原文だけの薄いものになる。既定のシステムプロンプトはコーディング
+  // エージェントの人格であり翻訳者としては雑音で、3,600 トークン払って翻訳に不利な
+  // 指示を積んでいた(実測: 訳文の質も書き下し版のほうが上)。
+  it("翻訳の要求はシステムプロンプトに載り、user prompt は対象言語と原文だけになる(ADR 0062 決定3)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeTranslationClient({
+      exec: async (_command, args) => {
+        calls.push(args);
+        return RESULT_ENVELOPE("t");
+      },
+    });
+    const source = "the board retires a settled tree";
+
+    await client.translate(source, "French");
+
+    const args = calls[0]!;
+    const systemPrompt = args[args.indexOf("--system-prompt") + 1]!;
+    const userPrompt = args[1]!;
+    // markdown 構造の保持は要求のひとつ —— それが綴られる場所がシステムプロンプト側
+    expect(systemPrompt).toMatch(/markdown/i);
+    expect(userPrompt).not.toMatch(/markdown/i);
+    expect(userPrompt).toContain("French");
+    expect(userPrompt).toContain(source);
+    // 「薄い」を額面どおり見る: 原文と言語名のほかに載るものはほとんど無い
+    expect(userPrompt.length).toBeLessThan(source.length + 80);
   });
 
   it("プロンプトに翻訳先言語と原文が含まれる", async () => {
@@ -144,6 +195,68 @@ describe("ClaudeTranslationClient", () => {
 
     const prompt = calls[0]![1]!;
     expect(prompt).not.toContain("決着");
+  });
+
+  // ADR 0063 決定2: 盤面が守るのは Pi のメモリである。CLI プロセス1本の peak RSS は
+  // ~300MB で ADR 0062 のトークン削減後も変わらず(302MB)、Pi の空きは ~2,980MB ——
+  // 単純計算で10本前後で OOM する。呼び出し元の行儀とは独立した床なので、seam から
+  // 「同時に何本立ったか」を直接見る。
+  it("同時に立てる CLI プロセスは2本まで(ADR 0063 決定2)", async () => {
+    let running = 0;
+    let peak = 0;
+    const release: Array<() => void> = [];
+    const client = new ClaudeTranslationClient({
+      exec: async () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise<void>((resolve) => release.push(resolve));
+        running -= 1;
+        return RESULT_ENVELOPE("t");
+      },
+    });
+
+    const calls = [
+      client.translate("a", "Japanese"),
+      client.translate("b", "Japanese"),
+      client.translate("c", "Japanese"),
+    ];
+    await Promise.resolve();
+    expect(release.length).toBe(2);
+
+    // 1本ぶん空ければ、待っていた3本目が入る
+    release.shift()!();
+    await vi.waitFor(() => expect(release.length).toBe(2));
+    for (const done of release.splice(0)) done();
+    await Promise.all(calls);
+
+    expect(peak).toBe(2);
+  });
+
+  // ADR 0063 決定2: 待ちに上限を置くのは、HTTP のタイムアウト —— 盤面が決めていない、
+  // 将来黙って変わりうる外部の値 —— に寄りかからないためである。諦めた答えは
+  // reject として上へ抜け、API 層の既存の 503 に乗る。
+  it("床が30秒空かなければ諦めて reject する(ADR 0063 決定2)", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new ClaudeTranslationClient({
+        exec: () => new Promise<string>(() => {}),
+      });
+
+      void client.translate("a", "Japanese");
+      void client.translate("b", "Japanese");
+      const gaveUp = client.translate("c", "Japanese");
+      // 諦める前に reject しないこと —— そこが「待つ」の中身である
+      const settledEarly = vi.advanceTimersByTimeAsync(29_000).then(() => "still waiting");
+      await expect(Promise.race([gaveUp.catch(() => "gave up"), settledEarly])).resolves.toBe(
+        "still waiting",
+      );
+
+      const rejected = expect(gaveUp).rejects.toThrow(/30s/);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("CLI 出力が不正な JSON エンベロープの場合、translate は reject する", async () => {

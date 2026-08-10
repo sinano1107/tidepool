@@ -109,6 +109,34 @@ it("throttled 中は翻訳を実行せず、応答が throttled と区別でき�
   expect(translationClient.calls).toEqual([]);
 });
 
+// ADR 0063 決定2: 床が30秒で諦めた答えは throttled ではなく既存の 503 に乗り、
+// 理由の文がそのまま人間まで届く —— WebUI 側の `error` 状態(TpTranslationNote が
+// `result.message` を描く)に乗るのがその文である。UI に新しい状態は作らない。
+it("床が待ちを諦めたときは 503 で返り、理由の文が message として届く(ADR 0063 決定2)", async () => {
+  const translationClient = new FakeTranslationClient();
+  translationClient.scriptFailure(
+    new Error(
+      "waited 30s for the translation floor to clear and gave up — more translations were asked for at once than this board runs",
+    ),
+  );
+  t = await bootTidepool({ translationClient });
+
+  const question = registerQuestion(t, {
+    title: "merge decision",
+    purpose: "CI passed, ready to merge?",
+    completion_criteria: "answered",
+    question: [{ title: "merge now?", options: ["merge", "hold"], recommendation: "merge" }],
+  });
+
+  const res = await api(t.baseUrl, "POST", "/api/translate", {
+    type: "question",
+    task_id: question.id,
+  });
+
+  expect(res.status).toBe(503);
+  expect(res.json.error).toContain("waited 30s for the translation floor to clear");
+});
+
 it("handoff doc を翻訳する(type: handoff, 見出しは英語のまま)", async () => {
   const translationClient = new FakeTranslationClient();
   translationClient.scriptTranslation("センサーは5分ごとに湿度を報告する");
