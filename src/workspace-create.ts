@@ -242,7 +242,9 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   // grammar before confirmation, for the same reason as the self-refusal: a
   // malformed prefix is not something a confirm can buy, and the value the
   // human read must be the one the CLI receives (ADR 0061 根拠5)
-  if (input.review_allowed_commands) assertValidReviewAllowedCommands(input.review_allowed_commands);
+  if (input.review_allowed_commands !== undefined) {
+    assertValidReviewAllowedCommands(input.review_allowed_commands);
+  }
   const dangerous = dangerousWorkspaceValues(input);
   if (dangerous.length > 0 && input.confirm !== true) {
     throw new WorkspaceConfirmationRequiredError(input.name, dangerous);

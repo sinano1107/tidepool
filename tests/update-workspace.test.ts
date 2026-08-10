@@ -28,8 +28,8 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 /** createWorkspace 側のテストと同じ正規化 — fixture を main に。 */
-async function makeMainRegistry(): Promise<string> {
-  const dir = await makeRegistry();
+async function makeMainRegistry(files?: Record<string, string>): Promise<string> {
+  const dir = await makeRegistry(files);
   git(dir, "branch", "-M", "main");
   return dir;
 }
@@ -66,8 +66,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
   });
 
   it("protected の解除は confirm がなければ拒否され、コミットを積まない(#55 と同型の確認ステップ)", async () => {
-    const registryDir = await makeRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
-    git(registryDir, "branch", "-M", "main");
+    const registryDir = await makeMainRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
     const before = git(registryDir, "rev-parse", "HEAD");
     const deps = await makeDeps(registryDir);
 
@@ -79,8 +78,7 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
   });
 
   it("protected の解除は confirm: true で通り、エントリから protected が消える", async () => {
-    const registryDir = await makeRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
-    git(registryDir, "branch", "-M", "main");
+    const registryDir = await makeMainRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
     const deps = await makeDeps(registryDir);
 
     await updateWorkspace({ name: "lagoon", protected: false, confirm: true }, deps);
@@ -169,11 +167,23 @@ describe("updateWorkspace: review_allowed_commands の編集(issue #264 / ADR 00
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
-  it("空配列は確認なしでキーごと消える — 床を下げる向きに摩擦は置かない(ADR 0061 決定2)", async () => {
-    const registryDir = await makeRegistry({
+  it("notes だけの PATCH は、設定済みの workspace でも確認を要求しない — 判定はペイロードだけを見る(ADR 0061 決定2)", async () => {
+    const registryDir = await makeMainRegistry({
       "workspaces.yaml": "tidepool:\n  path: /home/pi/work/tidepool\n  review_allowed_commands:\n    - npm test\n",
     });
-    git(registryDir, "branch", "-M", "main");
+    const deps = await makeDeps(registryDir);
+
+    await updateWorkspace({ name: "tidepool", notes: "run npm install first" }, deps);
+
+    const entry = loadRegistry(registryDir, "purely-local").workspaces.tidepool;
+    expect(entry?.notes).toBe("run npm install first");
+    expect(entry?.review_allowed_commands).toEqual(["npm test"]);
+  });
+
+  it("空配列は確認なしでキーごと消える — 床を下げる向きに摩擦は置かない(ADR 0061 決定2)", async () => {
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": "tidepool:\n  path: /home/pi/work/tidepool\n  review_allowed_commands:\n    - npm test\n",
+    });
     const deps = await makeDeps(registryDir);
 
     await updateWorkspace({ name: "tidepool", review_allowed_commands: [] }, deps);

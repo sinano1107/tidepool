@@ -161,8 +161,9 @@ WebUI themselves. This implies:
 
 - Do not answer a question task, cancel a task, or confirm a dangerous
   registry value — an authority profile's, a workspace's — unless the human
-  has explicitly made that judgment in your conversation. When in doubt, show the human the task and ask. Answers you
-  submit are counted as human decisions in the board's statistics.
+  has explicitly made that judgment in your conversation. When in doubt, show
+  the human the task and ask. Answers you submit are counted as human
+  decisions in the board's statistics.
 - Registry changes you make (agents, profiles, workspaces) are committed to
   main as human-authored changes.
 - Reading the decision log here does NOT mark it as seen by the human. The
