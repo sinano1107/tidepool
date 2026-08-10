@@ -5,6 +5,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { GitHubClient } from "./github.js";
 import { authedGit, type GitHubAuth } from "./github-auth.js";
 import {
+  assertValidReviewAllowedCommands,
   assertValidWorkspaceName,
   loadRegistry,
   ownEntry,
@@ -150,25 +151,62 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: CreateW
 }
 
 /** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
- *  `notes` and `protected` are editable — changing `path`/`repo`/`branch`
- *  re-points the entry at a different real checkout, which stays a manual
- *  edit (the registry is a git repository). */
+ *  `notes`, `protected` and `review_allowed_commands` (ADR 0061) are editable
+ *  — changing `path`/`repo`/`branch` re-points the entry at a different real
+ *  checkout, which stays a manual edit (the registry is a git repository).
+ *  A partial patch throughout: an absent field is untouched, which is what
+ *  lets the confirmation gate below judge the payload alone. */
 export interface UpdateWorkspaceInput {
   name: string;
   /** Provided → set; empty string → remove the field. */
   notes?: string;
   protected?: boolean;
+  /** ADR 0035's review write-floor lift, editable from the human doors since
+   *  ADR 0061 (the create door deliberately stays out of it — 決定3). Provided
+   *  → set; the empty array removes the key, absence being the canonical "no
+   *  commands", the same shape as `protected` below. */
+  review_allowed_commands?: string[];
+  /** Consent to every dangerous value in this payload, not to unprotecting
+   *  alone (ADR 0061 決定1) — one boolean, the refusal's reason codes say
+   *  what it bought. */
   confirm?: boolean;
 }
 
-/** Removing protection was requested without the confirmation step (issue
- *  #57, same shape as #55): adding `protected` is frictionless because it
- *  only moves in the safe direction — removal is the one edit that widens
- *  what agents can do, so it never happens on a single unconfirmed click. */
-export class UnprotectNeedsConfirmationError extends Error {
-  constructor(name: string) {
-    super(`removing protection from workspace "${name}" requires confirmation`);
-    this.name = "UnprotectNeedsConfirmationError";
+/** Machine-readable reason codes `dangerousWorkspaceValues` can return — the
+ *  workspace twin of profile-create's `DangerousValueReason`, stable strings
+ *  a door's refusal enumerates rather than prose (ADR 0061 決定1). */
+export type DangerousWorkspaceValueReason = "unprotect" | "review_allowed_commands_set";
+
+/** Pure judgment of which values in *this payload* widen what agents may do
+ *  (ADR 0061 決定2): removing protection, and setting the review write-floor
+ *  lift to a non-empty list. It never reads the entry being edited — the
+ *  update is a partial patch, so a field the human did not touch is simply
+ *  absent, and the empty array (clearing the list) moves in the safe
+ *  direction and asks nothing. */
+function dangerousWorkspaceValues(
+  input: Pick<UpdateWorkspaceInput, "protected" | "review_allowed_commands">,
+): DangerousWorkspaceValueReason[] {
+  const reasons: DangerousWorkspaceValueReason[] = [];
+  if (input.protected === false) reasons.push("unprotect");
+  if (input.review_allowed_commands?.length) reasons.push("review_allowed_commands_set");
+  return reasons;
+}
+
+/** A payload carrying dangerous values arrived without `confirm` (issue #57,
+ *  generalized by ADR 0061 決定1 from "removing protection" to "every
+ *  dangerous value in this payload"). Enforcement lives here in the domain,
+ *  once: the API maps this to a 409 with `dangerous_values`, the management
+ *  MCP to a tool error — and both bodies enumerate the reason codes, so the
+ *  message carries them too rather than only the structured field. */
+export class WorkspaceConfirmationRequiredError extends Error {
+  constructor(
+    name: string,
+    public readonly reasons: DangerousWorkspaceValueReason[],
+  ) {
+    super(
+      `workspace "${name}" edit contains dangerous values (${reasons.join(", ")}); resubmit with confirm: true`,
+    );
+    this.name = "WorkspaceConfirmationRequiredError";
   }
 }
 
@@ -191,29 +229,38 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
+  // the self-refusal outranks confirmation — checked first so a confirmed
+  // request gets the honest "never here", not another confirm loop. It also
+  // ignores the entry's current flag: the floor must not depend on the very
+  // state it protects
+  if (
+    input.protected === false &&
+    resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)
+  ) {
+    throw new RegistrySelfUnprotectError(input.name);
+  }
+  // grammar before confirmation, for the same reason as the self-refusal: a
+  // malformed prefix is not something a confirm can buy, and the value the
+  // human read must be the one the CLI receives (ADR 0061 根拠5)
+  if (input.review_allowed_commands) assertValidReviewAllowedCommands(input.review_allowed_commands);
+  const dangerous = dangerousWorkspaceValues(input);
+  if (dangerous.length > 0 && input.confirm !== true) {
+    throw new WorkspaceConfirmationRequiredError(input.name, dangerous);
+  }
   const next: WorkspaceEntry = { ...entry };
   if (input.notes !== undefined) {
     if (input.notes === "") delete next.notes;
     else next.notes = input.notes;
   }
   if (input.protected !== undefined) {
-    if (input.protected) {
-      next.protected = true;
-    } else {
-      // the self-refusal outranks confirmation — checked first so a confirmed
-      // request gets the honest "never here", not another confirm loop. It
-      // also ignores the entry's current flag: the floor must not depend on
-      // the very state it protects
-      if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
-        throw new RegistrySelfUnprotectError(input.name);
-      }
-      if (entry.protected === true && input.confirm !== true) {
-        throw new UnprotectNeedsConfirmationError(input.name);
-      }
-      // absence is the canonical "not protected" — mirrors creation, which
-      // never writes `protected: false`
-      delete next.protected;
-    }
+    // absence is the canonical "not protected" — mirrors creation, which
+    // never writes `protected: false`
+    if (input.protected) next.protected = true;
+    else delete next.protected;
+  }
+  if (input.review_allowed_commands !== undefined) {
+    if (input.review_allowed_commands.length === 0) delete next.review_allowed_commands;
+    else next.review_allowed_commands = input.review_allowed_commands;
   }
   commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
 }
