@@ -434,7 +434,10 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [showFullyReadWorkspaces, setShowFullyReadWorkspaces] = React.useState(false);
   const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
   const fullyReadGroups = allLogGroups.filter((g) => g.unreadCount === 0);
-  const logGroups = showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
+  const logGroups = React.useMemo(
+    () => showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0),
+    [allLogGroups, showFullyReadWorkspaces]
+  );
   const [logTranslateOn, setLogTranslateOn] = React.useState(false);
   const [logTranslations, setLogTranslations] = React.useState({});
   const logTranslateRequested = React.useRef(/* @__PURE__ */ new Set());

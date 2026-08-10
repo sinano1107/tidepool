@@ -376,7 +376,14 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [showFullyReadWorkspaces, setShowFullyReadWorkspaces] = React.useState(false);
   const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
   const fullyReadGroups = allLogGroups.filter((g) => g.unreadCount === 0);
-  const logGroups = showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0);
+  // memoized (not a bare .filter() per render): renderedLogEntries below
+  // depends on this, and an unstable reference here would defeat that
+  // useMemo on every unrelated re-render — including the very re-renders a
+  // translation result landing causes (see the note above the fanout effect).
+  const logGroups = React.useMemo(
+    () => (showFullyReadWorkspaces ? allLogGroups : allLogGroups.filter((g) => g.unreadCount > 0)),
+    [allLogGroups, showFullyReadWorkspaces],
+  );
   // the log skim's own toggle (one of the 3 switches ADR 0063's table
   // enumerates, issue #47): one switch governs every entry currently
   // rendered in this section — not
@@ -397,20 +404,20 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     return rendered;
   }, [logGroups, revealedRead]);
   // ADR 0063 決定4: the AbortController's lifecycle is the *toggle*
-  // (logTranslateOn alone), not the fanout below. `renderedLogEntries` is a
-  // useMemo, but `logGroups` upstream of it is a bare `.filter()` recomputed
-  // every render — so its identity is unstable across *any* re-render of
-  // this component, including the one `setLogTranslations` itself causes
-  // when a translation lands. Keying the controller to renderedLogEntries
-  // too (measured, via browser console instrumentation) turns that
-  // instability into a self-sustaining loop: a result arrives → re-render →
-  // new renderedLogEntries identity → cleanup aborts whatever is still
-  // queued → onAbort deletes its key → re-scan re-queues it → repeat. None
-  // of those re-renders are "スイッチを戻した"; cancel belongs only to off,
-  // so this controller effect has its own, narrower deps; the fanout effect
-  // below reads the current controller via a ref and carries no cleanup of
-  // its own — re-running it on every unstable re-render is harmless (it just
-  // skips already-requested keys).
+  // (logTranslateOn alone), not the fanout below — deliberately narrower
+  // than renderedLogEntries' own deps. Before `logGroups` above was
+  // memoized, its identity was unstable across *any* re-render of this
+  // component, including the one `setLogTranslations` itself causes when a
+  // translation lands; keying the controller to renderedLogEntries too
+  // (measured, via browser console instrumentation) turned that instability
+  // into a self-sustaining loop: a result arrives → re-render → new
+  // renderedLogEntries identity → cleanup aborts whatever is still queued →
+  // onAbort deletes its key → re-scan re-queues it → repeat. `logGroups` is
+  // fixed now, but the controller's own deps stay narrow regardless — cancel
+  // belongs only to "スイッチを戻した", not to every re-render, memoized or
+  // not. The fanout effect below reads the current controller via a ref and
+  // carries no cleanup of its own — re-running it on a re-render is harmless
+  // (it just skips already-requested keys).
   const logTranslateAbort = React.useRef(null);
   React.useEffect(() => {
     if (!logTranslateOn) return;
