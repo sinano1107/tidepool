@@ -483,6 +483,13 @@ export function advisorSpawnFlags(advisor: string | undefined): string[] {
  *  and silently. */
 const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
 
+/** The env var that closes the model's own reasoning (ADR 0062 決定2), named
+ *  here beside `ADVISOR_DISABLE_ENV` for the same reason that one is named:
+ *  a string env var typo fails open and silently — measured, the reasoning it
+ *  suppresses was 80% of a translation's output tokens ($0.0061 → $0.0026 on
+ *  the same call). No CLI flag spells this; the env is the only spelling. */
+const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
+
 /** The env every **Board call** carries (issue #174 / ADR 0044) — the board's
  *  own CLI invocations: the draft poll, display-time translation, the two
  *  `/usage` init pings, and the usage scrape. None of them is a worker session,
@@ -504,6 +511,18 @@ const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
  *  as `workerSpawnEnv` below and as `SpawnFn`'s `opts.env`. */
 export function boardCallEnv(): NodeJS.ProcessEnv {
   return { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
+}
+
+/** A Board call that additionally declares the absence of reasoning (ADR 0062
+ *  決定2) — display-time translation, and only it. Layered **on top of**
+ *  `boardCallEnv` rather than folded into it: "no reasoning" is not true of
+ *  every Board call — the AI draft assembles a task from a brain dump and
+ *  judges whether an issue may be registered, a generation task where
+ *  reasoning can be part of the job. Folding it in would redo, on a second
+ *  axis, the failure ADR 0044 prevented: lumping calls together under "it's a
+ *  Board call" and flattening what each one actually is. */
+export function noThinkingEnv(): NodeJS.ProcessEnv {
+  return { ...boardCallEnv(), [MAX_THINKING_TOKENS_ENV]: "0" };
 }
 
 /** anthropics/claude-code#69238: the CLI's stream byte-idle deadline defaults
