@@ -191,9 +191,9 @@ describe("ClaudeDraftClient", () => {
 
   // ADR 0062 決定1: 答えを取りに行く Board call は空のツール面を明示的に宣言する。
   // `--allowedTools` では足りない —— あれは permission 面を絞るだけで、ツール定義は
-  // システムプロンプトに載ったままである(実測: 入力 22k → 3.9k)。値の直後が別の
-  // フラグであることも見る: `--tools <tools...>` は可変長で、値を空にした分だけ
-  // 次の引数を食う余地がある。
+  // システムプロンプトに載ったままである(実測: 入力 22k → 3.9k)。ここが見るのは
+  // 「この呼び出しが宣言していること」で、綴りの危うさ(`--tools <tools...>` が
+  // 可変長ゆえ次の引数を食いうる)は翻訳側のテストが1回だけ見る。
   it("--tools \"\" を渡してツール面を空と宣言する(ADR 0062 決定1)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
@@ -208,9 +208,7 @@ describe("ClaudeDraftClient", () => {
     await client.draftTask("set up the greenhouse sensor", "English");
 
     const args = calls[0]!;
-    const at = args.indexOf("--tools");
-    expect(args[at + 1]).toBe("");
-    expect(args[at + 2]).toMatch(/^--/);
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
   });
 
   it("--safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {

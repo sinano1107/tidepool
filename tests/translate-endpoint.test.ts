@@ -115,7 +115,9 @@ it("throttled 中は翻訳を実行せず、応答が throttled と区別でき�
 it("床が待ちを諦めたときは 503 で返り、理由の文が message として届く(ADR 0063 決定2)", async () => {
   const translationClient = new FakeTranslationClient();
   translationClient.scriptFailure(
-    new Error("waited 30s for a translation slot and gave up — more translations were asked for at once than this board runs"),
+    new Error(
+      "waited 30s for the translation floor to clear and gave up — more translations were asked for at once than this board runs",
+    ),
   );
   t = await bootTidepool({ translationClient });
 
@@ -132,7 +134,7 @@ it("床が待ちを諦めたときは 503 で返り、理由の文が message �
   });
 
   expect(res.status).toBe(503);
-  expect(res.json.error).toContain("waited 30s for a translation slot");
+  expect(res.json.error).toContain("waited 30s for the translation floor to clear");
 });
 
 it("handoff doc を翻訳する(type: handoff, 見出しは英語のまま)", async () => {

@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { defaultExec, type ExecFn, noThinkingEnv, pinnedModelFlags } from "./claude-worker.js";
+import {
+  boardCallEnvWithoutThinking,
+  defaultExec,
+  type ExecFn,
+  emptyToolSurfaceFlags,
+  pinnedModelFlags,
+} from "./claude-worker.js";
 import type { GlossaryEntry } from "./glossary.js";
 import type { TranslationClient, TranslationResult } from "./translate.js";
 
@@ -78,7 +84,10 @@ function buildPrompt(source: string, language: string, glossary: GlossaryEntry[]
  *  question the board has no need of yet. */
 const MAX_CONCURRENT_TRANSLATIONS = 2;
 
-/** How long a translation waits for a slot before giving up (ADR 0063 決定2).
+/** How long a translation waits for the floor to clear before giving up (ADR
+ *  0063 決定2). Deliberately not called a "slot": CONTEXT.md gives `Slot` to the
+ *  board's single execution frame, and a Board call — which this is — "タスクにも
+ *  slot にも属さず". The floor is a different limit on a different resource.
  *  The point of having any limit is to not lean on someone else's timeout:
  *  Node's `server.requestTimeout` and whatever Tailscale Funnel enforces are
  *  values the board did not choose and that can change without notice. 30s
@@ -86,7 +95,7 @@ const MAX_CONCURRENT_TRANSLATIONS = 2;
  *  and since the caller keeps to two at a time, reaching it is not a slow
  *  board but evidence that some caller stopped behaving, which is exactly what
  *  the human then sees in place of the translation. */
-const SLOT_WAIT_TIMEOUT_MS = 30_000;
+const FLOOR_WAIT_TIMEOUT_MS = 30_000;
 
 export interface ClaudeTranslationClientOptions {
   /** CONTEXT.md's own term pairs (issue #47), injected as a translation aid
@@ -102,10 +111,10 @@ export interface ClaudeTranslationClientOptions {
 export class ClaudeTranslationClient implements TranslationClient {
   private readonly glossary: GlossaryEntry[];
   private readonly exec: ExecFn;
-  /** CLI processes alive right now, and the calls queued behind them. A
-   *  released slot is handed straight to the next waiter rather than counted
-   *  down and re-acquired, so a wakeup can never race a new arrival into the
-   *  same slot. */
+  /** CLI processes alive right now, and the calls queued behind them. A place
+   *  freed on the floor is handed straight to the next waiter rather than
+   *  counted down and re-acquired, so a wakeup can never race a new arrival
+   *  into the same place. */
   private running = 0;
   private readonly waiting: Array<() => void> = [];
 
@@ -114,7 +123,7 @@ export class ClaudeTranslationClient implements TranslationClient {
     this.exec = options.exec ?? defaultExec;
   }
 
-  private acquireSlot(): Promise<void> {
+  private enterFloor(): Promise<void> {
     if (this.running < MAX_CONCURRENT_TRANSLATIONS) {
       this.running += 1;
       return Promise.resolve();
@@ -125,11 +134,11 @@ export class ClaudeTranslationClient implements TranslationClient {
         if (at !== -1) this.waiting.splice(at, 1);
         reject(
           new Error(
-            `waited ${SLOT_WAIT_TIMEOUT_MS / 1000}s for a translation slot and gave up — ` +
-              "more translations were asked for at once than this board runs",
+            `waited ${FLOOR_WAIT_TIMEOUT_MS / 1000}s for the translation floor to clear ` +
+              "and gave up — more translations were asked for at once than this board runs",
           ),
         );
-      }, SLOT_WAIT_TIMEOUT_MS);
+      }, FLOOR_WAIT_TIMEOUT_MS);
       const wake = () => {
         clearTimeout(timer);
         resolve();
@@ -138,18 +147,18 @@ export class ClaudeTranslationClient implements TranslationClient {
     });
   }
 
-  private releaseSlot(): void {
+  private leaveFloor(): void {
     const next = this.waiting.shift();
     if (next) next();
     else this.running -= 1;
   }
 
   async translate(source: string, language: string): Promise<TranslationResult> {
-    await this.acquireSlot();
+    await this.enterFloor();
     try {
       return await this.runTranslation(source, language);
     } finally {
-      this.releaseSlot();
+      this.leaveFloor();
     }
   }
 
@@ -164,13 +173,7 @@ export class ClaudeTranslationClient implements TranslationClient {
         "--system-prompt",
         TRANSLATION_SYSTEM_PROMPT,
         ...pinnedModelFlags("haiku", "low"),
-        // an empty tool surface, declared (ADR 0062 決定1): a translation
-        // carries no tools, and the declaration is what keeps their
-        // *definitions* off the system prompt — measured, they were 18k of the
-        // input. `--allowedTools ""` narrows permissions only; the definitions
-        // ride along regardless.
-        "--tools",
-        "",
+        ...emptyToolSurfaceFlags(),
         // with no tools at all a second turn is structurally impossible; the
         // flag stays as the explicit statement that a single answer is what
         // this call is for, so a CLI that ever raises another turn fails loud
@@ -186,7 +189,7 @@ export class ClaudeTranslationClient implements TranslationClient {
       // 決定2). A haiku main model is no protection for the first — measured
       // 2026-08-04, haiku + an inherited advisorModel attaches opus to every
       // display-time translation. The second was 80% of the output tokens.
-      noThinkingEnv(),
+      boardCallEnvWithoutThinking(),
     );
     const envelope = resultEnvelopeSchema.parse(JSON.parse(stdout));
     return {

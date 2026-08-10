@@ -448,6 +448,25 @@ export function pinnedModelFlags(model: string, effort: string): string[] {
   return ["--model", model, "--effort", effort];
 }
 
+/** The empty tool surface a Board call declares when it goes to **fetch an
+ *  answer** rather than to work (ADR 0062 決定1). `--allowedTools ""` is not the
+ *  same thing: that narrows the permission surface while the tool *definitions*
+ *  still ride along on the system prompt — measured, they were 18k of a
+ *  translation's input.
+ *
+ *  Named here rather than spelled at each call site because the set of callers
+ *  is the decision: exactly two of ADR 0044's five Board calls take it — the AI
+ *  draft and display-time translation. **The three probes must never call it**
+ *  (skill enumeration ping, tool-surface probe, usage scrape): they go to
+ *  *observe* the CLI's state, and an observer trimming the environment it is
+ *  observing is self-contradictory. For the tool-surface probe it would be
+ *  worse than pointless — with `--tools ""` the comparison collapses to
+ *  「観測 ⊂ 期待」 and the board stops picking anything up. So the callers of
+ *  this function are greppable on purpose. */
+export function emptyToolSurfaceFlags(): string[] {
+  return ["--tools", ""];
+}
+
 /** The advisor capability's CLI spelling (issue #33 / ADR 0042), deliberately
  *  **not** folded into `pinnedModelFlags` above: that helper is shared with the
  *  board's own CLI calls (`ClaudeDraftClient`, `ClaudeTranslationClient`), and
@@ -521,7 +540,7 @@ export function boardCallEnv(): NodeJS.ProcessEnv {
  *  reasoning can be part of the job. Folding it in would redo, on a second
  *  axis, the failure ADR 0044 prevented: lumping calls together under "it's a
  *  Board call" and flattening what each one actually is. */
-export function noThinkingEnv(): NodeJS.ProcessEnv {
+export function boardCallEnvWithoutThinking(): NodeJS.ProcessEnv {
   return { ...boardCallEnv(), [MAX_THINKING_TOKENS_ENV]: "0" };
 }
 

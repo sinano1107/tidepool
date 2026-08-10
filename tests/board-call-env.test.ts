@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardCallEnv, initPingSpawnOptions, noThinkingEnv } from "../src/claude-worker.js";
+import { boardCallEnv, boardCallEnvWithoutThinking, initPingSpawnOptions } from "../src/claude-worker.js";
 
 /** Board call(盤面呼び出し / ADR 0044): 盤面が自分の機能のために回す CLI 呼び出しは
  *  worker session ではなく、したがって advisor を持たない。ここが見張るのは
@@ -49,9 +49,9 @@ describe("Board call の env", () => {
   // `boardCallEnv()` には畳み込まず、上に重ねる形で綴る。重ねる側が advisor の
   // 宣言を落とせば ADR 0044 が黙って失効するので、そこをここで見張る。
   it("推論を閉じる env は Board call の env の上に重なる(advisor の宣言を落とさない)", () => {
-    expect(noThinkingEnv().MAX_THINKING_TOKENS).toBe("0");
-    expect(noThinkingEnv().CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
-    expect(noThinkingEnv().PATH).toBe(process.env.PATH);
+    expect(boardCallEnvWithoutThinking().MAX_THINKING_TOKENS).toBe("0");
+    expect(boardCallEnvWithoutThinking().CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
+    expect(boardCallEnvWithoutThinking().PATH).toBe(process.env.PATH);
   });
 
   it("/usage ping の spawn オプションが Board call の env を運ぶ", () => {

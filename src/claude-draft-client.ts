@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { boardCallEnv, defaultExec, type ExecFn, pinnedModelFlags } from "./claude-worker.js";
+import {
+  boardCallEnv,
+  defaultExec,
+  type ExecFn,
+  emptyToolSurfaceFlags,
+  pinnedModelFlags,
+} from "./claude-worker.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
@@ -214,13 +220,7 @@ export class ClaudeDraftClient implements DraftClient {
         // a real generation task, not the trivial ping checkUsage()
         // deliberately downgrades to haiku for
         ...pinnedModelFlags("sonnet", "medium"),
-        // an empty tool surface, declared (ADR 0062 決定1): this call goes to
-        // fetch an answer, not to work, so it carries no tools — and the
-        // declaration is what keeps their *definitions* off the system prompt.
-        // `--allowedTools ""` would not do it: that narrows the permission
-        // surface while the definitions ride along regardless (measured).
-        "--tools",
-        "",
+        ...emptyToolSurfaceFlags(),
         // with no tools at all a second turn is structurally impossible; the
         // flag stays as the explicit statement that a single answer is what
         // this call is for, so a CLI that ever raises another turn fails loud
