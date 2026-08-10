@@ -131,10 +131,14 @@ const workspaceEntrySchema = z.object({
    *  carries the command, never the CLI's spelling, the same split as the
    *  skill allowlist's names-not-paths rule (ADR 0033).
    *
-   *  This is the one registry field that *widens* a session's permissions, so
-   *  its gate is the human merge a protected workspace requires (issue #15
-   *  layer 2). `assertValidReviewAllowedCommands` guards the grammar so a
-   *  spelling can't reach past what that human read. */
+   *  This is the one registry field that *widens* a session's permissions —
+   *  the only one whose value lifts the review write floor itself. Its gate is
+   *  the human surface's credential (ADR 0036) plus an explicit confirmation
+   *  of the dangerous value, not a pull request (ADR 0061 — correcting this
+   *  comment's earlier claim that a protected workspace's human merge was the
+   *  gate: human-authored registry changes commit straight to the protected
+   *  branch and never see a PR). `assertValidReviewAllowedCommands` guards the
+   *  grammar so a spelling can't reach past what that human read. */
   review_allowed_commands: z.array(z.string()).optional(),
 });
 
@@ -271,8 +275,12 @@ class InvalidReviewAllowedCommandError extends Error {
  *
  *  What the grammar is actually for is narrower than "well-formed". This is
  *  the one registry field that *widens* a review session's permissions, and
- *  its only gate is a human reading the registry PR. Every rule below exists
- *  so that what the human read is what the CLI receives:
+ *  its gate is a human reading the value — in the registry PR when an agent
+ *  authored it, in the human surface's confirmation dialog when a person did
+ *  (ADR 0061; the earlier "only gate is a human reading the registry PR" left
+ *  the human-authored path out, which commits straight to the protected branch
+ *  and never opens a PR). Every rule below exists so that what the human read
+ *  is what the CLI receives — the dialog's enumeration as much as the diff's:
  *
  *  - **no comma** — `--allowedTools` is comma-joined (claude-worker.ts), so
  *    `"npm test,rm -rf /"` reads as one allowance in the diff and arrives as

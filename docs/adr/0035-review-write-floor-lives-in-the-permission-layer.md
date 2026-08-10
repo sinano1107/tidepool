@@ -31,7 +31,7 @@ ADR 0033 の OS サンドボックスと併用する。ただし独立した4層
 **実測待ちにせず、決定的な permission 層に allow を置く**。「観測されただけの既定挙動」に床の成立を依存させないのは、`auto` の分類器を床から退けたのと同じ理屈である。
 
 1. **MCP verbs** — `mcp__tidepool` をサーバ単位で allow する。verb の権限は盤面側(authority profile / MCP router)が縛るので、CLI 側で開けても権限モデルは緩まない。事実2のとおり allow が無いと review は完全に死ぬので、デプロイ時 canary に「MCP verb が通る」行を持つ。
-2. **`review_allowed_commands`** — registry の `workspaces.yaml` に置くホスト非依存のコマンド接頭辞列(省略時は空)。盤面が spawn 時に `Bash(<prefix>*)` へ機械変換して `--allowedTools` に折り込む。review spawn にのみ効く。permission を**広げる**設定なので、保護 workspace である registry の人間 merge が門になる(agent の skill allowlist と同じ線)。文法検証はカンマ・括弧・`*`・空文字・制御文字を拒否する —— `--allowedTools` はカンマ結合なので、エントリ内のカンマは人間が review したつもりの範囲を越えて allow トークンを注入できる。
+2. **`review_allowed_commands`** — registry の `workspaces.yaml` に置くホスト非依存のコマンド接頭辞列(省略時は空)。盤面が spawn 時に `Bash(<prefix>*)` へ機械変換して `--allowedTools` に折り込む。review spawn にのみ効く。permission を**広げる**設定なので、保護 workspace である registry の人間 merge が門になる(agent の skill allowlist と同じ線)。文法検証はカンマ・括弧・`*`・空文字・制御文字を拒否する —— `--allowedTools` はカンマ結合なので、エントリ内のカンマは人間が review したつもりの範囲を越えて allow トークンを注入できる。**門についての記述は ADR 0061 で訂正された(下記追記)。**
 
 ## 床を workspace 側から持ち上げる経路(実測で見つかった実バグ)
 
@@ -53,3 +53,22 @@ CLI は checkout 自身の `.claude/settings.local.json` の `permissions.allow`
 - **`dontAsk`** — Bash 自体が落ちるので review に使えない。
 - **`auto` のまま OS 側を強化する** — `denyWrite: [workspace]` は Linux(bwrap)backend で成立しない(ADR 0033 追記、本番 Pi で確認)。macOS だけ効かせる案は本番が弱い側になるため ADR 0033 の dev/prod 乖離原則が禁じる。
 - **workspace 側 settings のガードを広げず ADR に残余として書く** — `permissions.allow` の経路は work セッションが自力で作れるので、review が封じ込めるはずの当の行為者が床を外せることになる。#60 で同じ形を塞いだ判断と揃えない理由がない。
+
+## 追記(#229 / ADR 0061 —— 「門は人間 merge」の訂正)
+
+この ADR が2箇所で書く「門は保護 workspace の人間 merge である」(層の分担の `--disallowedTools` 節、
+明示 allow の2本目)と、`src/registry.ts` の doc comment 2箇所(フィールド定義と
+`assertValidReviewAllowedCommands`)が書く「its only gate is a human reading the registry PR」は、
+**人間発の経路を勘定に入れていない不正確な記述であり、書かれた時点で既に不正確だった。**
+
+registry 変更の正規経路は2本ある —— agent 発(registry-edit タスク → PR → 人間 merge)と、人間発
+(WebUI / 管理MCP → 盤面がリモートの保護ブランチへ**直接コミット**、ADR 0052)。PR が門になるのは前者
+だけである。「PR が門」が事実だったのは、このフィールドにたまたま人間発の経路が無かったからにすぎず、
+**設計された門ではなく経路の不在**だった。
+
+ADR 0061 はその不在を埋め、門を明示する —— **人間面が要求する credential(ADR 0036)と、危険な値に対する
+明示の確認**。文法検証の役割はこの訂正で弱まらず、むしろ広がる:「人間が読んだものが CLI に届く」が守る
+対象に、確認ダイアログの理由コード列挙が加わる。
+
+**この ADR の主題(床は permission 層に立つ)は無傷である。** 訂正されたのは、床を持ち上げる唯一の
+フィールドを何が守るかについての記述だけで、床そのものはいまも `--permission-mode manual` にある。
