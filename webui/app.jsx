@@ -707,45 +707,82 @@ function useDirtySignal(edit, open, dirty) {
   React.useEffect(() => { if (open) edit.setDirty(dirty); }, [open, dirty]);
 }
 
+// Free-entry-only chip list for review_allowed_commands (ADR 0061 / issue
+// #265) — unlike SkillListInput/ProfileListInput there is no candidate list:
+// the board has no visibility into what commands exist on a host, so this is
+// SkillListInput's free-entry half with the picker dropped. Grammar
+// (assertValidReviewAllowedCommands) is re-checked server-side before write;
+// this stays a plain free-text add, same split as the skills picker.
+function ReviewCommandsInput({ values, onChange }) {
+  const { Input, Button, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const [free, setFree] = React.useState('');
+  const addFree = () => {
+    const v = free.trim();
+    if (!v || values.includes(v)) return;
+    onChange([...values, v]);
+    setFree('');
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        Review allowed commands
+      </span>
+      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+        command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty).
+      </p>
+      {values.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {values.map((v) => (
+            <button key={v} type="button" title="remove" onClick={() => onChange(values.filter((x) => x !== v))}
+              style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+              <Tag color="tide" mono>{v} ✕</Tag>
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+        <div style={{ flex: 1 }}>
+          <Input value={free} mono onChange={(e) => { setFree(e.target.value); }}
+            placeholder='command prefix — e.g. "npm test"' />
+        </div>
+        <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
+      </div>
+    </div>
+  );
+}
+
 // One workspace as a record card (issue #57 phase 3, restructured by #204):
 // read-only until Edit, then notes + protection as a single draft — the Switch
 // no longer PATCHes the moment it is touched. path/repo/branch re-point the
 // entry at a different checkout, which stays a manual registry edit, so they
 // are shown but never editable here.
 function WorkspaceRecord({ ws, say, onChanged, edit }) {
-  const { Button, Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   const id = `workspace:${ws.name}`;
   const open = edit.isOpen(id);
   const [notes, setNotes] = React.useState(ws.notes ?? '');
   const [prot, setProt] = React.useState(!!ws.protected);
-  const [busy, setBusy] = React.useState(false);
-  const [confirming, setConfirming] = React.useState(false);
+  const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? '') || prot !== !!ws.protected;
+  const dirty = notes.trim() !== (ws.notes ?? '')
+    || prot !== !!ws.protected
+    || !sameStrings(cmds, ws.review_allowed_commands ?? []);
   useDirtySignal(edit, open, dirty);
+  const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => { edit.close(); await onChanged(); });
 
-  const startEdit = () => edit.open(id, () => { setNotes(ws.notes ?? ''); setProt(!!ws.protected); });
-  const commit = async (confirmed) => {
-    setBusy(true);
-    try {
-      // notes and protection travel as one PATCH — updateWorkspace applies both
-      // and takes the confirmation alongside them, so a save is one commit
-      const body = { notes: notes.trim() };
-      if (prot !== !!ws.protected) {
-        body.protected = prot;
-        if (!prot) body.confirm = confirmed;
-      }
-      await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, body, 'PATCH');
-      say('success', 'workspace updated — committed to the registry', ws.name);
-      edit.close();
-      await onChanged();
-    } catch (err) {
-      say('danger', 'workspace update failed', String(err.message || err));
-    }
-    setBusy(false);
+  const startEdit = () => edit.open(id, () => {
+    setNotes(ws.notes ?? ''); setProt(!!ws.protected); setCmds(ws.review_allowed_commands ?? []);
+  });
+  // ADR 0061 決定2: notes never carries a confirmation, so it travels every
+  // save; protected/review_allowed_commands only join the body when they
+  // actually changed — an untouched field must stay absent for the door's
+  // pure-payload danger judgment to see only what the human actually edited
+  const save = () => {
+    const body = { notes: notes.trim() };
+    if (prot !== !!ws.protected) body.protected = prot;
+    if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
+    submit(`/api/workspaces/${encodeURIComponent(ws.name)}`, 'PATCH', body, 'updated', ws.name);
   };
-  // only the on→off direction asks — adding protection is the safe direction
-  const save = () => { if (!!ws.protected && !prot) { setConfirming(true); return; } commit(false); };
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -767,6 +804,8 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
           <FieldRow label="notes" kind={ws.notes ? 'text' : 'unset'} value={ws.notes ?? ''} unsetLabel="—" />
           <FieldRow label="protected" kind="bool" checked={!!ws.protected}
             onLabel="changes here always need human approval" offLabel="not protected" />
+          <FieldRow label="review allowed commands" kind={(ws.review_allowed_commands ?? []).length ? 'tags' : 'unset'}
+            tags={ws.review_allowed_commands ?? []} unsetLabel="no extra commands allowed — review stays read-only" />
         </React.Fragment>
       )}
       {open && (
@@ -777,24 +816,12 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
               the server refuses it too (ADR 0013), this just keeps the UI honest */}
           <Switch label="protected — changes here always need human approval" checked={prot}
             disabled={busy || (ws.registrySelf && !!ws.protected)} onChange={(next) => setProt(next)} />
+          <ReviewCommandsInput values={cmds} onChange={setCmds} />
           <EditActions dirty={dirty} busy={busy} saveLabel="Save — commits to the registry"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
-      <PortalDialog open={confirming} title="Remove protection?" onClose={() => setConfirming(false)}
-        footer={
-          <React.Fragment>
-            <Button variant="secondary" onClick={() => setConfirming(false)}>Keep protection</Button>
-            <Button variant="danger" onClick={() => { setConfirming(false); commit(true); }}>
-              Remove protection
-            </Button>
-          </React.Fragment>
-        }>
-        <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>
-          Tasks targeting <b>{ws.name}</b> will stop converting to approval questions,
-          and its PRs will follow the merge dial without waiting for you.
-        </p>
-      </PortalDialog>
+      {dialog}
     </Card>
   );
 }
@@ -976,10 +1003,14 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
   );
 }
 
-// The server's machine reason codes (issue #77's dangerousValues) rendered as
-// prose for the confirmation dialog (issue #78). The board never decides on its
-// own what counts as dangerous — it only translates the codes the 409 hands
-// back, so the danger definition stays single-sourced on the server (ADR 0027).
+// The server's machine reason codes (profile-create.ts's dangerousValues,
+// workspace-create.ts's dangerousWorkspaceValues) rendered as prose for the
+// confirmation dialog (issue #78, generalized to workspaces by ADR 0061 決定1).
+// The board never decides on its own what counts as dangerous — it only
+// translates the codes the 409 hands back, so the danger definition stays
+// single-sourced on the server (ADR 0027). An unrecognized code (server added
+// a reason the WebUI hasn't caught up to) falls back to the raw string rather
+// than being dropped — see DANGEROUS_REASON_LABEL[r] ?? r below.
 const DANGEROUS_REASON_LABEL = {
   merge_auto_if_ci_green:
     'Merge is auto_if_ci_green — a PR under this authority merges unattended once CI is green, with no human in the loop.',
@@ -987,6 +1018,10 @@ const DANGEROUS_REASON_LABEL = {
     'Assignable-to carries the wildcard "*" — an agent with this authority may delegate to any agent.',
   allowed_workspaces_wildcard:
     'Allowed-workspaces carries the wildcard "*" — this authority reaches every workspace on the board.',
+  unprotect:
+    'Protection is being removed — tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.',
+  review_allowed_commands_set:
+    'Review-allowed commands is non-empty — review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.',
 };
 
 // The merge dial (registry.ts): absent means no automatic merge decision, so an
@@ -1174,24 +1209,28 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
   );
 }
 
-// The two-phase dangerous-value save (issue #78, #55 phase 3), shared by create
-// and edit. The first attempt omits confirmDangerous; when the payload grants
-// broad power the server answers 409 confirm_required with the machine reason
-// codes (issue #77). We surface those in a dialog and, once the human accepts,
-// resend the very same body with confirmDangerous: true. The board makes no
-// pre-judgment of danger — the 409 is the only trigger. Returns the busy flag,
-// the save entrypoint, and the dialog element the caller renders inline.
-function useProfileSave(say, onDone) {
+// The two-phase dangerous-value save (issue #78, #55 phase 3; generalized to
+// workspaces by ADR 0061 決定1), shared by every door that can carry a
+// dangerous value. The first attempt omits the confirm flag; when the payload
+// grants broad power the server answers 409 confirm_required with the machine
+// reason codes (issue #77). We surface those in a dialog and, once the human
+// accepts, resend the very same body with the flag set. The board makes no
+// pre-judgment of danger — the 409 is the only trigger. `confirmKey` is the
+// flag name the door reads (`confirmDangerous` for profiles, `confirm` for
+// workspaces — ADR 0061 決定1 kept the workspace door's existing flag name
+// rather than adding a second boolean). Returns the busy flag, the save
+// entrypoint, and the dialog element the caller renders inline.
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null); // { reasons, resend } | null while safe
   const save = async (path, method, body, verb, name) => {
-    const attempt = async (confirmDangerous) => {
+    const attempt = async (confirmed) => {
       setBusy(true);
       try {
-        await api(path, confirmDangerous ? { ...body, confirmDangerous: true } : body, method);
+        await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
         setConfirm(null);
-        say('success', `profile ${verb} — committed to the registry`, name);
+        say('success', `${noun} ${verb} — committed to the registry`, name);
         await onDone();
       } catch (err) {
         // the #77 confirmation 409 is distinguished from any other failure
@@ -1201,7 +1240,7 @@ function useProfileSave(say, onDone) {
           setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say('danger', `profile ${verb} failed`, String(err.message || err));
+          say('danger', `${noun} ${verb} failed`, String(err.message || err));
         }
       }
       setBusy(false);
@@ -1209,16 +1248,14 @@ function useProfileSave(say, onDone) {
     await attempt(false);
   };
   const dialog = (
-    <PortalDialog open={!!confirm} title="Save a profile with broad power?" onClose={() => setConfirm(null)}
+    <PortalDialog open={!!confirm} title={dialogTitle} onClose={() => setConfirm(null)}
       footer={
         <React.Fragment>
           <Button variant="secondary" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
           <Button variant="danger" disabled={busy} onClick={() => confirm && confirm.resend()}>Save anyway</Button>
         </React.Fragment>
       }>
-      <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>
-        This profile grants broad power. Review before saving:
-      </p>
+      <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>{dialogLead}</p>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {(confirm?.reasons ?? []).map((r) => (
           <li key={r}>{DANGEROUS_REASON_LABEL[r] ?? r}</li>
@@ -1227,6 +1264,29 @@ function useProfileSave(say, onDone) {
     </PortalDialog>
   );
   return { busy, save, dialog };
+}
+
+function useProfileSave(say, onDone) {
+  return useDangerousSave(say, onDone, {
+    noun: 'profile', confirmKey: 'confirmDangerous',
+    dialogTitle: 'Save a profile with broad power?',
+    dialogLead: 'This profile grants broad power. Review before saving:',
+  });
+}
+
+// The workspace twin of useProfileSave (ADR 0061 決定1). Replaces the old
+// client-side pre-confirm (issue #57's "off→on asks before sending") — that
+// path never actually hit the server's 409 (src/api.ts's comment on the
+// confirm_required branch used to say as much), and it recomputed danger
+// itself, which is exactly the single-source-on-the-server posture ADR 0027
+// and DANGEROUS_REASON_LABEL's own comment rule out. Every dangerous save now
+// round-trips through the same 409 the direct API gets.
+function useWorkspaceSave(say, onDone) {
+  return useDangerousSave(say, onDone, {
+    noun: 'workspace', confirmKey: 'confirm',
+    dialogTitle: 'Save a change that widens what agents may do?',
+    dialogLead: 'This change widens what agents may do here. Review before saving:',
+  });
 }
 
 // One authority profile as a record card (issue #78, restructured by #204),

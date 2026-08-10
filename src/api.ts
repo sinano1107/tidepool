@@ -739,8 +739,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (err instanceof WorkspaceConfirmationRequiredError) {
         // machine-readable flag plus the reason codes the dialog enumerates
         // (ADR 0061 決定1 — the same body shape as the profile 409). The WebUI
-        // never takes this path: it confirms up front and sends confirm: true
-        // in one request; this 409 is the floor for direct API callers
+        // takes this path too (issue #265): it sends the plain body first,
+        // shows this 409's reasons in a dialog, and resends with confirm:
+        // true once the human accepts — same round trip a direct API caller
+        // gets, no client-side pre-judgment of danger (ADR 0027)
         res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
       } else if (err instanceof RegistrySelfUnprotectError) {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)
