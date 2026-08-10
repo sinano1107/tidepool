@@ -90,6 +90,15 @@ worker かを区別する手段がない。**逃げ道は必ず両方に開く�
 条件が落ちる —— 無実のセッションの quarantine である。したがって**盤面が workspace の ref を書いたら、
 その時点でスナップショットを取り直す**。
 
+**取り直すのは盤面が実際に書いた ref の行だけである(外科的な再基準化)。** 全 ref を撮り直すと、
+その瞬間までに worker が動かした ref も新しい基準に含まれてしまい、解放時の比較が素通りする ——
+違反を飲み込む静かな穴になる。しかも最も起きやすいのが registry clone(人間面からの registry 編集が
+`refreshRegistryForWrite` を撃つ)であり、**唯一の保護 workspace で不変条件が最も弱くなる**。書いた ref は
+どの経路でも1本に確定している(registry の fetch は `REGISTRY_BRANCH` だけ、`update-ref` は
+`refs/heads/<REGISTRY_BRANCH>` だけ、PR 昇格の push は `refs/remotes/origin/task/<id>` だけ、
+`mergeTaskToProtected` は保護ブランチだけ)ので、外科的に書けないケースは無い。全 ref のスナップショットは
+pickup の1回だけが撮る。
+
 `refs/remotes/*` を検査対象から外して「盤面は使う直前に必ず fetch する」に頼る案も採らなかった。安全性が
 **コード全体に散った性質**に依存し、将来 fetch を挟まない読み口が1つ足された瞬間に静かに崩れるためで、
 ADR 0052 が「宣言を clone の実態から推測しない」を選んだのと同じ形の危険である。再基準化の**呼び忘れは
