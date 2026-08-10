@@ -2117,6 +2117,14 @@ export function hasUnfinishedChildren(db: Db, taskId: string): boolean {
 export type BoardTask = Omit<Task, "status"> & {
   status: TaskStatus | "blocked" | "held" | "skipped";
   raw_assignee?: string | null;
+  /** Who registered the task — read off its own `task_registered` event,
+   *  not a stored column (issue #261: tasks carry no registrant of their
+   *  own, same read-time-resolution precedent as push.ts's
+   *  listUnnotifiedHumanTasks). registerTask always writes exactly one such
+   *  event, so the join is one-to-one. Populated on `boardRows`-sourced rows
+   *  (listBoard/listQueue) only — `presentTask`'s single-task GET stays out
+   *  of this issue's server-side scope (only the boardRows JOIN). */
+  registrant?: string;
 };
 
 function isHeld(db: Db, taskId: string): boolean {
@@ -2145,7 +2153,7 @@ function boardRows(
   return db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}, ${SETTLED_TREE_CTE}
-       SELECT tasks.*, tasks.assignee AS raw_assignee,
+       SELECT tasks.*, tasks.assignee AS raw_assignee, registered.worker_id AS registrant,
          CASE WHEN tasks.type = 'question' THEN '${HUMAN_WORKER_ID}'
               ELSE COALESCE(tasks.assignee, ${fallback}) END AS assignee,
          CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
@@ -2153,6 +2161,7 @@ function boardRows(
               ${extraCase}
               ELSE status END AS status
        FROM tasks
+       JOIN events registered ON registered.task_id = tasks.id AND registered.kind = 'task_registered'
        WHERE status <> 'cancelled' AND NOT ${settledTreeSql("tasks.id")}
        ORDER BY sort_key`,
     )

@@ -82,4 +82,38 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
     // AC4: skipped はボードに現れない
     expect(board.some((t) => t.status === "skipped")).toBe(false);
   });
+
+  it("行は登録者(task_registered イベントの worker_id)を持つ(issue #261)", () => {
+    const db = openDb(":memory:");
+
+    const byAgent = registerTask(
+      db,
+      { type: "work", title: "survey the tide pool", purpose: "p", completion_criteria: "c" },
+      new Date(0),
+      "reef-crab",
+    );
+    const byHuman = registerTask(
+      db,
+      { type: "work", title: "log the low tide", purpose: "p", completion_criteria: "c" },
+      new Date(1),
+    );
+    const byBoard = registerTask(
+      db,
+      {
+        type: "question",
+        title: "PR promotion failed",
+        purpose: "p",
+        completion_criteria: "c",
+        question: [{ title: "retry?", options: ["retry", "abandon"], recommendation: "retry" }],
+      },
+      new Date(2),
+      "tidepool",
+    );
+
+    const board = listBoard(db);
+
+    expect(board.find((t) => t.id === byAgent.id)?.registrant).toBe("reef-crab");
+    expect(board.find((t) => t.id === byHuman.id)?.registrant).toBe("human");
+    expect(board.find((t) => t.id === byBoard.id)?.registrant).toBe("tidepool");
+  });
 });

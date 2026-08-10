@@ -95,12 +95,14 @@ function mapData(board, log, pause, icons = {}) {
   const questions = board
     .filter((t) => t.status === 'todo' && t.type === 'question')
     .map((q) => {
-      // a question has no assignee (it is answered here); show who it blocks
-      const parentAssignee = board.find((p) => p.id === q.parent_id)?.assignee;
+      // who issued the question — the board itself (issue #261) or an agent
+      // (never human: a question only ever comes from a non-human registrant)
+      const isBoard = q.registrant === 'tidepool';
       return {
         id: q.id, parent: q.parent_id,
-        agent: parentAssignee ?? '—',
-        agentIcon: parentAssignee ? icons[parentAssignee] : undefined,
+        agent: q.registrant,
+        agentIcon: isBoard ? undefined : icons[q.registrant],
+        board: isBoard,
         context: q.purpose,
         // 1-4 items, each with its own title/detail/options (issue #30) — a
         // single-item bundle is the degenerate, most common case
@@ -115,7 +117,7 @@ function mapData(board, log, pause, icons = {}) {
   // from this flat, order-independent list — see triage-screen.jsx.
   const logEntries = [...log.entries].reverse().map((e) => ({
     id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
-    agentIcon: icons[e.worker_id],
+    agentIcon: icons[e.worker_id], human: e.worker_id === 'human',
     kind: e.kind === 'task_completed' ? 'completion' : 'decision',
     text: e.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
     unread: e.id > log.cursor,
