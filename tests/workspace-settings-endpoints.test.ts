@@ -1,9 +1,10 @@
 import { afterEach, expect, it } from "vitest";
+import { InvalidReviewAllowedCommandError } from "../src/registry.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   RegistrySelfUnprotectError,
-  UnprotectNeedsConfirmationError,
   type UpdateWorkspaceInput,
+  WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -54,11 +55,11 @@ it("PATCH /api/workspaces/:name は URL の名前と body を updateWorkspace �
   expect(calls).toEqual([{ name: "lagoon", notes: "run npm install", protected: true }]);
 });
 
-it("confirm なしの protected 解除は 409 + confirm_required — UI はこれを見て確認 Dialog に進む", async () => {
+it("confirm なしの危険な値は 409 + confirm_required + 理由コード列挙 — UI はこれを見て確認 Dialog に進む", async () => {
   t = await bootTidepool({
     workspaceAdmin: {
       update: async () => {
-        throw new UnprotectNeedsConfirmationError("lagoon");
+        throw new WorkspaceConfirmationRequiredError("lagoon", ["unprotect", "review_allowed_commands_set"]);
       },
     },
   });
@@ -66,7 +67,49 @@ it("confirm なしの protected 解除は 409 + confirm_required — UI はこ�
   const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", { protected: false });
 
   expect(res.status).toBe(409);
-  expect(res.json.confirm_required).toBe(true);
+  expect(res.json).toEqual({
+    error: expect.any(String),
+    confirm_required: true,
+    dangerous_values: ["unprotect", "review_allowed_commands_set"],
+  });
+});
+
+it("PATCH は review_allowed_commands を confirm ごと updateWorkspace へ渡す(ADR 0061 決定1)", async () => {
+  const calls: UpdateWorkspaceInput[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async (input) => {
+        calls.push(input);
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", {
+    review_allowed_commands: ["npm test"],
+    confirm: true,
+  });
+
+  expect(res.status).toBe(200);
+  expect(calls).toEqual([
+    { name: "lagoon", review_allowed_commands: ["npm test"], confirm: true },
+  ]);
+});
+
+it("文法違反の review_allowed_commands は 400 — confirm では買えない失敗", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async () => {
+        throw new InvalidReviewAllowedCommandError("npm test,rm -rf /", "a comma would inject");
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", {
+    review_allowed_commands: ["npm test,rm -rf /"],
+    confirm: true,
+  });
+
+  expect(res.status).toBe(400);
 });
 
 it("盤面自身の registry エントリの解除は 403(confirm があっても)", async () => {

@@ -38,6 +38,7 @@ import {
   authorityProfileSchema,
   InvalidAgentNameError,
   InvalidAuthorityProfileNameError,
+  InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   type RegistryCandidates,
@@ -93,8 +94,8 @@ import {
   BoardStateOverlapError,
   GitHubIdentityMissingError,
   RegistrySelfUnprotectError,
-  UnprotectNeedsConfirmationError,
   type WorkspaceAdmin,
+  WorkspaceConfirmationRequiredError,
 } from "./workspace-create.js";
 
 // question は人間向け HTTP API の範囲外(issue #38) — question タスクは
@@ -216,6 +217,10 @@ const createWorkspaceSchema = z.discriminatedUnion("mode", [
 const updateWorkspaceSchema = z.object({
   notes: z.string().optional(),
   protected: z.boolean().optional(),
+  // ADR 0061: the array shape only — the grammar (assertValidReviewAllowedCommands)
+  // lives in the domain, so a malformed prefix comes back as a domain error,
+  // this file's usual split. Absent → untouched; `[]` removes the key.
+  review_allowed_commands: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
 });
 
@@ -727,11 +732,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } catch (err) {
       if (err instanceof UnknownWorkspaceError) {
         res.status(404).json({ error: err.message });
-      } else if (err instanceof UnprotectNeedsConfirmationError) {
-        // machine-readable flag (issue #57 / #55's shape). The WebUI never
-        // takes this path — it confirms up front and sends confirm: true in
-        // one request; this 409 is the floor for direct API callers
-        res.status(409).json({ error: err.message, confirm_required: true });
+      } else if (err instanceof InvalidReviewAllowedCommandError) {
+        // 400, not 409: no confirmation can buy a malformed prefix (ADR 0061
+        // 根拠5) — same posture as the agent doors' skill-allowlist grammar
+        res.status(400).json({ error: err.message });
+      } else if (err instanceof WorkspaceConfirmationRequiredError) {
+        // machine-readable flag plus the reason codes the dialog enumerates
+        // (ADR 0061 決定1 — the same body shape as the profile 409). The WebUI
+        // never takes this path: it confirms up front and sends confirm: true
+        // in one request; this 409 is the floor for direct API callers
+        res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
       } else if (err instanceof RegistrySelfUnprotectError) {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)
         res.status(403).json({ error: err.message });

@@ -217,7 +217,10 @@ export function computeSkillDenials(
 //     インタプリタもラッパも挙がっていないので、registry に `sh -c` と書けば
 //     文法検証を通り `Bash(sh -c*)` として実際に開く。これは穴ではなく設計上の
 //     線引き — 列挙で塞ぐ試みは上のとおり失敗したので、`review_allowed_commands`
-//     の門は機械ではなく保護 workspace の人間 merge である(ADR 0035)。
+//     の門は機械ではなく値を読む人間である(ADR 0035 / ADR 0061 —— 人間面の
+//     credential と危険な値の明示の確認。「門は保護 workspace の人間 merge」と
+//     書かれていた時期があるが、人間発の registry 変更は WebUI / 管理MCP から
+//     保護ブランチへ直接コミットされ、PR を通らない)。
 //
 // 読み取りコマンド(cat/ls/grep 等)は対象外。パターン形式(`Bash(<prefix>*)`)
 // はインストール済み CLI の --help(2.1.214)の例("Bash(git *) Edit")で確認済み。
@@ -415,8 +418,9 @@ const MCP_SERVER_NAME = "tidepool";
  *     ような正当な副作用コマンドの巻き添えを、ホスト非依存のコマンド接頭辞と
  *     して registry が宣言し、ここが `Bash(<prefix>*)` へ機械変換する。work は
  *     元から書けるのでこれを必要とせず、開ければ registry のデータが work の
- *     Bash 面を広げる経路になる。permission を広げる設定なので門は registry の
- *     人間 merge(agent の skill allowlist と同じ線)。
+ *     Bash 面を広げる経路になる。permission を広げる設定なので門は値を読む
+ *     人間 —— registry PR か人間面の確認ダイアログ ——(ADR 0061。agent の
+ *     skill allowlist と同じ線)。
  *
  *  review 部分は `reviewToolDenials` と同じく `task.type` だけを見る — read-only
  *  は review という task type の性質であって実行エージェントの性質ではない

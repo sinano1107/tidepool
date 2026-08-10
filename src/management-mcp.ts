@@ -30,6 +30,7 @@ import type { RegistryReachabilityCheck } from "./registry.js";
 import {
   InvalidAgentNameError,
   InvalidAuthorityProfileNameError,
+  InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
 } from "./registry.js";
@@ -53,8 +54,8 @@ import {
   BoardStateOverlapError,
   GitHubIdentityMissingError,
   RegistrySelfUnprotectError,
-  UnprotectNeedsConfirmationError,
   type WorkspaceAdmin,
+  WorkspaceConfirmationRequiredError,
 } from "./workspace-create.js";
 
 export interface ManagementMcpDeps {
@@ -128,13 +129,14 @@ function registryToolError(err: unknown) {
     err instanceof InvalidWorkspaceNameError ||
     err instanceof BoardStateOverlapError ||
     err instanceof UnknownWorkspaceError ||
-    err instanceof UnprotectNeedsConfirmationError ||
+    err instanceof WorkspaceConfirmationRequiredError ||
     err instanceof RegistrySelfUnprotectError ||
     err instanceof InvalidAgentNameError ||
     err instanceof UnknownAgentError ||
     err instanceof UnknownAuthorityProfileError ||
     err instanceof InvalidAgentIconError ||
     err instanceof InvalidSkillAllowlistError ||
+    err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAuthorityProfileNameError
   ) {
     return toolError(err.message);
@@ -158,9 +160,10 @@ is attributed to that human, not to you — exactly as if they had clicked the
 WebUI themselves. This implies:
 
 - Do not answer a question task, cancel a task, or confirm a dangerous
-  profile value unless the human has explicitly made that judgment in your
-  conversation. When in doubt, show the human the task and ask. Answers you
-  submit are counted as human decisions in the board's statistics.
+  registry value — an authority profile's, a workspace's — unless the human
+  has explicitly made that judgment in your conversation. When in doubt, show
+  the human the task and ask. Answers you submit are counted as human
+  decisions in the board's statistics.
 - Registry changes you make (agents, profiles, workspaces) are committed to
   main as human-authored changes.
 - Reading the decision log here does NOT mark it as seen by the human. The
@@ -240,6 +243,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         name: z.string().min(1),
         notes: z.string().optional(),
         protected: z.boolean().optional(),
+        // ADR 0061: the review write-floor lift, editable from this door too —
+        // `[]` removes it. Non-empty needs `confirm`, same as unprotecting.
+        review_allowed_commands: z.array(z.string()).optional(),
         confirm: z.boolean().optional(),
       }),
     },

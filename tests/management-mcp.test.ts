@@ -7,7 +7,8 @@ import { registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
   GitHubIdentityMissingError,
-  UnprotectNeedsConfirmationError,
+  type UpdateWorkspaceInput,
+  WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { FakeDraftClient } from "./fakes.js";
 import {
@@ -64,6 +65,40 @@ it("管理MCP の initialize は人間面の義手モデル instructions を返�
   try {
     expect(client.getInstructions()).toContain("You are connected to the Management MCP");
     expect(client.getInstructions()).toContain("question task, which only a human may");
+  } finally {
+    await client.close();
+  }
+});
+
+it("update_workspace は review_allowed_commands を受け取り、確認要求は理由コードごと tool error になる(issue #264)", async () => {
+  const calls: UpdateWorkspaceInput[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async (input) => {
+        calls.push(input);
+        if (input.confirm !== true) {
+          throw new WorkspaceConfirmationRequiredError(input.name, ["review_allowed_commands_set"]);
+        }
+      },
+    },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const confirmed: any = await client.callTool({
+      name: "update_workspace",
+      arguments: { name: "lagoon", review_allowed_commands: ["npm test"], confirm: true },
+    });
+    expect(confirmed.isError).toBeFalsy();
+    expect(calls).toEqual([
+      { name: "lagoon", review_allowed_commands: ["npm test"], confirm: true },
+    ]);
+
+    const unconfirmed: any = await client.callTool({
+      name: "update_workspace",
+      arguments: { name: "lagoon", review_allowed_commands: ["npm test"] },
+    });
+    expect(unconfirmed.isError).toBe(true);
+    expect(unconfirmed.content[0].text).toContain("review_allowed_commands_set");
   } finally {
     await client.close();
   }
@@ -239,7 +274,7 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
         throw new Error("registry remote unavailable");
       },
       update: async () => {
-        throw new UnprotectNeedsConfirmationError("production");
+        throw new WorkspaceConfirmationRequiredError("production", ["unprotect"]);
       },
       list: () => {
         throw new Error("registry read failed");
@@ -296,7 +331,7 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
       arguments: { name: "production", protected: false },
     });
     expect(protectedWorkspace.isError).toBe(true);
-    expect(protectedWorkspace.content[0].text).toContain("requires confirmation");
+    expect(protectedWorkspace.content[0].text).toContain("unprotect");
 
     for (const name of ["list_workspaces", "list_agents", "list_profiles"]) {
       const result: any = await client.callTool({ name, arguments: {} });

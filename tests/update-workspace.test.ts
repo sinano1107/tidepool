@@ -3,13 +3,13 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadRegistry } from "../src/registry.js";
+import { InvalidReviewAllowedCommandError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import {
   listWorkspaceViews,
   RegistrySelfUnprotectError,
-  UnprotectNeedsConfirmationError,
   updateWorkspace,
+  WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -28,8 +28,8 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 /** createWorkspace 側のテストと同じ正規化 — fixture を main に。 */
-async function makeMainRegistry(): Promise<string> {
-  const dir = await makeRegistry();
+async function makeMainRegistry(files?: Record<string, string>): Promise<string> {
+  const dir = await makeRegistry(files);
   git(dir, "branch", "-M", "main");
   return dir;
 }
@@ -66,21 +66,19 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
   });
 
   it("protected の解除は confirm がなければ拒否され、コミットを積まない(#55 と同型の確認ステップ)", async () => {
-    const registryDir = await makeRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
-    git(registryDir, "branch", "-M", "main");
+    const registryDir = await makeMainRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
     const before = git(registryDir, "rev-parse", "HEAD");
     const deps = await makeDeps(registryDir);
 
     await expect(updateWorkspace({ name: "lagoon", protected: false }, deps)).rejects.toThrow(
-      UnprotectNeedsConfirmationError,
+      WorkspaceConfirmationRequiredError,
     );
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon?.protected).toBe(true);
   });
 
   it("protected の解除は confirm: true で通り、エントリから protected が消える", async () => {
-    const registryDir = await makeRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
-    git(registryDir, "branch", "-M", "main");
+    const registryDir = await makeMainRegistry({ "workspaces.yaml": WORKSPACES_WITH_PROTECTED });
     const deps = await makeDeps(registryDir);
 
     await updateWorkspace({ name: "lagoon", protected: false, confirm: true }, deps);
@@ -137,6 +135,77 @@ describe("updateWorkspace: notes / protected の編集(issue #57 フェーズ3)"
     await expect(
       updateWorkspace({ name: "registry", protected: false, confirm: true }, deps),
     ).rejects.toThrow(RegistrySelfUnprotectError);
+  });
+});
+
+describe("updateWorkspace: review_allowed_commands の編集(issue #264 / ADR 0061)", () => {
+  it("confirm: true 付きの設定が registry に着地する", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+
+    await updateWorkspace(
+      { name: "tidepool", review_allowed_commands: ["npm test"], confirm: true },
+      deps,
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.review_allowed_commands).toEqual([
+      "npm test",
+    ]);
+  });
+
+  it("非空の設定は confirm なしでは拒まれ、理由コードを運ぶ(コミットも積まない)", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      updateWorkspace({ name: "tidepool", review_allowed_commands: ["npm test"] }, deps),
+    ).rejects.toMatchObject({
+      name: "WorkspaceConfirmationRequiredError",
+      reasons: ["review_allowed_commands_set"],
+    });
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("notes だけの PATCH は、設定済みの workspace でも確認を要求しない — 判定はペイロードだけを見る(ADR 0061 決定2)", async () => {
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": "tidepool:\n  path: /home/pi/work/tidepool\n  review_allowed_commands:\n    - npm test\n",
+    });
+    const deps = await makeDeps(registryDir);
+
+    await updateWorkspace({ name: "tidepool", notes: "run npm install first" }, deps);
+
+    const entry = loadRegistry(registryDir, "purely-local").workspaces.tidepool;
+    expect(entry?.notes).toBe("run npm install first");
+    expect(entry?.review_allowed_commands).toEqual(["npm test"]);
+  });
+
+  it("空配列は確認なしでキーごと消える — 床を下げる向きに摩擦は置かない(ADR 0061 決定2)", async () => {
+    const registryDir = await makeMainRegistry({
+      "workspaces.yaml": "tidepool:\n  path: /home/pi/work/tidepool\n  review_allowed_commands:\n    - npm test\n",
+    });
+    const deps = await makeDeps(registryDir);
+
+    await updateWorkspace({ name: "tidepool", review_allowed_commands: [] }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toEqual({
+      path: "/home/pi/work/tidepool",
+    });
+  });
+
+  it("文法違反のエントリは書き込み前に弾かれ、registry は読める状態のまま(ADR 0061 根拠5)", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      updateWorkspace(
+        { name: "tidepool", review_allowed_commands: ["npm test,rm -rf /"], confirm: true },
+        deps,
+      ),
+    ).rejects.toThrow(InvalidReviewAllowedCommandError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.review_allowed_commands).toBeUndefined();
   });
 });
 
