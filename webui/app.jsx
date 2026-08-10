@@ -26,13 +26,53 @@ async function api(path, body, method = 'POST') {
   return res.json();
 }
 
+// ADR 0063 決定1: the caller-side pacer. All 3 toggle sites (question card,
+// log skim, handoff) route through this one `translateTarget` definition, so
+// wrapping it here — not in the kit's `runTranslate` — is what makes "every
+// switch passes through the same gate" true without touching the kit. The
+// kit still fires N calls; this queues them to MAX_CONCURRENT_TRANSLATIONS.
+const MAX_CONCURRENT_TRANSLATIONS = 2;
+let translationsInFlight = 0;
+const translationQueue = [];
+// ADR 0063 決定4: a queued (not yet dispatched) call cancels on `signal` abort
+// and is never sent — a dispatched one is past this gate and always runs to
+// completion (its paid tokens shouldn't be thrown away). The listener is
+// removed the instant a call dispatches, so aborting after dispatch is a
+// no-op — exactly the "sent keeps running" half of the decision.
+function paceTranslation(run, signal) {
+  return new Promise((resolve, reject) => {
+    const dispatch = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      translationsInFlight += 1;
+      run().then(resolve, reject).finally(() => {
+        translationsInFlight -= 1;
+        const next = translationQueue.shift();
+        if (next) next();
+      });
+    };
+    const onAbort = () => {
+      const i = translationQueue.indexOf(dispatch);
+      if (i !== -1) translationQueue.splice(i, 1);
+      reject(new DOMException('translation cancelled', 'AbortError'));
+    };
+    if (translationsInFlight < MAX_CONCURRENT_TRANSLATIONS) {
+      dispatch();
+    } else {
+      if (signal) signal.addEventListener('abort', onAbort);
+      translationQueue.push(dispatch);
+    }
+  });
+}
+
 // display-time translation (issue #47 / ADR 0015): the one seam behind every
 // kit face's own `onTranslate` prop — { type: 'log_entry', event_id } |
 // { type: 'question' | 'handoff', task_id }. The server resolves
 // cached/throttled/translated; this call never throws on a throttled
 // response (that's a 200), only on a genuine request/outage failure, which
-// each toggle's own catch renders inline.
-const translateTarget = (target) => api('/api/translate', target);
+// each toggle's own catch renders inline. `signal` (ADR 0063 決定4) is
+// optional — only the log skim's fan-out passes one, to cancel unsent
+// requests when its switch is toggled off.
+const translateTarget = (target, { signal } = {}) => paceTranslation(() => api('/api/translate', target), signal);
 
 // Web Push (issue #14): applicationServerKey wants raw bytes, the server
 // hands back the VAPID public key as URL-safe base64.
