@@ -351,8 +351,9 @@ export function prepareWorkspaceAtPickup(
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も
  *  remote-tracking ref も含む —— 列挙は黙って古くなるので、範囲を名前で切らない。
  *  `for-each-ref` の出力は refname 順に並んでいるので、そのまま1本のテキストとして
- *  持てば比較は文字列比較で済み、決定2 が要求する「動いた ref の名指し」は行差分で
- *  そのまま取れる。 */
+ *  持てる(決定6)。比較は行の集合差分で撮るので順序そのものには依らないが、
+ *  決定2 が要求する「動いた ref の名指し」が行差分でそのまま取れるのはこの形ゆえで
+ *  あり、再基準化も同じ refname 順を保つ(`rebaselineRef`)。 */
 function currentRefs(workspace: WorkspaceConfig): string {
   return git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname)");
 }
@@ -360,7 +361,7 @@ function currentRefs(workspace: WorkspaceConfig): string {
 /** ADR 0064 決定5: worker に checkout を手渡した瞬間の全 ref を基準として焼く。
  *  撮るのは pickup の1回だけで、ここから先は盤面自身が書いた ref の行だけが
  *  外科的に更新される(`rebaselineRef`)。 */
-export function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
+function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
   db.prepare(
     `INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)
      ON CONFLICT(name) DO UPDATE SET ref_snapshot = excluded.ref_snapshot`,
@@ -374,6 +375,11 @@ function storedRefs(db: Db, workspaceName: string): string {
   // 未設定に分岐は書かない(ADR 0064 決定6): 空文字は現在の ref 集合と一致しないので
   // 自然に違反へ落ちる —— pickup を経ない解放経路が将来足されても検査は黙って消えない
   return row?.ref_snapshot ?? "";
+}
+
+/** `"<objectname> <refname>"` の refname 側。 */
+function refName(line: string): string {
+  return line.slice(line.indexOf(" ") + 1);
 }
 
 function refLines(snapshot: string, exceptRef: string): string[] {
@@ -421,8 +427,12 @@ export function rebaselineRef(db: Db, workspace: WorkspaceConfig, ref: string): 
     sha = undefined; // 盤面が消した ref —— 行ごと落ちるのが正しい姿
   }
   if (sha) lines.push(`${sha} ${ref}`);
+  // 保存値の綴りは常に「`for-each-ref` のソート済み出力」= **refname 順**である
+  // (ADR 0064 決定6)。行頭は objectname なので素の sort は sha 順に並べてしまい、
+  // 再基準化のたびに列の契約が崩れる —— 今日の比較は集合差分で順序に依らないが、
+  // 保存値の形が pickup の1枚と再基準化後で別物になる理由は無い
   db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(
-    lines.sort().join("\n"),
+    lines.sort((a, b) => (refName(a) < refName(b) ? -1 : 1)).join("\n"),
     workspace.name,
   );
 }

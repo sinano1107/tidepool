@@ -66,21 +66,29 @@ function registryRebaseliner(db: Db, options: ServerOptions): () => void {
       ? remoteTrackingRef(REGISTRY_BRANCH)
       : `refs/heads/${REGISTRY_BRANCH}`;
   return () => {
-    const workspace = listWorkspaces().find((w) => pathIsRegistryClone(w.path, registry.dir));
-    if (workspace) rebaselineRef(db, workspace, ref);
+    // 列挙は投げうる(口の定義どおり)。撃つのが finally の中なので、ここで漏らすと
+    // 盤面の書き込みが返した値や、その書き込み自身が投げた本当の失敗を置き換えてしまう。
+    // 撮り直せなかった結果は次の解放が誤検知の quarantine として loud に出す
+    try {
+      const workspace = listWorkspaces().find((w) => pathIsRegistryClone(w.path, registry.dir));
+      if (workspace) rebaselineRef(db, workspace, ref);
+    } catch (err) {
+      console.warn("[workspace] registry ref rebaseline skipped (non-fatal)", err);
+    }
   };
 }
 
 /** 盤面の書き込みが**失敗しても** ref は既に動いている(入口の fetch は済んでいて
- *  push が落ちた、など)ので finally で撃つ。 */
-function rebaselineAfter<I>(
-  verb: ((input: I) => Promise<void>) | undefined,
+ *  push が落ちた、など)ので finally で撃つ。admin verb(入力1つ・戻り値なし)と
+ *  reachability(入力なし・到達性を返す)の両方が同じ1つの綴りを共有する。 */
+function rebaselineAfter<A extends unknown[], R>(
+  call: ((...args: A) => Promise<R>) | undefined,
   rebaseline: () => void,
-): ((input: I) => Promise<void>) | undefined {
-  if (!verb) return undefined;
-  return async (input) => {
+): ((...args: A) => Promise<R>) | undefined {
+  if (!call) return undefined;
+  return async (...args) => {
     try {
-      await verb(input);
+      return await call(...args);
     } finally {
       rebaseline();
     }
@@ -270,15 +278,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     create: rebaselineAfter(options.profileAdmin.create, rebaselineRegistry),
     update: rebaselineAfter(options.profileAdmin.update, rebaselineRegistry),
   };
-  const registryReachability =
-    options.registryReachability &&
-    (async () => {
-      try {
-        return await options.registryReachability!();
-      } finally {
-        rebaselineRegistry();
-      }
-    });
+  const registryReachability = rebaselineAfter(options.registryReachability, rebaselineRegistry);
   // ADR 0052 決定2 の起動時 refresh は**ここには無い**。合成 root
   // (`buildServerOptions`)が registry を読む前に撃つ —— そこより後ろに置くと、
   // remote-tracking ref が欠けた盤面では合成側の読みが先に落ち、fail-open が
