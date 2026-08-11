@@ -11,6 +11,7 @@ import {
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
   registerWork,
@@ -162,4 +163,50 @@ it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由�
 
   expect(res.isError).toBe(true);
   expect(res.content[0].text).toContain("2 to 4 options");
+});
+
+/** ADR 0067 決定2 の3つ目の扉。上のテスト群は purely-local な workspace が対象なので
+ *  この条件は効いてはならない —— 効いてしまったら `isRemoteBacked` で絞れていない。 */
+const DECLARED = "https://github.com/sinano1107/tidepool";
+
+it("remote 正本を宣言した workspace の解除は、WRITE が見えない間は拒否され question は開いたままである(ADR 0067)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
+  t.github.scriptLogin("tidepool-bot");
+  const db = openDb(join(t.dir, "board.sqlite"));
+  quarantineWorkspace(db, "sandbox", new Error("fetch failed"), t.clock.now());
+  db.close();
+  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question",
+  );
+
+  // ツリーはクリーンなので、拒む理由は repo アクセスだけである
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["repaired by hand"],
+  });
+
+  expect(res.status).toBe(409);
+  expect(res.json.error).toContain(
+    "gh api -X PUT repos/sinano1107/tidepool/collaborators/tidepool-bot -f permission=push",
+  );
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+});
+
+it("WRITE が見えていれば解除はそのまま受理される —— 新しい文法は増やしていない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
+  t.github.scriptRepositoryPermission("sinano1107/tidepool", "WRITE");
+  const db = openDb(join(t.dir, "board.sqlite"));
+  quarantineWorkspace(db, "sandbox", new Error("fetch failed"), t.clock.now());
+  db.close();
+  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question",
+  );
+
+  const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["repaired by hand"],
+  });
+
+  expect(res.status).toBe(200);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("done");
 });

@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { InvalidWorkspaceNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
+import { RepoAccessMissingError } from "../src/repo-access.js";
 import { BoardStateOverlapError, type CreateWorkspaceInput } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -103,6 +104,29 @@ it("盤面の状態パスと重なる登録(BoardStateOverlapError)は 400 で�
   // 盤面が壊れている(502)のでも未設定(503)のでもない
   expect(res.status).toBe(400);
   expect(res.json.error).toContain("board database (TIDEPOOL_DB)");
+});
+
+it("repo アクセスが足りない登録(RepoAccessMissingError)は 400 で案内をそのまま返す(ADR 0067)", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async () => {
+        throw new RepoAccessMissingError(
+          "sinano1107/tidepool either does not exist or is not visible to tidepool-bot. " +
+            "Grant write access with:\n\n  gh api -X PUT repos/sinano1107/tidepool/collaborators/tidepool-bot -f permission=push",
+        );
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "POST", "/api/workspaces", {
+    mode: "clone",
+    name: "lagoon",
+    repo: "https://github.com/sinano1107/tidepool",
+  });
+
+  // 400: 案内の一行を実行して出し直せば通る — 盤面が壊れている(502)のではない
+  expect(res.status).toBe(400);
+  expect(res.json.error).toContain("-f permission=push");
 });
 
 it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 決定1)", async () => {

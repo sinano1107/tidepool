@@ -34,6 +34,7 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
 } from "./registry.js";
+import { RepoAccessMissingError } from "./repo-access.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   cancelTaskDirectly,
@@ -128,6 +129,7 @@ function registryToolError(err: unknown) {
   if (
     err instanceof InvalidWorkspaceNameError ||
     err instanceof BoardStateOverlapError ||
+    err instanceof RepoAccessMissingError ||
     err instanceof UnknownWorkspaceError ||
     err instanceof WorkspaceConfirmationRequiredError ||
     err instanceof RegistrySelfUnprotectError ||

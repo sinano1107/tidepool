@@ -6,6 +6,7 @@ import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { RegistryReachabilityCheck } from "./registry.js";
+import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
   answerQuestion,
   assertAnswerable,
@@ -414,6 +415,16 @@ export async function submitAnswer(
     if (deps.boardState) {
       const overlap = boardStateOverlap(target.path, deps.boardState);
       if (overlap) throw new DomainError(overlap.reason);
+    }
+    // ADR 0067 決定2 の3つ目の扉。remote 正本を宣言した workspace だけが対象で、
+    // 「盤面は確認を鵜呑みにせず検証してから受理する」に1条件足すだけである ——
+    // 招待1枚で直るならここで直り、まだ書けなければ回答を拒んで question は開いた
+    // ままになる。ローカルの検査を先に済ませてから撃つので、purely-local な
+    // workspace では1つもネットワークに出ない。
+    const ref = parseGitHubRepo(target.repo);
+    if (deps.github && ref) {
+      const { guidance } = await repairRepoAccess(deps.github, ref);
+      if (guidance) throw new DomainError(guidance);
     }
   }
 

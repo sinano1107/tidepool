@@ -45,6 +45,7 @@ import {
   type RegistryReachabilityCheck,
 } from "./registry.js";
 import { openRegistryReachabilityQuestion } from "./registry-reachability.js";
+import { RepoAccessMissingError } from "./repo-access.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
@@ -698,7 +699,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // 400 の2つ: 名前が使えない(#68)と、指した checkout が盤面自身の状態パスと
       // 重なる(ADR 0040 / issue #149)。どちらも出し直せば通り得る呼び出し側の
       // 入力の問題であって、盤面の故障(502)でも未設定(503)でもない
-      if (err instanceof InvalidWorkspaceNameError || err instanceof BoardStateOverlapError) {
+      // ADR 0067: repo アクセスの不足も同じ族 —— 盤面は壊れておらず、案内の一行を
+      // 実行して出し直せば通る。message には既に3要素の案内が載っている
+      if (
+        err instanceof InvalidWorkspaceNameError ||
+        err instanceof BoardStateOverlapError ||
+        err instanceof RepoAccessMissingError
+      ) {
         res.status(400).json({ error: err.message });
       } else if (err instanceof GitHubIdentityMissingError) {
         // same "not configured" family as the workspaceAdmin?.create gate

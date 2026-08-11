@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { InvalidWorkspaceNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
+import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
@@ -271,6 +272,7 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
         if (input.name === "invalid") throw new InvalidWorkspaceNameError(input.name, "bad characters");
         if (input.name === "overlap") throw new BoardStateOverlapError("workspace overlaps board state");
         if (input.name === "missing-identity") throw new GitHubIdentityMissingError();
+        if (input.name === "no-repo-access") throw new RepoAccessMissingError("grant it with: gh api -X PUT ...");
         throw new Error("registry remote unavailable");
       },
       update: async () => {
@@ -319,6 +321,14 @@ it("管理MCP はWebUIと同じregistry失敗をtool errorへ変換する(issue 
       arguments: { name: "missing-identity", mode: "register", path: "/work/missing-identity" },
     });
     expect(missingIdentity.content[0].text).toContain("registry configuration missing");
+
+    // ADR 0067: repo アクセス不足の案内は、盤面の故障(registry upstream error)に
+    // 畳まれずそのまま届く —— 人間が読んで実行する一行だからである
+    const noRepoAccess: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "no-repo-access", mode: "register", path: "/work/no-repo-access" },
+    });
+    expect(noRepoAccess.content[0].text).toContain("gh api -X PUT");
 
     const upstream: any = await client.callTool({
       name: "create_workspace",

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { authedGit, type GitHubAuth } from "./github-auth.js";
+import { authedGit, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
 
 /** Everything a PR needs to exist, independent of how it's actually opened
  *  (issue #19): which task branch, onto which base, with what title/body. */
@@ -112,6 +112,48 @@ export interface GitHubClient {
    *  account, WITH an initial commit (issue #57): an empty repository has no
    *  default branch, and branch discipline would die on the first pickup. */
   createRepository(name: string): Promise<Repository>;
+  /** The login the token actually belongs to (ADR 0067 決定4) — the single
+   *  source of the name the repo-access guidance tells a human to invite. An
+   *  observation, never a constant: a stale spelling makes the human invite
+   *  someone else and the symptom surfaces far away ("I invited them and it
+   *  still doesn't work"). */
+  login(): Promise<string>;
+  /** The token owner's pending repository invitations (ADR 0067 決定1). The
+   *  board never empties this inbox — it reads it to find the one invitation
+   *  for the repo it is trying to reach right now. */
+  listRepositoryInvitations(): Promise<RepoInvitation[]>;
+  /** Accepts one invitation by id. Idempotent in practice: an accepted
+   *  invitation leaves the inbox (ADR 0067 実測3). */
+  acceptRepositoryInvitation(id: number): Promise<void>;
+  /** What the token may do on `ref` — the pass/fail question every ADR 0067
+   *  door asks (実測5). Null means **not visible**: no access and no such
+   *  repository are indistinguishable at this surface (実測7), and so is a
+   *  timeout — all three are read as unreachable, never as fatal. */
+  getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null>;
+}
+
+/** Which repository, as GitHub's own `owner/name` (ADR 0067) — distinct from
+ *  the bare-name `getRepository` probe, which resolves under the
+ *  authenticated account's namespace only. */
+export interface RepoSlug {
+  owner: string;
+  name: string;
+}
+
+/** `viewerPermission` as GitHub spells it. The board only ever asks whether
+ *  it is WRITE or above (ADR 0067 決定3) — READ is what 実測4's read
+ *  invitation leaves behind, and it is exactly the case that used to surface
+ *  as a 403 at PR promotion. */
+export type RepoPermission = "READ" | "TRIAGE" | "WRITE" | "MAINTAIN" | "ADMIN";
+
+/** One pending invitation as the board reads it: the id it would accept, the
+ *  `owner/name` it is for, and what it would grant (recorded for the record,
+ *  never trusted as the verdict — the verdict is the repo's own
+ *  `viewerPermission`, ADR 0067 決定3). */
+export interface RepoInvitation {
+  id: number;
+  fullName: string;
+  permissions: string;
 }
 
 /** A GitHub repository as the workspace-creation modes see it (issue #57):
@@ -272,5 +314,62 @@ export class GhCliClient implements GitHubClient {
       .toString()
       .trim();
     return { url };
+  }
+
+  async login(): Promise<string> {
+    return this.gh(["api", "user", "--jq", ".login"]).trim();
+  }
+
+  async listRepositoryInvitations(): Promise<RepoInvitation[]> {
+    const invitations = JSON.parse(this.gh(["api", "user/repository_invitations"])) as Array<{
+      id: number;
+      repository: { full_name: string };
+      permissions: string;
+    }>;
+    return invitations.map((i) => ({
+      id: i.id,
+      fullName: i.repository.full_name,
+      permissions: i.permissions,
+    }));
+  }
+
+  async acceptRepositoryInvitation(id: number): Promise<void> {
+    this.gh(["api", "--method", "PATCH", `user/repository_invitations/${id}`]);
+  }
+
+  async getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null> {
+    // every failure maps to null, not just not-found: an invisible repo, a
+    // repo the token has no access to, and a timed-out call are the same
+    // answer here — "cannot confirm WRITE" — and the three doors treat them
+    // identically (ADR 0067 実測7 / 決定6). Unlike getRepository above, this
+    // one must not re-throw an outage: a probe that throws on the pickup
+    // failure path would replace the real cause the human needs to read.
+    try {
+      const output = this.gh([
+        "repo",
+        "view",
+        `${ref.owner}/${ref.name}`,
+        "--json",
+        "viewerPermission",
+      ]);
+      return (JSON.parse(output) as { viewerPermission: RepoPermission }).viewerPermission ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The four ADR 0067 calls' shared shape: no workspace checkout to run from
+   *  (they ask about the token itself, or about a repo by `owner/name`), and
+   *  **a time limit** — `execFileSync` is synchronous, so a black-holed
+   *  connection on the pickup path would stall the event loop and take the
+   *  human surface ADR 0036 designates as the recovery path down with it. The
+   *  limit is the real-network one (`GIT_NETWORK_TIMEOUT_MS`), not the
+   *  local-binary probe's. */
+  private gh(args: string[]): string {
+    return execFileSync("gh", args, {
+      env: this.auth.env(),
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: GIT_NETWORK_TIMEOUT_MS,
+    }).toString();
   }
 }
