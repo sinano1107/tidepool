@@ -13,6 +13,7 @@ import {
   type WorkspaceEntry,
 } from "./registry.js";
 import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
+import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import {
   conventionCheckoutPath,
   git,
@@ -276,11 +277,33 @@ async function buildEntry(
   deps: CreateWorkspaceDeps,
 ): Promise<WorkspaceEntry> {
   if (input.mode === "register") return registerExistingCheckout(input.path);
-  if (input.mode === "clone") return cloneAndDescribe(input.name, input.repo, deps);
+  if (input.mode === "clone") {
+    await assertClonableRepoAccess(input.repo, deps);
+    return cloneAndDescribe(input.name, input.repo, deps);
+  }
   if (!deps.github) throw new GitHubIdentityMissingError();
   const existing = await deps.github.getRepository(input.name);
   const repository = existing ?? (await deps.github.createRepository(input.name));
   return cloneAndDescribe(input.name, repository.url, deps);
+}
+
+/** 登録の門(ADR 0067 決定2): clone を撃つ**前**に、その repo に盤面が書けることを
+ *  1回だけ確かめ、招待1枚で直せるなら直す。撃たないのは3つの場合で、どれも今日の
+ *  挙動のまま通す:
+ *
+ *  - `deps.github` 不在 —— 盤面が GitHub 身元を持たない宣言(ADR 0024 の fail-closed)
+ *  - 非 GitHub の URL —— `clone` の入力欄は「anything git clone accepts」であり、
+ *    `parseGitHubRepo` の `undefined` がそのままこの門になる(決定1)
+ *  - `create` モード —— 自分が今作った repo なので probe する相手がいない(この関数を
+ *    呼ぶのは clone モードだけ)
+ *
+ *  `register` モードにも置かない(決定3 の非対称): 既にホスト上にある checkout の
+ *  登録に probe を足すと、登録の門が全モードでネットワークを要求することになる。 */
+async function assertClonableRepoAccess(repo: string, deps: CreateWorkspaceDeps): Promise<void> {
+  const ref = parseGitHubRepo(repo);
+  if (!deps.github || !ref) return;
+  const { guidance } = await repairRepoAccess(deps.github, ref);
+  if (guidance) throw new RepoAccessMissingError(guidance);
 }
 
 /** The register mode's half: the entry records the explicit host path, plus the

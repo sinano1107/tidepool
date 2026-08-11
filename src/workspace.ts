@@ -532,6 +532,34 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
  *  (path known, folded into `cause`'s message) or an unknown workspace name
  *  encountered at resolution time (no path to know) — both quarantine the
  *  same way, keyed on the name alone. */
+/** その workspace の開いている確認 question に1行 append する。question が無ければ
+ *  何もせず false を返す —— 呼び出し元はそれを「まだ立っていない」と読む。
+ *
+ *  1 workspace = at most 1 open Confirmation question (CONTEXT.md's Quarantine):
+ *  a re-fire before the human answers just adds to the record of why, on the
+ *  question already standing。ADR 0067 決定7 の受諾の記録も同じ器に乗る —— 受諾専用
+ *  の面は作らず、直ってしまって question が立たなかったときは何も残さない(成功その
+ *  ものが記録である)。 */
+export function noteOnWorkspaceQuarantine(
+  db: Db,
+  workspaceName: string,
+  note: string,
+  now: Date,
+): boolean {
+  const existing = db
+    .prepare(`SELECT id FROM tasks WHERE question_quarantine_workspace = ? AND status = 'todo'`)
+    .get(workspaceName) as { id: string } | undefined;
+  if (!existing) return false;
+  appendEvent(db, {
+    taskId: existing.id,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "quarantine_refired", cause: note },
+    at: now,
+  });
+  return true;
+}
+
 export function quarantineWorkspace(
   db: Db,
   workspaceName: string,
@@ -546,21 +574,7 @@ export function quarantineWorkspace(
   // 1 workspace = at most 1 open Confirmation question (CONTEXT.md's
   // Quarantine): a re-fire before the human answers just adds to the record
   // of why, on the question already standing.
-  const existing = db
-    .prepare(
-      `SELECT id FROM tasks WHERE question_quarantine_workspace = ? AND status = 'todo'`,
-    )
-    .get(workspaceName) as { id: string } | undefined;
-  if (existing) {
-    appendEvent(db, {
-      taskId: existing.id,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
-      payload: { kind: "quarantine_refired", cause: causeMessage },
-      at: now,
-    });
-    return;
-  }
+  if (noteOnWorkspaceQuarantine(db, workspaceName, causeMessage, now)) return;
   const title = `workspace ${workspaceName} needs human attention`;
   registerTask(
     db,

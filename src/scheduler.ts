@@ -7,6 +7,7 @@ import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
 import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
+import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import {
@@ -32,6 +33,7 @@ import type { WorkerAdapter } from "./worker.js";
 import {
   BOARD_WORKER_ID,
   buildWorkspaceResolver,
+  noteOnWorkspaceQuarantine,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   resolveOrQuarantine,
@@ -182,7 +184,62 @@ export function startScheduler(deps: {
     return !nextSlotTask(db, workspace?.name, worker.id, auditorName);
   }
 
-  function pickup(task: Task): void {
+  /** ADR 0067 決定2 の pickup 側の扉。`prepareWorkspaceAtPickup` が落ちた瞬間に**1回
+   *  だけ**修復を試み、pickup を続けてよいかを返す。同期の `prepareWorkspaceAtPickup`
+   *  のシグネチャは変えない —— 非同期なのは修復の側だけである。
+   *
+   *  撃たない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
+   *  (盤面が GitHub 身元を持たない)と、`repo` が github.com を指していない(非
+   *  GitHub の remote / remote 正本の宣言そのものが無い)。
+   *
+   *  撃ち直すのは**受諾が1件でも起きたときだけ**である。何も変わっていないのに
+   *  再試行するのは、正常時の呼び出しを増やさないという不変条件の裏側を破る。 */
+  async function repairRepoAccessAtPickup(
+    workspace: WorkspaceConfig,
+    task: Task,
+    err: unknown,
+  ): Promise<boolean> {
+    // `isRemoteBacked` と同じ問い(`repo` の有無)—— ここでは値そのものを使う
+    const ref = workspace.repo === undefined ? undefined : parseGitHubRepo(workspace.repo);
+    let repair: { accepted: boolean; guidance: string | null } | null = null;
+    if (github && ref) {
+      try {
+        repair = await repairRepoAccess(github, ref);
+      } catch (probeErr) {
+        // probe 自身の失敗(タイムアウト、gh の異常終了)は元の原因を置き換えない ——
+        // 人間が読むべきは fetch がなぜ落ちたかである
+        console.error(`[scheduler] repo access probe failed for ${workspace.name}:`, probeErr);
+      }
+    }
+    if (repair?.accepted && !repair.guidance) {
+      try {
+        prepareWorkspaceAtPickup(db, workspace, task, { githubAuth, registry });
+        return true;
+      } catch (retryErr) {
+        err = retryErr;
+      }
+    }
+    // 案内は元の原因を**置き換えず**に連結する —— なぜ落ちたか(生の git のエラー)と
+    // 何をすれば直るかは別の情報で、どちらも人間の1つの question に載る
+    const guidance = repair?.guidance;
+    const cause = guidance
+      ? new Error(`${err instanceof Error ? err.message : String(err)}\n\n${guidance}`)
+      : err;
+    quarantineWorkspace(db, workspace.name, cause, clock.now());
+    // ADR 0067 決定7: 受諾した事実は、いま立った(あるいは既にあった)確認 question の
+    // イベントとして残す —— 受諾専用の面は作らない
+    if (repair?.accepted) {
+      noteOnWorkspaceQuarantine(
+        db,
+        workspace.name,
+        `accepted a pending repository invitation to ${workspace.repo}`,
+        clock.now(),
+      );
+    }
+    return false;
+  }
+
+  async function pickup(task: Task): Promise<void> {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor pointer,
@@ -213,11 +270,12 @@ export function startScheduler(deps: {
       // no other task aimed at this workspace gets picked up meanwhile.
       // ADR 0052 / issue #211: remote 正本の宣言と実態のずれ、そしてその refresh の
       // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
+      // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
+      // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
       try {
         prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
       } catch (err) {
-        quarantineWorkspace(db, resolved.name, err, clock.now());
-        return;
+        if (!(await repairRepoAccessAtPickup(resolved, picked, err))) return;
       }
       try {
         worker.start(picked);
@@ -331,7 +389,7 @@ export function startScheduler(deps: {
       )
         return;
       if (!(await issuePickupGate(head))) return;
-      pickup(head);
+      await pickup(head);
     } finally {
       inFlight = false;
     }
