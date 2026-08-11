@@ -35,7 +35,7 @@ import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
-import { autoCommitStaleTriage } from "./triage.js";
+import { closeStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
@@ -283,9 +283,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     registry: options.registry,
   });
   // an abandoned triage session may not pause pickup forever: the watchdog
-  // auto-commits it past the timeout, and the commit is a "run now" trigger
+  // closes it past the timeout, and reopening pickup is a "run now" trigger
   const stopTriageWatchdog = options.clock.setInterval(() => {
-    if (autoCommitStaleTriage(db, options.clock.now())) scheduler.pollNow();
+    if (closeStaleTriage(db, options.clock.now())) scheduler.pollNow();
   }, 60 * 1000);
   const watchdog = options.watchdog
     ? startWatchdog({

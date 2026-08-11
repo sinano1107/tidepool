@@ -125,7 +125,7 @@ function liveTitle(t) {
 // `icons` is the registry's assignee name → icon map (issue #52's
 // GET /api/registry/candidates); a name absent from it renders with
 // AgentChip's initials fallback.
-function mapData(board, log, pause, icons = {}) {
+function mapData(board, log, pause, icons = {}, triage = {}) {
   const paused = pause.paused;
   const throttle = pause.throttle;
   const fmtTime = (iso) => {
@@ -160,7 +160,7 @@ function mapData(board, log, pause, icons = {}) {
     agentIcon: icons[e.worker_id], human: e.worker_id === 'human',
     kind: e.kind === 'task_completed' ? 'completion' : 'decision',
     text: e.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
-    unread: e.id > log.cursor,
+    unread: e.unread,
     handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
   }));
@@ -224,8 +224,8 @@ function mapData(board, log, pause, icons = {}) {
   const halt = (slot, kind, msg, detail) => ({ slot, toast: { kind, msg, detail } });
   const pickupHalt = pause.triageActive
     ? halt(
-        { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'commit triage to resume', taskId: null },
-        'warn', 'moved to front — pickup blocked', 'triage in progress — commit it to resume')
+        { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'close triage session to resume', taskId: null },
+        'warn', 'moved to front — pickup blocked', 'triage in progress — close the session to resume')
     : paused
     ? halt(
         { color: 'var(--tide-4)', line: 'pickup paused — nothing starts until resumed', meta: '', taskId: null },
@@ -291,6 +291,7 @@ function mapData(board, log, pause, icons = {}) {
       };
   return {
     questions, log: logEntries, queue, board: cols, icons,
+    scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
     // empty until their domain slices exist: human tasks / agent registry /
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
@@ -308,13 +309,14 @@ function mapData(board, log, pause, icons = {}) {
 }
 
 async function fetchData() {
-  const [board, log, pause, candidates] = await Promise.all([
+  const [board, log, pause, candidates, triage] = await Promise.all([
     fetch('/api/tasks').then((r) => r.json()),
     fetch('/api/log').then((r) => r.json()),
     fetch('/api/pause').then((r) => r.json()),
     fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
+    fetch('/api/triage').then((r) => r.json()),
   ]);
-  return mapData(board, log, pause, candidates.icons);
+  return mapData(board, log, pause, candidates.icons, triage);
 }
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
@@ -2568,15 +2570,14 @@ function App() {
     }));
   };
 
-  // Triage commit: one server-side transaction applies everything the session
-  // staged (unblocked parents to the head, objections bundled into one repair
-  // task per objected task, scratchpad dispositions) and fires the immediate
-  // poll. The read cursor advances after — a failed commit never marks the
-  // skimmed lines as read, and a failed cursor advance never masquerades as a
-  // failed commit.
+  // Triage commit applies scratchpad dispositions and closes an open session
+  // when there is one. Only that last case fires the immediate poll. The read
+  // cursor advances after — a failed commit never marks the skimmed lines as
+  // read, and a failed cursor advance never masquerades as a failed commit.
   const commitTriage = async (answers, objections, scratch) => {
+    let result;
     try {
-      await api('/api/triage/commit', {
+      result = await api('/api/triage/commit', {
         // kit dispositions already speak the domain vocabulary
         scratchpad: scratch
           .filter((s) => typeof s.id === 'number')
@@ -2603,12 +2604,45 @@ function App() {
     const repairTasks = new Set(Object.keys(objections)
       .map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId)
       .filter(Boolean)).size;
-    const noted = scratch.filter((s) => s.kind !== 'discard').length;
+    const summary = [`${data.log.filter((entry) => entry.unread).length} read`];
+    if (answered) summary.push(`${answered} answered`);
+    if (repairTasks) summary.push(`${repairTasks} repair`);
+    if (scratch.length) summary.push(`${scratch.length} scratchpad applied`);
+    let message;
+    let outcomeNote = '';
+    if (result.outcome === 'closed_now') {
+      message = 'triage committed — session closed';
+      outcomeNote = ' · immediate poll fired';
+    } else if (result.outcome === 'already_closed_by_timeout') {
+      const closed = new Date(result.closed_at);
+      const hhmm = `${String(closed.getHours()).padStart(2, '0')}:${String(closed.getMinutes()).padStart(2, '0')}`;
+      message = 'triage committed — session already timed out';
+      outcomeNote = ` · session closed at ${hhmm}; staged steering was already applied`;
+    } else {
+      message = 'triage committed — no session was open';
+    }
     runWash('The tide is going out.', '🌊', () => {
       setTab('queue');
-      say(cursorNote ? 'warn' : 'success', 'triage committed — one transaction',
-        `${answered} answered${repairTasks ? ` · ${repairTasks} repair` : ''}${noted ? ` · ${noted} from scratchpad` : ''} · immediate poll fired${cursorNote}`);
+      say(cursorNote ? 'warn' : 'success', message,
+        `${summary.join(' · ')}${outcomeNote}${cursorNote}`);
     });
+  };
+
+  // The board-wide halt banner is an escape hatch, not the end of the triage
+  // flow: it closes the server session but never dispositions scratchpad lines
+  // or advances the decision-log cursor.
+  const closeTriageSession = async () => {
+    try {
+      const result = await api('/api/triage/commit', { scratchpad: [] });
+      await refreshFull();
+      if (result.outcome === 'closed_now') {
+        say('success', 'triage session closed', 'pickup resumed · immediate poll fired');
+      } else {
+        say('info', 'triage session was already closed', 'pickup was not stopped');
+      }
+    } catch (err) {
+      say('danger', 'failed to close triage session', String(err.message || err));
+    }
   };
 
   // One endpoint, two meanings the server itself distinguishes (issue #82
@@ -2795,7 +2829,7 @@ function App() {
           <span style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>
             triage in progress — pickup is stopped
           </span>
-          <Button variant="secondary" onClick={() => commitTriage({}, {}, [])}>commit triage</Button>
+          <Button variant="secondary" onClick={closeTriageSession}>close triage session</Button>
         </div>
       )}
 
@@ -2810,7 +2844,7 @@ function App() {
 
       <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
-        {tab === 'triage' && (data.questions.length || unreadCount
+        {tab === 'triage' && (data.questions.length || unreadCount || data.scratchpad.length
           ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff}
               onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview}
               onTranslate={onTranslateProp} />

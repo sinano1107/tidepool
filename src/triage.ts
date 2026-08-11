@@ -17,9 +17,16 @@ export interface TriageSession {
   started_at: string;
   last_activity_at: string;
   committed_at: string | null;
+  closed_by: "commit" | "timeout" | null;
+  timeout_notified: 0 | 1;
 }
 
-/** Leave a session alone this long and the watchdog commits it for you. */
+export interface TriageCommitResult {
+  outcome: "closed_now" | "already_closed_by_timeout" | "no_open_session";
+  closed_at: string | null;
+}
+
+/** Leave a session alone this long and the watchdog closes it. */
 export const TRIAGE_TIMEOUT = 30 * 60 * 1000;
 
 /** The one open session, if any — the system is single-human, so at most one
@@ -41,9 +48,6 @@ export function startTriage(db: Db, now: Date): TriageSession {
     const { lastInsertRowid } = db
       .prepare("INSERT INTO triage_sessions (started_at, last_activity_at) VALUES (?, ?)")
       .run(now.toISOString(), now.toISOString());
-    // scratchpad lines a previous session never dispositioned (e.g. a timeout
-    // auto-commit) are not lost: the new session adopts them for triage
-    db.prepare("UPDATE triage_scratchpad SET session_id = ?").run(Number(lastInsertRowid));
     session = db
       .prepare("SELECT * FROM triage_sessions WHERE id = ?")
       .get(Number(lastInsertRowid)) as TriageSession;
@@ -52,7 +56,7 @@ export function startTriage(db: Db, now: Date): TriageSession {
 }
 
 /** Every human touch (answer, objection, scratchpad, displayed entry) defers
- *  the auto-commit. */
+ *  the timeout close. */
 export function touchTriage(db: Db, now: Date): void {
   db.prepare(
     "UPDATE triage_sessions SET last_activity_at = ? WHERE committed_at IS NULL",
@@ -80,13 +84,13 @@ export function stageFrontInsert(db: Db, sessionId: number, taskId: string): voi
   );
 }
 
-/** The watchdog tick: commit a session left alone past TRIAGE_TIMEOUT.
- *  Returns true when it committed, so the caller can fire the immediate poll. */
-export function autoCommitStaleTriage(db: Db, now: Date): boolean {
+/** The watchdog tick: close a session left alone past TRIAGE_TIMEOUT.
+ *  Returns true when it closed one, so the caller can fire the immediate poll. */
+export function closeStaleTriage(db: Db, now: Date): boolean {
   const open = activeTriageSession(db);
   if (!open) return false;
   if (now.getTime() - Date.parse(open.last_activity_at) < TRIAGE_TIMEOUT) return false;
-  commitTriage(db, now);
+  commitTriage(db, now, [], "timeout");
   return true;
 }
 
@@ -281,25 +285,22 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
 
 export interface ScratchpadLine {
   id: number;
-  session_id: number;
   line: string;
 }
 
 /** Jot one line on the shared scratchpad — durable at once, from any screen. */
 export function addScratchpadLine(db: Db, line: string, now: Date): ScratchpadLine {
-  const open = triageActivity(db, now, true)!;
+  triageActivity(db, now);
   const { lastInsertRowid } = db
-    .prepare("INSERT INTO triage_scratchpad (session_id, line) VALUES (?, ?)")
-    .run(open.id, line);
+    .prepare("INSERT INTO triage_scratchpad (line) VALUES (?)")
+    .run(line);
   return db
     .prepare("SELECT * FROM triage_scratchpad WHERE id = ?")
     .get(Number(lastInsertRowid)) as ScratchpadLine;
 }
 
-export function listScratchpad(db: Db, sessionId: number): ScratchpadLine[] {
-  return db
-    .prepare("SELECT * FROM triage_scratchpad WHERE session_id = ? ORDER BY id")
-    .all(sessionId) as ScratchpadLine[];
+export function listScratchpad(db: Db): ScratchpadLine[] {
+  return db.prepare("SELECT * FROM triage_scratchpad ORDER BY id").all() as ScratchpadLine[];
 }
 
 export type ScratchpadDisposition = "meta_review" | "task" | "register" | "discard";
@@ -310,17 +311,16 @@ export type ScratchpadDisposition = "meta_review" | "task" | "register" | "disca
  *  as-is), or nothing at all. */
 function applyScratchpad(
   db: Db,
-  sessionId: number,
   dispositions: Array<{ id: number; disposition: ScratchpadDisposition }>,
   now: Date,
 ): void {
-  const lines = new Map(listScratchpad(db, sessionId).map((l) => [l.id, l]));
+  const lines = new Map(listScratchpad(db).map((l) => [l.id, l]));
   const consume = db.prepare("DELETE FROM triage_scratchpad WHERE id = ?");
   for (const { id, disposition } of dispositions) {
     const line = lines.get(id);
     if (!line) continue;
-    // every disposition consumes the line; undisposed lines stay and are
-    // adopted by the next session (startTriage)
+    // every disposition consumes the line; undisposed lines stay on the
+    // board-wide scratchpad for a future triage
     consume.run(id);
     if (disposition === "discard") continue;
     if (disposition === "register") {
@@ -415,11 +415,11 @@ export type PreviewTask = BoardTask & { front_inserted: boolean };
  *  live queue itself stays untouched until commit. */
 export function triagePreview(
   db: Db,
-  sessionId: number,
+  sessionId: number | undefined,
   defaultAgentName?: string,
   auditorName?: string,
 ): PreviewTask[] {
-  const staged = stagedFrontInserts(db, sessionId);
+  const staged = sessionId === undefined ? [] : stagedFrontInserts(db, sessionId);
   const queue = listBoard(db, defaultAgentName, auditorName).filter(
     (task) => task.status === "todo" || task.status === "blocked",
   );
@@ -439,23 +439,41 @@ export function commitTriage(
   db: Db,
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
-): TriageSession {
+  closedBy: "commit" | "timeout" = "commit",
+): TriageCommitResult {
   const open = activeTriageSession(db);
-  if (!open) throw new TriageError("no open triage session to commit");
+  if (!open) {
+    let timedOut: Pick<TriageSession, "id" | "committed_at"> | undefined;
+    db.transaction(() => {
+      applyScratchpad(db, scratchpad, now);
+      timedOut = db
+        .prepare(
+          `SELECT id, committed_at FROM triage_sessions
+           WHERE closed_by = 'timeout' AND timeout_notified = 0
+           ORDER BY id DESC LIMIT 1`,
+        )
+        .get() as Pick<TriageSession, "id" | "committed_at"> | undefined;
+      if (timedOut) {
+        db.prepare("UPDATE triage_sessions SET timeout_notified = 1 WHERE id = ?").run(timedOut.id);
+      }
+    })();
+    return timedOut
+      ? { outcome: "already_closed_by_timeout", closed_at: timedOut.committed_at }
+      : { outcome: "no_open_session", closed_at: null };
+  }
   db.transaction(() => {
     bundleObjections(db, open.id, now);
-    applyScratchpad(db, open.id, scratchpad, now);
+    applyScratchpad(db, scratchpad, now);
     // apply in reverse staging order so the first-staged task ends up on top
     for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
       const task = getTask(db, taskId);
       if (task && task.status === "todo") moveTask(db, task, null, now);
     }
-    db.prepare("UPDATE triage_sessions SET committed_at = ? WHERE id = ?").run(
+    db.prepare("UPDATE triage_sessions SET committed_at = ?, closed_by = ? WHERE id = ?").run(
       now.toISOString(),
+      closedBy,
       open.id,
     );
   })();
-  return db
-    .prepare("SELECT * FROM triage_sessions WHERE id = ?")
-    .get(open.id) as TriageSession;
+  return { outcome: "closed_now", closed_at: now.toISOString() };
 }

@@ -440,7 +440,7 @@ export async function submitAnswer(
   }
 
   // An answer during triage is durable immediately, but its parent unblock is
-  // staged until commit. The activity touch also defers triage auto-commit.
+  // staged until commit. The activity touch also defers the timeout close.
   const session = triageActivity(deps.db, now(), openTriage);
   const { question, parentUnblocked, pickupResumed } = answerQuestion(
     deps.db,

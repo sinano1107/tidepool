@@ -346,12 +346,14 @@ function groupLogEntries(entries) {
   const groups = [...byWorkspace.entries()].map(([key, groupEntries]) => {
     const sorted = groupEntries.slice().sort((a, b) => a.chronoKey - b.chronoKey);
     const unreadEntries = sorted.filter((l) => l.unread);
+    const readEntries = sorted.filter((l) => !l.unread);
     return {
       key,
       label: key || NO_WORKSPACE_LABEL,
-      entries: sorted,
+      readEntries,
+      unreadEntries,
       unreadCount: unreadEntries.length,
-      readCount: sorted.length - unreadEntries.length,
+      readCount: readEntries.length,
       mostRecentUnread: unreadEntries.length ? Math.max(...unreadEntries.map((l) => l.chronoKey)) : null,
       mostRecent: Math.max(...sorted.map((l) => l.chronoKey))
     };
@@ -370,7 +372,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [objections, setObjections] = React.useState({});
   const [objecting, setObjecting] = React.useState(null);
   const [draft, setDraft] = React.useState("");
-  const [scratch, setScratch] = React.useState([]);
+  const [scratch, setScratch] = React.useState(data.scratchpad ?? []);
   const [dropped, setDropped] = React.useState([]);
   const [scratchKinds, setScratchKinds] = React.useState({});
   const scratchSeq = React.useRef(0);
@@ -446,7 +448,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     for (const g of logGroups) {
       const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
       const hiddenCount = g.readCount - revealed;
-      rendered.push(...g.entries.slice(hiddenCount, g.readCount), ...g.entries.slice(g.readCount));
+      rendered.push(...g.readEntries.slice(hiddenCount), ...g.unreadEntries);
     }
     return rendered;
   }, [logGroups, revealedRead]);
@@ -571,8 +573,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     ), /* @__PURE__ */ React.createElement("div", { ref: logListRef, style: { display: "flex", flexDirection: "column", gap: 10 } }, logGroups.map((g) => {
       const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
       const hiddenCount = g.readCount - revealed;
-      const visibleReadEntries = g.entries.slice(hiddenCount, g.readCount);
-      const unreadEntries = g.entries.slice(g.readCount);
+      const visibleReadEntries = g.readEntries.slice(hiddenCount);
+      const unreadEntries = g.unreadEntries;
       return /* @__PURE__ */ React.createElement("div", { key: g.key, style: { background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, padding: "8px 12px", background: "var(--surface-recessed)", borderBottom: "1px solid var(--border-hairline)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)", textTransform: "uppercase", letterSpacing: "0.06em" } }, g.label), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, g.unreadCount > 0 ? `${g.unreadCount} unread` : `${g.readCount} read`)), hiddenCount > 0 && /* @__PURE__ */ React.createElement(
         "button",
         {
@@ -617,7 +619,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     }
     const previewQueue = data.queue.filter((t) => !pending.some((p) => p.id === t.id));
     return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, pending.map((t, i) => /* @__PURE__ */ React.createElement(QueueItem, { key: t.id, position: i + 1, task: t, frontInserted: true })), /* @__PURE__ */ React.createElement(TpQueueList, { tasks: previewQueue, baseIndex: pending.length, onReorder: onReorderQueue, onFront, headId: data.queue[0]?.id })), scratchPanel);
-  })(), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 20 } }, section > (nQuestions ? 0 : 1) && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", onClick: () => setSection(section - 1) }, "Back"), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: () => section < 2 ? setSection(section + 1) : onCommit(answers, objections, scratchResolved()) }, cur.next)), /* @__PURE__ */ React.createElement(TpScratchpad, { lines: scratch, onAdd: addScratch, onRemove: removeScratch }), section === 2 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, "commit applies everything in one transaction \xB7 immediate poll if slot free"));
+  })(), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 20 } }, section > (nQuestions ? 0 : 1) && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", onClick: () => setSection(section - 1) }, "Back"), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: () => section < 2 ? setSection(section + 1) : onCommit(answers, objections, scratchResolved()) }, cur.next)), /* @__PURE__ */ React.createElement(TpScratchpad, { lines: scratch, onAdd: addScratch, onRemove: removeScratch }), section === 2 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, "commit applies scratchpad dispositions and advances the read cursor"));
 }
 Object.assign(window, { TriageScreen, TpQuestionCard, TpQuestionItemPicker, TpWaterline, TpSegmentGauge });
 
@@ -778,7 +780,7 @@ function liveTitle(t) {
   if (t.issue_live_state === "unavailable") return `${t.title} (unavailable)`;
   return t.title;
 }
-function mapData(board, log, pause, icons = {}) {
+function mapData(board, log, pause, icons = {}, triage = {}) {
   const paused = pause.paused;
   const throttle = pause.throttle;
   const fmtTime = (iso) => {
@@ -812,7 +814,7 @@ function mapData(board, log, pause, icons = {}) {
     human: e.worker_id === "human",
     kind: e.kind === "task_completed" ? "completion" : "decision",
     text: e.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
-    unread: e.id > log.cursor,
+    unread: e.unread,
     handoffPresent: e.kind === "task_completed" && !!e.payload.handoff_present,
     workspace: e.workspace ?? null
   }));
@@ -869,10 +871,10 @@ function mapData(board, log, pause, icons = {}) {
   const throttleObservedAt = throttle?.observedAt ? fmtTime(throttle.observedAt) : null;
   const halt = (slot2, kind, msg, detail) => ({ slot: slot2, toast: { kind, msg, detail } });
   const pickupHalt = pause.triageActive ? halt(
-    { color: "var(--sun-4)", line: "triage in progress \xB7 nothing starts", meta: "commit triage to resume", taskId: null },
+    { color: "var(--sun-4)", line: "triage in progress \xB7 nothing starts", meta: "close triage session to resume", taskId: null },
     "warn",
     "moved to front \u2014 pickup blocked",
-    "triage in progress \u2014 commit it to resume"
+    "triage in progress \u2014 close the session to resume"
   ) : paused ? halt(
     { color: "var(--tide-4)", line: "pickup paused \u2014 nothing starts until resumed", meta: "", taskId: null },
     "warn",
@@ -937,6 +939,7 @@ function mapData(board, log, pause, icons = {}) {
     queue,
     board: cols,
     icons,
+    scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
     // empty until their domain slices exist: human tasks / agent registry /
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [],
@@ -960,13 +963,14 @@ function mapData(board, log, pause, icons = {}) {
   };
 }
 async function fetchData() {
-  const [board, log, pause, candidates] = await Promise.all([
+  const [board, log, pause, candidates, triage] = await Promise.all([
     fetch("/api/tasks").then((r) => r.json()),
     fetch("/api/log").then((r) => r.json()),
     fetch("/api/pause").then((r) => r.json()),
-    fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} }))
+    fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} })),
+    fetch("/api/triage").then((r) => r.json())
   ]);
-  return mapData(board, log, pause, candidates.icons);
+  return mapData(board, log, pause, candidates.icons, triage);
 }
 function TpTideWash({ label, emoji, duration = 1250 }) {
   const dur = `${duration}ms`;
@@ -2715,8 +2719,9 @@ function App() {
     }));
   };
   const commitTriage = async (answers, objections, scratch) => {
+    let result;
     try {
-      await api("/api/triage/commit", {
+      result = await api("/api/triage/commit", {
         // kit dispositions already speak the domain vocabulary
         scratchpad: scratch.filter((s) => typeof s.id === "number").map((s) => ({ id: s.id, disposition: s.kind }))
       });
@@ -2742,15 +2747,44 @@ function App() {
     }
     const answered = Object.values(answers).filter(Boolean).length;
     const repairTasks = new Set(Object.keys(objections).map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId).filter(Boolean)).size;
-    const noted = scratch.filter((s) => s.kind !== "discard").length;
+    const summary = [`${data.log.filter((entry) => entry.unread).length} read`];
+    if (answered) summary.push(`${answered} answered`);
+    if (repairTasks) summary.push(`${repairTasks} repair`);
+    if (scratch.length) summary.push(`${scratch.length} scratchpad applied`);
+    let message;
+    let outcomeNote = "";
+    if (result.outcome === "closed_now") {
+      message = "triage committed \u2014 session closed";
+      outcomeNote = " \xB7 immediate poll fired";
+    } else if (result.outcome === "already_closed_by_timeout") {
+      const closed = new Date(result.closed_at);
+      const hhmm = `${String(closed.getHours()).padStart(2, "0")}:${String(closed.getMinutes()).padStart(2, "0")}`;
+      message = "triage committed \u2014 session already timed out";
+      outcomeNote = ` \xB7 session closed at ${hhmm}; staged steering was already applied`;
+    } else {
+      message = "triage committed \u2014 no session was open";
+    }
     runWash("The tide is going out.", "\u{1F30A}", () => {
       setTab("queue");
       say(
         cursorNote ? "warn" : "success",
-        "triage committed \u2014 one transaction",
-        `${answered} answered${repairTasks ? ` \xB7 ${repairTasks} repair` : ""}${noted ? ` \xB7 ${noted} from scratchpad` : ""} \xB7 immediate poll fired${cursorNote}`
+        message,
+        `${summary.join(" \xB7 ")}${outcomeNote}${cursorNote}`
       );
     });
+  };
+  const closeTriageSession = async () => {
+    try {
+      const result = await api("/api/triage/commit", { scratchpad: [] });
+      await refreshFull();
+      if (result.outcome === "closed_now") {
+        say("success", "triage session closed", "pickup resumed \xB7 immediate poll fired");
+      } else {
+        say("info", "triage session was already closed", "pickup was not stopped");
+      }
+    } catch (err) {
+      say("danger", "failed to close triage session", String(err.message || err));
+    }
   };
   const moveFront = async (id) => {
     const wasHead = data.queue[0]?.id === id;
@@ -2870,7 +2904,7 @@ function App() {
     return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)" } }, "tidepool"));
   }
   const unreadCount = data.log.filter((l) => l.unread).length;
-  return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", background: "var(--surface-page)", boxShadow: "0 0 40px rgba(23,33,30,0.12)", position: "relative", overflow: "hidden" } }, wash && /* @__PURE__ */ React.createElement(TpTideWash, { label: wash.label, emoji: wash.emoji, duration: WASH_MS }), /* @__PURE__ */ React.createElement("header", { style: { display: "flex", alignItems: "center", gap: 8, padding: "14px 16px 10px", borderBottom: "1px solid var(--border-hairline)", position: "sticky", top: 0, background: "var(--surface-page)", zIndex: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: 22, color: "var(--tide-5)" } }, "tidepool"), /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: data.paused ? "var(--rock-4)" : "var(--text-muted)" } }, data.paused ? "pickup paused \xB7 " : "", data.questions.length, " questions \xB7 ", unreadCount, " new log \xB7 queue ", data.queue.length)), data.triageActive && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--sun-2)", background: "var(--sun-1)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "triage in progress \u2014 pickup is stopped"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: () => commitTriage({}, {}, []) }, "commit triage")), notifPermission === "default" && "serviceWorker" in navigator && "PushManager" in window && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border-hairline)", background: "var(--rock-2)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "Enable notifications to get questions outside quiet hours the moment they're asked."), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: enableNotifications }, "Enable")), /* @__PURE__ */ React.createElement("main", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowY: tab === "board" ? "hidden" : "auto", paddingBottom: tab === "board" ? 56 : 76, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { key: tab, className: tabDir === "right" ? "tp-tab-right" : "tp-tab-left", style: tab === "board" ? { height: "100%" } : { minHeight: "100%" } }, tab === "triage" && (data.questions.length || unreadCount ? /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", background: "var(--surface-page)", boxShadow: "0 0 40px rgba(23,33,30,0.12)", position: "relative", overflow: "hidden" } }, wash && /* @__PURE__ */ React.createElement(TpTideWash, { label: wash.label, emoji: wash.emoji, duration: WASH_MS }), /* @__PURE__ */ React.createElement("header", { style: { display: "flex", alignItems: "center", gap: 8, padding: "14px 16px 10px", borderBottom: "1px solid var(--border-hairline)", position: "sticky", top: 0, background: "var(--surface-page)", zIndex: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: 22, color: "var(--tide-5)" } }, "tidepool"), /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: data.paused ? "var(--rock-4)" : "var(--text-muted)" } }, data.paused ? "pickup paused \xB7 " : "", data.questions.length, " questions \xB7 ", unreadCount, " new log \xB7 queue ", data.queue.length)), data.triageActive && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--sun-2)", background: "var(--sun-1)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "triage in progress \u2014 pickup is stopped"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: closeTriageSession }, "close triage session")), notifPermission === "default" && "serviceWorker" in navigator && "PushManager" in window && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderBottom: "1px solid var(--border-hairline)", background: "var(--rock-2)" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "Enable notifications to get questions outside quiet hours the moment they're asked."), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: enableNotifications }, "Enable")), /* @__PURE__ */ React.createElement("main", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowY: tab === "board" ? "hidden" : "auto", paddingBottom: tab === "board" ? 56 : 76, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { key: tab, className: tabDir === "right" ? "tp-tab-right" : "tp-tab-left", style: tab === "board" ? { height: "100%" } : { minHeight: "100%" } }, tab === "triage" && (data.questions.length || unreadCount || data.scratchpad.length ? /* @__PURE__ */ React.createElement(
     TriageScreen,
     {
       data,

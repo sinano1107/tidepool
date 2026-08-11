@@ -164,9 +164,11 @@ export function openDb(path: string): Db {
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       started_at       TEXT NOT NULL,
       -- refreshed on every answer/objection/scratchpad touch; the watchdog
-      -- auto-commits a session left alone past the timeout
+      -- closes a session left alone past the timeout
       last_activity_at TEXT NOT NULL,
-      committed_at     TEXT
+      committed_at     TEXT,
+      closed_by        TEXT CHECK (closed_by IN ('commit', 'timeout')),
+      timeout_notified INTEGER NOT NULL DEFAULT 0 CHECK (timeout_notified IN (0, 1))
     );
 
     -- queue applications staged by an open triage session: tasks this session
@@ -181,9 +183,8 @@ export function openDb(path: string): Db {
     -- the triage scratchpad: irritation lines jotted anywhere in the flow,
     -- durable at once, dispositioned (meta-review / task / discard) at commit
     CREATE TABLE IF NOT EXISTS triage_scratchpad (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id INTEGER NOT NULL REFERENCES triage_sessions(id),
-      line       TEXT NOT NULL
+      id   INTEGER PRIMARY KEY AUTOINCREMENT,
+      line TEXT NOT NULL
     );
 
     -- pending dumps (issue #61): scratchpad lines dispositioned \`register\`
@@ -350,6 +351,28 @@ export function openDb(path: string): Db {
     -- append-only is enforced by structure, not convention
     ${EVENTS_APPEND_ONLY_TRIGGERS}
   `);
+  // ADR 0065: session closure records who closed it so the next terminal
+  // commit can report a timeout once. Scratchpad lines belong to the board,
+  // not to a session; SQLite on the deployed Pi supports this direct drop.
+  const triageSessionCols = (
+    db.prepare("PRAGMA table_info(triage_sessions)").all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (!triageSessionCols.includes("closed_by")) {
+    db.exec(
+      "ALTER TABLE triage_sessions ADD COLUMN closed_by TEXT CHECK (closed_by IN ('commit', 'timeout'))",
+    );
+  }
+  if (!triageSessionCols.includes("timeout_notified")) {
+    db.exec(
+      "ALTER TABLE triage_sessions ADD COLUMN timeout_notified INTEGER NOT NULL DEFAULT 0 CHECK (timeout_notified IN (0, 1))",
+    );
+  }
+  const triageScratchpadCols = (
+    db.prepare("PRAGMA table_info(triage_scratchpad)").all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (triageScratchpadCols.includes("session_id")) {
+    db.exec("ALTER TABLE triage_scratchpad DROP COLUMN session_id");
+  }
   // boards created before the question fields existed get them added in place
   const cols = (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map(
     (c) => c.name,

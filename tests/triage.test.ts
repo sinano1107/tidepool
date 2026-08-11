@@ -27,9 +27,25 @@ it("commit closes the session and fires an immediate poll", async () => {
   expect(t.worker.started).toEqual([]);
 
   const res = await api(t.baseUrl, "POST", "/api/triage/commit");
-  expect(res.status).toBe(200);
+  expect(res).toMatchObject({
+    status: 200,
+    json: { outcome: "closed_now", closed_at: expect.any(String) },
+  });
   // no clock advance: the commit itself hands the queue head to the worker
   expect(t.worker.started.map((x) => x.title)).toEqual(["queued work"]);
+});
+
+it("セッションが開いていない commit は成功し、即時 poll を発火しない", async () => {
+  t = await bootTidepool();
+  await registerWork(t, "queued work");
+
+  const res = await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  expect(res).toMatchObject({
+    status: 200,
+    json: { outcome: "no_open_session", closed_at: null },
+  });
+  expect(t.worker.started).toEqual([]);
 });
 
 /** Park `parent` behind an escalated question: parent into the slot, a human
@@ -109,6 +125,32 @@ async function loggedEntry(t: Tidepool, taskId: string, line: string) {
   return log.entries.find((e: any) => e.payload.line === line);
 }
 
+it("Decision log は human のエントリを保持するが未読には数えない", async () => {
+  t = await bootTidepool();
+  const agentTask = await registerWork(t, "agent decision");
+  await t.clock.advance(HOUR);
+  const agentEntry = await loggedEntry(t, agentTask.id, "agent が選んだ方針");
+  const humanTask = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title: "human work",
+      purpose: "p",
+      completion_criteria: "c",
+      assignee: "human",
+    })
+  ).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${humanTask.id}/complete`, {});
+
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  const humanEntry = log.entries.find(
+    (entry: any) => entry.kind === "task_completed" && entry.task_id === humanTask.id,
+  );
+
+  expect(agentEntry).toBeDefined();
+  expect(log.entries.find((entry: any) => entry.id === agentEntry.id)?.unread).toBe(true);
+  expect(humanEntry).toMatchObject({ worker_id: "human", unread: false });
+});
+
 it("an objection needs a direction comment and lands durably on the log entry", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "logged work");
@@ -153,7 +195,7 @@ it("the S3 preview stages the queue with this session's front-inserts highlighte
   expect(live.map((x: any) => x.title)).toEqual(["other work", "parent work", "which way?"]);
 });
 
-it("an abandoned session auto-commits after the timeout", async () => {
+it("an abandoned session closes after the timeout", async () => {
   t = await bootTidepool();
   const { question } = await escalatedBoard(t);
   await api(t.baseUrl, "POST", "/api/triage/start");
@@ -165,6 +207,29 @@ it("an abandoned session auto-commits after the timeout", async () => {
   const titles = (await api(t.baseUrl, "GET", "/api/tasks")).json.map((x: any) => x.title);
   expect(titles).toEqual(["parent work", "other work", "which way?"]);
   expect(t.worker.started.map((x) => x.title)).toEqual(["parent work", "parent work"]);
+});
+
+it("タイムアウトで閉じたセッションを次の commit が一度だけ時刻付きで伝える", async () => {
+  t = await bootTidepool();
+  const started = await api(t.baseUrl, "POST", "/api/triage/start");
+  const expectedClosedAt = new Date(
+    Date.parse(started.json.started_at) + TRIAGE_TIMEOUT,
+  ).toISOString();
+  await t.clock.advance(TRIAGE_TIMEOUT);
+  await registerWork(t, "natural poll を待つ work");
+
+  const first = await api(t.baseUrl, "POST", "/api/triage/commit");
+  const second = await api(t.baseUrl, "POST", "/api/triage/commit");
+
+  expect(first).toMatchObject({
+    status: 200,
+    json: { outcome: "already_closed_by_timeout", closed_at: expectedClosedAt },
+  });
+  expect(second).toMatchObject({
+    status: 200,
+    json: { outcome: "no_open_session", closed_at: null },
+  });
+  expect(t.worker.started).toEqual([]);
 });
 
 it("activity keeps an open session alive past the timeout window", async () => {
@@ -182,7 +247,45 @@ it("activity keeps an open session alive past the timeout window", async () => {
   expect(t.worker.started).toEqual([]);
 });
 
-it("scratchpad lines are shared during triage and triaged at commit", async () => {
+it("scratchpad はセッションを開かず、持ち越し行とライブ queue を返す", async () => {
+  t = await bootTidepool();
+  await registerWork(t, "live queued work");
+
+  const added = await api(t.baseUrl, "POST", "/api/triage/scratchpad", {
+    line: "持ち越す苛立ち",
+  });
+  const triage = await api(t.baseUrl, "GET", "/api/triage");
+
+  expect(added.status).toBe(201);
+  expect(triage.json).toMatchObject({
+    session: null,
+    scratchpad: [{ id: added.json.id, line: "持ち越す苛立ち" }],
+  });
+  expect(triage.json.queue.map((task: any) => [task.title, task.front_inserted])).toEqual([
+    ["live queued work", false],
+  ]);
+});
+
+it("セッション不在の commit でも scratchpad の振り分けを適用する", async () => {
+  t = await bootTidepool();
+  const line = (
+    await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "独立した振り分け" })
+  ).json;
+
+  const committed = await api(t.baseUrl, "POST", "/api/triage/commit", {
+    scratchpad: [{ id: line.id, disposition: "task" }],
+  });
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+
+  expect(committed).toMatchObject({
+    status: 200,
+    json: { outcome: "no_open_session", closed_at: null },
+  });
+  expect(board.some((task: any) => task.title === "独立した振り分け")).toBe(true);
+  expect(t.worker.started).toEqual([]);
+});
+
+it("scratchpad 行はセッションを開かず共有され、commit で振り分けられる", async () => {
   t = await bootTidepool();
   const lines = [
     "the agent keeps renaming things",
@@ -195,7 +298,7 @@ it("scratchpad lines are shared during triage and triaged at commit", async () =
     expect(res.status).toBe(201);
     ids.push(res.json.id);
   }
-  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).not.toBe(null);
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBe(null);
 
   // the pad is shared across the triage screens: every screen reads it back
   const pad = (await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad;
@@ -230,7 +333,7 @@ it("a scratchpad line dispositioned register is consumed and lands as a pending 
     scratchpad: [{ id: line.id, disposition: "register" }],
   });
 
-  // consumed off the scratchpad — the next session does not adopt it
+  // consumed off the board-wide scratchpad — it does not reappear
   await api(t.baseUrl, "POST", "/api/triage/start");
   expect((await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad).toEqual([]);
 
@@ -248,15 +351,15 @@ it("a scratchpad line dispositioned register is consumed and lands as a pending 
   expect(afterRestart.map((d: any) => d.line)).toEqual(["the retry policy needs a real writeup"]);
 });
 
-it("undisposed scratchpad lines survive an auto-commit into the next session", async () => {
+it("undisposed scratchpad lines survive a timeout close", async () => {
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/triage/start");
   const line = (await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "this again" }))
     .json;
-  await t.clock.advance(TRIAGE_TIMEOUT); // walk away — auto-commit carries no dispositions
+  await t.clock.advance(TRIAGE_TIMEOUT); // walk away — timeout close carries no dispositions
   expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBe(null);
 
-  // the jotted irritation is not lost: the next session adopts it
+  // the jotted irritation is not lost; opening another session does not change it
   await api(t.baseUrl, "POST", "/api/triage/start");
   const pad = (await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad;
   expect(pad.map((x: any) => x.line)).toEqual(["this again"]);
