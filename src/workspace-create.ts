@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
@@ -297,8 +297,8 @@ function createLocalCheckout(name: string, deps: CreateWorkspaceDeps): Workspace
   // registry コミット直前で失敗した孤児 —— 済んだ手順として流用する(clone
   // モードの cloneAndDescribe と同じ形)
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-    git(dir, "init", "-b", "main");
+    // git init creates any missing directories itself, mkdir first is redundant
+    git(deps.workspacesBaseDir, "init", "-b", "main", dir);
     writeFileSync(join(dir, "README.md"), `# ${name}\n`);
     git(dir, "add", "-A");
     git(dir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", "initial commit");
