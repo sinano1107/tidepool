@@ -421,7 +421,7 @@ export async function submitAnswer(
     // 招待1枚で直るならここで直り、まだ書けなければ回答を拒んで question は開いた
     // ままになる。ローカルの検査を先に済ませてから撃つので、purely-local な
     // workspace では1つもネットワークに出ない。
-    const ref = target.repo === undefined ? undefined : parseGitHubRepo(target.repo);
+    const ref = parseGitHubRepo(target.repo);
     if (deps.github && ref) {
       const { guidance } = await repairRepoAccess(deps.github, ref);
       if (guidance) throw new DomainError(guidance);

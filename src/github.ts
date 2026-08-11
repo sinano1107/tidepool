@@ -129,13 +129,13 @@ export interface GitHubClient {
    *  door asks (実測5). Null means **not visible**: no access and no such
    *  repository are indistinguishable at this surface (実測7), and so is a
    *  timeout — all three are read as unreachable, never as fatal. */
-  getRepositoryPermission(ref: RepoRepoRef): Promise<RepoPermission | null>;
+  getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null>;
 }
 
 /** Which repository, as GitHub's own `owner/name` (ADR 0067) — distinct from
  *  the bare-name `getRepository` probe, which resolves under the
  *  authenticated account's namespace only. */
-export interface RepoRepoRef {
+export interface RepoSlug {
   owner: string;
   name: string;
 }
@@ -337,7 +337,7 @@ export class GhCliClient implements GitHubClient {
     this.gh(["api", "--method", "PATCH", `user/repository_invitations/${id}`]);
   }
 
-  async getRepositoryPermission(ref: RepoRepoRef): Promise<RepoPermission | null> {
+  async getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null> {
     // every failure maps to null, not just not-found: an invisible repo, a
     // repo the token has no access to, and a timed-out call are the same
     // answer here — "cannot confirm WRITE" — and the three doors treat them

@@ -291,7 +291,8 @@ async function buildEntry(
  *  1回だけ確かめ、招待1枚で直せるなら直す。撃たないのは3つの場合で、どれも今日の
  *  挙動のまま通す:
  *
- *  - `deps.github` 不在 —— 盤面が GitHub 身元を持たない宣言(ADR 0024 の fail-closed)
+ *  - `deps.github` 不在 —— 盤面が GitHub 身元(ADR 0024)を持たないので probe を
+ *    撃つ相手そのものが無い。ここは通す側で、clone は今日どおり素の git に委ねる
  *  - 非 GitHub の URL —— `clone` の入力欄は「anything git clone accepts」であり、
  *    `parseGitHubRepo` の `undefined` がそのままこの門になる(決定1)
  *  - `create` モード —— 自分が今作った repo なので probe する相手がいない(この関数を

@@ -523,15 +523,6 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
   return row?.needs_human === 1;
 }
 
-/** Tree-rule failure containment (quarantine, CONTEXT.md): mark the workspace
- *  needs-human (its tasks stay out of the slot) and put the repair in front of
- *  the human as a 1-choice Confirmation question (issue #21) — the answer
- *  isn't a choice between outcomes, it's a confirmation that repair happened,
- *  verified before it clears needs-human (see answerQuestion in tasks.ts).
- *  Name-only (issue #26 / ADR 0009): the trigger can be a tree-rule failure
- *  (path known, folded into `cause`'s message) or an unknown workspace name
- *  encountered at resolution time (no path to know) — both quarantine the
- *  same way, keyed on the name alone. */
 /** その workspace の開いている確認 question に1行 append する。question が無ければ
  *  何もせず false を返す —— 呼び出し元はそれを「まだ立っていない」と読む。
  *
@@ -560,6 +551,15 @@ export function noteOnWorkspaceQuarantine(
   return true;
 }
 
+/** Tree-rule failure containment (quarantine, CONTEXT.md): mark the workspace
+ *  needs-human (its tasks stay out of the slot) and put the repair in front of
+ *  the human as a 1-choice Confirmation question (issue #21) — the answer
+ *  isn't a choice between outcomes, it's a confirmation that repair happened,
+ *  verified before it clears needs-human (see answerQuestion in tasks.ts).
+ *  Name-only (issue #26 / ADR 0009): the trigger can be a tree-rule failure
+ *  (path known, folded into `cause`'s message) or an unknown workspace name
+ *  encountered at resolution time (no path to know) — both quarantine the
+ *  same way, keyed on the name alone. */
 export function quarantineWorkspace(
   db: Db,
   workspaceName: string,

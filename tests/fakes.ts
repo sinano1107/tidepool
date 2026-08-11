@@ -18,7 +18,7 @@ import type {
   RepoInvitation,
   RepoPermission,
   RepoRef,
-  RepoRepoRef,
+  RepoSlug,
   Repository,
 } from "../src/github.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
@@ -335,7 +335,7 @@ export class FakeGitHubClient implements GitHubClient {
     );
   }
 
-  async getRepositoryPermission(ref: RepoRepoRef): Promise<RepoPermission | null> {
+  async getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null> {
     this.repoAccessCalls++;
     return this.permissions.get(`${ref.owner}/${ref.name}`.toLowerCase()) ?? null;
   }

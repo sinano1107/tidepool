@@ -1,7 +1,7 @@
 /** ADR 0067: 到達に失敗した瞬間に、いま到達したい repo 宛ての招待1枚だけを受諾して
  *  直す —— その1手を成す seam と、直せなかったときの人間向けの案内。 */
 
-import type { GitHubClient, RepoPermission, RepoRepoRef } from "./github.js";
+import type { GitHubClient, RepoPermission, RepoSlug } from "./github.js";
 
 /** WRITE 以上か(ADR 0067 決定3)。合格条件を「見える」ではなく「書ける」に置くのが
  *  この issue の芯である —— `read` の招待は受諾も clone も通してしまい、失敗は PR 昇格
@@ -18,7 +18,7 @@ function canWrite(permission: RepoPermission | null): boolean {
  *  quarantine の解除)すべてがこの同じ規則を共有する。 */
 export async function ensureRepoAccess(
   github: GitHubClient,
-  ref: RepoRepoRef,
+  ref: RepoSlug,
 ): Promise<{ permission: RepoPermission | null; accepted: boolean }> {
   const permission = await github.getRepositoryPermission(ref);
   // 既に書けるなら受信箱は読まない —— 正常時に呼び出しを増やさない側の線でもある
@@ -39,7 +39,7 @@ export async function ensureRepoAccess(
  *  `gh api user --jq .login` の実測値であって定数ではない —— ずれると人間は違う相手を
  *  招待することになる。 */
 export function repoAccessGuidance(
-  ref: RepoRepoRef,
+  ref: RepoSlug,
   login: string,
   permission: RepoPermission | null,
 ): string {
@@ -56,6 +56,13 @@ export function repoAccessGuidance(
   );
 }
 
+/** 修復の結果: 受諾が起きたか(= 撃ち直す価値があるか)と、まだ書けないなら人間へ
+ *  渡す案内。`guidance` が null なら書けるようになっている。 */
+export interface RepoAccessRepair {
+  accepted: boolean;
+  guidance: string | null;
+}
+
 /** 3つの扉(登録の門 / pickup の失敗 / quarantine の解除)が共有する一手: 招待1枚で
  *  直せるなら直し、それでも書けなければ人間向けの案内を返す。書けるようになったなら
  *  `guidance` は null である。
@@ -64,8 +71,8 @@ export function repoAccessGuidance(
  *  増やさないのがこの issue の不変条件だからである。 */
 export async function repairRepoAccess(
   github: GitHubClient,
-  ref: RepoRepoRef,
-): Promise<{ accepted: boolean; guidance: string | null }> {
+  ref: RepoSlug,
+): Promise<RepoAccessRepair> {
   const { permission, accepted } = await ensureRepoAccess(github, ref);
   if (canWrite(permission)) return { accepted, guidance: null };
   return { accepted, guidance: repoAccessGuidance(ref, await github.login(), permission) };
@@ -90,8 +97,8 @@ export class RepoAccessMissingError extends Error {
  *
  *  ADR 0052 が拒んだのは URL の**綴りの照合**(ssh / https / ホスト名の別名を別物と
  *  読む誤検出)であって、owner/name の抽出は exact な操作なのでその族ではない。 */
-export function parseGitHubRepo(url: string): RepoRepoRef | undefined {
-  const match = url.match(GITHUB_REPO_RE);
+export function parseGitHubRepo(url: string | undefined): RepoSlug | undefined {
+  const match = url?.match(GITHUB_REPO_RE);
   return match ? { owner: match[1]!, name: match[2]! } : undefined;
 }
 

@@ -7,7 +7,7 @@ import { getPaceOffsets } from "./pace-offsets.js";
 import { isPaused } from "./pause.js";
 import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
-import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
+import { parseGitHubRepo, type RepoAccessRepair, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import {
@@ -199,9 +199,10 @@ export function startScheduler(deps: {
     task: Task,
     err: unknown,
   ): Promise<boolean> {
-    // `isRemoteBacked` と同じ問い(`repo` の有無)—— ここでは値そのものを使う
-    const ref = workspace.repo === undefined ? undefined : parseGitHubRepo(workspace.repo);
-    let repair: { accepted: boolean; guidance: string | null } | null = null;
+    // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
+    // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
+    const ref = parseGitHubRepo(workspace.repo);
+    let repair: RepoAccessRepair | null = null;
     if (github && ref) {
       try {
         repair = await repairRepoAccess(github, ref);
