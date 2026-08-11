@@ -1,4 +1,4 @@
-import { api, registerQuestion, registerWork } from "../tests/harness.js";
+import { HOUR, mcpClient, registerQuestion, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 // issue #230: エージェント著述の複数行散文が white-space の指定漏れで1行に
@@ -44,10 +44,11 @@ test("decision log のエントリが空行とインデントを含む複数行�
   page,
 }) => {
   const t = await boot();
-  const work = await registerWork(t, "pre-wrap の適用範囲を決める", undefined, false, "human");
-  await api(t.baseUrl, "POST", `/api/tasks/${work.id}/complete`, {
-    handoff: { outcome: MULTILINE_DECISION },
-  });
+  const work = await registerWork(t, "pre-wrap の適用範囲を決める");
+  await t.clock.advance(HOUR);
+  const client = await mcpClient(t.mcpBaseUrl, work.id);
+  await client.callTool({ name: "log_decision", arguments: { line: MULTILINE_DECISION } });
+  await client.close();
 
   await page.goto(t.baseUrl);
   const entry = page.getByText("全面 pre-wrap を採用し、markdown は描かない。");
