@@ -284,7 +284,7 @@ async function buildEntry(
 }
 
 /** ADR 0066 決定1 の create モードの外部半分: GitHub に一切出ず、規約由来の場所
- *  (ADR 0018)に `mkdir` + `git init -b main` + 初期コミットで checkout を作る。
+ *  (ADR 0018)に `git init -b main` + 初期コミットで checkout を作る。
  *
  *  `-b main` は明示が必須である — ホストの `init.defaultBranch` は盤面の管理下に
  *  なく、`master` の環境では初期ブランチ名が保護ブランチの既定(`main`)とずれて
@@ -314,8 +314,8 @@ function createLocalCheckout(name: string, deps: CreateWorkspaceDeps): Workspace
  *    撃つ相手そのものが無い。ここは通す側で、clone は今日どおり素の git に委ねる
  *  - 非 GitHub の URL —— `clone` の入力欄は「anything git clone accepts」であり、
  *    `parseGitHubRepo` の `undefined` がそのままこの門になる(決定1)
- *  - `create` モード —— 自分が今作った repo なので probe する相手がいない(この関数を
- *    呼ぶのは clone モードだけ)
+ *  - `create` モード —— GitHub に一切出ない(ADR 0066 決定1)ので probe する相手が
+ *    そもそも無い(この関数を呼ぶのは clone モードだけ)
  *
  *  `register` モードにも置かない(決定3 の非対称): 既にホスト上にある checkout の
  *  登録に probe を足すと、登録の門が全モードでネットワークを要求することになる。 */

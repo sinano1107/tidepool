@@ -87,8 +87,19 @@ describe("createWorkspace: 新規作成モード(issue #57 / ADR 0066)", () => {
   it("初期ブランチは main — ホストの init.defaultBranch に依存しない", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-
-    await createWorkspace({ mode: "create", name: "lagoon" }, deps);
+    // ホストの init.defaultBranch を master に振っておく —— -b main が実装から
+    // 抜けても既定が main のホストでは緑のままなので、判別力を持たせるには
+    // 既定を master 側にずらして確かめる必要がある
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "init.defaultbranch";
+    process.env.GIT_CONFIG_VALUE_0 = "master";
+    try {
+      await createWorkspace({ mode: "create", name: "lagoon" }, deps);
+    } finally {
+      delete process.env.GIT_CONFIG_COUNT;
+      delete process.env.GIT_CONFIG_KEY_0;
+      delete process.env.GIT_CONFIG_VALUE_0;
+    }
 
     const checkoutDir = join(deps.workspacesBaseDir, "lagoon");
     expect(git(checkoutDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");

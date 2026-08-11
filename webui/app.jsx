@@ -1617,7 +1617,7 @@ function NewWorkspaceForm({ say, onCreated, edit }) {
   };
   const modeOptions = [
     { value: 'clone', label: 'clone a repository' },
-    { value: 'create', label: 'create a new private repository' },
+    { value: 'create', label: 'create a new local checkout' },
     { value: 'register', label: 'register an existing path' },
   ];
   const modeHint = {
