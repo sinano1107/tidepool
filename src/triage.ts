@@ -90,7 +90,7 @@ export function closeStaleTriage(db: Db, now: Date): boolean {
   const open = activeTriageSession(db);
   if (!open) return false;
   if (now.getTime() - Date.parse(open.last_activity_at) < TRIAGE_TIMEOUT) return false;
-  commitTriage(db, now, [], "timeout");
+  closeTriageSessionOnly(db, now, "timeout");
   return true;
 }
 
@@ -433,13 +433,44 @@ export function triagePreview(
   return [...fronts, ...rest];
 }
 
-/** Close the open session and apply everything it staged in one transaction.
- *  The caller fires the immediate poll — pickup resumes only through it. */
+/** Apply the steering held by one session and record who closed it.
+ *  Callers own the transaction so Commit can include scratchpad dispositions. */
+function closeTriageSession(
+  db: Db,
+  open: TriageSession,
+  now: Date,
+  closedBy: "commit" | "timeout",
+): void {
+  bundleObjections(db, open.id, now);
+  // apply in reverse staging order so the first-staged task ends up on top
+  for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
+    const task = getTask(db, taskId);
+    if (task && task.status === "todo") moveTask(db, task, null, now);
+  }
+  db.prepare("UPDATE triage_sessions SET committed_at = ?, closed_by = ? WHERE id = ?").run(
+    now.toISOString(),
+    closedBy,
+    open.id,
+  );
+}
+
+/** Close a live session without performing the rest of the Triage terminal. */
+export function closeTriageSessionOnly(
+  db: Db,
+  now: Date,
+  closedBy: "commit" | "timeout" = "commit",
+): TriageCommitResult {
+  const open = activeTriageSession(db);
+  if (!open) return { outcome: "no_open_session", closed_at: null };
+  db.transaction(() => closeTriageSession(db, open, now, closedBy))();
+  return { outcome: "closed_now", closed_at: now.toISOString() };
+}
+
+/** End the Triage: apply scratchpad dispositions and close a live session. */
 export function commitTriage(
   db: Db,
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
-  closedBy: "commit" | "timeout" = "commit",
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) {
@@ -462,18 +493,8 @@ export function commitTriage(
       : { outcome: "no_open_session", closed_at: null };
   }
   db.transaction(() => {
-    bundleObjections(db, open.id, now);
     applyScratchpad(db, scratchpad, now);
-    // apply in reverse staging order so the first-staged task ends up on top
-    for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
-      const task = getTask(db, taskId);
-      if (task && task.status === "todo") moveTask(db, task, null, now);
-    }
-    db.prepare("UPDATE triage_sessions SET committed_at = ?, closed_by = ? WHERE id = ?").run(
-      now.toISOString(),
-      closedBy,
-      open.id,
-    );
+    closeTriageSession(db, open, now, "commit");
   })();
   return { outcome: "closed_now", closed_at: now.toISOString() };
 }

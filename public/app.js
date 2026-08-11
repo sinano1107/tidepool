@@ -2726,7 +2726,7 @@ function App() {
         scratchpad: scratch.filter((s) => typeof s.id === "number").map((s) => ({ id: s.id, disposition: s.kind }))
       });
     } catch (err) {
-      refreshFull();
+      refresh();
       say(
         "danger",
         "triage commit failed \u2014 nothing applied, cursor NOT advanced",
@@ -2775,8 +2775,8 @@ function App() {
   };
   const closeTriageSession = async () => {
     try {
-      const result = await api("/api/triage/commit", { scratchpad: [] });
-      await refreshFull();
+      const result = await api("/api/triage/commit", { close_only: true });
+      await refresh();
       if (result.outcome === "closed_now") {
         say("success", "triage session closed", "pickup resumed \xB7 immediate poll fired");
       } else {

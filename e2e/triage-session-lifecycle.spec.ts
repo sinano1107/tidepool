@@ -99,6 +99,7 @@ test("タイムアウト済みの Triage は閉じた時刻と適用済みの操
   page,
 }) => {
   const t = await boot();
+  await completeAgentWork(t, "timeout 前に表示したログ");
   registerQuestion(t, {
     title: "timeout question",
     purpose: "open a triage session",
@@ -111,9 +112,22 @@ test("タイムアウト済みの Triage は閉じた時刻と適用済みの操
   await expect
     .poll(async () => (await api(t.baseUrl, "GET", "/api/triage")).json.session)
     .not.toBe(null);
-  await t.clock.advance(TRIAGE_TIMEOUT);
 
-  await page.getByRole("button", { name: "Log skim" }).click();
+  // Refresh once while the session is live so the banner and frozen log
+  // snapshot are both present before the timeout races the stale screen.
+  await page.getByRole("button", { name: "queue", exact: true }).click();
+  await expect(page.getByRole("button", { name: "close triage session" })).toBeVisible();
+  await page.getByRole("button", { name: /^triage/ }).click();
+  const frozenLastLogId = (await api(t.baseUrl, "GET", "/api/log")).json.entries.at(-1).id;
+
+  await t.clock.advance(TRIAGE_TIMEOUT);
+  await completeAgentWork(t, "timeout 後に届いた未表示ログ");
+
+  // The still-rendered banner only closes a live session. It must neither
+  // consume the timeout notice nor replace this Triage's frozen log snapshot.
+  await page.getByRole("button", { name: "close triage session" }).click();
+  await expect(page.getByText("triage session was already closed")).toBeVisible();
+
   await page.getByRole("button", { name: "Queue check" }).click();
   await page.getByRole("button", { name: "Commit" }).click();
 
@@ -121,6 +135,7 @@ test("タイムアウト済みの Triage は閉じた時刻と適用済みの操
   await expect(
     page.getByText(/session closed at \d{2}:\d{2}; staged steering was already applied/),
   ).toBeVisible();
+  expect((await api(t.baseUrl, "GET", "/api/log")).json.cursor).toBe(frozenLastLogId);
 });
 
 test("開いているセッションを Triage の Commit が今閉じたと伝える(#279)", async ({
@@ -152,7 +167,9 @@ test("本物の commit 失敗では既読カーソルを進めない(#279)", asy
 
   await page.goto(t.baseUrl);
   const cursorBefore = (await api(t.baseUrl, "GET", "/api/log")).json.cursor;
+  const frozenLastLogId = (await api(t.baseUrl, "GET", "/api/log")).json.entries.at(-1).id;
   await page.getByRole("button", { name: "Queue check" }).click();
+  await completeAgentWork(t, "失敗後の再試行で未表示のまま残すログ");
   await page.route("**/api/triage/commit", (route) =>
     route.fulfill({
       status: 500,
@@ -167,6 +184,13 @@ test("本物の commit 失敗では既読カーソルを進めない(#279)", asy
     page.getByText("triage commit failed — nothing applied, cursor NOT advanced"),
   ).toBeVisible();
   expect((await api(t.baseUrl, "GET", "/api/log")).json.cursor).toBe(cursorBefore);
+
+  await page.unroute("**/api/triage/commit");
+  await page.getByRole("button", { name: "Commit" }).click();
+  await expect(page.getByText("triage committed — no session was open")).toBeVisible();
+  await expect
+    .poll(async () => (await api(t.baseUrl, "GET", "/api/log")).json.cursor)
+    .toBe(frozenLastLogId);
 });
 
 test("agent の未読より新しい human エントリも既読 fold に残る(#279)", async ({

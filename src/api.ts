@@ -75,6 +75,7 @@ import { listTranslationUsage } from "./translation-cache.js";
 import {
   activeTriageSession,
   addScratchpadLine,
+  closeTriageSessionOnly,
   commitTriage,
   consumePendingDump,
   listPendingDumps,
@@ -416,6 +417,7 @@ const displayedSchema = z.object({
 });
 
 const commitSchema = z.object({
+  close_only: z.boolean().default(false),
   scratchpad: z
     .array(
       z.object({
@@ -1487,7 +1489,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const result = commitTriage(db, clock.now(), parsed.data.scratchpad);
+      const result = parsed.data.close_only
+        ? closeTriageSessionOnly(db, clock.now())
+        : commitTriage(db, clock.now(), parsed.data.scratchpad);
       // Only closing an open session re-opens pickup. A sessionless triage
       // never stopped it, so its terminal commit is not a "run now" trigger.
       if (result.outcome === "closed_now") onQueueHeadChanged();

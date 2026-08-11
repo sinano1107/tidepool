@@ -218,9 +218,14 @@ it("タイムアウトで閉じたセッションを次の commit が一度だ�
   await t.clock.advance(TRIAGE_TIMEOUT);
   await registerWork(t, "natural poll を待つ work");
 
+  const closeOnly = await api(t.baseUrl, "POST", "/api/triage/commit", { close_only: true });
   const first = await api(t.baseUrl, "POST", "/api/triage/commit");
   const second = await api(t.baseUrl, "POST", "/api/triage/commit");
 
+  expect(closeOnly).toMatchObject({
+    status: 200,
+    json: { outcome: "no_open_session", closed_at: null },
+  });
   expect(first).toMatchObject({
     status: 200,
     json: { outcome: "already_closed_by_timeout", closed_at: expectedClosedAt },

@@ -152,9 +152,9 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
         })),
       };
     });
-  // newest first for the skim; unread = beyond the read cursor. workspace
-  // grouping/fold (issue #44) is pure view derivation the kit does itself
-  // from this flat, order-independent list — see triage-screen.jsx.
+  // newest first for the skim; unread is the server's cursor + authorship
+  // decision. workspace grouping/fold (issue #44) is pure view derivation the
+  // kit does itself from this flat, order-independent list — see triage-screen.jsx.
   const logEntries = [...log.entries].reverse().map((e) => ({
     id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
     agentIcon: icons[e.worker_id], human: e.worker_id === 'human',
@@ -2584,7 +2584,7 @@ function App() {
           .map((s) => ({ id: s.id, disposition: s.kind })),
       });
     } catch (err) {
-      refreshFull();
+      refresh();
       say('danger', 'triage commit failed — nothing applied, cursor NOT advanced',
         String(err.message || err));
       return;
@@ -2633,8 +2633,8 @@ function App() {
   // or advances the decision-log cursor.
   const closeTriageSession = async () => {
     try {
-      const result = await api('/api/triage/commit', { scratchpad: [] });
-      await refreshFull();
+      const result = await api('/api/triage/commit', { close_only: true });
+      await refresh();
       if (result.outcome === 'closed_now') {
         say('success', 'triage session closed', 'pickup resumed · immediate poll fired');
       } else {
