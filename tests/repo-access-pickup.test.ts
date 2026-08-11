@@ -65,6 +65,14 @@ it("受諾しても WRITE 未満なら、元の原因に案内を連ねて quara
   expect(reason).toContain(
     "gh api -X PUT repos/sinano1107/tidepool/collaborators/tidepool-bot -f permission=push",
   );
+  // ADR 0067 決定7: 受諾した事実は、いま立った確認 question のイベントとして残る
+  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question",
+  );
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
+  expect(
+    events.some((e: any) => e.payload.cause?.includes("accepted a pending repository invitation")),
+  ).toBe(true);
 });
 
 it("招待が1枚も無ければ受諾は起きず、案内だけを添えて quarantine に落ちる", async () => {
