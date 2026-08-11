@@ -54,6 +54,7 @@ import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
   GitHubIdentityMissingError,
+  NotAGitRepositoryError,
   RegistrySelfUnprotectError,
   type WorkspaceAdmin,
   WorkspaceConfirmationRequiredError,
@@ -130,6 +131,7 @@ function registryToolError(err: unknown) {
     err instanceof InvalidWorkspaceNameError ||
     err instanceof BoardStateOverlapError ||
     err instanceof RepoAccessMissingError ||
+    err instanceof NotAGitRepositoryError ||
     err instanceof UnknownWorkspaceError ||
     err instanceof WorkspaceConfirmationRequiredError ||
     err instanceof RegistrySelfUnprotectError ||

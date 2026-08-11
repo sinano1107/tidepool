@@ -1911,7 +1911,7 @@ function NewWorkspaceForm({ say, onCreated, edit }) {
   ];
   const modeHint = {
     clone: "clones into the workspaces directory \u2014 the entry stays host-independent",
-    create: "creates a private GitHub repo named after the workspace, then clones it",
+    create: "creates a fresh, purely-local git checkout \u2014 nothing touches GitHub",
     register: "points at a checkout already on this host \u2014 the one mode that records a path"
   }[mode];
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "add a workspace"), /* @__PURE__ */ React.createElement(Select, { label: "Mode", options: modeOptions, value: mode, onChange: (e) => setMode(e.target.value) }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, modeHint), /* @__PURE__ */ React.createElement(

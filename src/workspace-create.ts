@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
@@ -19,6 +19,7 @@ import {
   git,
   originUrl,
   resolvesToRegistryClone,
+  TIDEPOOL_GIT_IDENTITY,
   UnknownWorkspaceError,
 } from "./workspace.js";
 
@@ -78,8 +79,10 @@ export interface WorkspaceAdminDeps {
 }
 
 export interface CreateWorkspaceDeps extends WorkspaceAdminDeps {
-  /** Absent (no board GitHub identity, ADR 0024) → the create mode, the one
-   *  verb that must call GitHub's API, refuses; register/clone still work. */
+  /** Absent (no board GitHub identity, ADR 0024) → clone's repo-access probe
+   *  (ADR 0067 決定2) is skipped, same as today's behavior. `create` no longer
+   *  needs a GitHub identity at all (ADR 0066 決定1); this dep survives S1
+   *  solely as `clone`'s consumer — see issue #284 やること2. */
   github?: GitHubClient;
 }
 
@@ -96,10 +99,9 @@ export interface WorkspaceAdmin {
   update: UpdateWorkspaceFn;
 }
 
-/** The create mode was requested while the board has no GitHub identity
- *  (ADR 0024's fail-closed absence): creating a repository is the one
- *  workspace verb that must call GitHub's API, so it refuses — register and
- *  clone still work. */
+/** ADR 0066 決定1 以降、create モードは GitHub 身元を要求しない — このエラーは
+ *  今日どこからも投げられていない。スライス2(`publish`)がここへ移す予定で、
+ *  クラス自体の去就はそれまで保留する(issue #284)。 */
 export class GitHubIdentityMissingError extends Error {
   constructor() {
     super("workspace create mode needs the board's GitHub identity (TIDEPOOL_GITHUB_TOKEN_FILE)");
@@ -268,10 +270,7 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
 }
 
-/** Each mode's external half, ordered so the registry commit stays last.
- *  The create mode is the clone mode with one extra step in front: ensure
- *  the repository exists (reusing a same-name one — idempotent retry), then
- *  both funnel into the same checkout-and-describe path. */
+/** Each mode's external half, ordered so the registry commit stays last. */
 async function buildEntry(
   input: CreateWorkspaceInput,
   deps: CreateWorkspaceDeps,
@@ -281,10 +280,30 @@ async function buildEntry(
     await assertClonableRepoAccess(input.repo, deps);
     return cloneAndDescribe(input.name, input.repo, deps);
   }
-  if (!deps.github) throw new GitHubIdentityMissingError();
-  const existing = await deps.github.getRepository(input.name);
-  const repository = existing ?? (await deps.github.createRepository(input.name));
-  return cloneAndDescribe(input.name, repository.url, deps);
+  return createLocalCheckout(input.name, deps);
+}
+
+/** ADR 0066 決定1 の create モードの外部半分: GitHub に一切出ず、規約由来の場所
+ *  (ADR 0018)に `mkdir` + `git init -b main` + 初期コミットで checkout を作る。
+ *
+ *  `-b main` は明示が必須である — ホストの `init.defaultBranch` は盤面の管理下に
+ *  なく、`master` の環境では初期ブランチ名が保護ブランチの既定(`main`)とずれて
+ *  `ensureTaskBranch`(workspace.ts)が pickup 時に落ちる。初期コミットが要るのは
+ *  同じ理由で、空リポジトリには `main` が存在しない。`repo` を書かないため、生まれる
+ *  workspace は構造的に purely-local である(ADR 0052 決定3)。 */
+function createLocalCheckout(name: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
+  const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
+  // idempotent retry (issue #57): 規約どおりの場所に既にある checkout は、前回
+  // registry コミット直前で失敗した孤児 —— 済んだ手順として流用する(clone
+  // モードの cloneAndDescribe と同じ形)
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+    git(dir, "init", "-b", "main");
+    writeFileSync(join(dir, "README.md"), `# ${name}\n`);
+    git(dir, "add", "-A");
+    git(dir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", "initial commit");
+  }
+  return {};
 }
 
 /** 登録の門(ADR 0067 決定2): clone を撃つ**前**に、その repo に盤面が書けることを
@@ -307,6 +326,17 @@ async function assertClonableRepoAccess(repo: string, deps: CreateWorkspaceDeps)
   if (guidance) throw new RepoAccessMissingError(guidance);
 }
 
+/** The registration gate refused a `register` path that is not a git
+ *  repository (ADR 0066 決定7): `repo` is written as an **observation made at
+ *  registration time** (ADR 0052 決定3), and an object that cannot be observed
+ *  must not get a written declaration in its place. */
+export class NotAGitRepositoryError extends Error {
+  constructor(public readonly path: string) {
+    super(`${path} is not a git repository`);
+    this.name = "NotAGitRepositoryError";
+  }
+}
+
 /** The register mode's half: the entry records the explicit host path, plus the
  *  checkout's own `origin` URL as its **remote-source-of-truth declaration**
  *  (ADR 0052 決定3 / issue #211). Reading it here is what makes the declaration a
@@ -316,11 +346,22 @@ async function assertClonableRepoAccess(repo: string, deps: CreateWorkspaceDeps)
  *
  *  No remote → no `repo`: a checkout that is nobody's clone is a legitimate,
  *  purely-local workspace, and writing `repo` anyway would manufacture exactly
- *  the declaration/reality mismatch that pickup quarantines. A path that isn't a
- *  git repository at all lands here too — the registration gate has never
- *  validated that (a checkout can be placed after the entry), so the absent
- *  declaration is the honest one to write. */
+ *  the declaration/reality mismatch that pickup quarantines.
+ *
+ *  **The path must be a git repository at all** (ADR 0066 決定7 — the previous
+ *  justification for skipping this, "a checkout can be placed after the entry",
+ *  is withdrawn). The check is just `git -C <path> rev-parse --git-dir`'s
+ *  success, same shape as ADR 0040's overlap gate: the gate refuses, the floor
+ *  stays at pickup. Without it, registering an unobservable path would write
+ *  the "no repo" default not as an observation but as a guess — and a human
+ *  placing a remote-backed clone there later would make declaration and
+ *  reality disagree, the exact mismatch pickup quarantines. */
 function registerExistingCheckout(path: string): WorkspaceEntry {
+  try {
+    git(path, "rev-parse", "--git-dir");
+  } catch {
+    throw new NotAGitRepositoryError(path);
+  }
   const repo = originUrl(path);
   return repo === undefined ? { path } : { path, repo };
 }
