@@ -33,6 +33,7 @@ import {
   isRemoteBacked,
   lineageTaskBranch,
   protectedBranch,
+  rebaselineRef,
   releaseWorkspace,
   resolveOrQuarantine,
   taskBranch,
@@ -183,13 +184,21 @@ export async function promoteHandoffPr(
   // (rowToTask) — the PR title is another of ADR 0016's real use-moments,
   // so it resolves the live issue instead when there is one.
   const { title } = await contentSourceFor(task, deps.github, () => workspace.path).expand();
-  const pr = await deps.github.createPullRequest({
-    path: workspace.path,
-    branch: taskBranch(task.id),
-    base: protectedBranch(workspace),
-    title,
-    body: prBody(task.handoff_doc, task.github_issue_number),
-  });
+  let pr: Awaited<ReturnType<typeof deps.github.createPullRequest>>;
+  try {
+    pr = await deps.github.createPullRequest({
+      path: workspace.path,
+      branch: taskBranch(task.id),
+      base: protectedBranch(workspace),
+      title,
+      body: prBody(task.handoff_doc, task.github_issue_number),
+    });
+  } finally {
+    // ADR 0064 決定4: 昇格は `refs/remotes/origin/task/<id>` を1本動かす。`gh pr create`
+    // が落ちても push は先に済んでいるので、失敗経路でも撃たなければ次の解放が
+    // 盤面自身の push を違反として読む
+    rebaselineRef(deps.db, workspace, `refs/remotes/origin/${taskBranch(task.id)}`);
+  }
   recordPrOpened(
     deps.db,
     task,

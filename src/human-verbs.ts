@@ -28,7 +28,9 @@ import { stageFrontInsert, triageActivity } from "./triage.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
+  protectedBranch,
   quarantineWorkspace,
+  rebaselineRef,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
   type WorkspaceConfig,
@@ -354,6 +356,13 @@ export async function submitAnswer(
     );
     try {
       mergeTaskToProtected(mergeWorkspace, localMergeTaskId);
+      // ADR 0064 決定4: 盤面が書いた ref の**行だけ**を撮り直す。走っているセッションの
+      // 解放が、盤面自身のこの書き込みを違反として読まないために要る
+      rebaselineRef(
+        deps.db,
+        mergeWorkspace,
+        `refs/heads/${protectedBranch(mergeWorkspace)}`,
+      );
     } catch (err) {
       quarantineWorkspace(deps.db, mergeWorkspace.name, err, now());
       throw new DomainError(err instanceof Error ? err.message : String(err));
