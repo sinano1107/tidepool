@@ -75,6 +75,7 @@ import { listTranslationUsage } from "./translation-cache.js";
 import {
   activeTriageSession,
   addScratchpadLine,
+  closeTriageSessionOnly,
   commitTriage,
   consumePendingDump,
   listPendingDumps,
@@ -416,6 +417,7 @@ const displayedSchema = z.object({
 });
 
 const commitSchema = z.object({
+  close_only: z.boolean().default(false),
   scratchpad: z
     .array(
       z.object({
@@ -1254,7 +1256,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // the decision log: events narrowed to human-facing kinds, oldest first,
   // plus the human's read position
   router.get("/log", (_req, res) => {
-    res.json({ entries: listLog(db, workspace?.name), cursor: getLogCursor(db) });
+    const cursor = getLogCursor(db);
+    const entries = listLog(db, workspace?.name).map((entry) => ({
+      ...entry,
+      // A human-authored entry remains in the log and can still be objected
+      // to, but it is never new information to that same single human.
+      unread: entry.worker_id !== HUMAN_WORKER_ID && entry.id > cursor,
+    }));
+    res.json({ entries, cursor });
   });
 
   router.post("/log/cursor", (req, res) => {
@@ -1413,14 +1422,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   router.get("/triage", (_req, res) => {
     const session = activeTriageSession(db);
-    if (!session) {
-      res.json({ session: null, queue: null, scratchpad: null });
-      return;
-    }
     res.json({
-      session,
-      queue: triagePreview(db, session.id, defaultAgentName, auditorName),
-      scratchpad: listScratchpad(db, session.id),
+      session: session ?? null,
+      queue: triagePreview(db, session?.id, defaultAgentName, auditorName),
+      scratchpad: listScratchpad(db),
     });
   });
 
@@ -1484,10 +1489,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const session = commitTriage(db, clock.now(), parsed.data.scratchpad);
-      // committing re-opens pickup and is itself the "run now" trigger
-      onQueueHeadChanged();
-      res.json(session);
+      const result = parsed.data.close_only
+        ? closeTriageSessionOnly(db, clock.now())
+        : commitTriage(db, clock.now(), parsed.data.scratchpad);
+      // Only closing an open session re-opens pickup. A sessionless triage
+      // never stopped it, so its terminal commit is not a "run now" trigger.
+      if (result.outcome === "closed_now") onQueueHeadChanged();
+      res.json(result);
     } catch (err) {
       if (err instanceof TriageError) {
         res.status(409).json({ error: err.message });

@@ -249,10 +249,9 @@ const NO_WORKSPACE_LABEL = 'no workspace';
 
 // Groups `data.log` by workspace, sorted groups-with-unread-first (most
 // recent unread first), then fully-read groups (most recent entry first).
-// Within a group, entries are chronological (oldest first) — because the
-// read cursor is a single forward-only watermark, read entries are always
-// exactly the group's oldest-side prefix, so there is exactly one fold per
-// group (the caller decides how much of that prefix to reveal).
+// Within a group, read and unread entries are each chronological. Human-authored
+// entries are read regardless of their id, so the two sets are partitioned by
+// the server verdict rather than inferred as two sides of the cursor.
 //
 // Each entry is stamped with `chronoKey` (its sort order) and `sourceIndex`
 // (its position in the input array) — `logKey` below falls back to
@@ -271,12 +270,14 @@ function groupLogEntries(entries) {
   const groups = [...byWorkspace.entries()].map(([key, groupEntries]) => {
     const sorted = groupEntries.slice().sort((a, b) => a.chronoKey - b.chronoKey);
     const unreadEntries = sorted.filter((l) => l.unread);
+    const readEntries = sorted.filter((l) => !l.unread);
     return {
       key,
       label: key || NO_WORKSPACE_LABEL,
-      entries: sorted,
+      readEntries,
+      unreadEntries,
       unreadCount: unreadEntries.length,
-      readCount: sorted.length - unreadEntries.length,
+      readCount: readEntries.length,
       mostRecentUnread: unreadEntries.length ? Math.max(...unreadEntries.map((l) => l.chronoKey)) : null,
       mostRecent: Math.max(...sorted.map((l) => l.chronoKey)),
     };
@@ -301,7 +302,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [objections, setObjections] = React.useState({});
   const [objecting, setObjecting] = React.useState(null);
   const [draft, setDraft] = React.useState('');
-  const [scratch, setScratch] = React.useState([]);       // [{ id, text }]
+  const [scratch, setScratch] = React.useState(data.scratchpad ?? []); // [{ id, text }]
   const [dropped, setDropped] = React.useState([]);       // persisted lines removed in-UI → discard at commit
   const [scratchKinds, setScratchKinds] = React.useState({}); // keyed by line id
   const scratchSeq = React.useRef(0);
@@ -399,7 +400,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     for (const g of logGroups) {
       const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
       const hiddenCount = g.readCount - revealed;
-      rendered.push(...g.entries.slice(hiddenCount, g.readCount), ...g.entries.slice(g.readCount));
+      rendered.push(...g.readEntries.slice(hiddenCount), ...g.unreadEntries);
     }
     return rendered;
   }, [logGroups, revealedRead]);
@@ -630,8 +631,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
               {logGroups.map((g) => {
                 const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
                 const hiddenCount = g.readCount - revealed;
-                const visibleReadEntries = g.entries.slice(hiddenCount, g.readCount);
-                const unreadEntries = g.entries.slice(g.readCount);
+                const visibleReadEntries = g.readEntries.slice(hiddenCount);
+                const unreadEntries = g.unreadEntries;
                 return (
                   <div key={g.key} style={{ background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '8px 12px', background: 'var(--surface-recessed)', borderBottom: '1px solid var(--border-hairline)' }}>
@@ -732,7 +733,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       <TpScratchpad lines={scratch} onAdd={addScratch} onRemove={removeScratch} />
       {section === 2 && (
         <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textAlign: 'center', marginTop: 12 }}>
-          commit applies everything in one transaction · immediate poll if slot free
+          commit applies scratchpad dispositions and advances the read cursor
         </p>
       )}
     </div>
