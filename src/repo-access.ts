@@ -6,7 +6,7 @@ import type { GitHubClient, RepoPermission, RepoRepoRef } from "./github.js";
 /** WRITE 以上か(ADR 0067 決定3)。合格条件を「見える」ではなく「書ける」に置くのが
  *  この issue の芯である —— `read` の招待は受諾も clone も通してしまい、失敗は PR 昇格
  *  という遠い場所に出る(実測4)。`null`(見えない)も当然 false。 */
-export function canWrite(permission: RepoPermission | null): boolean {
+function canWrite(permission: RepoPermission | null): boolean {
   return permission === "WRITE" || permission === "MAINTAIN" || permission === "ADMIN";
 }
 
@@ -90,7 +90,7 @@ export class RepoAccessMissingError extends Error {
  *
  *  ADR 0052 が拒んだのは URL の**綴りの照合**(ssh / https / ホスト名の別名を別物と
  *  読む誤検出)であって、owner/name の抽出は exact な操作なのでその族ではない。 */
-export function parseGitHubRepo(url: string): { owner: string; name: string } | undefined {
+export function parseGitHubRepo(url: string): RepoRepoRef | undefined {
   const match = url.match(GITHUB_REPO_RE);
   return match ? { owner: match[1]!, name: match[2]! } : undefined;
 }
