@@ -23,12 +23,14 @@ import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import type {
-  AuthorityProfile,
-  RegistryCandidates,
-  RegistryReachabilityCheck,
-  RegistrySource,
-  RosterAgent,
+import {
+  type AuthorityProfile,
+  REGISTRY_BRANCH,
+  type RegistryCandidates,
+  type RegistryReachabilityCheck,
+  type RegistrySource,
+  type RosterAgent,
+  remoteTrackingRef,
 } from "./registry.js";
 import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
@@ -38,8 +40,60 @@ import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
-import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
+import {
+  buildWorkspaceResolver,
+  pathIsRegistryClone,
+  rebaselineRef,
+  type WorkspaceConfig,
+} from "./workspace.js";
 import type { WorkspaceAdmin } from "./workspace-create.js";
+
+/** ADR 0064 決定4 の再基準化のうち、**registry clone を触る経路**ぶん。動く ref は
+ *  `mode` で1本に決まる —— remote-backed の fetch も push も
+ *  `refs/remotes/origin/<REGISTRY_BRANCH>` を、purely-local の `update-ref` は
+ *  `refs/heads/<REGISTRY_BRANCH>` を動かす —— ので、包むのは「registry を書く/読む
+ *  口」だけでよく、経路ごとに綴りを持ち回る必要がない。
+ *
+ *  組めるのはここだけである: `db` は `startServer` が開き、registry の宣言と登録済み
+ *  workspace の列挙は options として届く。registry clone が workspace として登録されて
+ *  いなければ撮り直す先が無いので no-op になる(ADR 0064 決定4 の条件列)。 */
+function registryRebaseliner(db: Db, options: ServerOptions): () => void {
+  const registry = options.registry;
+  const listWorkspaces = options.boardState?.listWorkspaces;
+  if (!registry || !listWorkspaces) return () => {};
+  const ref =
+    registry.mode === "remote-backed"
+      ? remoteTrackingRef(REGISTRY_BRANCH)
+      : `refs/heads/${REGISTRY_BRANCH}`;
+  return () => {
+    // 列挙は投げうる(口の定義どおり)。撃つのが finally の中なので、ここで漏らすと
+    // 盤面の書き込みが返した値や、その書き込み自身が投げた本当の失敗を置き換えてしまう。
+    // 撮り直せなかった結果は次の解放が誤検知の quarantine として loud に出す
+    try {
+      const workspace = listWorkspaces().find((w) => pathIsRegistryClone(w.path, registry.dir));
+      if (workspace) rebaselineRef(db, workspace, ref);
+    } catch (err) {
+      console.warn("[workspace] registry ref rebaseline skipped (non-fatal)", err);
+    }
+  };
+}
+
+/** 盤面の書き込みが**失敗しても** ref は既に動いている(入口の fetch は済んでいて
+ *  push が落ちた、など)ので finally で撃つ。admin verb(入力1つ・戻り値なし)と
+ *  reachability(入力なし・到達性を返す)の両方が同じ1つの綴りを共有する。 */
+function rebaselineAfter<A extends unknown[], R>(
+  call: ((...args: A) => Promise<R>) | undefined,
+  rebaseline: () => void,
+): ((...args: A) => Promise<R>) | undefined {
+  if (!call) return undefined;
+  return async (...args) => {
+    try {
+      return await call(...args);
+    } finally {
+      rebaseline();
+    }
+  };
+}
 
 /** The real adapter needs the board's own db and clock, which are created in
  *  here — so the worker arrives as a factory fed with them. */
@@ -204,6 +258,27 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
+  // ADR 0064 決定4: registry clone の ref を動かす口を1本残らず包む。3つの admin verb
+  // (入口の fetch と着地の push / update-ref)と、回答時の reachability の再 fetch ——
+  // どれもセッション実行中に人間面から入りうるので、包み忘れた口は無実のセッションを
+  // quarantine する形で(静かにではなく)露見する。
+  const rebaselineRegistry = registryRebaseliner(db, options);
+  const workspaceAdmin = options.workspaceAdmin && {
+    ...options.workspaceAdmin,
+    create: rebaselineAfter(options.workspaceAdmin.create, rebaselineRegistry),
+    update: rebaselineAfter(options.workspaceAdmin.update, rebaselineRegistry),
+  };
+  const agentAdmin = options.agentAdmin && {
+    ...options.agentAdmin,
+    create: rebaselineAfter(options.agentAdmin.create, rebaselineRegistry),
+    update: rebaselineAfter(options.agentAdmin.update, rebaselineRegistry),
+  };
+  const profileAdmin = options.profileAdmin && {
+    ...options.profileAdmin,
+    create: rebaselineAfter(options.profileAdmin.create, rebaselineRegistry),
+    update: rebaselineAfter(options.profileAdmin.update, rebaselineRegistry),
+  };
+  const registryReachability = rebaselineAfter(options.registryReachability, rebaselineRegistry);
   // ADR 0052 決定2 の起動時 refresh は**ここには無い**。合成 root
   // (`buildServerOptions`)が registry を読む前に撃つ —— そこより後ろに置くと、
   // remote-tracking ref が欠けた盤面では合成側の読みが先に落ち、fail-open が
@@ -278,7 +353,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     github: options.github,
     fableAgents: options.fableAgents,
     containment,
-    registryReachability: options.registryReachability,
+    registryReachability,
     githubAuth: options.githubAuth,
     registry: options.registry,
   });
@@ -362,12 +437,12 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
       containment,
-      registryReachability: options.registryReachability,
+      registryReachability,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
-      workspaceAdmin: options.workspaceAdmin,
-      agentAdmin: options.agentAdmin,
-      profileAdmin: options.profileAdmin,
+      workspaceAdmin,
+      agentAdmin,
+      profileAdmin,
       hostSkills: options.hostSkills,
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
@@ -393,12 +468,12 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
       containment,
-      registryReachability: options.registryReachability,
+      registryReachability,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
-      workspaceAdmin: options.workspaceAdmin,
-      agentAdmin: options.agentAdmin,
-      profileAdmin: options.profileAdmin,
+      workspaceAdmin,
+      agentAdmin,
+      profileAdmin,
     }),
   );
   // its own app/port (issue #37): `/mcp` never shares `port`, so publishing

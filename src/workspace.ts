@@ -343,6 +343,98 @@ export function prepareWorkspaceAtPickup(
   assertRemoteDeclarationMatchesClone(workspace);
   refreshWorkspace(workspace, board.githubAuth);
   ensureTaskBranch(db, workspace, task);
+  // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
+  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ
+  snapshotRefs(db, workspace);
+}
+
+/** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も
+ *  remote-tracking ref も含む —— 列挙は黙って古くなるので、範囲を名前で切らない。
+ *  `for-each-ref` の出力は refname 順に並んでいるので、そのまま1本のテキストとして
+ *  持てる(決定6)。比較は行の集合差分で撮るので順序そのものには依らないが、
+ *  決定2 が要求する「動いた ref の名指し」が行差分でそのまま取れるのはこの形ゆえで
+ *  あり、再基準化も同じ refname 順を保つ(`rebaselineRef`)。 */
+function currentRefs(workspace: WorkspaceConfig): string {
+  return git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname)");
+}
+
+/** ADR 0064 決定5: worker に checkout を手渡した瞬間の全 ref を基準として焼く。
+ *  撮るのは pickup の1回だけで、ここから先は盤面自身が書いた ref の行だけが
+ *  外科的に更新される(`rebaselineRef`)。 */
+function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
+  db.prepare(
+    `INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)
+     ON CONFLICT(name) DO UPDATE SET ref_snapshot = excluded.ref_snapshot`,
+  ).run(workspace.name, currentRefs(workspace));
+}
+
+function storedRefs(db: Db, workspaceName: string): string {
+  const row = db
+    .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
+    .get(workspaceName) as { ref_snapshot: string | null } | undefined;
+  // 未設定に分岐は書かない(ADR 0064 決定6): 空文字は現在の ref 集合と一致しないので
+  // 自然に違反へ落ちる —— pickup を経ない解放経路が将来足されても検査は黙って消えない
+  return row?.ref_snapshot ?? "";
+}
+
+/** `"<objectname> <refname>"` の refname 側。 */
+function refName(line: string): string {
+  return line.slice(line.indexOf(" ") + 1);
+}
+
+function refLines(snapshot: string, exceptRef: string): string[] {
+  return snapshot
+    .split("\n")
+    .filter((line) => line !== "" && !line.endsWith(` ${exceptRef}`));
+}
+
+/** ADR 0064 の不変条件そのもの: **タスクブランチは worker の唯一の可変 ref である**。
+ *  自分のタスクブランチの行を両側から落として、残りの集合が一致することを要求する ——
+ *  移動・削除・新規作成のいずれも違反で、削除が最も静かな破壊であるからこそ「動いた
+ *  ものだけを見る」綴りは選ばない(決定2)。
+ *
+ *  メッセージは**動いた ref を名指しする**。quarantine の確認 question の本文に載り、
+ *  人間の修理手順がそのまま読める形になる。 */
+function assertOnlyTaskBranchMoved(db: Db, workspace: WorkspaceConfig, taskId: string): void {
+  const except = `refs/heads/${taskBranch(taskId)}`;
+  const before = refLines(storedRefs(db, workspace.name), except);
+  const after = refLines(currentRefs(workspace), except);
+  const gone = before.filter((line) => !after.includes(line));
+  const added = after.filter((line) => !before.includes(line));
+  if (gone.length === 0 && added.length === 0) return;
+  throw new Error(
+    `workspace ${workspace.name}: refs other than ${except} changed during the session — ` +
+      [...gone.map((line) => `was: ${line}`), ...added.map((line) => `now: ${line}`)].join(", "),
+  );
+}
+
+/** ADR 0064 決定4 の外科的な再基準化: 盤面自身が `ref` を書いた直後に、**その1行だけ**を
+ *  スナップショット上で更新する。全 ref を撮り直すと、その瞬間までに worker が動かした
+ *  ref まで新しい基準に入り、解放時の比較が素通りする —— 違反を飲み込む静かな穴になる。
+ *
+ *  スナップショットを持たない workspace には**何もしない**(行を作らない)。次の pickup が
+ *  全体の基準を撮る。検査側に NULL 経路を作らない決定6 とは別の話である。 */
+export function rebaselineRef(db: Db, workspace: WorkspaceConfig, ref: string): void {
+  const stored = db
+    .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
+    .get(workspace.name) as { ref_snapshot: string | null } | undefined;
+  if (!stored?.ref_snapshot) return;
+  const lines = refLines(stored.ref_snapshot, ref);
+  let sha: string | undefined;
+  try {
+    sha = git(workspace.path, "rev-parse", "--verify", "--quiet", ref);
+  } catch {
+    sha = undefined; // 盤面が消した ref —— 行ごと落ちるのが正しい姿
+  }
+  if (sha) lines.push(`${sha} ${ref}`);
+  // 保存値の綴りは常に「`for-each-ref` のソート済み出力」= **refname 順**である
+  // (ADR 0064 決定6)。行頭は objectname なので素の sort は sha 順に並べてしまい、
+  // 再基準化のたびに列の契約が崩れる —— 今日の比較は集合差分で順序に依らないが、
+  // 保存値の形が pickup の1枚と再基準化後で別物になる理由は無い
+  db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(
+    lines.sort((a, b) => (refName(a) < refName(b) ? -1 : 1)).join("\n"),
+    workspace.name,
+  );
 }
 
 /** The slot-release tree rule: whatever the session left behind is stashed as
@@ -516,7 +608,7 @@ export function resolvesToRegistryClone(
  *  `WorkspaceConfig` carries (issue #211's pickup-time crosscheck). The entry-shaped
  *  face above stands in front of it for the callers that still hold an entry and a
  *  base dir (ADR 0018's derivation). */
-function pathIsRegistryClone(checkoutPath: string, registryDir: string): boolean {
+export function pathIsRegistryClone(checkoutPath: string, registryDir: string): boolean {
   return safeRealpath(checkoutPath) === safeRealpath(registryDir);
 }
 
@@ -621,6 +713,9 @@ export function releaseWorkspace(
 ): void {
   try {
     releaseTree(workspace, task.id);
+    // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
+    // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
+    assertOnlyTaskBranchMoved(db, workspace, task.id);
     if (mergeBack) refreshWorkspace(workspace, githubAuth);
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
     if (target) {
@@ -640,7 +735,17 @@ export function mergeTaskToProtected(workspace: WorkspaceConfig, taskId: string)
   if (isRemoteBacked(workspace)) {
     throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
   }
-  git(workspace.path, "checkout", protectedBranch(workspace));
+  const branch = protectedBranch(workspace);
+  // 着地は人間面から入るので、同じ workspace で**別のタスクが走っている最中**に来る
+  // (ADR 0064 決定4 が挙げる並行そのもの)。checkout はその worker の作業ツリーを
+  // 奪い、走っているセッションは自分のタスクブランチの外で終わって tree rule に撃たれる
+  // —— 休止中(HEAD が保護ブランチ)でなければ ref だけを進める。`fetch . src:dst` は
+  // ff できない更新を自分で拒むので、ff-only という条件はどちらの綴りでも同じである。
+  if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
+    git(workspace.path, "fetch", ".", `${taskBranch(taskId)}:${branch}`);
+    return;
+  }
+  git(workspace.path, "checkout", branch);
   git(
     workspace.path,
     ...TIDEPOOL_GIT_IDENTITY,

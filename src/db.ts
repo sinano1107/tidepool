@@ -202,9 +202,14 @@ export function openDb(path: string): Db {
     -- a workspace the slot-release tree rule failed on (conflict, broken
     -- checkout): marked needs-human, its tasks stay out of the slot until a
     -- human repairs it (issue #8)
+    -- ADR 0064 決定6: ref_snapshot は pickup の瞬間に撮った全 ref の写像
+    -- (for-each-ref のソート済み出力そのもの)。slot 解放時にこれと現在を比べ、
+    -- タスクブランチ以外が1つでも動いていれば quarantine する。worker が書けない
+    -- 場所であることが要件なので git の ref ではなくここに置く。
     CREATE TABLE IF NOT EXISTS workspace_state (
-      name        TEXT PRIMARY KEY,
-      needs_human INTEGER NOT NULL DEFAULT 0
+      name         TEXT PRIMARY KEY,
+      needs_human  INTEGER NOT NULL DEFAULT 0,
+      ref_snapshot TEXT
     );
 
     -- an agent name pickup could not resolve against the registry (ADR 0012 /
@@ -545,6 +550,15 @@ export function openDb(path: string): Db {
       ALTER TABLE throttle_state ADD COLUMN fable_throttled INTEGER;
       ALTER TABLE throttle_state ADD COLUMN fable_resume_at TEXT;
     `);
+  }
+  // ADR 0064 決定6: 既存盤面には NULL が入る。検査側に NULL の分岐は無いので、
+  // 移行の瞬間に in_progress だったタスク(高々1つ)の解放だけが「基準と一致しない」
+  // = 違反に落ちる — fail-closed 側の、人間が30秒で答える1枚である。
+  const workspaceStateCols = (
+    db.prepare("PRAGMA table_info(workspace_state)").all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (!workspaceStateCols.includes("ref_snapshot")) {
+    db.exec("ALTER TABLE workspace_state ADD COLUMN ref_snapshot TEXT");
   }
   if (!throttleCols.includes("state") && !throttleCols.includes("observed_at")) {
     // ADR 0058: pre-existing last-observed rows have no honest observation
