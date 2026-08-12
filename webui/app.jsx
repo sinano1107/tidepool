@@ -1617,12 +1617,12 @@ function NewWorkspaceForm({ say, onCreated, edit }) {
   };
   const modeOptions = [
     { value: 'clone', label: 'clone a repository' },
-    { value: 'create', label: 'create a new private repository' },
+    { value: 'create', label: 'create a new local checkout' },
     { value: 'register', label: 'register an existing path' },
   ];
   const modeHint = {
     clone: 'clones into the workspaces directory — the entry stays host-independent',
-    create: 'creates a private GitHub repo named after the workspace, then clones it',
+    create: 'creates a fresh, purely-local git checkout — nothing touches GitHub',
     register: 'points at a checkout already on this host — the one mode that records a path',
   }[mode];
 

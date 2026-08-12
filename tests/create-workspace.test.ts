@@ -7,7 +7,11 @@ import { describe, expect, it } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
-import { BoardStateOverlapError, createWorkspace } from "../src/workspace-create.js";
+import {
+  BoardStateOverlapError,
+  createWorkspace,
+  NotAGitRepositoryError,
+} from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -52,6 +56,14 @@ async function makeExistingCheckout(upstream: string): Promise<string> {
   return dir;
 }
 
+/** register モードの対象 — git リポジトリだが origin を持たない、ローカルのみの
+ *  checkout(ADR 0066 決定7 の門をくぐれる最小の fixture)。 */
+async function makeLocalOnlyCheckout(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-local-only-"));
+  git(dir, "init", "-b", "main");
+  return dir;
+}
+
 async function makeDeps(registryDir: string) {
   return {
     registry: { dir: registryDir, mode: "purely-local" as const },
@@ -60,49 +72,76 @@ async function makeDeps(registryDir: string) {
   };
 }
 
-describe("createWorkspace: 新規作成モード(issue #57)", () => {
-  it("GitHub に private リポジトリを作成し、clone モードと同様に登録される", async () => {
+describe("createWorkspace: 新規作成モード(issue #57 / ADR 0066)", () => {
+  it("GitHub を1度も呼ばずに workspace を作り、repo を書かない", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-    // gh が作った「初期コミット付きリポジトリ」の代役 — フェイクはこの URL を返す
-    const upstream = await makeUpstream();
-    deps.github.scriptNextRepositoryUrl(upstream);
 
     await createWorkspace({ mode: "create", name: "lagoon" }, deps);
 
-    expect(deps.github.createdRepositories).toEqual(["lagoon"]);
-    const cloneDir = join(deps.workspacesBaseDir, "lagoon");
-    expect(git(cloneDir, "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
-    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
+    expect(deps.github.repoAccessCalls).toBe(0);
+    expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(true);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({});
+  });
+
+  it("初期ブランチは main — ホストの init.defaultBranch に依存しない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    // ホストの init.defaultBranch を master に振っておく —— -b main が実装から
+    // 抜けても既定が main のホストでは緑のままなので、判別力を持たせるには
+    // 既定を master 側にずらして確かめる必要がある
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "init.defaultbranch";
+    process.env.GIT_CONFIG_VALUE_0 = "master";
+    try {
+      await createWorkspace({ mode: "create", name: "lagoon" }, deps);
+    } finally {
+      delete process.env.GIT_CONFIG_COUNT;
+      delete process.env.GIT_CONFIG_KEY_0;
+      delete process.env.GIT_CONFIG_VALUE_0;
+    }
+
+    const checkoutDir = join(deps.workspacesBaseDir, "lagoon");
+    expect(git(checkoutDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    // 空リポジトリには main が存在しない(ensureTaskBranch が pickup 時に落ちる)
+    // ので、初期コミットが実在することも押さえる
+    expect(git(checkoutDir, "rev-list", "--count", "HEAD")).toBe("1");
+  });
+
+  it("GitHub 身元が無い盤面(deps.github 不在)でも create が通る", async () => {
+    const registryDir = await makeMainRegistry();
+    const { github: _github, ...deps } = await makeDeps(registryDir);
+
+    await createWorkspace({ mode: "create", name: "lagoon" }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({});
   });
 
   it("notes と protected は作成フォームからエントリへそのまま載る(protected を付けるのは安全方向なので確認なし)", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-    const upstream = await makeUpstream();
 
     await createWorkspace(
-      { mode: "clone", name: "lagoon", repo: upstream, notes: "run npm install", protected: true },
+      { mode: "create", name: "lagoon", notes: "run npm install", protected: true },
       deps,
     );
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({
-      repo: upstream,
       notes: "run npm install",
       protected: true,
     });
   });
 
-  it("リトライは冪等: 同名のリポジトリが既に存在すれば作成せず流用して先へ進む", async () => {
+  it("リトライは冪等: 規約どおりの場所に既に checkout があれば(前回 registry コミット直前で失敗した孤児)、済んだ手順として流用して登録まで進む", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-    const upstream = await makeUpstream();
-    deps.github.scriptRepository("lagoon", upstream);
+    // 前回の孤児を模す: 規約どおりの場所に手作業で init 済み
+    git(deps.workspacesBaseDir, "init", "-b", "main", "lagoon");
 
     await createWorkspace({ mode: "create", name: "lagoon" }, deps);
 
-    expect(deps.github.createdRepositories).toEqual([]);
-    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
+    expect(deps.github.repoAccessCalls).toBe(0);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({});
   });
 });
 
@@ -110,14 +149,12 @@ describe("createWorkspace: register モード(issue #57)", () => {
   it("明示 path のエントリが workspaces.yaml に加わり、Tidepool 名義で registry にコミットされる", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
+    const path = await makeLocalOnlyCheckout();
 
-    await createWorkspace(
-      { mode: "register", name: "sandbox", path: "/home/pi/work/sandbox" },
-      deps,
-    );
+    await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
 
     const registry = loadRegistry(registryDir, "purely-local");
-    expect(registry.workspaces.sandbox).toEqual({ path: "/home/pi/work/sandbox" });
+    expect(registry.workspaces.sandbox).toEqual({ path });
     // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する。
     // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
     // (ADR 0052 決定6: clone の working tree は正本ではないので触れない)
@@ -148,12 +185,27 @@ describe("createWorkspace: register モード(issue #57)", () => {
   it("origin を持たない既存 checkout の登録では repo を書かない", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-    const checkout = await mkdtemp(join(tmpdir(), "tidepool-local-only-"));
-    git(checkout, "init", "-b", "main");
+    const checkout = await makeLocalOnlyCheckout();
 
     await createWorkspace({ mode: "register", name: "sandbox", path: checkout }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: checkout });
+  });
+
+  // ADR 0066 決定7: `repo` は登録の瞬間の観測(ADR 0052 決定3)であり、対象が
+  // git リポジトリでなければ観測できない。旧挙動(origin なしとして repo を
+  // 書かず通す)は撤回 — 観測に基づかない既定値を書いていた。
+  it("git リポジトリでないパスの登録は拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+    const deps = await makeDeps(registryDir);
+    const notAGitRepo = await mkdtemp(join(tmpdir(), "tidepool-not-a-repo-"));
+
+    await expect(
+      createWorkspace({ mode: "register", name: "sandbox", path: notAGitRepo }, deps),
+    ).rejects.toThrow(NotAGitRepositoryError);
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 });
 
@@ -312,7 +364,7 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
     expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
   });
 
-  it("新規作成モード: 重なる clone 先なら GitHub リポジトリを作る前に拒否する(外部作用の手前で止める)", async () => {
+  it("新規作成モード: 重なる clone 先なら checkout を作る前に拒否する(外部作用の手前で止める)", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
     const guarded = {
@@ -323,40 +375,55 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
     await expect(createWorkspace({ mode: "create", name: "lagoon" }, guarded)).rejects.toThrow(
       BoardStateOverlapError,
     );
-    expect(deps.github.createdRepositories).toEqual([]);
+    expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
   });
 
   it("交差しない登録は従来どおり通る", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
     const boardDir = await mkdtemp(join(tmpdir(), "tidepool-board-"));
+    const path = await makeLocalOnlyCheckout();
 
-    await createWorkspace({ mode: "register", name: "sandbox", path: "/home/pi/work/sandbox" }, {
+    await createWorkspace({ mode: "register", name: "sandbox", path }, {
       ...deps,
       boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }],
     });
 
-    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: "/home/pi/work/sandbox" });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
   });
 });
 
 describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
-  it("外部処理(リポジトリ作成)の最中に registry クローンのブランチが動いても、着地先は影響を受けない(/code-review TOCTOU 指摘)", async () => {
+  // 旧テスト「外部処理(リポジトリ作成)の最中に...」は削除した。create モードの
+  // 外部処理は ADR 0066 決定1 で GitHub 呼び出しから mkdir + git init + 初期コミット
+  // (ローカル・同期)に変わり、フックできる非同期の差し込み点が無くなった —— 同じ
+  // 性質(worktree は毎回その場で切るので registryDir のブランチ移動に影響されない)
+  // は、以下の「registry-edit タスクのブランチに居ても...」(呼び出し**前**にブランチが
+  // 動いている形)と clone モードの ADR 0067 probe を差し込む版で引き続き押さえる。
+  it("clone モードの repo-access probe の最中に registry クローンのブランチが動いても、着地先は影響を受けない(/code-review TOCTOU 指摘)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
     const upstream = await makeUpstream();
-    deps.github.scriptNextRepositoryUrl(upstream);
-    // 遅い外部手順(リポジトリ作成)の間に registry-edit タスクがブランチを
+    // 規約どおりの場所に前回の孤児を置き、実 clone をネットワークへ出さずに
+    // probe の先まで通す(冪等リトライは clone モードの別テストが単独で押さえている)
+    git(deps.workspacesBaseDir, "clone", upstream, join(deps.workspacesBaseDir, "lagoon"));
+    deps.github.scriptRepositoryPermission("sinano1107/tidepool", "WRITE");
+    // 遅い外部手順(repo-access probe)の間に registry-edit タスクがブランチを
     // checkout する — worktree は毎回その場で切るので、この移動に影響されない
-    const inner = deps.github.createRepository.bind(deps.github);
-    deps.github.createRepository = async (name) => {
+    const inner = deps.github.getRepositoryPermission.bind(deps.github);
+    deps.github.getRepositoryPermission = async (ref) => {
       git(registryDir, "checkout", "-b", "task/registry-edit-1");
-      return inner(name);
+      return inner(ref);
     };
 
-    await createWorkspace({ mode: "create", name: "lagoon" }, deps);
+    await createWorkspace(
+      { mode: "clone", name: "lagoon", repo: "https://github.com/sinano1107/tidepool" },
+      deps,
+    );
 
-    expect(loadRegistry(registryDir, "remote-backed").workspaces.lagoon).toEqual({ repo: upstream });
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.lagoon).toEqual({
+      repo: "https://github.com/sinano1107/tidepool",
+    });
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
   });
 
@@ -364,10 +431,11 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const path = await makeLocalOnlyCheckout();
 
-    await createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps);
+    await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
 
-    expect(loadRegistry(registryDir, "remote-backed").workspaces.sandbox).toEqual({ path: "/tmp/sandbox" });
+    expect(loadRegistry(registryDir, "remote-backed").workspaces.sandbox).toEqual({ path });
     expect(git(registryDir, "log", "-1", "--format=%s", "refs/remotes/origin/main")).toBe(
       "add workspace sandbox via WebUI",
     );
@@ -377,9 +445,10 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
     const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const path = await makeLocalOnlyCheckout();
 
     await expect(
-      createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps),
+      createWorkspace({ mode: "register", name: "sandbox", path }, deps),
     ).rejects.toThrow(RegistryPushFailedError);
     expect(loadRegistry(registryDir, "remote-backed").workspaces.sandbox).toBeUndefined();
   });
@@ -399,10 +468,11 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
     const registryDir = await makeMainRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
     const deps = await makeDeps(registryDir);
+    const path = await makeLocalOnlyCheckout();
 
-    await createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps);
+    await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
 
-    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path: "/tmp/sandbox" });
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
   });
 });

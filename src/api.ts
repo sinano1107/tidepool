@@ -95,6 +95,7 @@ import {
 import {
   BoardStateOverlapError,
   GitHubIdentityMissingError,
+  NotAGitRepositoryError,
   RegistrySelfUnprotectError,
   type WorkspaceAdmin,
   WorkspaceConfirmationRequiredError,
@@ -696,15 +697,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // failed to land (ADR 0052 決定1: that means the edit never happened,
       // issue #57 の非致命は撤回)— is an external step failing, 502, and the
       // retry reuses whatever orphan it left behind (issue #57)
-      // 400 の2つ: 名前が使えない(#68)と、指した checkout が盤面自身の状態パスと
-      // 重なる(ADR 0040 / issue #149)。どちらも出し直せば通り得る呼び出し側の
-      // 入力の問題であって、盤面の故障(502)でも未設定(503)でもない
+      // 400 の3つ: 名前が使えない(#68)、指した checkout が盤面自身の状態パスと
+      // 重なる(ADR 0040 / issue #149)、register の対象が git リポジトリでない
+      // (ADR 0066 決定7)。どれも出し直せば通り得る呼び出し側の入力の問題であって、
+      // 盤面の故障(502)でも未設定(503)でもない
       // ADR 0067: repo アクセスの不足も同じ族 —— 盤面は壊れておらず、案内の一行を
       // 実行して出し直せば通る。message には既に3要素の案内が載っている
       if (
         err instanceof InvalidWorkspaceNameError ||
         err instanceof BoardStateOverlapError ||
-        err instanceof RepoAccessMissingError
+        err instanceof RepoAccessMissingError ||
+        err instanceof NotAGitRepositoryError
       ) {
         res.status(400).json({ error: err.message });
       } else if (err instanceof GitHubIdentityMissingError) {
