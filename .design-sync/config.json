@@ -7,7 +7,16 @@
   "overrides": {
     "FieldRow": { "cardMode": "column" },
     "NavRow": { "cardMode": "column" },
-    "ScreenHeader": { "cardMode": "column" }
+    "ScreenHeader": { "cardMode": "column" },
+    "Dialog": { "cardMode": "single", "primaryStory": "CancelConfirm", "viewport": "560x600" },
+    "Button": { "cardMode": "column" },
+    "LogEntry": { "cardMode": "column" },
+    "QueueItem": { "cardMode": "column" },
+    "RiskFlag": { "cardMode": "column" },
+    "Input": { "cardMode": "column" },
+    "Card": { "cardMode": "column" },
+    "Tag": { "cardMode": "column" },
+    "Toast": { "cardMode": "column" }
   },
   "componentSrcMap": {
     "Button": "../components/actions/Button.jsx",
