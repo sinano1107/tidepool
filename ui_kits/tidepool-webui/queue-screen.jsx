@@ -152,7 +152,6 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
   const headId = data.queue[0]?.id ?? null;
-  const queue = data.queue;
   React.useEffect(() => { lucide.createIcons(); });
   return (
     <div style={{ padding: '20px 16px' }}>
@@ -232,7 +231,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
       )}
 
       <div style={{ marginBottom: 28 }}>
-        <TpQueueList tasks={queue} onReorder={onReorder} onFront={onFront} headId={headId} />
+        <TpQueueList tasks={data.queue} onReorder={onReorder} onFront={onFront} headId={headId} />
       </div>
 
       <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Your tasks</h2>

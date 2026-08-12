@@ -7,30 +7,22 @@ import { activeTriageSession } from "./triage.js";
 
 /** 用語集「盤面全体の停止」の列挙(ADR 0058 決定1)。fable 線と workspace /
  *  agent の quarantine は資源単位なのでここに入らず、spend-down は停止ではなく
- *  操舵なので入らない。 */
-export type BoardHaltKind =
-  | "triage"
-  | "pause"
-  | "containment"
-  | "registryReachability"
-  | "throttle";
-
-/** throttle entry だけが持つ属性(ADR 0068 決定2)。`observedAt` は throttle の
- *  答えが使用量の読み取りに由来して遅れるための鮮度であり、他の4つは「row /
- *  question が存在する」という盤面自身の事実なので偽の鮮度を持たない。
- *  `revalidating`(再観測中)は独立の kind ではなく throttle の状態である。 */
-export interface ThrottleHaltDetail {
-  revalidating: boolean;
-  /** throttled なのに resumesAt が無い = 使用量そのものを読めなかった
-   *  (ADR 0028 の fail-closed)。「線を超えた」とは別の答えである。 */
-  failClosed: boolean;
-  resumesAt: string | null;
-  observedAt: string | null;
-}
-
+ *  操舵なので入らない。
+ *
+ *  属性を持つのは throttle entry だけである(ADR 0068 決定2)。`observedAt` は
+ *  throttle の答えが使用量の読み取りに由来して遅れるための鮮度であり、他の4つは
+ *  「row / question が存在する」という盤面自身の事実なので偽の鮮度を持たない。
+ *  `revalidating`(再観測中)は独立の kind ではなく throttle の状態、`failClosed`
+ *  は「使用量そのものを読めなかった」(ADR 0028)で「線を超えた」とは別の答え。 */
 export type BoardHalt =
-  | { kind: Exclude<BoardHaltKind, "throttle"> }
-  | ({ kind: "throttle" } & ThrottleHaltDetail);
+  | { kind: "triage" | "pause" | "containment" | "registryReachability" }
+  | {
+      kind: "throttle";
+      revalidating: boolean;
+      failClosed: boolean;
+      resumesAt: string | null;
+      observedAt: string | null;
+    };
 
 /** 盤面全体の停止の**順序つき**列挙 — 読み口(`GET /pause`・`GET /api/queue`・
  *  `list_queue`)と scheduler の同期プレフィックスが共有する唯一の場所

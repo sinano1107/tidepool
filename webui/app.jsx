@@ -131,9 +131,8 @@ function liveTitle(t) {
 function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }) {
   // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
   // ブラウザは並べ替えず、先頭を読んで kind 別コピーに写すだけ
-  const halts = queueEnvelope.halts ?? [];
-  const haltKinds = new Set(halts.map((h) => h.kind));
-  const paused = haltKinds.has('pause');
+  const halts = queueEnvelope.halts;
+  const paused = halts.some((h) => h.kind === 'pause');
   // 資源単位の表示に要る完全な throttle(windows / fable 詳細)は /pause から —
   // halts の throttle entry と一部重複するが、把握して受け入れた重複である
   const throttle = pause.throttle;
@@ -280,8 +279,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
           : `usage limit · resumes ${resumes}`);
     },
   };
-  const primaryHalt = halts[0];
-  const pickupHalt = primaryHalt ? HALT_COPY[primaryHalt.kind]?.(primaryHalt) ?? null : null;
+  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -318,7 +316,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
     slot, pickupHalt, running: !!running, paused: !!paused,
-    triageActive: haltKinds.has('triage'),
+    triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
     spendDown: pause.spendDown ?? null,
     throttled,
