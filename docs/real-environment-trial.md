@@ -1,6 +1,6 @@
 # 実環境動作確認(ADR 0052 の3段)
 
-2026-08-08 に設計・着手。**第0段・第1段(1-A / 1-B / 1-C)・第2段まで完了。第3段は前提が3つとも解決済みで未実施。**
+2026-08-08 に設計・着手。**第0段から第3段まで全段完了(2026-08-12)。**
 
 原則は1つ — **1段につき新しい subsystem を1つだけ足す**。前の段が通っていない状態で次に進まない。
 
@@ -16,7 +16,8 @@
 | 公開 URL | `https://raspberrypi.tailc0084f.ts.net:8443` |
 | ソース / 実行 | `/mnt/ssd/tidepool` → rsync → `/opt/tidepool` |
 | registry clone | `/mnt/ssd/tidepool-registry` |
-| sandbox workspace | `/mnt/ssd/tidepool-workspaces/sandbox`(remote 無し = purely-local) |
+| sandbox workspace | `/mnt/ssd/tidepool-workspaces/sandbox`(remote 無し = purely-local。`path` 明示エントリ) |
+| 規約導出の workspace 基点 | **`/mnt/workspaces`**(SSD 上の 20G ext4 ループバック、`TIDEPOOL_WORKSPACES_DIR`)—— 第3段で exFAT から移設 |
 | claude CLI | 2.1.221 |
 | デプロイ済みコミット | 第0段〜1-B は `a55154b`、**1-C は `556877f`**(#274 = ADR 0064 の ref スナップショット比較が入った後) |
 | watchdog | work 90分 / review 45分、slot = 1 |
@@ -332,9 +333,9 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 ---
 
-## 第3段 — `tidepool` 自身 / 未実施(前提は3つとも解決済み)
+## 第3段 — `tidepool` 自身 / **完了(2026-08-12)**
 
-**前提3つ —— いずれも 2026-08-12 に確認済みで、GitHub 側の手作業は collaborator 追加の1コマンドだけ:**
+**前提3つ —— いずれも 2026-08-12 に確認済み。GitHub 側の手作業は collaborator 追加の1コマンドだけだった:**
 
 1. **`tidepool-bot` を `sinano1107/tidepool` の collaborator に追加**(registry には既にいる)。
 
@@ -375,15 +376,84 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 3. **`standard` に `merge: escalate` を足す。** ここで初めて merge ダイヤルが被測定物になるので、**workspace `tidepool` は `protected: true` にしない** —— 保護するとダイヤルに関係なく人間 merge の question が立ち(第2段がまさにそれ)、ダイヤルの検証にならない。
 
-**お題**: 既存の open issue から範囲が閉じたものを1つ。**#206** が向いている。
+   **確認ダイアログは出ない。それが正しい。** `dangerousValues`(`src/profile-create.ts`)が扉を立てるのは `merge: auto_if_ci_green`(無人 merge)と2つのワイルドカードだけで、**`escalate` はダイヤルの中で最も安全な値**である —— 人間に必ず聞く側なので確認を求める理由がない。#266 が問題にしているのは「既に危険値を持つ profile を無関係な1文字修正で編集すると扉が再度出る」ケースであり、この観測と矛盾しない。
 
-**合格の判定:**
+### 実際に走らせるまでに、ホスト側で2つ潰した
 
-- [ ] issue-backed task として登録でき、内容が issue から展開される
-- [ ] PR 本文に `Closes #206` が自動付与される
-- [ ] merge ダイヤル(`escalate`)で merge question が立つ
-- [ ] merge が issue を閉じる
-- [ ] **2本目のタスクが1本目の merge 済み成果の上から始まる**(= S3 の本丸)
+**どちらも計画に無く、実タスクを1本走らせて初めて出た。**
+
+**(1) workspace が exFAT の上にあった。** `TIDEPOOL_WORKSPACES_DIR` を `/mnt/ssd/tidepool-workspaces` に置いたところ、`npm install` が完走しなかった。
+
+```
+exFAT で symlink:  ln: … 許可されていない操作です
+exFAT で hardlink: ln: … 許可されていない操作です
+ext4 で symlink:   OK
+
+node_modules: 297MB で 45秒間まったく増えず、npm install は 77% CPU
+```
+
+`node_modules/.bin/*` は symlink なので、**exFAT では npm が原理的に完走できない**。`/mnt/ssd` は 1.9T の exFAT で、Pi の他のデータは全部そこにある —— だから選んだが、それが罠だった。**このホストで tidepool のテストを回す既定の手順が「ネイティブ fs の checkout を使う」だったのは、まさにこの理由である。**
+
+対処: **SSD 上に ext4 のループバックイメージを作った**(20G)。`truncate` は exFAT で sparse にならず約 5.7 秒/GB、20G で約2分。clone は **13分で0バイト → 3.8秒**になった。
+
+**ついでに `/mnt/ssd` 自体が fstab に無いことも見つかった。** `mnt-ssd.mount` は 7/2 の手動 mount のままで、**再起動すればソース・registry clone・workspace が全部消える**状態だった。両方 fstab に入れた(`nofail` 付き、ループバックには `x-systemd.requires-mounts-for=/mnt/ssd`)。
+
+```
+UUID=68A9-671B /mnt/ssd exfat defaults,nofail,uid=1000,gid=1000,fmask=0022,dmask=0022,iocharset=utf8,x-systemd.device-timeout=15 0 0
+/mnt/ssd/tidepool-workspaces.img /mnt/workspaces ext4 loop,nofail,x-systemd.requires-mounts-for=/mnt/ssd 0 0
+```
+
+**(2) サンドボックスが外部ダウンロードを塞いでいた。** ext4 に移しても `npm install` は通らなかった。
+
+```
+サンドボックス内:  15回のフェッチ 全部 403、200 はゼロ
+サンドボックス外:  GET registry.npmjs.org/npm → 200
+```
+
+対処: **`/opt/tidepool/node_modules`(363M)を workspace へコピーした**。`package-lock.json` の md5 が一致していたので正当。**symlink を持つツリーをコピーできるのは ext4 に移した後だけ**なので、(1) の解決が (2) の回避策を可能にしている。コピーは17秒。
+
+**この2つで空振り2セッション・約 $4.3 を使った。** どちらも「止まっているのか遅いのか」が盤面からは見えず、`npm` のデバッグログと `for-each-ref` を人間が読んで初めて分かった。
+
+### 結果(合格 5-5)
+
+```
+06:21:51  worker_spawned      3本目。node_modules 配置済みなので npm install を撃たず vitest へ直行
+06:38:38  task_completed      単一コミット 646a54e
+06:38:45  pr_opened  #308  +  merge question 53b5cd2b
+06:41:48  PR #308 MERGED
+06:41:50  issue #280 CLOSED / COMPLETED
+06:46:35  task_picked_up      判定5 用の検証タスク
+```
+
+| 判定 | 結果 |
+|---|---|
+| issue-backed task として登録でき、内容が issue から展開される | ✅ DB は `title`/`purpose`/`completion_criteria` とも NULL、`github_issue_number` のみ。queue の行にも board のカードにもタイトルが出る |
+| PR 本文に `Closes #280` が自動付与される | ✅ |
+| merge ダイヤル(`escalate`)で merge question が立つ | ✅ **保護を付けていないので、立てたのはダイヤルそのもの** |
+| merge が issue を閉じる | ✅ `CLOSED / COMPLETED` |
+| **2本目のタスクが1本目の merge 済み成果の上から始まる(S3 の本丸)** | ✅ `task/244509a3` が **merge コミット `0815840` から切られ**、`src/api.ts` に `/triage/close` が1件・`/triage/commit` が0件 |
+
+**判定5 の証拠は pickup の瞬間に確定する。** 完走を待つ必要がないので、**実 issue を消費せず読み取りのみの検証タスク**を1本立てて済ませた($0.28)。
+
+### 成果物の質
+
+エージェントは **`public/app.js` を `npm run build:webui` で再ビルド**している。エンドポイント改名で事前ビルド済みバンドル(ADR 0055)が置き去りになる、という事前に挙げていたリスクを自分で潰した。しかも handoff によれば **旧パスが残っていたのを advisor が指摘して発見**している。
+
+無関係な既存失敗8件も、原因(サンドボックスの git identity)まで特定したうえで `Known issues` に分けて報告している。
+
+### 発見(5件)
+
+| issue | |
+|---|---|
+| **#309** | サンドボックスが外部ダウンロードを塞ぐ(npm registry / Playwright CDN)。**依存を持つリポジトリで実作業ができない。** ADR 0033 の封じ込めとの兼ね合いなのでバグと言い切れない |
+| **#310** | サンドボックスの一時 shadow ファイル20件が `releaseTree` の `git add -A` と競合。**タイミング次第で PR に混ざる** |
+| **#312** | worker の git identity が `tako` のため tidepool 自身のテストが8件落ちる。**第3段の前提そのものに効く** |
+| **#313** | 差分ゼロで完了した work タスクが解決不能な PR 昇格失敗になる。しかも推奨が永久に失敗する `retry` |
+| **#311** | issue-backed タスクが comments を取得して捨て、完了基準は「comments を見よ」と指示する |
+
+加えて **#305**(規約導出モードが着地先を人間に見せない)は第3段の準備中に出たもので、(1) の exFAT 問題はその実害の1つである。
+
+**お題は計画の #206 から #280 へ変更した。** #206 は `needs-triage` で「kit と本番実装の関係を決める」設計寄りの議題であり、#246 とも #300 / #301 とも重なる —— エージェントに投げる第3段のお題としては不向きだった。**#280(`/api/triage/commit` を `close` に改名し、Commit = close + cursor をクライアント合成として明示する)は `ready-for-agent`** で、ADR 0065 に決着済み・やることが列挙済み・前提の #279 も merge 済みだった。しかもテスト20箇所超に触るので、機械的だが空ではない。
 
 ---
 
@@ -411,11 +481,23 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 10. **お題は15〜30分に収める。** watchdog は work 90分 / review 45分、slot は1本。
 
-11. **push 忘れ。** Pi は GitHub から pull する。手元の `git status` の「up to date」は手元の remote-tracking ref に対してであって GitHub に対してではない。デプロイ前に `git log origin/main..HEAD` が空であることを必ず確認する。
+11. **workspace は ext4 に置く。exFAT では `npm install` が原理的に完走しない**(`node_modules/.bin/*` は symlink)。規約導出の基点は `/mnt/workspaces`(SSD 上の ext4 ループバック)。`path` を明示する既存エントリ(`sandbox` / `registry`)は exFAT のままだが、npm を撃たないので問題は出ていない。
+
+12. **依存はホスト側で用意する。サンドボックスからは外部へ出られない**(#309)。`cp -a /opt/tidepool/node_modules <workspace>/` で配る —— `package-lock.json` の md5 が一致していることを先に確認する。**エージェントは放っておくと自分で `npm install` を撃ち、403 リトライで CPU を焼き続ける**(エラーで落ちない)。
+
+13. **実行中のタスクは UI からキャンセルできない**(`assertHumanEditableScope` が `in_progress` を除く)。止める手は2つ —— watchdog を待つ(work 90分)か、**Pi 上でプロセスを kill してからサービスを再起動する**。再起動が `failTask` を撃ち(ADR 0001)、retry / abandon の question が立って slot が解放される。**kill だけでは解放されない** —— `worker_exited` は記録されるが、タスクは `in_progress` のまま残る。
+
+    再開したいなら **question を未回答のまま置く**とよい。未回答の question はタスクを `nextSlotTask` から外すので、その間にホスト側の手当てを済ませてから `retry` と答えられる。
+
+14. **差分ゼロで完了したら `abandon promotion`**(#313)。推奨は `retry` だが**永久に失敗する** —— コミットが増える経路が無い。
+
+15. **`pkill -f "<文字列>"` は自分の ssh セッションにマッチする。** コマンドライン中に同じ文字列が含まれるため。実測で2回踏んだ(1回は接続が切れ、1回は監視が偽陽性を出した)。PID を名指しするか、パターンを工夫する。
+
+16. **push 忘れ。** Pi は GitHub から pull する。手元の `git status` の「up to date」は手元の remote-tracking ref に対してであって GitHub に対してではない。デプロイ前に `git log origin/main..HEAD` が空であることを必ず確認する。
 
 ---
 
-## 発見(22件)
+## 発見(30件)
 
 ### 1-A / 1-B(14件、2026-08-08)—— **全件 closed**
 
@@ -449,9 +531,24 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 加えて **#298 の見立てが崩れた**(コメントで追記)。第2段では handoff も `task_completed` の result も PR 本文も全部日本語で、1-C の分かれ方(成果について書くフィールドは英語)は再現しなかった。**安定した分かれ目は無く、周囲のペイロードの言語に合わせているだけ**である。射程に **PR 本文 = 盤面の外に出る面**が加わった。
 
+### 第3段(8件、2026-08-12)
+
+| issue | |
+|---|---|
+| **#309** | サンドボックスが外部ダウンロードを塞ぐ(npm registry / Playwright CDN)。**依存を持つリポジトリで実作業ができない。** ADR 0033 の封じ込めとの兼ね合いなのでバグと言い切れない |
+| **#312** | worker の git identity が `tako` のため tidepool 自身のテストが8件落ちる。**「テストが green」を完了基準に書けない** |
+| **#313** | 差分ゼロで完了した work タスクが解決不能な PR 昇格失敗になる。推奨が永久に失敗する `retry` |
+| **#310** | サンドボックスの一時 shadow ファイル20件が `git add -A` と競合し、タイミング次第で PR に混ざる |
+| **#311** | issue-backed タスクが comments を取得して捨て、完了基準は「comments を見よ」と指示する |
+| **#305** | `clone` / `create` モードの登録がチェックアウト先を人間に見せない。**exFAT 事故の直接の原因** |
+| **#306** | `claude` CLI の認証切れが人間に届かない。bare catch が診断そのものを捨てる |
+| **#307** | worker セッションのトークン内訳が未測定。`cache_read` が output の150倍、接頭辞は約 35k |
+
+**#309 / #312 / #313 の3件が重い。** どれも「**エージェントが tidepool 自身を開発する**」という v1 の目的地に直接効く —— 依存が入れられない、テストが素で緑にならない、成果ゼロの正当な完了が失敗として扱われる。
+
 ### 分布そのものが観測である
 
-**22件のうち15件が「盤面の状態や、エージェント・盤面が書いたものが、人間に正直に届かない」系**である。実装の正しさではなく**面の正直さ**に寄っていて、コードレビューでは出ず、実環境で人間が1周操作して初めて出た。1-A/1-B で9/14、1-C で5/6、第2段で1/2 —— **同じ分布が3回続けて出た**。
+**30件のうち19件が「盤面の状態や、エージェント・盤面が書いたものが、人間に正直に届かない」系**である。実装の正しさではなく**面の正直さ**に寄っていて、コードレビューでは出ず、実環境で人間が1周操作して初めて出た。1-A/1-B で9/14、1-C で5/6、第2段で1/2、第3段で4/8 —— **同じ分布が4回続けて出た**。
 
 **#298 は毛色が違う**(エージェント側の出力規律)。**#304 はさらに違う** —— これは**失敗が起きる前に、機構が残した痕跡から見つけた**唯一の発見である。`workspace_state.ref_snapshot` と実際の `for-each-ref` を突き合わせたら1行だけ食い違っていた、という形で出た。
 
@@ -459,3 +556,7 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 1. **新しい経路を1本通すたびに、その経路が初めて生む記録の種類が新しい発見を連れてくる。** #298 は decompose が初めてエージェント作の title / purpose を生んだから、#303 / #304 は remote-backed が初めて PR と `refs/remotes/*` を生んだから出た。段を足すときは「何が新しく生まれるか」を先に列挙しておくと当たりが付けやすい。
 2. **判定のために盤面の内部状態を読むと、判定に使わなかった行が発見になる。** #304 は S1 / S2 の判定のついでに撮ったスナップショットから出た。**判定に必要な最小限だけを見ない**ほうがよい。
+
+3. **ホストの前提は、実タスクを1本走らせるまで検証されない。** 第3段は exFAT とサンドボックスの通信遮断で2セッション・$4.3 を空振りした。どちらも「設定を確かめる」段階では見えず、**`npm install` という1つの実作業が両方を同時に照らした**。段を足すときは、その段で初めて走る**実作業の種類**を先に列挙しておくとよい(ネットワークを使うか、依存を入れるか、ビルドするか、ブラウザを起動するか)。
+
+4. **止まっているのか遅いのかは、盤面からは決して分からない。** 空振り2本とも、判定に使ったのは `npm` のデバッグログ・`for-each-ref`・`du` の時系列であって、盤面が出す情報ではなかった。**無人運用を名乗る以上、ここは埋まっているべき穴である**(#306 と同じ系)。
