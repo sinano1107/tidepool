@@ -317,7 +317,7 @@ export class RegistrySelfPublishError extends Error {
   }
 }
 
-/** publish の4つ目の拒否(issue #285 やること5): エントリは `repo` を持たないのに
+/** publish の4つ目の拒否(ADR 0066 決定5): エントリは `repo` を持たないのに
  *  checkout には `origin` が在る。それは帯域外の手作業が作った ADR 0052 のずれ状態で
  *  あり、pickup でどのみち quarantine に落ちる —— publish が上書きして辻褄を合わせる
  *  形は採らない。**巻き戻しの線もここで引かれる**: 自分が `remote add` した場合しか
@@ -374,7 +374,7 @@ export async function publishWorkspace(
     const branches = git(dir, "for-each-ref", "--format=%(refname:strip=2)", "refs/heads/")
       .split("\n")
       .filter((branch) => branch !== "");
-    // `--atomic` は必須(issue #285 やること2): 宛先が「Add a README」つきの非空 repo
+    // `--atomic` は必須(ADR 0066 決定6): 宛先が「Add a README」つきの非空 repo
     // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
     // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
     // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。

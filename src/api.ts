@@ -718,10 +718,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof NotAGitRepositoryError
       ) {
         res.status(400).json({ error: err.message });
-      } else if (err instanceof GitHubIdentityMissingError) {
-        // same "not configured" family as the workspaceAdmin?.create gate
-        // above — the board simply has no GitHub identity (ADR 0024)
-        res.status(503).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
