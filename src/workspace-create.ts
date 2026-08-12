@@ -81,7 +81,7 @@ export interface WorkspaceAdminDeps {
 
 /** 共通の dep に、**GitHub へ出ていく workspace 動詞**が要るものを1つ足した組:
  *  `clone`(ADR 0067 決定2 の登録の門)と `publish`(決定8)がこれを共有する。 */
-export interface WorkspaceNetworkDeps extends WorkspaceAdminDeps {
+export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
   /** Absent(盤面が GitHub 身元を持たない、ADR 0024)→ ADR 0067 の到達性 probe は
    *  撃たれず、今日の挙動のまま —— clone は素の git に委ね、publish は push が落ちる
    *  だけになる。`create` は GitHub に一切出ないので、そもそもこれを読まない
@@ -91,7 +91,13 @@ export interface WorkspaceNetworkDeps extends WorkspaceAdminDeps {
 
 export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<void>;
 export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
-export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<void>;
+/** 返すのは publish が push した remote-tracking ref(`refs/remotes/origin/<branch>`)
+ *  である。ADR 0064 決定4 の再基準化は「盤面が**実際に書いた** ref の行だけ」を要求し、
+ *  publish はその集合を **push の直前に checkout から読んで確定させる**唯一の場所だから
+ *  である —— 事後に `refs/remotes/origin/*` を列挙し直す綴りだと、その間に worker が
+ *  偽造した remote-tracking ref まで「盤面が書いた」に化け、ADR 0064 が閉じた潜在バグ
+ *  (偽造 → 無実の次セッションへの誤帰属)がそのまま戻る。 */
+export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<string[]>;
 
 /** The settings surface's workspace verbs as one bundle (issue #57): they
  *  exist together or not at all (a registry is configured, or none is), so
@@ -146,7 +152,7 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
-export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceNetworkDeps): Promise<void> {
+export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<void> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
@@ -330,8 +336,8 @@ export class CheckoutHasOriginError extends Error {
  *  checkout は動かさない(ADR 0064 の「走っているセッションの作業ツリーを奪わない」)。 */
 export async function publishWorkspace(
   input: PublishWorkspaceInput,
-  deps: WorkspaceNetworkDeps,
-): Promise<void> {
+  deps: WorkspaceGitHubDeps,
+): Promise<string[]> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
@@ -361,6 +367,13 @@ export async function publishWorkspace(
   if (fresh.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, fresh.repo);
   git(dir, "remote", "add", "origin", input.repo);
   try {
+    // `--all` が送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**
+    // 読むのが要件である(ADR 0064 決定4): 撮り直す ref の集合は盤面が書いたものだけに
+    // 確定していなければならず、事後に `refs/remotes/origin/*` を列挙し直すと、その間に
+    // worker が偽造した remote-tracking ref を基準へ迎え入れてしまう。
+    const branches = git(dir, "for-each-ref", "--format=%(refname:strip=2)", "refs/heads/")
+      .split("\n")
+      .filter((branch) => branch !== "");
     // `--atomic` は必須(issue #285 やること2): 宛先が「Add a README」つきの非空 repo
     // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
     // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
@@ -374,6 +387,7 @@ export async function publishWorkspace(
       { ...fresh, repo: input.repo },
       `publish workspace ${input.name} via WebUI`,
     );
+    return branches.map((branch) => `refs/remotes/origin/${branch}`);
   } catch (err) {
     // 巻き戻すのは**自分が足した origin だけ**(上の CheckoutHasOriginError が
     // その線を引いている)。最も起きる人為ミスは「repo は作ったが bot の招待を
@@ -389,7 +403,7 @@ export async function publishWorkspace(
 /** Each mode's external half, ordered so the registry commit stays last. */
 async function buildEntry(
   input: CreateWorkspaceInput,
-  deps: WorkspaceNetworkDeps,
+  deps: WorkspaceGitHubDeps,
 ): Promise<WorkspaceEntry> {
   if (input.mode === "register") return registerExistingCheckout(input.path);
   if (input.mode === "clone") {
@@ -407,7 +421,7 @@ async function buildEntry(
  *  `ensureTaskBranch`(workspace.ts)が pickup 時に落ちる。初期コミットが要るのは
  *  同じ理由で、空リポジトリには `main` が存在しない。`repo` を書かないため、生まれる
  *  workspace は構造的に purely-local である(ADR 0052 決定3)。 */
-function createLocalCheckout(name: string, deps: WorkspaceNetworkDeps): WorkspaceEntry {
+function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): WorkspaceEntry {
   const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): 規約どおりの場所に既にある checkout は、前回
   // registry コミット直前で失敗した孤児 —— 済んだ手順として流用する(clone
@@ -484,7 +498,7 @@ function registerExistingCheckout(path: string): WorkspaceEntry {
 
 /** The clone mode's external half: a checkout at the convention-derived
  *  location (ADR 0018 — the entry never records the path). */
-function cloneAndDescribe(name: string, repo: string, deps: WorkspaceNetworkDeps): WorkspaceEntry {
+function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps): WorkspaceEntry {
   const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it

@@ -342,3 +342,25 @@ it("publish が触っていない ref を worker が動かせば、今までど�
 
   expect((await quarantineQuestion(t))?.purpose).toContain("refs/heads/sibling");
 });
+
+// ADR 0064 決定4 の「盤面が**実際に書いた** ref の行だけ」。publish 後に checkout を
+// 覗いて `refs/remotes/origin/*` を列挙すると、worker が窓の中で偽造した
+// remote-tracking ref まで「盤面が書いた」に化ける —— ADR 0064 が閉じたはずの
+// 潜在バグ(偽造 `refs/remotes` → 無実の次セッションへの誤帰属)がそのまま戻る。
+// 撮り直す集合は push の直前に確定していなければならない。
+it("publish が push していない origin ref を worker が偽造すれば quarantine に落ちる", async () => {
+  const { ws, dest, boot } = await publishableBoard("sandbox");
+  t = await bootTidepool(boot);
+  const task = await registerWork(t, "forges a remote-tracking ref");
+  await t.clock.advance(HOUR);
+  commitOn(ws.path, "work.txt", "my own work\n", "worker's own commit");
+  git(ws.path, "update-ref", "refs/remotes/origin/forged", `task/${task.id}`);
+
+  expect(
+    (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
+  ).toBe(200);
+
+  await complete(t, task.id);
+
+  expect((await quarantineQuestion(t))?.purpose).toContain("refs/remotes/origin/forged");
+});

@@ -99,16 +99,24 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     const { registryDir, deps, checkout } = await makeBoard();
     // publish 以前のタスクブランチ(決着後も削除されない差分の恒久記録)も連れて行く
     git(checkout, "branch", "task/abc123");
+    // タグはドメイン上の意味を持たないので送らない(ADR 0066 決定6)
+    git(checkout, "tag", "v0.1.0");
     const dest = await makeDestination();
 
-    await publishWorkspace({ name: "sandbox", repo: dest }, deps);
+    const pushed = await publishWorkspace({ name: "sandbox", repo: dest }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
     expect(git(registryDir, "log", "-1", "--format=%an %s")).toBe(
       "tidepool publish workspace sandbox via WebUI",
     );
     expect(remoteBranches(dest).sort()).toEqual(["main", "task/abc123"]);
+    expect(git(dest, "ls-remote", "--tags", dest)).toBe("");
     expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
+    // ADR 0064 決定4 の6行目が撮り直す集合 —— push の直前に確定した「盤面が書いた ref」
+    expect(pushed.sort()).toEqual([
+      "refs/remotes/origin/main",
+      "refs/remotes/origin/task/abc123",
+    ]);
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち

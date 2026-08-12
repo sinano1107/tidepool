@@ -443,19 +443,15 @@ export function rebaselineRef(db: Db, workspace: WorkspaceConfig, ref: string): 
  *  「**N 本だが確定している**」へ改訂される —— 外科的である(全 ref を撮り直さない)
  *  という機構そのものは無変更である。
  *
- *  「いま存在する `refs/remotes/origin/*` 全部」が「publish が push したブランチ」と
- *  一致するのは、publish が **`origin` を持たない checkout にしか撃たれない**
- *  (`CheckoutHasOriginError`)からである。publish 以前に origin-tracking ref は1本も
- *  無いので、この列挙が盤面の書き込み以外を飲み込むことはない。
+ *  **`refs` は publish が push の直前に確定させた集合でなければならない**
+ *  (`publishWorkspace` の戻り値)。ここで checkout を覗いて列挙し直すと、その間に
+ *  worker が偽造した remote-tracking ref まで基準へ迎え入れることになり、ADR 0064 が
+ *  閉じた潜在バグ(偽造 `refs/remotes` → 無実の次セッションへの誤帰属)が戻る。
  *
- *  **成功した publish の直後にだけ呼ぶこと。** 拒否や失敗の後に呼ぶと、worker が偽造
- *  した `refs/remotes/origin/*`(ADR 0064 が閉じた潜在バグそのもの)を基準へ迎え入れて
- *  しまう。 */
-export function rebaselinePublishedRefs(db: Db, workspace: WorkspaceConfig): void {
-  const refs = git(workspace.path, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/");
-  for (const ref of refs.split("\n").filter((line) => line !== "")) {
-    rebaselineRef(db, workspace, ref);
-  }
+ *  **成功した publish の直後にだけ呼ぶこと。** 失敗した publish は `remote remove` で
+ *  巻き戻るので、撮り直す対象もそもそも残らない。 */
+export function rebaselinePublishedRefs(db: Db, workspace: WorkspaceConfig, refs: string[]): void {
+  for (const ref of refs) rebaselineRef(db, workspace, ref);
 }
 
 /** The slot-release tree rule: whatever the session left behind is stashed as

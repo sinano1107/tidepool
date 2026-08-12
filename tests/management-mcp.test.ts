@@ -114,6 +114,7 @@ it("publish_workspace は宛先ごとオーケストレーションへ渡り、�
     if (input.repo === "https://github.com/sinano1107/taken.git") {
       throw new WorkspaceAlreadyPublishedError(input.name, input.repo);
     }
+    return [];
   });
   t = await bootTidepool({ workspaceAdmin: { publish: published } });
   const client = await managementMcpClient(t.baseUrl);
