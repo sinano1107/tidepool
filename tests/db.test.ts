@@ -4,7 +4,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { getThrottleState, isPickupBlocked, reportThrottle } from "../src/throttle.js";
+import { getThrottleState, reportThrottle } from "../src/throttle.js";
 
 it("throttle_state の旧スキーマ(state/utilization)を持つ既存 board は、再オープン時に新スキーマ(throttled)へ移行される(ADR 0008)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-db-migrate-"));
@@ -28,7 +28,7 @@ it("throttle_state の旧スキーマ(state/utilization)を持つ既存 board �
   // must be writable/readable under the new single-`throttled` shape without
   // tripping the old CHECK/NOT NULL constraints
   reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, new Date());
-  expect(isPickupBlocked(db, new Date())).toBe(true);
+  expect(getThrottleState(db).throttled).toBe(true);
   db.close();
 });
 

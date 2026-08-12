@@ -107,7 +107,7 @@ it("ペース線超過の間も実行中タスクには決して触れない(常
   expect(t.worker.started.map((x) => x.id)).toEqual([first.id, second.id]);
 });
 
-it("throttled の間、todo タスクはキュービュー(/api/queue)では skipped、ボード(/api/tasks)では todo のまま", async () => {
+it("throttled の全体線は行に現れず、キューの envelope の halts が1回で答える(ADR 0068)", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "long haul");
 
@@ -119,16 +119,22 @@ it("throttled の間、todo タスクはキュービュー(/api/queue)では ski
   expect(board.find((x: any) => x.id === task.id).status).toBe("todo");
 
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
-  expect(queue.find((x: any) => x.id === task.id).status).toBe("skipped");
+  expect(queue.tasks.find((x: any) => x.id === task.id).status).toBe("todo");
+  // 鮮度は throttle entry だけが運ぶ(ADR 0068 決定2)
+  expect(queue.halts).toEqual([
+    {
+      kind: "throttle",
+      revalidating: false,
+      failClosed: false,
+      resumesAt: resetsAt.toISOString(),
+      observedAt: expect.any(String),
+    },
+  ]);
 
-  // once resets_at passes and /usage reports a fresh reading, the queue view
-  // goes back to plain todo
+  // once resets_at passes and /usage reports a fresh reading, the halt is gone
   t.worker.scriptUsage(healthyUsageText(t.clock.now()));
   await t.clock.advance(2 * HOUR);
-  const queueAfter = (await api(t.baseUrl, "GET", "/api/queue")).json;
-  expect(queueAfter.find((x: any) => x.id === task.id)?.status ?? "in_progress").not.toBe(
-    "skipped",
-  );
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([]);
 });
 
 /** session/week は健全なまま、fable 線だけ超過している観測 (ADR 0030)。
@@ -156,9 +162,11 @@ it("fable 線の超過は fable モデルのタスクだけを skip し、他の
   // キュー先頭は fable タスクだが、skip されて後続の通常タスクが拾われる
   expect(t.worker.started.map((x) => x.id)).toEqual([normalTask.id]);
 
-  // キュービューでは fable タスクだけが skipped、盤面(/api/tasks)は todo のまま
+  // キュービューでは fable タスクだけが skipped(資源単位なので行に現れる)、
+  // 盤面(/api/tasks)は todo のまま。盤面全体は止まっていないので halts は空
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
-  expect(queue.find((x: any) => x.id === fableTask.id).status).toBe("skipped");
+  expect(queue.halts).toEqual([]);
+  expect(queue.tasks.find((x: any) => x.id === fableTask.id).status).toBe("skipped");
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board.find((x: any) => x.id === fableTask.id).status).toBe("todo");
 });

@@ -40,7 +40,7 @@ it("quarantine 済み agent 宛ての todo はキュービューで skipped、�
 
   await t.clock.advance(HOUR);
 
-  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks;
   expect(queue.find((x: any) => x.id === delegated.id).status).toBe("skipped");
   expect(queue.find((x: any) => x.id === other.id).status).not.toBe("skipped");
 

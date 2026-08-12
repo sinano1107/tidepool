@@ -117,9 +117,9 @@ it("answering a question returns the parent to the queue head when only attached
   const answered = answerQuestion(db, question, ["left"], new Date(4));
 
   expect(answered.parentUnblocked).toBe(true);
-  expect(listQueue(db, false).find((task) => task.status === "todo")?.id).toBe(parent.id);
-  expect(listQueue(db, false).findIndex((task) => task.id === parent.id)).toBeLessThan(
-    listQueue(db, false).findIndex((task) => task.id === other.id),
+  expect(listQueue(db).find((task) => task.status === "todo")?.id).toBe(parent.id);
+  expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeLessThan(
+    listQueue(db).findIndex((task) => task.id === other.id),
   );
   expect(nextSlotTask(db)?.id).toBe(parent.id);
   db.close();

@@ -60,16 +60,6 @@ function readThrottleState(db: Db): ThrottleStateRow | undefined {
     .get() as ThrottleStateRow | undefined;
 }
 
-/** No row means no /usage check has ever run — normal (unthrottled). A row
- *  with no resets_at is a parse failure (fail-closed): stays active until a
- *  fresher report arrives, since there is no known recovery time to wait out. */
-export function isPickupBlocked(db: Db, now: Date): boolean {
-  const row = readThrottleState(db);
-  if (!row || !row.throttled) return false;
-  if (!row.resets_at) return true;
-  return now.getTime() < new Date(row.resets_at).getTime();
-}
-
 /** One window's last-observed pace verdict, for display: null when the
  *  window went unobserved. resumeAt is the catch-up instant (ADR 0030), not
  *  the window's reset time. */
@@ -78,10 +68,10 @@ export interface WindowThrottleState {
   resumeAt: string | null;
 }
 
-/** The fable line's own isPickupBlocked (ADR 0030): true while the last
+/** The fable line's own stored pickup gate (ADR 0030): true while the last
  *  observation has fable over its pace line and the catch-up instant hasn't
- *  passed. Unlike the board-wide gate this blocks only fable-model tasks —
- *  the caller applies it per task. A missing fable observation (NULL column)
+ *  passed. 資源単位なので盤面は止めず、fable モデルのタスクだけを行の skipped
+ *  にする — the caller applies it per task. A missing fable observation (NULL column)
  *  is "no per-model limit", never blocked. */
 export function isFablePickupBlocked(db: Db, now: Date): boolean {
   const row = readThrottleState(db);
@@ -108,9 +98,10 @@ function windowState(throttled: number | null, resumeAt: string | null): WindowT
   return { throttled: !!throttled, resumeAt };
 }
 
-/** Raw throttle_state for display (issue #82): unlike isPickupBlocked, this
- *  doesn't resolve a passed resets_at back to false — the human sees the last
- *  reported state as-is until the next poll refreshes it. */
+/** Raw throttle_state for display (issue #82): a passed resets_at is *not*
+ *  resolved back to false — the human sees the last reported state as-is until
+ *  the next poll refreshes it, and its age is what `observedAt` says
+ *  (ADR 0068 決定2)。盤面全体の停止の読みは board-halt.ts がこれを使う。 */
 export function getThrottleState(db: Db): ThrottleState {
   const row = readThrottleState(db);
   if (!row) {

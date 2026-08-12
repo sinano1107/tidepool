@@ -22,7 +22,7 @@ describe("listQueue は human 宛てタスクを実行キューから除外す�
       new Date(1),
     );
 
-    const queue = listQueue(db, false);
+    const queue = listQueue(db);
     expect(queue.map((t) => t.id)).not.toContain(human.id);
     expect(queue.map((t) => t.id)).toContain(agent.id);
 

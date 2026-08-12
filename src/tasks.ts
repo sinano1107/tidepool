@@ -2187,13 +2187,13 @@ export function listBoard(
 }
 
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
- *  frozen by an environmental event — the Swell throttle, or (issue #26) its
- *  own execution workspace under quarantine. `skipped` is display-only and
- *  queue-view-only (CONTEXT.md's Usage limit / Quarantine) — it never reaches
- *  `listBoard`/`presentTask`, so the board keeps showing plain `todo` while
- *  either condition holds. `throttled` is computed by the caller
- *  (`isPickupBlocked`) — this module stays free of a dependency on
- *  throttle.ts. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
+ *  frozen by **a reason of its own** — its execution workspace or agent under
+ *  quarantine (issue #26 / ADR 0012), or the fable line (ADR 0030). Board-wide
+ *  halts are not row properties and never reach here: the queue read's
+ *  envelope answers them once with `boardHalts` (ADR 0068 決定4). `skipped` is
+ *  display-only and queue-view-only (CONTEXT.md's Quarantine) — it never
+ *  reaches `listBoard`/`presentTask`, so the board keeps showing plain `todo`
+ *  while the condition holds. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
  *  gate (issue #26 / ADR 0009: `task.workspace ?? the board's default`) —
  *  absent, no workspace tracking exists and the gate is skipped entirely.
  *  `defaultAgentName`/`auditorName` are the same gate over the agent-name
@@ -2214,7 +2214,6 @@ export function listBoard(
  *  merely marked skipped within it. */
 export function listQueue(
   db: Db,
-  throttled: boolean,
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
   auditorName?: string,
@@ -2226,14 +2225,13 @@ export function listQueue(
   const rows = boardRows(
     db,
     `WHEN status = 'todo' AND type <> 'question' AND (
-       ? = 1 OR (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
+       (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
          OR (${fallback} IS NOT NULL AND ${agentQuarantinedSql("tasks.assignee", fallback)})
          OR (@fableSkippedAssignees IS NOT NULL
            AND COALESCE(tasks.assignee, ${fallback}) IN (
              SELECT value FROM json_each(@fableSkippedAssignees)))
      ) THEN 'skipped'`,
     [
-      throttled ? 1 : 0,
       defaultWorkspaceName ?? null,
       defaultWorkspaceName ?? null,
       {

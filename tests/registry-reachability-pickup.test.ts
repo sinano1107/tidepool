@@ -6,6 +6,7 @@ import { Slot } from "../src/slot.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { KillSignal, WorkerAdapter } from "../src/worker.js";
 import { FakeClock, healthyUsageText, ScriptedWorker } from "./fakes.js";
+import { api, bootTidepool, HOUR, registerWork } from "./harness.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 // ここが測るのは**ゲートが spawn の手前で実際に fetch を撃つこと**である。worker は
@@ -102,4 +103,24 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     questionTitles: ["registry remote is unreachable — pickup is stopped"],
   });
   scheduler.stop();
+});
+
+// ADR 0068 決定5 の帰結: registry の確認 question が開いている間、poll は候補選定の
+// **手前**の同期プレフィックスで止まる。壊れている間の /usage 観測はもう走らない
+// (pickup しないという結果は同一 — 消えるのは無駄な観測だけ)。
+it("registry 質問が開いている間、poll は /usage を観測しない(ADR 0068 決定5)", async () => {
+  const t = await bootTidepool({
+    registryReachability: async () => ({ available: false, reason: "origin is unreachable" }),
+  });
+  try {
+    await registerWork(t, "waits for the registry");
+    await t.clock.advance(HOUR); // 1回目の poll: 質問がまだ無いので観測は走り、質問が立つ
+    const first = (await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt;
+    expect(first).not.toBeNull();
+
+    await t.clock.advance(HOUR); // 2回目の poll: 質問が開いているので手前で止まる
+    expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt).toBe(first);
+  } finally {
+    await t.stop();
+  }
 });

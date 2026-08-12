@@ -98,7 +98,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
     );
     completeTask(db, root, HANDOFF, "reef-crab", new Date(1));
 
-    const queue = listQueue(db, false);
+    const queue = listQueue(db);
 
     expect(queue.some((t) => t.id === root.id)).toBe(false);
   });

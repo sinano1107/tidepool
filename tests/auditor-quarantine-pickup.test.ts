@@ -39,7 +39,7 @@ it("Auditor が quarantine されている間、defaultAgentName が健全でも
 
   // the review stays out of the slot while the healthy default-agent task flows
   expect(t.worker.started.map((x: any) => x.id)).toEqual([work.id]);
-  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks;
   expect(queue.find((x: any) => x.id === review.id)?.status).toBe("skipped");
   expect(queue.find((x: any) => x.id === work.id)?.status).not.toBe("skipped");
 });

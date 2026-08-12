@@ -1,5 +1,5 @@
 // ui_kits/tidepool-webui/queue-screen.jsx
-function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, headId, gap = 6 }) {
+function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6 }) {
   const { QueueItem } = window.TidepoolDesignSystem_8a0ead;
   const itemEls = React.useRef(/* @__PURE__ */ new Map());
   const lastTops = React.useRef(/* @__PURE__ */ new Map());
@@ -122,7 +122,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, hea
         opacity: t.blocked ? 0.55 : void 0
       }
     },
-    /* @__PURE__ */ React.createElement(QueueItem, { position: baseIndex + i + 1, task: t, skipped: t.skipped, skipReason, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
+    /* @__PURE__ */ React.createElement(QueueItem, { position: baseIndex + i + 1, task: t, skipped: t.skipped, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
   )));
 }
 const TP_SLOT_STATES = {
@@ -131,23 +131,11 @@ const TP_SLOT_STATES = {
   warning: { color: "var(--sun-4)", line: "close to limit \xB7 finishing tp-0142, starting nothing new", meta: "per Anthropic threshold" },
   limit: { color: "var(--coral-4)", line: "usage limit \xB7 nothing starts", meta: "resumes 06:12 \xB7 immediate poll at reset" }
 };
-function pausedSlot(underlyingSlot) {
-  return {
-    color: "var(--rock-4)",
-    line: underlyingSlot?.taskId ? "pickup paused \xB7 task finishes, nothing new starts" : "pickup paused \u2014 nothing starts until resumed",
-    meta: "poll idle",
-    taskId: underlyingSlot?.taskId ?? null
-  };
-}
 function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false, onTogglePause, spendDown = null, onSpendDown, onFront, onDoneHuman, onReorder }) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
-  const underlyingSlot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
-  const slot = paused ? pausedSlot(underlyingSlot) : underlyingSlot;
-  const throttled = !paused && slotState === "limit";
-  const skipReason = paused ? "pickup paused" : data.throttleFailClosed ? "usage check unavailable" : data.throttleResumesAt ? `resumes ${data.throttleResumesAt}` : "resumes on reset";
+  const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const alert = wsAlert ? data.workspaceAlert : null;
   const headId = data.queue[0]?.id ?? null;
-  const queue = paused || throttled ? data.queue.map((t) => ({ ...t, skipped: true })) : data.queue;
   React.useEffect(() => {
     lucide.createIcons();
   });
@@ -181,7 +169,7 @@ function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false
     borderRadius: 1,
     marginBottom: 14,
     background: paused ? "repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)" : slot.color
-  } }), onSpendDown && (spendDown ? /* @__PURE__ */ React.createElement("div", { key: "spend-down-active", style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 14, background: "var(--sun-1)", border: "1px solid var(--sun-2)", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "spend-down \xB7 burning the ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, spendDown.window), " budget to the 100% cap"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }, "expires at reset"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(null) }, "cancel")) : /* @__PURE__ */ React.createElement("div", { key: "spend-down-idle", style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down"), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "burn what's left of a window before it expires"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("session") }, "session"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("week") }, "week"))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: queue, onReorder, onFront, skipReason, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
+  } }), onSpendDown && (spendDown ? /* @__PURE__ */ React.createElement("div", { key: "spend-down-active", style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 14, background: "var(--sun-1)", border: "1px solid var(--sun-2)", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "spend-down \xB7 burning the ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, spendDown.window), " budget to the 100% cap"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }, "expires at reset"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(null) }, "cancel")) : /* @__PURE__ */ React.createElement("div", { key: "spend-down-idle", style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down"), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "burn what's left of a window before it expires"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("session") }, "session"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("week") }, "week"))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: data.queue, onReorder, onFront, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
 }
 Object.assign(window, { QueueScreen, TpQueueList });
 
@@ -780,8 +768,9 @@ function liveTitle(t) {
   if (t.issue_live_state === "unavailable") return `${t.title} (unavailable)`;
   return t.title;
 }
-function mapData(board, log, pause, icons = {}, triage = {}) {
-  const paused = pause.paused;
+function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }) {
+  const halts = queueEnvelope.halts;
+  const paused = halts.some((h) => h.kind === "pause");
   const throttle = pause.throttle;
   const fmtTime = (iso) => {
     const d = new Date(iso);
@@ -818,13 +807,16 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
     handoffPresent: e.kind === "task_completed" && !!e.payload.handoff_present,
     workspace: e.workspace ?? null
   }));
-  const queue = board.filter((t) => (t.status === "todo" || t.status === "blocked") && t.type !== "question").map((t) => ({
+  const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
     id: t.id,
     title: liveTitle(t),
     assignee: t.assignee ?? void 0,
     assigneeIcon: t.assignee ? icons[t.assignee] : void 0,
     risk: !!t.risk_flag,
     blocked: t.status === "blocked",
+    // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
+    // fable 線(ADR 0068 決定4)。盤面全体の停止はスロット行が1回で言う
+    skipped: t.status === "skipped",
     frontInserted: RECENT_FRONTS.has(t.id),
     flash: RECENT_FRONTS.has(t.id)
   }));
@@ -861,64 +853,78 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
   }
   const running = board.find((t) => t.status === "in_progress");
   const throttled = !!throttle?.throttled;
-  const throttleFailClosed = throttled && !throttle.resumesAt;
-  const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resumesAt) : null;
   const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
   const hitLines = ["session", "week", "fable"].filter((w) => throttleWindows[w]?.throttled);
   const fableWindow = throttleWindows.fable;
   const fableThrottled = !!fableWindow?.throttled;
   const fableResumesAt = fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
-  const throttleObservedAt = throttle?.observedAt ? fmtTime(throttle.observedAt) : null;
   const halt = (slot2, kind, msg, detail) => ({ slot: slot2, toast: { kind, msg, detail } });
-  const pickupHalt = pause.triageActive ? halt(
-    { color: "var(--sun-4)", line: "triage in progress \xB7 nothing starts", meta: "close triage session to resume", taskId: null },
-    "warn",
-    "moved to front \u2014 pickup blocked",
-    "triage in progress \u2014 close the session to resume"
-  ) : paused ? halt(
-    { color: "var(--tide-4)", line: "pickup paused \u2014 nothing starts until resumed", meta: "", taskId: null },
-    "warn",
-    "moved to front \u2014 pickup is paused",
-    "resume to run it"
-  ) : pause.containmentBlocked ? halt(
-    { color: "var(--coral-4)", line: "worker containment unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null },
-    "warn",
-    "moved to front \u2014 pickup blocked",
-    "worker containment is not established"
-  ) : pause.registryReachabilityBlocked ? halt(
-    { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null },
-    "warn",
-    "moved to front \u2014 pickup blocked",
-    "registry remote is unreachable"
-  ) : throttle?.revalidating ? halt(
-    {
-      color: "var(--sun-4)",
-      line: "usage re-evaluation in progress \xB7 nothing starts",
-      taskId: null,
-      meta: throttleObservedAt ? `last observed ${throttleObservedAt}` : "no observation yet"
-    },
-    "info",
-    "moved to front \u2014 usage is being re-evaluated",
-    "waiting for a fresh observation"
-  ) : throttled ? halt(
-    {
-      color: "var(--coral-4)",
-      taskId: null,
-      ...throttleFailClosed ? {
-        line: "usage check unavailable \xB7 nothing starts",
-        meta: `fail-closed \u2014 check usage check logs${throttleObservedAt ? ` \xB7 observed ${throttleObservedAt}` : ""}`
-      } : {
-        line: "usage pace \xB7 nothing starts",
-        // which line is hit (ADR 0030) — an old pre-window row (no
-        // windows persisted yet) falls back to the plain resume text
-        meta: `${hitLines.length ? `${hitLines.join(" + ")} line \xB7 ` : ""}resumes ${throttleResumesAt}${throttleObservedAt ? ` \xB7 observed ${throttleObservedAt}` : ""}`
+  const HALT_COPY = {
+    triage: () => halt(
+      { color: "var(--sun-4)", line: "triage in progress \xB7 nothing starts", meta: "close triage session to resume", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "triage in progress \u2014 close the session to resume"
+    ),
+    pause: () => halt(
+      { color: "var(--rock-4)", line: "pickup paused \u2014 nothing starts until resumed", meta: "poll idle", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup is paused",
+      "resume to run it"
+    ),
+    containment: () => halt(
+      { color: "var(--coral-4)", line: "worker containment unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "worker containment is not established"
+    ),
+    registryReachability: () => halt(
+      { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "registry remote is unreachable"
+    ),
+    // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
+    // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
+    // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
+    throttle: (entry) => {
+      const observed = entry.observedAt ? fmtTime(entry.observedAt) : null;
+      const resumes = entry.resumesAt ? fmtTime(entry.resumesAt) : null;
+      if (entry.revalidating) {
+        return halt(
+          {
+            color: "var(--sun-4)",
+            line: "usage re-evaluation in progress \xB7 nothing starts",
+            taskId: null,
+            meta: observed ? `last observed ${observed}` : "no observation yet"
+          },
+          "info",
+          "moved to front \u2014 usage is being re-evaluated",
+          "waiting for a fresh observation"
+        );
       }
-    },
-    "warn",
-    "moved to front \u2014 pickup blocked",
-    throttleFailClosed ? "usage check unavailable \u2014 nothing starts until a fresh reading arrives" : `usage limit \xB7 resumes ${throttleResumesAt}`
-  ) : null;
-  const slot = running ? { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : fableThrottled ? {
+      return halt(
+        {
+          color: "var(--coral-4)",
+          taskId: null,
+          ...entry.failClosed ? {
+            line: "usage check unavailable \xB7 nothing starts",
+            meta: `fail-closed \u2014 check usage check logs${observed ? ` \xB7 observed ${observed}` : ""}`
+          } : {
+            line: "usage pace \xB7 nothing starts",
+            // which line is hit (ADR 0030) — an old pre-window row (no
+            // windows persisted yet) falls back to the plain resume text
+            meta: `${hitLines.length ? `${hitLines.join(" + ")} line \xB7 ` : ""}resumes ${resumes}${observed ? ` \xB7 observed ${observed}` : ""}`
+          }
+        },
+        "warn",
+        "moved to front \u2014 pickup blocked",
+        entry.failClosed ? "usage check unavailable \u2014 nothing starts until a fresh reading arrives" : `usage limit \xB7 resumes ${resumes}`
+      );
+    }
+  };
+  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+  const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : fableThrottled ? {
     // fable line only (ADR 0030): the board keeps flowing — fable-model
     // tasks alone wait for their catch-up
     color: "var(--rock-3)",
@@ -948,14 +954,10 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
     pickupHalt,
     running: !!running,
     paused: !!paused,
-    triageActive: !!pause.triageActive,
-    containmentBlocked: !!pause.containmentBlocked,
-    registryReachabilityBlocked: !!pause.registryReachabilityBlocked,
+    triageActive: halts.some((h) => h.kind === "triage"),
     // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
     spendDown: pause.spendDown ?? null,
     throttled,
-    throttleFailClosed,
-    throttleResumesAt,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled,
     fableResumesAt,
@@ -963,14 +965,15 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
   };
 }
 async function fetchData() {
-  const [board, log, pause, candidates, triage] = await Promise.all([
+  const [board, log, pause, candidates, triage, queue] = await Promise.all([
     fetch("/api/tasks").then((r) => r.json()),
     fetch("/api/log").then((r) => r.json()),
     fetch("/api/pause").then((r) => r.json()),
     fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} })),
-    fetch("/api/triage").then((r) => r.json())
+    fetch("/api/triage").then((r) => r.json()),
+    fetch("/api/queue").then((r) => r.json())
   ]);
-  return mapData(board, log, pause, candidates.icons, triage);
+  return mapData(board, log, pause, candidates.icons, triage, queue);
 }
 function TpTideWash({ label, emoji, duration = 1250 }) {
   const dur = `${duration}ms`;

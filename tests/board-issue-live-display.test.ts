@@ -171,7 +171,7 @@ it("GET /api/queue と GET /api/tasks/:id もissue参照タスクをlive展開�
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "再現手順: ...", comments: [] });
 
   const queue = await api(t.baseUrl, "GET", "/api/queue");
-  const queued = queue.json.find((x: any) => x.id === task.id);
+  const queued = queue.json.tasks.find((x: any) => x.id === task.id);
   expect(queued.title).toBe("ログイン画面のバグ");
   expect(queued.issue_live_state).toBe("live");
 

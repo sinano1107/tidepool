@@ -6,9 +6,10 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
+import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
-import { type ContainmentCheck, openContainmentQuestion } from "./containment.js";
+import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import {
   getDisplayLanguage,
@@ -44,7 +45,6 @@ import {
   type RegistryCandidates,
   type RegistryReachabilityCheck,
 } from "./registry.js";
-import { openRegistryReachabilityQuestion } from "./registry-reachability.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
@@ -64,7 +64,7 @@ import {
   presentTask,
   type Task,
 } from "./tasks.js";
-import { getThrottleState, isFablePickupBlocked, isPickupBlocked } from "./throttle.js";
+import { getThrottleState, isFablePickupBlocked } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import {
   TranslationTargetError,
@@ -1426,13 +1426,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     return state && { window: state.window, activatedAt: state.activatedAt.toISOString() };
   }
 
+  // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。`throttle` は資源単位の
+  // 表示(windows / fable 詳細)に要る完全な形のまま残る — halts の throttle
+  // entry と一部重複するが、把握して受け入れた重複である
   router.get("/pause", (_req, res) => {
     const { resetsAt: resumesAt, ...throttle } = getThrottleState(db);
     res.json({
-      paused: isPaused(db),
-      triageActive: activeTriageSession(db) !== undefined,
-      containmentBlocked: openContainmentQuestion(db) !== undefined,
-      registryReachabilityBlocked: openRegistryReachabilityQuestion(db) !== undefined,
+      halts: boardHalts(db, throttleRevalidating),
       throttle: { ...throttle, resumesAt, revalidating: throttleRevalidating() },
       spendDown: spendDownJson(),
     });
@@ -1615,28 +1615,25 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(listYourTasks(db));
   });
 
-  // the queue view (#10): unlike the board, a todo task pickup can't reach
-  // right now — Swell throttle, the human's own Pause (issue #34), or a
-  // standing sandbox halt (issue #60 / ADR 0033), the same board-wide
-  // "nothing starts" shape — shows here as skipped. The sandbox half reads the
-  // standing question rather than re-running the capability check: the gate
-  // always registers the question before it blocks, so the question's presence
-  // *is* the halt, and this stays a plain SQL read on a polled endpoint.
+  // the queue view (#10): an envelope (ADR 0068 決定3) — `halts` says why the
+  // board is quiet, `tasks` carries the rows, and a row's `skipped` is its own
+  // resource-scoped reason alone. Both come from the same read at the same
+  // instant, so no gap between two fetches can make them disagree.
   router.get("/queue", async (_req, res) => {
-    res.json(
-      await presentLive(
+    res.json({
+      halts: boardHalts(db, throttleRevalidating),
+      tasks: await presentLive(
         listQueue(
           db,
-          isPickupBlocked(db, clock.now()) || isPaused(db) || openContainmentQuestion(db) !== undefined,
           workspace?.name,
           defaultAgentName,
           auditorName,
           // fable 線の超過中は fable モデルのタスクだけが skipped に見える
-          // (ADR 0030) — 盤面全体の throttled とは独立の資源単位の絞り
+          // (ADR 0030) — 資源単位の絞りなので行に現れる
           isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
         ),
       ),
-    );
+    });
   });
 
   router.get("/tasks/:id/events", (req, res) => {
