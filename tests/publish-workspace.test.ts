@@ -136,7 +136,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
 // probe は `await` を含むが、まだ外部効果を1つも起こしていない位置(`remote add` の
 // 手前)なので不可分性の要求には触れない。
 describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
-  it("WRITE が無ければ remote add すら撃たずに拒否し、案内の3要素を返す", async () => {
+  it("WRITE が無ければ remote add すら撃たずに拒否する", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const github = new FakeGitHubClient();
     github.scriptRepositoryPermission("sinano1107/sandbox", "READ");
@@ -151,6 +151,58 @@ describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
 
     expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("直せなかったときの案内は repo の名指し・一行コマンド・settings リンクを持つ", async () => {
+    const { deps } = await makeBoard();
+    const github = new FakeGitHubClient();
+    github.scriptRepositoryPermission("sinano1107/sandbox", "READ");
+
+    const err: Error = await publishWorkspace(
+      { name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" },
+      { ...deps, github },
+    ).then(
+      () => new Error("publish resolved — expected a refusal"),
+      (e) => e as Error,
+    );
+
+    expect(err.message).toContain("sinano1107/sandbox");
+    expect(err.message).toContain(
+      "gh api -X PUT repos/sinano1107/sandbox/collaborators/tidepool-bot -f permission=push",
+    );
+    expect(err.message).toContain("https://github.com/sinano1107/sandbox/settings/access");
+  });
+
+  // probe は唯一の `await` なので、その往復が registry を読んでから書くまでの窓を作る。
+  // publish の対象は**既に登録済み**の workspace なので、`createWorkspace` の
+  // 「途中失敗が残すのは registry が知らない孤児だけ」という根拠は引き継げない。
+  it("probe の往復中に landed した publish を上書きせず、拒否へ落ちる", async () => {
+    const { registryDir, deps, checkout } = await makeBoard();
+    const github = new FakeGitHubClient();
+    github.scriptRepositoryPermission("sinano1107/sandbox", "WRITE");
+    // probe が撃たれた瞬間に、別の扉から publish が landed したことにする
+    const original = github.getRepositoryPermission.bind(github);
+    github.getRepositoryPermission = async (ref) => {
+      await writeFile(
+        join(registryDir, "workspaces.yaml"),
+        `sandbox:\n  path: ${checkout}\n  repo: https://github.com/sinano1107/first.git\n`,
+      );
+      git(registryDir, "add", "-A");
+      git(registryDir, "commit", "-m", "another door published first");
+      return original(ref);
+    };
+
+    await expect(
+      publishWorkspace(
+        { name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" },
+        { ...deps, github },
+      ),
+    ).rejects.toThrow(WorkspaceAlreadyPublishedError);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(
+      "https://github.com/sinano1107/first.git",
+    );
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
   });
 
   it("非 GitHub の宛先では probe が1回も撃たれない", async () => {

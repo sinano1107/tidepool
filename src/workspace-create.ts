@@ -357,6 +357,13 @@ export async function publishWorkspace(
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
   // 宣言が無い = ADR 0052 の quarantine 事由)を観測できない ──
+  // probe の往復の間に人間面から同じエントリの編集(notes など)が landed していたら、
+  // 上で読んだ写しは既に古い —— そのまま書くと相手の編集を黙って巻き戻す。publish の
+  // 対象は**既に登録済み**の workspace なので、`createWorkspace` の「途中失敗が残すのは
+  // registry が知らない孤児だけ」という根拠はここでは引き継げない(ADR 0066 決定5)。
+  const fresh = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).workspaces, input.name);
+  if (!fresh) throw new UnknownWorkspaceError(input.name);
+  if (fresh.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, fresh.repo);
   git(dir, "remote", "add", "origin", input.repo);
   try {
     // `--atomic` は必須(issue #285 やること2): 宛先が「Add a README」つきの非空 repo
@@ -369,7 +376,7 @@ export async function publishWorkspace(
     commitWorkspaceEntry(
       deps,
       input.name,
-      { ...entry, repo: input.repo },
+      { ...fresh, repo: input.repo },
       `publish workspace ${input.name} via WebUI`,
     );
   } catch (err) {
