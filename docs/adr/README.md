@@ -1,0 +1,71 @@
+# ADR Index
+
+One line per ADR — the line is the H1 title, which states the decision itself. When you create an ADR, add its line here; when one is superseded, mark it here and in the file's Status.
+
+- [0001](0001-single-process-sqlite-monolith.md) — Single-process TypeScript monolith; board in SQLite, registry in git
+- [0002](0002-domain-verb-mcp-tools.md) — Domain-verb MCP tools; out-of-authority operations convert to approval questions, not errors
+- [0003](0003-decompose-returns-the-parent-for-integration.md) — Decompose returns the parent for integration; a task with unfinished children cannot complete
+- [0004](0004-triage-session-staging-and-timeout-autocommit.md) — トリアージセッションはキュー効果をステージし、放置はタイムアウトで自動コミットする
+- [0005](0005-pin-cli-runtime-flags-explicitly.md) — エージェント実行に影響するCLIフラグは常に明示的にピン留めする
+- [0006](0006-held-subtrees-and-plan-scoped-abandon.md) — 未回答 question は配下を held にし、abandon は計画ごと破棄して親を再計画に戻す
+- [0007](0007-swell-throttle-bypasses-failure-retry.md) — Swell throttle は watchdog の失敗リトライ経路を経由しない **(superseded by 0008)**
+- [0008](0008-usage-polling-throttle.md) — Throttle 検知は pickup 時の /usage ポーリングと自前閾値による — 実行中タスクは常に完走する **(取得機構は 0028、閾値判定は 0030 で置換済み)**
+- [0009](0009-per-use-workspace-resolution.md) — workspace 名は使う瞬間に registry から解決し、path を pin しない
+- [0010](0010-subagents-divide-labor-not-accountability.md) — Subagent は労力の分割であって委譲ではない — 盤面は authority ダイヤルを持たない
+- [0011](0011-unset-assignee-references-default-agent.md) — assignee 未指定は既定 agent への参照であり、「割当待ち」状態は作らない
+- [0012](0012-slot-is-capacity-not-identity.md) — slot は容量であり身元ではない: assignee は spawn の瞬間に解決し、解決失敗は quarantine へ落とす
+- [0013](0013-review-authority-derives-from-task-type.md) — review の権限はエージェントではなくタスク型に由来する: 強制床はコードに置く
+- [0014](0014-roster-push-pull-prose.md) — roster は push+pull のハイブリッドで配り、能力は分類学ではなく散文で伝える
+- [0015](0015-canonical-text-is-english-translation-is-a-view.md) — 正準テキストは英語、翻訳は表示時の導出
+- [0016](0016-issue-backed-tasks-reference-content-live.md) — Issue-backed task は内容を live 参照で持つ — 登録時 snapshot ではなく
+- [0017](0017-agent-definitions-carry-specialty-only.md) — エージェント定義は専門性のみを運ぶ — ワーカープロトコルは盤面が注入する
+- [0018](0018-host-independent-workspace-entries.md) — workspace エントリはホスト非依存 — path は規約導出が既定
+- [0019](0019-agent-names-carry-specialty-continuity.md) — agent 名は専門性の連続性を運ぶ — 編集は洗練に限り、転生は新名で
+- [0020](0020-registry-reads-committed-main.md) — registry はコミット済み main から読む — spawn は版を観測記録し、self RCA には当時版を注入する
+- [0021](0021-agent-review-requests-open-via-flag-not-type.md) — エージェントのレビュー要請は flag で開き、type では開かない
+- [0022](0022-board-timezone-auto-reported-by-browser.md) — 盤面タイムゾーンはブラウザが自動報告する、ピッカーは作らない
+- [0023](0023-workspace-branch-is-a-reference-not-a-fork-fact.md) — workspace の branch は参照であり fork 事実ではない
+- [0024](0024-board-github-identity-is-injected-machine-user.md) — 盤面の GitHub 身元は明示注入された machine user — GitHub 名義は執行者を表す
+- [0025](0025-skill-allowlist-in-agent-frontmatter.md) — skill アクセスは agent frontmatter の許可リスト — 強制は spawn 前列挙の補集合 deny
+- [0026](0026-emoji-input-restricted-to-twemoji-coverage.md) — 絵文字入力は Twemoji 収録範囲に制限する、描画の統一方式は先送り
+- [0027](0027-automated-tests-stop-at-the-server-boundary.md) — 自動テストはサーバー境界で止め、ブラウザ駆動は受け入れ確認に限る
+- [0028](0028-usage-throttle-scrapes-interactive-tui.md) — Throttle の使用率取得は対話 TUI の `/usage` パネルをスクレイプする
+- [0029](0029-agent-drives-webui-browser-checks.md) — WebUI のブラウザ確認はエージェントが Playwright で担い、人間の受け入れ確認ステップを廃止する
+- [0030](0030-throttle-paces-usage-against-elapsed-time.md) — Throttle は一律閾値ではなく経過ペースとの差で絞る — オフセットは人間の取り分の予約
+- [0031](0031-teams-are-derived-views-review-routing-is-task-keyed.md) — チームとロールは保存されるエンティティではなく導出ビュー — レビュアーのルーティングはタスク単位の指名のみ
+- [0032](0032-management-mcp-opens-the-board-to-agents-attribution-stays-human.md) — 管理MCP は盤面をエージェントに開くが、操作の帰属は常に人間
+- [0033](0033-worker-containment-via-harness-sandbox.md) — worker の封じ込めはハーネス内蔵サンドボックスで行う: 拘束されるのは AI の手であってハーネスではない
+- [0034](0034-worker-network-containment-two-tier-invariant.md) — worker のネットワーク到達は「操作 = 完全閉鎖 / 読取 = 監査つき受容」の二段で封じる **(superseded by 0036)**
+- [0035](0035-review-write-floor-lives-in-the-permission-layer.md) — review の書き込み床は permission 層(`--permission-mode manual`)が担う
+- [0036](0036-human-surface-is-guarded-by-a-credential.md) — 人間面は credential で守る: worker のネットワーク到達封じをアプリ層の認証に置き換える
+- [0037](0037-workspace-settings-cannot-carry-a-worker-floor.md) — workspace 自身の settings は worker の床を運べない: hooks を殺し、settings への書き込みを二層で塞ぐ
+- [0038](0038-worker-tool-floor-is-the-residual-default.md) — worker のツール層の床は permission モードが持つ: `auto` は permission に背いていない
+- [0039](0039-worker-tool-surface-is-a-default-deny-allowlist.md) — worker のツール面は既定拒否の allowlist: 残余の既定が届かない層には向きを反転させた別機構が要る
+- [0040](0040-board-state-paths-cannot-overlap-workspaces.md) — 盤面の状態パスは workspace と交差できない: 重なりガードは pickup 時の workspace quarantine
+- [0041](0041-composition-root-options-are-observable-and-absences-are-declared.md) — 合成 root のオプション組み立ては観測可能で、渡さない口は宣言される
+- [0042](0042-advisor-pairing-is-not-validated-against-a-table.md) — advisor のペアリングは表で検証しない — 版依存の意味を持つ文字列を盤面が judge しない
+- [0043](0043-composition-observation-extends-to-worker-options.md) — 合成の観測は worker options 層まで伸ばす — 「不在 = 実物」と「不在 = 機能が切れる」は別の層
+- [0044](0044-board-calls-declare-the-absence-of-an-advisor.md) — 盤面呼び出しは advisor を持たない — 不在は呼び出しごとに明示する
+- [0045](0045-course-correction-flows-through-context-not-checkpoints.md) — 軌道修正は checkpoint 機構ではなく文脈の可視化で賄う
+- [0046](0046-repair-tasks-belong-to-the-objected-task.md) — 異議由来の修理タスクは異議されたタスクの子である
+- [0047](0047-parent-context-arrives-as-one-woven-history.md) — 親の文脈は1本の年表として届く
+- [0048](0048-abandon-discards-the-decomposition-not-the-plan.md) — abandon が破棄するのは計画ではなく、失敗タスクが乗っている分解判断
+- [0049](0049-only-awaited-children-block-the-parent.md) — 親を塞ぐのは親が待っている子だけであり、付帯子は塞がない
+- [0050](0050-preview-boards-are-for-authoring-not-verification.md) — プレビュー盤面はオーサリングのための面であり、検証ではない
+- [0051](0051-design-system-source-lives-under-design-system.md) — デザインシステムの実ソースは design-system/ 配下に集約する
+- [0052](0052-registry-source-of-truth-is-the-remote-main.md) — 盤面が読む正本はリモートの保護ブランチであり、ホスト上の clone はキャッシュである
+- [0053](0053-task-branch-forks-from-its-lineage-and-work-returns-where-it-was-cut.md) — タスクブランチの fork 元は系譜が決め、成果は切られた場所へ帰る
+- [0054](0054-the-review-exemption-reads-the-executor-not-the-assignee.md) — レビューの免除が問うのは Assignee ではなく Executor である
+- [0055](0055-webui-is-prebuilt-and-served-from-the-board.md) — WebUI は事前ビルドして盤面から配る
+- [0056](0056-task-type-override-reaches-the-authority-prose.md) — task type の override は authority の散文と roster にも及ぶ
+- [0057](0057-the-log-skim-carries-no-standing-action-glyphs.md) — ログ流し読みの面に常時のアクショングリフは置かない — 唯一の明示アクションは行そのものに乗る
+- [0058](0058-board-wide-halt-answers-through-one-read-with-its-observation-freshness.md) — 盤面全体の停止は1つの読み口が答え、その答えは観測の鮮度を伴う
+- [0059](0059-triage-opens-on-steering-not-on-skimming.md) — トリアージセッションは操舵で開き、流し読みでは開かない
+- [0060](0060-the-board-is-cast-but-not-a-dweller.md) — 盤面は登場人物だが住人ではない — 記号の語彙が種別を言う
+- [0061](0061-the-floor-lifting-field-is-gated-by-the-human-door-not-a-pull-request.md) — 床を持ち上げるフィールドの門は人間面であって PR ではない
+- [0062](0062-tool-free-board-calls-declare-an-empty-tool-surface.md) — 答えを取りに行く盤面呼び出しは空のツール面を宣言する — 翻訳はさらに推論の不在を宣言する
+- [0063](0063-translation-is-paced-by-the-caller-and-floored-by-the-board.md) — 翻訳の流量は呼び出し元が決め、盤面はホストの資源を守る床だけを持つ
+- [0064](0064-the-task-branch-is-the-workers-only-mutable-ref.md) — タスクブランチは worker の唯一の可変 ref である
+- [0065](0065-commit-is-the-triage-terminal-not-the-sessions-verb.md) — コミットはトリアージの終端であって、セッションの動詞ではない
+- [0066](0066-workspaces-are-born-local-and-publish-grants-the-remote.md) — 盤面は GitHub 上に repo を作らない — workspace はローカルに生まれ、`publish` が remote 正本を与える
+- [0067](0067-repo-access-is-repaired-by-accepting-one-invitation-on-the-failure-path.md) — repo アクセスは、到達に失敗した瞬間に招待1枚を受諾して直す

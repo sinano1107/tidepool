@@ -34,3 +34,12 @@ If the concept you need isn't in the glossary yet, that's a signal — either yo
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
 > _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
+
+## ADR landing convention (project-local)
+
+This repo's grilling sessions historically landed their full design detail in the ADR, growing some ADRs to 200+ lines. Keep the split instead:
+
+- **The ADR carries the decision and its why** — decision, rationale, and (when worth remembering) considered options. Honor the format doc's single-paragraph spirit; the healthy median here is ~30 lines, and an ADR past ~60 lines is a signal that spec material has leaked in.
+- **Measurement belongs to the issue.** Current-implementation surveys, measurement tables, implementation walk-throughs, and `file:line` references go in the grilling issue (the spec side of the deliverable), not the ADR — code moves and these go stale silently. In the ADR, cite the issue that holds them.
+- **Existing ADRs are immutable history.** Never retroactively slim, rewrite, or renumber them: ADR numbers and decision headings (「決定N」) are citation addresses used by commits, memories, and other ADRs.
+- **Keep the index current.** `docs/adr/README.md` holds a one-line index of every ADR. Add a line when you create one; when an ADR is superseded, mark it both in the file's Status and in the index.
