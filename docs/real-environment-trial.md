@@ -1,6 +1,6 @@
 # 実環境動作確認(ADR 0052 の3段)
 
-2026-08-08 に設計・着手。**第0段と第1段(1-A / 1-B / 1-C)まで完了。第2段は解禁済み・未実施。**
+2026-08-08 に設計・着手。**第0段・第1段(1-A / 1-B / 1-C)・第2段まで完了。第3段は前提が3つとも解決済みで未実施。**
 
 原則は1つ — **1段につき新しい subsystem を1つだけ足す**。前の段が通っていない状態で次に進まない。
 
@@ -195,7 +195,7 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 ---
 
-## 第2段 — `registry`(PR と人間 merge)/ 未実施(解禁済み)
+## 第2段 — `registry`(PR と人間 merge)/ **完了(2026-08-12)**
 
 **前提だった #220 と #228 は ADR 0053 で決着し、1-C で実機の回帰確認も通った。解禁済みである。**
 
@@ -235,19 +235,80 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 **お題を計画から書き換えた点:** 計画の「README の記述と整合させる」は**空振りする** —— registry の README は layout を説明するだけで、削除対象の agent / profile を個別に列挙していない。代わりに README 末尾に残っている e2e 由来の HTML コメント2行が同種の残骸なので、そちらを削除対象に足した。
 
-### 合格の判定(ADR 0053 反映済み)
+### 結果(合格 6-6 / 2026-08-12)
 
-- [ ] **ルートタスクなので PR が開く。** ADR 0053 決定2 で「保護ブランチから切られたタスクだけが PR を開く」と条件が付いた —— ルートは保護ブランチから切られるので今日どおり
-- [ ] **tako が decompose した場合、子は PR を開かず親へ merge back する。** かつ `registry` を名指しする子は**人間承認 question に変換される**(`allowed_workspaces` / ADR 0013 layer 2)。この経路に入ったら判定は分岐する
-- [ ] 保護 workspace なので merge question が立つ
-- [ ] 人間が merge する
-- [ ] **merge した内容が盤面に効く**(= S1 の本丸)。判定手順は下記
-- [ ] 編集後も WebUI から registry を編集できる(= S2)
-- [ ] **`registryRebaseliner` が効いている**(= #274 の初実走)。セッション中に盤面が registry の ref を書いても、解放時に ADR 0064 の比較が誤検知の quarantine を出さないこと。`workspace_state` の `needs_human` が 0 のままであることで見る
+```
+04:28:31  task_registered   cf1396bf
+04:28:34  task_moved        ← ↑ 1回で発火(キューが空 = 素の先頭だった)
+04:29:05  task_picked_up
+04:29:42  decision_logged
+04:29:59  task_completed
+04:30:05  pr_opened  #4  +  merge question 1f4539ec
+04:30:08  worker_exited     exit 0 / $0.39
+04:34:40  PR #4 merged      ← question に merge と答え、盤面が gh pr merge を撃った
+```
 
-**S1 の判定手順 —— 書き込みゼロ、セッション消費ゼロ:**
+| 判定 | 結果 |
+|---|---|
+| ルートタスクなので PR が開く | ✅ PR #4、`+0 −41`、8ファイル。過不足なし |
+| decompose した場合の分岐 | — tako は1セッションで完了。分岐に入らず(未検証のまま残る) |
+| 保護 workspace なので merge question が立つ | ✅ `1f4539ec`、options `merge`/`hold`、推奨 `merge` |
+| 人間が merge する | ✅ 正確には**人間は question に答え、盤面が `gh pr merge` を撃った** |
+| **merge した内容が盤面に効く(S1 の本丸)** | ✅ Register 画面から `probe` / `probe-2` が消えた |
+| 編集後も WebUI から registry を編集できる(S2) | ✅ `fcdd268 update agent fugu via WebUI` が着地 |
+| ADR 0064 の比較が誤検知を出さない | ✅ ただし**前提が揃っていることを発見した** —— #304 |
 
-読み口は **Register 画面の assignee ドロップダウン**(`GET /api/registry/candidates`)を使う。これは盤面自身の registry 読みそのものであり、しかも**リクエストごとに読み直す**:
+**tako は escalate しなかった。** `standard` の guidance が「deleting data」を authority 外と名指ししているにもかかわらず、purpose に置いた authorization の一文を読んで進めた。**guidance は字義的には読まれない**という測定が取れた。
+
+### S2 で一番効いた証拠: 新しいコミットの親
+
+```
+fcdd268 parent=ad0846d  update agent fugu via WebUI
+```
+
+`refreshRegistryForWrite` が**書き込みの前に fetch した**直接証拠である(ADR 0052 決定2 の「入口の refresh 点」)。古い base の上に書いていたら、merge した削除が丸ごと巻き戻っていた。
+
+### identity の3層が分かれて記録された
+
+```
+fcdd268  tidepool     <…tidepool-bot@users.noreply.github.com>  update agent fugu via WebUI
+ad0846d  tidepool-bot <…>                                        Merge pull request #4
+f83127c  tako         <tako@tidepool.invalid>                    chore: remove verification debris
+```
+
+盤面自身の書き込み / GitHub 上の merge(machine user)/ worker のコミットが、それぞれ別名義で残る。第0段の「全て tidepool 名義」の再確認になった。
+
+### **merge は盤面の見え方を1ミリも変えない**
+
+これが第2段で一番価値のある観測である。
+
+```
+ad0846d  GitHub で merge          → 盤面の見え方: 変化なし。probe はまだ候補に居る
+fcdd268  fugu 編集 → 入口で fetch  → ここで初めて probe が消えた
+```
+
+**盤面は GitHub を読んでいない。** 読むのはローカル clone の `refs/remotes/origin/<branch>` であり、GitHub 上の merge はその remote-tracking ref を動かさない。動かすのは `fetch` だけである。
+
+その証拠として、**削除したはずのファイルは今も Pi のディスク上に在る**:
+
+```
+盤面が読む ref (origin/main):   fugu.md  tako.md
+checkout の実ファイル:          fugu.md  probe-2.md  probe.md  tako.md
+```
+
+`loadRegistry` が working tree を一切見ない(「never the working tree. Every content read and the provenance `commit` use the same ref, so they agree by construction」)ためである。**第0段の「WebUI から3回書いても checkout は動かない」がバグではなかったことも、ここで繋がる** —— checkout は盤面が読むものではない。
+
+**運用上の含意: merge 直後に見て「効いていない」と結論してはならない。** 中間状態を1度見ておくことが、「merge が効かない」と「まだ fetch していない」の取り違えを塞ぐ。
+
+### 発見
+
+**#304 —— ADR 0064 の外科的再基準化が symbolic ref を取り残す。** `refs/remotes/origin/HEAD` は `origin/main` への symref で、`for-each-ref` が解決して出すため行の objectname が連動して動く。`rebaselineRef` は名指しした1行だけを直すので、連動した行が古いまま残る。**セッション実行中に人間が registry を編集すると、解放時の比較がこれを違反と読んで quarantine に落とす。**
+
+今回踏まなかったのは、タスクの実行中に registry 編集が起きなかったからである。第1段が purely-local で `refs/remotes/*` を1本も持たなかったことも、1-C で出なかった理由である。**失敗ではなく、機構が残した痕跡(スナップショットと実 ref の1行の食い違い)から見つけた。**
+
+### S1 に使った読み口(書き込みゼロ、セッション消費ゼロ)—— 次段でも流用できる
+
+**Register 画面の assignee ドロップダウン**(`GET /api/registry/candidates`)。これは盤面自身の registry 読みそのものであり、しかも**リクエストごとに読み直す**:
 
 ```ts
 // src/server-options.ts —— コメントが意図を明示している
@@ -271,9 +332,9 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 ---
 
-## 第3段 — `tidepool` 自身 / 未実施
+## 第3段 — `tidepool` 自身 / 未実施(前提は3つとも解決済み)
 
-**前提2つ:**
+**前提3つ —— いずれも 2026-08-12 に確認済みで、GitHub 側の手作業は collaborator 追加の1コマンドだけ:**
 
 1. **`tidepool-bot` を `sinano1107/tidepool` の collaborator に追加**(registry には既にいる)。
 
@@ -283,11 +344,36 @@ assignees: [...Object.keys(registry.agents), "human"],
    gh api -X PUT repos/sinano1107/tidepool/collaborators/tidepool-bot -f permission=push
    ```
 
-   受諾は盤面が到達失敗時に1回だけ試みる(`repairRepoAccessAtPickup`)。走らせる前に、`clone` モードの門が #284 / #285 でどう変わったかを `src/workspace-create.ts` で確認すること —— 下の記述はその変更より前のものである。
+   受諾は盤面が到達失敗時に1回だけ試みる(`repairRepoAccessAtPickup`)。加えて **`clone` モードの登録の門でも先に撃たれる**(下記)。
 
-2. **workspace のパスは `/mnt/ssd/tidepool-workspaces/tidepool`。** `/mnt/ssd/tidepool` は deploy の rsync 元なので**絶対に登録しない** — ADR 0040 のガードはここに効かず、塞いでいるのは #167 の deploy スクリプト側の前提検査だけ。
+2. **`clone` モードで登録する。`register` モードは使わない。**(2026-08-12 に #284 / #285 の変更を読んで確定)
 
-ここで初めて `standard` に `merge: escalate` を足す。
+   計画は「パスは `/mnt/ssd/tidepool-workspaces/tidepool`。`/mnt/ssd/tidepool` は deploy の rsync 元なので絶対に登録しない」と**人間の注意**で塞いでいたが、**モードの選択で構造的に塞げる**。
+
+   ```ts
+   // clone モード: パスは規約から導かれ、エントリはパスを記録しない(ADR 0018)
+   function cloneAndDescribe(name, repo, deps) {
+     const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
+   ```
+
+   **`clone` モードはパスを受け取らない。** workspace 名 `tidepool` を与えれば `<base>/tidepool` に落ちるので、rsync 元を打ち間違える経路がそもそも無い。パスを明示的に書く唯一のモードが `register` であり、それが計画の危惧していた形である。
+
+   **`clone` モードは登録の門で repo アクセスを先に検査する**(#284):
+
+   ```ts
+   if (input.mode === "clone") {
+     await assertRepoAccess(input.repo, deps.github);   // ← ADR 0067 の招待受諾もここで走る
+     return cloneAndDescribe(input.name, input.repo, deps);
+   }
+   ```
+
+   権限が無ければ生の git エラーではなく `RepoAccessMissingError`(人間向けの案内つき)で落ち、招待が来ていれば `repairRepoAccess` がその場で受諾する。**前提1 の手作業が要らなくなったのはこの経路である。**
+
+   なお **`register` モードには意図的にこの probe が無い**(ADR 0066 決定3 の非対称 —— 既存 checkout の登録に probe を足すと、登録の門が全モードでネットワークを要求することになる)。これも `register` を選ばない理由に加わる。
+
+   `create` モードは #285 で GitHub に一切出なくなり(`git init -b main` + 初期コミット)、構造的に purely-local になる。第3段には使えない。
+
+3. **`standard` に `merge: escalate` を足す。** ここで初めて merge ダイヤルが被測定物になるので、**workspace `tidepool` は `protected: true` にしない** —— 保護するとダイヤルに関係なく人間 merge の question が立ち(第2段がまさにそれ)、ダイヤルの検証にならない。
 
 **お題**: 既存の open issue から範囲が閉じたものを1つ。**#206** が向いている。
 
@@ -329,7 +415,7 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 ---
 
-## 発見(20件)
+## 発見(22件)
 
 ### 1-A / 1-B(14件、2026-08-08)—— **全件 closed**
 
@@ -354,10 +440,22 @@ assignees: [...Object.keys(registry.agents), "human"],
 | pick 可能性の定義が複数箇所にある | #299 | #300 と根が同じ |
 | エージェントの出力規律 | #298 | ADR 0015 の「正準は英語」がワーカーに届いていない |
 
+### 第2段(2件、2026-08-12)
+
+| issue | |
+|---|---|
+| **#304** | ADR 0064 の外科的再基準化が symbolic ref を取り残す。**セッション中の registry 編集 → 解放時に誤検知の quarantine**。第2段・第3段の通常の運用姿勢がそのまま条件になる |
+| #303 | handoff doc は PR 昇格より前に書かれるので、着地の状態について構造的に古い。remote-backed なら毎回起きる |
+
+加えて **#298 の見立てが崩れた**(コメントで追記)。第2段では handoff も `task_completed` の result も PR 本文も全部日本語で、1-C の分かれ方(成果について書くフィールドは英語)は再現しなかった。**安定した分かれ目は無く、周囲のペイロードの言語に合わせているだけ**である。射程に **PR 本文 = 盤面の外に出る面**が加わった。
+
 ### 分布そのものが観測である
 
-**20件のうち14件が「盤面の状態や、エージェント・盤面が書いたものが、人間に正直に届かない」系**である。実装の正しさではなく**面の正直さ**に寄っていて、コードレビューでは出ず、実環境で人間が1周操作して初めて出た。1-C の6件も5件がこの系で、**同じ分布が2回続けて出た**。
+**22件のうち15件が「盤面の状態や、エージェント・盤面が書いたものが、人間に正直に届かない」系**である。実装の正しさではなく**面の正直さ**に寄っていて、コードレビューでは出ず、実環境で人間が1周操作して初めて出た。1-A/1-B で9/14、1-C で5/6、第2段で1/2 —— **同じ分布が3回続けて出た**。
 
-**#298 だけ毛色が違う。** これは面ではなくエージェント側の出力規律の話で、**日本語ペイロードで decompose を伴う実タスクを走らせたのが 1-C が初めて**だったために出た。1-A / 1-B は decompose しなかったので、エージェントが書く title / purpose / 完了基準がそもそも生まれていない。
+**#298 は毛色が違う**(エージェント側の出力規律)。**#304 はさらに違う** —— これは**失敗が起きる前に、機構が残した痕跡から見つけた**唯一の発見である。`workspace_state.ref_snapshot` と実際の `for-each-ref` を突き合わせたら1行だけ食い違っていた、という形で出た。
 
-**観測の一般則: 新しい経路を1本通すたびに、その経路が初めて生む記録の種類が新しい発見を連れてくる。** 段を足すときは「何が新しく生まれるか」を先に列挙しておくと当たりが付けやすい。
+**観測の一般則が2つ立った。**
+
+1. **新しい経路を1本通すたびに、その経路が初めて生む記録の種類が新しい発見を連れてくる。** #298 は decompose が初めてエージェント作の title / purpose を生んだから、#303 / #304 は remote-backed が初めて PR と `refs/remotes/*` を生んだから出た。段を足すときは「何が新しく生まれるか」を先に列挙しておくと当たりが付けやすい。
+2. **判定のために盤面の内部状態を読むと、判定に使わなかった行が発見になる。** #304 は S1 / S2 の判定のついでに撮ったスナップショットから出た。**判定に必要な最小限だけを見ない**ほうがよい。
