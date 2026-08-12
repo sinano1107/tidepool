@@ -507,6 +507,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       registryReachability,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
+      throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspaceAdmin,
       agentAdmin,
       profileAdmin,

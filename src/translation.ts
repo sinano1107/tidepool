@@ -20,7 +20,7 @@ export type TranslationOutcome =
 /** Resolves one translation, cache-first (issue #47): a cache hit never
  *  touches the client or the throttle gate (an already-paid-for translation
  *  costs nothing to show again, even while throttled). A cache miss checks
- *  `getThrottleState` — the raw last-observed reading, not `isPickupBlocked`'s
+ *  `getThrottleState` — the raw last-observed reading, not a live re-observation's
  *  now-resolved variant, since there is no /usage poll on this path to refresh
  *  it — and skips the call entirely while throttled (CONTEXT.md's Throttle:
  *  a worker budget). */

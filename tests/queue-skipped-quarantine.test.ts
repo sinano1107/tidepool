@@ -48,7 +48,7 @@ it("workspace が quarantine された間、その workspace の todo タスク�
   const runsInSandbox = await registerWork(t, "keeps flowing in sandbox", "sandbox");
   await t.clock.advance(HOUR);
 
-  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks;
   expect(queue.find((x: any) => x.id === stuckInProd.id).status).toBe("skipped");
   expect(queue.find((x: any) => x.id === runsInSandbox.id).status).not.toBe("skipped");
 

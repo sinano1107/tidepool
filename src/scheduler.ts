@@ -1,10 +1,10 @@
+import { boardHalts } from "./board-halt.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCheck, containmentPickupBlocked } from "./containment.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { getPaceOffsets } from "./pace-offsets.js";
-import { isPaused } from "./pause.js";
 import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, type RepoAccessRepair, repairRepoAccess } from "./repo-access.js";
@@ -20,7 +20,6 @@ import {
   type Task,
 } from "./tasks.js";
 import { reportThrottle } from "./throttle.js";
-import { activeTriageSession } from "./triage.js";
 import {
   evaluateThrottle,
   isSpendDownExpired,
@@ -166,12 +165,12 @@ export function startScheduler(deps: {
 
   async function pickupBlocked(): Promise<boolean> {
     if (slot.currentTaskId !== null) return true;
-    // triage pauses pickup: the human is re-steering the queue, so nothing
-    // new enters the slot until the session commits (issue #6)
-    if (activeTriageSession(db)) return true;
-    // the human's own explicit pause (issue #34): orthogonal to triage — a
-    // paused board still gates pickup after a triage commit
-    if (isPaused(db)) return true;
+    // ADR 0068 決定5: 同期の短絡は列挙から導出する — triage セッション (issue #6)・
+    // Pause (issue #34)・封じ込め能力とレジストリ到達性の**開いている確認
+    // question**。停止が1つ増えたとき、増えるのは配線ではなく列挙の1行になる。
+    // stored throttle だけは消費しない: scheduler は常に再観測する
+    // (ADR 0008 の just-in-time)。
+    if (boardHalts(db).some((halt) => halt.kind !== "throttle")) return true;
     // ADR 0033 / ADR 0036: a worker whose containment is not established is not
     // run at all. Unlike the workspace/agent quarantines below this halts the
     // whole board — containment belongs to the host and to the board's own

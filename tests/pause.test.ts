@@ -59,25 +59,24 @@ it("pause 中に todo を先頭へ move しても pickup が発火せず、resum
   expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
 });
 
-it("pause 中の todo はキュービューで skipped として現れ、resume すると通常の todo に戻る", async () => {
+it("pause 中もキューの行は todo のまま — 停止は envelope の halts が1回で答える(ADR 0068)", async () => {
   t = await bootTidepool();
   const running = await registerWork(t, "keeps the slot busy");
   const task = await registerWork(t, "waits for resume");
   await t.clock.advance(HOUR); // "keeps the slot busy" picked up, slot stays occupied throughout
 
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
-  const pausedQueue = (await api(t.baseUrl, "GET", "/api/queue")).json;
-  expect(pausedQueue.find((x: any) => x.id === task.id).status).toBe("skipped");
-
-  // the board itself keeps showing plain todo — skipped is queue-view-only
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board.find((x: any) => x.id === task.id).status).toBe("todo");
+  const paused = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  // 盤面全体の停止は行の性質ではなく面の性質 — 行の skipped には現れない
+  expect(paused.tasks.find((x: any) => x.id === task.id).status).toBe("todo");
+  expect(paused.halts).toEqual([{ kind: "pause" }]);
 
   // the slot is still occupied by "running", so resume's immediate poll is a
-  // no-op for "task" — it's back to plain todo, not picked up
+  // no-op for "task" — the halt simply leaves the envelope
   await api(t.baseUrl, "POST", "/api/pause", { paused: false });
-  const resumedQueue = (await api(t.baseUrl, "GET", "/api/queue")).json;
-  expect(resumedQueue.find((x: any) => x.id === task.id).status).toBe("todo");
+  const resumed = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  expect(resumed.tasks.find((x: any) => x.id === task.id).status).toBe("todo");
+  expect(resumed.halts).toEqual([]);
   expect(t.worker.started.map((x: any) => x.id)).toEqual([running.id]);
 });
 
@@ -99,10 +98,9 @@ it("pause 状態はサーバー再起動を跨いで維持される", async () =
   t = await bootTidepool({ dir: t.dir });
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json).toEqual({
-    paused: true,
-    triageActive: false,
-    containmentBlocked: false,
-    registryReachabilityBlocked: false,
+    // 盤面全体の停止は列挙が1回で答える — 4つの boolean は列挙から導出できる
+    // ので応答から消えた(ADR 0068 決定3)
+    halts: [{ kind: "pause" }],
     throttle: {
       throttled: false,
       resumesAt: null,
@@ -140,13 +138,13 @@ it("GET /api/pause は開いている triage session を盤面全体の停止と
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/triage/start");
 
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.triageActive).toBe(true);
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([{ kind: "triage" }]);
 });
 
 it("GET /api/pause は封じ込め能力の不成立を盤面全体の停止として返す(ADR 0058)", async () => {
   t = await bootTidepool({ sandboxCapability: () => ({ available: false, reason: "no sandbox" }) });
 
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.containmentBlocked).toBe(true);
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([{ kind: "containment" }]);
 });
 
 it("GET /api/pause は registry 到達性の不成立を盤面全体の停止として返す(ADR 0058)", async () => {
@@ -156,5 +154,7 @@ it("GET /api/pause は registry 到達性の不成立を盤面全体の停止と
   await registerWork(t, "waits for the registry");
   await t.clock.advance(HOUR);
 
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.registryReachabilityBlocked).toBe(true);
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([
+    { kind: "registryReachability" },
+  ]);
 });

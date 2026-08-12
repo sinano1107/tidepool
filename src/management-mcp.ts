@@ -7,9 +7,10 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
+import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
-import { type ContainmentCheck, openContainmentQuestion } from "./containment.js";
+import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents, listLog } from "./events.js";
@@ -24,7 +25,6 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { toolError, toolResult } from "./mcp.js";
-import { isPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import type { RegistryReachabilityCheck } from "./registry.js";
 import {
@@ -49,7 +49,7 @@ import {
   listQueue,
   listYourTasks,
 } from "./tasks.js";
-import { isFablePickupBlocked, isPickupBlocked } from "./throttle.js";
+import { isFablePickupBlocked } from "./throttle.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
@@ -80,6 +80,9 @@ export interface ManagementMcpDeps {
   registryReachability?: RegistryReachabilityCheck;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
+  /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
+   *  盤面では未注入で、その場合 throttle の再観測中は現れない。 */
+  throttleRevalidating?: () => boolean;
   workspaceAdmin?: Partial<WorkspaceAdmin>;
   agentAdmin?: Partial<AgentAdmin>;
   profileAdmin?: Partial<ProfileAdmin>;
@@ -189,19 +192,20 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool("list_board", { description: "List the current task board." }, async () =>
     toolResult(listBoard(deps.db, deps.defaultAgentName, deps.auditorName)),
   );
+  // ADR 0068 決定3: the envelope is this ADR's real fix — an agent reading the
+  // queue here receives "why is it quiet" in the same one read, since MCP has
+  // no banner channel to fill the gap.
   server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () =>
-    toolResult(
-      listQueue(
+    toolResult({
+      halts: boardHalts(deps.db, deps.throttleRevalidating),
+      tasks: listQueue(
         deps.db,
-        isPickupBlocked(deps.db, deps.clock.now()) ||
-          isPaused(deps.db) ||
-          openContainmentQuestion(deps.db) !== undefined,
         deps.workspace?.name,
         deps.defaultAgentName,
         deps.auditorName,
         isFablePickupBlocked(deps.db, deps.clock.now()) && deps.fableAgents ? deps.fableAgents() : undefined,
       ),
-    ),
+    }),
   );
   server.registerTool("list_your_tasks", { description: "List unsettled tasks assigned to the human." }, async () =>
     toolResult(listYourTasks(deps.db)),

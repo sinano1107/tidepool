@@ -30,7 +30,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       new Date(1),
     );
 
-    const queue = listQueue(db, false, undefined, "deckhand");
+    const queue = listQueue(db, undefined, "deckhand");
     expect(queue.find((t) => t.id === stuck.id)?.status).toBe("skipped");
     expect(queue.find((t) => t.id === runnable.id)?.status).toBe("todo");
 
@@ -48,7 +48,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       new Date(0),
     );
 
-    expect(listQueue(db, false).find((t) => t.id === task.id)?.status).toBe("todo");
+    expect(listQueue(db).find((t) => t.id === task.id)?.status).toBe("todo");
   });
 
   it("review type かつ assignee 未設定のタスクは、defaultAgentName が健全でも auditorName の quarantine で skipped になる(issue #42)", () => {
@@ -65,7 +65,7 @@ describe("listQueue は quarantine 済み agent 宛ての todo を skipped と�
       new Date(1),
     );
 
-    const queue = listQueue(db, false, undefined, "deckhand", "auditor");
+    const queue = listQueue(db, undefined, "deckhand", "auditor");
     expect(queue.find((t) => t.id === review.id)?.status).toBe("skipped");
     expect(queue.find((t) => t.id === work.id)?.status).toBe("todo");
   });

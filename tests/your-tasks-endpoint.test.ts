@@ -30,6 +30,6 @@ it("GET /api/your-tasks は human 宛てタスクを返し、実行キューに�
   expect(yourTasks.json.map((x: any) => x.id)).toEqual([human.id]);
 
   const queue = await api(t.baseUrl, "GET", "/api/queue");
-  expect(queue.json.map((x: any) => x.id)).not.toContain(human.id);
-  expect(queue.json.map((x: any) => x.id)).toContain(agent.id);
+  expect(queue.json.tasks.map((x: any) => x.id)).not.toContain(human.id);
+  expect(queue.json.tasks.map((x: any) => x.id)).toContain(agent.id);
 });

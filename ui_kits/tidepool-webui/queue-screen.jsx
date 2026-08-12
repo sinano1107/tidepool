@@ -132,8 +132,8 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, hea
   );
 }
 
-// The slot line reflects the four states of the single execution slot.
-// 'limit' additionally renders every queue row as skipped (Swell throttle).
+// The slot line reflects the four states of the single execution slot. 盤面
+// 全体の停止は行に降りない — 面が1回言う(ADR 0068 決定7)。
 const TP_SLOT_STATES = {
   busy: { color: 'var(--tide-4)', line: 'tp-0142 · Queue reorder — fractional sort keys', meta: 'next poll 08:00' },
   free: { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'next poll 08:00' },
@@ -163,24 +163,16 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
   // real deployments pass live slot content via data.slot; the canned states remain for the mock
   const underlyingSlot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const slot = paused ? pausedSlot(underlyingSlot) : underlyingSlot;
-  const throttled = !paused && slotState === 'limit';
-  // the generic "skipped · resumes on reset" row label lied for pause (a
-  // human resumes it, not a reset) and for fail-closed throttle (no known
-  // reset time to begin with) — issue #82 / #79's lesson about not
-  // papering over an unobservable state applies to the row, not just the
-  // slot line above it.
-  const skipReason = paused
-    ? 'pickup paused'
-    : data.throttleFailClosed
-    ? 'usage check unavailable'
-    : data.throttleResumesAt
-    ? `resumes ${data.throttleResumesAt}`
-    : 'resumes on reset';
+  // ADR 0068 決定7: 盤面全体の停止による全行減光は廃止 — 停止は面(スロット行)が
+  // 1回言う。残る減光は行が自分で運ぶ資源単位の `skipped`(workspace / agent の
+  // quarantine・fable 線)だけで、その理由はそれぞれ修理 question とスロット行が
+  // 既に持っている(行単位の理由文言は当面付けない)。
+  const skipReason = 'held by its own resource';
   const alert = wsAlert ? data.workspaceAlert : null;
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
   const headId = data.queue[0]?.id ?? null;
-  const queue = (paused || throttled) ? data.queue.map((t) => ({ ...t, skipped: true })) : data.queue;
+  const queue = data.queue;
   React.useEffect(() => { lucide.createIcons(); });
   return (
     <div style={{ padding: '20px 16px' }}>

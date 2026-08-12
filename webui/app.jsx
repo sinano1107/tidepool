@@ -124,9 +124,18 @@ function liveTitle(t) {
 // Map the server board + decision log into the shape the kit screens consume.
 // `icons` is the registry's assignee name → icon map (issue #52's
 // GET /api/registry/candidates); a name absent from it renders with
-// AgentChip's initials fallback.
-function mapData(board, log, pause, icons = {}, triage = {}) {
-  const paused = pause.paused;
+// AgentChip's initials fallback. `queueEnvelope` is GET /api/queue's
+// { halts, tasks } (ADR 0068 決定6): rows and board-wide halts come from the
+// same read at the same instant, so no gap between two fetches can make the
+// rows and the slot line disagree.
+function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }) {
+  // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
+  // ブラウザは並べ替えず、先頭を読んで kind 別コピーに写すだけ
+  const halts = queueEnvelope.halts ?? [];
+  const haltKinds = new Set(halts.map((h) => h.kind));
+  const paused = haltKinds.has('pause');
+  // 資源単位の表示に要る完全な throttle(windows / fable 詳細)は /pause から —
+  // halts の throttle entry と一部重複するが、把握して受け入れた重複である
   const throttle = pause.throttle;
   const fmtTime = (iso) => {
     const d = new Date(iso);
@@ -164,17 +173,21 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
     handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
   }));
-  // the queue is the todo order the slot walks. derived-blocked rows keep
-  // their sort_key position (the slot skips them until the children finish),
-  // so they stay visible — hiding them would make the displayed order lie
-  // about where a drag actually lands. questions stay out: they never enter
-  // the slot and are answered in triage.
-  const queue = board
-    .filter((t) => (t.status === 'todo' || t.status === 'blocked') && t.type !== 'question')
+  // the queue is the todo order the slot walks, straight from /api/queue (ADR
+  // 0068 決定6) — the server's own row set and its resource-scoped `skipped`,
+  // no longer re-derived from the board here. derived-blocked rows keep their
+  // sort_key position (the slot skips them until the children finish), so they
+  // stay visible — hiding them would make the displayed order lie about where a
+  // drag actually lands. held rows stay out, same as before.
+  const queue = queueEnvelope.tasks
+    .filter((t) => t.status === 'todo' || t.status === 'blocked' || t.status === 'skipped')
     .map((t) => ({
       id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked',
+      // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
+      // fable 線(ADR 0068 決定4)。盤面全体の停止はスロット行が1回で言う
+      skipped: t.status === 'skipped',
       frontInserted: RECENT_FRONTS.has(t.id), flash: RECENT_FRONTS.has(t.id),
     }));
   const openChildren = {};
@@ -206,11 +219,6 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
   }
   const running = board.find((t) => t.status === 'in_progress');
   const throttled = !!throttle?.throttled;
-  // resets_at null while throttled is the fail-closed case (#79's lesson):
-  // usage itself could not be observed, not merely "over threshold" — the
-  // slot must say so rather than showing a bogus/absent resume time
-  const throttleFailClosed = throttled && !throttle.resumesAt;
-  const throttleResumesAt = throttled && !throttleFailClosed ? fmtTime(throttle.resumesAt) : null;
   // ADR 0030: which pace line is hit (session/week), and the fable line's own
   // per-task state — resets_at is now the catch-up ("resumes") instant, and a
   // fable-only excess shows here while the board itself keeps flowing
@@ -220,52 +228,60 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
   const fableThrottled = !!fableWindow?.throttled;
   const fableResumesAt =
     fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
-  const throttleObservedAt = throttle?.observedAt ? fmtTime(throttle.observedAt) : null;
   const halt = (slot, kind, msg, detail) => ({ slot, toast: { kind, msg, detail } });
-  const pickupHalt = pause.triageActive
-    ? halt(
-        { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'close triage session to resume', taskId: null },
-        'warn', 'moved to front — pickup blocked', 'triage in progress — close the session to resume')
-    : paused
-    ? halt(
-        { color: 'var(--tide-4)', line: 'pickup paused — nothing starts until resumed', meta: '', taskId: null },
-        'warn', 'moved to front — pickup is paused', 'resume to run it')
-    : pause.containmentBlocked
-    ? halt(
-        { color: 'var(--coral-4)', line: 'worker containment unavailable · nothing starts', meta: 'see the repair question', taskId: null },
-        'warn', 'moved to front — pickup blocked', 'worker containment is not established')
-    : pause.registryReachabilityBlocked
-    ? halt(
-        { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
-        'warn', 'moved to front — pickup blocked', 'registry remote is unreachable')
-    : throttle?.revalidating
-    ? halt(
-        {
-          color: 'var(--sun-4)', line: 'usage re-evaluation in progress · nothing starts', taskId: null,
-          meta: throttleObservedAt ? `last observed ${throttleObservedAt}` : 'no observation yet',
-        },
-        'info', 'moved to front — usage is being re-evaluated', 'waiting for a fresh observation')
-    : throttled
-    ? halt(
+  // ADR 0068 決定1/決定7: the display priority now lives in the server's ordered
+  // enumeration, not in a ternary chain here — this is a plain kind → copy map
+  // over its head. A new board-wide halt adds one entry, not a new arm.
+  const HALT_COPY = {
+    triage: () => halt(
+      { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'close triage session to resume', taskId: null },
+      'warn', 'moved to front — pickup blocked', 'triage in progress — close the session to resume'),
+    pause: () => halt(
+      { color: 'var(--tide-4)', line: 'pickup paused — nothing starts until resumed', meta: '', taskId: null },
+      'warn', 'moved to front — pickup is paused', 'resume to run it'),
+    containment: () => halt(
+      { color: 'var(--coral-4)', line: 'worker containment unavailable · nothing starts', meta: 'see the repair question', taskId: null },
+      'warn', 'moved to front — pickup blocked', 'worker containment is not established'),
+    registryReachability: () => halt(
+      { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
+      'warn', 'moved to front — pickup blocked', 'registry remote is unreachable'),
+    // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
+    // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
+    // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
+    throttle: (entry) => {
+      const observed = entry.observedAt ? fmtTime(entry.observedAt) : null;
+      const resumes = entry.resumesAt ? fmtTime(entry.resumesAt) : null;
+      if (entry.revalidating) {
+        return halt(
+          {
+            color: 'var(--sun-4)', line: 'usage re-evaluation in progress · nothing starts', taskId: null,
+            meta: observed ? `last observed ${observed}` : 'no observation yet',
+          },
+          'info', 'moved to front — usage is being re-evaluated', 'waiting for a fresh observation');
+      }
+      return halt(
         {
           color: 'var(--coral-4)', taskId: null,
-          ...(throttleFailClosed
+          ...(entry.failClosed
             ? {
                 line: 'usage check unavailable · nothing starts',
-                meta: `fail-closed — check usage check logs${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
+                meta: `fail-closed — check usage check logs${observed ? ` · observed ${observed}` : ''}`,
               }
             : {
                 line: 'usage pace · nothing starts',
                 // which line is hit (ADR 0030) — an old pre-window row (no
                 // windows persisted yet) falls back to the plain resume text
-                meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${throttleResumesAt}${throttleObservedAt ? ` · observed ${throttleObservedAt}` : ''}`,
+                meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${resumes}${observed ? ` · observed ${observed}` : ''}`,
               }),
         },
         'warn', 'moved to front — pickup blocked',
-        throttleFailClosed
+        entry.failClosed
           ? 'usage check unavailable — nothing starts until a fresh reading arrives'
-          : `usage limit · resumes ${throttleResumesAt}`)
-    : null;
+          : `usage limit · resumes ${resumes}`);
+    },
+  };
+  const primaryHalt = halts[0];
+  const pickupHalt = primaryHalt ? HALT_COPY[primaryHalt.kind]?.(primaryHalt) ?? null : null;
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -296,12 +312,10 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
     // out-of-authority approval questions — the kit sections render empty
     humanTasks: [], agents: [],
     slot, pickupHalt, running: !!running, paused: !!paused,
-    triageActive: !!pause.triageActive,
-    containmentBlocked: !!pause.containmentBlocked,
-    registryReachabilityBlocked: !!pause.registryReachabilityBlocked,
+    triageActive: haltKinds.has('triage'),
     // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
     spendDown: pause.spendDown ?? null,
-    throttled, throttleFailClosed, throttleResumesAt,
+    throttled,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled, fableResumesAt,
     lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
@@ -309,14 +323,15 @@ function mapData(board, log, pause, icons = {}, triage = {}) {
 }
 
 async function fetchData() {
-  const [board, log, pause, candidates, triage] = await Promise.all([
+  const [board, log, pause, candidates, triage, queue] = await Promise.all([
     fetch('/api/tasks').then((r) => r.json()),
     fetch('/api/log').then((r) => r.json()),
     fetch('/api/pause').then((r) => r.json()),
     fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
     fetch('/api/triage').then((r) => r.json()),
+    fetch('/api/queue').then((r) => r.json()),
   ]);
-  return mapData(board, log, pause, candidates.icons, triage);
+  return mapData(board, log, pause, candidates.icons, triage, queue);
 }
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
