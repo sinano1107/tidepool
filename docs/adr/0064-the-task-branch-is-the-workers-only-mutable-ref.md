@@ -85,6 +85,7 @@ worker かを区別する手段がない。**逃げ道は必ず両方に開く�
 | `src/registry-write.ts` `update-ref`(purely-local の registry 着地) | `refs/heads/<REGISTRY_BRANCH>` | 同上 |
 | `src/github.ts` PR 昇格の push | `refs/remotes/*` | 任意の workspace |
 | `src/human-verbs.ts` `mergeTaskToProtected`(purely-local の着地 question への回答) | `refs/heads/<保護>` | 任意の workspace |
+| `src/workspace-create.ts` `publishWorkspace` の push(ADR 0066 決定2/4) | `refs/remotes/origin/*`(push したブランチぶん) | 任意の purely-local な workspace |
 
 タスクA の着地 question に人間が答えた瞬間にタスクB が同じ workspace で走っていれば、B の解放で不変
 条件が落ちる —— 無実のセッションの quarantine である。したがって**盤面が workspace の ref を書いたら、
@@ -94,10 +95,17 @@ worker かを区別する手段がない。**逃げ道は必ず両方に開く�
 その瞬間までに worker が動かした ref も新しい基準に含まれてしまい、解放時の比較が素通りする ——
 違反を飲み込む静かな穴になる。しかも最も起きやすいのが registry clone(人間面からの registry 編集が
 `refreshRegistryForWrite` を撃つ)であり、**唯一の保護 workspace で不変条件が最も弱くなる**。書いた ref は
-どの経路でも1本に確定している(registry の fetch は `REGISTRY_BRANCH` だけ、`update-ref` は
+どの経路でも **N 本だが確定している**(registry の fetch は `REGISTRY_BRANCH` だけ、`update-ref` は
 `refs/heads/<REGISTRY_BRANCH>` だけ、PR 昇格の push は `refs/remotes/origin/task/<id>` だけ、
-`mergeTaskToProtected` は保護ブランチだけ)ので、外科的に書けないケースは無い。全 ref のスナップショットは
+`mergeTaskToProtected` は保護ブランチだけ、`publishWorkspace` は push したブランチぶんの
+`refs/remotes/origin/*`)ので、外科的に書けないケースは無い。全 ref のスナップショットは
 pickup の1回だけが撮る。
+
+`publish` だけが N > 1 になる(ADR 0066 決定4 が本テーブルへ足した6行目)。撮り直す先が確定しているという
+根拠は変わらない —— publish は `origin` を持たない checkout にしか撃たれない(publish 側の4つ目の拒否)ので、
+その瞬間に存在する `refs/remotes/origin/*` は**盤面がたった今 push したものだけ**である。ただし
+**成功したときにしか撮り直してはならない**: 拒否や push 失敗の後に撮ると、worker が偽造した
+`refs/remotes/origin/*`(下の「静かな潜在バグ」そのもの)を基準へ迎え入れることになる。
 
 `refs/remotes/*` を検査対象から外して「盤面は使う直前に必ず fetch する」に頼る案も採らなかった。安全性が
 **コード全体に散った性質**に依存し、将来 fetch を挟まない読み口が1つ足された瞬間に静かに崩れるためで、

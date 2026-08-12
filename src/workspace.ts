@@ -437,6 +437,27 @@ export function rebaselineRef(db: Db, workspace: WorkspaceConfig, ref: string): 
   );
 }
 
+/** ADR 0064 決定4 のテーブル6行目(ADR 0066 決定4 / issue #285): `publish` が push した
+ *  ぶんの `refs/remotes/origin/*` を撮り直す。ADR 0064 本文の「盤面が書いた ref は
+ *  どの経路でも**1本に確定**している」は、publish が初めて複数本を書く経路なので
+ *  「**N 本だが確定している**」へ改訂される —— 外科的である(全 ref を撮り直さない)
+ *  という機構そのものは無変更である。
+ *
+ *  「いま存在する `refs/remotes/origin/*` 全部」が「publish が push したブランチ」と
+ *  一致するのは、publish が **`origin` を持たない checkout にしか撃たれない**
+ *  (`CheckoutHasOriginError`)からである。publish 以前に origin-tracking ref は1本も
+ *  無いので、この列挙が盤面の書き込み以外を飲み込むことはない。
+ *
+ *  **成功した publish の直後にだけ呼ぶこと。** 拒否や失敗の後に呼ぶと、worker が偽造
+ *  した `refs/remotes/origin/*`(ADR 0064 が閉じた潜在バグそのもの)を基準へ迎え入れて
+ *  しまう。 */
+export function rebaselinePublishedRefs(db: Db, workspace: WorkspaceConfig): void {
+  const refs = git(workspace.path, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/");
+  for (const ref of refs.split("\n").filter((line) => line !== "")) {
+    rebaselineRef(db, workspace, ref);
+  }
+}
+
 /** The slot-release tree rule: whatever the session left behind is stashed as
  *  a WIP commit on the task branch, and the tree is verified clean before the
  *  slot goes free. Mechanical, on every release — completion, escalation or

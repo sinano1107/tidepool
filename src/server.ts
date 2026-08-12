@@ -43,10 +43,11 @@ import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
   pathIsRegistryClone,
+  rebaselinePublishedRefs,
   rebaselineRef,
   type WorkspaceConfig,
 } from "./workspace.js";
-import type { WorkspaceAdmin } from "./workspace-create.js";
+import type { PublishWorkspaceFn, WorkspaceAdmin } from "./workspace-create.js";
 
 /** ADR 0064 決定4 の再基準化のうち、**registry clone を触る経路**ぶん。動く ref は
  *  `mode` で1本に決まる —— remote-backed の fetch も push も
@@ -74,6 +75,44 @@ function registryRebaseliner(db: Db, options: ServerOptions): () => void {
       if (workspace) rebaselineRef(db, workspace, ref);
     } catch (err) {
       console.warn("[workspace] registry ref rebaseline skipped (non-fatal)", err);
+    }
+  };
+}
+
+/** ADR 0064 決定4 の再基準化のうち、**publish が push した workspace を触る**ぶん
+ *  (テーブル6行目 / ADR 0066 決定4)。registry ぶんとは2点で違う:
+ *
+ *  - 動くのは1本ではなく **N 本**(push したブランチのぶんだけ `refs/remotes/origin/*`
+ *    が新規作成される)。撮り直す先は `rebaselinePublishedRefs` が checkout から読む。
+ *  - **成功したときにしか撃たない**。`finally` で撃つ registry ぶんと違い、拒否や push
+ *    失敗の後に撮り直すと、worker が偽造した `refs/remotes/origin/*` を基準に迎えて
+ *    しまう —— 違反を飲み込む静かな穴そのものである。失敗した publish は `remote
+ *    remove` で巻き戻るので、撮り直す対象もそもそも残らない。
+ *
+ *  registry の再基準化は publish でも要る(エントリのコミットが registry clone の ref を
+ *  動かす)ので、そちらは今までどおり `finally` で撃つ。 */
+function publishRebaseliner(
+  db: Db,
+  options: ServerOptions,
+  rebaselineRegistry: () => void,
+): PublishWorkspaceFn | undefined {
+  const publish = options.workspaceAdmin?.publish;
+  if (!publish) return undefined;
+  const listWorkspaces = options.boardState?.listWorkspaces;
+  return async (input) => {
+    try {
+      await publish(input);
+    } finally {
+      rebaselineRegistry();
+    }
+    // 列挙は投げうる(registryRebaseliner と同じ口の定義)。publish 自体は既に成功して
+    // いるので、ここで漏らすと成功が失敗に化ける —— 撮り直せなかった結果は次の解放が
+    // 誤検知の quarantine として loud に出す
+    try {
+      const workspace = listWorkspaces?.().find((w) => w.name === input.name);
+      if (workspace) rebaselinePublishedRefs(db, workspace);
+    } catch (err) {
+      console.warn("[workspace] published ref rebaseline skipped (non-fatal)", err);
     }
   };
 }
@@ -267,6 +306,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     ...options.workspaceAdmin,
     create: rebaselineAfter(options.workspaceAdmin.create, rebaselineRegistry),
     update: rebaselineAfter(options.workspaceAdmin.update, rebaselineRegistry),
+    publish: publishRebaseliner(db, options, rebaselineRegistry),
   };
   const agentAdmin = options.agentAdmin && {
     ...options.agentAdmin,

@@ -1249,8 +1249,34 @@ function ReviewCommandsInput({ values, onChange }) {
     }
   )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !free.trim(), onClick: addFree }, "Add")));
 }
+function PublishWorkspace({ ws, say, onPublished }) {
+  const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [repo, setRepo] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: repo.trim() });
+      setRepo("");
+      say("success", "workspace published \u2014 every branch is on the remote", ws.name);
+      await onPublished();
+    } catch (err) {
+      say("danger", "publish failed \u2014 nothing landed, safe to retry", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "Publish"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "give this purely-local workspace a remote source of truth \u2014 every branch is pushed to an empty repository you created and invited the bot to. The board creates nothing on GitHub."), /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      value: repo,
+      onChange: (e) => setRepo(e.target.value),
+      placeholder: "the destination repository URL \u2014 must be empty"
+    }
+  ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !repo.trim(), onClick: submit }, "Publish \u2014 pushes every branch, then commits to the registry"));
+}
 function WorkspaceRecord({ ws, say, onChanged, edit }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
+  const publishable = !ws.repo && !ws.registrySelf;
   const id = `workspace:${ws.name}`;
   const open = edit.isOpen(id);
   const [notes, setNotes] = React.useState(ws.notes ?? "");
@@ -1299,7 +1325,7 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       tags: ws.review_allowed_commands ?? [],
       unsetLabel: "no extra commands allowed \u2014 review stays read-only"
     }
-  )), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  ), publishable && /* @__PURE__ */ React.createElement(PublishWorkspace, { ws, say, onPublished: onChanged })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
     {
       label: "Notes",

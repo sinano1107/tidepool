@@ -47,6 +47,7 @@ import {
 import {
   createWorkspace,
   listWorkspaceViews,
+  publishWorkspace,
   updateWorkspace,
   type WorkspaceAdmin,
 } from "./workspace-create.js";
@@ -445,6 +446,9 @@ function workspaceAdmin(
     create: (input) => createWorkspace(input, { ...deps, github }),
     list: () => listWorkspaceViews(deps),
     update: (input) => updateWorkspace(input, deps),
+    // ADR 0066 決定2 / ADR 0067 決定8: push は `githubAuth` で撃ち、宛先への到達性
+    // probe は `github` があるときだけ撃つ —— どちらも上の deps と同じ組である
+    publish: (input) => publishWorkspace(input, { ...deps, github }),
   };
 }
 
