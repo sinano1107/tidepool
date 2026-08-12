@@ -26,7 +26,7 @@ it("commit closes the session and fires an immediate poll", async () => {
   await api(t.baseUrl, "POST", "/api/triage/start");
   expect(t.worker.started).toEqual([]);
 
-  const res = await api(t.baseUrl, "POST", "/api/triage/commit");
+  const res = await api(t.baseUrl, "POST", "/api/triage/close");
   expect(res).toMatchObject({
     status: 200,
     json: { outcome: "closed_now", closed_at: expect.any(String) },
@@ -39,7 +39,7 @@ it("セッションが開いていない commit は成功し、即時 poll を�
   t = await bootTidepool();
   await registerWork(t, "queued work");
 
-  const res = await api(t.baseUrl, "POST", "/api/triage/commit");
+  const res = await api(t.baseUrl, "POST", "/api/triage/close");
 
   expect(res).toMatchObject({
     status: 200,
@@ -90,7 +90,7 @@ it("an answer during triage persists at once but reaches the queue only at commi
   const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(before.map((x: any) => x.title)).toEqual(["other work", "parent work", "which way?"]);
 
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
   const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(after.map((x: any) => x.title)).toEqual(["parent work", "other work", "which way?"]);
   // the immediate poll hands the parent straight back to the worker
@@ -218,9 +218,9 @@ it("タイムアウトで閉じたセッションを次の commit が一度だ�
   await t.clock.advance(TRIAGE_TIMEOUT);
   await registerWork(t, "natural poll を待つ work");
 
-  const closeOnly = await api(t.baseUrl, "POST", "/api/triage/commit", { close_only: true });
-  const first = await api(t.baseUrl, "POST", "/api/triage/commit");
-  const second = await api(t.baseUrl, "POST", "/api/triage/commit");
+  const closeOnly = await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
+  const first = await api(t.baseUrl, "POST", "/api/triage/close");
+  const second = await api(t.baseUrl, "POST", "/api/triage/close");
 
   expect(closeOnly).toMatchObject({
     status: 200,
@@ -277,7 +277,7 @@ it("セッション不在の commit でも scratchpad の振り分けを適用�
     await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "独立した振り分け" })
   ).json;
 
-  const committed = await api(t.baseUrl, "POST", "/api/triage/commit", {
+  const committed = await api(t.baseUrl, "POST", "/api/triage/close", {
     scratchpad: [{ id: line.id, disposition: "task" }],
   });
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
@@ -309,7 +309,7 @@ it("scratchpad 行はセッションを開かず共有され、commit で振り�
   const pad = (await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad;
   expect(pad.map((x: any) => x.line)).toEqual(lines);
 
-  await api(t.baseUrl, "POST", "/api/triage/commit", {
+  await api(t.baseUrl, "POST", "/api/triage/close", {
     scratchpad: [
       { id: ids[0], disposition: "meta_review" },
       { id: ids[1], disposition: "task" },
@@ -334,7 +334,7 @@ it("a scratchpad line dispositioned register is consumed and lands as a pending 
     })
   ).json;
 
-  await api(t.baseUrl, "POST", "/api/triage/commit", {
+  await api(t.baseUrl, "POST", "/api/triage/close", {
     scratchpad: [{ id: line.id, disposition: "register" }],
   });
 
@@ -370,7 +370,7 @@ it("undisposed scratchpad lines survive a timeout close", async () => {
   expect(pad.map((x: any) => x.line)).toEqual(["this again"]);
 
   // a dispositioned line is consumed for good — discard it and it stays gone
-  await api(t.baseUrl, "POST", "/api/triage/commit", {
+  await api(t.baseUrl, "POST", "/api/triage/close", {
     scratchpad: [{ id: line.id, disposition: "discard" }],
   });
   await api(t.baseUrl, "POST", "/api/triage/start");
@@ -433,7 +433,7 @@ it("commit bundles the objections into one repair task per objected task", async
   for (const [entry, comment] of directions) {
     await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entry.id, comment });
   }
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   // two objected tasks → exactly two repair tasks, each carrying its directions
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
@@ -464,7 +464,7 @@ it("異議されたエントリを event id 順の対として修理タスクへ
     entry_id: decision.id,
     comment: "古い判断を見直す",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const repair = board.find((entry: any) => entry.title === "repair: 対の修理");
@@ -516,7 +516,7 @@ it("result が null の完了エントリへの異議には no outcome recorded 
     entry_id: completed.id,
     comment: "完了報告を補う",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (entry: any) => entry.title === "repair: 完了報告なし",
@@ -534,7 +534,7 @@ it("元タスクの workspace が null なら修理タスクも null のまま�
     entry_id: entry.id,
     comment: "修理する",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.title === "repair: workspace なし",
@@ -553,7 +553,7 @@ it("commit also generates a self RCA review as a child of the objected task, ass
     entry_id: e1.id,
     comment: "the hack corrupts state — do it properly",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const selfReview = board.find(
@@ -574,7 +574,7 @@ it("an in-progress task can complete after an objection attaches repair and RCA 
     entry_id: entry.id,
     comment: "replace the hack with the durable implementation",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const attached = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
     (child: any) => child.parent_id === task.id,
@@ -603,7 +603,7 @@ it("two objected entries written by the same worker fold into one self RCA revie
     entry_id: e2.id,
     comment: "bring the fixtures back",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const selfReviews = board.filter(
@@ -637,7 +637,7 @@ it("an objection against a human-completed task's log entry generates no self RC
     entry_id: humanEntry.id,
     comment: "this shouldn't have been approved without a second signature",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const selfReview = board.find(
@@ -667,7 +667,7 @@ it("commit also generates an independent auditor RCA review as a child of the ob
     entry_id: e1.id,
     comment: "the hack corrupts state — do it properly",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const reviews = board.filter((x: any) => x.type === "review" && x.parent_id === a.id);
@@ -688,7 +688,7 @@ it("the independent auditor RCA registers with assignee unset — a live Auditor
     entry_id: e1.id,
     comment: "the hack corrupts state — do it properly",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const auditorReview = board.find(

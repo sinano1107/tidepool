@@ -170,7 +170,7 @@ test("本物の commit 失敗では既読カーソルを進めない(#279)", asy
   const frozenLastLogId = (await api(t.baseUrl, "GET", "/api/log")).json.entries.at(-1).id;
   await page.getByRole("button", { name: "Queue check" }).click();
   await completeAgentWork(t, "失敗後の再試行で未表示のまま残すログ");
-  await page.route("**/api/triage/commit", (route) =>
+  await page.route("**/api/triage/close", (route) =>
     route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -185,7 +185,7 @@ test("本物の commit 失敗では既読カーソルを進めない(#279)", asy
   ).toBeVisible();
   expect((await api(t.baseUrl, "GET", "/api/log")).json.cursor).toBe(cursorBefore);
 
-  await page.unroute("**/api/triage/commit");
+  await page.unroute("**/api/triage/close");
   await page.getByRole("button", { name: "Commit" }).click();
   await expect(page.getByText("triage committed — no session was open")).toBeVisible();
   await expect

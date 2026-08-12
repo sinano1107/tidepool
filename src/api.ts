@@ -426,7 +426,7 @@ const displayedSchema = z.object({
   entry_ids: z.array(z.number().int().positive()).min(1),
 });
 
-const commitSchema = z.object({
+const closeSchema = z.object({
   close_only: z.boolean().default(false),
   scratchpad: z
     .array(
@@ -1536,8 +1536,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
-  router.post("/triage/commit", (req, res) => {
-    const parsed = commitSchema.safeParse(req.body ?? {});
+  // The server's half of Commit (ADR 0065 decision 2): apply scratchpad
+  // dispositions and close an open session. The read cursor is the other
+  // half — the client advances it separately via /log/cursor, never here.
+  router.post("/triage/close", (req, res) => {
+    const parsed = closeSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;

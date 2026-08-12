@@ -125,7 +125,7 @@ it("pause は triage session と直交する: pause 中のコミットは pickup
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
 
   await api(t.baseUrl, "POST", "/api/triage/start");
-  const commitRes = await api(t.baseUrl, "POST", "/api/triage/commit");
+  const commitRes = await api(t.baseUrl, "POST", "/api/triage/close");
   expect(commitRes.status).toBe(200);
 
   // the commit fires its own immediate poll, but pause still gates it

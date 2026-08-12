@@ -2617,19 +2617,23 @@ function App() {
     }));
   };
 
-  // Triage commit applies scratchpad dispositions and closes an open session
-  // when there is one. Only that last case fires the immediate poll. The read
-  // cursor advances after — a failed commit never marks the skimmed lines as
-  // read, and a failed cursor advance never masquerades as a failed commit.
+  // Commit = close + cursor (ADR 0065 decision 2 / consequences): two calls,
+  // composed client-side. /api/triage/close applies scratchpad dispositions
+  // and closes an open session when there is one — only that first call can
+  // fire the immediate poll. The read cursor is the second call, advanced
+  // after: a failed close never marks the skimmed lines as read, and a
+  // failed cursor advance never masquerades as a failed commit.
+  const closeTriage = (scratchpad) => api('/api/triage/close', { scratchpad });
+
   const commitTriage = async (answers, objections, scratch) => {
     let result;
     try {
-      result = await api('/api/triage/commit', {
+      result = await closeTriage(
         // kit dispositions already speak the domain vocabulary
-        scratchpad: scratch
+        scratch
           .filter((s) => typeof s.id === 'number')
           .map((s) => ({ id: s.id, disposition: s.kind })),
-      });
+      );
     } catch (err) {
       refresh();
       say('danger', 'triage commit failed — nothing applied, cursor NOT advanced',
@@ -2676,11 +2680,12 @@ function App() {
   };
 
   // The board-wide halt banner is an escape hatch, not the end of the triage
-  // flow: it closes the server session but never dispositions scratchpad lines
-  // or advances the decision-log cursor.
+  // flow (ADR 0065 decision 8): it makes the close call alone — no scratchpad
+  // dispositions, no cursor advance. Unlike commitTriage's two-call close +
+  // cursor, the banner is close only.
   const closeTriageSession = async () => {
     try {
-      const result = await api('/api/triage/commit', { close_only: true });
+      const result = await api('/api/triage/close', { close_only: true });
       await refresh();
       if (result.outcome === 'closed_now') {
         say('success', 'triage session closed', 'pickup resumed · immediate poll fired');
