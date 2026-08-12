@@ -69,3 +69,4 @@ One line per ADR — the line is the H1 title, which states the decision itself.
 - [0065](0065-commit-is-the-triage-terminal-not-the-sessions-verb.md) — コミットはトリアージの終端であって、セッションの動詞ではない
 - [0066](0066-workspaces-are-born-local-and-publish-grants-the-remote.md) — 盤面は GitHub 上に repo を作らない — workspace はローカルに生まれ、`publish` が remote 正本を与える
 - [0067](0067-repo-access-is-repaired-by-accepting-one-invitation-on-the-failure-path.md) — repo アクセスは、到達に失敗した瞬間に招待1枚を受諾して直す
+- [0068](0068-the-halt-enumeration-is-one-module-and-skipped-is-resource-scoped.md) — 盤面全体の停止は1つの読み口 module が列挙で答え、`skipped` は資源単位の理由だけを運ぶ
