@@ -102,7 +102,7 @@ async function seedBoard(t: Tidepool): Promise<{ taskId: string }> {
   await api(t.baseUrl, "POST", "/api/triage/start");
   const scratch = (await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "a stray idea" }))
     .json;
-  await api(t.baseUrl, "POST", "/api/triage/commit", {
+  await api(t.baseUrl, "POST", "/api/triage/close", {
     scratchpad: [{ id: scratch.id, disposition: "register" }],
   });
   await api(t.baseUrl, "POST", "/api/settings/quiet-hours", { start: "22:00", end: "06:00" });

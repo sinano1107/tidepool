@@ -7,7 +7,7 @@ afterEach(() => t?.stop());
 async function pendingDump(t: Tidepool, line: string) {
   await api(t.baseUrl, "POST", "/api/triage/start");
   const scratch = (await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line })).json;
-  await api(t.baseUrl, "POST", "/api/triage/commit", {
+  await api(t.baseUrl, "POST", "/api/triage/close", {
     scratchpad: [{ id: scratch.id, disposition: "register" }],
   });
   return (await api(t.baseUrl, "GET", "/api/pending-dumps")).json.find(

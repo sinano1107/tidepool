@@ -220,7 +220,7 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
     entry_id: entry.id,
     comment: "repair the unfinished decision",
   });
-  await api(t.baseUrl, "POST", "/api/triage/commit");
+  await api(t.baseUrl, "POST", "/api/triage/close");
   const pickedParentReview = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) =>
       task.type === "review" &&
