@@ -199,30 +199,60 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 **前提だった #220 と #228 は ADR 0053 で決着し、1-C で実機の回帰確認も通った。解禁済みである。**
 
-**ただし以下の節は 2026-08-08 に書かれたままで、走らせる前に4箇所の書き足しが要る。**
-
-1. **タスクの field が揃っていない。** 下のお題は散文1行だけで、title / completion criteria / assignee / review flag の分解が無い。1-B でも「計画には purpose しか書かれておらず、title と completion criteria は本番で補った」と同じことが起きている。
-2. **合格の判定が ADR 0053 より前の文面である。** 「タスクブランチ → PR が開く」はルートタスクなら今も正しいが、決定2で「**保護ブランチから切られたタスクだけが** PR を開く」と条件が付いた。tako が decompose した場合、子は PR を開かず親へ merge back するので、今の判定文は空振りする。
-3. **registry workspace 特有の変換が判定に入っていない。** `workspaces.yaml` の `registry` は `protected: true` で、notes が「decompose 子が registry を名指しすると、登録した worker の `allowed_workspaces` に関係なく常に人間承認 question に変換される」と書いている。加えて `standard.yaml` の `allowed_workspaces` は `["sandbox"]` のままである。**`allowed_workspaces` の強制は `decomposeTask`(`src/tasks.ts`)にしか無い**ので人間が登録するルートタスクは通るが、tako が decompose すると子が全部承認 question になる。判定表にこれを書いておくこと。
-4. **8/10 以降に前提を動かす変更が入っている。** #284(workspace の新規作成を GitHub から切り離し、register の門を締める)と **#285(`publish` —— purely-local な workspace に remote 正本を与える扉)**。下の第3段 前提2 が引用している `src/workspace-create.ts` の `clone` モードの記述は、この2つで書き換わっている可能性が高い。
-
-なお **#235(merge ダイヤルの省略の意味が未定義)はブロッカーではない** —— registry は `protected: true` なのでダイヤルの状態に関係なく人間 merge の question が立つ(ADR 0053 根拠3 が「本 ADR の決定3はその結論に依らず成立する」と明記)。
-
 **workspace `registry` / agent `tako` / authority `standard`**
-
-お題:
-
-> `registry から検証用の残骸を削除する: agents/probe.md, agents/probe-2.md, authority/danger-assign.yaml, danger-merge.yaml, danger-ws.yaml, reviewer-safe.yaml, reviewer-safe-2.yaml。README の記述と整合させる。tako / fugu / standard / auditor には触れない。`
 
 第2段に据える理由: `tidepool-bot` に既に write 権限がある(**GitHub 側の準備がゼロ**)/ `protected: true` なので merge ダイヤルの設定に関係なく**人間 merge の question が必ず立つ** / 削除対象の agent に未決着タスクは無い。
 
-**合格の判定:**
+### 走る前に確かめた前提(2026-08-12、全て実測 or コードで裏取り済み)
 
-- [ ] タスクブランチ → PR が開く
+| | |
+|---|---|
+| **workspace の登録操作は不要** | `registry` は `workspaces.yaml` に既に宣言済み(`path` / `repo` / `protected: true`)。1-C が走った事実が、`assertValidWorkspaces` を通ることの証明でもある(1エントリでも不正なら registry のロード全体が落ちる) |
+| **remote 宣言は clone の実態と一致** | clone の `origin` は `https://github.com/sinano1107/tidepool-registry.git`。`assertRemoteDeclarationMatchesClone` を通る |
+| **registry としての宣言と workspace としての宣言が一致** | 盤面は remote-backed、workspace 側も `repo` あり → `assertRegistryRoleAgrees`(issue #211)を通る。この検査は**まさにこの二重の役のために**存在する |
+| **#274 が第2段を名指しで想定している** | `registryRebaseliner`(`src/server.ts`)は「registry clone が **workspace として登録されていれば**」その ref を外科的に撮り直す。スナップショットは pickup で初めて焼かれるので、**第2段がこの経路を実際に動かす初めての機会**である |
+| **タスクブランチは最新の registry を載せる** | clone の local `main` は `c928365` と古いが、ルートタスクの fork 元は `refs/remotes/origin/<branch>` であり、`refreshWorkspace` が pickup で fetch する |
+| **`allowed_workspaces` はルートタスクを止めない** | `standard.yaml` は `["sandbox"]` のままだが、強制は `decomposeTask`(`src/tasks.ts`)にしかない。人間が登録するルートタスクは通る。**ただし tako が decompose すると子は全部人間承認 question になる**(`workspaces.yaml` の notes / ADR 0013 layer 2) |
+| **#235 はブロッカーではない** | `protected: true` なので merge ダイヤルの状態に関係なく人間 merge の question が立つ(ADR 0053 根拠3) |
+
+**未解決の設計上の引っかかり: `standard` の guidance は「deleting data」を名指しで authority 外としている。**
+
+> Anything irreversible or outward-facing is outside your authority: pushing to shared branches, publishing, **deleting data**, contacting external services with side effects, spending money.
+
+第2段のお題はファイル削除そのものである。tako が「人間が削除対象を7件名指しで列挙した purpose」を authorization と読むか、guidance を字義どおり読んで escalate するかは**走らせてみないと分からない**。purpose に一文入れて前者へ寄せるが、**escalate したらそれ自体が観測である**(guidance がどれだけ字義的に読まれるかの測定)。
+
+### お題
+
+| field | value |
+|---|---|
+| title | `registry から検証用の残骸を削除する` |
+| purpose | `registry には検証で作った残骸が残っている。agents/probe.md / agents/probe-2.md / authority/danger-assign.yaml / authority/danger-merge.yaml / authority/danger-ws.yaml / authority/reviewer-safe.yaml / authority/reviewer-safe-2.yaml の7件を削除する。README.md 末尾の e2e 由来の HTML コメント2行(issue #50 / #53)も同じ残骸なので一緒に消す。tako.md / fugu.md / standard.yaml / auditor.yaml / workspaces.yaml には触れないこと。この削除は人間が対象を名指しで指定した依頼であり、保護 workspace の人間 merge がその安全弁である。` |
+| completion criteria | `上記7ファイルが削除されている / README.md の e2e コメント2行が消えている / tako.md・fugu.md・standard.yaml・auditor.yaml・workspaces.yaml が無変更である / README 本文が実態と整合している(README は agent を個別に列挙していないので変更不要のはず —— 確認した結果を decision log に残すこと)` |
+| assignee | **`tako`(明示)** |
+| workspace | **`registry`** |
+| review flag | off |
+| risk flag | off |
+
+**お題を計画から書き換えた点:** 計画の「README の記述と整合させる」は**空振りする** —— registry の README は layout を説明するだけで、削除対象の agent / profile を個別に列挙していない。代わりに README 末尾に残っている e2e 由来の HTML コメント2行が同種の残骸なので、そちらを削除対象に足した。
+
+### 合格の判定(ADR 0053 反映済み)
+
+- [ ] **ルートタスクなので PR が開く。** ADR 0053 決定2 で「保護ブランチから切られたタスクだけが PR を開く」と条件が付いた —— ルートは保護ブランチから切られるので今日どおり
+- [ ] **tako が decompose した場合、子は PR を開かず親へ merge back する。** かつ `registry` を名指しする子は**人間承認 question に変換される**(`allowed_workspaces` / ADR 0013 layer 2)。この経路に入ったら判定は分岐する
 - [ ] 保護 workspace なので merge question が立つ
 - [ ] 人間が merge する
-- [ ] **merge した内容が次の pickup で盤面に効く**(= S1 の本丸)。`probe` を assignee に指定したタスクが agent quarantine に落ちるようになっていれば、merge が届いた証拠
+- [ ] **merge した内容が盤面に効く**(= S1 の本丸)。判定手順は下記
 - [ ] 編集後も WebUI から registry を編集できる(= S2)
+- [ ] **`registryRebaseliner` が効いている**(= #274 の初実走)。セッション中に盤面が registry の ref を書いても、解放時に ADR 0064 の比較が誤検知の quarantine を出さないこと。`workspace_state` の `needs_human` が 0 のままであることで見る
+
+**S1 の判定手順(エージェントセッションを消費しない):**
+
+1. **開始前(陰性対照)**: assignee を `probe` にしたタスクを1本登録する → **通るはず**(`probe.md` が origin/main にある)。タイトルは `[registry merge probe]` 前置きで —— イベントは append-only で消せない
+2. 第2段のタスクを走らせ、PR を人間が merge する
+3. **refresh を起こす**: 盤面の registry 読みは `refs/remotes/origin/<branch>` なので、merge しただけでは clone に届かない。fetch が走るのは boot / pickup / WebUI からの registry 書き込み(`refreshRegistryForWrite`)の3経路
+4. **もう一度 `probe` 割当で登録する** → **`unknown agent: probe` で弾かれるはず**(`resolveExecutionAgent` の `UnknownAgentError`)
+
+計画にあった「`probe` を assignee に指定したタスクが **agent quarantine** に落ちる」は誤り —— assignee の registry 解決は**登録の時点**で走る(CONTEXT.md「編集時に登録時と同じ検査 — registry 解決 — を再実行」)ので、quarantine まで行かず登録が弾かれる。3で refresh を起こす必要がある点だけは、元の「次の pickup で効く」という言い方が正しく捉えていた。
 
 ---
 
