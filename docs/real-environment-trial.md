@@ -1,6 +1,6 @@
 # 実環境動作確認(ADR 0052 の3段)
 
-2026-08-08 に設計・着手。**第0段と第1段(1-A / 1-B)まで完了。第2段以降は未実施。**
+2026-08-08 に設計・着手。**第0段と第1段(1-A / 1-B / 1-C)まで完了。第2段は解禁済み・未実施。**
 
 原則は1つ — **1段につき新しい subsystem を1つだけ足す**。前の段が通っていない状態で次に進まない。
 
@@ -18,6 +18,7 @@
 | registry clone | `/mnt/ssd/tidepool-registry` |
 | sandbox workspace | `/mnt/ssd/tidepool-workspaces/sandbox`(remote 無し = purely-local) |
 | claude CLI | 2.1.221 |
+| デプロイ済みコミット | 第0段〜1-B は `a55154b`、**1-C は `556877f`**(#274 = ADR 0064 の ref スナップショット比較が入った後) |
 | watchdog | work 90分 / review 45分、slot = 1 |
 | 盤面ポインタ | `TIDEPOOL_WORKSPACE=sandbox` / `TIDEPOOL_AUDITOR=fugu` / `TIDEPOOL_AGENT` 未設定(= `tako`) |
 
@@ -159,17 +160,53 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 盤面が `recommendation_accepted: true` を機械記録しているのも良い観測。
 
-### 1-C(未実施 — 見送り)
+### 1-C(完了 / 合格 8-8 / 2026-08-12)
 
-計画のお題: `json2md / md2json / json-diff の3つを tools/ に揃える`。
+**ADR 0053(#220 / #228 の決着)の回帰確認として実施。** 当初の見送り理由 ——「decompose の子はそれぞれ保護ブランチから切られ、統合すべきものが親のブランチに1つも無い」—— は ADR 0053 の実装(`lineageTaskBranch` / merge back / purely-local の着地 question)で消えた。
 
-**#228 が決まるまで意味のある測定にならない。** decompose の子はそれぞれ保護ブランチから切られ、親も自分のブランチに戻るので、**統合すべきものが親のブランチに1つも無い**。走らせて分かるのは decompose の意味論ではなく #228 の影響範囲で、それは `src/workspace.ts:195` の読みで既に確定している。#228 の修正後に回帰確認として走らせるのが筋。
+計画のお題は `json2md / md2json / json-diff の3つを tools/ に揃える` だったが、**1-B の成果(案A)が `task/53baaaf1` に載ったまま `main` へ着地していなかった**ため、先に人間が `git merge --ff-only` で着地させてから、足す2つに絞って登録した。旧コードには purely-local の着地経路が無く(#220)、決着済みタスクを盤面から再提示する機構も無いので、これは手作業でしか直せない。
+
+| field | value |
+|---|---|
+| title | `tools/ に md2json と json-diff を足して3つ揃える` |
+| purpose | `…足す2つは独立に作れるので、子タスクに分解して1つずつ仕上げること。既存の json2md と同じ作法に従う —— 依存ゼロ、テストは node:test、tools/<名前>/index.js の1ツール1ディレクトリ。最後に統合して、README を3つ揃った状態の1枚にまとめること。` |
+| completion criteria | `…node --test が全部 green / README に3つそれぞれのワンライナー使用例がある / md2json が json2md の出力を読み戻せる(往復が通る)` |
+| assignee | **`tako`(明示)** |
+| review flag | off |
+
+**purpose で decompose を明示指示したのは意図的。** 1-B は「エスカレーションするか」自体が被測定物だったので明示できなかったが、1-C の被測定物は分解**後**のブランチ機構であって「tako が自発的に分解するか」ではない。review flag を off にしたのも同じ理由 —— review 経路は Auditor が実欠陥を見つけたときだけ発火する非決定的な経路で、1回に両方詰めると発火しなかったとき測定が濁る。
+
+| 判定(ADR 0053) | 結果 |
+|---|---|
+| 子の fork 元が `task/<親>` | ✅ 子2のブランチが親の当時の HEAD `d48be04` を含む(`main` は `0c22401`) |
+| 子の完了で `task/<親>` へ merge back | ✅ 2本とも(`d48be04` → `ed5547c`) |
+| 子の完了で PR も question も立たない | ✅ 2本とも。**#220 の偽 `PR promotion failed` は1本も立たなかった** |
+| 2人目の子のツリーに1人目の成果 | ✅ `tools/md2json/` が見えている |
+| 統合復帰時に子全員の成果 | ✅ 3ツール + 統合された README(`8f164f2`)。**#228 の本丸** |
+| ルート完了で merge/hold question が1本 | ✅ ちょうど1本、`tidepool` 名義、options `merge`/`hold`、推奨 `merge` |
+| 「merge」で `main` へ ff-only 着地 | ✅ `main` が `0c22401` → `8f164f2` |
+| `workspace_state` の `needs_human` が 0 のまま | ✅ 全過程で quarantine に落ちなかった。**この行は「テーブルが空」ではない** —— #274(ADR 0064)以降 `ref_snapshot` 列が常に埋まるので、行の存在自体は正常である |
+
+**判定1 は子1では判別できなかった。** 親が purpose を読んで即 decompose したため `task/<親>` にコミットが1つも無く、`main` と同じコミットを指していた。子2で初めて親と保護ブランチが別コミットになり、判別力が出た。**同じ形の測定を組むときは、親が独自コミットを持つまで fork 元は観測できないと見込んでおく。**
+
+コストは decompose $0.33 / md2json $0.98 / json-diff $0.99 / 統合復帰 $0.80 = **$3.10**、実時間 約40分(throttle による停止を除く)。統合復帰の1本で cache_read が100万トークンを超えた。
+
+**発見6件** —— #296 #297 #298 #299 #300 #301。うち #296 は 1-C を20分止めた直接の原因。
 
 ---
 
-## 第2段 — `registry`(PR と人間 merge)/ 未実施
+## 第2段 — `registry`(PR と人間 merge)/ 未実施(解禁済み)
 
-**前提: #220 と #228 の決着。** この2つは第2段・第3段が通る経路そのものを支配しており、決めずに進むと観測が「S1〜S3 の挙動」なのか「未決の欠陥」なのか切り分けられなくなる。
+**前提だった #220 と #228 は ADR 0053 で決着し、1-C で実機の回帰確認も通った。解禁済みである。**
+
+**ただし以下の節は 2026-08-08 に書かれたままで、走らせる前に4箇所の書き足しが要る。**
+
+1. **タスクの field が揃っていない。** 下のお題は散文1行だけで、title / completion criteria / assignee / review flag の分解が無い。1-B でも「計画には purpose しか書かれておらず、title と completion criteria は本番で補った」と同じことが起きている。
+2. **合格の判定が ADR 0053 より前の文面である。** 「タスクブランチ → PR が開く」はルートタスクなら今も正しいが、決定2で「**保護ブランチから切られたタスクだけが** PR を開く」と条件が付いた。tako が decompose した場合、子は PR を開かず親へ merge back するので、今の判定文は空振りする。
+3. **registry workspace 特有の変換が判定に入っていない。** `workspaces.yaml` の `registry` は `protected: true` で、notes が「decompose 子が registry を名指しすると、登録した worker の `allowed_workspaces` に関係なく常に人間承認 question に変換される」と書いている。加えて `standard.yaml` の `allowed_workspaces` は `["sandbox"]` のままである。**`allowed_workspaces` の強制は `decomposeTask`(`src/tasks.ts`)にしか無い**ので人間が登録するルートタスクは通るが、tako が decompose すると子が全部承認 question になる。判定表にこれを書いておくこと。
+4. **8/10 以降に前提を動かす変更が入っている。** #284(workspace の新規作成を GitHub から切り離し、register の門を締める)と **#285(`publish` —— purely-local な workspace に remote 正本を与える扉)**。下の第3段 前提2 が引用している `src/workspace-create.ts` の `clone` モードの記述は、この2つで書き換わっている可能性が高い。
+
+なお **#235(merge ダイヤルの省略の意味が未定義)はブロッカーではない** —— registry は `protected: true` なのでダイヤルの状態に関係なく人間 merge の question が立つ(ADR 0053 根拠3 が「本 ADR の決定3はその結論に依らず成立する」と明記)。
 
 **workspace `registry` / agent `tako` / authority `standard`**
 
@@ -195,19 +232,13 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 1. **`tidepool-bot` を `sinano1107/tidepool` の collaborator に追加**(registry には既にいる)。
 
-   **workspace を登録する前に済ませること。** `clone` モードは登録の門でその場に `authedGit(... "clone" ...)` を撃つので(`src/workspace-create.ts:266`)、権限が無ければ PR を作る段階ではなく**登録の時点で**落ちる。
+   **手順は変わった。#213 は closed で、ADR 0067(#288)が盤面側に飲み込ませた** —— `src/repo-access.ts` が `user/repository_invitations` を読み、**いま到達したい repo 宛ての招待1枚だけを検証して受諾する**。人間が `gh api -X PATCH user/repository_invitations/<id>` を手で撃つ旧手順はもう要らない。
 
    ```bash
    gh api -X PUT repos/sinano1107/tidepool/collaborators/tidepool-bot -f permission=push
-   # 受諾(個人アカウントの repo への追加は招待。盤面のトークンで受ける)
-   ssh masaki@100.78.52.97 'set -a; . /etc/default/tidepool; set +a; \
-     GH_TOKEN=$(cat "$TIDEPOOL_GITHUB_TOKEN_FILE") gh api user/repository_invitations \
-       --jq ".[] | {id, repo: .repository.full_name}"'
-   ssh masaki@100.78.52.97 'set -a; . /etc/default/tidepool; set +a; \
-     GH_TOKEN=$(cat "$TIDEPOOL_GITHUB_TOKEN_FILE") gh api -X PATCH user/repository_invitations/<id>'
    ```
 
-   一覧が空なら直接付与されている。付与の確認は bot のトークンで読めるかを見る。この手順を盤面側に飲み込ませるのが #213。
+   受諾は盤面が到達失敗時に1回だけ試みる(`repairRepoAccessAtPickup`)。走らせる前に、`clone` モードの門が #284 / #285 でどう変わったかを `src/workspace-create.ts` で確認すること —— 下の記述はその変更より前のものである。
 
 2. **workspace のパスは `/mnt/ssd/tidepool-workspaces/tidepool`。** `/mnt/ssd/tidepool` は deploy の rsync 元なので**絶対に登録しない** — ADR 0040 のガードはここに効かず、塞いでいるのは #167 の deploy スクリプト側の前提検査だけ。
 
@@ -231,36 +262,57 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 2. **pickup はタスク登録では発火しない。** スケジューラは1時間おき。即時発火するのは triage の auto-commit と `POST /api/tasks/:id/move`(先頭が変わる body、既に先頭のタスクへの `{"after": null}` も特例で発火)だけ。**queue 画面で ↑ を2回**押す(1回目は「reordered only」、2回目で「immediate poll fired」)。
 
+   発火条件は「**素の** todo の先頭に居るタスクを、もう一度先頭へ動かしたとき」である。`queueHeadId` は pick 可能性を見ないので、**blocked な親・question・held・quarantine されたタスクが上に居座っていると1回目は必ず空振りする**(#299)。1-C では blocked な親が先頭に居たため、子への ↑ が毎回2回必要だった。
+
 3. **triage セッションは pickup を止める。** Triage は既定タブで、未読があると入った瞬間にサーバ側でセッションが開き、**タブを離れても閉じない**。skim を最後まで終えて commit するか、30分の無活動タイムアウトを待つ(#225)。
 
-4. **purely-local workspace では完了ごとに偽の `PR promotion failed` question が立つ**(#220)。「abandon promotion」で流す。
+4. ~~purely-local workspace では完了ごとに偽の `PR promotion failed` question が立つ~~ —— **#220 の修正で消えた**(1-C で確認、work 3本の完了で1本も立たなかった)。「abandon promotion」で流す運用はもう要らない。
 
-5. **purely-local workspace には着地経路が無い。** 完了作業が保護ブランチへ到達する手段が1つも無いので、後続タスクが前の成果を要るなら人間が `git merge --ff-only` を手で撃つ(#220 のコメント)。
+5. **purely-local の着地は盤面の merge question を通る**(ADR 0053 決定3)。ルート完了で `merge` / `hold` の question が**分解ツリー1本につき1回**立ち、`merge` と答えると盤面が保護ブランチへ `merge --ff-only` する。以前の「人間が手で `git merge --ff-only` を撃つ」は不要になった —— ただし**ADR 0053 より前に決着したタスクの成果は再提示されない**ので、そこだけは今も手作業でしか着地させられない(1-C で 1-B の成果に対して実際にやった)。
 
-6. **実験中は decision log の翻訳表示を切る。** 1件あたり入力18.6k / 出力4.5k / $0.03〜0.05 を盤面と同じ予算から食う(#224)。
+6. **decision log の翻訳表示は切らなくてよい** —— #224 は ADR 0062 / 0063(#270 / #271)で決着し、流量制御・進行表示・キャンセルが入った。むしろ点けて挙動を見るほうがよい。
 
-7. **スロットルは ADR 0030 の pacing であって上限ではない。** `pace_offsets` と spend-down で開ける。**spend-down は対象ウィンドウのリセットまで自動失効しない**ので、実験を中断するときは手で解除する。
+7. **ペースのオフセットを変えても、そのままでは効かない**(#296)。`throttle_state` は古い判定を `resets_at` まで保持し続けるので、盤面は最大1時間**変更前のオフセットの判定に縛られる**。`onQueueHeadChanged()` を撃つ操作(queue の ↑ / spend-down の入切 / pause 解除 / triage close)を1つやって再評価させること。
 
-8. **お題は15〜30分に収める。** watchdog は work 90分 / review 45分、slot は1本。
+8. **再評価中は古い halt が「失敗」として見える**(#297)。↑ を押した直後の黄色い `moved to front — pickup blocked` は、再評価が終わる前の古い `throttle_state` を読んだものである。数秒待って queue を見直すこと。
 
-9. **push 忘れ。** Pi は GitHub から pull する。手元の `git status` の「up to date」は手元の remote-tracking ref に対してであって GitHub に対してではない。デプロイ前に `git log origin/main..HEAD` が空であることを必ず確認する。
+9. **スロットルは ADR 0030 の pacing であって上限ではない。** `pace_offsets` と spend-down で開ける。**spend-down は対象ウィンドウのリセットまで自動失効しない**ので、実験を中断するときは手で解除する。**オフセットは 0〜100 の減算のみ**なので「盤面が線形ペースを X pt 先行してよい」というツマミは存在しない —— 0 が最も緩い設定であり、バースト形状の仕事は構造的に自分を止める。一気に流したいときは spend-down が唯一の逃し弁である。
+
+10. **お題は15〜30分に収める。** watchdog は work 90分 / review 45分、slot は1本。
+
+11. **push 忘れ。** Pi は GitHub から pull する。手元の `git status` の「up to date」は手元の remote-tracking ref に対してであって GitHub に対してではない。デプロイ前に `git log origin/main..HEAD` が空であることを必ず確認する。
 
 ---
 
-## 発見(14件、全て grilling 待ち)
+## 発見(20件)
 
-第1段だけで14件。**1-A の1本から9件**出た。
+### 1-A / 1-B(14件、2026-08-08)—— **全件 closed**
 
 | 束 | issue | |
 |---|---|---|
-| **ブランチと着地** | **#220 #228** | **最優先。第2段の前提。**片方だけ実装すると他方を固定する |
-| 未設定 assignee をどの読み口が解決するか | #217 #221 #223 | 1つの決定が3つを閉じる。#223 は監査証跡に出る |
+| ブランチと着地 | #220 #228 | 第2段の前提だった。ADR 0053 で決着、1-C で回帰確認 |
+| 未設定 assignee をどの読み口が解決するか | #217 #221 #223 | ADR 0054。1つの決定が3つを閉じた |
 | レビューと異議の射程 | #218 #231 | |
-| 盤面の状態と散文が人間に届くまで | #225 #227 #226 #230 | #226 #230 はほぼ機械的 |
+| 盤面の状態と散文が人間に届くまで | #225 #227 #226 #230 | ADR 0058 |
 | 盤面と human の見た目 | #222 | |
-| registry の書き込み経路 | #229 | 「WebUI の registry 書き込みが main 直コミットでよいか」を含む |
-| Board call のコスト | #224 | 測定が先 |
+| registry の書き込み経路 | #229 | |
+| Board call のコスト | #224 | ADR 0062 / 0063 |
 
-grilling の順序は **ブランチと着地 → assignee の解決 → レビューと異議の射程**。1本目が決まらないと第2段に進めない。
+**1-A の1本から9件**出た。
 
-**この分布自体が観測である。** 14件のうち9件は「盤面の状態や、エージェントが書いたものが、人間に届かない」系であり、実装の正しさではなく**面の正直さ**に寄っている。コードレビューでは出ない類で、実環境で人間が1周操作して初めて出た。
+### 1-C(6件、2026-08-12)
+
+| 束 | issue | |
+|---|---|---|
+| **throttle の再評価** | **#296 #297** | #296 が 1-C を20分止めた。#297 はその診断中に出た。#297 は #227 の直し残し |
+| キューと人間の面 | #300 #301 | **表と裏。片方だけ直すと人間割当タスクがどこにも出なくなる** |
+| pick 可能性の定義が複数箇所にある | #299 | #300 と根が同じ |
+| エージェントの出力規律 | #298 | ADR 0015 の「正準は英語」がワーカーに届いていない |
+
+### 分布そのものが観測である
+
+**20件のうち14件が「盤面の状態や、エージェント・盤面が書いたものが、人間に正直に届かない」系**である。実装の正しさではなく**面の正直さ**に寄っていて、コードレビューでは出ず、実環境で人間が1周操作して初めて出た。1-C の6件も5件がこの系で、**同じ分布が2回続けて出た**。
+
+**#298 だけ毛色が違う。** これは面ではなくエージェント側の出力規律の話で、**日本語ペイロードで decompose を伴う実タスクを走らせたのが 1-C が初めて**だったために出た。1-A / 1-B は decompose しなかったので、エージェントが書く title / purpose / 完了基準がそもそも生まれていない。
+
+**観測の一般則: 新しい経路を1本通すたびに、その経路が初めて生む記録の種類が新しい発見を連れてくる。** 段を足すときは「何が新しく生まれるか」を先に列挙しておくと当たりが付けやすい。
