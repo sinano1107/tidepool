@@ -2,7 +2,7 @@
 
 // Reorderable queue list — pointer-driven drag & drop with tidal FLIP animations.
 // Reused by QueueScreen and the triage queue-check step.
-function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, headId, gap = 6 }) {
+function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6 }) {
   const { QueueItem } = window.TidepoolDesignSystem_8a0ead;
   const itemEls = React.useRef(new Map());
   const lastTops = React.useRef(new Map());
@@ -125,7 +125,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, skipReason, hea
              isHead is an id match against the true queue head, not a position/baseIndex computation: a sliced
              view (e.g. the triage preview's previewQueue, offset by baseIndex) would otherwise mislabel the
              actual head whenever it isn't rendered at index 0 of *this* slice. */}
-          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} skipReason={skipReason} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
+          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>
@@ -141,33 +141,13 @@ const TP_SLOT_STATES = {
   limit: { color: 'var(--coral-4)', line: 'usage limit · nothing starts', meta: 'resumes 06:12 · immediate poll at reset' },
 };
 
-// Pause (issue #34) is the fifth slot state, layered over whichever of the
-// four above is currently underneath — the same "environmental event freezes
-// pickup, running task finishes" shape as throttle's 'limit', but human-
-// triggered and manually cleared. `underlyingSlot.taskId` (real deployments
-// only — the canned mock states carry none) distinguishes the busy/free
-// phrasing.
-function pausedSlot(underlyingSlot) {
-  return {
-    color: 'var(--rock-4)',
-    line: underlyingSlot?.taskId
-      ? 'pickup paused · task finishes, nothing new starts'
-      : 'pickup paused — nothing starts until resumed',
-    meta: 'poll idle',
-    taskId: underlyingSlot?.taskId ?? null,
-  };
-}
-
 function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false, onTogglePause, spendDown = null, onSpendDown, onFront, onDoneHuman, onReorder }) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
-  // real deployments pass live slot content via data.slot; the canned states remain for the mock
-  const underlyingSlot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
-  const slot = paused ? pausedSlot(underlyingSlot) : underlyingSlot;
-  // ADR 0068 決定7: 盤面全体の停止による全行減光は廃止 — 停止は面(スロット行)が
-  // 1回言う。残る減光は行が自分で運ぶ資源単位の `skipped`(workspace / agent の
-  // quarantine・fable 線)だけで、その理由はそれぞれ修理 question とスロット行が
-  // 既に持っている(行単位の理由文言は当面付けない)。
-  const skipReason = 'held by its own resource';
+  // real deployments pass live slot content via data.slot; the canned states
+  // remain for the mock. Pause は行を作り直さない — 停止の並び順はサーバの列挙が
+  // 持ち(ADR 0068 決定1)、この画面はその答えをそのまま描く。`paused` がここに
+  // 残るのは pause ボタン・波線・文字色といった pause の操作面のためである。
+  const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const alert = wsAlert ? data.workspaceAlert : null;
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
@@ -252,7 +232,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
       )}
 
       <div style={{ marginBottom: 28 }}>
-        <TpQueueList tasks={queue} onReorder={onReorder} onFront={onFront} skipReason={skipReason} headId={headId} />
+        <TpQueueList tasks={queue} onReorder={onReorder} onFront={onFront} headId={headId} />
       </div>
 
       <h2 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>Your tasks</h2>

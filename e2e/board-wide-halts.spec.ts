@@ -1,5 +1,5 @@
 import { usagePanelText } from "../tests/fakes.js";
-import { HOUR, registerWork } from "../tests/harness.js";
+import { api, HOUR, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 test("Pause 中の queue ↑ は操作を隠さず、slot と toast が停止理由を名指す(ADR 0058)", async ({
@@ -100,5 +100,41 @@ test("fable 線で止まった行だけがキューで減光し、盤面は流�
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Queue" }).click();
   await expect(page.getByText("slot free — fable tasks paced")).toBeVisible();
-  await expect(page.getByText("skipped · held by its own resource")).toBeVisible();
+  await expect(page.getByText("skipped", { exact: true })).toBeVisible();
+});
+
+// 決定1 の並び順は interface である。以前はキュー画面の pausedSlot がスロット行を
+// 作り直していたため、triage と Pause が同時に立つとサーバ順序を画面が上書きして
+// いた。行の作成をやめた今、先頭(triage)がそのまま出る。
+test("triage と Pause が同時なら slot はサーバ順序の先頭(triage)を描く(ADR 0068 決定1)", async ({
+  boot,
+  page,
+}) => {
+  const t = await boot();
+  await registerWork(t, "waits behind both halts");
+
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Queue" }).click();
+  await page.getByRole("button", { name: "pause pickup" }).click();
+  await expect(page.getByText("pickup paused — nothing starts until resumed")).toBeVisible();
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await expect(page.getByText("triage in progress · nothing starts")).toBeVisible();
+  await expect(page.getByText("pickup paused — nothing starts until resumed")).toHaveCount(0);
+});
+
+// Pause だけは実行中タスクの上でも喋る — 言うことがそのタスクの行く末だから
+// (issue #34)。pausedSlot から app.jsx へ移した分岐の pin。
+test("実行中に Pause すると slot が「完走して後が続かない」と言う(issue #34)", async ({
+  boot,
+  page,
+}) => {
+  const t = await boot();
+  await registerWork(t, "already running");
+  await t.clock.advance(HOUR); // picked up — the fake worker never finishes it
+
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Queue" }).click();
+  await page.getByRole("button", { name: "pause pickup" }).click();
+  await expect(page.getByText("pickup paused · task finishes, nothing new starts")).toBeVisible();
 });

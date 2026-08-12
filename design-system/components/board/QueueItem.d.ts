@@ -2,17 +2,17 @@
  * One row of the TODO queue — position, task, assignee, and an optional drag handle.
  * "Run now" (tide-colored) is only the head row's action; every other row's
  * "↑ front" reorders to the head without triggering an immediate poll.
- * Skipped rows render dashed (throttle/pause pickup-block, auto-recovers).
+ * Skipped rows render dashed — this row alone cannot be picked up right now.
  */
 export interface QueueItemProps {
   /** 1-based queue position. */
   position?: number;
   task?: { id?: string; title?: string; assignee?: string; risk?: boolean };
-  /** Env-wide pickup block (throttle/pause) — dashed, auto-recovers. */
+  /** This row's own resource cannot take it right now — dashed. */
   skipped?: boolean;
-  /** Why `skipped` is true: distinguishes pause / fail-closed throttle / a
-   *  known throttle resume time so the row never claims a reset time it
-   *  doesn't have. Defaults to the generic throttle phrasing. */
+  /** Optional reason appended after `skipped ·`. Omit it when the reason
+   *  already lives elsewhere on the screen; the row then just says `skipped`
+   *  rather than claiming a cause it doesn't know. */
   skipReason?: string;
   /** Highlighted: placed at front by this triage session. */
   frontInserted?: boolean;

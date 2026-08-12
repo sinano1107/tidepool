@@ -237,7 +237,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       { color: 'var(--sun-4)', line: 'triage in progress · nothing starts', meta: 'close triage session to resume', taskId: null },
       'warn', 'moved to front — pickup blocked', 'triage in progress — close the session to resume'),
     pause: () => halt(
-      { color: 'var(--tide-4)', line: 'pickup paused — nothing starts until resumed', meta: '', taskId: null },
+      { color: 'var(--rock-4)', line: 'pickup paused — nothing starts until resumed', meta: 'poll idle', taskId: null },
       'warn', 'moved to front — pickup is paused', 'resume to run it'),
     containment: () => halt(
       { color: 'var(--coral-4)', line: 'worker containment unavailable · nothing starts', meta: 'see the repair question', taskId: null },
@@ -286,9 +286,15 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
   // a running task always wins the slot line — throttle_state only refreshes
-  // at pickup-decision time, so mid-run it may already be stale.
+  // at pickup-decision time, so mid-run it may already be stale. Pause is the
+  // one halt that still speaks over a running task, because what it has to say
+  // is about that task's fate (issue #34): it finishes, nothing follows. これは
+  // かつて QueueScreen 側の pausedSlot が持っていた分岐で、画面がサーバ順序
+  // (ADR 0068 決定1)を上書きしないようこちらへ移した。
   const slot = running
-    ? { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
+    ? paused
+      ? { color: 'var(--rock-4)', line: 'pickup paused · task finishes, nothing new starts', meta: 'poll idle', taskId: running.id }
+      : { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
     : pickupHalt
     ? pickupHalt.slot
     : fableThrottled
