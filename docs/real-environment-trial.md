@@ -245,14 +245,29 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 - [ ] 編集後も WebUI から registry を編集できる(= S2)
 - [ ] **`registryRebaseliner` が効いている**(= #274 の初実走)。セッション中に盤面が registry の ref を書いても、解放時に ADR 0064 の比較が誤検知の quarantine を出さないこと。`workspace_state` の `needs_human` が 0 のままであることで見る
 
-**S1 の判定手順(エージェントセッションを消費しない):**
+**S1 の判定手順 —— 書き込みゼロ、セッション消費ゼロ:**
 
-1. **開始前(陰性対照)**: assignee を `probe` にしたタスクを1本登録する → **通るはず**(`probe.md` が origin/main にある)。タイトルは `[registry merge probe]` 前置きで —— イベントは append-only で消せない
+読み口は **Register 画面の assignee ドロップダウン**(`GET /api/registry/candidates`)を使う。これは盤面自身の registry 読みそのものであり、しかも**リクエストごとに読み直す**:
+
+```ts
+// src/server-options.ts —— コメントが意図を明示している
+// pass the provider itself, not a boot-time snapshot: the register screen's
+// candidates must reflect agents/workspaces created live through settings
+registryCandidates: () => registryCandidates(board),
+// → loadBoardRegistry(board) → loadRegistry(dir, mode) → refs/remotes/origin/<branch>
+assignees: [...Object.keys(registry.agents), "human"],
+```
+
+1. **開始前(陰性対照)**: Register 画面を開き、assignee 候補に **`probe` と `probe-2` が居ること**を確認する
 2. 第2段のタスクを走らせ、PR を人間が merge する
-3. **refresh を起こす**: 盤面の registry 読みは `refs/remotes/origin/<branch>` なので、merge しただけでは clone に届かない。fetch が走るのは boot / pickup / WebUI からの registry 書き込み(`refreshRegistryForWrite`)の3経路
-4. **もう一度 `probe` 割当で登録する** → **`unknown agent: probe` で弾かれるはず**(`resolveExecutionAgent` の `UnknownAgentError`)
+3. **refresh を起こす**: 盤面の registry 読みは `refs/remotes/origin/<branch>` なので、GitHub 側で merge しただけでは clone に届かない。fetch が走るのは **boot / pickup / WebUI からの registry 書き込み(`refreshRegistryForWrite`)** の3経路
+4. **Register 画面を開き直す** → **`probe` / `probe-2` が候補から消えているはず**
 
-計画にあった「`probe` を assignee に指定したタスクが **agent quarantine** に落ちる」は誤り —— assignee の registry 解決は**登録の時点**で走る(CONTEXT.md「編集時に登録時と同じ検査 — registry 解決 — を再実行」)ので、quarantine まで行かず登録が弾かれる。3で refresh を起こす必要がある点だけは、元の「次の pickup で効く」という言い方が正しく捉えていた。
+**手順3を飛ばして4を見ると失敗する。** それは「merge が効かない」ではなく「まだ fetch していない」の観測であり、両者を取り違えないこと。3の前後で同じ画面を2回見るのが、この判定の判別力の源である。
+
+計画にあった「`probe` を assignee に指定したタスクが **agent quarantine** に落ちる」は誤り —— assignee の registry 解決は**登録の時点**で走る(CONTEXT.md「編集時に登録時と同じ検査 — registry 解決 — を再実行」)ので、quarantine まで行かず登録が `unknown agent: probe` で弾かれる。ただしそれも書き込みを伴うので、上のドロップダウン読みのほうが軽い。
+
+**余談として観測できること: この候補一覧には `human` が常に含まれる。** つまり人間割当タスクは Register 画面から今日でも登録でき、#300(人間割当タスクが実行キューに出る)は仮定の話ではなく到達可能である。
 
 ---
 
