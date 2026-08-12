@@ -437,6 +437,23 @@ export function rebaselineRef(db: Db, workspace: WorkspaceConfig, ref: string): 
   );
 }
 
+/** ADR 0064 決定4 のテーブル6行目(ADR 0066 決定4 / issue #285): `publish` が push した
+ *  ぶんの `refs/remotes/origin/*` を撮り直す。ADR 0064 本文の「盤面が書いた ref は
+ *  どの経路でも**1本に確定**している」は、publish が初めて複数本を書く経路なので
+ *  「**N 本だが確定している**」へ改訂される —— 外科的である(全 ref を撮り直さない)
+ *  という機構そのものは無変更である。
+ *
+ *  **`refs` は publish が push の直前に確定させた集合でなければならない**
+ *  (`publishWorkspace` の戻り値)。ここで checkout を覗いて列挙し直すと、その間に
+ *  worker が偽造した remote-tracking ref まで基準へ迎え入れることになり、ADR 0064 が
+ *  閉じた潜在バグ(偽造 `refs/remotes` → 無実の次セッションへの誤帰属)が戻る。
+ *
+ *  **成功した publish の直後にだけ呼ぶこと。** 失敗した publish は `remote remove` で
+ *  巻き戻るので、撮り直す対象もそもそも残らない。 */
+export function rebaselinePublishedRefs(db: Db, workspace: WorkspaceConfig, refs: string[]): void {
+  for (const ref of refs) rebaselineRef(db, workspace, ref);
+}
+
 /** The slot-release tree rule: whatever the session left behind is stashed as
  *  a WIP commit on the task branch, and the tree is verified clean before the
  *  slot goes free. Mechanical, on every release — completion, escalation or

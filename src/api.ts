@@ -94,10 +94,13 @@ import {
 } from "./workspace.js";
 import {
   BoardStateOverlapError,
+  CheckoutHasOriginError,
   GitHubIdentityMissingError,
   NotAGitRepositoryError,
+  RegistrySelfPublishError,
   RegistrySelfUnprotectError,
   type WorkspaceAdmin,
+  WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
 } from "./workspace-create.js";
 
@@ -226,6 +229,11 @@ const updateWorkspaceSchema = z.object({
   review_allowed_commands: z.array(z.string()).optional(),
   confirm: z.boolean().optional(),
 });
+
+// ADR 0066 決定8: publish は confirm を要求しない(ADR 0061 の「危険な値」族では
+// なく、エージェントの権限を広げない)。宛先の綴りの検証も置かない — 打ち間違いは
+// 人間の入力の範疇で、権限が無ければ push が落ちる(ADR 0066 決定2)
+const publishWorkspaceSchema = z.object({ repo: z.string().min(1) });
 
 // the shape mirrors CreateAgentInput directly; name/authority validity and
 // icon shape live in the domain (assertValidAgentName / assertKnownAuthority
@@ -710,10 +718,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof NotAGitRepositoryError
       ) {
         res.status(400).json({ error: err.message });
-      } else if (err instanceof GitHubIdentityMissingError) {
-        // same "not configured" family as the workspaceAdmin?.create gate
-        // above — the board simply has no GitHub identity (ADR 0024)
-        res.status(503).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -760,6 +764,46 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // 403, not 409: no resubmission can ever make this pass (ADR 0013)
         res.status(403).json({ error: err.message });
       } else {
+        res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+
+  // ADR 0066 決定2 の扉。PATCH ではなく専用の POST なのは、これが編集ではなく
+  // **状態遷移**だからである(決定3): purely-local → remote-backed が起きた瞬間に
+  // fork 元も休止位置も着地の形も同時に切り替わる。
+  router.post("/workspaces/:name/publish", async (req, res) => {
+    const parsed = publishWorkspaceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!workspaceAdmin?.publish) {
+      res.status(503).json({ error: "workspace settings not configured" });
+      return;
+    }
+    try {
+      await workspaceAdmin.publish({ name: req.params.name, repo: parsed.data.repo });
+      res.json({});
+    } catch (err) {
+      if (err instanceof UnknownWorkspaceError) {
+        res.status(404).json({ error: err.message });
+      } else if (
+        // 出し直せば通り得る呼び出し側の入力・状態の問題(create の扉と同じ読み):
+        // 別の宛先を選び直す / 帯域外の origin を手で直す / 案内の一行を実行する
+        err instanceof WorkspaceAlreadyPublishedError ||
+        err instanceof CheckoutHasOriginError ||
+        err instanceof RepoAccessMissingError
+      ) {
+        res.status(400).json({ error: err.message });
+      } else if (err instanceof RegistrySelfPublishError) {
+        // 403: unprotect の自己拒否と同じく、出し直しでは決して通らない(ADR 0013)
+        res.status(403).json({ error: err.message });
+      } else if (err instanceof GitHubIdentityMissingError) {
+        // 上の未設定ゲートと同じ族 — 盤面が GitHub 身元を持たない(ADR 0024)
+        res.status(503).json({ error: err.message });
+      } else {
+        // push が落ちた、registry がランドしなかった(ADR 0052 決定1)—— 外部の一手
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
     }

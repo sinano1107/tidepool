@@ -793,6 +793,48 @@ function ReviewCommandsInput({ values, onChange }) {
   );
 }
 
+// The purely-local → remote-backed door (ADR 0066 決定2/8, issue #285). No
+// confirmation step: publish is not one of ADR 0061's dangerous values — it
+// widens nothing an agent may do — and the destination being a URL the human
+// types every time is itself the shape of consent. The board creates nothing
+// on GitHub: the repository is one the human prepared and invited the bot to.
+function PublishWorkspace({ ws, say, onPublished }) {
+  const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [repo, setRepo] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/workspaces/${encodeURIComponent(ws.name)}/publish`, { repo: repo.trim() });
+      setRepo('');
+      say('success', 'workspace published — every branch is on the remote', ws.name);
+      await onPublished();
+    } catch (err) {
+      // a failed publish leaves no trace (the board rolls its own `remote add`
+      // back), so "fix the cause and press it again" is honest — the refusal's
+      // message already carries the one-line repair when it is an access one
+      say('danger', 'publish failed — nothing landed, safe to retry', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Publish</span>
+      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+        give this purely-local workspace a remote source of truth — every branch is pushed to an
+        empty repository you created and invited the bot to. The board creates nothing on GitHub.
+      </p>
+      <Input value={repo} onChange={(e) => setRepo(e.target.value)}
+        placeholder="the destination repository URL — must be empty" />
+      <Button variant="secondary" size="sm" disabled={busy || !repo.trim()} onClick={submit}>
+        Publish — pushes every branch, then commits to the registry
+      </Button>
+    </div>
+  );
+}
+
 // One workspace as a record card (issue #57 phase 3, restructured by #204):
 // read-only until Edit, then notes + protection as a single draft — the Switch
 // no longer PATCHes the moment it is touched. path/repo/branch re-point the
@@ -800,6 +842,10 @@ function ReviewCommandsInput({ values, onChange }) {
 // are shown but never editable here.
 function WorkspaceRecord({ ws, say, onChanged, edit }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
+  // ADR 0066 決定2: publish は編集ではなく状態遷移なので、Edit の下書きには入らない
+  // — purely-local な workspace だけがこの扉を持ち、registry clone 自身は持たない
+  // (サーバ側も RegistrySelfPublishError で拒む)
+  const publishable = !ws.repo && !ws.registrySelf;
   const id = `workspace:${ws.name}`;
   const open = edit.isOpen(id);
   const [notes, setNotes] = React.useState(ws.notes ?? '');
@@ -848,6 +894,7 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
             onLabel="changes here always need human approval" offLabel="not protected" />
           <FieldRow label="review allowed commands" kind={(ws.review_allowed_commands ?? []).length ? 'tags' : 'unset'}
             tags={ws.review_allowed_commands ?? []} unsetLabel="no extra commands allowed — review stays read-only" />
+          {publishable && <PublishWorkspace ws={ws} say={say} onPublished={onChanged} />}
         </React.Fragment>
       )}
       {open && (

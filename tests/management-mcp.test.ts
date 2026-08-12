@@ -8,7 +8,9 @@ import { registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
   GitHubIdentityMissingError,
+  type PublishWorkspaceInput,
   type UpdateWorkspaceInput,
+  WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
 import { FakeDraftClient } from "./fakes.js";
@@ -100,6 +102,46 @@ it("update_workspace は review_allowed_commands を受け取り、確認要求�
     });
     expect(unconfirmed.isError).toBe(true);
     expect(unconfirmed.content[0].text).toContain("review_allowed_commands_set");
+  } finally {
+    await client.close();
+  }
+});
+
+// ADR 0066 決定8 / issue #285: 扉は3枚すべて —— workspace 系の動詞だけを
+// 非対称にする根拠がない(義手モデルの下では帰属はどちらも人間である)。
+it("publish_workspace は宛先ごとオーケストレーションへ渡り、拒否は tool error になる", async () => {
+  const published = vi.fn(async (input: PublishWorkspaceInput) => {
+    if (input.repo === "https://github.com/sinano1107/taken.git") {
+      throw new WorkspaceAlreadyPublishedError(input.name, input.repo);
+    }
+    return [];
+  });
+  t = await bootTidepool({ workspaceAdmin: { publish: published } });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["publish_workspace"]));
+
+    const ok: any = await client.callTool({
+      name: "publish_workspace",
+      arguments: { name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" },
+    });
+    expect(ok.isError ?? false).toBe(false);
+    expect(published).toHaveBeenCalledWith({
+      name: "sandbox",
+      repo: "https://github.com/sinano1107/sandbox.git",
+    });
+
+    const refused: any = await client.callTool({
+      name: "publish_workspace",
+      arguments: { name: "sandbox", repo: "https://github.com/sinano1107/taken.git" },
+    });
+    expect(refused.isError).toBe(true);
+    // 拒否は呼び出し側の状態の問題であって盤面の故障ではない —— 「registry upstream
+    // error」に混ぜず、案内そのものを読ませる(create の扉と同じ族分け)
+    expect(refused.content[0].text).toBe(
+      'workspace "sandbox" already declares a remote source of truth (repo: https://github.com/sinano1107/taken.git)',
+    );
   } finally {
     await client.close();
   }

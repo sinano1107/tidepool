@@ -53,10 +53,13 @@ import { isFablePickupBlocked, isPickupBlocked } from "./throttle.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
+  CheckoutHasOriginError,
   GitHubIdentityMissingError,
   NotAGitRepositoryError,
+  RegistrySelfPublishError,
   RegistrySelfUnprotectError,
   type WorkspaceAdmin,
+  WorkspaceAlreadyPublishedError,
   WorkspaceConfirmationRequiredError,
 } from "./workspace-create.js";
 
@@ -135,6 +138,9 @@ function registryToolError(err: unknown) {
     err instanceof UnknownWorkspaceError ||
     err instanceof WorkspaceConfirmationRequiredError ||
     err instanceof RegistrySelfUnprotectError ||
+    err instanceof WorkspaceAlreadyPublishedError ||
+    err instanceof CheckoutHasOriginError ||
+    err instanceof RegistrySelfPublishError ||
     err instanceof InvalidAgentNameError ||
     err instanceof UnknownAgentError ||
     err instanceof UnknownAuthorityProfileError ||
@@ -257,6 +263,28 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       if (!deps.workspaceAdmin?.update) return toolError("workspace administration is not configured");
       try {
         await deps.workspaceAdmin.update(input);
+        return toolResult({});
+      } catch (err) {
+        return registryToolError(err);
+      }
+    },
+  );
+  server.registerTool(
+    "publish_workspace",
+    {
+      // ADR 0066 決定2: the board creates nothing on GitHub — the destination
+      // repository is one a human prepared and the bot was invited to.
+      description:
+        "Give a purely-local workspace a remote source of truth: push every branch to an empty repository the human prepared, then record it on the registry entry.",
+      inputSchema: z.object({
+        name: z.string().min(1),
+        repo: z.string().min(1),
+      }),
+    },
+    async (input) => {
+      if (!deps.workspaceAdmin?.publish) return toolError("workspace administration is not configured");
+      try {
+        await deps.workspaceAdmin.publish(input);
         return toolResult({});
       } catch (err) {
         return registryToolError(err);

@@ -16,6 +16,7 @@ import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import {
   conventionCheckoutPath,
+  entryCheckoutPath,
   git,
   originUrl,
   resolvesToRegistryClone,
@@ -78,16 +79,25 @@ export interface WorkspaceAdminDeps {
   githubAuth?: GitHubAuth;
 }
 
-export interface CreateWorkspaceDeps extends WorkspaceAdminDeps {
-  /** Absent (no board GitHub identity, ADR 0024) → clone's repo-access probe
-   *  (ADR 0067 決定2) is skipped, same as today's behavior. `create` no longer
-   *  needs a GitHub identity at all (ADR 0066 決定1); this dep survives S1
-   *  solely as `clone`'s consumer — see issue #284 やること2. */
+/** 共通の dep に、**GitHub へ出ていく workspace 動詞**が要るものを1つ足した組:
+ *  `clone`(ADR 0067 決定2 の登録の門)と `publish`(決定8)がこれを共有する。 */
+export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
+  /** Absent(盤面が GitHub 身元を持たない、ADR 0024)→ ADR 0067 の到達性 probe は
+   *  撃たれず、今日の挙動のまま —— clone は素の git に委ね、publish は push が落ちる
+   *  だけになる。`create` は GitHub に一切出ないので、そもそもこれを読まない
+   *  (ADR 0066 決定1)。 */
   github?: GitHubClient;
 }
 
 export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<void>;
 export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
+/** 返すのは publish が push した remote-tracking ref(`refs/remotes/origin/<branch>`)
+ *  である。ADR 0064 決定4 の再基準化は「盤面が**実際に書いた** ref の行だけ」を要求し、
+ *  publish はその集合を **push の直前に checkout から読んで確定させる**唯一の場所だから
+ *  である —— 事後に `refs/remotes/origin/*` を列挙し直す綴りだと、その間に worker が
+ *  偽造した remote-tracking ref まで「盤面が書いた」に化け、ADR 0064 が閉じた潜在バグ
+ *  (偽造 → 無実の次セッションへの誤帰属)がそのまま戻る。 */
+export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<string[]>;
 
 /** The settings surface's workspace verbs as one bundle (issue #57): they
  *  exist together or not at all (a registry is configured, or none is), so
@@ -97,14 +107,19 @@ export interface WorkspaceAdmin {
   create: CreateWorkspaceFn;
   list: () => WorkspaceView[];
   update: UpdateWorkspaceFn;
+  /** ADR 0066 決定2/8: purely-local → remote-backed の遷移を与える4つ目の動詞。 */
+  publish: PublishWorkspaceFn;
 }
 
-/** ADR 0066 決定1 以降、create モードは GitHub 身元を要求しない — このエラーは
- *  今日どこからも投げられていない。スライス2(`publish`)がここへ移す予定で、
- *  クラス自体の去就はそれまで保留する(issue #284)。 */
+/** publish の3つ目の拒否(ADR 0066 決定5 / issue #285): 盤面が GitHub 身元
+ *  (ADR 0024)を持たないので push できない。要求するのは `github` クライアントでは
+ *  なく `githubAuth` である —— publish が GitHub に出るのは git の push 1本だけで、
+ *  API は ADR 0067 の probe(あれば撃つ)にしか使わない。
+ *
+ *  ADR 0066 決定1 以降、create モードはこのエラーを投げない(GitHub に一切出ない)。 */
 export class GitHubIdentityMissingError extends Error {
   constructor() {
-    super("workspace create mode needs the board's GitHub identity (TIDEPOOL_GITHUB_TOKEN_FILE)");
+    super("publish needs the board's GitHub identity (TIDEPOOL_GITHUB_TOKEN_FILE) to push");
     this.name = "GitHubIdentityMissingError";
   }
 }
@@ -137,7 +152,7 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
-export async function createWorkspace(input: CreateWorkspaceInput, deps: CreateWorkspaceDeps): Promise<void> {
+export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<void> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
@@ -270,14 +285,129 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
 }
 
+/** ADR 0066 決定2 の入力: publish するのはどの workspace か、宛先の repo URL はどこか。
+ *  宛先は**毎回人間が打つ値**であり、盤面は所有者も綴りも検証しない —— 打ち間違いは
+ *  人間の入力の範疇で、権限が無ければ push が落ちるだけである。 */
+export interface PublishWorkspaceInput {
+  name: string;
+  repo: string;
+}
+
+/** publish の1つ目の拒否(ADR 0066 決定5): エントリが既に `repo` を持つ。この拒否が
+ *  リトライの意味も確定させる —— 成功した publish の再送は「もう remote 正本がある」
+ *  であって、宛先の差し替えではない(それは registry の手編集)。 */
+export class WorkspaceAlreadyPublishedError extends Error {
+  constructor(name: string, repo: string) {
+    super(`workspace "${name}" already declares a remote source of truth (repo: ${repo})`);
+    this.name = "WorkspaceAlreadyPublishedError";
+  }
+}
+
+/** publish の2つ目の拒否(ADR 0066 決定5): エントリが盤面自身の registry clone を
+ *  指している。通すと workspace エントリは remote-backed を宣言し、合成 root
+ *  (`RegistryMode`)は purely-local を宣言する —— ADR 0052 が quarantine と定めた
+ *  「2つの宣言の食い違い」を人間の扉が製造することになる。`RegistrySelfUnprotectError`
+ *  (ADR 0013)と同じ形の、確認では買えない拒否である。 */
+export class RegistrySelfPublishError extends Error {
+  constructor(name: string) {
+    super(
+      `workspace "${name}" is the board's own registry clone — its remote source of truth is the board's own composition, not this door`,
+    );
+    this.name = "RegistrySelfPublishError";
+  }
+}
+
+/** publish の4つ目の拒否(ADR 0066 決定5): エントリは `repo` を持たないのに
+ *  checkout には `origin` が在る。それは帯域外の手作業が作った ADR 0052 のずれ状態で
+ *  あり、pickup でどのみち quarantine に落ちる —— publish が上書きして辻褄を合わせる
+ *  形は採らない。**巻き戻しの線もここで引かれる**: 自分が `remote add` した場合しか
+ *  `remote remove` しないので、publish が足していない remote は決して消えない。 */
+export class CheckoutHasOriginError extends Error {
+  constructor(name: string, origin: string) {
+    super(
+      `workspace "${name}" declares no remote source of truth but its checkout already has an 'origin' (${origin}) — repair the mismatch by hand`,
+    );
+    this.name = "CheckoutHasOriginError";
+  }
+}
+
+/** ADR 0066 決定2 の扉: purely-local な workspace に remote 正本を与える。
+ *  `git remote add origin` → `git push --atomic --all` → registry エントリへ `repo`。
+ *  checkout は動かさない(ADR 0064 の「走っているセッションの作業ツリーを奪わない」)。 */
+export async function publishWorkspace(
+  input: PublishWorkspaceInput,
+  deps: WorkspaceGitHubDeps,
+): Promise<string[]> {
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const entry = ownEntry(registry.workspaces, input.name);
+  if (!entry) throw new UnknownWorkspaceError(input.name);
+  if (entry.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, entry.repo);
+  if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
+    throw new RegistrySelfPublishError(input.name);
+  }
+  if (!deps.githubAuth) throw new GitHubIdentityMissingError();
+  const dir = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
+  const existing = originUrl(dir);
+  if (existing !== undefined) throw new CheckoutHasOriginError(input.name, existing);
+  // ADR 0067 決定8: ADR 0066 決定5 が名指しした最頻の人為ミス「repo は作ったが bot の
+  // 招待を忘れた」を、push が落ちる**前に**招待1枚で直す。位置は `remote add` の手前で
+  // なければならない —— 直せなかったとき、巻き戻す痕跡がそもそも作られない側に立つ。
+  await assertRepoAccess(input.repo, deps.github);
+  // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedGit` も
+  // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
+  // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
+  // 宣言が無い = ADR 0052 の quarantine 事由)を観測できない ──
+  // probe の往復の間に人間面から同じエントリの編集(notes など)が landed していたら、
+  // 上で読んだ写しは既に古い —— そのまま書くと相手の編集を黙って巻き戻す。publish の
+  // 対象は**既に登録済み**の workspace なので、`createWorkspace` の「途中失敗が残すのは
+  // registry が知らない孤児だけ」という根拠はここでは引き継げない(ADR 0066 決定5)。
+  const fresh = ownEntry(loadRegistry(deps.registry.dir, deps.registry.mode).workspaces, input.name);
+  if (!fresh) throw new UnknownWorkspaceError(input.name);
+  if (fresh.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, fresh.repo);
+  git(dir, "remote", "add", "origin", input.repo);
+  try {
+    // `--all` が送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**
+    // 読むのが要件である(ADR 0064 決定4): 撮り直す ref の集合は盤面が書いたものだけに
+    // 確定していなければならず、事後に `refs/remotes/origin/*` を列挙し直すと、その間に
+    // worker が偽造した remote-tracking ref を基準へ迎え入れてしまう。
+    const branches = git(dir, "for-each-ref", "--format=%(refname:strip=2)", "refs/heads/")
+      .split("\n")
+      .filter((branch) => branch !== "");
+    // `--atomic` は必須(ADR 0066 決定6): 宛先が「Add a README」つきの非空 repo
+    // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
+    // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
+    // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
+    // `--all` は `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
+    // (ADR 0066 決定6)。上限は掛けない: 人間が起こす一括転送なので clone と同じ扱い。
+    authedGit(deps.githubAuth, dir, "push", "--atomic", "--all", "origin");
+    commitWorkspaceEntry(
+      deps,
+      input.name,
+      { ...fresh, repo: input.repo },
+      `publish workspace ${input.name} via WebUI`,
+    );
+    return branches.map((branch) => `refs/remotes/origin/${branch}`);
+  } catch (err) {
+    // 巻き戻すのは**自分が足した origin だけ**(上の CheckoutHasOriginError が
+    // その線を引いている)。最も起きる人為ミスは「repo は作ったが bot の招待を
+    // 忘れた」で、経路は remote add(成功)→ push(失敗)→ registry コミット未実行。
+    // registry コミットが落ちた場合もここへ来る: 宣言の無い workspace に origin が
+    // 残るほうが ADR 0052 のずれそのものであり、再送は同一 ref の push なので
+    // up-to-date で通る。
+    git(dir, "remote", "remove", "origin");
+    throw err;
+  }
+}
+
 /** Each mode's external half, ordered so the registry commit stays last. */
 async function buildEntry(
   input: CreateWorkspaceInput,
-  deps: CreateWorkspaceDeps,
+  deps: WorkspaceGitHubDeps,
 ): Promise<WorkspaceEntry> {
   if (input.mode === "register") return registerExistingCheckout(input.path);
   if (input.mode === "clone") {
-    await assertClonableRepoAccess(input.repo, deps);
+    await assertRepoAccess(input.repo, deps.github);
     return cloneAndDescribe(input.name, input.repo, deps);
   }
   return createLocalCheckout(input.name, deps);
@@ -291,7 +421,7 @@ async function buildEntry(
  *  `ensureTaskBranch`(workspace.ts)が pickup 時に落ちる。初期コミットが要るのは
  *  同じ理由で、空リポジトリには `main` が存在しない。`repo` を書かないため、生まれる
  *  workspace は構造的に purely-local である(ADR 0052 決定3)。 */
-function createLocalCheckout(name: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
+function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): WorkspaceEntry {
   const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): 規約どおりの場所に既にある checkout は、前回
   // registry コミット直前で失敗した孤児 —— 済んだ手順として流用する(clone
@@ -306,23 +436,23 @@ function createLocalCheckout(name: string, deps: CreateWorkspaceDeps): Workspace
   return {};
 }
 
-/** 登録の門(ADR 0067 決定2): clone を撃つ**前**に、その repo に盤面が書けることを
- *  1回だけ確かめ、招待1枚で直せるなら直す。撃たないのは3つの場合で、どれも今日の
- *  挙動のまま通す:
+/** 盤面がこれから git でその repo へ出ていく直前に、書けることを1回だけ確かめ、
+ *  招待1枚で直せるなら直す(ADR 0067 決定2 の登録の門 = `clone`、決定8 の `publish`)。
+ *  撃たないのは2つの場合で、どちらも今日の挙動のまま通す:
  *
- *  - `deps.github` 不在 —— 盤面が GitHub 身元(ADR 0024)を持たないので probe を
- *    撃つ相手そのものが無い。ここは通す側で、clone は今日どおり素の git に委ねる
- *  - 非 GitHub の URL —— `clone` の入力欄は「anything git clone accepts」であり、
- *    `parseGitHubRepo` の `undefined` がそのままこの門になる(決定1)
- *  - `create` モード —— GitHub に一切出ない(ADR 0066 決定1)ので probe する相手が
- *    そもそも無い(この関数を呼ぶのは clone モードだけ)
+ *  - `github` 不在 —— 盤面が GitHub 身元(ADR 0024)を持たないので probe を撃つ相手
+ *    そのものが無い。ここは通す側で、git 呼び出しは今日どおり素のまま落ちる
+ *  - 非 GitHub の URL —— `clone` の入力欄も `publish` の宛先欄も「anything git が
+ *    受ける綴り」であり、`parseGitHubRepo` の `undefined` がそのままこの門になる
+ *    (決定1)
  *
- *  `register` モードにも置かない(決定3 の非対称): 既にホスト上にある checkout の
- *  登録に probe を足すと、登録の門が全モードでネットワークを要求することになる。 */
-async function assertClonableRepoAccess(repo: string, deps: CreateWorkspaceDeps): Promise<void> {
+ *  `create` モードは GitHub に一切出ない(ADR 0066 決定1)ので呼ばない。`register`
+ *  モードにも置かない(決定3 の非対称): 既にホスト上にある checkout の登録に probe を
+ *  足すと、登録の門が全モードでネットワークを要求することになる。 */
+async function assertRepoAccess(repo: string, github: GitHubClient | undefined): Promise<void> {
   const ref = parseGitHubRepo(repo);
-  if (!deps.github || !ref) return;
-  const { guidance } = await repairRepoAccess(deps.github, ref);
+  if (!github || !ref) return;
+  const { guidance } = await repairRepoAccess(github, ref);
   if (guidance) throw new RepoAccessMissingError(guidance);
 }
 
@@ -368,7 +498,7 @@ function registerExistingCheckout(path: string): WorkspaceEntry {
 
 /** The clone mode's external half: a checkout at the convention-derived
  *  location (ADR 0018 — the entry never records the path). */
-function cloneAndDescribe(name: string, repo: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
+function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps): WorkspaceEntry {
   const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it

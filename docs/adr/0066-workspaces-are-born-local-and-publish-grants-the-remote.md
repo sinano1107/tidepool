@@ -28,7 +28,7 @@ CONTEXT.md の GitHub identity は「**GitHub 上の名義は執行者を表し�
 
 purely-local → remote-backed という遷移には、今日**扉が1枚も無い**。`repo` は `updateWorkspace` の編集対象外(`notes` / `protected` / `review_allowed_commands` のみ)であり、遷移は registry の手編集でしか起こせない。`publish` が与えるのはこの扉であって、repo の作成はその中の1ステップですらない — 盤面は repo を作らない。
 
-**引数は宛先の repo URL である。** 人間が GitHub 上に空 repo を作り(個人名前空間でよい)、bot を collaborator に招待し、その URL を渡す。盤面がするのは `git remote add origin <url>` と `git push --all` と registry エントリへの `repo` の書き込みだけで、**GitHub 上に新しく作るものが1つも無い**。この非対称が本 ADR の要である: 執行者としての名義(ADR 0024)は残り、所有者としての立場だけが盤面から消える。
+**引数は宛先の repo URL である。** 人間が GitHub 上に空 repo を作り(個人名前空間でよい)、bot を collaborator に招待し、その URL を渡す。盤面がするのは `git remote add origin <url>` と `git push --atomic --all`(決定6)と registry エントリへの `repo` の書き込みだけで、**GitHub 上に新しく作るものが1つも無い**。この非対称が本 ADR の要である: 執行者としての名義(ADR 0024)は残り、所有者としての立場だけが盤面から消える。
 
 宛先が人間の入力であることは副次的な利点も持つ。合成 root の env 1行に宛先を置く設計では、その1行の誤りが以後の全 publish を黙って別の場所へ着地させるが、毎回人間が打つ値ならその形の静かな誤りは起こらない。盤面は宛先の所有者を検証しない — 打ち間違いは人間の入力の範疇であり、bot に write 権限が無ければ push が落ちるだけである。
 
@@ -46,11 +46,14 @@ ADR 0064 は「書いた ref はどの経路でも1本に確定している」�
 
 並行を許すのは、CONTEXT.md が既に「人間面から入る書き込みは slot の外から来るので**常にセッションと並行しうる**」と書いており、`publish` がその族に属するためである。セッションの途中で宣言が反転するが、ADR 0053 は着地の形を**完了時に**解決するので矛盾しない — PR の base はいま push した保護ブランチであり、それはタスクブランチが切られた地点そのものである。ADR 0052 決定7 の休止位置の追従も、publish 直後はリモートとローカルの保護ブランチが一致しているので no-op になる。
 
-### 5. `publish` は3つを拒み、失敗時は `remote add` を巻き戻す
+### 5. `publish` は4つを拒み、失敗時は `remote add` を巻き戻す
 
 - **既に remote-backed な workspace**(エントリが `repo` を持つ)。この拒否がリトライの意味も確定させる。
 - **registry clone 自身**(`resolvesToRegistryClone` — `src/workspace.ts:276`)。purely-local な盤面でこれを通すと、workspace エントリは remote-backed を宣言し合成 root は purely-local を宣言する。**ADR 0052 が quarantine と定めた「2つの宣言の食い違い」を人間の扉が製造する**ことになる。`RegistrySelfUnprotectError`(ADR 0013)と同じ形の、確認では買えない拒否である。
-- **git リポジトリでないパス**は決定6 の門が先に弾くので、`publish` の側では起こらない。
+- **GitHub 身元(ADR 0024)を持たない盤面**。push できないので、外部効果を1つも起こさないうちに落とす。要求するのは `github` クライアントではなく `githubAuth` である —— `publish` が GitHub へ出るのは git の push 1本だけで、API は ADR 0067 の probe(あれば撃つ)にしか使わない。
+- **checkout に既に `origin` が在る workspace**(実装時に追加 — issue #285 やること5)。エントリが `repo` を持たないのにこれが起きているなら、それは帯域外の手作業が作った ADR 0052 のずれ状態であり、pickup でどのみち quarantine に落ちる。`publish` が上書きして辻褄を合わせる形は採らない。**この拒否は下の巻き戻しの線も引いている** —— 自分が `remote add` した場合しか `remote remove` しないので、publish が足していない remote は決して消えない。
+
+**git リポジトリでないパス**は決定7 の門が先に弾くので、`publish` の側では起こらない。
 
 **失敗時は `git remote remove origin` で巻き戻す。** 案1で最も起きる人為ミスは「repo は作ったが bot の招待を忘れた」であり、そのとき経路は `remote add`(ローカル・成功)→ `push`(失敗)→ registry コミット未実行 を辿る。残るのは「clone に remote があるのに宣言が無い」= ADR 0052 が quarantine と定めたずれそのものである。`remote add` はローカル操作なので巻き戻しは確実で、失敗した publish は痕跡を残さない。
 
@@ -58,7 +61,9 @@ ADR 0064 は「書いた ref はどの経路でも1本に確定している」�
 
 ### 6. `publish` が送るのは全ブランチ。完全性は主張しない
 
-`git push --all`(`refs/heads/*`)。publish 以前のタスクブランチも連れて行く。タスクブランチは決着後も削除されない**差分の恒久記録**であり(CONTEXT.md の Review)、保護ブランチだけを送ると、workspace は「remote 正本を持つ」と宣言しながら恒久記録の唯一の在処が盤面自身がキャッシュと呼ぶものになる。publish 以降のタスクのブランチは完了時の PR 昇格が押すので、範囲の選択が決めるのは publish 以前の履歴を連れて行くかだけである。
+`git push --atomic --all`(`refs/heads/*`)。publish 以前のタスクブランチも連れて行く。
+
+**`--atomic` は必須である**(実装時に追加 — issue #285 やること2)。2番目に起きやすい人為ミスは GitHub UI の「Add a README」で、そのとき `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので**成功する**。非 atomic だと publish は失敗扱いで決定5 の巻き戻しを撃つのに、人間の「空のはずの repo」にはタスクブランチが載ったまま残り、**「失敗した publish は痕跡を残さない」がリモート側で破れる**。サーバ側 atomic push は git 2.4+ で GitHub も対応している。タスクブランチは決着後も削除されない**差分の恒久記録**であり(CONTEXT.md の Review)、保護ブランチだけを送ると、workspace は「remote 正本を持つ」と宣言しながら恒久記録の唯一の在処が盤面自身がキャッシュと呼ぶものになる。publish 以降のタスクのブランチは完了時の PR 昇格が押すので、範囲の選択が決めるのは publish 以前の履歴を連れて行くかだけである。
 
 送るのは**その瞬間にローカルにあるブランチ集合の忠実な転写**であって、履歴の完全性ではない。盤面は ref の永続台帳を持たない — ADR 0064 のスナップショットは pickup→release の窓の中だけの一時的な基準である。セッションの外で人間がブランチを消していれば、それは publish の時点で存在せず、送りようがない。**欠落の報告もしない**: event log からタスクブランチ名を導けるので検知自体は可能だが、消えたブランチに対して人間が取れる行動は無く、状態遷移の動詞を監査の動詞に変えることになる。タグは送らない(ドメイン上の意味を持たないため)。
 

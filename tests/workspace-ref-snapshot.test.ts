@@ -1,8 +1,12 @@
 import { writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createAgent } from "../src/agent-create.js";
+import { GitHubAuth } from "../src/github-auth.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
+import { publishWorkspace } from "../src/workspace-create.js";
 import {
   api,
   bootTidepool,
@@ -266,4 +270,97 @@ it("違反メッセージは動いた ref を名指しし、消えた行と増�
   const purpose = (await quarantineQuestion(t))?.purpose;
   expect(purpose).toContain(`was: ${before} refs/heads/sibling`);
   expect(purpose).toContain(`now: ${after} refs/heads/sibling`);
+});
+
+// ADR 0064 決定4 のテーブル**6行目**(ADR 0066 決定4 / issue #285): `publish` は
+// `refs/remotes/origin/*` を**新規に作る**唯一の経路である。checkout は動かさないので
+// ADR 0064 の「走っているセッションの作業ツリーを奪わない」線は無傷だが、再基準化
+// しなければ無実のセッションが解放時に quarantine へ落ちる。
+async function publishableBoard(name: string): Promise<{
+  ws: WorkspaceConfig;
+  dest: string;
+  boot: Parameters<typeof bootTidepool>[0];
+}> {
+  const ws = await makeWorkspace(dirs, name);
+  const registryDir = await makeRegistry({ "workspaces.yaml": `${name}:\n  path: ${ws.path}\n` });
+  const workspacesBaseDir = await mkdtemp(join(tmpdir(), "tidepool-ws-base-"));
+  const tokenDir = await mkdtemp(join(tmpdir(), "tidepool-token-"));
+  const dest = await mkdtemp(join(tmpdir(), "tidepool-dest-"));
+  dirs.push(registryDir, workspacesBaseDir, tokenDir, dest);
+  git(dest, "init", "--bare", "-b", "main");
+  writeFileSync(join(tokenDir, "token"), "ghp_test\n");
+  const deps = {
+    registry: { dir: registryDir, mode: "purely-local" as const },
+    workspacesBaseDir,
+    githubAuth: new GitHubAuth(join(tokenDir, "token")),
+  };
+  return {
+    ws,
+    dest,
+    boot: {
+      workspace: ws,
+      workspaceAdmin: { publish: (input) => publishWorkspace(input, deps) },
+      boardState: { paths: [], listWorkspaces: () => [ws] },
+    },
+  };
+}
+
+it("セッション中に publish しても、そのセッションは quarantine されない", async () => {
+  const { ws, dest, boot } = await publishableBoard("sandbox");
+  t = await bootTidepool(boot);
+  const task = await registerWork(t, "runs while the human publishes");
+  await t.clock.advance(HOUR);
+  commitOn(ws.path, "in-flight.txt", "still working\n", "worker's own commit");
+
+  expect(
+    (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
+  ).toBe(200);
+  expect(git(ws.path, "rev-parse", "refs/remotes/origin/main")).toBe(git(ws.path, "rev-parse", "main"));
+
+  await complete(t, task.id);
+
+  expect(await quarantineQuestion(t)).toBeUndefined();
+});
+
+// 外科的であることの裏側(ADR 0064 決定4): 全 ref を撮り直せば、その瞬間までに worker が
+// 動かした ref も新しい基準に飲み込まれ、解放時の比較が素通りする。publish が触るのは
+// `refs/remotes/origin/*` だけなので、`refs/heads/*` の逸脱は今までどおり捕まる。
+it("publish が触っていない ref を worker が動かせば、今までどおり quarantine に落ちる", async () => {
+  const { ws, dest, boot } = await publishableBoard("sandbox");
+  git(ws.path, "branch", "sibling");
+  t = await bootTidepool(boot);
+  const task = await registerWork(t, "moves a sibling while the human publishes");
+  await t.clock.advance(HOUR);
+  commitOn(ws.path, "work.txt", "my own work\n", "worker's own commit");
+  git(ws.path, "branch", "-f", "sibling", `task/${task.id}`);
+
+  expect(
+    (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
+  ).toBe(200);
+
+  await complete(t, task.id);
+
+  expect((await quarantineQuestion(t))?.purpose).toContain("refs/heads/sibling");
+});
+
+// ADR 0064 決定4 の「盤面が**実際に書いた** ref の行だけ」。publish 後に checkout を
+// 覗いて `refs/remotes/origin/*` を列挙すると、worker が窓の中で偽造した
+// remote-tracking ref まで「盤面が書いた」に化ける —— ADR 0064 が閉じたはずの
+// 潜在バグ(偽造 `refs/remotes` → 無実の次セッションへの誤帰属)がそのまま戻る。
+// 撮り直す集合は push の直前に確定していなければならない。
+it("publish が push していない origin ref を worker が偽造すれば quarantine に落ちる", async () => {
+  const { ws, dest, boot } = await publishableBoard("sandbox");
+  t = await bootTidepool(boot);
+  const task = await registerWork(t, "forges a remote-tracking ref");
+  await t.clock.advance(HOUR);
+  commitOn(ws.path, "work.txt", "my own work\n", "worker's own commit");
+  git(ws.path, "update-ref", "refs/remotes/origin/forged", `task/${task.id}`);
+
+  expect(
+    (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
+  ).toBe(200);
+
+  await complete(t, task.id);
+
+  expect((await quarantineQuestion(t))?.purpose).toContain("refs/remotes/origin/forged");
 });
