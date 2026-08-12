@@ -79,11 +79,13 @@ export interface WorkspaceAdminDeps {
   githubAuth?: GitHubAuth;
 }
 
-export interface CreateWorkspaceDeps extends WorkspaceAdminDeps {
-  /** Absent (no board GitHub identity, ADR 0024) → clone's repo-access probe
-   *  (ADR 0067 決定2) is skipped, same as today's behavior. `create` no longer
-   *  needs a GitHub identity at all (ADR 0066 決定1); this dep survives S1
-   *  solely as `clone`'s consumer — see issue #284 やること2. */
+/** 共通の dep に、**GitHub へ出ていく workspace 動詞**が要るものを1つ足した組:
+ *  `clone`(ADR 0067 決定2 の登録の門)と `publish`(決定8)がこれを共有する。 */
+export interface WorkspaceNetworkDeps extends WorkspaceAdminDeps {
+  /** Absent(盤面が GitHub 身元を持たない、ADR 0024)→ ADR 0067 の到達性 probe は
+   *  撃たれず、今日の挙動のまま —— clone は素の git に委ね、publish は push が落ちる
+   *  だけになる。`create` は GitHub に一切出ないので、そもそもこれを読まない
+   *  (ADR 0066 決定1)。 */
   github?: GitHubClient;
 }
 
@@ -144,7 +146,7 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
-export async function createWorkspace(input: CreateWorkspaceInput, deps: CreateWorkspaceDeps): Promise<void> {
+export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceNetworkDeps): Promise<void> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
@@ -285,13 +287,6 @@ export interface PublishWorkspaceInput {
   repo: string;
 }
 
-export interface PublishWorkspaceDeps extends WorkspaceAdminDeps {
-  /** Absent(盤面が GitHub 身元を持たない、ADR 0024)→ ADR 0067 決定8 の到達性 probe は
-   *  撃たれず、今日の挙動のまま push が落ちるだけになる。`clone` モードと同じ扱いで
-   *  ある(`CreateWorkspaceDeps.github`)。 */
-  github?: GitHubClient;
-}
-
 /** publish の1つ目の拒否(ADR 0066 決定5): エントリが既に `repo` を持つ。この拒否が
  *  リトライの意味も確定させる —— 成功した publish の再送は「もう remote 正本がある」
  *  であって、宛先の差し替えではない(それは registry の手編集)。 */
@@ -335,7 +330,7 @@ export class CheckoutHasOriginError extends Error {
  *  checkout は動かさない(ADR 0064 の「走っているセッションの作業ツリーを奪わない」)。 */
 export async function publishWorkspace(
   input: PublishWorkspaceInput,
-  deps: PublishWorkspaceDeps,
+  deps: WorkspaceNetworkDeps,
 ): Promise<void> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
@@ -394,7 +389,7 @@ export async function publishWorkspace(
 /** Each mode's external half, ordered so the registry commit stays last. */
 async function buildEntry(
   input: CreateWorkspaceInput,
-  deps: CreateWorkspaceDeps,
+  deps: WorkspaceNetworkDeps,
 ): Promise<WorkspaceEntry> {
   if (input.mode === "register") return registerExistingCheckout(input.path);
   if (input.mode === "clone") {
@@ -412,7 +407,7 @@ async function buildEntry(
  *  `ensureTaskBranch`(workspace.ts)が pickup 時に落ちる。初期コミットが要るのは
  *  同じ理由で、空リポジトリには `main` が存在しない。`repo` を書かないため、生まれる
  *  workspace は構造的に purely-local である(ADR 0052 決定3)。 */
-function createLocalCheckout(name: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
+function createLocalCheckout(name: string, deps: WorkspaceNetworkDeps): WorkspaceEntry {
   const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): 規約どおりの場所に既にある checkout は、前回
   // registry コミット直前で失敗した孤児 —— 済んだ手順として流用する(clone
@@ -489,7 +484,7 @@ function registerExistingCheckout(path: string): WorkspaceEntry {
 
 /** The clone mode's external half: a checkout at the convention-derived
  *  location (ADR 0018 — the entry never records the path). */
-function cloneAndDescribe(name: string, repo: string, deps: CreateWorkspaceDeps): WorkspaceEntry {
+function cloneAndDescribe(name: string, repo: string, deps: WorkspaceNetworkDeps): WorkspaceEntry {
   const dir = conventionCheckoutPath(name, deps.workspacesBaseDir);
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it
