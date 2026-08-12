@@ -15,6 +15,7 @@ import {
 } from "../src/workspace-create.js";
 import { FakeDraftClient } from "./fakes.js";
 import {
+  api,
   bootTidepool,
   managementMcpClient,
   registerQuestion,
@@ -142,6 +143,24 @@ it("publish_workspace は宛先ごとオーケストレーションへ渡り、�
     expect(refused.content[0].text).toBe(
       'workspace "sandbox" already declares a remote source of truth (repo: https://github.com/sinano1107/taken.git)',
     );
+  } finally {
+    await client.close();
+  }
+});
+
+// ADR 0068 が直す実害の本体: トリアージ中に list_queue を読んだエージェントに
+// 「キューは流れている」と見えていた。MCP にはバナーの補完チャネルが無いので、
+// 停止理由は同じ1読みの envelope に載るしかない。
+it("list_queue の envelope は盤面全体の停止を1回で答え、行は todo のまま(ADR 0068)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "waits for the triage session to close");
+  await api(t.baseUrl, "POST", "/api/triage/start");
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const queue: any = readToolPayload(await client.callTool({ name: "list_queue", arguments: {} }));
+    expect(queue.halts).toEqual([{ kind: "triage" }]);
+    expect(queue.tasks.find((x: any) => x.id === task.id).status).toBe("todo");
   } finally {
     await client.close();
   }
