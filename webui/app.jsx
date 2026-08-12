@@ -2623,17 +2623,17 @@ function App() {
   // fire the immediate poll. The read cursor is the second call, advanced
   // after: a failed close never marks the skimmed lines as read, and a
   // failed cursor advance never masquerades as a failed commit.
-  const closeTriage = (scratchpad) => api('/api/triage/close', { scratchpad });
+  const closeTriage = (body) => api('/api/triage/close', body);
 
   const commitTriage = async (answers, objections, scratch) => {
     let result;
     try {
-      result = await closeTriage(
+      result = await closeTriage({
         // kit dispositions already speak the domain vocabulary
-        scratch
+        scratchpad: scratch
           .filter((s) => typeof s.id === 'number')
           .map((s) => ({ id: s.id, disposition: s.kind })),
-      );
+      });
     } catch (err) {
       refresh();
       say('danger', 'triage commit failed — nothing applied, cursor NOT advanced',
@@ -2685,7 +2685,7 @@ function App() {
   // cursor, the banner is close only.
   const closeTriageSession = async () => {
     try {
-      const result = await api('/api/triage/close', { close_only: true });
+      const result = await closeTriage({ close_only: true });
       await refresh();
       if (result.outcome === 'closed_now') {
         say('success', 'triage session closed', 'pickup resumed · immediate poll fired');

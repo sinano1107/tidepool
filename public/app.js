@@ -2744,14 +2744,14 @@ function App() {
       frontInserted: t.front_inserted
     }));
   };
-  const closeTriage = (scratchpad) => api("/api/triage/close", { scratchpad });
+  const closeTriage = (body) => api("/api/triage/close", body);
   const commitTriage = async (answers, objections, scratch) => {
     let result;
     try {
-      result = await closeTriage(
+      result = await closeTriage({
         // kit dispositions already speak the domain vocabulary
-        scratch.filter((s) => typeof s.id === "number").map((s) => ({ id: s.id, disposition: s.kind }))
-      );
+        scratchpad: scratch.filter((s) => typeof s.id === "number").map((s) => ({ id: s.id, disposition: s.kind }))
+      });
     } catch (err) {
       refresh();
       say(
@@ -2802,7 +2802,7 @@ function App() {
   };
   const closeTriageSession = async () => {
     try {
-      const result = await api("/api/triage/close", { close_only: true });
+      const result = await closeTriage({ close_only: true });
       await refresh();
       if (result.outcome === "closed_now") {
         say("success", "triage session closed", "pickup resumed \xB7 immediate poll fired");
