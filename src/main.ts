@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
 import { boardStatePaths } from "./board-state.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
+import { resolveCliAuthExpiry } from "./cli-auth.js";
 import { SystemClock } from "./clock.js";
 import { loadGitHubAuth } from "./github-auth.js";
 import { parseGlossary } from "./glossary.js";
@@ -144,6 +145,7 @@ const server = await startServer(
     githubAuth: loadGitHubAuth(githubTokenFile),
     vapid: vapidConfig(),
     translationClient: translationClientFactory(),
+    cliAuthExpiresAt: resolveCliAuthExpiry(process.env.TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT),
   }),
 );
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);

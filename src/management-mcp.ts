@@ -9,6 +9,7 @@ import {
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
+import type { CliAuthCheck } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
@@ -78,6 +79,7 @@ export interface ManagementMcpDeps {
   isProtectedWorkspace?: (name: string) => boolean;
   containment?: ContainmentCheck;
   registryReachability?: RegistryReachabilityCheck;
+  cliAuth?: CliAuthCheck;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
   /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
@@ -608,6 +610,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               agentRegistered: deps.agentRegistered,
               containment: deps.containment,
               registryReachability: deps.registryReachability,
+              cliAuth: deps.cliAuth,
               boardState: deps.boardState,
             },
             task,

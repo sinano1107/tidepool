@@ -8,6 +8,7 @@ import {
 } from "./agent-create.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
+import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
@@ -499,6 +500,8 @@ export interface ApiRouterDeps {
   containment?: ContainmentCheck;
   /** ADR 0052: re-runs refresh before accepting a registry quarantine answer. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
+  cliAuth?: CliAuthCheck;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -573,6 +576,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     agentRegistered,
     containment,
     registryReachability,
+    cliAuth,
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
@@ -1002,6 +1006,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // "unreachable" signal as no client configured. AC3 (issue #12) is that
       // draft failures never block registration, only push the user to the
       // plain form, so every draftTask() failure gets 503 here, not 500.
+      quarantineCliAuthFailure(db, err, clock.now());
       res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
     }
   });
@@ -1153,6 +1158,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           agentRegistered,
           containment,
           registryReachability,
+          cliAuth,
           boardState,
         },
         task,
@@ -1256,6 +1262,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } catch (err) {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
+      quarantineCliAuthFailure(db, err, clock.now());
       res.status(503).json({ error: err instanceof Error ? err.message : "draft failed" });
     }
   });
@@ -1295,6 +1302,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         res.status(404).json({ error: err.message });
         return;
       }
+      quarantineCliAuthFailure(db, err, clock.now());
       res.status(503).json({ error: err instanceof Error ? err.message : "translation failed" });
     }
   });

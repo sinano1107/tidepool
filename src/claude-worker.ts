@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { isCliAuthFailureEnvelope, quarantineCliAuth } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -731,8 +732,9 @@ function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEv
   return isStreamResultEvent(parsed) ? parsed : null;
 }
 
-const parseResultLine = (line: string): StreamResultEvent | null =>
-  readResultEvent(parseStreamLine(line));
+function isCliAuthFailure(parsed: Record<string, unknown> | null): boolean {
+  return parsed?.type === "result" && isCliAuthFailureEnvelope(parsed);
+}
 
 /** What the stdout scan collected about this session's advisor while the
  *  stream ran (issue #33). Both are needed at exit and neither survives on the
@@ -1198,7 +1200,7 @@ function scanWorkspaceSkills(workspacePath: string): string[] {
 export const defaultExec: ExecFn = (command, args, env) =>
   new Promise((resolve, reject) => {
     execFile(command, args, { env }, (err, stdout) => {
-      if (err) reject(err);
+      if (err) reject(Object.assign(err, { stdout }));
       else resolve(stdout);
     });
   });
@@ -1871,6 +1873,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // stream-json `result` line so worker_exited can report usage/cost at
     // exit without re-reading the file back off disk
     let lastResult: StreamResultEvent | null = null;
+    let cliAuthFailed = false;
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
@@ -1887,6 +1890,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // decoded once, read by every concern below (see parseStreamLine)
         const parsed = parseStreamLine(line);
         lastResult = readResultEvent(parsed) ?? lastResult;
+        cliAuthFailed ||= isCliAuthFailure(parsed);
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
@@ -1958,7 +1962,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // mid-line), which would otherwise strand the last result line in
       // `buffered` forever and read as a false "missing usage" — same
       // status as an actual kill, which it isn't
-      lastResult = parseResultLine(buffered) ?? lastResult;
+      const finalParsed = parseStreamLine(buffered);
+      lastResult = readResultEvent(finalParsed) ?? lastResult;
+      cliAuthFailed ||= isCliAuthFailure(finalParsed);
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
@@ -1966,6 +1972,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)
       if (code !== 0) console.error(`[worker] claude exited with ${signal ?? code}`);
+      if (cliAuthFailed) quarantineCliAuth(this.options.db, this.options.clock.now());
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,

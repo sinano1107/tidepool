@@ -158,6 +158,7 @@ export type EventPayload =
   // ADR 0052: registry remote reachability was rechecked successfully when
   // its Confirmation question was answered, so board-wide pickup resumes.
   | { kind: "registry_reinstated" }
+  | { kind: "cli_auth_reinstated" }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill); the event itself is

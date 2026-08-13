@@ -15,6 +15,7 @@ import {
   pinnedModelFlags,
   type SpawnFn,
 } from "../src/claude-worker.js";
+import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { refreshRegistry } from "../src/registry.js";
@@ -57,6 +58,8 @@ function makeTask(
     question_quarantine_agent: null,
     question_quarantine_sandbox: null,
     question_quarantine_registry: null,
+    question_quarantine_cli_auth: null,
+    question_cli_auth_expiry_warning: null,
     github_issue_number: null,
     created_at: "2026-07-08T00:00:00.000Z",
   };
@@ -1562,6 +1565,20 @@ describe("ClaudeCodeWorker", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("実行中セッションの result が API 401 を返したら CLI 認証停止を盤面へ昇格する(issue #320)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-cli-auth-expired");
+    stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
+
+    emitExit(1, null);
+
+    expect(
+      listBoard(db)
+        .filter((task) => task.type === "question")
+        .map((task) => task.title),
+    ).toEqual([CLI_AUTH_QUESTION_TITLE]);
   });
 
   it("worker_exited イベントに stderr の末尾20行を stderr_tail として載せる(issue #125)", async () => {
