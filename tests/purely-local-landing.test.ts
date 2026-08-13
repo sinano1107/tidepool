@@ -27,6 +27,7 @@ it("purely-local の root work 完了は PR を試みず、代わりに着地 qu
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  writeFileSync(join(workspace.path, "feature.txt"), "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({
@@ -56,6 +57,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   });
   const task = await registerWork(t, "ship automatically");
   await t.clock.advance(HOUR);
+  writeFileSync(join(workspace.path, "automatic.txt"), "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

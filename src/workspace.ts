@@ -80,8 +80,8 @@ export function isRemoteBacked(workspace: WorkspaceConfig): boolean {
  *  `protectedBranch` の返す**名前**とは役が違う: PR の base や直接書き込み禁止の
  *  対象はリモートのブランチ名そのものなので今も名前を使い、「今この保護ブランチは
  *  どのコミットか」を訊く側だけがこの ref を使う(タスクブランチの fork 元、
- *  slot 解放後の休止位置の追従先)。 */
-function protectedBranchRef(workspace: WorkspaceConfig): string {
+ *  slot 解放後の休止位置の追従先、完了時の未着地 commit 比較)。 */
+export function protectedBranchRef(workspace: WorkspaceConfig): string {
   const branch = protectedBranch(workspace);
   return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : branch;
 }
@@ -188,6 +188,21 @@ export function listRegisteredWorkspaces(
 
 export function taskBranch(taskId: string): string {
   return `task/${taskId}`;
+}
+
+/** ADR 0073: whether this completed root work has anything not yet carried
+ *  to the same protected-branch ref its landing path uses. */
+export function taskHasCommitsToLand(workspace: WorkspaceConfig, taskId: string): boolean {
+  return (
+    Number(
+      git(
+        workspace.path,
+        "rev-list",
+        "--count",
+        `${protectedBranchRef(workspace)}..${taskBranch(taskId)}`,
+      ),
+    ) > 0
+  );
 }
 
 function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {

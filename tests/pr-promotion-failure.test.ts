@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import {
+  addTaskChange,
   api,
   bootTidepool,
   FULL_HANDOFF,
@@ -27,6 +28,7 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({
@@ -61,6 +63,7 @@ it("retrying a failed PR promotion opens the PR before settling the failure ques
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -91,6 +94,7 @@ it("a failed retry rejects the answer with the promotion error and keeps the que
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -116,6 +120,7 @@ it("abandoning PR promotion settles the failure question without changing comple
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -150,6 +155,7 @@ it("a settled failure question cannot be re-answered into a retry", async () => 
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -181,6 +187,7 @@ it("a typo'd answer is rejected outright instead of silently settling the questi
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
@@ -209,6 +216,7 @@ it("a malformed POST (answer count mismatch) to an open promotion-failure questi
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
