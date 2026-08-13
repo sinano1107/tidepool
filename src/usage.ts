@@ -31,14 +31,16 @@ export interface UsageWindowSnapshot {
   resetsAt: Date;
 }
 
+export type ObservedUsageWindow = UsageWindowSnapshot | "idle";
+
 export interface UsageSnapshot {
-  session: UsageWindowSnapshot | null;
-  week: UsageWindowSnapshot | null;
+  session: ObservedUsageWindow | null;
+  week: ObservedUsageWindow | null;
   /** fable の週次 per-model 行 (ADR 0030)。null は「行なし or 読めない」—
    *  session/week が健全なら「個別制限のないプラン」(Pro)と読み、fail-closed
    *  にはしない。書式変更で誤って null に化ける残リスクは全体線と100%キャップ
    *  が被害上限を抑え、UI の観測状態表示で人間が気づける(ADR 0030)。 */
-  fable: UsageWindowSnapshot | null;
+  fable: ObservedUsageWindow | null;
 }
 
 // PTY capture of the interactive TUI's /usage panel (ADR 0028) — replaces the
@@ -230,6 +232,7 @@ function evaluateCappedWindow(w: UsageWindowSnapshot, windowMs: number, now: Dat
 export function isSpendDownExpired(spendDown: SpendDownState, snapshot: UsageSnapshot): boolean {
   const target = spendDown.window === "session" ? snapshot.session : snapshot.week;
   if (!target) return false;
+  if (target === "idle") return true;
   const windowMs = spendDown.window === "session" ? SESSION_WINDOW_MS : WEEK_WINDOW_MS;
   return spendDown.activatedAt.getTime() < target.resetsAt.getTime() - windowMs;
 }
@@ -247,24 +250,30 @@ export function evaluateThrottle(
 ): ThrottleDecision {
   const active = spendDown && !isSpendDownExpired(spendDown, snapshot) ? spendDown : null;
   const session =
-    snapshot.session &&
-    (active?.window === "session"
-      ? evaluateCappedWindow(snapshot.session, SESSION_WINDOW_MS, now)
-      : evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now));
+    snapshot.session === "idle"
+      ? { throttled: false, resumeAt: null }
+      : snapshot.session &&
+        (active?.window === "session"
+          ? evaluateCappedWindow(snapshot.session, SESSION_WINDOW_MS, now)
+          : evaluateWindow(snapshot.session, SESSION_WINDOW_MS, offsets.session, now));
   // spend-down(week) は fable の線も一緒に外す — 同じ瞬間に失効する予算(ADR 0030)
   const week =
-    snapshot.week &&
-    (active?.window === "week"
-      ? evaluateCappedWindow(snapshot.week, WEEK_WINDOW_MS, now)
-      : evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now));
+    snapshot.week === "idle"
+      ? { throttled: false, resumeAt: null }
+      : snapshot.week &&
+        (active?.window === "week"
+          ? evaluateCappedWindow(snapshot.week, WEEK_WINDOW_MS, now)
+          : evaluateWindow(snapshot.week, WEEK_WINDOW_MS, offsets.week, now));
   // fable の逆算不整合も null(観測なし)へ倒す: fail-closed は session/week の
   // 意味論で、fable でそれをやると Pro プラン運用時に恒久 skip を製造する側に
   // 倒れかねない。誤読の被害は全体線と100%キャップが上限を抑える(ADR 0030)。
   const fable =
-    snapshot.fable &&
-    (active?.window === "week"
-      ? evaluateCappedWindow(snapshot.fable, WEEK_WINDOW_MS, now)
-      : evaluateWindow(snapshot.fable, WEEK_WINDOW_MS, offsets.fable, now));
+    snapshot.fable === "idle"
+      ? { throttled: false, resumeAt: null }
+      : snapshot.fable &&
+        (active?.window === "week"
+          ? evaluateCappedWindow(snapshot.fable, WEEK_WINDOW_MS, now)
+          : evaluateWindow(snapshot.fable, WEEK_WINDOW_MS, offsets.fable, now));
   const windows = { session: session ?? null, week: week ?? null, fable: fable ?? null };
   // fail-closed: either window unobserved means the decision can't be trusted,
   // even if the other window looks fine (issue #22: "観測不能なとき...は
@@ -291,10 +300,11 @@ function extractBlock(text: string, label: string, until: string | null): string
   return text.slice(start, untilIndex === -1 ? undefined : untilIndex);
 }
 
-function parseSessionWindow(block: string, now: Date): UsageWindowSnapshot | null {
+function parseSessionWindow(block: string, now: Date): ObservedUsageWindow | null {
   const percent = PERCENT_USED_PATTERN.exec(block);
   const resets = SESSION_RESETS_PATTERN.exec(block)?.groups;
-  if (!percent || !resets) return null;
+  if (!percent) return null;
+  if (!resets) return Number(percent[1]) === 0 ? "idle" : null;
   return {
     percent: Number(percent[1]),
     resetsAt: parseSessionResetsAt(
@@ -308,10 +318,11 @@ function parseSessionWindow(block: string, now: Date): UsageWindowSnapshot | nul
   };
 }
 
-function parseWeekWindow(block: string, now: Date): UsageWindowSnapshot | null {
+function parseWeekWindow(block: string, now: Date): ObservedUsageWindow | null {
   const percent = PERCENT_USED_PATTERN.exec(block);
   const resets = WEEK_RESETS_PATTERN.exec(block)?.groups;
-  if (!percent || !resets) return null;
+  if (!percent) return null;
+  if (!resets) return Number(percent[1]) === 0 ? "idle" : null;
   return {
     percent: Number(percent[1]),
     resetsAt: parseResetsAt(
@@ -329,14 +340,12 @@ function parseWeekWindow(block: string, now: Date): UsageWindowSnapshot | null {
 
 /** Parses the composed screen text of the interactive TUI's `/usage` panel
  *  (ADR 0074). ANSI stripping remains as defensive tolerance for direct
- *  callers. Only the all-models week line is read: `weekBlock` runs from the
- *  "(all models)" label to end-of-string, but `.exec()` takes the first
- *  percent/resets match in it, which is that label's own — any per-model
- *  breakdown rows further down are never reached. */
+ *  callers. The all-models week block ends before the Fable label, so a
+ *  missing all-models reset cannot be read from the following per-model row. */
 export function parseUsage(resultText: string, now: Date): UsageSnapshot {
   const stripped = resultText.replace(ANSI_PATTERN, "").replace(/\r/g, "\n");
   const sessionBlock = extractBlock(stripped, SESSION_LABEL, WEEK_LABEL);
-  const weekBlock = extractBlock(stripped, WEEK_LABEL, null);
+  const weekBlock = extractBlock(stripped, WEEK_LABEL, FABLE_LABEL);
   // fable は per-model 行 (ADR 0030): 書式は week と同形。行が無い(Pro プラン)
   // 場合は null — session/week と違い fail-closed の入力ではない。
   const fableBlock = extractBlock(stripped, FABLE_LABEL, null);
