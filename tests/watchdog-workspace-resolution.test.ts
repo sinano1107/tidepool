@@ -31,6 +31,7 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
     await import("node:fs").then((fs) =>
       fs.writeFileSync(join(prod.path, "stuck.txt"), "stuck work\n"),
     );
+    await import("node:fs").then((fs) => fs.writeFileSync(join(prod.path, ".bashrc"), ""));
 
     failTask(
       db,
@@ -49,6 +50,9 @@ describe("watchdog の failTask が task.workspace を解決する", () => {
     expect(git(prod.path, "log", "--format=%s", `task/${task.id}`)).toContain(
       `WIP: task ${task.id}`,
     );
+    expect(
+      git(prod.path, "ls-tree", "-r", "--name-only", `task/${task.id}`).split("\n"),
+    ).not.toContain(".bashrc");
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   });
 });

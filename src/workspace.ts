@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
@@ -13,6 +13,7 @@ import {
   remoteTrackingRef,
   type WorkspaceEntry,
 } from "./registry.js";
+import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
 import { BOARD_WORKER_ID, getTask, registerTask, type Task } from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
@@ -468,6 +469,13 @@ export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
     throw new Error(
       `workspace ${workspace.name} is on '${head}', not '${taskBranch(taskId)}' — refusing to commit`,
     );
+  }
+  for (const path of SANDBOX_SHADOW_PATHS) {
+    const absolutePath = join(workspace.path, path);
+    const stat = lstatSync(absolutePath, { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size !== 0) continue;
+    if (git(workspace.path, "ls-files", "--cached", "--", path) !== "") continue;
+    rmSync(absolutePath, { force: true });
   }
   git(workspace.path, "add", "-A");
   if (git(workspace.path, "status", "--porcelain") !== "") {

@@ -106,6 +106,34 @@ export interface WorkerSessionSettings {
  *  nothing. */
 const TOOLCHAIN_READ = ["~/.gitconfig", "~/.config/git"];
 
+/** ADR 0069: files created in the workspace while sandbox-runtime#139 shadows
+ *  protected home paths:
+ *  https://github.com/anthropic-experimental/sandbox-runtime/issues/139
+ *  Only an empty, untracked file at one of these exact paths may be discarded
+ *  by the slot-release tree rule. */
+export const SANDBOX_SHADOW_PATHS = [
+  ".bash_profile",
+  ".bashrc",
+  ".gitconfig",
+  ".profile",
+  ".zprofile",
+  ".zshrc",
+  ".ripgreprc",
+  ".gitmodules",
+  ".idea",
+  ".mcp.json",
+  ".vscode",
+  ".claude/agents",
+  ".claude/commands",
+  ".claude/hooks",
+  ".claude/launch.json",
+  ".claude/loop.md",
+  ".claude/output-styles",
+  ".claude/routines",
+  ".claude/scheduled_tasks.json",
+  ".claude/workflows",
+] as const;
+
 /** The skill roots a permitted skill name is mapped into. ADR 0033's invariant
  *  lives here, in code: an allowlist carries skill *names*, never paths, so the
  *  name → path mapping and its "under a skill root, always" confinement are the
