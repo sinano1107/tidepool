@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
   api,
@@ -16,6 +16,28 @@ import {
 
 let t: Tidepool;
 const dirs: string[] = [];
+const KNOWN_SANDBOX_SHADOW_PATHS = [
+  ".bash_profile",
+  ".bashrc",
+  ".gitconfig",
+  ".profile",
+  ".zprofile",
+  ".zshrc",
+  ".ripgreprc",
+  ".gitmodules",
+  ".idea",
+  ".mcp.json",
+  ".vscode",
+  ".claude/agents",
+  ".claude/commands",
+  ".claude/hooks",
+  ".claude/launch.json",
+  ".claude/loop.md",
+  ".claude/output-styles",
+  ".claude/routines",
+  ".claude/scheduled_tasks.json",
+  ".claude/workflows",
+] as const;
 afterEach(async () => {
   await t?.stop();
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
@@ -55,6 +77,41 @@ it("complete による解放で WIP コミットが強制され、ツリーが�
   expect(git(ws.path, "show", `task/${task.id}:notes.txt`)).toBe("half-finished work");
   // main には何も書かれていない
   expect(() => git(ws.path, "show", "main:notes.txt")).toThrow();
+});
+
+it("release は既知パス・untracked・0バイトをすべて満たす sandbox shadow だけを WIP から除く", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  writeFileSync(join(ws.path, ".profile"), "");
+  git(ws.path, "add", ".profile");
+  git(ws.path, "commit", "-m", "tracked empty profile");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "write while sandbox shadows exist");
+  await t.clock.advance(HOUR);
+
+  for (const path of KNOWN_SANDBOX_SHADOW_PATHS) {
+    if (path === ".profile" || path === ".zshrc") continue;
+    mkdirSync(dirname(join(ws.path, path)), { recursive: true });
+    writeFileSync(join(ws.path, path), "");
+  }
+  writeFileSync(join(ws.path, ".zshrc"), "real workspace content\n");
+  writeFileSync(join(ws.path, ".future-shadow"), "");
+  writeFileSync(join(ws.path, "notes.txt"), "work product\n");
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  const taskRef = `task/${task.id}`;
+  const taskFiles = git(ws.path, "ls-tree", "-r", "--name-only", taskRef).split("\n");
+  for (const path of KNOWN_SANDBOX_SHADOW_PATHS) {
+    if (path === ".profile" || path === ".zshrc") continue;
+    expect(taskFiles).not.toContain(path);
+  }
+  expect(git(ws.path, "show", `${taskRef}:.profile`)).toBe("");
+  expect(git(ws.path, "show", `${taskRef}:.zshrc`)).toBe("real workspace content");
+  expect(git(ws.path, "show", `${taskRef}:.future-shadow`)).toBe("");
+  expect(git(ws.path, "show", `${taskRef}:notes.txt`)).toBe("work product");
+  expect(git(ws.path, "status", "--porcelain")).toBe("");
 });
 
 it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面の機械的執行でエージェントの行為ではない(issue #53)", async () => {
@@ -155,6 +212,33 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   // question は盤面自身の名義で登録される — 自分の失敗をエージェントに帰属させない
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+});
+
+it("sandbox shadow の削除失敗は workspace を quarantine し、後続 pickup を止める", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "finish while a sandbox mount survives");
+  await t.clock.advance(HOUR);
+
+  const shadowDir = join(ws.path, ".claude");
+  mkdirSync(shadowDir);
+  writeFileSync(join(shadowDir, "agents"), "");
+  chmodSync(shadowDir, 0o555);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  } finally {
+    chmodSync(shadowDir, 0o755);
+    await client.close();
+  }
+
+  const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const question = list.find((x: any) => x.question_quarantine_workspace === "sandbox");
+  expect(question?.purpose).toContain("unlink");
+
+  await registerWork(t, "must wait for workspace repair");
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });
 
 it("ワーカーが main に逃げていても WIP は main にコミットされず、workspace が隔離される", async () => {
