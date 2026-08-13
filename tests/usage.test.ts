@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { composeTerminalScreen, evaluateThrottle, parseUsage } from "../src/usage.js";
+import { composeTerminalScreen, evaluateThrottle, isSpendDownExpired, parseUsage } from "../src/usage.js";
 import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
 
 it("Pi の実測差分描画を合成すると、ストリームに無い fable ラベルと全 usage を読める(issue #323)", async () => {
@@ -12,6 +12,49 @@ it("Pi の実測差分描画を合成すると、ストリームに無い fable 
     session: { percent: 66, resetsAt: new Date("2026-08-14T07:59:00.000Z") },
     week: { percent: 4, resetsAt: new Date("2026-08-20T03:59:00.000Z") },
     fable: { percent: 7, resetsAt: new Date("2026-08-20T04:00:00.000Z") },
+  });
+});
+
+// issue #287 で Pi 上の静止 session window を ADR 0074 の画面合成に通して
+// 確定した最終画面。初期フレームの仮 Resets 行は redraw 後には残らない。
+const IDLE_SESSION_SCREEN = `Current session
+                                                     0% used
+
+  Current week (all models)
+  ███▌                                               7% used
+  Resets Aug 20, 12:59pm (Asia/Tokyo)`;
+
+it("Resets 行のない実機由来の 0% session は、観測不能でなく idle として読む(issue #287)", () => {
+  expect(parseUsage(IDLE_SESSION_SCREEN, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: "idle",
+    week: { percent: 7, resetsAt: new Date("2026-08-20T03:59:00.000Z") },
+    fable: null,
+  });
+});
+
+it("Resets 行のない 0%超の session は破損疑いとして観測不能のままにする(issue #287)", () => {
+  expect(
+    parseUsage(
+      "Current session\n                                                     1% used\n\nCurrent week (all models)\n7% used\nResets Aug 20, 12:59pm (Asia/Tokyo)",
+      new Date("2026-08-14T00:00:00.000Z"),
+    ),
+  ).toEqual({
+    session: null,
+    week: { percent: 7, resetsAt: new Date("2026-08-20T03:59:00.000Z") },
+    fable: null,
+  });
+});
+
+it("Resets 行のない 0% week も session と同じく idle として読む(issue #287)", () => {
+  expect(
+    parseUsage(
+      "Current session\n7% used\nResets 12:59pm (Asia/Tokyo)\n\nCurrent week (all models)\n0% used",
+      new Date("2026-08-14T00:00:00.000Z"),
+    ),
+  ).toEqual({
+    session: { percent: 7, resetsAt: new Date("2026-08-14T03:59:00.000Z") },
+    week: "idle",
+    fable: null,
   });
 });
 
@@ -348,6 +391,29 @@ it("片方の窓だけ観測不能でも fail-closed で throttled(観測でき�
     resetsAt: null,
     windows: { session: { throttled: false, resumeAt: null }, week: null, fable: null },
   });
+});
+
+it("idle の session は fail-closed の入力にせず、健全な week と合わせて盤面を流す(issue #287)", () => {
+  const decision = evaluateThrottle(
+    { session: "idle", week: { percent: 30, resetsAt: WEEK_RESETS }, fable: null },
+    OFFSETS,
+    PACE_NOW,
+  );
+
+  expect(decision).toEqual({
+    throttled: false,
+    resetsAt: null,
+    windows: { session: { throttled: false, resumeAt: null }, week: { throttled: false, resumeAt: null }, fable: null },
+  });
+});
+
+it("対象窓が idle なら spend-down は失効する — 観測できた不在はリセット済みの証拠(issue #287)", () => {
+  expect(
+    isSpendDownExpired(
+      { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+      { session: "idle", week: { percent: 30, resetsAt: WEEK_RESETS }, fable: null },
+    ),
+  ).toBe(true);
 });
 
 // --- Spend-down (ADR 0030 / issue #128): 対象ウィンドウのペース線だけを外して
