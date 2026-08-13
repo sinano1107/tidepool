@@ -6,7 +6,7 @@ import {
   emptyToolSurfaceFlags,
   pinnedModelFlags,
 } from "./claude-worker.js";
-import { CliAuthError, rethrowCliAuthExecFailure } from "./cli-auth.js";
+import { rethrowCliAuthExecFailure } from "./cli-auth.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
@@ -216,26 +216,26 @@ export class ClaudeDraftClient implements DraftClient {
       stdout = await this.exec(
         "claude",
         [
-        "-p",
-        prompt,
-        "--output-format",
-        "json",
-        // a real generation task, not the trivial ping checkUsage()
-        // deliberately downgrades to haiku for
-        ...pinnedModelFlags("sonnet", "medium"),
-        ...emptyToolSurfaceFlags(),
-        // with no tools at all a second turn is structurally impossible; the
-        // flag stays as the explicit statement that a single answer is what
-        // this call is for, so a CLI that ever raises another turn fails loud
-        "--max-turns",
-        "1",
-        // this call runs with the board's own cwd, not a task workspace —
-        // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
-        // from leaking into what must stay a bare JSON answer. Auth/model/
-        // tools/permissions are unaffected (unlike --bare, which would force
-        // API-key-only auth). It does **not** keep an advisor out — measured,
-        // issue #174 — which is what the env below is for.
-        "--safe-mode",
+          "-p",
+          prompt,
+          "--output-format",
+          "json",
+          // a real generation task, not the trivial ping checkUsage()
+          // deliberately downgrades to haiku for
+          ...pinnedModelFlags("sonnet", "medium"),
+          ...emptyToolSurfaceFlags(),
+          // with no tools at all a second turn is structurally impossible; the
+          // flag stays as the explicit statement that a single answer is what
+          // this call is for, so a CLI that ever raises another turn fails loud
+          "--max-turns",
+          "1",
+          // this call runs with the board's own cwd, not a task workspace —
+          // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
+          // from leaking into what must stay a bare JSON answer. Auth/model/
+          // tools/permissions are unaffected (unlike --bare, which would force
+          // API-key-only auth). It does **not** keep an advisor out — measured,
+          // issue #174 — which is what the env below is for.
+          "--safe-mode",
         ],
         // a Board call: no advisor, spelled explicitly (ADR 0044). Without it the
         // host's own advisorModel rode along on every JIT draft poll and burned
@@ -246,14 +246,7 @@ export class ClaudeDraftClient implements DraftClient {
       rethrowCliAuthExecFailure(err);
     }
     const envelope: unknown = JSON.parse(stdout);
-    const { api_error_status, is_error, result } = envelope as {
-      api_error_status?: unknown;
-      is_error?: unknown;
-      result?: unknown;
-    };
-    if (api_error_status === 401) {
-      throw new CliAuthError(typeof result === "string" ? result : "Claude API returned 401");
-    }
+    const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
     if (typeof result !== "string") {
       throw new Error("draft CLI response missing a string result field");
     }

@@ -10,16 +10,13 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 
 it("期限設定は任意で、未設定なら警告なし、不正値ならログだけで警告を無効にする(#320)", () => {
-  const warn = vi.fn();
-
-  expect({ absent: resolveCliAuthExpiry(undefined, warn), warnings: warn.mock.calls }).toEqual({
-    absent: undefined,
-    warnings: [],
-  });
-
-  expect(resolveCliAuthExpiry("not-a-date", warn)).toBeUndefined();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  expect(resolveCliAuthExpiry(undefined)).toBeUndefined();
+  expect(warn).not.toHaveBeenCalled();
+  expect(resolveCliAuthExpiry("not-a-date")).toBeUndefined();
   expect(warn).toHaveBeenCalledOnce();
   expect(warn.mock.calls[0]?.join(" ")).toContain("TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT");
+  warn.mockRestore();
 });
 
 it("有効期限の30日前に英語の更新questionを履歴全体で1枚だけ立てる(#320)", async () => {

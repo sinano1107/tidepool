@@ -14,14 +14,11 @@ export type CliAuthCheck = () => Promise<CliAuthResult>;
 export const CLI_AUTH_PROBE_INTERVAL_MS = 30 * 60 * 1000;
 const CLI_AUTH_EXPIRY_WARNING_MS = 30 * 24 * 60 * 60 * 1000;
 
-export function resolveCliAuthExpiry(
-  value: string | undefined,
-  warn: (message: string) => void = (message) => console.warn(message),
-): Date | undefined {
+export function resolveCliAuthExpiry(value: string | undefined): Date | undefined {
   if (value === undefined) return undefined;
   const expiresAt = new Date(value);
   if (!Number.isFinite(expiresAt.getTime())) {
-    warn(
+    console.warn(
       `[cli-auth] invalid TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT value ${JSON.stringify(value)}; ` +
         "advance expiry warning is disabled",
     );
@@ -58,10 +55,8 @@ export function rethrowCliAuthExecFailure(err: unknown): never {
   throw err;
 }
 
-export function quarantineCliAuthFailure(db: Db, err: unknown, now: Date): boolean {
-  if (!(err instanceof CliAuthError)) return false;
-  quarantineCliAuth(db, now);
-  return true;
+export function quarantineCliAuthFailure(db: Db, err: unknown, now: Date): void {
+  if (err instanceof CliAuthError) quarantineCliAuth(db, now);
 }
 
 /** The open Confirmation question is the durable half of the board-wide
@@ -109,19 +104,13 @@ export function quarantineCliAuth(db: Db, now: Date): void {
   );
 }
 
-function cliAuthExpiryWarningExists(db: Db): boolean {
-  return (
-    db
-      .prepare("SELECT 1 FROM tasks WHERE question_cli_auth_expiry_warning IS NOT NULL LIMIT 1")
-      .get() !== undefined
-  );
-}
-
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {
   if (
     expiresAt === undefined ||
     expiresAt.getTime() - now.getTime() > CLI_AUTH_EXPIRY_WARNING_MS ||
-    cliAuthExpiryWarningExists(db)
+    db
+      .prepare("SELECT 1 FROM tasks WHERE question_cli_auth_expiry_warning IS NOT NULL LIMIT 1")
+      .get() !== undefined
   ) {
     return;
   }
