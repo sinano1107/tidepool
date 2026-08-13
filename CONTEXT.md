@@ -171,13 +171,19 @@ agent 定義が宣言する、その agent が worker session 中に使ってよ
 
 workspace が宣言する、**review セッションが書き込み床を越えて実行してよいコマンド接頭辞**の集合。許可リスト3本目で、上の2つと同じく**参照であって在庫の主張ではない** — このホストに存在しないコマンドを許していても不問。
 
-上の2つと決定的に違うのは、**床そのものを持ち上げる唯一の registry フィールド**であることである。Skill 許可リストは床を持ち上げない(skill を通しても Bash の床は残る)、ツール許可リストは盤面のコード定数で agent に依らない。**データが床に触れるのはここだけ**で、その1点であるがゆえに、綴りが人間の読んだ範囲を越えないことを文法が守る(カンマは allow トークンを1つ余計に注入しうる — ADR 0035)。
+上の2つと決定的に違うのは、**床そのものを持ち上げる registry フィールド**であることである。Skill 許可リストは床を持ち上げない(skill を通しても Bash の床は残る)、ツール許可リストは盤面のコード定数で agent に依らない。**データが床に触れるのはここと Domain allowlist の2つだけ**で(2026-08-13 の grilling、issue #309 / ADR 0072 までは唯一だった)、その希少さゆえに、綴りが人間の読んだ範囲を越えないことを文法が守る(カンマは allow トークンを1つ余計に注入しうる — ADR 0035)。
 
 門は **PR ではなく人間面**である(2026-08-10 のグリリング、issue #229 / ADR 0061)。「保護 workspace の人間 merge が門」と書かれていた時期があるが、それが事実だったのはこのフィールドに人間発の経路がたまたま無かったからで、設計された門ではなく経路の不在だった — registry の人間発変更はもともと PR を通らない(Registry 参照)。今日の門は人間面の credential と、危険な値としての明示の確認である。
 
+## Domain allowlist(ドメイン許可リスト)
+
+workspace が宣言する、**worker session のサンドボックスから外部へ到達してよいドメイン**の集合。許可リスト4本目で、データが床(egress の既定全閉)に触れる2つ目のフィールド(2026-08-13 の grilling、issue #309 / ADR 0072)。既定は全閉 — フィールド不在の workspace の worker は外部へ一切出られず、依存はホスト側の事前配置で賄う。
+
+ドメインを開けることは、その workspace の内容と注入される盤面文脈を**そのドメインの運営者へ持ち出せる経路を開けること**でもある。この取引の受容の単位は workspace、判断の瞬間は registry 編集時 — private / 機微な workspace は閉じたままが既定側である。統治は Review command allowlist と同型: 床の deny 側(tailnet 遮断)はコード定数のまま常勝、門は人間面の credential + 危険な値の明示確認、文法ガードが綴りを人間の読んだ範囲に閉じる。文法がドメイン**名**だけを通し IP リテラルを拒むのは装飾ではない — 床の tailnet 遮断は名前パターンであり、IP はデータが床を名指しで迂回する唯一の穴になる。裸の全開放(`*`)は確認でも買えない — 姿勢の放棄はデータ値ではなくコード変更で表明する。
+
 ## 危険な値(Dangerous value)
 
-人間面が**明示の確認を要求する** registry の値。権限を広げる向きの値であり、理由コードとして数え上げられる — profile の無人 merge(`merge_auto_if_ci_green`)、profile の2つのワイルドカード(`assignable_to_wildcard` / `allowed_workspaces_wildcard`)、workspace の保護剥奪(`unprotect`)、レビューコマンド許可リストの非空(`review_allowed_commands_set`)。
+人間面が**明示の確認を要求する** registry の値。権限を広げる向きの値であり、理由コードとして数え上げられる — profile の無人 merge(`merge_auto_if_ci_green`)、profile の2つのワイルドカード(`assignable_to_wildcard` / `allowed_workspaces_wildcard`)、workspace の保護剥奪(`unprotect`)、レビューコマンド許可リストの非空(`review_allowed_commands_set`)、ドメイン許可リストの非空(`allowed_domains_set`)。
 
 **強める向きに確認は要らない**という非対称を持つ — 保護の付与、許可リストの縮小、そもそも保護を持たない workspace の作成は、いずれも同意を求める対象ではない。
 
