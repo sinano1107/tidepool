@@ -196,11 +196,14 @@ export async function registerThroughHumanDoor(
           try {
             inspection = await deps.draftClient.inspectIssue(issue);
           } catch (err) {
+            const fullError = err instanceof Error ? err.message : String(err);
+            console.warn("[issue inspection] LLM inspection failed", fullError);
+            const preview = fullError.slice(0, 200);
             return {
               ok: false,
               failure: {
                 kind: "inspection_unavailable",
-                error: err instanceof Error ? err.message : String(err),
+                error: `${preview}${fullError.length > preview.length ? "…" : ""} See server logs for full details.`,
               },
             };
           }
