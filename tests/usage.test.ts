@@ -45,16 +45,16 @@ it("Resets 行のない 0%超の session は破損疑いとして観測不能の
   });
 });
 
-it("Resets 行のない 0% week も session と同じく idle として読む(issue #287)", () => {
+it("Resets 行のない 0% week は後続の fable Resets と混ぜず、session と同じく idle として読む(issue #287)", () => {
   expect(
     parseUsage(
-      "Current session\n7% used\nResets 12:59pm (Asia/Tokyo)\n\nCurrent week (all models)\n0% used",
+      "Current session\n7% used\nResets 12:59pm (Asia/Tokyo)\n\nCurrent week (all models)\n0% used\n\nCurrent week (Fable)\n7% used\nResets Aug 20, 12:59pm (Asia/Tokyo)",
       new Date("2026-08-14T00:00:00.000Z"),
     ),
   ).toEqual({
     session: { percent: 7, resetsAt: new Date("2026-08-14T03:59:00.000Z") },
     week: "idle",
-    fable: null,
+    fable: { percent: 7, resetsAt: new Date("2026-08-20T03:59:00.000Z") },
   });
 });
 

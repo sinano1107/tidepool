@@ -340,14 +340,12 @@ function parseWeekWindow(block: string, now: Date): ObservedUsageWindow | null {
 
 /** Parses the composed screen text of the interactive TUI's `/usage` panel
  *  (ADR 0074). ANSI stripping remains as defensive tolerance for direct
- *  callers. Only the all-models week line is read: `weekBlock` runs from the
- *  "(all models)" label to end-of-string, but `.exec()` takes the first
- *  percent/resets match in it, which is that label's own — any per-model
- *  breakdown rows further down are never reached. */
+ *  callers. The all-models week block ends before the Fable label, so a
+ *  missing all-models reset cannot be read from the following per-model row. */
 export function parseUsage(resultText: string, now: Date): UsageSnapshot {
   const stripped = resultText.replace(ANSI_PATTERN, "").replace(/\r/g, "\n");
   const sessionBlock = extractBlock(stripped, SESSION_LABEL, WEEK_LABEL);
-  const weekBlock = extractBlock(stripped, WEEK_LABEL, null);
+  const weekBlock = extractBlock(stripped, WEEK_LABEL, FABLE_LABEL);
   // fable は per-model 行 (ADR 0030): 書式は week と同形。行が無い(Pro プラン)
   // 場合は null — session/week と違い fail-closed の入力ではない。
   const fableBlock = extractBlock(stripped, FABLE_LABEL, null);
