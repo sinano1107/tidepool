@@ -322,6 +322,10 @@ export function git(dir: string, ...args: string[]): string {
     .trim();
 }
 
+export function addTaskChange(path: string, taskId: string): void {
+  writeFileSync(join(path, `${taskId}.txt`), "finished\n");
+}
+
 /** A fresh temp git checkout named `name`, one commit deep. The path is
  *  pushed onto the caller's own `dirs` array so its own `afterEach` cleans it
  *  up — this helper only creates, never tracks cleanup itself. */

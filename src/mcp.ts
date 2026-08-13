@@ -134,7 +134,7 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
  *  strict=true is submitAnswer's synchronous retry (issue #66): every
  *  precondition that the first attempt silently skips on becomes a thrown
  *  error the human sees. */
-export async function promoteHandoffPr(
+export async function handleRootWorkLanding(
   deps: McpDeps,
   task: Task,
   strict = true,
@@ -232,7 +232,7 @@ export async function promoteHandoffPr(
 async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
   if (task.type !== "work") return;
   try {
-    await promoteHandoffPr(deps, task, false);
+    await handleRootWorkLanding(deps, task, false);
   } catch (err) {
     registerPrPromotionFailureQuestion(
       deps.db,

@@ -1,8 +1,7 @@
-import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
+  addTaskChange,
   api,
   bootTidepool,
   FULL_HANDOFF,
@@ -19,10 +18,6 @@ afterEach(async () => {
   await t?.stop();
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-
-function addTaskChange(path: string, taskId: string): void {
-  writeFileSync(join(path, `${taskId}.txt`), "finished\n");
-}
 
 it("a failed PR promotion leaves the work done and asks Tidepool whether to retry or abandon promotion", async () => {
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");

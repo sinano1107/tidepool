@@ -20,7 +20,7 @@ import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
-import { createMcpRouter, promoteHandoffPr } from "./mcp.js";
+import { createMcpRouter, handleRootWorkLanding } from "./mcp.js";
 import { checkPendingAutoMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
@@ -473,7 +473,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
-      retryPrPromotion: (task) => promoteHandoffPr(mcpDeps, task),
+      retryPrPromotion: (task) => handleRootWorkLanding(mcpDeps, task),
       registryCandidates: options.registryCandidates,
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
@@ -504,7 +504,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
-      retryPrPromotion: (task) => promoteHandoffPr(mcpDeps, task),
+      retryPrPromotion: (task) => handleRootWorkLanding(mcpDeps, task),
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       auditorName,

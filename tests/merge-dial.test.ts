@@ -1,8 +1,7 @@
-import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
+  addTaskChange,
   api,
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
@@ -19,10 +18,6 @@ afterEach(async () => {
   await t?.stop();
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
-
-function addTaskChange(path: string, taskId: string): void {
-  writeFileSync(join(path, `${taskId}.txt`), "finished\n");
-}
 
 it("completing a work task under the escalate merge dial registers a merge-decision question referencing the opened PR", async () => {
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
