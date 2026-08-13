@@ -182,8 +182,8 @@ it("fable 行(Current week (Fable))のある実機キャプチャを合成して
   const snapshot = parseUsage(screen, now);
 
   // session/week は従来どおり読めたまま
-  expect(snapshot.session?.percent).toBe(70);
-  expect(snapshot.week?.percent).toBe(28);
+  expect(snapshot.session).toMatchObject({ percent: 70 });
+  expect(snapshot.week).toMatchObject({ percent: 28 });
   expect(snapshot.fable).toEqual({
     percent: 75,
     resetsAt: new Date("2026-07-23T04:00:00.000Z"),
@@ -197,8 +197,8 @@ it("fable 行が無いパネル(Pro プラン — 個別制限が存在しない
   const snapshot = parseUsage(screen, now);
 
   expect(snapshot.fable).toBeNull();
-  expect(snapshot.session?.percent).toBe(70);
-  expect(snapshot.week?.percent).toBe(28);
+  expect(snapshot.session).toMatchObject({ percent: 70 });
+  expect(snapshot.week).toMatchObject({ percent: 28 });
 });
 
 it("既知の行パターンに一致しないテキスト(該当行なし・unavailable 表示など)は session/week とも null(fail-closed の入力)", () => {
