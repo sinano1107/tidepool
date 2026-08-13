@@ -36,6 +36,7 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
+  writeFileSync(join(ws.path, "result.txt"), "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -59,6 +60,7 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write the report");
   await t.clock.advance(HOUR);
+  writeFileSync(join(ws.path, "report.txt"), "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });

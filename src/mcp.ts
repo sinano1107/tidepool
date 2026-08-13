@@ -3,6 +3,7 @@ import type { Router } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { appendEvent } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
@@ -10,6 +11,7 @@ import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   assigneeNeedsApproval,
+  BOARD_WORKER_ID,
   completeTask,
   contentSourceFor,
   DEFAULT_AUDITOR_NAME,
@@ -33,10 +35,12 @@ import {
   isRemoteBacked,
   lineageTaskBranch,
   protectedBranch,
+  protectedBranchRef,
   rebaselineRef,
   releaseWorkspace,
   resolveOrQuarantine,
   taskBranch,
+  taskHasCommitsToLand,
   UnknownWorkspaceError,
   type WorkspaceConfig,
   workspaceNeedsHuman,
@@ -114,11 +118,13 @@ function prBody(handoffDoc: string | null, githubIssueNumber: number | null): st
   return doc ? `${doc}\n\n${closes}` : closes;
 }
 
-/** Root work-task completion → PR (issue #19 / ADR 0053): by the time this
+/** Root work-task completion → landing (issue #19 / ADR 0053 / ADR 0073): by the time this
  *  runs, the tree rule has either stashed the work as a WIP commit on the task branch, or
  *  failed and quarantined the workspace (releaseWorkspace swallows that
  *  failure so the completion itself still stands) — in the latter case the
  *  task branch may carry none of the finished work, so no PR is attempted.
+ *  A healthy completion with no commits to carry records nothing_to_land
+ *  before the remote-PR / purely-local-question surfaces diverge.
  *  Never entrusted to the worker, never lets a PR failure touch the
  *  completion that already landed — a real creation failure becomes a
  *  Tidepool failure question, while pre-existing quarantine still skips PR
@@ -160,6 +166,18 @@ export async function promoteHandoffPr(
     if (strict) {
       throw new Error(`workspace "${workspace.name}" needs human attention before PR promotion`);
     }
+    return;
+  }
+  const base = protectedBranchRef(workspace);
+  if (!taskHasCommitsToLand(workspace, task.id)) {
+    if (strict) throw new Error(`task branch has nothing to land on "${base}"`);
+    appendEvent(deps.db, {
+      taskId: task.id,
+      workerId: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "nothing_to_land", base },
+      at: deps.clock.now(),
+    });
     return;
   }
   if (!isRemoteBacked(workspace)) {

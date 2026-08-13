@@ -1,4 +1,6 @@
+import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import {
   api,
@@ -18,6 +20,10 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
+function addTaskChange(path: string, taskId: string): void {
+  writeFileSync(join(path, `${taskId}.txt`), "finished\n");
+}
+
 it("completing a work task under the escalate merge dial registers a merge-decision question referencing the opened PR", async () => {
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
@@ -26,6 +32,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -52,6 +59,7 @@ it("completing a work task with no merge dial configured opens the PR without an
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -65,9 +73,10 @@ it("completing a work task with no merge dial configured opens the PR without an
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
 });
 
-async function completeUnderEscalate(t: Tidepool) {
+async function completeUnderEscalate(t: Tidepool, path: string) {
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(path, task.id);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
@@ -82,7 +91,7 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
   });
-  const { question } = await completeUnderEscalate(t);
+  const { question } = await completeUnderEscalate(t, ws.path);
   t.github.scriptCiStatus("success");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -103,7 +112,7 @@ it("answering \"merge\" while CI is not green is rejected, and the question stay
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
   });
-  const { question } = await completeUnderEscalate(t);
+  const { question } = await completeUnderEscalate(t, ws.path);
   t.github.scriptCiStatus("pending");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -123,7 +132,7 @@ it("a malformed POST (answer count mismatch) to an open merge question is reject
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
   });
-  const { question } = await completeUnderEscalate(t);
+  const { question } = await completeUnderEscalate(t, ws.path);
   t.github.scriptCiStatus("success");
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -147,7 +156,7 @@ it("answering \"hold\" resolves the question without checking CI or merging", as
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
   });
-  const { question } = await completeUnderEscalate(t);
+  const { question } = await completeUnderEscalate(t, ws.path);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["hold"],
@@ -168,6 +177,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -202,6 +212,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
   });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -253,6 +264,7 @@ it("a risky decomposed child merges back, then its root integration PR asks for 
   const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.title === "risky child",
   );
+  addTaskChange(ws.path, child.id);
   const childClient = await mcpClient(t.mcpBaseUrl, child.id);
   await childClient.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await childClient.close();
@@ -286,7 +298,7 @@ it("a settled merge-decision question cannot be re-answered into a merge", async
     workspace: ws,
     authority: { name: "standard", guidance: "", merge: "escalate" },
   });
-  const { question } = await completeUnderEscalate(t);
+  const { question } = await completeUnderEscalate(t, ws.path);
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["hold"],
   });

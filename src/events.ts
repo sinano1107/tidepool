@@ -65,6 +65,9 @@ export type EventPayload =
   // through task_id
   | { kind: "task_completed"; handoff_present: boolean; result: string | null }
   | { kind: "task_escalated"; question_id: string }
+  // ADR 0073: a completed root work task had no commits to carry to its
+  // protected branch. This is a board-observed fact, not a human decision.
+  | { kind: "nothing_to_land"; base: string }
   // issue #11: a completed work task's handoff opened this PR — pr_number is
   // the durable link the merge dial (escalate/auto_if_ci_green) reads back
   | { kind: "pr_opened"; pr_number: number }
