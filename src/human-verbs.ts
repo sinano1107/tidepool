@@ -195,10 +195,13 @@ export async function registerThroughHumanDoor(
           let inspection;
           try {
             inspection = await deps.draftClient.inspectIssue(issue);
-          } catch {
+          } catch (err) {
             return {
               ok: false,
-              failure: { kind: "inspection_unavailable", error: "LLM inspection failed" },
+              failure: {
+                kind: "inspection_unavailable",
+                error: err instanceof Error ? err.message : String(err),
+              },
             };
           }
           if (!inspection.ok) {

@@ -240,10 +240,11 @@ export class ClaudeDraftClient implements DraftClient {
       boardCallEnv(),
     );
     const envelope: unknown = JSON.parse(stdout);
-    const result = (envelope as { result?: unknown }).result;
+    const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
     if (typeof result !== "string") {
       throw new Error("draft CLI response missing a string result field");
     }
+    if (is_error === true) throw new Error(result);
     return result;
   }
 }

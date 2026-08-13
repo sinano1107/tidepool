@@ -252,7 +252,9 @@ it("人間の登録 door は LLM 到達不能を GateFailure として返す", a
   const github = new FakeGitHubClient();
   github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
   const draftClient = new FakeDraftClient();
-  draftClient.scriptInspectionFailure(new Error("LLM is down"));
+  draftClient.scriptInspectionFailure(
+    new Error("Failed to authenticate: OAuth session expired and could not be refreshed"),
+  );
 
   const result = await registerThroughHumanDoor(
     {
@@ -267,7 +269,10 @@ it("人間の登録 door は LLM 到達不能を GateFailure として返す", a
 
   expect(result).toEqual({
     ok: false,
-    failure: { kind: "inspection_unavailable", error: "LLM inspection failed" },
+    failure: {
+      kind: "inspection_unavailable",
+      error: "Failed to authenticate: OAuth session expired and could not be refreshed",
+    },
   });
   expect(listBoard(db)).toEqual([]);
 });
