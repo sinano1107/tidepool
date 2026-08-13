@@ -21,7 +21,6 @@ import {
   git,
   originUrl,
   resolvesToRegistryClone,
-  TIDEPOOL_GIT_IDENTITY,
   UnknownWorkspaceError,
 } from "./workspace.js";
 
@@ -446,7 +445,7 @@ function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): Workspace
     git(deps.workspacesBaseDir, "init", "-b", "main", dir);
     writeFileSync(join(dir, "README.md"), `# ${name}\n`);
     git(dir, "add", "-A");
-    git(dir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", "initial commit");
+    git(dir, "commit", "-m", "initial commit");
   }
   return {};
 }

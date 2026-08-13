@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAgent,
   InvalidAgentIconError,
@@ -27,8 +27,14 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 describe("createAgent: 正常系(issue #70)", () => {
-  it("agents/<name>.md が Tidepool 名義でコミットされ、loadRegistry が全フィールドを返す(ラウンドトリップ)", async () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("ambient な worker 名義があっても agents/<name>.md は Tidepool 名義でコミットされ、loadRegistry が全フィールドを返す(issue #312)", async () => {
     const registryDir = await makeMainRegistry();
+    vi.stubEnv("GIT_AUTHOR_NAME", "tako");
+    vi.stubEnv("GIT_AUTHOR_EMAIL", "tako@tidepool.invalid");
+    vi.stubEnv("GIT_COMMITTER_NAME", "tako");
+    vi.stubEnv("GIT_COMMITTER_EMAIL", "tako@tidepool.invalid");
 
     await createAgent(
       {
@@ -62,7 +68,10 @@ describe("createAgent: 正常系(issue #70)", () => {
     // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する。
     // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
     // (ADR 0052 決定6: clone の working tree は正本ではないので触れない)
-    expect(git(registryDir, "log", "-1", "--format=%an")).toBe("tidepool");
+    expect(git(registryDir, "log", "-1", "--format=%an <%ae>|%cn <%ce>")).toBe(
+      "tidepool <306969821+tidepool-bot@users.noreply.github.com>|" +
+        "tidepool <306969821+tidepool-bot@users.noreply.github.com>",
+    );
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("create agent tako via WebUI");
   });
 
