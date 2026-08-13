@@ -128,13 +128,13 @@ test("triage と Pause が同時なら slot はサーバ順序の先頭(triage)�
 }) => {
   const t = await boot();
   await registerWork(t, "waits behind both halts");
+  await api(t.baseUrl, "POST", "/api/triage/start");
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Queue" }).click();
+  await expect(page.getByText("triage in progress · nothing starts")).toBeVisible();
   await page.getByRole("button", { name: "pause pickup" }).click();
-  await expect(page.getByText("pickup paused — nothing starts until resumed")).toBeVisible();
-
-  await api(t.baseUrl, "POST", "/api/triage/start");
+  await expect(page.getByRole("button", { name: "resume pickup" })).toBeVisible();
   await expect(page.getByText("triage in progress · nothing starts")).toBeVisible();
   await expect(page.getByText("pickup paused — nothing starts until resumed")).toHaveCount(0);
 });
