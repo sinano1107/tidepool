@@ -773,7 +773,7 @@ function useDirtySignal(edit, open, dirty) {
 
 // Free-entry-only chip list for workspace allowlists. Grammar is re-checked
 // server-side before write; this stays a plain free-text add.
-function ReviewCommandsInput({
+function FreeEntryAllowlistInput({
   values,
   onChange,
   label = 'Review allowed commands',
@@ -934,8 +934,8 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
               the server refuses it too (ADR 0013), this just keeps the UI honest */}
           <Switch label="protected — changes here always need human approval" checked={prot}
             disabled={busy || (ws.registrySelf && !!ws.protected)} onChange={(next) => setProt(next)} />
-          <ReviewCommandsInput values={cmds} onChange={setCmds} />
-          <ReviewCommandsInput values={domains} onChange={setDomains}
+          <FreeEntryAllowlistInput values={cmds} onChange={setCmds} />
+          <FreeEntryAllowlistInput values={domains} onChange={setDomains}
             label="Allowed domains"
             description="domains this workspace's worker sessions may reach. Empty keeps external fetches closed (confirmed on save if non-empty)."
             placeholder='domain — e.g. "registry.npmjs.org"' />

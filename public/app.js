@@ -1227,7 +1227,7 @@ function useDirtySignal(edit, open, dirty) {
     if (open) edit.setDirty(dirty);
   }, [open, dirty]);
 }
-function ReviewCommandsInput({
+function FreeEntryAllowlistInput({
   values,
   onChange,
   label = "Review allowed commands",
@@ -1367,8 +1367,8 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       disabled: busy || ws.registrySelf && !!ws.protected,
       onChange: (next) => setProt(next)
     }
-  ), /* @__PURE__ */ React.createElement(ReviewCommandsInput, { values: cmds, onChange: setCmds }), /* @__PURE__ */ React.createElement(
-    ReviewCommandsInput,
+  ), /* @__PURE__ */ React.createElement(FreeEntryAllowlistInput, { values: cmds, onChange: setCmds }), /* @__PURE__ */ React.createElement(
+    FreeEntryAllowlistInput,
     {
       values: domains,
       onChange: setDomains,

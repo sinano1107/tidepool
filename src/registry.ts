@@ -335,6 +335,15 @@ export class InvalidAllowedDomainError extends Error {
   }
 }
 
+function isIpLiteralHost(domain: string): boolean {
+  if (isIP(domain) !== 0) return true;
+  try {
+    return isIP(new URL(`http://${domain}`).hostname) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Grammar-only validation of workspace-scoped egress domains (ADR 0072). */
 export function assertValidAllowedDomains(domains: string[]): void {
   for (const entry of domains) {
@@ -342,13 +351,13 @@ export function assertValidAllowedDomains(domains: string[]): void {
     if (entry === "*") {
       throw new InvalidAllowedDomainError(entry, "bare wildcard is not allowed");
     }
-    if (isIP(entry) !== 0) {
+    const domain = entry.startsWith("*.") ? entry.slice(2) : entry;
+    if (isIpLiteralHost(domain)) {
       throw new InvalidAllowedDomainError(entry, "IP literals are not allowed");
     }
     if (entry.includes(":") || entry.includes("/")) {
       throw new InvalidAllowedDomainError(entry, "expected a domain name");
     }
-    const domain = entry.startsWith("*.") ? entry.slice(2) : entry;
     const labels = domain.split(".");
     if (
       domain.length > 253 ||

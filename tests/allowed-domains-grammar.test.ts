@@ -117,6 +117,23 @@ describe("workspaces.yaml の allowed_domains 文法検証", () => {
     );
   });
 
+  it.each(["1684300900", "127.1", "0x7f000001", "*.100.100.100.100"])(
+    "URL client が IP と解釈する %s は拒否する",
+    async (entry) => {
+      const dir = await makeRegistry({
+        "workspaces.yaml": `tidepool:
+  path: /home/pi/work/tidepool
+  allowed_domains:
+    - ${JSON.stringify(entry)}
+`,
+      });
+
+      expect(() => loadRegistry(dir, "purely-local")).toThrow(
+        `invalid allowed_domains entry "${entry}": IP literals are not allowed`,
+      );
+    },
+  );
+
   it("DNS label 以外の文字を含む値は拒否する", async () => {
     const dir = await makeRegistry({
       "workspaces.yaml": `tidepool:
