@@ -1,4 +1,23 @@
+import xtermHeadless from "@xterm/headless";
 import { offsetMinutesEastOfUtc } from "./tz.js";
+
+const { Terminal } = xtermHeadless;
+
+/** Applies a raw PTY capture to a terminal of the same dimensions and returns
+ *  the composed screen text (ADR 0074). `write` is asynchronous: reading the
+ *  buffer before its callback would race the terminal parser. */
+export async function composeTerminalScreen(capture: string, cols: number, rows: number): Promise<string> {
+  const terminal = new Terminal({ cols, rows, allowProposedApi: true });
+  try {
+    await new Promise<void>((resolve) => terminal.write(capture, resolve));
+    return Array.from(
+      { length: terminal.buffer.active.length },
+      (_, index) => terminal.buffer.active.getLine(index)?.translateToString(true) ?? "",
+    ).join("\n");
+  } finally {
+    terminal.dispose();
+  }
+}
 
 /** A single window's utilization as observed via the interactive TUI's
  *  `/usage` panel (ADR 0028). `resetsAt` is always a full instant: session
@@ -308,11 +327,10 @@ function parseWeekWindow(block: string, now: Date): UsageWindowSnapshot | null {
   };
 }
 
-/** Parses the PTY-captured text of the interactive TUI's `/usage` panel
- *  (ADR 0028). ANSI/cursor-positioning escapes are this function's
- *  responsibility to strip — the scraper hands over the raw capture. Only
- *  the all-models week line is read: `weekBlock` runs from the "(all
- *  models)" label to end-of-string, but `.exec()` takes the first
+/** Parses the composed screen text of the interactive TUI's `/usage` panel
+ *  (ADR 0074). ANSI stripping remains as defensive tolerance for direct
+ *  callers. Only the all-models week line is read: `weekBlock` runs from the
+ *  "(all models)" label to end-of-string, but `.exec()` takes the first
  *  percent/resets match in it, which is that label's own — any per-model
  *  breakdown rows further down are never reached. */
 export function parseUsage(resultText: string, now: Date): UsageSnapshot {

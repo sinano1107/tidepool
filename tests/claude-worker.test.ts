@@ -1367,14 +1367,14 @@ describe("ClaudeCodeWorker", () => {
 
       // パネルを描いて片付けさせ、テストがハングしないようにする
       rec.emitData("Current session: 10% used\nCurrent week: 5% used\n");
-      await vi.advanceTimersByTimeAsync(1_000); // パネル debounce を発火
+      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce と画面合成を完了
       await pending;
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("checkUsage はパネル描画を捉えたら Ctrl-C×2 で終了させ、キャプチャした生テキストをそのまま返す(#80 は ANSI 除去を担う)", async () => {
+  it("checkUsage はパネル描画を捉えたら Ctrl-C×2 で終了させ、ANSI ではなく合成画面を返す(ADR 0074)", async () => {
     const rec = recordingPty();
     const worker = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
@@ -1383,14 +1383,16 @@ describe("ClaudeCodeWorker", () => {
 
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000); // settle を過ぎて /usage 送信
-      // ANSI エスケープを含む生の描画をそのまま返すこと(除去は parseUsage の責務)
+      // ANSI エスケープを含む生描画を、端末画面へ合成して返す。
       const panel =
         "\x1b[1mCurrent session: 56% used · resets Jul 9 at 5:59pm\x1b[0m\n" +
         "Current week (all models): 12% used · resets Jul 14\n";
       rec.emitData(panel);
-      await vi.advanceTimersByTimeAsync(1_000); // パネル debounce を発火
+      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce と画面合成を完了
 
-      await expect(pending).resolves.toContain(panel);
+      const screen = await pending;
+      expect(screen).toContain("Current session: 56% used");
+      expect(screen).not.toContain("\x1b[1m");
       // Ctrl-C×2 で畳んだうえで、捕捉不可な SIGKILL を backstop に送る
       // (孤児を残さないための保証は TUI の signal 処理に依存させない)
       expect(rec.writes.at(-1)).toBe("\x03\x03");
@@ -1414,12 +1416,71 @@ describe("ClaudeCodeWorker", () => {
       // debounce 未満のうちに残りが届く(チャンク境界で数値が分断されるケース)
       await vi.advanceTimersByTimeAsync(200);
       rec.emitData("56% used\nResets Jul 9\n");
-      await vi.advanceTimersByTimeAsync(1_000); // 静穏化 → 捕捉
+      await vi.advanceTimersByTimeAsync(5_000); // 静穏化 → 合成
 
-      const raw = await pending;
+      const screen = await pending;
       // 後続チャンクの数値まで取り込めている(ヘッダ即断なら失われていた)
-      expect(raw).toContain("56% used");
-      expect(raw).toContain("Resets Jul 9");
+      expect(screen).toContain("56% used");
+      expect(screen).toContain("Resets Jul 9");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage は旧500ms窓より遅い差分再描画まで待ち、fable ラベルを含む合成画面を返す(issue #323)", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    vi.useFakeTimers();
+    try {
+      const pending = worker.checkUsage();
+      rec.emitData(PROMPT_READY_MARKER);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      rec.emitData(
+        "\x1b[?1049h\x1b[2J\x1b[H" +
+          "Current session\r\n10% used\r\nResets 1:30pm (Asia/Tokyo)\r\n" +
+          "Current week (all models)\r\n5% used\r\nResets Aug 20 at 1pm (Asia/Tokyo)\r\n" +
+          "   Current week (all models)\r\n0% used\r\nResets Aug 20 at 1pm (Asia/Tokyo)",
+      );
+      // Pi 実測の redraw gap は499ms/485ms。1秒後の差分でも、2秒窓はまだ確定しない。
+      await vi.advanceTimersByTimeAsync(1_000);
+      rec.emitData(
+        "\x1b[7;1H\x1b[17CFable)\x1b[K" +
+          "\x1b[8;1H7% used\x1b[K" +
+          "\x1b[9;1HResets Aug 20 at 1pm (Asia/Tokyo)\x1b[K",
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await expect(pending).resolves.toContain("Current week (Fable)");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage はパネル描画後の再描画がタイムアウトまで止まらなくても、その時点の合成画面を返す(ADR 0074 safety floor)", async () => {
+    const rec = recordingPty();
+    const worker = await makeUsageWorker(rec.pty);
+    vi.useFakeTimers();
+    try {
+      const pending = worker.checkUsage();
+      rec.emitData(PROMPT_READY_MARKER);
+      await vi.advanceTimersByTimeAsync(5_000);
+      rec.emitData(
+        "\x1b[?1049h\x1b[2J\x1b[HCurrent session\r\n10% used\r\n" +
+          "Resets 1:30pm (Asia/Tokyo)\r\nCurrent week (all models)\r\n5% used\r\n" +
+          "Resets Aug 20 at 1pm (Asia/Tokyo)",
+      );
+
+      // 1秒ごとの再描画で2秒の quiet debounce を延ばし続ける。
+      for (let second = 6; second < 30; second += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        rec.emitData("\x1b[1;1HCurrent session");
+      }
+      await vi.advanceTimersByTimeAsync(1_000); // 30s の全体 timeout
+      await vi.runAllTimersAsync(); // headless terminal の非同期 write を完了
+
+      await expect(pending).resolves.toContain("Current session");
+      expect(rec.kills).toContain("SIGKILL");
     } finally {
       vi.useRealTimers();
     }
@@ -1472,7 +1533,7 @@ describe("ClaudeCodeWorker", () => {
       rec.emitData(PROMPT_READY_MARKER);
       await vi.advanceTimersByTimeAsync(5_000);
       rec.emitData("Current session: 1%\nCurrent week: 1%\n");
-      await vi.advanceTimersByTimeAsync(1_000); // パネル debounce を発火
+      await vi.advanceTimersByTimeAsync(5_000); // パネル debounce と画面合成を完了
       await pending;
     } finally {
       vi.useRealTimers();
@@ -1512,9 +1573,11 @@ describe("ClaudeCodeWorker", () => {
       // パネルも "Current" と "session" がカーソル移動で分断される
       const spaceless = "Current\x1b[10Gsession\r\n34%used\r\nCurrent\x1b[10Gweek\r\n35%used\r\n";
       rec.emitData(spaceless);
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
 
-      await expect(pending).resolves.toContain(spaceless); // 生テキストは verbatim
+      const screen = await pending;
+      expect(screen).toContain("34%used"); // raw marker 照合を通り、合成まで完了
+      expect(screen).not.toContain("\x1b[10G");
     } finally {
       vi.useRealTimers();
     }

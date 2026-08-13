@@ -32,6 +32,7 @@ import {
   reviewedTaskExecutor,
   type Task,
 } from "./tasks.js";
+import { composeTerminalScreen } from "./usage.js";
 import type { KillSignal, WorkerAdapter } from "./worker.js";
 import {
   guardRegistryDefaultBranch,
@@ -1253,16 +1254,15 @@ const USAGE_PROMPT_SETTLE_MS = 2_500;
 // The /usage panel is captured once both header lines have rendered; these
 // double as the acceptance-criteria markers (Current session / Current week).
 const PANEL_MARKERS = ["Current session", "Current week"];
-// Once the panel's headers appear, each row's % and reset line can still
-// arrive in a later chunk (the panel renders top-to-bottom over several
-// writes). Wait for the render to go quiet before capturing so a chunk
-// boundary can't split a number off the header we keyed on. Comfortably
-// shorter than the gap before the panel re-renders with its usage breakdown,
-// so we capture the first complete render, not the breakdown.
-const PANEL_QUIET_MS = 500;
-// Fail closed if the panel has not rendered within this budget (measured
-// end-to-end ~3.4s on macOS, ~7s on the Pi, so 15s is generous headroom).
-const USAGE_TIMEOUT_MS = 15_000;
+// Pi 2.1.221 drew session/week 207ms after /usage, then redrew after 499ms and
+// 485ms quiet gaps (re-measured 2026-08-14 for issue #323). Two seconds is 4×
+// the measured maximum: every redraw extends the same debounce, without
+// waiting specifically for fable (absent on Pro).
+const PANEL_QUIET_MS = 2_000;
+// The issue #323 probe observed all three redraws over a 30s capture. Match
+// that measured observation window; normal completion still happens on the
+// 2s quiet debounce, so this is only the runaway ceiling.
+const USAGE_TIMEOUT_MS = 30_000;
 // Wide enough that "Current session …" never wraps at 80 columns (ADR 0028).
 const PTY_COLS = 200;
 const PTY_ROWS = 50;
@@ -2050,13 +2050,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  cwd (unlike start(), which pins cwd to the task's workspace) with
    *  --safe-mode so the board repo's CLAUDE.md/skills/MCP never leak into the
    *  probe. Auth/tokens are never touched — refresh is left to the CLI's own
-   *  startup (ADR 0028's core constraint). Returns the captured raw text
-   *  verbatim; ANSI stripping and extraction are parseUsage's job (#80). Any
-   *  failure — spawn error, early exit, or timeout — resolves null so the
-   *  scheduler fails closed, and the session is always torn down (Ctrl-C×2
-   *  then kill) so no orphan is left behind. `--settings` pins the fullscreen
-   *  renderer (see USAGE_TUI_SETTINGS) so the panel stays parseable regardless
-   *  of the host's own TUI setting.
+   *  startup (ADR 0028's core constraint). Returns the composed terminal
+   *  screen; parseUsage reads that plain text (ADR 0074). Spawn failure or exit
+   *  before the panel appears resolves null so the scheduler fails closed. A
+   *  timeout after panel observation returns the latest composed screen as a
+   *  best effort. The session is always torn down (Ctrl-C×2 then kill) so no
+   *  orphan is left behind. `--settings` pins the fullscreen renderer (see
+   *  USAGE_TUI_SETTINGS) so the panel stays parseable regardless of the host's
+   *  own TUI setting.
    *
    *  The old exec probe carried an ADR 0005 runaway *cost* ceiling
    *  (--model haiku/--max-turns/--max-budget-usd). That's gone: the
@@ -2088,7 +2089,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       let settleTimer: ReturnType<typeof setTimeout> | undefined;
       let panelTimer: ReturnType<typeof setTimeout> | undefined;
 
-      const finish = (result: string | null) => {
+      const finish = (capture: string | null) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -2105,10 +2106,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         } catch {
           // already gone (e.g. finishing from onExit) — nothing left to do
         }
-        resolve(result);
+        if (capture === null) {
+          resolve(null);
+          return;
+        }
+        void composeTerminalScreen(capture, PTY_COLS, PTY_ROWS).then(resolve, () => resolve(null));
       };
 
-      const timer = setTimeout(() => finish(null), USAGE_TIMEOUT_MS);
+      const timer = setTimeout(
+        () => finish(hasUsagePanel(buffer) ? buffer : null),
+        USAGE_TIMEOUT_MS,
+      );
 
       session.onExit(() => finish(hasUsagePanel(buffer) ? buffer : null));
 
