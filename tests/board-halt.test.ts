@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
+import { quarantineCliAuth } from "../src/cli-auth.js";
 import { quarantineContainment } from "../src/containment.js";
 import { openDb } from "../src/db.js";
 import { setPaused } from "../src/pause.js";
@@ -14,12 +15,13 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     expect(boardHalts(openDb(":memory:"))).toEqual([]);
   });
 
-  it("5つすべてが同時に立っていれば トリアージ → Pause → containment → レジストリ到達性 → throttle の順で並ぶ", () => {
+  it("6つすべてが同時に立っていれば cliAuth はレジストリ到達性の後・throttle の前に並ぶ", () => {
     const db = openDb(":memory:");
     startTriage(db, NOW);
     setPaused(db, true);
     quarantineContainment(db, "no sandbox", NOW);
     quarantineRegistryReachability(db, "origin is unreachable", NOW);
+    quarantineCliAuth(db, NOW);
     reportThrottle(
       db,
       {
@@ -35,6 +37,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
       "pause",
       "containment",
       "registryReachability",
+      "cliAuth",
       "throttle",
     ]);
   });

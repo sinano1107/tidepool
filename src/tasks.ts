@@ -124,6 +124,10 @@ export interface Task {
   question_quarantine_sandbox: number | null;
   /** System-internal only (ADR 0052): registry reachability quarantine. */
   question_quarantine_registry: number | null;
+  /** System-internal only (ADR 0070): Claude CLI authentication quarantine. */
+  question_quarantine_cli_auth: number | null;
+  /** System-internal only (ADR 0070): one-time configured-expiry warning. */
+  question_cli_auth_expiry_warning: number | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to, or null for an ordinary task.
    *  `workspace` doubles as the repo half of the reference for such a task. */
@@ -292,6 +296,10 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   quarantine_sandbox?: boolean;
   /** System-internal only (ADR 0052): registry reachability Confirmation. */
   quarantine_registry?: boolean;
+  /** System-internal only (ADR 0070): Claude CLI authentication Confirmation. */
+  quarantine_cli_auth?: boolean;
+  /** System-internal only (ADR 0070): one-time configured-expiry warning. */
+  cli_auth_expiry_warning?: boolean;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -334,7 +342,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     input.quarantine_workspace !== undefined ||
     input.quarantine_agent !== undefined ||
     input.quarantine_sandbox !== undefined ||
-    input.quarantine_registry !== undefined
+    input.quarantine_registry !== undefined ||
+    input.quarantine_cli_auth !== undefined
       ? 1
       : 2;
   for (const item of items) {
@@ -555,6 +564,8 @@ export function registerTask(
     question_quarantine_agent: input.quarantine_agent ?? null,
     question_quarantine_sandbox: input.quarantine_sandbox ? 1 : null,
     question_quarantine_registry: input.quarantine_registry ? 1 : null,
+    question_quarantine_cli_auth: input.quarantine_cli_auth ? 1 : null,
+    question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ? 1 : null,
     github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
   };
@@ -564,12 +575,12 @@ export function registerTask(
          risk_flag, review_flag, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, github_issue_number, created_at)
+         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_cli_auth_expiry_warning, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @github_issue_number, @created_at)`,
+         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_cli_auth_expiry_warning, @github_issue_number, @created_at)`,
     ).run({
       ...task,
       // the stored row keeps title/purpose/completion_criteria genuinely
@@ -1182,6 +1193,18 @@ export function answerQuestion(
         workerId: HUMAN_WORKER_ID,
         origin,
         payload: { kind: "registry_reinstated" },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
+
+    if (question.question_quarantine_cli_auth !== null) {
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        origin,
+        payload: { kind: "cli_auth_reinstated" },
         at: now,
       });
       pickupResumed = true;

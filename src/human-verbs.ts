@@ -1,5 +1,6 @@
 import { verifyAgentRepaired } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -196,6 +197,7 @@ export async function registerThroughHumanDoor(
           try {
             inspection = await deps.draftClient.inspectIssue(issue);
           } catch (err) {
+            quarantineCliAuthFailure(deps.db, err, now());
             const fullError = err instanceof Error ? err.message : String(err);
             console.warn("[issue inspection] LLM inspection failed", fullError);
             const preview = fullError.slice(0, 200);
@@ -276,6 +278,7 @@ export interface SubmitAnswerDeps {
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
   registryReachability?: RegistryReachabilityCheck;
+  cliAuth?: CliAuthCheck;
   boardState?: BoardStatePath[];
 }
 
@@ -462,6 +465,14 @@ export async function submitAnswer(
       throw new DomainError(
         `registry remote is still unreachable: ${reachability.reason ?? "refresh failed"}`,
       );
+    }
+  }
+
+  if (task.question_quarantine_cli_auth !== null) {
+    if (!deps.cliAuth) throw new DomainError("Claude authentication cannot be verified");
+    const result = await deps.cliAuth();
+    if (result.status !== "authenticated") {
+      throw new DomainError(`Claude authentication is still unavailable: ${result.reason}`);
     }
   }
 

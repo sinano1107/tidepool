@@ -3,6 +3,7 @@ import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
 import type { BoardStatePath } from "./board-state.js";
+import { createClaudeCliAuthCheck } from "./claude-cli-auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
   ClaudeCodeWorker,
@@ -131,6 +132,8 @@ export interface BoardComposition {
   /** issue #47 / ADR 0015: 表示時翻訳。盤面自身の CONTEXT.md を読んで作るので
    *  合成 root 側で組む。 */
   translationClient: TranslationClient;
+  /** ADR 0070: optional token expiry; absent disables only advance warning. */
+  cliAuthExpiresAt: Date | undefined;
 }
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
@@ -531,6 +534,8 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
     registryReachability: registryReachabilityCheck(board),
+    cliAuth: createClaudeCliAuthCheck(),
+    cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0024 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
     // machine user 名義で撃つ。落とすと private な remote の workspace が黙って
     // quarantine に落ち続ける(fail-closed だが理由が「認証が無い」になる)。

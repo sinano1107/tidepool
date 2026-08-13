@@ -49,6 +49,7 @@ function composition(): BoardComposition {
     githubAuth: undefined,
     vapid: undefined,
     translationClient: new FakeTranslationClient(),
+    cliAuthExpiresAt: undefined,
   };
 }
 

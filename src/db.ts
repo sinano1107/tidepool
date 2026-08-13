@@ -87,6 +87,13 @@ const TASKS_TABLE_DDL = `
       -- question standing in for registry remote reachability. Board-wide,
       -- but distinct from worker containment; never set via MCP or JSON API.
       question_quarantine_registry INTEGER,
+      -- system-internal only (ADR 0070): 1 on the single Confirmation
+      -- question standing in for Claude CLI authentication. Board-wide;
+      -- never set via MCP or JSON API.
+      question_quarantine_cli_auth INTEGER,
+      -- system-internal only (ADR 0070): marks the one-time advance warning
+      -- for the configured Claude token expiry. It never halts pickup.
+      question_cli_auth_expiry_warning INTEGER,
       -- issue-backed task reference (issue #49, ADR 0016): the GitHub issue
       -- number this task is a live reference to, or null for an ordinary
       -- task. workspace (already above) doubles as the repo half of the
@@ -402,6 +409,8 @@ export function openDb(path: string): Db {
     "github_issue_number",
     "question_quarantine_sandbox",
     "question_quarantine_registry",
+    "question_quarantine_cli_auth",
+    "question_cli_auth_expiry_warning",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
   }

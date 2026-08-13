@@ -1,3 +1,4 @@
+import { openCliAuthQuestion } from "./cli-auth.js";
 import { openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
 import { isPaused } from "./pause.js";
@@ -15,7 +16,7 @@ import { activeTriageSession } from "./triage.js";
  *  `revalidating`(再観測中)は独立の kind ではなく throttle の状態、`failClosed`
  *  は「使用量そのものを読めなかった」(ADR 0028)で「線を超えた」とは別の答え。 */
 export type BoardHalt =
-  | { kind: "triage" | "pause" | "containment" | "registryReachability" }
+  | { kind: "triage" | "pause" | "containment" | "registryReachability" | "cliAuth" }
   | {
       kind: "throttle";
       revalidating: boolean;
@@ -46,6 +47,7 @@ export function boardHalts(
   if (isPaused(db)) halts.push({ kind: "pause" });
   if (openContainmentQuestion(db)) halts.push({ kind: "containment" });
   if (openRegistryReachabilityQuestion(db)) halts.push({ kind: "registryReachability" });
+  if (openCliAuthQuestion(db)) halts.push({ kind: "cliAuth" });
   const throttle = getThrottleState(db);
   const revalidating = throttleRevalidating();
   if (throttle.throttled || revalidating) {

@@ -1,4 +1,5 @@
 import { boardHalts } from "./board-halt.js";
+import { type CliAuthCheck, quarantineCliAuth } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCheck, containmentPickupBlocked } from "./containment.js";
 import type { Db } from "./db.js";
@@ -46,8 +47,24 @@ export const HOURLY = 60 * 60 * 1000;
  *  the observation as a side effect so /api/queue reflects it immediately.
  *  オフセットは盤面設定 (ADR 0030) を毎回読む — settings で変えた値が次の
  *  poll から効く。 */
-async function checkThrottle(db: Db, clock: Clock, worker: WorkerAdapter): Promise<ThrottleDecision> {
+async function checkThrottle(
+  db: Db,
+  clock: Clock,
+  worker: WorkerAdapter,
+  cliAuth?: CliAuthCheck,
+): Promise<ThrottleDecision> {
   const resultText = await worker.checkUsage();
+  // `null` is deliberately ambiguous (modal, renderer, marker, auth, …).
+  // Preserve fail-closed throttle, and raise cliAuth only if a second probe
+  // produces the definitive structured 401 evidence (ADR 0070).
+  if (resultText === null && cliAuth) {
+    try {
+      const auth = await cliAuth();
+      if (auth.status === "unauthorized") quarantineCliAuth(db, clock.now());
+    } catch (err) {
+      console.warn("[cli-auth] usage failure could not be classified", err);
+    }
+  }
   const snapshot: UsageSnapshot =
     resultText !== null
       ? parseUsage(resultText, clock.now())
@@ -133,6 +150,8 @@ export function startScheduler(deps: {
   containment?: ContainmentCheck;
   /** ADR 0052: refreshes remote main only when a pickup candidate exists. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0070: disambiguates a failed usage observation with a live auth probe. */
+  cliAuth?: CliAuthCheck;
   /** ADR 0024 / issue #211: 盤面の GitHub 身元。remote 正本を宣言した workspace の
    *  pickup 直前の fetch(ADR 0052 決定2)がこの名義で撃つ。Absent → 盤面が GitHub
    *  身元を持たない宣言なので fetch は素の git に委ねる —— private な remote なら
@@ -156,6 +175,7 @@ export function startScheduler(deps: {
     fableAgents,
     containment,
     registryReachability,
+    cliAuth,
     githubAuth,
     registry,
   } = deps;
@@ -363,7 +383,7 @@ export function startScheduler(deps: {
       let decision: ThrottleDecision;
       throttleRevalidating = true;
       try {
-        decision = await checkThrottle(db, clock, worker);
+        decision = await checkThrottle(db, clock, worker, cliAuth);
       } finally {
         throttleRevalidating = false;
       }

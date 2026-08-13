@@ -6,6 +6,7 @@ import {
   emptyToolSurfaceFlags,
   pinnedModelFlags,
 } from "./claude-worker.js";
+import { CliAuthError, rethrowCliAuthExecFailure } from "./cli-auth.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
@@ -210,9 +211,11 @@ export class ClaudeDraftClient implements DraftClient {
   /** The one-shot `claude -p` call both draftTask and draftHandoff share —
    *  only the prompt differs between them. */
   private async runDraftPrompt(prompt: string): Promise<string> {
-    const stdout = await this.exec(
-      "claude",
-      [
+    let stdout: string;
+    try {
+      stdout = await this.exec(
+        "claude",
+        [
         "-p",
         prompt,
         "--output-format",
@@ -233,14 +236,24 @@ export class ClaudeDraftClient implements DraftClient {
         // API-key-only auth). It does **not** keep an advisor out — measured,
         // issue #174 — which is what the env below is for.
         "--safe-mode",
-      ],
-      // a Board call: no advisor, spelled explicitly (ADR 0044). Without it the
-      // host's own advisorModel rode along on every JIT draft poll and burned
-      // opus, unrecorded anywhere.
-      boardCallEnv(),
-    );
+        ],
+        // a Board call: no advisor, spelled explicitly (ADR 0044). Without it the
+        // host's own advisorModel rode along on every JIT draft poll and burned
+        // opus, unrecorded anywhere.
+        boardCallEnv(),
+      );
+    } catch (err) {
+      rethrowCliAuthExecFailure(err);
+    }
     const envelope: unknown = JSON.parse(stdout);
-    const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
+    const { api_error_status, is_error, result } = envelope as {
+      api_error_status?: unknown;
+      is_error?: unknown;
+      result?: unknown;
+    };
+    if (api_error_status === 401) {
+      throw new CliAuthError(typeof result === "string" ? result : "Claude API returned 401");
+    }
     if (typeof result !== "string") {
       throw new Error("draft CLI response missing a string result field");
     }

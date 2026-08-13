@@ -244,6 +244,9 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     registryReachability: () => halt(
       { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
       'warn', 'moved to front — pickup blocked', 'registry remote is unreachable'),
+    cliAuth: () => halt(
+      { color: 'var(--coral-4)', line: 'Claude authentication unavailable · nothing starts', meta: 'see the repair question', taskId: null },
+      'warn', 'moved to front — pickup blocked', 'Claude authentication is unavailable'),
     // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
     // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
     // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ

@@ -13,6 +13,7 @@ import {
   hashToken,
 } from "../src/auth.js";
 import type { BoardStatePath } from "../src/board-state.js";
+import type { CliAuthCheck } from "../src/cli-auth.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
@@ -143,6 +144,10 @@ export interface BootOptions {
   fableAgents?: () => string[];
   /** ADR 0052: remote-backed registry reachability seam. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0070: Claude CLI authentication probe. */
+  cliAuth?: CliAuthCheck;
+  /** ADR 0070: optional token expiry used only for advance warning. */
+  cliAuthExpiresAt?: Date;
   /** 封じ込め能力ゲートの fs 半分(ADR 0033 / issue #60)。**渡すとゲートごと
    *  arm される**ので、人間面の自己検査(ADR 0036 / issue #154)も一緒に効く。
    *  Absent → ゲートを持たない盤面(既定): テストの spawn は ScriptedWorker で、
@@ -217,6 +222,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
     registryReachability: options.registryReachability,
+    cliAuth: options.cliAuth,
+    cliAuthExpiresAt: options.cliAuthExpiresAt,
     registry: options.registry,
     boardState: options.boardState,
     containment: options.sandboxCapability && {

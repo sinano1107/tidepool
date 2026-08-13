@@ -6,6 +6,7 @@ import {
   emptyToolSurfaceFlags,
   pinnedModelFlags,
 } from "./claude-worker.js";
+import { CliAuthError, rethrowCliAuthExecFailure } from "./cli-auth.js";
 import type { GlossaryEntry } from "./glossary.js";
 import type { TranslationClient, TranslationResult } from "./translate.js";
 
@@ -163,9 +164,11 @@ export class ClaudeTranslationClient implements TranslationClient {
   }
 
   private async runTranslation(source: string, language: string): Promise<TranslationResult> {
-    const stdout = await this.exec(
-      "claude",
-      [
+    let stdout: string;
+    try {
+      stdout = await this.exec(
+        "claude",
+        [
         "-p",
         buildPrompt(source, language, this.glossary),
         "--output-format",
@@ -184,14 +187,23 @@ export class ClaudeTranslationClient implements TranslationClient {
         // the board's own cwd would otherwise contribute to what must stay a
         // bare translated answer
         "--safe-mode",
-      ],
-      // a Board call with no advisor (ADR 0044) and no reasoning (ADR 0062
-      // 決定2). A haiku main model is no protection for the first — measured
-      // 2026-08-04, haiku + an inherited advisorModel attaches opus to every
-      // display-time translation. The second was 80% of the output tokens.
-      boardCallEnvWithoutThinking(),
-    );
-    const envelope = resultEnvelopeSchema.parse(JSON.parse(stdout));
+        ],
+        // a Board call with no advisor (ADR 0044) and no reasoning (ADR 0062
+        // 決定2). A haiku main model is no protection for the first — measured
+        // 2026-08-04, haiku + an inherited advisorModel attaches opus to every
+        // display-time translation. The second was 80% of the output tokens.
+        boardCallEnvWithoutThinking(),
+      );
+    } catch (err) {
+      rethrowCliAuthExecFailure(err);
+    }
+    const rawEnvelope = JSON.parse(stdout) as Record<string, unknown>;
+    if (rawEnvelope.api_error_status === 401) {
+      throw new CliAuthError(
+        typeof rawEnvelope.result === "string" ? rawEnvelope.result : "Claude API returned 401",
+      );
+    }
+    const envelope = resultEnvelopeSchema.parse(rawEnvelope);
     return {
       text: envelope.result,
       usage: {

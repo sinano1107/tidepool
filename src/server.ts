@@ -6,6 +6,7 @@ import type { AgentAdmin } from "./agent-create.js";
 import { createApiRouter } from "./api.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
+import { type CliAuthCheck, startCliAuthMonitor } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import {
   type ContainmentCapability,
@@ -214,6 +215,10 @@ export interface ServerOptions {
   fableAgents?: () => string[];
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0070: live Claude authentication probe. */
+  cliAuth?: CliAuthCheck;
+  /** ADR 0070: optional configured expiry used only for advance warning. */
+  cliAuthExpiresAt?: Date;
   /** ADR 0024 / issues #211 and #236: the board's GitHub identity, for
    *  pickup- and completion-time fetches of a remote-backed workspace. Absent
    *  → the board declares no GitHub identity and those fetches run bare, the
@@ -390,6 +395,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     fableAgents: options.fableAgents,
     containment,
     registryReachability,
+    cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
     registry: options.registry,
   });
@@ -474,6 +480,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentRegistered: options.agentRegistered,
       containment,
       registryReachability,
+      cliAuth: options.cliAuth,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin,
@@ -505,6 +512,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       isProtectedWorkspace: options.isProtectedWorkspace,
       containment,
       registryReachability,
+      cliAuth: options.cliAuth,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
       throttleRevalidating: () => scheduler.isThrottleRevalidating(),
@@ -555,6 +563,17 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // **await する**: 起動が返った時点で盤面の封じ込め状態が確定していてほしい
   // (実 HTTP を1往復するので、投げっぱなしだと「起動直後は無検査」の窓ができる)。
   if (containment) await containmentPickupBlocked(db, containment, options.clock.now());
+  const cliAuthMonitor = options.cliAuth
+    ? startCliAuthMonitor({
+        db,
+        clock: options.clock,
+        check: options.cliAuth,
+        expiresAt: options.cliAuthExpiresAt,
+      })
+    : undefined;
+  // Establish the auth state before startServer returns, while keeping the
+  // human surface itself live as the repair path (ADR 0070).
+  await cliAuthMonitor?.probeNow();
 
   return {
     port: humanPort,
@@ -564,6 +583,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         stopTriageWatchdog();
         stopAutoMergePoll?.();
         stopNotificationPoll();
+        cliAuthMonitor?.stop();
         watchdog?.stop();
         scheduler.stop();
         listener.close((err) => {
