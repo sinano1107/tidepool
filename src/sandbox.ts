@@ -82,6 +82,8 @@ export interface WorkerSessionSettings {
      *  is untouched here and stays #140 / ADR 0034's question. */
     network: {
       allowLocalBinding: true;
+      strictAllowlist: true;
+      allowedDomains?: string[];
       /** The proxy filters on the `CONNECT` host string, not the address it
        *  resolves to — so a name pattern here does not reach traffic to an
        *  IP literal or to a name that merely *resolves into* a denied range.
@@ -297,6 +299,8 @@ export interface WorkerSessionSettingsInput {
    *  names this session may actually use, or `"all"` for the unrestricted
    *  (`["*"]`) agent. */
   permittedSkills: string[] | "all";
+  /** ADR 0072: workspace-scoped egress. Absent keeps the allowlist empty. */
+  allowedDomains?: string[];
 }
 
 /** ADR 0033's two profiles as one code constant (ADR 0013: the floor lives in
@@ -358,7 +362,7 @@ export interface WorkerSessionSettingsInput {
  *  The CLI's own default project protections still refuse `.git/config`,
  *  `.git/hooks` and friends underneath all of it. */
 export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
-  const { taskType, workspacePath, permittedSkills } = input;
+  const { taskType, workspacePath, permittedSkills, allowedDomains } = input;
   const readOnly = taskType === "review";
   return {
     // ADR 0037: not keyed on the profile — a hook fires harness-side whichever
@@ -390,7 +394,12 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
       // either type has to be able to run the suite it is judging.
       // ADR 0036 / issue #152: same for the tailnet deny — floor, not the
       // primary mechanism, but independent of task type.
-      network: { allowLocalBinding: true, deniedDomains: [...DENIED_TAILNET_DOMAINS] },
+      network: {
+        allowLocalBinding: true,
+        strictAllowlist: true,
+        ...(allowedDomains !== undefined && { allowedDomains: [...allowedDomains] }),
+        deniedDomains: [...DENIED_TAILNET_DOMAINS],
+      },
     },
   };
 }

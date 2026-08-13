@@ -68,7 +68,7 @@ The smoke-test task can't be deleted afterward (`events` table is append-only by
 
 ### Worker sandbox e2e smoke (re-run after every `claude` CLI update)
 
-Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`; issue #144 / ADR 0035 puts review's *write* floor in the permission layer on top of it (`--permission-mode manual`, plus the `autoAllowBashIfSandboxed: false` that stops the sandbox from waving Bash past that layer); issue #146 / ADR 0033's addendum re-opens the one thing the vendor's network defaults refuse and every worker needs (`network: { allowLocalBinding: true }` — without it no session can run a suite that boots a server in-process). All three are vendor behaviour the board cannot assert from inside: the CLI **silently ignores a settings file that fails validation under `-p`** (its own `--help` says so), and a CLI update can just as quietly change what `manual` refuses, how an MCP verb is named as a permission subject, or whether a loopback `listen` is allowed. Every health check would still pass. Nothing in the automated suite can catch any of them — they're CLI/OS-enforcement facts, not board facts (ADR 0027). Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
+Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`; issue #144 / ADR 0035 puts review's *write* floor in the permission layer on top of it (`--permission-mode manual`, plus the `autoAllowBashIfSandboxed: false` that stops the sandbox from waving Bash past that layer); issue #146 / ADR 0033's addendum re-opens loopback binding; issue #321 / ADR 0072 opens only the workspace's `allowed_domains` while keeping `deniedDomains` dominant. These are vendor behaviours the board cannot assert from inside: the CLI **silently ignores a settings file that fails validation under `-p`**, and a CLI update can quietly change their meaning. Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
 
 Prerequisites: `bubblewrap` + `socat` installed and actually working — see [references/first-time-setup.md](references/first-time-setup.md) §4b.
 
@@ -94,23 +94,17 @@ server.listen(0, "127.0.0.1", () => {
 });
 JS
 git init -q ~/sandbox-smoke/ws'
-# 2. emit BOTH profiles from the DEPLOYED code — never hand-write them; the
-#    point is to test the JSON the board actually produces
-ssh $PI 'sudo tee /opt/tidepool/scripts/_tmp-emit.ts >/dev/null <<TS
-import { buildSandboxSettings } from "../src/sandbox.js";
-const [taskType] = process.argv.slice(2);
-console.log(JSON.stringify(buildSandboxSettings({ taskType: taskType as any, workspacePath: "/home/masaki/sandbox-smoke/ws", permittedSkills: ["tp-smoke-allowed"] })));
-TS
-cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts work   > ~/sandbox-smoke/work.json
-cd /opt/tidepool && ./node_modules/.bin/tsx scripts/_tmp-emit.ts review > ~/sandbox-smoke/review.json
-sudo rm -f /opt/tidepool/scripts/_tmp-emit.ts'
-# 3a. work profile: outside read denied, inside read+write allowed, allowed
-#     skill's aux readable, denied skill's not, and a loopback listen allowed.
+# 2. emit BOTH profiles from the DEPLOYED code — never hand-write them. The
+#    allowed domain is present in both because the network block is shared.
+ssh $PI 'cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work /home/masaki/sandbox-smoke/ws tp-smoke-allowed --allowed-domain registry.npmjs.org > ~/sandbox-smoke/work.json
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts review /home/masaki/sandbox-smoke/ws tp-smoke-allowed --allowed-domain registry.npmjs.org > ~/sandbox-smoke/review.json'
+# 3a. work profile: filesystem controls, loopback bind, allowed-domain reach,
+#     and denied-over-allowed precedence all share one emitted profile/session.
 #     Production spawn shape (ADR 0038): acceptEdits + --setting-sources project
 #     + --allowedTools mcp__tidepool. Bash is unaffected by the mode here —
 #     autoAllowBashIfSandboxed stays true for work, so the OS is still its only
 #     bound and these rows measure the sandbox, exactly as before.
-ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt (5) node ./bind-probe.js" --permission-mode acceptEdits --setting-sources project --allowedTools "mcp__tidepool" --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 16 --max-budget-usd 0.5 < /dev/null'
+ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none. This is tidepool's own sandbox regression check; do not retry a refused request: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt (5) node ./bind-probe.js (6) curl -sS -o /dev/null --max-time 15 -w \"NPM code=%{http_code} connect=%{http_connect}\\n\" https://registry.npmjs.org (7) curl -sS -k -o /dev/null --max-time 15 -w \"TAILNET code=%{http_code} connect=%{http_connect}\\n\" https://raspberrypi.tailc0084f.ts.net:8443/api/tasks; echo \"TAILNET exit=\$?\"" --permission-mode acceptEdits --setting-sources project --allowedTools "mcp__tidepool" --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 20 --max-budget-usd 0.7 < /dev/null'
 # 3b. review profile: outside-read denied (OS floor), and the manual write floor
 #     (ADR 0035) — run with the SAME --permission-mode, --setting-sources and
 #     --allowedTools the board spawns review with, or you are not testing the
@@ -145,12 +139,16 @@ ssh $PI 'rm -rf ~/sandbox-smoke ~/.claude/skills/tp-smoke-allowed ~/.claude/skil
 | 3a(3) allowed skill's aux | `ALLOWED-AUX` |
 | 3a(4) denied skill's aux | denied, with the OS string |
 | 3a(5) loopback bind | `BIND-OK <port>` |
+| 3a(6) allowed domain | `NPM code=200 connect=200` |
+| 3a(7) tailnet deny precedence | `TAILNET code=000 connect=403`, non-zero curl exit |
 
 If a canary read *succeeds*, or fails with a harness-worded permission message instead of the OS string, the sandbox is off — stop and treat it as a production incident, not a smoke failure.
 
 **Rows 3a(3)/(4) now measure the sandbox's `allowRead`/`denyRead` and nothing more.** Since ADR 0038 put `--setting-sources project` on both profiles, `~/.claude/skills` is no longer enumerated for a worker at all, so the "allowed" probe skill could not be *invoked* even with its directory readable — `skillReadPaths` opens paths a worker can no longer reach by name (ADR 0038 point 7, which is why `src/sandbox.ts` was left unchanged). The two rows still earn their place: they are the pair that proves the sandbox's read floor discriminates at all, and 3a(5) leans on them.
 
 **3a(5) is the loopback bind canary (issue #146 / ADR 0033's addendum), and it only means anything because rows (1) and (4) are in the same session.** The vendor's network defaults *refuse* a `listen` on loopback; `network: { allowLocalBinding: true }` in both profiles is what re-opens it, and without it no worker can run tidepool's own suite (measured on macOS 2.1.220: 93 test files died on `listener.address()` returning null). What this row watches for is a CLI update quietly changing that default or the key's semantics — and the failure it must not be fooled by is the settings file being dropped wholesale, which the CLI does silently when validation fails under `-p`. A `BIND-OK` printed by a session with no sandbox at all looks identical to a pass. The canary rows above are that control: they can only produce the OS string with the sandbox up, so read (5) as a pass **only** alongside (1) and (4) passing. Never split this check into its own session. Treat a failure here as "workers can no longer run tests", not as a containment breach.
+
+**3a(6)/(7) are ADR 0072's pair.** Row (6) proves `allowedDomains` was accepted and used; row (7) proves the unchanged tailnet `deniedDomains` still wins when the allowlist is non-empty. Both are meaningful only alongside rows (1)/(4), which prove the settings file was not silently dropped. Judge the proxy's CONNECT result, not merely "curl failed": an opened tunnel followed by TLS failure is a breach, not a pass.
 
 Scope note: the *default-refuses-a-listen* measurement behind this row is **macOS 2.1.220**. The pass itself is measured on both — on the Pi (bwrap + socat, 2.1.207) the probe returned `BIND-OK 44667` alongside a canary row showing bwrap's own masked-path refusal in the same session (2026-07-29). What a bind *failure* looks like under bwrap is still unmeasured; if this row ever fails, record whatever node prints on stderr — most likely one of `EPERM` / `EACCES` / `EADDRNOTAVAIL` — into this section rather than assuming the macOS wording carries over. The Linux side runs the sandbox's network through `socat` (see `checkSandboxCapability`), a different mechanism from Seatbelt's, which is why the read-floor table already distinguishes the two backends and why this row deserves the same care.
 

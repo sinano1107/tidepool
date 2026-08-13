@@ -634,6 +634,38 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain("get_current_task");
   });
 
+  it("許可ドメインがある session は実効 egress とリトライ禁止を英語で伝える(ADR 0072)", async () => {
+    const { start, calls } = await makeWorker({
+      "workspaces.yaml": `tidepool:
+  path: /home/pi/work/tidepool
+  allowed_domains:
+    - registry.npmjs.org
+`,
+    });
+
+    start("task-network-protocol");
+
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain(
+      "Network egress is deny-by-default. This session may reach only: registry.npmjs.org. " +
+        "Do not retry downloads from any other domain.",
+    );
+  });
+
+  it("許可ドメインがない session は外部取得不能を英語で明言する(ADR 0072)", async () => {
+    const { start, calls } = await makeWorker();
+
+    start("task-closed-network-protocol");
+
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).toContain(
+      "Network egress is deny-by-default. This session cannot fetch from any external domain. " +
+        "Do not retry external downloads.",
+    );
+  });
+
   it("Workflow ツールを spawn 時に無効化する(オーケストレーションは worker にカテゴリ禁止・ADR 0010 追補 / issue #31)", async () => {
     const { start, calls } = await makeWorker();
     start();
@@ -927,6 +959,25 @@ describe("ClaudeCodeWorker", () => {
     expect(sandbox.failIfUnavailable).toBe(true);
     expect(sandbox.filesystem.denyRead).toEqual(["~/"]);
     expect(sandbox.filesystem.allowRead).toContain("/home/pi/work/tidepool");
+  });
+
+  it("registry の allowed_domains が実 spawn の network.allowedDomains に届く(ADR 0072)", async () => {
+    const { start, calls, logDir } = await makeWorker({
+      "workspaces.yaml": `tidepool:
+  path: /home/pi/work/tidepool
+  allowed_domains:
+    - registry.npmjs.org
+`,
+    });
+
+    start("task-domain-egress");
+
+    expect(sandboxSettings(calls[0]!.args, logDir).network).toEqual({
+      allowLocalBinding: true,
+      strictAllowlist: true,
+      allowedDomains: ["registry.npmjs.org"],
+      deniedDomains: ["*.ts.net", "raspberrypi"],
+    });
   });
 
   it("review タスクは allowWrite が空の profile で走る — profile は行為の性質(task.type)だけで決まり assignee によらない(ADR 0013)", async () => {

@@ -771,13 +771,15 @@ function useDirtySignal(edit, open, dirty) {
   React.useEffect(() => { if (open) edit.setDirty(dirty); }, [open, dirty]);
 }
 
-// Free-entry-only chip list for review_allowed_commands (ADR 0061 / issue
-// #265) — unlike SkillListInput/ProfileListInput there is no candidate list:
-// the board has no visibility into what commands exist on a host, so this is
-// SkillListInput's free-entry half with the picker dropped. Grammar
-// (assertValidReviewAllowedCommands) is re-checked server-side before write;
-// this stays a plain free-text add, same split as the skills picker.
-function ReviewCommandsInput({ values, onChange }) {
+// Free-entry-only chip list for workspace allowlists. Grammar is re-checked
+// server-side before write; this stays a plain free-text add.
+function ReviewCommandsInput({
+  values,
+  onChange,
+  label = 'Review allowed commands',
+  description = 'command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty).',
+  placeholder = 'command prefix — e.g. "npm test"',
+}) {
   const { Input, Button, Tag } = window.TidepoolDesignSystem_8a0ead;
   const [free, setFree] = React.useState('');
   const addFree = () => {
@@ -789,10 +791,10 @@ function ReviewCommandsInput({ values, onChange }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-        Review allowed commands
+        {label}
       </span>
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty).
+        {description}
       </p>
       {values.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -807,7 +809,7 @@ function ReviewCommandsInput({ values, onChange }) {
       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
           <Input value={free} mono onChange={(e) => { setFree(e.target.value); }}
-            placeholder='command prefix — e.g. "npm test"' />
+            placeholder={placeholder} />
         </div>
         <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
       </div>
@@ -873,24 +875,27 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
   const [notes, setNotes] = React.useState(ws.notes ?? '');
   const [prot, setProt] = React.useState(!!ws.protected);
   const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
+  const [domains, setDomains] = React.useState(ws.allowed_domains ?? []);
   const origin = ws.repo ?? ws.path;
   const dirty = notes.trim() !== (ws.notes ?? '')
     || prot !== !!ws.protected
-    || !sameStrings(cmds, ws.review_allowed_commands ?? []);
+    || !sameStrings(cmds, ws.review_allowed_commands ?? [])
+    || !sameStrings(domains, ws.allowed_domains ?? []);
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => { edit.close(); await onChanged(); });
 
   const startEdit = () => edit.open(id, () => {
     setNotes(ws.notes ?? ''); setProt(!!ws.protected); setCmds(ws.review_allowed_commands ?? []);
+    setDomains(ws.allowed_domains ?? []);
   });
-  // ADR 0061 決定2: notes never carries a confirmation, so it travels every
-  // save; protected/review_allowed_commands only join the body when they
-  // actually changed — an untouched field must stay absent for the door's
-  // pure-payload danger judgment to see only what the human actually edited
+  // Notes always travels; dangerous fields join only when actually changed —
+  // untouched fields must stay absent for pure-payload confirmation judgment
+  // (ADR 0061 決定2 / ADR 0072).
   const save = () => {
     const body = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
+    if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
     submit(`/api/workspaces/${encodeURIComponent(ws.name)}`, 'PATCH', body, 'updated', ws.name);
   };
 
@@ -916,6 +921,8 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
             onLabel="changes here always need human approval" offLabel="not protected" />
           <FieldRow label="review allowed commands" kind={(ws.review_allowed_commands ?? []).length ? 'tags' : 'unset'}
             tags={ws.review_allowed_commands ?? []} unsetLabel="no extra commands allowed — review stays read-only" />
+          <FieldRow label="allowed domains" kind={(ws.allowed_domains ?? []).length ? 'tags' : 'unset'}
+            tags={ws.allowed_domains ?? []} unsetLabel="external fetches unavailable" />
           {publishable && <PublishWorkspace ws={ws} say={say} onPublished={onChanged} />}
         </React.Fragment>
       )}
@@ -928,6 +935,10 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
           <Switch label="protected — changes here always need human approval" checked={prot}
             disabled={busy || (ws.registrySelf && !!ws.protected)} onChange={(next) => setProt(next)} />
           <ReviewCommandsInput values={cmds} onChange={setCmds} />
+          <ReviewCommandsInput values={domains} onChange={setDomains}
+            label="Allowed domains"
+            description="domains this workspace's worker sessions may reach. Empty keeps external fetches closed (confirmed on save if non-empty)."
+            placeholder='domain — e.g. "registry.npmjs.org"' />
           <EditActions dirty={dirty} busy={busy} saveLabel="Save — commits to the registry"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
@@ -1133,6 +1144,8 @@ const DANGEROUS_REASON_LABEL = {
     'Protection is being removed — tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.',
   review_allowed_commands_set:
     'Review-allowed commands is non-empty — review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.',
+  allowed_domains_set:
+    'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
 };
 
 // The merge dial (registry.ts): absent means no automatic merge decision, so an

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
-import { InvalidWorkspaceNameError } from "../src/registry.js";
+import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
@@ -103,6 +103,63 @@ it("update_workspace は review_allowed_commands を受け取り、確認要求�
     });
     expect(unconfirmed.isError).toBe(true);
     expect(unconfirmed.content[0].text).toContain("review_allowed_commands_set");
+  } finally {
+    await client.close();
+  }
+});
+
+it("update_workspace は allowed_domains を confirm ごと人間面へ渡す(issue #321)", async () => {
+  const calls: UpdateWorkspaceInput[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async (input) => {
+        calls.push(input);
+      },
+    },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "update_workspace",
+      arguments: {
+        name: "lagoon",
+        allowed_domains: ["registry.npmjs.org"],
+        confirm: true,
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toEqual([
+      { name: "lagoon", allowed_domains: ["registry.npmjs.org"], confirm: true },
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("update_workspace の不正 allowed_domains は registry 文法エラーとして返す(issue #321)", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async () => {
+        throw new InvalidAllowedDomainError("100.100.100.100", "IP literals are not allowed");
+      },
+    },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "update_workspace",
+      arguments: {
+        name: "lagoon",
+        allowed_domains: ["100.100.100.100"],
+        confirm: true,
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(
+      'invalid allowed_domains entry "100.100.100.100": IP literals are not allowed',
+    );
   } finally {
     await client.close();
   }

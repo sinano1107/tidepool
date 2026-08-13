@@ -43,6 +43,8 @@ export interface WorkspaceConfig {
    *  same way `branch` is. Absent → none: a `WorkspaceConfig` built outside the
    *  registry widens nothing. */
   review_allowed_commands?: string[];
+  /** Workspace-scoped sandbox egress domains (ADR 0072). Absent opens none. */
+  allowed_domains?: string[];
 }
 
 /** The protected branch: no task ever works on it directly. */
@@ -139,6 +141,7 @@ export function resolveExecutionWorkspace(
     branch: entry.branch,
     repo: entry.repo,
     review_allowed_commands: entry.review_allowed_commands,
+    allowed_domains: entry.allowed_domains,
   };
 }
 
@@ -175,6 +178,7 @@ export function listRegisteredWorkspaces(
     branch: entry.branch,
     repo: entry.repo,
     review_allowed_commands: entry.review_allowed_commands,
+    allowed_domains: entry.allowed_domains,
   }));
 }
 

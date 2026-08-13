@@ -341,7 +341,7 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
 describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 0036 / issue #152)", () => {
   // 期待値は独立した literal — ブロックまるごと置くので、キーが増えれば落ちる
   // (ベンダー既定の意味論に依存する床なので、黙って広がってはならない)。
-  it("どちらのプロファイルも loopback への listen を開け、tailnet の完全名/短縮名を deny する", () => {
+  it("どちらのプロファイルも未許可 egress を閉じ、loopback listen と tailnet deny を共有する", () => {
     for (const taskType of ["work", "review"] as const) {
       expect(
         buildSandboxSettings({
@@ -351,6 +351,25 @@ describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 003
         }).sandbox.network,
       ).toEqual({
         allowLocalBinding: true,
+        strictAllowlist: true,
+        deniedDomains: ["*.ts.net", "raspberrypi"],
+      });
+    }
+  });
+
+  it("workspace の許可ドメインを両プロファイルへ渡し、未許可 host は決定的に拒否する(ADR 0072)", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect(
+        buildSandboxSettings({
+          taskType,
+          workspacePath: "/home/pi/work/tidepool",
+          permittedSkills: "all",
+          allowedDomains: ["registry.npmjs.org"],
+        }).sandbox.network,
+      ).toEqual({
+        allowLocalBinding: true,
+        strictAllowlist: true,
+        allowedDomains: ["registry.npmjs.org"],
         deniedDomains: ["*.ts.net", "raspberrypi"],
       });
     }

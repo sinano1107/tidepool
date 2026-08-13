@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { isIP } from "node:net";
 import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
@@ -140,6 +141,9 @@ const workspaceEntrySchema = z.object({
    *  branch and never see a PR). `assertValidReviewAllowedCommands` guards the
    *  grammar so a spelling can't reach past what that human read. */
   review_allowed_commands: z.array(z.string()).optional(),
+  /** Domains this workspace's worker sessions may reach through the sandbox
+   *  network proxy (issue #321 / ADR 0072). Absent keeps egress closed. */
+  allowed_domains: z.array(z.string()).optional(),
 });
 
 /** A workspace entry in `workspaces.yaml`: where tasks run (name → path on
@@ -319,6 +323,42 @@ export function assertValidReviewAllowedCommands(commands: string[]): void {
     }
     if (entry !== entry.trim()) {
       throw new InvalidReviewAllowedCommandError(entry, "leading or trailing whitespace");
+    }
+  }
+}
+
+/** A workspace domain allowlist entry is not valid registry grammar. */
+export class InvalidAllowedDomainError extends Error {
+  constructor(public readonly entry: string, reason: string) {
+    super(`invalid allowed_domains entry "${entry}": ${reason}`);
+    this.name = "InvalidAllowedDomainError";
+  }
+}
+
+/** Grammar-only validation of workspace-scoped egress domains (ADR 0072). */
+export function assertValidAllowedDomains(domains: string[]): void {
+  for (const entry of domains) {
+    if (entry === "") throw new InvalidAllowedDomainError(entry, "empty domain");
+    if (entry === "*") {
+      throw new InvalidAllowedDomainError(entry, "bare wildcard is not allowed");
+    }
+    if (isIP(entry) !== 0) {
+      throw new InvalidAllowedDomainError(entry, "IP literals are not allowed");
+    }
+    if (entry.includes(":") || entry.includes("/")) {
+      throw new InvalidAllowedDomainError(entry, "expected a domain name");
+    }
+    const domain = entry.startsWith("*.") ? entry.slice(2) : entry;
+    const labels = domain.split(".");
+    if (
+      domain.length > 253 ||
+      labels.some(
+        (label) =>
+          !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label),
+      ) ||
+      (entry.includes("*") && !entry.startsWith("*."))
+    ) {
+      throw new InvalidAllowedDomainError(entry, "expected a domain name");
     }
   }
 }
@@ -547,6 +587,7 @@ const workspacesSchema = z.record(z.string(), workspaceEntrySchema);
 function assertValidWorkspaces(workspaces: z.infer<typeof workspacesSchema>): void {
   for (const entry of Object.values(workspaces)) {
     assertValidReviewAllowedCommands(entry.review_allowed_commands ?? []);
+    assertValidAllowedDomains(entry.allowed_domains ?? []);
   }
 }
 

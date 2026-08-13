@@ -23,7 +23,7 @@ describe("resolveWorkspacesBaseDir", () => {
 });
 
 function makeRegistry(
-  workspaces: Record<string, { path?: string; branch?: string }>,
+  workspaces: Record<string, { path?: string; branch?: string; allowed_domains?: string[] }>,
 ): Registry {
   return {
     commit: "0".repeat(40),
@@ -60,6 +60,21 @@ describe("resolveExecutionWorkspace", () => {
     });
     const resolved = resolveExecutionWorkspace(registry, "sandbox", null, BASE_DIR);
     expect(resolved).toEqual({ name: "sandbox", path: "/home/pi/work/sandbox", branch: "master" });
+  });
+
+  it("workspace entry の allowed_domains は worker session 設定へ渡せる形で解決される(ADR 0072)", () => {
+    const registry = makeRegistry({
+      sandbox: {
+        path: "/home/pi/work/sandbox",
+        allowed_domains: ["registry.npmjs.org"],
+      },
+    });
+
+    expect(resolveExecutionWorkspace(registry, "sandbox", null, BASE_DIR)).toEqual({
+      name: "sandbox",
+      path: "/home/pi/work/sandbox",
+      allowed_domains: ["registry.npmjs.org"],
+    });
   });
 
   it("registry に存在しない workspace 名は UnknownWorkspaceError を投げる", () => {

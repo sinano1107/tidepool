@@ -30,6 +30,7 @@ import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
 import type { RegistryReachabilityCheck } from "./registry.js";
 import {
   InvalidAgentNameError,
+  InvalidAllowedDomainError,
   InvalidAuthorityProfileNameError,
   InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
@@ -152,6 +153,7 @@ function registryToolError(err: unknown) {
     err instanceof InvalidAgentIconError ||
     err instanceof InvalidSkillAllowlistError ||
     err instanceof InvalidReviewAllowedCommandError ||
+    err instanceof InvalidAllowedDomainError ||
     err instanceof InvalidAuthorityProfileNameError
   ) {
     return toolError(err.message);
@@ -259,9 +261,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         name: z.string().min(1),
         notes: z.string().optional(),
         protected: z.boolean().optional(),
-        // ADR 0061: the review write-floor lift, editable from this door too —
-        // `[]` removes it. Non-empty needs `confirm`, same as unprotecting.
+        // ADR 0061 / 0072: both workspace allowlists are editable here too —
+        // `[]` removes one. Non-empty needs `confirm`, same as unprotecting.
         review_allowed_commands: z.array(z.string()).optional(),
+        allowed_domains: z.array(z.string()).optional(),
         confirm: z.boolean().optional(),
       }),
     },

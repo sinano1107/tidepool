@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { InvalidReviewAllowedCommandError } from "../src/registry.js";
+import { InvalidAllowedDomainError, InvalidReviewAllowedCommandError } from "../src/registry.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import {
   RegistrySelfUnprotectError,
@@ -95,6 +95,27 @@ it("PATCH は review_allowed_commands を confirm ごと updateWorkspace へ渡�
   ]);
 });
 
+it("PATCH は allowed_domains を confirm ごと updateWorkspace へ渡す(ADR 0072)", async () => {
+  const calls: UpdateWorkspaceInput[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async (input) => {
+        calls.push(input);
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", {
+    allowed_domains: ["registry.npmjs.org"],
+    confirm: true,
+  });
+
+  expect(res.status).toBe(200);
+  expect(calls).toEqual([
+    { name: "lagoon", allowed_domains: ["registry.npmjs.org"], confirm: true },
+  ]);
+});
+
 it("文法違反の review_allowed_commands は 400 — confirm では買えない失敗", async () => {
   t = await bootTidepool({
     workspaceAdmin: {
@@ -106,6 +127,23 @@ it("文法違反の review_allowed_commands は 400 — confirm では買えな�
 
   const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", {
     review_allowed_commands: ["npm test,rm -rf /"],
+    confirm: true,
+  });
+
+  expect(res.status).toBe(400);
+});
+
+it("文法違反の allowed_domains は 400 — confirm では買えない失敗", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      update: async () => {
+        throw new InvalidAllowedDomainError("100.100.100.100", "IP literals are not allowed");
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/workspaces/lagoon", {
+    allowed_domains: ["100.100.100.100"],
     confirm: true,
   });
 

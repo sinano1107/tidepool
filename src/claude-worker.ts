@@ -125,6 +125,13 @@ is outside your authority or you hit a dead end, escalate rather than guess.
 
 This may be a resumed task session: if the task history shows prior-session traces, inspect the task branch with \`git log\` before starting work.`;
 
+function workerProtocol(allowedDomains: string[] | undefined): string {
+  const network = allowedDomains?.length
+    ? `Network egress is deny-by-default. This session may reach only: ${allowedDomains.join(", ")}. Do not retry downloads from any other domain.`
+    : "Network egress is deny-by-default. This session cannot fetch from any external domain. Do not retry external downloads.";
+  return `${WORKER_PROTOCOL}\n\n${network}`;
+}
+
 /** One roster line's text (issue #43 / ADR 0014): "name — description",
  *  shared by every entry — a registry agent's `AgentDefinition` or the
  *  fixed `HUMAN_ROSTER_AGENT` alike, since both are `RosterAgent`s. */
@@ -1706,6 +1713,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           taskType: task.type,
           workspacePath: workspace.path,
           permittedSkills: enforcement.permittedSkills,
+          allowedDomains: workspace.allowed_domains,
         }),
       ),
     );
@@ -1836,7 +1844,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // stitched at spawn time. A party review (self RCA) additionally carries
         // the 当時版 definition as evidence (ADR 0020 part 4), appended last.
         "--append-system-prompt",
-        `${definition.systemPrompt}\n\n## Authority\n\n${authorityProfile.guidance}${rosterSection(buildRoster(registry, rosterAssignableTo))}\n\n${BOARD_DOCTRINE}\n\n${WORKER_PROTOCOL}${this.historicalDefinitionSection(task)}`,
+        `${definition.systemPrompt}\n\n## Authority\n\n${authorityProfile.guidance}${rosterSection(buildRoster(registry, rosterAssignableTo))}\n\n${BOARD_DOCTRINE}\n\n${workerProtocol(workspace.allowed_domains)}${this.historicalDefinitionSection(task)}`,
       ],
       // the agent's own commits are stamped with the agent's identity (issue
       // #53), merged over the inherited env — never a token (ADR 0024). The

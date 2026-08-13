@@ -209,6 +209,34 @@ describe("updateWorkspace: review_allowed_commands の編集(issue #264 / ADR 00
   });
 });
 
+describe("updateWorkspace: allowed_domains の編集(issue #321 / ADR 0072)", () => {
+  it("非空の設定は confirm なしでは allowed_domains_set を理由に拒む", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+
+    await expect(
+      updateWorkspace({ name: "tidepool", allowed_domains: ["registry.npmjs.org"] }, deps),
+    ).rejects.toMatchObject({
+      name: "WorkspaceConfirmationRequiredError",
+      reasons: ["allowed_domains_set"],
+    });
+  });
+
+  it("confirm: true 付きの設定が registry に着地する", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+
+    await updateWorkspace(
+      { name: "tidepool", allowed_domains: ["registry.npmjs.org"], confirm: true },
+      deps,
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool?.allowed_domains).toEqual([
+      "registry.npmjs.org",
+    ]);
+  });
+});
+
 describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
   it("registry クローンが registry-edit タスクのブランチに居ても、編集がリモート main へ着地する", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();

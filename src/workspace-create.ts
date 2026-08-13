@@ -5,6 +5,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { GitHubClient } from "./github.js";
 import { authedGit, type GitHubAuth } from "./github-auth.js";
 import {
+  assertValidAllowedDomains,
   assertValidReviewAllowedCommands,
   assertValidWorkspaceName,
   loadRegistry,
@@ -169,7 +170,8 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
 }
 
 /** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
- *  `notes`, `protected` and `review_allowed_commands` (ADR 0061) are editable
+ *  `notes`, `protected`, `review_allowed_commands` (ADR 0061), and
+ *  `allowed_domains` (ADR 0072) are editable
  *  — changing `path`/`repo`/`branch` re-points the entry at a different real
  *  checkout, which stays a manual edit (the registry is a git repository).
  *  A partial patch throughout: an absent field is untouched, which is what
@@ -184,6 +186,8 @@ export interface UpdateWorkspaceInput {
    *  → set; the empty array removes the key, absence being the canonical "no
    *  commands", the same shape as `protected` below. */
   review_allowed_commands?: string[];
+  /** ADR 0072's workspace-scoped network egress lift. Empty removes it. */
+  allowed_domains?: string[];
   /** Consent to every dangerous value in this payload, not to unprotecting
    *  alone (ADR 0061 決定1) — one boolean, the refusal's reason codes say
    *  what it bought. */
@@ -193,7 +197,10 @@ export interface UpdateWorkspaceInput {
 /** Machine-readable reason codes `dangerousWorkspaceValues` can return — the
  *  workspace twin of profile-create's `DangerousValueReason`, stable strings
  *  a door's refusal enumerates rather than prose (ADR 0061 決定1). */
-export type DangerousWorkspaceValueReason = "unprotect" | "review_allowed_commands_set";
+export type DangerousWorkspaceValueReason =
+  | "unprotect"
+  | "review_allowed_commands_set"
+  | "allowed_domains_set";
 
 /** Pure judgment of which values in *this payload* widen what agents may do
  *  (ADR 0061 決定2): removing protection, and setting the review write-floor
@@ -202,11 +209,12 @@ export type DangerousWorkspaceValueReason = "unprotect" | "review_allowed_comman
  *  absent, and the empty array (clearing the list) moves in the safe
  *  direction and asks nothing. */
 function dangerousWorkspaceValues(
-  input: Pick<UpdateWorkspaceInput, "protected" | "review_allowed_commands">,
+  input: Pick<UpdateWorkspaceInput, "protected" | "review_allowed_commands" | "allowed_domains">,
 ): DangerousWorkspaceValueReason[] {
   const reasons: DangerousWorkspaceValueReason[] = [];
   if (input.protected === false) reasons.push("unprotect");
   if (input.review_allowed_commands?.length) reasons.push("review_allowed_commands_set");
+  if (input.allowed_domains?.length) reasons.push("allowed_domains_set");
   return reasons;
 }
 
@@ -263,6 +271,9 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   if (input.review_allowed_commands !== undefined) {
     assertValidReviewAllowedCommands(input.review_allowed_commands);
   }
+  if (input.allowed_domains !== undefined) {
+    assertValidAllowedDomains(input.allowed_domains);
+  }
   const dangerous = dangerousWorkspaceValues(input);
   if (dangerous.length > 0 && input.confirm !== true) {
     throw new WorkspaceConfirmationRequiredError(input.name, dangerous);
@@ -281,6 +292,10 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   if (input.review_allowed_commands !== undefined) {
     if (input.review_allowed_commands.length === 0) delete next.review_allowed_commands;
     else next.review_allowed_commands = input.review_allowed_commands;
+  }
+  if (input.allowed_domains !== undefined) {
+    if (input.allowed_domains.length === 0) delete next.allowed_domains;
+    else next.allowed_domains = input.allowed_domains;
   }
   commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
 }

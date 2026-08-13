@@ -483,7 +483,7 @@ UUID=68A9-671B /mnt/ssd exfat defaults,nofail,uid=1000,gid=1000,fmask=0022,dmask
 
 11. **workspace は ext4 に置く。exFAT では `npm install` が原理的に完走しない**(`node_modules/.bin/*` は symlink)。規約導出の基点は `/mnt/workspaces`(SSD 上の ext4 ループバック)。`path` を明示する既存エントリ(`sandbox` / `registry`)は exFAT のままだが、npm を撃たないので問題は出ていない。
 
-12. **依存はホスト側で用意する。サンドボックスからは外部へ出られない**(#309)。`cp -a /opt/tidepool/node_modules <workspace>/` で配る —— `package-lock.json` の md5 が一致していることを先に確認する。**エージェントは放っておくと自分で `npm install` を撃ち、403 リトライで CPU を焼き続ける**(エラーで落ちない)。
+12. **依存は、workspace の `allowed_domains` が閉じている場合はホスト側で用意する**(#309 / ADR 0072)。`cp -a /opt/tidepool/node_modules <workspace>/` で配る —— `package-lock.json` の md5 が一致していることを先に確認する。非空の `allowed_domains` はその workspace の worker だけに列挙ドメインへの egress を開く。許可外への取得は retry しない。
 
 13. **実行中のタスクは UI からキャンセルできない**(`assertHumanEditableScope` が `in_progress` を除く)。止める手は2つ —— watchdog を待つ(work 90分)か、**Pi 上でプロセスを kill してからサービスを再起動する**。再起動が `failTask` を撃ち(ADR 0001)、retry / abandon の question が立って slot が解放される。**kill だけでは解放されない** —— `worker_exited` は記録されるが、タスクは `in_progress` のまま残る。
 

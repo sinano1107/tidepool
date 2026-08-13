@@ -1227,7 +1227,13 @@ function useDirtySignal(edit, open, dirty) {
     if (open) edit.setDirty(dirty);
   }, [open, dirty]);
 }
-function ReviewCommandsInput({ values, onChange }) {
+function ReviewCommandsInput({
+  values,
+  onChange,
+  label = "Review allowed commands",
+  description = "command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty).",
+  placeholder = 'command prefix \u2014 e.g. "npm test"'
+}) {
   const { Input, Button, Tag } = window.TidepoolDesignSystem_8a0ead;
   const [free, setFree] = React.useState("");
   const addFree = () => {
@@ -1236,7 +1242,7 @@ function ReviewCommandsInput({ values, onChange }) {
     onChange([...values, v]);
     setFree("");
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "Review allowed commands"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty)."), values.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, values.map((v) => /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, label), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, description), values.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, values.map((v) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key: v,
@@ -1254,7 +1260,7 @@ function ReviewCommandsInput({ values, onChange }) {
       onChange: (e) => {
         setFree(e.target.value);
       },
-      placeholder: 'command prefix \u2014 e.g. "npm test"'
+      placeholder
     }
   )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: !free.trim(), onClick: addFree }, "Add")));
 }
@@ -1291,8 +1297,9 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
   const [notes, setNotes] = React.useState(ws.notes ?? "");
   const [prot, setProt] = React.useState(!!ws.protected);
   const [cmds, setCmds] = React.useState(ws.review_allowed_commands ?? []);
+  const [domains, setDomains] = React.useState(ws.allowed_domains ?? []);
   const origin = ws.repo ?? ws.path;
-  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []);
+  const dirty = notes.trim() !== (ws.notes ?? "") || prot !== !!ws.protected || !sameStrings(cmds, ws.review_allowed_commands ?? []) || !sameStrings(domains, ws.allowed_domains ?? []);
   useDirtySignal(edit, open, dirty);
   const { busy, save: submit, dialog } = useWorkspaceSave(say, async () => {
     edit.close();
@@ -1302,11 +1309,13 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
     setNotes(ws.notes ?? "");
     setProt(!!ws.protected);
     setCmds(ws.review_allowed_commands ?? []);
+    setDomains(ws.allowed_domains ?? []);
   });
   const save = () => {
     const body = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
+    if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
     submit(`/api/workspaces/${encodeURIComponent(ws.name)}`, "PATCH", body, "updated", ws.name);
   };
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, ws.name), ws.registrySelf && /* @__PURE__ */ React.createElement(Tag, { color: "tide", mono: true }, "registry"), ws.protected && /* @__PURE__ */ React.createElement(Tag, { color: "sun" }, "protected")), ws.registrySelf && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the board's own registry clone \u2014 protection stays on"), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
@@ -1334,6 +1343,14 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       tags: ws.review_allowed_commands ?? [],
       unsetLabel: "no extra commands allowed \u2014 review stays read-only"
     }
+  ), /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "allowed domains",
+      kind: (ws.allowed_domains ?? []).length ? "tags" : "unset",
+      tags: ws.allowed_domains ?? [],
+      unsetLabel: "external fetches unavailable"
+    }
   ), publishable && /* @__PURE__ */ React.createElement(PublishWorkspace, { ws, say, onPublished: onChanged })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
     {
@@ -1351,6 +1368,15 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       onChange: (next) => setProt(next)
     }
   ), /* @__PURE__ */ React.createElement(ReviewCommandsInput, { values: cmds, onChange: setCmds }), /* @__PURE__ */ React.createElement(
+    ReviewCommandsInput,
+    {
+      values: domains,
+      onChange: setDomains,
+      label: "Allowed domains",
+      description: "domains this workspace's worker sessions may reach. Empty keeps external fetches closed (confirmed on save if non-empty).",
+      placeholder: 'domain \u2014 e.g. "registry.npmjs.org"'
+    }
+  ), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -1523,7 +1549,8 @@ const DANGEROUS_REASON_LABEL = {
   assignable_to_wildcard: 'Assignable-to carries the wildcard "*" \u2014 an agent with this authority may delegate to any agent.',
   allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.',
   unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
-  review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default."
+  review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.",
+  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains."
 };
 const MERGE_OPTIONS = [
   { value: "", label: "no automatic merge decision (default)" },
