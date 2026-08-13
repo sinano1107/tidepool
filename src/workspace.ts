@@ -94,18 +94,22 @@ function protectedBranchRef(workspace: WorkspaceConfig): string {
  *  tidepool-bot account its GitHub operations do, extending the "board acts as
  *  Tidepool, not as a person" line (quarantine/watchdog questions already
  *  register under this name) onto git author. */
-export const TIDEPOOL_GIT_IDENTITY = [
-  "-c",
-  "user.name=tidepool",
-  "-c",
-  "user.email=306969821+tidepool-bot@users.noreply.github.com",
-] as const;
+const TIDEPOOL_GIT_IDENTITY_ENV = {
+  GIT_AUTHOR_NAME: "tidepool",
+  GIT_AUTHOR_EMAIL: "306969821+tidepool-bot@users.noreply.github.com",
+  GIT_COMMITTER_NAME: "tidepool",
+  GIT_COMMITTER_EMAIL: "306969821+tidepool-bot@users.noreply.github.com",
+} as const;
 
 /** Shared by every board-driven git call (here and workspace-create.ts).
  *  stderr captured, not inherited: git narrates checkouts on stderr and the
  *  board's console is not the place for it. */
 export function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+  return execFileSync("git", args, {
+    cwd,
+    env: { ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV },
+    stdio: ["ignore", "pipe", "pipe"],
+  })
     .toString()
     .trim();
 }
@@ -483,7 +487,7 @@ export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
   }
   git(workspace.path, "add", "-A");
   if (git(workspace.path, "status", "--porcelain") !== "") {
-    git(workspace.path, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", `WIP: task ${taskId}`);
+    git(workspace.path, "commit", "-m", `WIP: task ${taskId}`);
   }
   if (git(workspace.path, "status", "--porcelain") !== "") {
     throw new Error(`workspace ${workspace.name} still dirty after WIP commit`);
@@ -517,7 +521,7 @@ function parkOnProtectedBranch(workspace: WorkspaceConfig): void {
   const ref = protectedBranchRef(workspace);
   // identity を渡すのは ff が commit を作らない場合でも git が要求しうるため —
   // 盤面が打つ git はすべて Tidepool 名義という線(issue #53)をここでも切らない
-  git(workspace.path, ...TIDEPOOL_GIT_IDENTITY, "merge", "--ff-only", ref);
+  git(workspace.path, "merge", "--ff-only", ref);
   if (git(workspace.path, "rev-parse", "HEAD") === git(workspace.path, "rev-parse", ref)) return;
   throw new Error(
     `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +
@@ -763,7 +767,7 @@ export function releaseWorkspace(
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
     if (target) {
       git(workspace.path, "checkout", target);
-      git(workspace.path, ...TIDEPOOL_GIT_IDENTITY, "merge", taskBranch(task.id));
+      git(workspace.path, "merge", taskBranch(task.id));
     }
     parkOnProtectedBranch(workspace);
   } catch (err) {
@@ -789,11 +793,5 @@ export function mergeTaskToProtected(workspace: WorkspaceConfig, taskId: string)
     return;
   }
   git(workspace.path, "checkout", branch);
-  git(
-    workspace.path,
-    ...TIDEPOOL_GIT_IDENTITY,
-    "merge",
-    "--ff-only",
-    taskBranch(taskId),
-  );
+  git(workspace.path, "merge", "--ff-only", taskBranch(taskId));
 }

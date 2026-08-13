@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { authedGit, type GitHubAuth } from "./github-auth.js";
 import { REGISTRY_BRANCH, type RegistrySource, refreshRegistry, registryRef } from "./registry.js";
-import { git, TIDEPOOL_GIT_IDENTITY } from "./workspace.js";
+import { git } from "./workspace.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
  *  push もできず、push 成功が「効いた」の定義である以上、その編集は最初から
@@ -78,7 +78,7 @@ export function commitToRegistry(
     write(worktreeDir);
     if (git(worktreeDir, "status", "--porcelain") === "") return;
     git(worktreeDir, "add", "-A");
-    git(worktreeDir, ...TIDEPOOL_GIT_IDENTITY, "commit", "-m", message);
+    git(worktreeDir, "commit", "-m", message);
     land(registry, worktreeDir, baseSha, auth);
   } finally {
     // ベストエフォート: ここで投げると、push/CAS が投げた本当の失敗を隠してしまう。
