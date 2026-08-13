@@ -1254,10 +1254,10 @@ const USAGE_PROMPT_SETTLE_MS = 2_500;
 // The /usage panel is captured once both header lines have rendered; these
 // double as the acceptance-criteria markers (Current session / Current week).
 const PANEL_MARKERS = ["Current session", "Current week"];
-// Pi 2.1.221 drew session/week at 5.838s/5.840s, then inserted fable only in a
-// later breakdown redraw after the old 500ms quiet window had already fired
-// (issue #323). Two seconds is 4× that disproven floor: every redraw extends
-// the same debounce, without waiting specifically for fable (absent on Pro).
+// Pi 2.1.221 drew session/week 207ms after /usage, then redrew after 499ms and
+// 485ms quiet gaps (re-measured 2026-08-14 for issue #323). Two seconds is 4×
+// the measured maximum: every redraw extends the same debounce, without
+// waiting specifically for fable (absent on Pro).
 const PANEL_QUIET_MS = 2_000;
 // The issue #323 probe observed all three redraws over a 30s capture. Match
 // that measured observation window; normal completion still happens on the
@@ -2051,12 +2051,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  --safe-mode so the board repo's CLAUDE.md/skills/MCP never leak into the
    *  probe. Auth/tokens are never touched — refresh is left to the CLI's own
    *  startup (ADR 0028's core constraint). Returns the composed terminal
-   *  screen; parseUsage reads that plain text (ADR 0074). Any
-   *  failure — spawn error, early exit, or timeout — resolves null so the
-   *  scheduler fails closed, and the session is always torn down (Ctrl-C×2
-   *  then kill) so no orphan is left behind. `--settings` pins the fullscreen
-   *  renderer (see USAGE_TUI_SETTINGS) so the panel stays parseable regardless
-   *  of the host's own TUI setting.
+   *  screen; parseUsage reads that plain text (ADR 0074). Spawn failure or exit
+   *  before the panel appears resolves null so the scheduler fails closed. A
+   *  timeout after panel observation returns the latest composed screen as a
+   *  best effort. The session is always torn down (Ctrl-C×2 then kill) so no
+   *  orphan is left behind. `--settings` pins the fullscreen renderer (see
+   *  USAGE_TUI_SETTINGS) so the panel stays parseable regardless of the host's
+   *  own TUI setting.
    *
    *  The old exec probe carried an ADR 0005 runaway *cost* ceiling
    *  (--model haiku/--max-turns/--max-budget-usd). That's gone: the

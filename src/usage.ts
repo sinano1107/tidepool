@@ -327,11 +327,10 @@ function parseWeekWindow(block: string, now: Date): UsageWindowSnapshot | null {
   };
 }
 
-/** Parses the PTY-captured text of the interactive TUI's `/usage` panel
- *  (ADR 0028). ANSI/cursor-positioning escapes are this function's
- *  responsibility to strip — the scraper hands over the raw capture. Only
- *  the all-models week line is read: `weekBlock` runs from the "(all
- *  models)" label to end-of-string, but `.exec()` takes the first
+/** Parses the composed screen text of the interactive TUI's `/usage` panel
+ *  (ADR 0074). ANSI stripping remains as defensive tolerance for direct
+ *  callers. Only the all-models week line is read: `weekBlock` runs from the
+ *  "(all models)" label to end-of-string, but `.exec()` takes the first
  *  percent/resets match in it, which is that label's own — any per-model
  *  breakdown rows further down are never reached. */
 export function parseUsage(resultText: string, now: Date): UsageSnapshot {

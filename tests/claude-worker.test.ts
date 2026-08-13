@@ -1442,7 +1442,7 @@ describe("ClaudeCodeWorker", () => {
           "Current week (all models)\r\n5% used\r\nResets Aug 20 at 1pm (Asia/Tokyo)\r\n" +
           "   Current week (all models)\r\n0% used\r\nResets Aug 20 at 1pm (Asia/Tokyo)",
       );
-      // Pi では初回パネル後の静穏が旧500msを越えてから breakdown が再描画された。
+      // Pi 実測の redraw gap は499ms/485ms。1秒後の差分でも、2秒窓はまだ確定しない。
       await vi.advanceTimersByTimeAsync(1_000);
       rec.emitData(
         "\x1b[7;1H\x1b[17CFable)\x1b[K" +
