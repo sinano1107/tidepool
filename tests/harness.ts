@@ -146,7 +146,7 @@ export interface BootOptions {
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: Claude CLI authentication probe. */
   cliAuth?: CliAuthCheck;
-  /** ADR 0070: optional token expiry used only for advance warning. */
+  /** ADR 0075: optional token expiry used only for advance warning. */
   cliAuthExpiresAt?: Date;
   /** 封じ込め能力ゲートの fs 半分(ADR 0033 / issue #60)。**渡すとゲートごと
    *  arm される**ので、人間面の自己検査(ADR 0036 / issue #154)も一緒に効く。

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { boardCallEnv, pinnedModelFlags } from "./claude-worker.js";
-import type { CliAuthCheck, CliAuthResult } from "./cli-auth.js";
+import { type CliAuthCheck, type CliAuthResult, isCliAuthFailureEnvelope } from "./cli-auth.js";
 
 export interface CliAuthCommandResult {
   exitCode: number | null;
@@ -51,7 +51,7 @@ export function createClaudeCliAuthCheck(command: CliAuthCommand = defaultComman
     } catch {
       return { status: "unknown", reason: "probe did not return a JSON envelope" };
     }
-    if (envelope.api_error_status === 401) {
+    if (isCliAuthFailureEnvelope(envelope)) {
       return { status: "unauthorized", reason: "API returned 401" };
     }
     if (observed.exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {

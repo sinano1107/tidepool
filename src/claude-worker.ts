@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { quarantineCliAuth } from "./cli-auth.js";
+import { isCliAuthFailureEnvelope, quarantineCliAuth } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -733,7 +733,7 @@ function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEv
 }
 
 function isCliAuthFailure(parsed: Record<string, unknown> | null): boolean {
-  return parsed?.type === "result" && parsed.api_error_status === 401;
+  return parsed?.type === "result" && isCliAuthFailureEnvelope(parsed);
 }
 
 /** What the stdout scan collected about this session's advisor while the

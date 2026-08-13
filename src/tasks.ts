@@ -126,7 +126,7 @@ export interface Task {
   question_quarantine_registry: number | null;
   /** System-internal only (ADR 0070): Claude CLI authentication quarantine. */
   question_quarantine_cli_auth: number | null;
-  /** System-internal only (ADR 0070): one-time configured-expiry warning. */
+  /** System-internal only (ADR 0075): warned configured-expiry epoch. */
   question_cli_auth_expiry_warning: number | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to, or null for an ordinary task.
@@ -298,8 +298,8 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   quarantine_registry?: boolean;
   /** System-internal only (ADR 0070): Claude CLI authentication Confirmation. */
   quarantine_cli_auth?: boolean;
-  /** System-internal only (ADR 0070): one-time configured-expiry warning. */
-  cli_auth_expiry_warning?: boolean;
+  /** System-internal only (ADR 0075): the warned configured expiry epoch. */
+  cli_auth_expiry_warning?: number;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -565,7 +565,7 @@ export function registerTask(
     question_quarantine_sandbox: input.quarantine_sandbox ? 1 : null,
     question_quarantine_registry: input.quarantine_registry ? 1 : null,
     question_quarantine_cli_auth: input.quarantine_cli_auth ? 1 : null,
-    question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ? 1 : null,
+    question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ?? null,
     github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
   };

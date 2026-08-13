@@ -132,7 +132,7 @@ export interface BoardComposition {
   /** issue #47 / ADR 0015: 表示時翻訳。盤面自身の CONTEXT.md を読んで作るので
    *  合成 root 側で組む。 */
   translationClient: TranslationClient;
-  /** ADR 0070: optional token expiry; absent disables only advance warning. */
+  /** ADR 0075: optional token expiry; absent disables only advance warning. */
   cliAuthExpiresAt: Date | undefined;
 }
 

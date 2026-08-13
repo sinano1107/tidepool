@@ -91,8 +91,8 @@ const TASKS_TABLE_DDL = `
       -- question standing in for Claude CLI authentication. Board-wide;
       -- never set via MCP or JSON API.
       question_quarantine_cli_auth INTEGER,
-      -- system-internal only (ADR 0070): marks the one-time advance warning
-      -- for the configured Claude token expiry. It never halts pickup.
+      -- system-internal only (ADR 0075): the configured expiry epoch for
+      -- which this advance warning was created. It never halts pickup.
       question_cli_auth_expiry_warning INTEGER,
       -- issue-backed task reference (issue #49, ADR 0016): the GitHub issue
       -- number this task is a live reference to, or null for an ordinary

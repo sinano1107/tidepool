@@ -13,11 +13,17 @@ export type CliAuthCheck = () => Promise<CliAuthResult>;
 
 export const CLI_AUTH_PROBE_INTERVAL_MS = 30 * 60 * 1000;
 const CLI_AUTH_EXPIRY_WARNING_MS = 30 * 24 * 60 * 60 * 1000;
+const ISO_EXPIRY = /^(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 
 export function resolveCliAuthExpiry(value: string | undefined): Date | undefined {
   if (value === undefined) return undefined;
   const expiresAt = new Date(value);
-  if (!Number.isFinite(expiresAt.getTime())) {
+  const date = ISO_EXPIRY.exec(value)?.[1];
+  if (
+    date === undefined ||
+    !Number.isFinite(expiresAt.getTime()) ||
+    new Date(`${date}T12:00:00Z`).toISOString().slice(0, 10) !== date
+  ) {
     console.warn(
       `[cli-auth] invalid TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT value ${JSON.stringify(value)}; ` +
         "advance expiry warning is disabled",
@@ -31,6 +37,10 @@ export function resolveCliAuthExpiry(value: string | undefined): Date | undefine
  * Callers must never infer this from an error-message substring. */
 export class CliAuthError extends Error {}
 
+export function isCliAuthFailureEnvelope(value: unknown): boolean {
+  return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 401;
+}
+
 /** `execFile` rejects on the same non-zero exit that carries Claude's JSON
  * error envelope. Preserve that structured stdout instead of falling back to
  * an error-message substring. */
@@ -43,7 +53,7 @@ export function rethrowCliAuthExecFailure(err: unknown): never {
   if (text !== null) {
     try {
       const envelope = JSON.parse(text) as Record<string, unknown>;
-      if (envelope.api_error_status === 401) {
+      if (isCliAuthFailureEnvelope(envelope)) {
         throw new CliAuthError(
           typeof envelope.result === "string" ? envelope.result : "Claude API returned 401",
         );
@@ -105,12 +115,13 @@ export function quarantineCliAuth(db: Db, now: Date): void {
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {
+  const expiry = expiresAt?.getTime();
   if (
-    expiresAt === undefined ||
-    expiresAt.getTime() - now.getTime() > CLI_AUTH_EXPIRY_WARNING_MS ||
+    expiry === undefined ||
+    expiry - now.getTime() > CLI_AUTH_EXPIRY_WARNING_MS ||
     db
-      .prepare("SELECT 1 FROM tasks WHERE question_cli_auth_expiry_warning IS NOT NULL LIMIT 1")
-      .get() !== undefined
+      .prepare("SELECT 1 FROM tasks WHERE question_cli_auth_expiry_warning = ? LIMIT 1")
+      .get(expiry) !== undefined
   ) {
     return;
   }
@@ -120,7 +131,7 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
       type: "question",
       title: CLI_AUTH_EXPIRY_WARNING_TITLE,
       purpose:
-        `The configured Claude authentication token expires at ${expiresAt.toISOString()}. ` +
+        `The configured Claude authentication token expires at ${new Date(expiry).toISOString()}. ` +
         "Rotate it before then to avoid stopping agent pickup:\n\n" +
         "1. Run `claude setup-token` and complete the browser authorization.\n" +
         "2. Update `CLAUDE_CODE_OAUTH_TOKEN` in `/etc/default/tidepool`. Set " +
@@ -136,7 +147,7 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
           recommendation: "token rotated",
         },
       ],
-      cli_auth_expiry_warning: true,
+      cli_auth_expiry_warning: expiry,
     },
     now,
     BOARD_WORKER_ID,

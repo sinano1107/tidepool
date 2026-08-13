@@ -217,7 +217,7 @@ export interface ServerOptions {
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: live Claude authentication probe. */
   cliAuth?: CliAuthCheck;
-  /** ADR 0070: optional configured expiry used only for advance warning. */
+  /** ADR 0075: optional configured expiry used only for advance warning. */
   cliAuthExpiresAt?: Date;
   /** ADR 0024 / issues #211 and #236: the board's GitHub identity, for
    *  pickup- and completion-time fetches of a remote-backed workspace. Absent
