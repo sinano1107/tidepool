@@ -1,4 +1,23 @@
+import xtermHeadless from "@xterm/headless";
 import { offsetMinutesEastOfUtc } from "./tz.js";
+
+const { Terminal } = xtermHeadless;
+
+/** Applies a raw PTY capture to a terminal of the same dimensions and returns
+ *  the composed screen text (ADR 0074). `write` is asynchronous: reading the
+ *  buffer before its callback would race the terminal parser. */
+export async function composeTerminalScreen(capture: string, cols: number, rows: number): Promise<string> {
+  const terminal = new Terminal({ cols, rows, allowProposedApi: true });
+  try {
+    await new Promise<void>((resolve) => terminal.write(capture, resolve));
+    return Array.from(
+      { length: terminal.buffer.active.length },
+      (_, index) => terminal.buffer.active.getLine(index)?.translateToString(true) ?? "",
+    ).join("\n");
+  } finally {
+    terminal.dispose();
+  }
+}
 
 /** A single window's utilization as observed via the interactive TUI's
  *  `/usage` panel (ADR 0028). `resetsAt` is always a full instant: session

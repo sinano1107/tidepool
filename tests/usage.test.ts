@@ -1,5 +1,19 @@
 import { expect, it } from "vitest";
-import { evaluateThrottle, parseUsage } from "../src/usage.js";
+import { composeTerminalScreen, evaluateThrottle, parseUsage } from "../src/usage.js";
+import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
+
+it("Pi の実測差分描画を合成すると、ストリームに無い fable ラベルと全 usage を読める(issue #323)", async () => {
+  expect(PI_USAGE_CAPTURE_2_1_221).not.toContain("Current week (Fable)");
+
+  const screen = await composeTerminalScreen(PI_USAGE_CAPTURE_2_1_221, 200, 50);
+
+  expect(screen).toContain("Current week (Fable)");
+  expect(parseUsage(screen, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: { percent: 66, resetsAt: new Date("2026-08-14T07:59:00.000Z") },
+    week: { percent: 4, resetsAt: new Date("2026-08-20T03:59:00.000Z") },
+    fable: { percent: 7, resetsAt: new Date("2026-08-20T04:00:00.000Z") },
+  });
+});
 
 // ラズパイ実機で `claude --safe-mode` の /usage パネルを PTY 越しにキャプチャした生バイト列から
 // 抜粋(issue #80 実測)。ANSI エスケープ・カーソル移動・プログレスバーのブロック文字を含む。
@@ -7,10 +21,11 @@ import { evaluateThrottle, parseUsage } from "../src/usage.js";
 const REAL_PTY_CAPTURE =
   "Current session\r\x1b[2C\x1b[1B\x1b[22m\x1b[48;2;80;83;112m\x1b[38;2;177;185;249m███████████████████████████████████               \x1b[54G\x1b[39m\x1b[49m70%\x1b[58Gused\r\x1b[2C\x1b[1B\x1b[38;2;153;153;153mResets 1:30pm (Asia/Tokyo)\r\x1b[2C\x1b[2B\x1b[39m\x1b[1mCurrent week (all models)\r\x1b[2C\x1b[1B\x1b[22m\x1b[48;2;80;83;112m\x1b[38;2;177;185;249m██████████████▍                                   \x1b[54G\x1b[39m\x1b[49m28%\x1b[58Gused\r\x1b[2C\x1b[1B\x1b[38;2;153;153;153mResets Jul 23 at 1pm (Asia/Tokyo)";
 
-it("実機で観測した PTY 生キャプチャ(ANSI・カーソル移動混じり)から session/week の使用率と reset 時刻をパースする(issue #80)", () => {
+it("実機で観測した PTY 生キャプチャ(ANSI・カーソル移動混じり)を合成して session/week の使用率と reset 時刻をパースする(issue #80)", async () => {
   const now = new Date("2026-07-17T00:00:00.000Z"); // 両方の reset より前、同年
 
-  const snapshot = parseUsage(REAL_PTY_CAPTURE, now);
+  const screen = await composeTerminalScreen(REAL_PTY_CAPTURE, 200, 50);
+  const snapshot = parseUsage(screen, now);
 
   expect(snapshot.session).toEqual({
     percent: 70,
@@ -117,10 +132,11 @@ const REAL_PTY_CAPTURE_WITH_FABLE =
   REAL_PTY_CAPTURE +
   "\r\x1b[3C\x1b[2B\x1b[39m\x1b[1mCurrent week (Fable)\x1b[22m\x1b[K\r\x1b[3C\x1b[1B\x1b[48;2;80;83;112m\x1b[38;2;177;185;249m██████████████████████████████████████            \x1b[55G\x1b[39m\x1b[49m75%\x1b[59Gused\r\x1b[3C\x1b[1B\x1b[38;2;153;153;153mResets Jul 23 at 1pm (Asia/Tokyo)";
 
-it("fable 行(Current week (Fable))のある実機キャプチャから fable ウィンドウの使用率と reset 時刻をパースする(issue #126)", () => {
+it("fable 行(Current week (Fable))のある実機キャプチャを合成して fable ウィンドウの使用率と reset 時刻をパースする(issue #126)", async () => {
   const now = new Date("2026-07-17T00:00:00.000Z");
 
-  const snapshot = parseUsage(REAL_PTY_CAPTURE_WITH_FABLE, now);
+  const screen = await composeTerminalScreen(REAL_PTY_CAPTURE_WITH_FABLE, 200, 50);
+  const snapshot = parseUsage(screen, now);
 
   // session/week は従来どおり読めたまま
   expect(snapshot.session?.percent).toBe(70);
@@ -131,10 +147,11 @@ it("fable 行(Current week (Fable))のある実機キャプチャから fable �
   });
 });
 
-it("fable 行が無いパネル(Pro プラン — 個別制限が存在しない)は fable=null で、session/week の読みは損なわれない(ADR 0030: 不在は fail-closed にしない)", () => {
+it("fable 行が無いパネル(Pro プラン — 個別制限が存在しない)を合成しても fable=null で、session/week の読みは損なわれない(ADR 0030: 不在は fail-closed にしない)", async () => {
   const now = new Date("2026-07-17T00:00:00.000Z");
 
-  const snapshot = parseUsage(REAL_PTY_CAPTURE, now);
+  const screen = await composeTerminalScreen(REAL_PTY_CAPTURE, 200, 50);
+  const snapshot = parseUsage(screen, now);
 
   expect(snapshot.fable).toBeNull();
   expect(snapshot.session?.percent).toBe(70);
