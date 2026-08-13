@@ -63,6 +63,22 @@ describe("ClaudeDraftClient", () => {
     await expect(client.draftTask("set up the greenhouse sensor", "English")).rejects.toThrow();
   });
 
+  it("CLI が is_error と共に返した result は、全 one-shot 呼び出し元へ診断として運ぶ(issue #306)", async () => {
+    const client = new ClaudeDraftClient({
+      exec: async () =>
+        JSON.stringify({
+          is_error: true,
+          terminal_reason: "api_error",
+          result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+        }),
+    });
+
+    const expected = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    await expect(client.draftTask("dump", "English")).rejects.toThrow(expected);
+    await expect(client.draftHandoff("dump", "English")).rejects.toThrow(expected);
+    await expect(client.inspectIssue({ title: "t", body: "b", comments: [] })).rejects.toThrow(expected);
+  });
+
   it("必須フィールド(title/purpose/completion_criteria)が欠けている場合、draftTask は reject する", async () => {
     const client = new ClaudeDraftClient({
       exec: async () =>

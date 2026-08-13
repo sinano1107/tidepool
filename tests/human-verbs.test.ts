@@ -1,5 +1,6 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
+import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -20,7 +21,10 @@ import { FakeDraftClient, FakeGitHubClient } from "./fakes.js";
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
 let db: Db;
-afterEach(() => db?.close());
+afterEach(() => {
+  db?.close();
+  vi.restoreAllMocks();
+});
 
 function onlyQuestion(db: Db): Task {
   const questions = listBoard(db).filter((task) => task.type === "question");
@@ -247,12 +251,15 @@ it("人間の登録 door は LLM 検査の不合格をサジェスト付き Gate
   expect(listBoard(db)).toEqual([]);
 });
 
-it("人間の登録 door は LLM 到達不能を GateFailure として返す", async () => {
+it("人間の登録 door は envelope の完全な LLM 診断をログに残し、切り詰めて返す(issue #306)", async () => {
   db = openDb(":memory:");
   const github = new FakeGitHubClient();
   github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
-  const draftClient = new FakeDraftClient();
-  draftClient.scriptInspectionFailure(new Error("LLM is down"));
+  const fullError = `Failed to authenticate: ${"x".repeat(220)}`;
+  const draftClient = new ClaudeDraftClient({
+    exec: async () => JSON.stringify({ is_error: true, result: fullError }),
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
   const result = await registerThroughHumanDoor(
     {
@@ -267,9 +274,34 @@ it("人間の登録 door は LLM 到達不能を GateFailure として返す", a
 
   expect(result).toEqual({
     ok: false,
-    failure: { kind: "inspection_unavailable", error: "LLM inspection failed" },
+    failure: {
+      kind: "inspection_unavailable",
+      error: `${fullError.slice(0, 200)}… See server logs for full details.`,
+    },
   });
+  expect(warn).toHaveBeenCalledWith("[issue inspection] LLM inspection failed", fullError);
   expect(listBoard(db)).toEqual([]);
+});
+
+it("人間の登録 door は exec が投げた完全な LLM 診断もログに残し、切り詰めて返す(issue #306)", async () => {
+  db = openDb(":memory:");
+  const github = new FakeGitHubClient();
+  github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
+  const fullError = "Failed to authenticate: OAuth session expired and could not be refreshed";
+  const draftClient = new ClaudeDraftClient({ exec: async () => { throw new Error(fullError); } });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const result = await registerThroughHumanDoor(
+    { db, github, draftClient, workspace: { name: "tidepool", path: "/workspaces/tidepool" } },
+    { type: "work", github_issue_number: 189, workspace: "tidepool" },
+    () => NOW,
+  );
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "inspection_unavailable", error: `${fullError} See server logs for full details.` },
+  });
+  expect(warn).toHaveBeenCalledWith("[issue inspection] LLM inspection failed", fullError);
 });
 
 it("人間の登録 door は work child を人間 decompose として登録する", async () => {
