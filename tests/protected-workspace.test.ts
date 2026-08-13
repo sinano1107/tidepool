@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
+  addTaskChange,
   api,
   bootTidepool,
   FULL_HANDOFF,
@@ -107,6 +108,7 @@ it("completing a low-risk task in a protected workspace under auto_if_ci_green a
 
   const task = await registerWork(t, "apply the approved diff", "registry");
   await t.clock.advance(HOUR);
+  addTaskChange(registry.path, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
+  addTaskChange,
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
   git,
@@ -38,6 +39,7 @@ describe("issue #27: workspace ごとの保護ブランチ設定", () => {
 
     const task = await registerWork(t, "runs against master", "prod");
     await t.clock.advance(HOUR);
+    addTaskChange(prod.path, task.id);
     expect(git(prod.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
 
     const client = await mcpClient(t.mcpBaseUrl, task.id);
