@@ -129,7 +129,7 @@ const profileFieldsSchema = z.object({
   guidance: z.string(),
   assignable_to: z.array(z.string()),
   allowed_workspaces: z.array(z.string()),
-  merge: z.enum(["escalate", "auto_if_ci_green"]).optional(),
+  merge: z.enum(["escalate", "auto_if_ci_green", "external"]),
   confirm_dangerous: z.boolean().default(false),
 });
 

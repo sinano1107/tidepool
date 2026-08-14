@@ -24,6 +24,7 @@ assignable_to:
   - "${AUTHORITY_WILDCARD}"
 allowed_workspaces:
   - "${AUTHORITY_WILDCARD}"
+merge: external
 `;
 
 const WORKSPACES_YAML = `tidepool:

@@ -12,11 +12,12 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
     ).toEqual([]);
   });
 
-  it("merge 省略も安全 — escalate と同じく空配列", () => {
+  it("merge: external も安全 — 盤面の無人動作をゼロにする値なので確認は増えない(ADR 0079 決定5)", () => {
     expect(
       dangerousValues({
         assignable_to: ["deckhand"],
         allowed_workspaces: ["tidepool"],
+        merge: "external",
       }),
     ).toEqual([]);
   });
@@ -36,6 +37,7 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
       dangerousValues({
         assignable_to: ["*"],
         allowed_workspaces: ["tidepool"],
+        merge: "escalate",
       }),
     ).toContain("assignable_to_wildcard");
   });
@@ -45,6 +47,7 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
       dangerousValues({
         assignable_to: ["deckhand"],
         allowed_workspaces: ["*"],
+        merge: "escalate",
       }),
     ).toContain("allowed_workspaces_wildcard");
   });

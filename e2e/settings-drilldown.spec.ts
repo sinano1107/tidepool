@@ -44,7 +44,13 @@ const PROFILES = [
     allowed_workspaces: ["tidepool"],
     merge: "escalate",
   },
-  { name: "reviewer", guidance: "read-only", assignable_to: ["anemone"], allowed_workspaces: ["*"] },
+  {
+    name: "reviewer",
+    guidance: "read-only",
+    assignable_to: ["anemone"],
+    allowed_workspaces: ["*"],
+    merge: "external",
+  },
 ];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -143,6 +149,25 @@ test("profile record renders tags and the wildcard", async ({ boot, page }) => {
   await expect(page.getByText("read-only")).toBeVisible();
   await expect(page.getByText("* — every workspace")).toBeVisible();
   await expect(page.getByText("merge authority", { exact: true })).toBeVisible();
+});
+
+test("a new profile cannot be added until the merge dial is chosen (ADR 0079: 省略の口を UI にも作らない)", async ({ boot, page }) => {
+  const t = await boot({ ...seams, profileAdmin: { list: () => PROFILES as any, create: async () => {} } } as any);
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByTestId("settings-section-profiles").click();
+  await page.getByRole("button", { name: "Add" }).click();
+
+  const add = page.getByRole("button", { name: "Add authority profile — commits to the registry" });
+  await page
+    .getByPlaceholder("letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later")
+    .fill("cautious");
+  await page.getByPlaceholder("how an agent carrying this authority should act").fill("ask first");
+  // 名前も guidance も埋まっているのに、ダイヤル未選択のままでは保存できない
+  await expect(add).toBeDisabled();
+
+  await page.getByLabel("Merge authority").selectOption("external");
+  await expect(add).toBeEnabled();
 });
 
 test("an unreachable registry says so on the index, not behind a lie", async ({ boot, page }) => {

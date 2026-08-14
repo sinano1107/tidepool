@@ -69,7 +69,8 @@ export type EventPayload =
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
   // issue #11: a completed work task's handoff opened this PR — pr_number is
-  // the durable link the merge dial (escalate/auto_if_ci_green) reads back
+  // the durable link the merge dial (escalate / auto_if_ci_green; `external`
+  // leaves the PR to GitHub's own surface — ADR 0079) reads back
   | { kind: "pr_opened"; pr_number: number }
   // issue #11: the merge dial's escalate answer actually merged this PR,
   // right after a live CI check confirmed success immediately beforehand

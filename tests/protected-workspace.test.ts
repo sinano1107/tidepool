@@ -91,6 +91,37 @@ it("a child targeting a non-protected workspace registers directly even when isP
 
 const MINUTE = 60 * 1000;
 
+it("completing a task in a protected workspace under the external merge dial still asks for a human merge (ADR 0079: the resource-side invariant outranks the dial)", async () => {
+  const sandbox = await makeWorkspace(dirs, "sandbox");
+  const { workspace: registry } = await makeRemoteBackedWorkspace(dirs, "registry");
+  const workspaces: Record<string, WorkspaceConfig> = { sandbox, registry };
+  t = await bootTidepool({
+    workspace: sandbox,
+    resolveWorkspace: (name) => {
+      const ws = workspaces[name ?? "sandbox"];
+      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
+      return ws;
+    },
+    authority: { name: "standard", guidance: "", merge: "external" },
+    isProtectedWorkspace: (name) => name === "registry",
+  });
+
+  const task = await registerWork(t, "apply the approved diff", "registry");
+  await t.clock.advance(HOUR);
+  addTaskChange(registry.path, task.id);
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const mergeQuestion = board.find(
+    (x: any) => x.type === "question" && x.title.startsWith("merge PR"),
+  );
+  expect(mergeQuestion).toBeDefined();
+  expect(mergeQuestion.question_items[0].options).toEqual(["merge", "hold"]);
+});
+
 it("completing a low-risk task in a protected workspace under auto_if_ci_green asks for merge approval immediately, instead of queueing for auto-merge", async () => {
   const sandbox = await makeWorkspace(dirs, "sandbox");
   const { workspace: registry } = await makeRemoteBackedWorkspace(dirs, "registry");

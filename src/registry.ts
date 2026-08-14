@@ -64,30 +64,34 @@ export interface AgentDefinition {
  *  `allowed_workspaces` (issue #11) is its spatial analogue: a decompose
  *  child explicitly targeting a workspace outside this list converts the
  *  same way. A profile loaded from the registry (via `authorityProfileSchema`
- *  below) always carries both fields explicitly — omission is a load error
- *  (issue #41: "absent means unrestricted" was a silent footgun for registry
- *  authors). Unrestricted must instead be spelled out with the wildcard
+ *  below) always carries all three machine-read fields explicitly — omission
+ *  is a load error (issue #41: "absent means unrestricted" was a silent
+ *  footgun for registry authors; ADR 0079 決定1 extends the same line to
+ *  `merge`). Unrestricted must instead be spelled out with the wildcard
  *  `"*"`, which `outsideAuthority` (tasks.ts) reads as "no restriction". The
  *  fields stay optional on this TS type only because `AuthorityProfile`
  *  values are also hand-built in code paths that never go through the
  *  registry loader — the read-only reviewer floor (`REVIEWER_AUTHORITY_PROFILE`
  *  in mcp.ts, ADR 0013) and per-task `resolveAuthority` overrides in tests —
- *  where omission legitimately still means unrestricted; issue #41 is
- *  registry-side profile hygiene only, not a change to that code-side shape.
- *  `merge` (issue #11) is the authority dial over merging a task's PR —
- *  "merge is the start of external effect": `escalate` always asks a human
- *  first; `auto_if_ci_green` merges unattended once CI passes, but only for a
- *  task that carries no risk (a risky task always asks, regardless of the
- *  dial). Absent means no automatic merge decision at all — a PR opens and
- *  nothing more happens (today's pre-#11 baseline), same "absent is inert"
- *  shape as the other two fields once loaded from code rather than the
- *  registry. */
+ *  where omission legitimately still means unrestricted / inert; issue #41 and
+ *  ADR 0079 are registry-side profile hygiene only, not a change to that
+ *  code-side shape.
+ *  `merge` (issue #11, three-valued since ADR 0079) declares **which surface
+ *  the human's merge decision lives on** — "merge is the start of external
+ *  effect": `escalate` puts it on the board's question surface (always asks a
+ *  human first); `auto_if_ci_green` keeps it inside the profile's own
+ *  authority, merging unattended once CI passes, but only for a task that
+ *  carries no risk (a risky task always asks, regardless of the dial);
+ *  `external` puts it outside the board entirely — GitHub's own PR surface
+ *  (review UI, required reviews, merge queue, or a merge authority off the
+ *  board) — so the board opens the PR and takes no further action, and does
+ *  not observe it either (ADR 0079 決定2). */
 export interface AuthorityProfile {
   name: string;
   guidance: string;
   assignable_to?: string[];
   allowed_workspaces?: string[];
-  merge?: "escalate" | "auto_if_ci_green";
+  merge?: "escalate" | "auto_if_ci_green" | "external";
 }
 
 const workspaceEntrySchema = z.object({
@@ -573,7 +577,7 @@ export const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
   assignable_to: z.array(z.string()),
   allowed_workspaces: z.array(z.string()),
-  merge: z.enum(["escalate", "auto_if_ci_green"]).optional(),
+  merge: z.enum(["escalate", "auto_if_ci_green", "external"]),
 });
 
 /** No authority profile in the registry carries this name — thrown both when
