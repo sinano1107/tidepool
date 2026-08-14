@@ -33,11 +33,10 @@ export type DangerousValueReason =
 /** Pure judgment of whether a profile's values grant broad power (issue #76):
  *  `merge: auto_if_ci_green` (unattended merge) and either list carrying the
  *  wildcard (unrestricted delegation/workspace access). The enumeration counts
- *  values that widen the board's unattended outward effect, which is why
- *  `merge: external` is deliberately absent (ADR 0079 決定5): it takes the
- *  board's unattended action to zero and still requires a human act to merge.
- *  This layer only reports — it never blocks a write; enforcing confirmation
- *  on a dangerous profile is phase 2's API contract. */
+ *  values that widen the board's **unattended** outward effect — which is why
+ *  `merge: external` is deliberately absent (ADR 0079 決定5). This layer only
+ *  reports — it never blocks a write; enforcing confirmation on a dangerous
+ *  profile is phase 2's API contract. */
 export function dangerousValues(
   input: Pick<CreateProfileInput, "assignable_to" | "allowed_workspaces" | "merge">,
 ): DangerousValueReason[] {

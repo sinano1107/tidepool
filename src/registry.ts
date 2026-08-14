@@ -77,15 +77,10 @@ export interface AgentDefinition {
  *  ADR 0079 are registry-side profile hygiene only, not a change to that
  *  code-side shape.
  *  `merge` (issue #11, three-valued since ADR 0079) declares **which surface
- *  the human's merge decision lives on** — "merge is the start of external
- *  effect": `escalate` puts it on the board's question surface (always asks a
- *  human first); `auto_if_ci_green` keeps it inside the profile's own
- *  authority, merging unattended once CI passes, but only for a task that
- *  carries no risk (a risky task always asks, regardless of the dial);
- *  `external` puts it outside the board entirely — GitHub's own PR surface
- *  (review UI, required reviews, merge queue, or a merge authority off the
- *  board) — so the board opens the PR and takes no further action, and does
- *  not observe it either (ADR 0079 決定2). */
+ *  the human's merge decision lives on**: `escalate` the board's question
+ *  surface, `auto_if_ci_green` the profile's own authority (unattended once CI
+ *  passes, never for a risky task), `external` GitHub's own PR surface — the
+ *  board opens the PR and neither asks nor observes (ADR 0079 決定2). */
 export interface AuthorityProfile {
   name: string;
   guidance: string;

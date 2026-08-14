@@ -1148,11 +1148,9 @@ const DANGEROUS_REASON_LABEL = {
     'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
 };
 
-// The merge dial (registry.ts): required and three-valued since ADR 0079 — it
-// declares which surface the human's merge decision lives on, and omission is
-// not one of the answers. The leading entry is therefore a placeholder for
-// "not chosen yet", not a default meaning: Save stays disabled until one of the
-// three is picked. auto_if_ci_green is the dangerous one.
+// The merge dial (registry.ts): required and three-valued since ADR 0079, so
+// the leading entry is "not chosen yet", not a default — Save stays disabled
+// until one of the three is picked. auto_if_ci_green is the dangerous one.
 const MERGE_OPTIONS = [
   { value: '', label: 'choose one — the dial is required' },
   { value: 'escalate', label: 'escalate — always ask a human before merging' },
@@ -1168,8 +1166,7 @@ function sameStrings(a, b) {
 }
 
 // The four profile fields as the API wants them: all four always present —
-// the registry schema requires every one of them, merge included (ADR 0079),
-// so the caller must have gated Save on a chosen dial before getting here.
+// the registry schema requires every one, merge included (ADR 0079).
 function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
   return {
     guidance,
