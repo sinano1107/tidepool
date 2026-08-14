@@ -161,7 +161,7 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
 export function startCliAuthExpiryWarningTimer(deps: {
   db: Db;
   clock: Clock;
-  expiresAt?: Date;
+  expiresAt: Date;
 }): () => void {
   return deps.clock.setInterval(
     () => warnCliAuthExpiry(deps.db, deps.expiresAt, deps.clock.now()),
