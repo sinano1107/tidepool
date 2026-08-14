@@ -50,7 +50,7 @@ describe("createProfile: 正常系(issue #76)", () => {
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("create authority profile risky via WebUI");
   });
 
-  it("merge を省略すると frontmatter にキー自体が現れず、ラウンドトリップでも undefined のまま", async () => {
+  it("merge: external も他の2値と同じくファイルに書かれ、ラウンドトリップで戻る(ADR 0079: 省略の口は無い)", async () => {
     const registryDir = await makeMainRegistry();
 
     await createProfile(
@@ -59,6 +59,7 @@ describe("createProfile: 正常系(issue #76)", () => {
         guidance: "Read-only work.",
         assignable_to: ["*"],
         allowed_workspaces: ["*"],
+        merge: "external",
       },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
@@ -66,7 +67,7 @@ describe("createProfile: 正常系(issue #76)", () => {
     // ADR 0052 決定6: 書き込みは使い捨て worktree の中で起こる — registryDir 自身
     // の working tree ではなく着地先の ref から読む(loadRegistry と同じ規律)
     const raw = git(registryDir, "show", "main:authority/readonly.yaml");
-    expect(raw).not.toContain("merge");
+    expect(raw).toContain("merge: external");
     expect(raw).not.toContain("name");
     const profile = loadRegistry(registryDir, "purely-local").authority.readonly;
     expect(profile).toEqual({
@@ -74,7 +75,7 @@ describe("createProfile: 正常系(issue #76)", () => {
       guidance: "Read-only work.",
       assignable_to: ["*"],
       allowed_workspaces: ["*"],
-      merge: undefined,
+      merge: "external",
     });
   });
 });
@@ -84,6 +85,7 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
     guidance: "g",
     assignable_to: ["*"],
     allowed_workspaces: ["*"],
+    merge: "escalate" as const,
   };
 
   it.each(["../escape", "a/b", "", ".", ".."])(
@@ -113,7 +115,13 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
 });
 
 describe("createProfile: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
-  const input = { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] };
+  const input = {
+    name: "risky",
+    guidance: "g",
+    assignable_to: ["*"],
+    allowed_workspaces: ["*"],
+    merge: "escalate" as const,
+  };
 
   it("registry クローンが registry-edit タスクのブランチに居ても、リモート main へコミットが着地する", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
@@ -167,7 +175,7 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
   it("registry の全プロファイルを全フィールドで返す", async () => {
     const registryDir = await makeMainRegistry();
     await createProfile(
-      { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] },
+      { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "external" },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
@@ -179,7 +187,7 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
       guidance: "g",
       assignable_to: ["*"],
       allowed_workspaces: ["*"],
-      merge: undefined,
+      merge: "external",
     });
   });
 });

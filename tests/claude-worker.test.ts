@@ -453,7 +453,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("roster の human 行: assignable_to に human があれば固定の1行で描画する(issue #43 / ADR 0014)", async () => {
     const { start, calls } = await makeWorker({
-      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - navigator\n  - human\nallowed_workspaces:\n  - "*"\n`,
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - navigator\n  - human\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
       "agents/navigator.md": NAVIGATOR_MD,
     });
     start();
@@ -470,7 +470,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("assignable_to の Object.prototype 由来のキー(toString 等)は drift と同じく黙ってスキップされ roster に混入しない(issue #69)", async () => {
     const { start, calls } = await makeWorker({
-      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - toString\nallowed_workspaces:\n  - "*"\n`,
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - toString\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
     });
     start();
     const args = calls[0]!.args;
@@ -497,7 +497,7 @@ describe("ClaudeCodeWorker", () => {
     const registryGuidance = "Registry authority guidance must not appear in a review.";
     const { start, calls } = await makeWorker({
       "authority/standard.yaml":
-        `guidance: ${registryGuidance}\nassignable_to:\n  - \"*\"\nallowed_workspaces:\n  - \"*\"\n`,
+        `guidance: ${registryGuidance}\nassignable_to:\n  - \"*\"\nallowed_workspaces:\n  - \"*\"\nmerge: external\n`,
       "agents/keeper.md": KEEPER_MD,
     });
     start("task-review-authority", null, "keeper", "review");

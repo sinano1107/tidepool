@@ -32,7 +32,9 @@ export type DangerousValueReason =
 
 /** Pure judgment of whether a profile's values grant broad power (issue #76):
  *  `merge: auto_if_ci_green` (unattended merge) and either list carrying the
- *  wildcard (unrestricted delegation/workspace access). This layer only
+ *  wildcard (unrestricted delegation/workspace access). The enumeration counts
+ *  values that widen the board's **unattended** outward effect — which is why
+ *  `merge: external` is deliberately absent (ADR 0079 決定5). This layer only
  *  reports — it never blocks a write; enforcing confirmation on a dangerous
  *  profile is phase 2's API contract. */
 export function dangerousValues(
@@ -127,22 +129,22 @@ function sameEffectiveFields(existing: AuthorityProfile, input: UpdateProfileInp
 }
 
 /** `AuthorityProfile` → `authority/<name>.yaml` の中身(name は書かない —
- *  ファイル名由来)。parseAuthorityFile が同じフィールドを読み戻す。merge は
- *  省略時キー自体を出さない — ラウンドトリップで undefined のまま。 */
-function serializeProfileFile(profile: AuthorityProfile): string {
-  const meta: Record<string, unknown> = {
+ *  ファイル名由来)。parseAuthorityFile が同じフィールドを読み戻す。machine が
+ *  読む3フィールドはどれも常に書かれる — merge も含め省略の口は無い(ADR 0079
+ *  決定1: 省略 = 意味を持つ、という footgun を作らない)。 */
+function serializeProfileFile(profile: CreateProfileInput): string {
+  return stringifyYaml({
     guidance: profile.guidance,
     assignable_to: profile.assignable_to,
     allowed_workspaces: profile.allowed_workspaces,
-  };
-  if (profile.merge !== undefined) meta.merge = profile.merge;
-  return stringifyYaml(meta);
+    merge: profile.merge,
+  });
 }
 
 /** Writes `authority/<name>.yaml` inside a disposable worktree and lands it
  *  under the board's own identity (ADR 0020 / ADR 0052 決定6) — the
  *  profile-admin's commitAgentFile. */
-function commitProfileFile(deps: ProfileAdminDeps, profile: AuthorityProfile, message: string): void {
+function commitProfileFile(deps: ProfileAdminDeps, profile: CreateProfileInput, message: string): void {
   commitToRegistry(
     deps.registry,
     deps.githubAuth,

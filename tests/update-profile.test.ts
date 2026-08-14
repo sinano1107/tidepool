@@ -61,6 +61,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
         guidance: "Rewritten guidance.",
         assignable_to: ["deckhand"],
         allowed_workspaces: ["tidepool"],
+        merge: "escalate",
       },
       { registry: { dir: registryDir, mode: "remote-backed" } },
     );
@@ -86,6 +87,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
           guidance: "Rewritten guidance.",
           assignable_to: ["deckhand"],
           allowed_workspaces: ["tidepool"],
+          merge: "escalate",
         },
         { registry: { dir: registryDir, mode: "remote-backed" } },
       ),
@@ -107,6 +109,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
       guidance: "Prefer reversible actions. Anything irreversible is outside your authority.\n",
       assignable_to: ["*"],
       allowed_workspaces: ["*"],
+      merge: "external" as const,
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
@@ -118,7 +121,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
   it("配列フィールドは中身の比較 — 同じ要素の再送はコミットなしの成功(参照比較のバグ回帰)", async () => {
     const registryDir = await makeMainRegistry({
       "authority/reviewer.yaml":
-        "guidance: review only\nassignable_to:\n  - deckhand\n  - tako\nallowed_workspaces:\n  - tidepool\n",
+        "guidance: review only\nassignable_to:\n  - deckhand\n  - tako\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
     });
     const before = git(registryDir, "rev-parse", "HEAD");
 
@@ -128,6 +131,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         guidance: "review only",
         assignable_to: ["deckhand", "tako"],
         allowed_workspaces: ["tidepool"],
+        merge: "escalate",
       },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
@@ -138,7 +142,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
   it("assignable_to の中身だけが変われば(要素数は同じ)コミットする — 長さだけの比較への後退を防ぐ", async () => {
     const registryDir = await makeMainRegistry({
       "authority/reviewer.yaml":
-        "guidance: review only\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\n",
+        "guidance: review only\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
     });
     const before = git(registryDir, "rev-parse", "HEAD");
 
@@ -148,6 +152,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         guidance: "review only",
         assignable_to: ["tako"],
         allowed_workspaces: ["tidepool"],
+        merge: "escalate",
       },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
@@ -164,7 +169,7 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
 
     await expect(
       updateProfile(
-        { name: "ghost", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"] },
+        { name: "ghost", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "escalate" },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);

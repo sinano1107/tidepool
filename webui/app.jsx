@@ -1148,12 +1148,14 @@ const DANGEROUS_REASON_LABEL = {
     'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
 };
 
-// The merge dial (registry.ts): absent means no automatic merge decision, so an
-// unset value is the safe default. auto_if_ci_green is the dangerous one.
+// The merge dial (registry.ts): required and three-valued since ADR 0079, so
+// the leading entry is "not chosen yet", not a default — Save stays disabled
+// until one of the three is picked. auto_if_ci_green is the dangerous one.
 const MERGE_OPTIONS = [
-  { value: '', label: 'no automatic merge decision (default)' },
+  { value: '', label: 'choose one — the dial is required' },
   { value: 'escalate', label: 'escalate — always ask a human before merging' },
   { value: 'auto_if_ci_green', label: 'auto_if_ci_green — merge unattended once CI is green' },
+  { value: 'external', label: 'external — the merge lives on GitHub, off the board' },
 ];
 
 // Order-sensitive content equality — the profile save payload's arrays compare
@@ -1163,15 +1165,14 @@ function sameStrings(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-// The four profile fields as the API wants them: arrays always present (the
-// registry schema requires them), merge omitted when unset so a round-trip
-// leaves it undefined rather than sending an invalid empty enum.
+// The four profile fields as the API wants them: all four always present —
+// the registry schema requires every one, merge included (ADR 0079).
 function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
   return {
     guidance,
     assignable_to: assignableTo,
     allowed_workspaces: allowedWorkspaces,
-    merge: merge || undefined,
+    merge,
   };
 }
 
@@ -1461,8 +1462,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
           <FieldRow label="allowed workspaces" kind={(profile.allowed_workspaces ?? []).length ? 'tags' : 'unset'}
             tags={profile.allowed_workspaces ?? []} wildcardHint="every workspace"
             unsetLabel="no workspace — this authority can't act anywhere" />
-          <FieldRow label="merge authority" kind={profile.merge ? 'mono' : 'unset'} value={profile.merge ?? ''}
-            unsetLabel="no automatic merge decision" />
+          <FieldRow label="merge authority" kind="mono" value={profile.merge} />
         </React.Fragment>
       )}
       {open && (
@@ -1473,7 +1473,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
             assignableTo={assignableTo} setAssignableTo={setAssignableTo}
             allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
             merge={merge} setMerge={setMerge} />
-          <EditActions dirty={dirty} busy={busy} saveLabel="Save changes — commits to the registry"
+          <EditActions dirty={dirty} ok={!!merge} busy={busy} saveLabel="Save changes — commits to the registry"
             onSave={submit} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
@@ -1809,7 +1809,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
         assignableTo={assignableTo} setAssignableTo={setAssignableTo}
         allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
         merge={merge} setMerge={setMerge} />
-      <EditActions ok={registryNameOk(name)} busy={busy} saveLabel="Add authority profile — commits to the registry"
+      <EditActions ok={registryNameOk(name) && !!merge} busy={busy} saveLabel="Add authority profile — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
       {dialog}
     </Card>

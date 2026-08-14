@@ -1553,9 +1553,10 @@ const DANGEROUS_REASON_LABEL = {
   allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains."
 };
 const MERGE_OPTIONS = [
-  { value: "", label: "no automatic merge decision (default)" },
+  { value: "", label: "choose one \u2014 the dial is required" },
   { value: "escalate", label: "escalate \u2014 always ask a human before merging" },
-  { value: "auto_if_ci_green", label: "auto_if_ci_green \u2014 merge unattended once CI is green" }
+  { value: "auto_if_ci_green", label: "auto_if_ci_green \u2014 merge unattended once CI is green" },
+  { value: "external", label: "external \u2014 the merge lives on GitHub, off the board" }
 ];
 function sameStrings(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
@@ -1565,7 +1566,7 @@ function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
     guidance,
     assignable_to: assignableTo,
     allowed_workspaces: allowedWorkspaces,
-    merge: merge || void 0
+    merge
   };
 }
 function ProfileListInput({ label, hint, candidates, wildcardHint, values, onChange }) {
@@ -1786,15 +1787,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
       wildcardHint: "every workspace",
       unsetLabel: "no workspace \u2014 this authority can't act anywhere"
     }
-  ), /* @__PURE__ */ React.createElement(
-    FieldRow,
-    {
-      label: "merge authority",
-      kind: profile.merge ? "mono" : "unset",
-      value: profile.merge ?? "",
-      unsetLabel: "no automatic merge decision"
-    }
-  )), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(FieldRow, { label: "merge authority", kind: "mono", value: profile.merge })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     ProfileFields,
     {
       agentNames,
@@ -1812,6 +1805,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
     EditActions,
     {
       dirty,
+      ok: !!merge,
       busy,
       saveLabel: "Save changes \u2014 commits to the registry",
       onSave: submit,
@@ -2117,7 +2111,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
   ), /* @__PURE__ */ React.createElement(
     EditActions,
     {
-      ok: registryNameOk(name),
+      ok: registryNameOk(name) && !!merge,
       busy,
       saveLabel: "Add authority profile \u2014 commits to the registry",
       onSave: submit,

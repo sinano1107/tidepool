@@ -49,7 +49,35 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   expect(question.question_items[0].recommendation).toBe("merge");
 });
 
-it("completing a work task with no merge dial configured opens the PR without any merge-decision question (pre-#11 baseline)", async () => {
+it("completing a work task under the external merge dial opens the PR and stops there — no question, nothing queued for the unattended poll (ADR 0079)", async () => {
+  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({
+    workspace: ws,
+    authority: { name: "standard", guidance: "", merge: "external" },
+  });
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  addTaskChange(ws.path, task.id);
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.close();
+
+  expect(t.github.requests).toHaveLength(1);
+  const done = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+  expect(done.pr_number).toBe(1);
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.filter((x: any) => x.type === "question")).toEqual([]);
+
+  // the merge lives on GitHub's own PR surface: no unattended merge is queued
+  // either, so the poll must stay idle rather than merge behind the human
+  t.github.scriptCiStatus("success");
+  await t.clock.advance(60 * 1000);
+  expect(t.github.merged).toEqual([]);
+});
+
+it("completing a work task under a code-built profile carrying no dial opens the PR without any merge-decision question (the reviewer floor's shape — registry profiles must declare one)", async () => {
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "ship the feature");

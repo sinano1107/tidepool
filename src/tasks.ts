@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin, type EventPayload, taskDecisionLog } from "./events.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
-import type { RosterAgent } from "./registry.js";
+import type { MergeDial, RosterAgent } from "./registry.js";
 
 /** Worker id attributed to bare (non ?task=) sessions, e.g. the JSON API. */
 export const HUMAN_WORKER_ID = "human";
@@ -1364,10 +1364,13 @@ export interface ChildSpec extends TaskContent {
 export interface AuthorityContext {
   assignable_to?: string[];
   allowed_workspaces?: string[];
-  /** The merge dial (issue #11): `escalate` makes recordPrOpened register a
-   *  merge-decision question for every PR; anything else takes no action
-   *  here (`auto_if_ci_green`'s auto-merge poll is a separate mechanism). */
-  merge?: "escalate" | "auto_if_ci_green";
+  /** The merge dial (issue #11, three-valued since ADR 0079 — see registry.ts):
+   *  `escalate` makes recordPrOpened register a merge-decision question for
+   *  every PR; `auto_if_ci_green` queues it for the unattended poll (merge.ts);
+   *  `external` leaves it to GitHub. Undefined stays possible on this code-side
+   *  type — a hand-built profile (the reviewer floor, ADR 0013) carries no dial
+   *  — and is inert like `external`. */
+  merge?: MergeDial;
 }
 
 /** Options fixed by the server for a merge-decision question (issue #11) —
@@ -1511,8 +1514,10 @@ export function clearPendingAutoMerge(db: Db, taskId: string): void {
  *  GitHubClient dependency). `auto_if_ci_green` asks the same way for a task
  *  that carries risk (never silently auto-merges a risky change, regardless
  *  of the dial); a low-risk task instead queues for the unattended CI poll
- *  (merge.ts). Anything else (no dial configured) takes no further action —
- *  today's pre-#11 baseline. A task executing against a protected workspace
+ *  (merge.ts). `external` leaves the merge to GitHub's own PR surface: the PR
+ *  opens and the board takes no further action — a declared inertness, not a
+ *  residual one, so it is spelled as its own case below (ADR 0079).
+ *  A task executing against a protected workspace
  *  (CONTEXT.md / ADR 0013) always asks, same as `escalate`, overriding
  *  whatever dial (including none) the executing worker's profile carries —
  *  "PR to a protected workspace always needs a human merge" is a
@@ -1536,36 +1541,34 @@ export function recordPrOpened(
       payload: { kind: "pr_opened", pr_number: prNumber },
       at: now,
     });
-    if (isProtected || authority?.merge === "escalate") {
-      registerMergeQuestion(
-        db,
-        task,
-        prNumber,
-        isProtected
-          ? `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
-            `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`
-          : `"${task.title}" completed and opened PR #${prNumber}. Merge it now?`,
-        "merge",
-        workerId,
-        now,
-        origin,
+    const ask = (purpose: string) =>
+      registerMergeQuestion(db, task, prNumber, purpose, "merge", workerId, now, origin);
+    if (isProtected) {
+      ask(
+        `"${task.title}" completed and opened PR #${prNumber} against a protected ` +
+          `workspace — always needs a human merge, regardless of the merge dial. Merge it now?`,
       );
-    } else if (authority?.merge === "auto_if_ci_green") {
-      if (task.risk_flag) {
-        registerMergeQuestion(
-          db,
-          task,
-          prNumber,
-          `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
-            `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
-          "merge",
-          workerId,
-          now,
-          origin,
-        );
-      } else {
-        queuePendingAutoMerge(db, task.id, prNumber);
-      }
+      return;
+    }
+    switch (authority?.merge) {
+      case "escalate":
+        ask(`"${task.title}" completed and opened PR #${prNumber}. Merge it now?`);
+        break;
+      case "auto_if_ci_green":
+        if (task.risk_flag) {
+          ask(
+            `"${task.title}" completed and opened PR #${prNumber}, but carries risk — ` +
+              `auto_if_ci_green never auto-merges a risky task. Merge it now?`,
+          );
+        } else {
+          queuePendingAutoMerge(db, task.id, prNumber);
+        }
+        break;
+      case "external":
+      case undefined:
+        // 宣言された不作為(ADR 0079 決定2)。undefined は手組み profile
+        // (reviewer floor)だけが到達する。
+        break;
     }
   })();
 }

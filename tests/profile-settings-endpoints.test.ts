@@ -22,6 +22,7 @@ it("POST /api/profiles は profile を createProfile へ渡し、201 を返す",
     guidance: "Stay in your lane.",
     assignable_to: [],
     allowed_workspaces: [],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(201);
@@ -32,6 +33,7 @@ it("POST /api/profiles は profile を createProfile へ渡し、201 を返す",
       guidance: "Stay in your lane.",
       assignable_to: [],
       allowed_workspaces: [],
+      merge: "escalate",
     },
   ]);
 });
@@ -111,6 +113,7 @@ it("assignable_to の wildcard も confirm なしは 409 で対応コードを�
     guidance: "Can delegate to anyone.",
     assignable_to: ["*"],
     allowed_workspaces: [],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(409);
@@ -127,6 +130,7 @@ it("allowed_workspaces の wildcard も confirm なしは 409 で対応コード
     guidance: "Any workspace.",
     assignable_to: [],
     allowed_workspaces: ["*"],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(409);
@@ -179,6 +183,7 @@ it("PATCH /api/profiles/:name は URL の名前と body を updateProfile へ渡
     guidance: "Updated guidance.",
     assignable_to: ["tako"],
     allowed_workspaces: ["tidepool"],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(200);
@@ -189,6 +194,7 @@ it("PATCH /api/profiles/:name は URL の名前と body を updateProfile へ渡
       guidance: "Updated guidance.",
       assignable_to: ["tako"],
       allowed_workspaces: ["tidepool"],
+      merge: "escalate",
     },
   ]);
 });
@@ -207,6 +213,7 @@ it("編集でも危険値 + confirm なしは 409 で拒否し、保存しない
     guidance: "Now roams everywhere.",
     assignable_to: [],
     allowed_workspaces: ["*"],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(409);
@@ -228,6 +235,7 @@ it("編集でも confirmDangerous: true なら保存が通る", async () => {
     guidance: "Now roams everywhere.",
     assignable_to: [],
     allowed_workspaces: ["*"],
+    merge: "escalate",
     confirmDangerous: true,
   });
 
@@ -238,6 +246,7 @@ it("編集でも confirmDangerous: true なら保存が通る", async () => {
       guidance: "Now roams everywhere.",
       assignable_to: [],
       allowed_workspaces: ["*"],
+      merge: "escalate",
     },
   ]);
 });
@@ -255,6 +264,7 @@ it("編集対象の未知 name(UnknownAuthorityProfileError)は 404", async () =
     guidance: "g",
     assignable_to: [],
     allowed_workspaces: [],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(404);
@@ -270,7 +280,7 @@ it("不正入力は 400(POST/PATCH とも zod で拒否)", async () => {
 
   // name 欠落
   expect(
-    (await api(t.baseUrl, "POST", "/api/profiles", { guidance: "g", assignable_to: [], allowed_workspaces: [] })).status,
+    (await api(t.baseUrl, "POST", "/api/profiles", { guidance: "g", assignable_to: [], allowed_workspaces: [], merge: "escalate" })).status,
   ).toBe(400);
   // 未知キー(strictObject を extend しても strict が残る)
   expect(
@@ -279,6 +289,7 @@ it("不正入力は 400(POST/PATCH とも zod で拒否)", async () => {
         guidance: "g",
         assignable_to: [],
         allowed_workspaces: [],
+        merge: "escalate",
         bogus: 1,
       })
     ).status,
@@ -299,6 +310,7 @@ it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 
     guidance: "g",
     assignable_to: [],
     allowed_workspaces: [],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(502);
@@ -307,10 +319,10 @@ it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 
 it("POST/PATCH は profileAdmin 未設定なら 503", async () => {
   t = await bootTidepool();
   expect(
-    (await api(t.baseUrl, "POST", "/api/profiles", { name: "x", guidance: "g", assignable_to: [], allowed_workspaces: [] })).status,
+    (await api(t.baseUrl, "POST", "/api/profiles", { name: "x", guidance: "g", assignable_to: [], allowed_workspaces: [], merge: "escalate" })).status,
   ).toBe(503);
   expect(
-    (await api(t.baseUrl, "PATCH", "/api/profiles/x", { guidance: "g", assignable_to: [], allowed_workspaces: [] })).status,
+    (await api(t.baseUrl, "PATCH", "/api/profiles/x", { guidance: "g", assignable_to: [], allowed_workspaces: [], merge: "escalate" })).status,
   ).toBe(503);
 });
 
@@ -328,6 +340,7 @@ it("不正な profile 名(InvalidAuthorityProfileNameError)は 400", async () =>
     guidance: "g",
     assignable_to: [],
     allowed_workspaces: [],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(400);
@@ -347,6 +360,7 @@ it("その他の外部失敗は 502", async () => {
     guidance: "g",
     assignable_to: [],
     allowed_workspaces: [],
+    merge: "escalate",
   });
 
   expect(res.status).toBe(502);
