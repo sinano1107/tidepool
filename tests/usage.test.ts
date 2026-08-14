@@ -15,6 +15,42 @@ it("Pi の実測差分描画を合成すると、ストリームに無い fable 
   });
 });
 
+it("実機キャプチャの Refreshing… 付き stale seed は全ウィンドウを観測不能にする(issue #334)", async () => {
+  const marker = "Refreshing…";
+  const markerOffset = PI_USAGE_CAPTURE_2_1_221.indexOf(marker);
+  expect(markerOffset).not.toBe(-1);
+  const screen = await composeTerminalScreen(
+    PI_USAGE_CAPTURE_2_1_221.slice(0, markerOffset + marker.length),
+    200,
+    50,
+  );
+
+  expect(parseUsage(screen, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: null,
+    week: null,
+    fable: null,
+  });
+});
+
+// 失敗系マーカーは CLI 2.1.232 バンドルの実読に基づく合成済み画面テキスト(ADR 0078)。
+const SYNTHETIC_USAGE_SCREEN =
+  "Current session\n10% used\nResets 1pm (Asia/Tokyo)\n" +
+  "Current week (all models)\n20% used\nResets Aug 20 at 1pm (Asia/Tokyo)\n" +
+  "Current week (Fable)\n30% used\nResets Aug 20 at 1pm (Asia/Tokyo)";
+
+it.each([
+  "Showing last-known usage",
+  "could not refresh",
+  "Failed to load usage data",
+  "(rate limited — try again in a moment)",
+])("%s 付き画面は全ウィンドウを観測不能にする(issue #334)", (marker) => {
+  expect(parseUsage(`${SYNTHETIC_USAGE_SCREEN}\n${marker}`, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: null,
+    week: null,
+    fable: null,
+  });
+});
+
 // issue #287 で Pi 上の静止 session window を ADR 0074 の画面合成に通して
 // 確定した最終画面。初期フレームの仮 Resets 行は redraw 後には残らない。
 const IDLE_SESSION_SCREEN = `Current session
