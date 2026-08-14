@@ -1397,6 +1397,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     setPaceOffsets(db, parsed.data);
+    // どの window を変えたか・値が実際に変わったかによらず、保存成功後は即時再評価
+    // する。古い offset で立った throttle_state を tick 待ちにすると、緩和後も最大
+    // 1時間 pickup と表示が止まり続ける(issue #296)。
+    onQueueHeadChanged();
     res.json(getPaceOffsets(db));
   });
 
