@@ -70,4 +70,14 @@ One line per ADR — the line is the H1 title, which states the decision itself.
 - [0066](0066-workspaces-are-born-local-and-publish-grants-the-remote.md) — 盤面は GitHub 上に repo を作らない — workspace はローカルに生まれ、`publish` が remote 正本を与える
 - [0067](0067-repo-access-is-repaired-by-accepting-one-invitation-on-the-failure-path.md) — repo アクセスは、到達に失敗した瞬間に招待1枚を受諾して直す
 - [0068](0068-the-halt-enumeration-is-one-module-and-skipped-is-resource-scoped.md) — 盤面全体の停止は1つの読み口 module が列挙で答え、`skipped` は資源単位の理由だけを運ぶ
+- [0069](0069-shadow-debris-deletion-is-the-tree-rules-only-exception.md) — サンドボックスの shadow 残骸の削除は slot-release tree rule の唯一の例外である
+- [0070](0070-cli-auth-uses-a-setup-token-and-its-death-halts-the-board.md) — 動力の認証は長寿命トークンへ移し、その失効は cliAuth として盤面を止める
+- [0071](0071-board-git-author-identity-is-pinned-by-env-injection.md) — 盤面の git コミット名義は env 注入で固定する — ambient env に負けない
+- [0072](0072-workspace-scoped-domain-allowlist-opens-worker-egress.md) — worker の外部到達は workspace 単位のドメイン許可リストで開ける: 既定は全閉、開ける判断は registry 編集時の人間が引き受ける
+- [0073](0073-a-completion-with-nothing-to-carry-requires-no-landing.md) — 運ぶものが無い完了は着地を要求しない
+- [0074](0074-usage-scrape-reads-the-composed-screen-not-the-stream.md) — 使用量の読み取りは PTY ストリームではなく合成後の画面を読む — @xterm/headless による端末エミュレーション
 - [0075](0075-claude-token-expiry-metadata-is-optional.md) — Claude token の期限 metadata は任意であり、事前警告は設定された期限ごとに1度だけ出す
+- [0076](0076-an-idle-window-is-observed-absence-not-observation-failure.md) — 未開始(Idle)ウィンドウは「観測できた不在」であり観測の失敗ではない — fail-closed に落とさない
+- [0077](0077-auth-detection-is-just-in-time-and-the-periodic-probe-is-retired.md) — 認証の検出は実害の瞬間に行い、定期プローブは廃止する
+- [0078](0078-a-marker-bearing-usage-screen-is-an-untrusted-observation.md) — リフレッシュ未完了/失敗のマーカーが付いた /usage 画面は信頼できない観測 — parseUsage がゲートで観測不能へ畳む
+- [0079](0079-the-merge-dial-is-three-valued-and-external-declares-a-merge-outside-the-board.md) — merge ダイヤルは3値必須 — `external` が盤面の外の merge を宣言し、正典の主張は盤面決裁の merge に狭まる
