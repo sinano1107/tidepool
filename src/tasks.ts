@@ -1456,20 +1456,20 @@ export function registerMergeQuestion(
  *  nobody decided anything, so there is no `question_answered` event, no
  *  recorded option, and no recommendation-acceptance statistic — a "hold"
  *  submitted against an already-merged PR must never read back as a hold
- *  decision. Settles only a still-open question (the merged check is an
- *  awaited network read, so a human answer can land in that window) and
- *  reports whether it was this call that settled it. */
+ *  decision. Settles only a still-open question — the merged check is an
+ *  awaited network read, so another path can settle it in that window, and
+ *  a second observation must not re-stamp an already-closed question. */
 export function settleMergeQuestionAsObserved(
   db: Db,
   questionId: string,
   prNumber: number,
   now: Date,
-): boolean {
-  return db.transaction(() => {
+): void {
+  db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
       .run(questionId);
-    if (changes === 0) return false;
+    if (changes === 0) return;
     appendEvent(db, {
       taskId: questionId,
       workerId: BOARD_WORKER_ID,
@@ -1477,7 +1477,6 @@ export function settleMergeQuestionAsObserved(
       payload: { kind: "pr_merge_observed", pr_number: prNumber },
       at: now,
     });
-    return true;
   })();
 }
 

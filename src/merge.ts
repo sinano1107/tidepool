@@ -41,6 +41,7 @@ export async function checkPendingAutoMerges(
       // the GitHub merge call runs before the row is cleared: if it throws, the
       // task stays queued and the next poll retries it, rather than the row
       // vanishing with no merge and no question to fall back on
+      let observed = false;
       try {
         await github.mergePullRequest({ path: workspace.path, number: pr_number });
       } catch (err) {
@@ -50,22 +51,17 @@ export async function checkPendingAutoMerges(
         if (!(await github.isPullRequestMerged({ path: workspace.path, number: pr_number }))) {
           throw err;
         }
-        clearPendingAutoMerge(db, task_id);
-        appendEvent(db, {
-          taskId: task_id,
-          workerId: BOARD_WORKER_ID,
-          origin: "board",
-          payload: { kind: "pr_merge_observed", pr_number },
-          at: now,
-        });
-        continue;
+        observed = true;
       }
       clearPendingAutoMerge(db, task_id);
       appendEvent(db, {
         taskId: task_id,
-        workerId: HUMAN_WORKER_ID,
+        // 執行者と事実の綴りが揃って切り替わる(ADR 0079 決定4)
+        workerId: observed ? BOARD_WORKER_ID : HUMAN_WORKER_ID,
         origin: "board",
-        payload: { kind: "pr_merged", pr_number },
+        payload: observed
+          ? { kind: "pr_merge_observed", pr_number }
+          : { kind: "pr_merged", pr_number },
         at: now,
       });
       continue;
@@ -84,14 +80,6 @@ export async function checkPendingAutoMerges(
     );
   }
 }
-
-/** How often the external-merge scan below runs (ADR 0079 決定3). Deliberately
- *  slower than the 60s CI poll and deliberately its own interval: what waits
- *  here is a human's judgement (hours to days), not a CI run, and riding the
- *  60s poll would widen its firing condition by a whole time scale. The scan
- *  buys comfort only — correctness is the answer-time backstop's job, so this
- *  number is not a thing to "fix" down to 60s. */
-export const EXTERNAL_MERGE_SCAN_INTERVAL_MS = 10 * 60 * 1000;
 
 /** ADR 0079 決定3's first trigger: read the PRs of the merge questions the
  *  board still holds a decision on, and retire any whose PR someone already

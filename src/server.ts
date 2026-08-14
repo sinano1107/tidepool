@@ -25,11 +25,7 @@ import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter, handleRootWorkLanding } from "./mcp.js";
-import {
-  checkPendingAutoMerges,
-  EXTERNAL_MERGE_SCAN_INTERVAL_MS,
-  observeExternalMerges,
-} from "./merge.js";
+import { checkPendingAutoMerges, observeExternalMerges } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import {
@@ -446,6 +442,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // freshness a human's pending judgement needs is human-scale, and folding
   // this into the 60s poll above would widen that poll's firing condition
   // from "the auto-merge queue is non-empty" to "a merge question is open".
+  // The scan buys comfort only (correctness is the answer-time backstop's
+  // job), so the 10 minutes is not a thing to "fix" down to 60 seconds.
   const stopExternalMergeScan =
     autoMergeWorkspaceResolver && options.github
       ? options.clock.setInterval(() => {
@@ -455,7 +453,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
             autoMergeWorkspaceResolver,
             options.clock.now(),
           );
-        }, EXTERNAL_MERGE_SCAN_INTERVAL_MS)
+        }, 10 * 60 * 1000)
       : undefined;
   // question push notifications (issue #14): a poll rather than a hook at
   // every registerTask call site, same shape as the two polls above. Tracks

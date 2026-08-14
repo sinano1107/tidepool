@@ -387,11 +387,13 @@ export async function submitAnswer(
   // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
   // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
   if (mergePr !== null && deps.github) {
-    const alreadyMerged = await Promise.resolve()
-      .then(() => resolveWorkspaceForAnswer(deps, task.workspace, "cannot read the merge state"))
-      .then((ws) => deps.github!.isPullRequestMerged({ path: ws.path, number: mergePr }))
-      .catch(() => false);
-    if (alreadyMerged && settleMergeQuestionAsObserved(deps.db, task.id, mergePr, now())) {
+    let alreadyMerged = false;
+    try {
+      const ws = resolveWorkspaceForAnswer(deps, task.workspace, "cannot read the merge state");
+      alreadyMerged = await deps.github.isPullRequestMerged({ path: ws.path, number: mergePr });
+    } catch {}
+    if (alreadyMerged) {
+      settleMergeQuestionAsObserved(deps.db, task.id, mergePr, now());
       return getTask(deps.db, task.id)!;
     }
   }
