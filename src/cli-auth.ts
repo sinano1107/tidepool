@@ -11,7 +11,7 @@ export type CliAuthResult =
 
 export type CliAuthCheck = () => Promise<CliAuthResult>;
 
-export const CLI_AUTH_PROBE_INTERVAL_MS = 30 * 60 * 1000;
+export const CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS = 30 * 60 * 1000;
 const CLI_AUTH_EXPIRY_WARNING_MS = 30 * 24 * 60 * 60 * 1000;
 const ISO_EXPIRY = /^(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 
@@ -155,34 +155,16 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
   );
 }
 
-/** Periodic Board-call probe. Only a definitive unauthorized result creates
- * the quarantine; an unknown result is not promoted out of throttle's
- * existing fail-closed posture (ADR 0070). */
-export function startCliAuthMonitor(deps: {
+/** Periodically checks the configured expiry date. This intentionally makes
+ * no Claude call: authentication is detected only on a real use of Claude
+ * (ADR 0077). */
+export function startCliAuthExpiryWarningTimer(deps: {
   db: Db;
   clock: Clock;
-  check: CliAuthCheck;
   expiresAt?: Date;
-}): { probeNow: () => Promise<void>; stop: () => void } {
-  let running: Promise<void> | null = null;
-  const probeNow = (): Promise<void> => {
-    if (running) return running;
-    running = (async () => {
-      warnCliAuthExpiry(deps.db, deps.expiresAt, deps.clock.now());
-      if (openCliAuthQuestion(deps.db)) return;
-      let result: CliAuthResult;
-      try {
-        result = await deps.check();
-      } catch (err) {
-        console.warn("[cli-auth] authentication probe failed without a definitive result", err);
-        return;
-      }
-      if (result.status === "unauthorized") quarantineCliAuth(deps.db, deps.clock.now());
-    })().finally(() => {
-      running = null;
-    });
-    return running;
-  };
-  const stop = deps.clock.setInterval(() => void probeNow(), CLI_AUTH_PROBE_INTERVAL_MS);
-  return { probeNow, stop };
+}): () => void {
+  return deps.clock.setInterval(
+    () => warnCliAuthExpiry(deps.db, deps.expiresAt, deps.clock.now()),
+    CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
+  );
 }
