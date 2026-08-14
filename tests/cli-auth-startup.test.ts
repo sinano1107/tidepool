@@ -1,7 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import {
   CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
-  CLI_AUTH_QUESTION_TITLE,
   quarantineCliAuth,
 } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";

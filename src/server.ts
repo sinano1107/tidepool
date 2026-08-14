@@ -6,7 +6,11 @@ import type { AgentAdmin } from "./agent-create.js";
 import { createApiRouter } from "./api.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
-import { startCliAuthExpiryWarningTimer, type CliAuthCheck, warnCliAuthExpiry } from "./cli-auth.js";
+import {
+  CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
+  type CliAuthCheck,
+  warnCliAuthExpiry,
+} from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import {
   type ContainmentCapability,
@@ -563,13 +567,13 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // **await する**: 起動が返った時点で盤面の封じ込め状態が確定していてほしい
   // (実 HTTP を1往復するので、投げっぱなしだと「起動直後は無検査」の窓ができる)。
   if (containment) await containmentPickupBlocked(db, containment, options.clock.now());
-  warnCliAuthExpiry(db, options.cliAuthExpiresAt, options.clock.now());
-  const stopCliAuthExpiryWarning = options.cliAuthExpiresAt
-    ? startCliAuthExpiryWarningTimer({
-        db,
-        clock: options.clock,
-        expiresAt: options.cliAuthExpiresAt,
-      })
+  const cliAuthExpiresAt = options.cliAuthExpiresAt;
+  warnCliAuthExpiry(db, cliAuthExpiresAt, options.clock.now());
+  const stopCliAuthExpiryWarning = cliAuthExpiresAt
+    ? options.clock.setInterval(
+        () => warnCliAuthExpiry(db, cliAuthExpiresAt, options.clock.now()),
+        CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
+      )
     : undefined;
 
   return {

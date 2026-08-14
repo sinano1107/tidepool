@@ -1,4 +1,3 @@
-import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
@@ -152,19 +151,5 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
     now,
     BOARD_WORKER_ID,
     "board",
-  );
-}
-
-/** Periodically checks the configured expiry date. This intentionally makes
- * no Claude call: authentication is detected only on a real use of Claude
- * (ADR 0077). */
-export function startCliAuthExpiryWarningTimer(deps: {
-  db: Db;
-  clock: Clock;
-  expiresAt: Date;
-}): () => void {
-  return deps.clock.setInterval(
-    () => warnCliAuthExpiry(deps.db, deps.expiresAt, deps.clock.now()),
-    CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
   );
 }
