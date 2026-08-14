@@ -1531,7 +1531,7 @@ export function listPendingAutoMerges(db: Db): PendingAutoMerge[] {
 }
 
 /** The merge decisions the board still holds (ADR 0079 決定3) — the slow
- *  external-merge scan's whole reading list. `external` never registers one,
+ *  outside-merge scan's whole reading list. `external` never registers one,
  *  so a dial that declared the merge outside the board is out of scope by
  *  construction, not by a filter that could drift. Empty means the scan makes
  *  no network call at all. */

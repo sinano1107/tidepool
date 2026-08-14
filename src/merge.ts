@@ -88,7 +88,7 @@ export async function checkPendingAutoMerges(
  *  requests: the reading list is the board's own decision surface, never all
  *  open PRs (an `external` dial registers no question, so its PRs are out of
  *  scope by construction — the declaration stays honest). */
-export async function observeExternalMerges(
+export async function observeMergesOutsideBoard(
   db: Db,
   github: GitHubClient,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,

@@ -25,7 +25,7 @@ import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter, handleRootWorkLanding } from "./mcp.js";
-import { checkPendingAutoMerges, observeExternalMerges } from "./merge.js";
+import { checkPendingAutoMerges, observeMergesOutsideBoard } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import {
@@ -438,16 +438,16 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
           );
         }, 60 * 1000)
       : undefined;
-  // the external-merge scan (ADR 0079 決定3): its own, slower interval — the
+  // the outside-merge scan (ADR 0079 決定3): its own, slower interval — the
   // freshness a human's pending judgement needs is human-scale, and folding
   // this into the 60s poll above would widen that poll's firing condition
   // from "the auto-merge queue is non-empty" to "a merge question is open".
   // The scan buys comfort only (correctness is the answer-time backstop's
   // job), so the 10 minutes is not a thing to "fix" down to 60 seconds.
-  const stopExternalMergeScan =
+  const stopOutsideMergeScan =
     autoMergeWorkspaceResolver && options.github
       ? options.clock.setInterval(() => {
-          void observeExternalMerges(
+          void observeMergesOutsideBoard(
             db,
             options.github!,
             autoMergeWorkspaceResolver,
@@ -600,7 +600,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       new Promise((resolve, reject) => {
         stopTriageWatchdog();
         stopAutoMergePoll?.();
-        stopExternalMergeScan?.();
+        stopOutsideMergeScan?.();
         stopNotificationPoll();
         stopCliAuthExpiryWarning?.();
         watchdog?.stop();
