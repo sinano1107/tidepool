@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
   CLI_AUTH_EXPIRY_WARNING_TITLE,
   resolveCliAuthExpiry,
 } from "../src/cli-auth.js";
@@ -86,4 +87,25 @@ it("期限まで30日より長ければ更新questionを立てない(#320)", asy
   });
 
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json).toEqual([]);
+});
+
+it("期限警告タイマーは期限入りを検知してもClaude認証をprobeしない(ADR 0077)", async () => {
+  let calls = 0;
+  t = await bootTidepool({
+    cliAuth: async () => {
+      calls += 1;
+      return { status: "unauthorized", reason: "API returned 401" };
+    },
+    cliAuthExpiresAt: new Date(30 * 24 * 60 * 60 * 1000 + 60 * 1000),
+  });
+
+  await t.clock.advance(CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS);
+
+  const questions = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter(
+    (task) => task.title === CLI_AUTH_EXPIRY_WARNING_TITLE,
+  );
+  expect({ calls, questions: questions.map((task) => task.title) }).toEqual({
+    calls: 0,
+    questions: [CLI_AUTH_EXPIRY_WARNING_TITLE],
+  });
 });

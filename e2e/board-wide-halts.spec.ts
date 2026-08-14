@@ -1,3 +1,5 @@
+import { quarantineCliAuth } from "../src/cli-auth.js";
+import { openDb } from "../src/db.js";
 import { usagePanelText } from "../tests/fakes.js";
 import { api, HOUR, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
@@ -56,9 +58,10 @@ test("Claude 認証が失効したら slot と queue ↑ の toast が同じ停�
   boot,
   page,
 }) => {
-  const t = await boot({
-    cliAuth: async () => ({ status: "unauthorized", reason: "API returned 401" }),
-  });
+  const t = await boot();
+  const db = openDb(`${t.dir}/board.sqlite`);
+  quarantineCliAuth(db, t.clock.now());
+  db.close();
   await registerWork(t, "waits for Claude authentication repair");
 
   await page.goto(t.baseUrl);

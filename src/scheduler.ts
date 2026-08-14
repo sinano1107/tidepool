@@ -61,6 +61,9 @@ async function checkThrottle(
     try {
       const auth = await cliAuth();
       if (auth.status === "unauthorized") quarantineCliAuth(db, clock.now());
+      else if (auth.status === "unknown") {
+        console.warn("[cli-auth] usage failure could not be classified", auth.reason);
+      }
     } catch (err) {
       console.warn("[cli-auth] usage failure could not be classified", err);
     }

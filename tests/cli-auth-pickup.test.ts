@@ -1,18 +1,19 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
-afterEach(() => t?.stop());
+afterEach(() => {
+  t?.stop();
+  vi.restoreAllMocks();
+});
 
 it("checkUsage がnullでも追加probeで401が確定したときだけcliAuth questionを立てる(ADR 0070)", async () => {
   let checks = 0;
   t = await bootTidepool({
     cliAuth: async () => {
       checks += 1;
-      return checks === 1
-        ? { status: "authenticated" }
-        : { status: "unauthorized", reason: "API returned 401" };
+      return { status: "unauthorized", reason: "API returned 401" };
     },
   });
   t.worker.scriptUsage(null);
@@ -26,13 +27,14 @@ it("checkUsage がnullでも追加probeで401が確定したときだけcliAuth 
     started: t.worker.started,
     questionTitles: tasks.filter((candidate) => candidate.type === "question").map((candidate) => candidate.title),
   }).toEqual({
-    checks: 2,
+    checks: 1,
     started: [],
     questionTitles: [CLI_AUTH_QUESTION_TITLE],
   });
 });
 
 it("checkUsage のnullを追加probeでも分類できなければfail-closed throttleだけに留める(ADR 0070)", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   let checks = 0;
   t = await bootTidepool({
     cliAuth: async () => {
@@ -51,5 +53,9 @@ it("checkUsage のnullを追加probeでも分類できなければfail-closed th
     checks,
     questions: tasks.filter((candidate) => candidate.type === "question"),
     halts: pause.halts.map((halt: { kind: string }) => halt.kind),
-  }).toEqual({ checks: 2, questions: [], halts: ["throttle"] });
+  }).toEqual({ checks: 1, questions: [], halts: ["throttle"] });
+  expect(warn).toHaveBeenCalledWith(
+    "[cli-auth] usage failure could not be classified",
+    "probe did not return a JSON envelope",
+  );
 });
