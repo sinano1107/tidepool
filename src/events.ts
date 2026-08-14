@@ -75,6 +75,14 @@ export type EventPayload =
   // issue #11: the merge dial's escalate answer actually merged this PR,
   // right after a live CI check confirmed success immediately beforehand
   | { kind: "pr_merged"; pr_number: number }
+  // ADR 0079 決定4: the board did NOT merge this PR — it found the PR already
+  // merged on a surface it holds a decision on (an open merge question, the
+  // auto-merge queue) and retired that decision. Spelled apart from pr_merged
+  // on purpose: "the board merged it" and "the board observed it merged" are
+  // different facts, and the narrowed canon claim (judgement is the board's
+  // record only for merges the board decides) is unverifiable without the
+  // distinction
+  | { kind: "pr_merge_observed"; pr_number: number }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join

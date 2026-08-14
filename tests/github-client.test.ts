@@ -299,6 +299,26 @@ it("mergePullRequest は gh pr merge --merge を呼ぶ", async () => {
   expect(invocations).toContain("pr merge 7 --merge");
 });
 
+it("isPullRequestMerged は gh pr view --json state を読み、MERGED だけを真とする(ADR 0079)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
+  binPath = dir;
+  const logPath = join(dir, "gh-invocations.log");
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"state":"MERGED"}';; *) printf '{"state":"OPEN"}';; esac\n`,
+  );
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const client = new GhCliClient(await makeAuth());
+  expect(await client.isPullRequestMerged({ path: "/tmp", number: 7 })).toBe(true);
+  expect(await client.isPullRequestMerged({ path: "/tmp", number: 8 })).toBe(false);
+
+  const invocations = await readFile(logPath, "utf8");
+  expect(invocations).toContain("pr view 7 --json state");
+});
+
 it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
   binPath = dir;
