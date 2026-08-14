@@ -35,7 +35,7 @@ export async function checkPendingAutoMerges(
     const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
     if (status === "pending") continue;
     if (status === "success") {
-      // the external merge runs before the row is cleared: if it throws, the
+      // the GitHub merge call runs before the row is cleared: if it throws, the
       // task stays queued and the next poll retries it, rather than the row
       // vanishing with no merge and no question to fall back on
       await github.mergePullRequest({ path: workspace.path, number: pr_number });

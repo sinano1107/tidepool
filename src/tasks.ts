@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { appendEvent, type EventOrigin, type EventPayload, taskDecisionLog } from "./events.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
-import type { RosterAgent } from "./registry.js";
+import type { MergeDial, RosterAgent } from "./registry.js";
 
 /** Worker id attributed to bare (non ?task=) sessions, e.g. the JSON API. */
 export const HUMAN_WORKER_ID = "human";
@@ -1370,7 +1370,7 @@ export interface AuthorityContext {
    *  `external` leaves it to GitHub. Undefined stays possible on this code-side
    *  type — a hand-built profile (the reviewer floor, ADR 0013) carries no dial
    *  — and is inert like `external`. */
-  merge?: "escalate" | "auto_if_ci_green" | "external";
+  merge?: MergeDial;
 }
 
 /** Options fixed by the server for a merge-decision question (issue #11) —

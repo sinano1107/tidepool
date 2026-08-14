@@ -86,8 +86,14 @@ export interface AuthorityProfile {
   guidance: string;
   assignable_to?: string[];
   allowed_workspaces?: string[];
-  merge?: "escalate" | "auto_if_ci_green" | "external";
+  merge?: MergeDial;
 }
+
+/** The merge dial's values, one source for both the schema below and every TS
+ *  union that spells them (same shape as MERGE_QUESTION_OPTIONS in tasks.ts) —
+ *  a fourth value must not need a fourth edit. */
+export const MERGE_DIAL_VALUES = ["escalate", "auto_if_ci_green", "external"] as const;
+export type MergeDial = (typeof MERGE_DIAL_VALUES)[number];
 
 const workspaceEntrySchema = z.object({
   /** Absent → regulation-derived at resolution time (ADR 0018): base
@@ -572,7 +578,7 @@ export const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
   assignable_to: z.array(z.string()),
   allowed_workspaces: z.array(z.string()),
-  merge: z.enum(["escalate", "auto_if_ci_green", "external"]),
+  merge: z.enum(MERGE_DIAL_VALUES),
 });
 
 /** No authority profile in the registry carries this name — thrown both when

@@ -27,7 +27,6 @@ import {
 } from "./human-verbs.js";
 import { toolError, toolResult } from "./mcp.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
-import type { RegistryReachabilityCheck } from "./registry.js";
 import {
   InvalidAgentNameError,
   InvalidAllowedDomainError,
@@ -35,6 +34,8 @@ import {
   InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
+  MERGE_DIAL_VALUES,
+  type RegistryReachabilityCheck,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -129,7 +130,7 @@ const profileFieldsSchema = z.object({
   guidance: z.string(),
   assignable_to: z.array(z.string()),
   allowed_workspaces: z.array(z.string()),
-  merge: z.enum(["escalate", "auto_if_ci_green", "external"]),
+  merge: z.enum(MERGE_DIAL_VALUES),
   confirm_dangerous: z.boolean().default(false),
 });
 
