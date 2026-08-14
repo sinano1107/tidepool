@@ -115,6 +115,8 @@ write one, register that split with the tidepool MCP's decompose instead.`;
 // specialty prose, and this section supplies the protocol every worker shares.
 const WORKER_PROTOCOL = `## Rules of the road
 
+Write everything you put on the board — decision log lines, child task fields, handoff docs, results — in English, even when the task's payload is in another language. Human-authored text you quote stays in its original language.
+
 Do the work in the current working directory. It is the task's workspace.
 
 The tidepool MCP verbs are your only channel back to the board. Invent no side
