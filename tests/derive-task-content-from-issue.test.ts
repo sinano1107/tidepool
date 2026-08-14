@@ -6,13 +6,15 @@ it("deriveTaskContentFromIssue は issue 本文の後に全コメントを取得
   const issue: Issue = {
     title: "ログイン画面のバグ",
     body: "再現手順: ...",
-    comments: ["追加情報です"],
+    comments: ["追加情報です", "これも見てください"],
   };
 
   const content = deriveTaskContentFromIssue(issue);
 
   expect(content.title).toBe("ログイン画面のバグ");
-  expect(content.purpose).toBe("再現手順: ...\n\n## Issue comments\n\n追加情報です");
+  expect(content.purpose).toBe(
+    "再現手順: ...\n\n## Issue comments\n\n追加情報です\n\nこれも見てください",
+  );
 });
 
 it("deriveTaskContentFromIssue はコメントがない issue に空の区切りを付けず、届いた内容だけを完了基準へ指す", () => {
