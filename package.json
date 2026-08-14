@@ -19,6 +19,7 @@
     "lint:fix": "biome check --write",
     "build:webui": "node scripts/build-webui-bundle.mjs",
     "build:ds-bundle": "node scripts/build-ds-bundle.mjs",
+    "build:adr-index": "node scripts/build-adr-index.mjs",
     "preview:settings": "tsx scripts/preview-settings.ts"
   },
   "dependencies": {
