@@ -439,8 +439,11 @@ export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber
 export function deriveTaskContentFromIssue(issue: Issue): TaskContent {
   return {
     title: issue.title,
-    purpose: issue.body,
-    completion_criteria: "See the linked GitHub issue's body and comments for completion criteria.",
+    purpose:
+      issue.comments.length === 0
+        ? issue.body
+        : `${issue.body}\n\n## Issue comments\n\n${issue.comments.join("\n\n")}`,
+    completion_criteria: "See the issue content above for completion criteria.",
   };
 }
 

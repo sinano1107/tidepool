@@ -35,10 +35,8 @@ it("GET /api/tasks はissue参照タスクの内容をGitHubからlive展開し 
 
   const live = res.json.find((x: any) => x.id === issueBacked.id);
   expect(live.title).toBe("ログイン画面のバグ");
-  expect(live.purpose).toBe("再現手順: ...");
-  expect(live.completion_criteria).toBe(
-    "See the linked GitHub issue's body and comments for completion criteria.",
-  );
+  expect(live.purpose).toBe("再現手順: ...\n\n## Issue comments\n\n追加情報です");
+  expect(live.completion_criteria).toBe("See the issue content above for completion criteria.");
   expect(live.issue_live_state).toBe("live");
 
   const plain = res.json.find((x: any) => x.id === ordinary.id);

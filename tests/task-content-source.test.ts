@@ -21,8 +21,8 @@ it("TaskContentSource.liveIssue は GitHub から取得した issue を導出し
 
   await expect(source.expand()).resolves.toEqual({
     title: "ログイン画面のバグ",
-    purpose: "再現手順: ...",
-    completion_criteria: "See the linked GitHub issue's body and comments for completion criteria.",
+    purpose: "再現手順: ...\n\n## Issue comments\n\n追加情報です",
+    completion_criteria: "See the issue content above for completion criteria.",
   });
 });
 
@@ -67,7 +67,7 @@ it("contentSourceFor は issue参照タスクなら GitHub から解決した内
   await expect(source.expand()).resolves.toEqual({
     title: "ログイン画面のバグ",
     purpose: "再現手順: ...",
-    completion_criteria: "See the linked GitHub issue's body and comments for completion criteria.",
+    completion_criteria: "See the issue content above for completion criteria.",
   });
 });
 

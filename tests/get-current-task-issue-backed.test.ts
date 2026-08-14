@@ -32,10 +32,8 @@ it("get_current_task はissue参照タスクの場合、GitHubのissueから解�
     expect(result.isError ?? false).toBe(false);
     const payload = JSON.parse(result.content[0].text);
     expect(payload.title).toBe("ログイン画面のバグ");
-    expect(payload.purpose).toBe("再現手順: ...");
-    expect(payload.completion_criteria).toBe(
-      "See the linked GitHub issue's body and comments for completion criteria.",
-    );
+    expect(payload.purpose).toBe("再現手順: ...\n\n## Issue comments\n\n追加情報です");
+    expect(payload.completion_criteria).toBe("See the issue content above for completion criteria.");
   } finally {
     await client.close();
   }
