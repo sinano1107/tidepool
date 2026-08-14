@@ -81,3 +81,4 @@ One line per ADR — the line is the H1 title, which states the decision itself.
 - [0077](0077-auth-detection-is-just-in-time-and-the-periodic-probe-is-retired.md) — 認証の検出は実害の瞬間に行い、定期プローブは廃止する
 - [0078](0078-a-marker-bearing-usage-screen-is-an-untrusted-observation.md) — リフレッシュ未完了/失敗のマーカーが付いた /usage 画面は信頼できない観測 — parseUsage がゲートで観測不能へ畳む
 - [0079](0079-the-merge-dial-is-three-valued-and-external-declares-a-merge-outside-the-board.md) — merge ダイヤルは3値必須 — `external` が盤面の外の merge を宣言し、正典の主張は盤面決裁の merge に狭まる
+- [0080](0080-the-adr-index-is-generated-from-h1-and-status-lines.md) — ADR 索引は生成物 — 正典は各 ADR の H1 と Status 行
