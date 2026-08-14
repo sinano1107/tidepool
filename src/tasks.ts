@@ -1451,6 +1451,36 @@ export function registerMergeQuestion(
   );
 }
 
+/** ADR 0079 決定3/4: retires a merge question whose PR turned out to be
+ *  already merged outside the board. Deliberately not `answerQuestion`:
+ *  nobody decided anything, so there is no `question_answered` event, no
+ *  recorded option, and no recommendation-acceptance statistic — a "hold"
+ *  submitted against an already-merged PR must never read back as a hold
+ *  decision. Settles only a still-open question (the merged check is an
+ *  awaited network read, so a human answer can land in that window) and
+ *  reports whether it was this call that settled it. */
+export function settleMergeQuestionAsObserved(
+  db: Db,
+  questionId: string,
+  prNumber: number,
+  now: Date,
+): boolean {
+  return db.transaction(() => {
+    const { changes } = db
+      .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
+      .run(questionId);
+    if (changes === 0) return false;
+    appendEvent(db, {
+      taskId: questionId,
+      workerId: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "pr_merge_observed", pr_number: prNumber },
+      at: now,
+    });
+    return true;
+  })();
+}
+
 /** ADR 0053 decision 3: a purely-local root completion has no PR surface, so
  *  the board asks whether to fast-forward its task branch onto the protected
  *  branch or leave it there permanently. The task id is deliberately stored
@@ -1499,6 +1529,26 @@ export function listPendingAutoMerges(db: Db): PendingAutoMerge[] {
   return db
     .prepare("SELECT task_id, pr_number FROM pending_auto_merges")
     .all() as PendingAutoMerge[];
+}
+
+/** The merge decisions the board still holds (ADR 0079 決定3) — the slow
+ *  external-merge scan's whole reading list. `external` never registers one,
+ *  so a dial that declared the merge outside the board is out of scope by
+ *  construction, not by a filter that could drift. Empty means the scan makes
+ *  no network call at all. */
+export interface OpenMergeQuestion {
+  id: string;
+  pr_number: number;
+  workspace: string | null;
+}
+
+export function listOpenMergeQuestions(db: Db): OpenMergeQuestion[] {
+  return db
+    .prepare(
+      `SELECT id, question_pending_merge_pr AS pr_number, workspace FROM tasks
+       WHERE type = 'question' AND status = 'todo' AND question_pending_merge_pr IS NOT NULL`,
+    )
+    .all() as OpenMergeQuestion[];
 }
 
 export function clearPendingAutoMerge(db: Db, taskId: string): void {

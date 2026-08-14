@@ -25,7 +25,11 @@ import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter, handleRootWorkLanding } from "./mcp.js";
-import { checkPendingAutoMerges } from "./merge.js";
+import {
+  checkPendingAutoMerges,
+  EXTERNAL_MERGE_SCAN_INTERVAL_MS,
+  observeExternalMerges,
+} from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import {
@@ -438,6 +442,21 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
           );
         }, 60 * 1000)
       : undefined;
+  // the external-merge scan (ADR 0079 決定3): its own, slower interval — the
+  // freshness a human's pending judgement needs is human-scale, and folding
+  // this into the 60s poll above would widen that poll's firing condition
+  // from "the auto-merge queue is non-empty" to "a merge question is open".
+  const stopExternalMergeScan =
+    autoMergeWorkspaceResolver && options.github
+      ? options.clock.setInterval(() => {
+          void observeExternalMerges(
+            db,
+            options.github!,
+            autoMergeWorkspaceResolver,
+            options.clock.now(),
+          );
+        }, EXTERNAL_MERGE_SCAN_INTERVAL_MS)
+      : undefined;
   // question push notifications (issue #14): a poll rather than a hook at
   // every registerTask call site, same shape as the two polls above. Tracks
   // the quiet-hours boundary itself so crossing it folds everything
@@ -583,6 +602,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       new Promise((resolve, reject) => {
         stopTriageWatchdog();
         stopAutoMergePoll?.();
+        stopExternalMergeScan?.();
         stopNotificationPoll();
         stopCliAuthExpiryWarning?.();
         watchdog?.stop();

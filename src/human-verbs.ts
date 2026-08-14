@@ -24,6 +24,7 @@ import {
   PR_PROMOTION_FAILURE_OPTIONS,
   type RegisterTaskInput,
   registerTask,
+  settleMergeQuestionAsObserved,
   type Task,
 } from "./tasks.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
@@ -380,6 +381,20 @@ export async function submitAnswer(
   }
 
   const mergePr = task.question_pending_merge_pr;
+  // ADR 0079 決定3 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
+  // 走る — merge 済み PR は CI が赤/pending でも観測決着に到達しなければならず、
+  // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
+  // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
+  // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
+  if (mergePr !== null && deps.github) {
+    const alreadyMerged = await Promise.resolve()
+      .then(() => resolveWorkspaceForAnswer(deps, task.workspace, "cannot read the merge state"))
+      .then((ws) => deps.github!.isPullRequestMerged({ path: ws.path, number: mergePr }))
+      .catch(() => false);
+    if (alreadyMerged && settleMergeQuestionAsObserved(deps.db, task.id, mergePr, now())) {
+      return getTask(deps.db, task.id)!;
+    }
+  }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsMerge) {
     if (!deps.github) {

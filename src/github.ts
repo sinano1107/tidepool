@@ -93,6 +93,12 @@ export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   getCiStatus(ref: PrRef): Promise<CiStatus>;
   mergePullRequest(ref: PrRef): Promise<void>;
+  /** Whether this PR is already merged (ADR 0079 決定3) — the read the board
+   *  needs to tell "the merge is still mine to make" from "someone merged it
+   *  outside the board". Only asked on the two surfaces the board holds a
+   *  decision on (an open merge question, the auto-merge queue), never as a
+   *  standing watch over every open PR. */
+  isPullRequestMerged(ref: PrRef): Promise<boolean>;
   getIssue(ref: IssueRef): Promise<Issue>;
   /** Lists the repository's open issues (issue #67) — the issue-number
    *  picker's data source. No paging/search-term filter/cache: `--limit 100`,
@@ -209,6 +215,15 @@ export class GhCliClient implements GitHubClient {
       env: this.auth.env(),
       stdio: ["ignore", "pipe", "pipe"],
     });
+  }
+
+  async isPullRequestMerged(ref: PrRef): Promise<boolean> {
+    const output = execFileSync("gh", ["pr", "view", String(ref.number), "--json", "state"], {
+      cwd: ref.path,
+      env: this.auth.env(),
+      stdio: ["ignore", "pipe", "pipe"],
+    }).toString();
+    return (JSON.parse(output) as { state: string }).state === "MERGED";
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {

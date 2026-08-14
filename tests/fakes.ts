@@ -174,6 +174,9 @@ export class FakeGitHubClient implements GitHubClient {
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
   readonly ciChecks: PrRef[] = [];
   readonly merged: PrRef[] = [];
+  readonly mergeChecks: PrRef[] = [];
+  private mergedOutside = new Set<number>();
+  private mergeCheckFailures = new Map<number, Error>();
   private failure: Error | null = null;
   private issueFailure: Error | null = null;
   private issueFailures = new Map<number, Error>();
@@ -198,7 +201,31 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async mergePullRequest(ref: PrRef): Promise<void> {
+    // GitHub refuses a merge on an already-merged PR; the fake must too, or
+    // the poll's retry hole (ADR 0079 決定3) can't be reproduced here
+    if (this.mergedOutside.has(ref.number)) {
+      throw new Error(`PR #${ref.number} is already merged`);
+    }
     this.merged.push(ref);
+  }
+
+  async isPullRequestMerged(ref: PrRef): Promise<boolean> {
+    this.mergeChecks.push(ref);
+    const failure = this.mergeCheckFailures.get(ref.number);
+    if (failure) throw failure;
+    return this.mergedOutside.has(ref.number);
+  }
+
+  /** Makes the merged read on one PR throw — an offline Pi, a repo the token
+   *  lost, a GitHub outage. `gh` exits non-zero and the real client rethrows. */
+  scriptMergeCheckFailure(number: number, err: Error): void {
+    this.mergeCheckFailures.set(number, err);
+  }
+
+  /** Scripts the PR as merged by someone on GitHub's own surface, behind the
+   *  board's back (ADR 0079) — every later merge attempt on it fails. */
+  scriptMergedOutside(number: number): void {
+    this.mergedOutside.add(number);
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {
