@@ -381,10 +381,19 @@ export function startScheduler(deps: {
     // できた — 後で立てると、hourly tick と `POST /tasks/:id/move` が同時に
     // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
+    // **`throttleRevalidating` も `pickupBlocked` より手前で立てる。** 同じ gate が
+    // 実 HTTP を待つ間、最後の throttle 観測値は stale でありうる。新しい観測へ
+    // 向かっている事実を `GET /pause` が先に出せなければ、古い throttle を現在の
+    // pickup block と誤読させる(issue #297)。
+    throttleRevalidating = true;
     try {
-      if (await pickupBlocked()) return;
+      // 上位 halt により観測へ至らないなら、再評価中ではない。その halt 自身が
+      // `GET /pause` の列挙に現れるので、ここで freshness を降ろす。
+      if (await pickupBlocked()) {
+        throttleRevalidating = false;
+        return;
+      }
       let decision: ThrottleDecision;
-      throttleRevalidating = true;
       try {
         decision = await checkThrottle(db, clock, worker, cliAuth);
       } finally {

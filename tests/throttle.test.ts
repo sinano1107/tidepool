@@ -245,6 +245,37 @@ it("usage 再評価を待たず GET /api/pause は revalidating=true を返し�
   });
 });
 
+it("pickup gate の実 await 中も GET /api/pause は revalidating=true を返し、停止後に false へ戻る(issue #297)", async () => {
+  let calls = 0;
+  let enterGate!: () => void;
+  let releaseGate!: () => void;
+  const gateEntered = new Promise<void>((resolve) => {
+    enterGate = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  t = await bootTidepool({
+    sandboxCapability: () => ({ available: true }),
+    toolSurface: async () => {
+      if (++calls === 1) return { available: true };
+      enterGate();
+      await gate;
+      return { available: false, reason: "tool surface is unavailable" };
+    },
+  });
+  const task = await registerWork(t, "waits for the pickup gate");
+
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
+  await gateEntered;
+
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(true);
+  releaseGate();
+  await vi.waitFor(async () => {
+    expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(false);
+  });
+});
+
 it("usage 観測後の registry 検査中は GET /api/pause が revalidating=false を返す(ADR 0058)", async () => {
   let enterRegistry!: () => void;
   let releaseRegistry!: () => void;
