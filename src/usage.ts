@@ -344,6 +344,15 @@ function parseWeekWindow(block: string, now: Date): ObservedUsageWindow | null {
  *  missing all-models reset cannot be read from the following per-model row. */
 export function parseUsage(resultText: string, now: Date): UsageSnapshot {
   const stripped = resultText.replace(ANSI_PATTERN, "").replace(/\r/g, "\n");
+  if (
+    stripped.includes("Refreshing…") ||
+    stripped.includes("Showing last-known usage") ||
+    stripped.includes("could not refresh") ||
+    stripped.includes("Failed to load usage data") ||
+    stripped.includes("(rate limited")
+  ) {
+    return { session: null, week: null, fable: null };
+  }
   const sessionBlock = extractBlock(stripped, SESSION_LABEL, WEEK_LABEL);
   const weekBlock = extractBlock(stripped, WEEK_LABEL, FABLE_LABEL);
   // fable は per-model 行 (ADR 0030): 書式は week と同形。行が無い(Pro プラン)

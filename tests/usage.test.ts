@@ -15,6 +15,76 @@ it("Pi の実測差分描画を合成すると、ストリームに無い fable 
   });
 });
 
+it("実機キャプチャの Refreshing… 付き stale seed は全ウィンドウを観測不能にする(issue #334)", async () => {
+  const marker = "Refreshing…";
+  const markerOffset = PI_USAGE_CAPTURE_2_1_221.indexOf(marker);
+  expect(markerOffset).not.toBe(-1);
+  const screen = await composeTerminalScreen(
+    PI_USAGE_CAPTURE_2_1_221.slice(0, markerOffset + marker.length),
+    200,
+    50,
+  );
+
+  expect(parseUsage(screen, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: null,
+    week: null,
+    fable: null,
+  });
+});
+
+// 失敗系マーカーは CLI 2.1.232 バンドルの実読に基づく合成済み画面テキスト(ADR 0078)。
+it("Showing last-known usage 付き画面は全ウィンドウを観測不能にする(issue #334)", () => {
+  const screen =
+    "Current session\n10% used\nResets 1pm (Asia/Tokyo)\n" +
+    "Current week (all models)\n20% used\nResets Aug 20 at 1pm (Asia/Tokyo)\n" +
+    "Current week (Fable)\n30% used\nResets Aug 20 at 1pm (Asia/Tokyo)\nShowing last-known usage";
+
+  expect(parseUsage(screen, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: null,
+    week: null,
+    fable: null,
+  });
+});
+
+it("could not refresh 付き画面は全ウィンドウを観測不能にする(issue #334)", () => {
+  const screen =
+    "Current session\n10% used\nResets 1pm (Asia/Tokyo)\n" +
+    "Current week (all models)\n20% used\nResets Aug 20 at 1pm (Asia/Tokyo)\n" +
+    "Current week (Fable)\n30% used\nResets Aug 20 at 1pm (Asia/Tokyo)\ncould not refresh";
+
+  expect(parseUsage(screen, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: null,
+    week: null,
+    fable: null,
+  });
+});
+
+it("Failed to load usage data 付き画面は全ウィンドウを観測不能にする(issue #334)", () => {
+  const screen =
+    "Current session\n10% used\nResets 1pm (Asia/Tokyo)\n" +
+    "Current week (all models)\n20% used\nResets Aug 20 at 1pm (Asia/Tokyo)\n" +
+    "Current week (Fable)\n30% used\nResets Aug 20 at 1pm (Asia/Tokyo)\nFailed to load usage data";
+
+  expect(parseUsage(screen, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: null,
+    week: null,
+    fable: null,
+  });
+});
+
+it("`(rate limited` 付き画面は全ウィンドウを観測不能にする(issue #334)", () => {
+  const screen =
+    "Current session\n10% used\nResets 1pm (Asia/Tokyo)\n" +
+    "Current week (all models)\n20% used\nResets Aug 20 at 1pm (Asia/Tokyo)\n" +
+    "Current week (Fable)\n30% used\nResets Aug 20 at 1pm (Asia/Tokyo)\n(rate limited — try again in a moment)";
+
+  expect(parseUsage(screen, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
+    session: null,
+    week: null,
+    fable: null,
+  });
+});
+
 // issue #287 で Pi 上の静止 session window を ADR 0074 の画面合成に通して
 // 確定した最終画面。初期フレームの仮 Resets 行は redraw 後には残らない。
 const IDLE_SESSION_SCREEN = `Current session
