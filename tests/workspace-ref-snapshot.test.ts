@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createAgent } from "../src/agent-create.js";
+import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
@@ -19,7 +20,7 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
@@ -270,6 +271,130 @@ it("違反メッセージは動いた ref を名指しし、消えた行と増�
   const purpose = (await quarantineQuestion(t))?.purpose;
   expect(purpose).toContain(`was: ${before} refs/heads/sibling`);
   expect(purpose).toContain(`now: ${after} refs/heads/sibling`);
+});
+
+// ADR 0081: `for-each-ref` は symref を**解決値で**出すので、盤面が `origin/main` を
+// 1本書くとスナップショット上は2行動く —— 外科的再基準化は名指しした1行しか撮り直さない
+// ので、連動した `origin/HEAD` の行が古いまま取り残され、無実の quarantine になる。
+// 指し先で数えれば symref の行は指し先が動いても不変で、取り残しが生じない。
+it("盤面が origin/main を撮り直しても、連動する origin/HEAD で quarantine されない", async () => {
+  const { registryDir } = await makeRemoteBackedRegistry();
+  dirs.push(registryDir);
+  // clone が持つ既定ブランチの symref(本番の registry clone と同じ姿)。push -u は
+  // これを張らないので明示する
+  git(registryDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  const workspace = {
+    name: "registry",
+    path: registryDir,
+    repo: git(registryDir, "remote", "get-url", "origin"),
+  };
+  const registry = { dir: registryDir, mode: "remote-backed" as const };
+  t = await bootTidepool({
+    workspace,
+    registry,
+    boardState: { paths: [], listWorkspaces: () => [workspace] },
+    agentAdmin: { create: (input) => createAgent(input, { registry }) },
+  });
+  const task = await registerWork(t, "runs in the registry clone");
+  await t.clock.advance(HOUR);
+  const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
+
+  expect(
+    (
+      await api(t.baseUrl, "POST", "/api/agents", {
+        name: "tako",
+        authority: "standard",
+        skills: ["*"],
+        description: "General agent",
+        systemPrompt: "You are Tako.",
+      })
+    ).status,
+  ).toBe(201);
+  expect(git(registryDir, "rev-parse", "refs/remotes/origin/main")).not.toBe(before);
+
+  await complete(t, task.id);
+
+  expect(await quarantineQuestion(t)).toBeUndefined();
+});
+
+// ADR 0081: symref 自身の可動部は不変条件に残る —— 状態は解決値ではなく**指し先**で
+// あり、worker は `git symbolic-ref` / `git remote set-head` でそれを動かせる。
+// 付け替えは行差分にそのまま出て、動いた ref が名指しされる。
+it("worker が symref を付け替えれば、指し先の差として quarantine に落ちる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "repoints the remote default branch");
+  await t.clock.advance(HOUR);
+
+  git(
+    workspace.path,
+    "update-ref",
+    "refs/remotes/origin/develop",
+    git(workspace.path, "rev-parse", "refs/remotes/origin/main"),
+  );
+  git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+
+  await complete(t, task.id);
+
+  const purpose = (await quarantineQuestion(t))?.purpose;
+  expect(purpose).toContain("was: symref=refs/remotes/origin/main refs/remotes/origin/HEAD");
+  expect(purpose).toContain("now: symref=refs/remotes/origin/develop refs/remotes/origin/HEAD");
+});
+
+// ADR 0081: 削除は `guardRegistryDefaultBranch` も素通しする(`origin/HEAD` 不在は
+// 「remote 既定なし」として合格扱い)—— この不変条件だけが捕まえる。
+it("worker が symref を削除すれば quarantine に落ちる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "deletes the remote default branch symref");
+  await t.clock.advance(HOUR);
+
+  git(workspace.path, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+
+  await complete(t, task.id);
+
+  expect((await quarantineQuestion(t))?.purpose).toContain(
+    "was: symref=refs/remotes/origin/main refs/remotes/origin/HEAD",
+  );
+});
+
+// ADR 0081: 新規 symref の作成はどの守りにも掛かっていなかった —— 指し先で数えることで
+// 行が増え、名指しで出る。
+it("worker が symref を新規に作れば quarantine に落ちる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "creates a symref that was not there");
+  await t.clock.advance(HOUR);
+
+  git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+
+  await complete(t, task.id);
+
+  expect((await quarantineQuestion(t))?.purpose).toContain(
+    "now: symref=refs/remotes/origin/main refs/remotes/origin/HEAD",
+  );
+});
+
+// ADR 0081: 保存の形そのもの(db.ts の `workspace_state.ref_snapshot` の契約)。
+// symref の行だけが指し先を持ち、解決値の行はどこにも残らない。
+it("symref を持つ workspace のスナップショットは、symref の行を指し先で保存する", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  git(workspace.path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  t = await bootTidepool({ workspace });
+  await registerWork(t, "gets a snapshot at pickup");
+  await t.clock.advance(HOUR);
+
+  const db = openDb(join(t.dir, "board.sqlite"));
+  const snapshot = (
+    db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = 'sandbox'").get() as {
+      ref_snapshot: string;
+    }
+  ).ref_snapshot;
+  db.close();
+
+  expect(snapshot.split("\n")).toContain("symref=refs/remotes/origin/main refs/remotes/origin/HEAD");
 });
 
 // ADR 0064 決定4 のテーブル**6行目**(ADR 0066 決定4 / issue #285): `publish` は
