@@ -128,7 +128,7 @@ function liveTitle(t) {
 // { halts, tasks } (ADR 0068 決定6): rows and board-wide halts come from the
 // same read at the same instant, so no gap between two fetches can make the
 // rows and the slot line disagree.
-function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }) {
+function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }, yourTasks = []) {
   // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
   // ブラウザは並べ替えず、先頭を読んで kind 別コピーに写すだけ
   const halts = queueEnvelope.halts;
@@ -315,9 +315,13 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   return {
     questions, log: logEntries, queue, board: cols, icons,
     scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
-    // empty until their domain slices exist: human tasks / agent registry /
-    // out-of-authority approval questions — the kit sections render empty
-    humanTasks: [], agents: [],
+    // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
+    // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
+    // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
+    humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
+    // empty until its domain slice exists: the agent registry — the kit section
+    // renders empty
+    agents: [],
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
@@ -330,15 +334,16 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
 }
 
 async function fetchData() {
-  const [board, log, pause, candidates, triage, queue] = await Promise.all([
+  const [board, log, pause, candidates, triage, queue, yourTasks] = await Promise.all([
     fetch('/api/tasks').then((r) => r.json()),
     fetch('/api/log').then((r) => r.json()),
     fetch('/api/pause').then((r) => r.json()),
     fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
     fetch('/api/triage').then((r) => r.json()),
     fetch('/api/queue').then((r) => r.json()),
+    fetch('/api/your-tasks').then((r) => r.json()),
   ]);
-  return mapData(board, log, pause, candidates.icons, triage, queue);
+  return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);
 }
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
@@ -2455,6 +2460,85 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   );
 }
 
+// The six handoff fields (src/tasks.ts's HANDOFF_FIELDS) under the kit's own
+// labels for them (ui_kits/tidepool-webui/index.html's TP_HANDOFF_FIELDS).
+const HANDOFF_FIELDS = [
+  ['outcome', 'outcome vs criteria'],
+  ['deliverables', 'deliverable location'],
+  ['decision_refs', 'key decision refs'],
+  ['dead_ends', 'dead ends'],
+  ['resume_context', 'context to resume'],
+  ['known_issues', 'known issues (no task)'],
+];
+
+// issue #13's handoff assist, wired by issue #301: completing a human task that
+// blocks a parent. Free-text dump → the LLM drafts the six fields → the human
+// edits and confirms. `missing` is advisory only — the server exempts human
+// tasks from the handoff requirement, so an untouched, empty form still
+// completes. The draft is optional in the other direction too: no draft client
+// (or an unreachable one) is always a 503, and like the register gate's own
+// dump → draft → confirm, that just leaves the fields blank to type into.
+function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
+  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [dump, setDump] = React.useState('');
+  const [fields, setFields] = React.useState({});
+  const [missing, setMissing] = React.useState([]);
+  const [drafting, setDrafting] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const draft = async () => {
+    setDrafting(true);
+    try {
+      const d = await api(`/api/tasks/${task.id}/complete/draft`, { dump: dump.trim() });
+      setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ''])));
+      setMissing(d.missing ?? []);
+    } catch (err) {
+      say('info', 'no draft — fill it in yourself', String(err.message || err));
+    }
+    setDrafting(false);
+  };
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const handoff = Object.fromEntries(
+        HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? '').trim()]).filter(([, v]) => v),
+      );
+      await api(`/api/tasks/${task.id}/complete`, { handoff });
+      say('success', 'task completed', task.id);
+      await onCompleted();
+      onClose();
+    } catch (err) {
+      say('danger', 'complete failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return (
+    // 6欄 + ダンプ欄はビューポートより高くなる。DS の Dialog は高さを縛らないので
+    // この面自身が巻き取る — kit のモック(TpHandoffSheet)が持つ設計そのもの
+    <div style={{ padding: '20px 16px', maxHeight: '70vh', overflowY: 'auto' }}>
+      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Complete task</h1>
+      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+        "{task.title}" blocks {task.blocking} — the handoff is what that parent reads when it resumes
+      </p>
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 14 }}>
+        <Input label="How did it go?" multiline rows={3} value={dump} onChange={(e) => setDump(e.target.value)}
+          placeholder="dump it — the LLM structures it into the six fields below" />
+        <Button variant="secondary" size="lg" full disabled={!dump.trim() || drafting} onClick={draft}>
+          {drafting ? 'Drafting…' : 'Draft handoff'}
+        </Button>
+      </Card>
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {HANDOFF_FIELDS.map(([field, label]) => (
+          <Input key={field} label={label} multiline rows={2} value={fields[field] ?? ''}
+            hint={missing.includes(field) ? '⚠ the draft found nothing for this — optional' : undefined}
+            onChange={(e) => setFields((f) => ({ ...f, [field]: e.target.value }))} />
+        ))}
+        <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Done</Button>
+        <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Not yet</Button>
+      </Card>
+    </div>
+  );
+}
+
 function App() {
   const { Toast, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const [data, setData] = React.useState(null);
@@ -2471,6 +2555,9 @@ function App() {
   const [actionsTask, setActionsTask] = React.useState(null);
   const [editTaskCard, setEditTaskCard] = React.useState(null);
   const [cancelTaskCard, setCancelTaskCard] = React.useState(null);
+  // issue #301: the your-tasks row whose completion dialog is open (a row that
+  // blocks a parent), or null when closed
+  const [completeHumanCard, setCompleteHumanCard] = React.useState(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get('question'),
   );
@@ -2785,6 +2872,24 @@ function App() {
     }
   };
 
+  // Your tasks' Done (issue #13's two doors, wired here by issue #301). Which
+  // door opens is the row's own `blocking`, answered server-side: a task that
+  // holds nobody up closes in one tap with no doc at all (the human exemption
+  // in completeTask), one that blocks a parent opens the handoff dialog first —
+  // the parent picks that doc up when it resumes. Unblocking the parent and the
+  // immediate poll are the server's job; the browser only refetches.
+  const doneHuman = async (id) => {
+    const task = data.humanTasks.find((t) => t.id === id);
+    if (task?.blocking) { setCompleteHumanCard(task); return; }
+    try {
+      await api(`/api/tasks/${id}/complete`, {});
+      say('success', 'task completed', id);
+      await refreshFull();
+    } catch (err) {
+      say('danger', 'complete failed', String(err.message || err));
+    }
+  };
+
   // Pause (issue #34) — the human's own steering channel, never exposed via
   // MCP. Resuming fires an immediate poll server-side; pausing fires nothing.
   // The pause toast detail mirrors the queue slot line's own busy/free split
@@ -2968,7 +3073,7 @@ function App() {
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills as tasks come in.</div>
             </div>)}
         {tab === 'board' && <BoardScreen data={data} onOpenTask={openTask} />}
-        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={() => {}} onReorder={reorder} />}
+        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={doneHuman} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
         {tab === 'settings' && <SettingsScreen say={say} registerLeaveGuard={(fn) => { leaveGuard.current = fn; }} />}
         </div>
@@ -3017,6 +3122,11 @@ function App() {
       <PortalDialog open={!!cancelTaskCard} onClose={() => setCancelTaskCard(null)}>
         {cancelTaskCard && (
           <CancelTaskDialog task={cancelTaskCard} say={say} onCancelled={refreshFull} onClose={() => setCancelTaskCard(null)} />
+        )}
+      </PortalDialog>
+      <PortalDialog open={!!completeHumanCard} onClose={() => setCompleteHumanCard(null)}>
+        {completeHumanCard && (
+          <CompleteHumanTaskDialog task={completeHumanCard} say={say} onCompleted={refreshFull} onClose={() => setCompleteHumanCard(null)} />
         )}
       </PortalDialog>
 

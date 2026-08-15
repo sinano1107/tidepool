@@ -2060,7 +2060,15 @@ export function unfinishedChildSql(parentRef: string): string {
   return `EXISTS (SELECT 1 FROM tasks c
             WHERE c.parent_id = ${parentRef}
               AND c.status NOT IN ('done', 'cancelled')
-              AND (c.based_on_decision IS NOT NULL OR c.type = 'question'))`;
+              AND ${awaitedChildSql("c")})`;
+}
+
+/** Just the child-side half of that rule (ADR 0049): "is this row a child its
+ *  parent waits for?". `listYourTasks` applies it to the row itself to name the
+ *  parent it is holding up, so the predicate has one home rather than a copy
+ *  per read口. `rowRef` is the SQL alias of the child row. */
+export function awaitedChildSql(rowRef: string): string {
+  return `(${rowRef}.based_on_decision IS NOT NULL OR ${rowRef}.type = 'question')`;
 }
 
 /** The one SQL shape of "this task's execution workspace is quarantined"
@@ -2329,18 +2337,27 @@ export function listQueue(
     }));
 }
 
+/** How a your-tasks row appears (issue #301): `blocking` names the parent this
+ *  row is holding up — the ADR 0049 predicate applied to the row itself — or
+ *  null when it holds up nobody. Presentation of this read口 only, not a column
+ *  on `Task`: it decides which completion door the human surface opens (one tap
+ *  vs. the handoff dialog). */
+export type YourTask = Task & { blocking: string | null };
+
 /** The your-tasks list (issue #13): every unsettled `human`-assignee task,
  *  the persistent home the Assignee/Slot glossary entries promise them — they
  *  never enter the execution queue (`listQueue`) or the slot (`nextSlotTask`)
  *  at all. Ordered by `sort_key` like every other board view. */
-export function listYourTasks(db: Db): Task[] {
+export function listYourTasks(db: Db): YourTask[] {
   const rows = db
     .prepare(
-      `SELECT * FROM tasks WHERE assignee = @humanWorkerId
+      `SELECT tasks.*,
+         CASE WHEN ${awaitedChildSql("tasks")} THEN tasks.parent_id END AS blocking
+       FROM tasks WHERE assignee = @humanWorkerId
          AND status NOT IN ('done', 'cancelled') ORDER BY sort_key`,
     )
-    .all({ humanWorkerId: HUMAN_WORKER_ID }) as TaskRow[];
-  return rows.map(rowToTask);
+    .all({ humanWorkerId: HUMAN_WORKER_ID }) as Array<TaskRow & { blocking: string | null }>;
+  return rows.map((row) => ({ ...rowToTask(row), blocking: row.blocking }));
 }
 
 export function getTask(db: Db, id: string): Task | undefined {

@@ -58,4 +58,56 @@ describe("listYourTasks は human 宛ての未決着タスクを返す(issue #13
     expect(yours.map((t) => t.id)).not.toContain(agent.id);
     expect(yours.map((t) => t.id)).not.toContain(doneHuman.id);
   });
+
+  it("各行は自分が塞いでいる親を blocking で名指す — 付帯子は塞がない(ADR 0049 / issue #301)", () => {
+    const db = openDb(":memory:");
+    const lone = registerTask(
+      db,
+      {
+        type: "work",
+        title: "physically water the greenhouse",
+        purpose: "p",
+        completion_criteria: "c",
+        assignee: "human",
+      },
+      new Date(0),
+    );
+    const parent = registerTask(
+      db,
+      { type: "work", title: "parent", purpose: "p", completion_criteria: "c" },
+      new Date(1),
+    );
+    const awaited = registerTask(
+      db,
+      {
+        type: "work",
+        title: "sign the paperwork",
+        purpose: "p",
+        completion_criteria: "c",
+        assignee: "human",
+        parent_id: parent.id,
+        based_on_decision: 1,
+      },
+      new Date(2),
+    );
+    const attached = registerTask(
+      db,
+      {
+        type: "work",
+        title: "repair task attached after the fact",
+        purpose: "p",
+        completion_criteria: "c",
+        assignee: "human",
+        parent_id: parent.id,
+      },
+      new Date(3),
+    );
+
+    const blocking = new Map(listYourTasks(db).map((t) => [t.id, t.blocking]));
+    expect(blocking.get(lone.id)).toBeNull();
+    expect(blocking.get(awaited.id)).toBe(parent.id);
+    expect(blocking.get(attached.id)).toBeNull();
+
+    db.close();
+  });
 });
