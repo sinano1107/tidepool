@@ -29,10 +29,10 @@ export const test = base.extend<Fixtures>({
 });
 
 /** ADR 0082 決定1: 一覧の読み口は基点ディレクトリを属性として一緒に返す。
- *  spec 側はほとんどの場合その値に用が無いので、workspace 配列だけを渡せば
- *  済むようにこの1枚を挟む(基点そのものを見る spec は `source` を振る)。 */
-export function workspaceList(workspaces: unknown[], source: "configured" | "default" = "configured") {
-  return { workspaces, workspacesBaseDir: { path: "/mnt/workspaces", source } };
+ *  spec 側はその値に用が無いので、workspace 配列だけを渡せば済むようにこの1枚を
+ *  挟む —— 基点そのものを見る spec は、この helper を通さず自分で組む。 */
+export function workspaceList(workspaces: unknown[]) {
+  return { workspaces, workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" } };
 }
 
 export { expect } from "@playwright/test";
