@@ -70,6 +70,8 @@ PORT=4589
 MCP_PORT=4590
 TIDEPOOL_REGISTRY=/mnt/ssd/tidepool-registry
 TIDEPOOL_WORKSPACE=sandbox
+TIDEPOOL_WORKSPACES_DIR=/mnt/workspaces
+TIDEPOOL_AUDITOR=fugu
 TIDEPOOL_DB=/opt/tidepool/data/board.sqlite
 TIDEPOOL_WORKER_LOGS=/opt/tidepool/worker-logs
 TIDEPOOL_VAPID_SUBJECT=mailto:<owner-email>
@@ -80,6 +82,8 @@ TIDEPOOL_PUBLIC_ORIGINS=https://raspberrypi.tailc0084f.ts.net:8443
 EOF
 sudo chmod 600 /etc/default/tidepool && sudo chown root:root /etc/default/tidepool'
 ```
+
+**`TIDEPOOL_WORKSPACES_DIR` is where `clone`/`create` workspaces land** (ADR 0018 / ADR 0082). Unset, the board silently uses the development default `~/tidepool-workspaces` — on this Pi that is the SD card, not the SSD. `verify-deploy.sh` checks that this and the other five board-behaviour keys are present; `TIDEPOOL_AUDITOR` is not one of them (unset simply means no auditor), it is here because this board runs one.
 
 **`TIDEPOOL_PUBLIC_ORIGINS` must be set before the board's first boot** (issue #153 / ADR 0036). Cookies are per-origin, so the board has to know the URLs it is published at — it cannot derive them. First boot issues the token and prints one bootstrap URL per known origin, once; boot without this set and only the loopback URL is printed, and the phone's way in is gone until you rotate (which throws away the token you just issued).
 

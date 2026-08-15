@@ -43,6 +43,7 @@ function composition(): BoardComposition {
     advisorDisabled: false,
     workspaceName: "sandbox",
     workspacesDir: "/nonexistent/workspaces",
+    workspacesDirSource: "configured",
     defaultAgentName: "tako",
     auditorName: "shako",
     boardState: [],

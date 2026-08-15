@@ -11,23 +11,22 @@ import { api, bootTidepool, type Tidepool } from "./harness.js";
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("GET /api/workspaces は設定面向けの一覧ビューを返す(issue #57 フェーズ3)", async () => {
-  t = await bootTidepool({
-    workspaceAdmin: {
-      list: () => [
-        { name: "registry", path: "/srv/registry", protected: true, registrySelf: true },
-        { name: "lagoon", repo: "https://github.com/example/lagoon.git", registrySelf: false },
-      ],
-    },
-  });
+// ADR 0082 決定1: 一覧は基点ディレクトリを属性として一緒に返す —— 規約導出の
+// エントリの着地先を client が合成できる唯一の材料である。
+it("GET /api/workspaces は設定面向けの一覧ビューを基点ディレクトリごと返す(issue #57 フェーズ3 / ADR 0082)", async () => {
+  const list = {
+    workspaces: [
+      { name: "registry", path: "/srv/registry", protected: true, registrySelf: true },
+      { name: "lagoon", repo: "https://github.com/example/lagoon.git", registrySelf: false },
+    ],
+    workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" as const },
+  };
+  t = await bootTidepool({ workspaceAdmin: { list: () => list } });
 
   const res = await api(t.baseUrl, "GET", "/api/workspaces");
 
   expect(res.status).toBe(200);
-  expect(res.json).toEqual([
-    { name: "registry", path: "/srv/registry", protected: true, registrySelf: true },
-    { name: "lagoon", repo: "https://github.com/example/lagoon.git", registrySelf: false },
-  ]);
+  expect(res.json).toEqual(list);
 });
 
 it("GET /api/workspaces は registry 未設定なら 503", async () => {

@@ -63,7 +63,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   t = await bootTidepool({
     workspace,
     registryCandidates: { assignees: ["tako"], workspaces: ["board-ws"], icons: {} },
-    workspaceAdmin: { list: () => [] },
+    workspaceAdmin: { list: () => ({ workspaces: [], workspacesBaseDir: { path: "/work", source: "default" as const } }) },
     agentAdmin: { list: () => [], authorityProfiles: () => [] },
     profileAdmin: { list: () => [] },
     hostSkills: async () => ["review"],

@@ -40,6 +40,21 @@ if [[ "$local_head" != "$pi_head" ]]; then
   failed=1
 fi
 
+# ADR 0082 決定5: the keys whose absence makes the board behave differently in
+# silence — an unset TIDEPOOL_WORKSPACES_DIR sends clone/create checkouts to the
+# SD card's default, an unset TIDEPOOL_DB opens a second board. The template in
+# references/first-time-setup.md drifted from the real file for months because
+# nothing compared them; this is that comparison. The list is static here on
+# purpose: it is a deployment expectation, not something the board declares.
+for key in TIDEPOOL_WORKSPACES_DIR TIDEPOOL_PUBLIC_ORIGINS TIDEPOOL_GITHUB_TOKEN_FILE TIDEPOOL_REGISTRY TIDEPOOL_DB TIDEPOOL_WORKER_LOGS; do
+  if ssh "$PI" "sudo grep -qE '^${key}=.' /etc/default/tidepool"; then
+    log "env: $key set"
+  else
+    fail "/etc/default/tidepool has no $key — the board runs on a silent default"
+    failed=1
+  fi
+done
+
 # Unauthenticated, on purpose (issue #154 / ADR 0036). The old check asked for
 # 200 over the tailnet URL, which needed a token in transit and proved only that
 # *something* answers. A 401 proves two things at once with no secret carried:

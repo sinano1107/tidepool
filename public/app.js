@@ -1210,6 +1210,9 @@ function registryNameOk(name) {
   const v = name.trim();
   return /^[A-Za-z0-9._-]+$/.test(v) && ![".", ".."].includes(v);
 }
+function landingPath(baseDir, name) {
+  return `${baseDir.path.replace(/\/+$/, "")}/${name.trim()}`;
+}
 function PortalDialog(props) {
   const { Dialog } = window.TidepoolDesignSystem_8a0ead;
   return ReactDOM.createPortal(/* @__PURE__ */ React.createElement(Dialog, { ...props }), document.body);
@@ -1289,7 +1292,7 @@ function PublishWorkspace({ ws, say, onPublished }) {
     }
   ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !repo.trim(), onClick: submit }, "Publish \u2014 pushes every branch, then commits to the registry"));
 }
-function WorkspaceRecord({ ws, say, onChanged, edit }) {
+function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   const publishable = !ws.repo && !ws.registrySelf;
   const id = `workspace:${ws.name}`;
@@ -1326,7 +1329,7 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
       value: origin ? `${origin}${ws.branch ? ` \xB7 ${ws.branch}` : ""}` : "",
       unsetLabel: "not recorded on the entry"
     }
-  ), /* @__PURE__ */ React.createElement(FieldRow, { label: "notes", kind: ws.notes ? "text" : "unset", value: ws.notes ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
+  ), !ws.path && baseDir && /* @__PURE__ */ React.createElement("div", { "data-testid": "workspace-derived-path" }, /* @__PURE__ */ React.createElement(FieldRow, { label: "checkout (derived)", kind: "mono", value: landingPath(baseDir, ws.name) })), /* @__PURE__ */ React.createElement(FieldRow, { label: "notes", kind: ws.notes ? "text" : "unset", value: ws.notes ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "protected",
@@ -1929,7 +1932,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
     }
   )));
 }
-function NewWorkspaceForm({ say, onCreated, edit }) {
+function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const { Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [mode, setMode] = React.useState("clone");
   const [name, setName] = React.useState("");
@@ -1978,7 +1981,7 @@ function NewWorkspaceForm({ say, onCreated, edit }) {
       onChange: (e) => setName(e.target.value),
       placeholder: "letters, digits, - _ . \u2014 safe as a directory and a repo name"
     }
-  ), mode === "clone" && /* @__PURE__ */ React.createElement(
+  ), mode !== "register" && registryNameOk(name) && baseDir && /* @__PURE__ */ React.createElement("p", { "data-testid": "workspace-landing-preview", style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, mode === "clone" ? "will clone to" : "will create at", " ", landingPath(baseDir, name)), baseDir.source === "default" && " \u2014 default; TIDEPOOL_WORKSPACES_DIR is not set on this host"), mode === "clone" && /* @__PURE__ */ React.createElement(
     Input,
     {
       label: "Repository",
@@ -2155,10 +2158,13 @@ function SettingsScreen({ say, registerLeaveGuard }) {
     loadPaceOffsets();
   }, []);
   const [workspaces, setWorkspaces] = React.useState(null);
+  const [baseDir, setBaseDir] = React.useState(null);
   const [unavailable, setUnavailable] = React.useState(false);
   const load = async () => {
     try {
-      setWorkspaces(await api("/api/workspaces", void 0, "GET"));
+      const res = await api("/api/workspaces", void 0, "GET");
+      setWorkspaces(res.workspaces);
+      setBaseDir(res.workspacesBaseDir);
     } catch {
       setUnavailable(true);
       setWorkspaces([]);
@@ -2276,8 +2282,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       indexSummary: (items) => `${items.length} \xB7 ${items.filter((w) => w.protected).length} protected`,
       rowIdentity: (w) => ({ label: w.name }),
       rowSummary: (w) => w.repo || w.path || "\u2014",
-      record: (rec) => /* @__PURE__ */ React.createElement(WorkspaceRecord, { ws: rec, say, onChanged: load, edit }),
-      createForm: () => /* @__PURE__ */ React.createElement(NewWorkspaceForm, { say, onCreated: load, edit })
+      record: (rec) => /* @__PURE__ */ React.createElement(WorkspaceRecord, { ws: rec, baseDir, say, onChanged: load, edit }),
+      createForm: () => /* @__PURE__ */ React.createElement(NewWorkspaceForm, { baseDir, say, onCreated: load, edit })
     },
     agents: {
       title: "Agents",

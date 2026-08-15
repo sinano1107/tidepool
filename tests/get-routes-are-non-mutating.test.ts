@@ -168,7 +168,7 @@ it.each(GET_ROUTES)("GET /api%s は DB を変異させない(ADR 0034)", async (
     registryCandidates: { assignees: [], workspaces: [], icons: {} },
     hostSkills: async () => [],
     fableAgents: () => [],
-    workspaceAdmin: { list: () => [] },
+    workspaceAdmin: { list: () => ({ workspaces: [], workspacesBaseDir: { path: "/work", source: "default" as const } }) },
     agentAdmin: { list: () => [], authorityProfiles: () => [] },
     profileAdmin: { list: () => [] },
   });

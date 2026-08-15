@@ -53,10 +53,22 @@ const MAIN_BRANCH = "main";
 /** ADR 0018: the base directory a workspace entry's path derives from when
  *  the entry omits `path`. `configured` is `TIDEPOOL_WORKSPACES_DIR` as read
  *  by the caller (env access stays at the board's config edge, not here) —
- *  absent → `~/tidepool-workspaces` (the Pi's systemd unit sets
- *  `/mnt/ssd/tidepool-workspaces` explicitly). */
+ *  absent → `~/tidepool-workspaces`, the development machine's default. A
+ *  production host sets it (see the deploy-pi skill); ADR 0082 決定4 keeps the
+ *  value that host uses out of here, since a source comment asserting a
+ *  deployment fact goes silently false the moment the deployment changes. */
 export function resolveWorkspacesBaseDir(configured: string | undefined): string {
   return configured ?? join(homedir(), "tidepool-workspaces");
+}
+
+/** ADR 0082 決定2: where the base dir above came from. The path alone cannot
+ *  tell "a host that meant this" from "a host that set nothing" — the
+ *  registration gate shows both, so the same env value answers both questions
+ *  here rather than growing a second spelling of `??` at the display end. */
+export type WorkspacesBaseDirSource = "configured" | "default";
+
+export function workspacesBaseDirSource(configured: string | undefined): WorkspacesBaseDirSource {
+  return configured === undefined ? "default" : "configured";
 }
 
 /** ADR 0023: `branch` is a reference resolved fresh at every use, same

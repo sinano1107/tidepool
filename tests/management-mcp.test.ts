@@ -237,14 +237,17 @@ it("管理MCP は5つの純読取 board tool を発見する(issue #191)", async
 });
 
 it("workspaceAdmin の create / list / update を管理MCP から利用できる(issue #193)", async () => {
-  const created = vi.fn(async () => {});
+  const created = vi.fn(async () => "/mnt/workspaces/harbor");
   const updated = vi.fn(async () => {});
   t = await bootTidepool({
     workspaceAdmin: {
       create: created,
-      list: () => [
-        { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false },
-      ],
+      list: () => ({
+        workspaces: [
+          { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false },
+        ],
+        workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" as const },
+      }),
       update: updated,
     },
   });
@@ -260,7 +263,9 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
       arguments: { name: "harbor", mode: "register", path: "/work/harbor" },
     });
     expect(create.isError ?? false).toBe(false);
-    expect(readToolPayload(create)).toEqual({});
+    // ADR 0082 決定1: MCP は「見せてから決める」形を持てない —— 着地したパスを
+    // 結果で返すことがその代わりである
+    expect(readToolPayload(create)).toEqual({ path: "/mnt/workspaces/harbor" });
     expect(created).toHaveBeenCalledWith({
       name: "harbor",
       mode: "register",
@@ -272,6 +277,7 @@ it("workspaceAdmin の create / list / update を管理MCP から利用できる
       workspaces: [
         { name: "tidepool", path: "/work/tidepool", repo: "owner/tidepool", branch: "main", registrySelf: false },
       ],
+      workspacesBaseDir: { path: "/mnt/workspaces", source: "configured" },
     });
 
     const update: any = await client.callTool({

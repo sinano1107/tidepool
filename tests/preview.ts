@@ -44,7 +44,7 @@ export async function bootPreview(): Promise<Preview> {
     const board = await bootTidepool({
       workspaceAdmin: {
         create: (input) => createWorkspace(input, workspaceDeps),
-        list: () => listWorkspaceViews(workspaceDeps),
+        list: () => listWorkspaceViews(workspaceDeps, "configured"),
         update: (input) => updateWorkspace(input, workspaceDeps),
       },
       agentAdmin: {
