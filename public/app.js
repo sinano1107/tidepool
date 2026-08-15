@@ -1329,7 +1329,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       value: origin ? `${origin}${ws.branch ? ` \xB7 ${ws.branch}` : ""}` : "",
       unsetLabel: "not recorded on the entry"
     }
-  ), !ws.path && baseDir && /* @__PURE__ */ React.createElement("div", { "data-testid": "workspace-derived-path" }, /* @__PURE__ */ React.createElement(FieldRow, { label: "checkout (derived)", kind: "mono", value: landingPath(baseDir, ws.name) })), /* @__PURE__ */ React.createElement(FieldRow, { label: "notes", kind: ws.notes ? "text" : "unset", value: ws.notes ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
+  ), !ws.path && baseDir && /* @__PURE__ */ React.createElement(FieldRow, { label: "checkout (derived)", kind: "mono", value: landingPath(baseDir, ws.name) }), /* @__PURE__ */ React.createElement(FieldRow, { label: "notes", kind: ws.notes ? "text" : "unset", value: ws.notes ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "protected",

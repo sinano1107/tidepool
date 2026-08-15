@@ -925,9 +925,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
           {/* ADR 0082 決定3: path を持たないエントリの着地先は origin とは別の行で。
               エントリに書かれた値ではなく規約から導かれた値だと分かる形で見せる */}
           {!ws.path && baseDir && (
-            <div data-testid="workspace-derived-path">
-              <FieldRow label="checkout (derived)" kind="mono" value={landingPath(baseDir, ws.name)} />
-            </div>
+            <FieldRow label="checkout (derived)" kind="mono" value={landingPath(baseDir, ws.name)} />
           )}
           <FieldRow label="notes" kind={ws.notes ? 'text' : 'unset'} value={ws.notes ?? ''} unsetLabel="—" />
           <FieldRow label="protected" kind="bool" checked={!!ws.protected}
