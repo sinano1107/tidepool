@@ -33,8 +33,10 @@ quarantine する。
 
 ### 1. 見張るのは `refs/*` 全部。除外は自分のタスクブランチ1本のみ
 
-タグも stash も remote-tracking ref も含む。荷重が今日かかっているのは保護ブランチ(ローカルと
-remote-tracking)と `refs/heads/task/*` だけだが、**列挙は黙って古くなる** —— #234 が書かれた時点で
+タグも stash も remote-tracking ref も含む。symref(`refs/remotes/origin/HEAD` 等)も対象に残るが、
+その状態は解決値ではなく**指し先**で数える(ADR 0081 / issue #304 — 解決値で数えると `origin/main`
+1本の書き込みで2行動き、決定4 の外科的再基準化が symref の行を取り残す)。荷重が今日かかっているのは
+保護ブランチ(ローカルと remote-tracking)と `refs/heads/task/*` だけだが、**列挙は黙って古くなる** —— #234 が書かれた時点で
 荷重を持っていたのは保護ブランチ1本で、ADR 0053 が祖先のタスクブランチを統合幹(fork 元 / merge back
 先)にした瞬間に増えた。CONTEXT.md が付帯子を「列挙ではなく補集合」で定義したのと同じ理由である。
 
@@ -155,6 +157,8 @@ worker が何をしたかを読める。そして解除の検証は `verifyWorks
 
 値は `git for-each-ref --format='%(objectname) %(refname)'` のソート済み出力をそのまま1本のテキストと
 して持つ。比較が文字列比較で済み、決定2 が要求する「動いた ref の名指し」が行差分でそのまま取れる。
+symref の行だけは objectname ではなく `symref=<指し先>` を持つ(ADR 0081 — 解決値は指し先の ref と
+連動して動くため、保存すると二重計上になる)。
 
 **スナップショット未設定(NULL)の分岐は書かない。** 移行の瞬間に `in_progress` なタスクは高々1つで、
 当たっても quarantine が1枚立って人間が30秒で答えるだけである。一方 `NULL = 検査スキップ` は静かな穴で、
