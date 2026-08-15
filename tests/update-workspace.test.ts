@@ -284,9 +284,9 @@ describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () =
       { cwd: registryDir },
     );
 
-    const views = listWorkspaceViews(await makeDeps(registryDir));
+    const deps = await makeDeps(registryDir);
 
-    expect(views).toEqual([
+    expect(listWorkspaceViews(deps, "configured").workspaces).toEqual([
       { name: "registry", path: registryDir, protected: true, registrySelf: true },
       {
         name: "lagoon",
@@ -296,5 +296,20 @@ describe("listWorkspaceViews: 設定面の一覧(issue #57 フェーズ3)", () =
         registrySelf: false,
       },
     ]);
+  });
+
+  // ADR 0082 決定1/2: 規約導出の着地先を人間に見せるための基点は、一覧の属性として
+  // 返る。出所を添えるのは「意図した設定」と「未設定の既定」を区別させるため。
+  it("基点ディレクトリを出所つきで返す", async () => {
+    const deps = await makeDeps(await makeMainRegistry());
+
+    expect(listWorkspaceViews(deps, "configured").workspacesBaseDir).toEqual({
+      path: deps.workspacesBaseDir,
+      source: "configured",
+    });
+    expect(listWorkspaceViews(deps, "default").workspacesBaseDir).toEqual({
+      path: deps.workspacesBaseDir,
+      source: "default",
+    });
   });
 });

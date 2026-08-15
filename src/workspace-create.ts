@@ -22,6 +22,7 @@ import {
   originUrl,
   resolvesToRegistryClone,
   UnknownWorkspaceError,
+  type WorkspacesBaseDirSource,
 } from "./workspace.js";
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
@@ -89,7 +90,10 @@ export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
   github?: GitHubClient;
 }
 
-export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<void>;
+/** 返すのは着地した checkout のパス(ADR 0082 決定1)。MCP の `create_workspace`
+ *  は1回の呼び出しで登録まで進むので、「見せてから決める」形が無い —— 決めた後に
+ *  どこへ落ちたかを返すことがその代わりである。 */
+export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<string>;
 export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
 /** 返すのは publish が push した remote-tracking ref(`refs/remotes/origin/<branch>`)
  *  である。ADR 0064 決定4 の再基準化は「盤面が**実際に書いた** ref の行だけ」を要求し、
@@ -105,7 +109,7 @@ export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<strin
  *  dep, not three. */
 export interface WorkspaceAdmin {
   create: CreateWorkspaceFn;
-  list: () => WorkspaceView[];
+  list: () => WorkspaceListView;
   update: UpdateWorkspaceFn;
   /** ADR 0066 決定2/8: purely-local → remote-backed の遷移を与える4つ目の動詞。 */
   publish: PublishWorkspaceFn;
@@ -152,20 +156,22 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
 /** Orchestrates one workspace creation: external effects first, the registry
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
-export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<void> {
+export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<string> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
+  const path = intendedCheckoutPath(input, deps);
   // ADR 0040: before any external effect — a refused registration must not
   // leave a clone or a GitHub repository behind.
   if (deps.boardState) {
-    const overlap = boardStateOverlap(intendedCheckoutPath(input, deps), deps.boardState);
+    const overlap = boardStateOverlap(path, deps.boardState);
     if (overlap) throw new BoardStateOverlapError(overlap.reason);
   }
   const entry = await buildEntry(input, deps);
   if (input.notes !== undefined) entry.notes = input.notes;
   if (input.protected) entry.protected = true;
   commitWorkspaceEntry(deps, input.name, entry, `add workspace ${input.name} via WebUI`);
+  return path;
 }
 
 /** The edit half of the WebUI's workspace admin (issue #57 phase 3): only
@@ -536,13 +542,31 @@ export interface WorkspaceView extends WorkspaceEntry {
   registrySelf: boolean;
 }
 
-export function listWorkspaceViews(deps: WorkspaceAdminDeps): WorkspaceView[] {
+/** The list read with the base directory as an attribute of the list itself
+ *  (ADR 0082 決定1): the client composes `<base>/<name>` for the preview and
+ *  for a path-omitting entry's row. That is display, not a second resolution —
+ *  the rule is one join and the name carries no separator. */
+export interface WorkspaceListView {
+  workspaces: WorkspaceView[];
+  workspacesBaseDir: { path: string; source: WorkspacesBaseDirSource };
+}
+
+/** `source` rides in as an argument rather than on `WorkspaceAdminDeps`: it is
+ *  the one thing only this verb needs, and the deps bundle is "what every
+ *  workspace-admin verb needs". */
+export function listWorkspaceViews(
+  deps: WorkspaceAdminDeps,
+  source: WorkspacesBaseDirSource,
+): WorkspaceListView {
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
-  return Object.entries(registry.workspaces).map(([name, entry]) => ({
-    ...entry,
-    name,
-    registrySelf: resolvesToRegistryClone(entry, name, deps.registry.dir, deps.workspacesBaseDir),
-  }));
+  return {
+    workspaces: Object.entries(registry.workspaces).map(([name, entry]) => ({
+      ...entry,
+      name,
+      registrySelf: resolvesToRegistryClone(entry, name, deps.registry.dir, deps.workspacesBaseDir),
+    })),
+    workspacesBaseDir: { path: deps.workspacesBaseDir, source },
+  };
 }
 
 /** Appends the entry to workspaces.yaml inside a disposable worktree and

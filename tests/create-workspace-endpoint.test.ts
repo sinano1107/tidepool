@@ -14,6 +14,7 @@ it("POST /api/workspaces は検証済み入力を createWorkspace オーケス�
     workspaceAdmin: {
       create: async (input) => {
         calls.push(input);
+        return "/mnt/workspaces/lagoon";
       },
     },
   });
@@ -55,6 +56,7 @@ it("スキーマ違反(clone モードに repo なし)は 400 で、オーケス
     workspaceAdmin: {
       create: async (input) => {
         calls.push(input);
+        return "/mnt/workspaces/lagoon";
       },
     },
   });

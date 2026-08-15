@@ -721,6 +721,12 @@ function registryNameOk(name) {
   return /^[A-Za-z0-9._-]+$/.test(v) && !['.', '..'].includes(v);
 }
 
+// ADR 0018 の規約(基点 + 名前)を表示のために合成する。ADR 0082 決定1: 解決その
+// ものは server 側の1点に残り、ここは「その1本の規約を読み上げる」だけである。
+function landingPath(baseDir, name) {
+  return `${baseDir.path.replace(/\/+$/, '')}/${name.trim()}`;
+}
+
 // Every board dialog must portal to <body>: the DS Dialog is position:fixed,
 // but a transformed ancestor (the tab-transition wrapper's animation) re-bases
 // "fixed" onto the full scrollable page instead of the viewport, parking the
@@ -864,7 +870,7 @@ function PublishWorkspace({ ws, say, onPublished }) {
 // no longer PATCHes the moment it is touched. path/repo/branch re-point the
 // entry at a different checkout, which stays a manual registry edit, so they
 // are shown but never editable here.
-function WorkspaceRecord({ ws, say, onChanged, edit }) {
+function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   // ADR 0066 決定2: publish は編集ではなく状態遷移なので、Edit の下書きには入らない
   // — purely-local な workspace だけがこの扉を持ち、registry clone 自身は持たない
@@ -916,6 +922,11 @@ function WorkspaceRecord({ ws, say, onChanged, edit }) {
           <FieldRow label={ws.repo ? 'repository' : 'path'} kind={origin ? 'mono' : 'unset'}
             value={origin ? `${origin}${ws.branch ? ` · ${ws.branch}` : ''}` : ''}
             unsetLabel="not recorded on the entry" />
+          {/* ADR 0082 決定3: path を持たないエントリの着地先は origin とは別の行で。
+              エントリに書かれた値ではなく規約から導かれた値だと分かる形で見せる */}
+          {!ws.path && baseDir && (
+            <FieldRow label="checkout (derived)" kind="mono" value={landingPath(baseDir, ws.name)} />
+          )}
           <FieldRow label="notes" kind={ws.notes ? 'text' : 'unset'} value={ws.notes ?? ''} unsetLabel="—" />
           <FieldRow label="protected" kind="bool" checked={!!ws.protected}
             onLabel="changes here always need human approval" offLabel="not protected" />
@@ -1664,7 +1675,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
 // The workspace create form (issue #57 phase 3), behind Add on the Workspaces
 // screen (#204 決定7) — it takes the same single edit slot a record card does,
 // and saves and cancels by the same rules.
-function NewWorkspaceForm({ say, onCreated, edit }) {
+function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const { Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [mode, setMode] = React.useState('clone');
   const [name, setName] = React.useState('');
@@ -1715,6 +1726,17 @@ function NewWorkspaceForm({ say, onCreated, edit }) {
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{modeHint}</p>
       <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — safe as a directory and a repo name" />
+      {/* ADR 0082 決定1: 規約導出の2モードは着地先を人間に一度も見せずに決めていた。
+          基点は一覧が返し、名前は区切り文字を含まない検証を既に通っているので、
+          結合はここで済む(解決の複製ではなく表示) */}
+      {mode !== 'register' && registryNameOk(name) && baseDir && (
+        <p data-testid="workspace-landing-preview" style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          <span style={{ fontFamily: 'var(--font-mono)' }}>
+            {mode === 'clone' ? 'will clone to' : 'will create at'} {landingPath(baseDir, name)}
+          </span>
+          {baseDir.source === 'default' && ' — default; TIDEPOOL_WORKSPACES_DIR is not set on this host'}
+        </p>
+      )}
       {mode === 'clone' && (
         <Input label="Repository" value={repo} onChange={(e) => setRepo(e.target.value)}
           placeholder="anything git clone accepts — recorded on the entry" />
@@ -1864,10 +1886,15 @@ function SettingsScreen({ say, registerLeaveGuard }) {
 
 
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
+  // ADR 0082 決定1: 規約導出の着地先を合成するための基点 — { path, source }。
+  // 読めていないうち(ロード中・503)は null で、着地先は一切見せない
+  const [baseDir, setBaseDir] = React.useState(null);
   const [unavailable, setUnavailable] = React.useState(false); // 503 — no registry configured
   const load = async () => {
     try {
-      setWorkspaces(await api('/api/workspaces', undefined, 'GET'));
+      const res = await api('/api/workspaces', undefined, 'GET');
+      setWorkspaces(res.workspaces);
+      setBaseDir(res.workspacesBaseDir);
     } catch {
       // 503 (no registry configured) and transport failures read the same:
       // there is nothing to administer from here
@@ -1993,8 +2020,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       indexSummary: (items) => `${items.length} · ${items.filter((w) => w.protected).length} protected`,
       rowIdentity: (w) => ({ label: w.name }),
       rowSummary: (w) => w.repo || w.path || '—',
-      record: (rec) => <WorkspaceRecord ws={rec} say={say} onChanged={load} edit={edit} />,
-      createForm: () => <NewWorkspaceForm say={say} onCreated={load} edit={edit} />,
+      record: (rec) => <WorkspaceRecord ws={rec} baseDir={baseDir} say={say} onChanged={load} edit={edit} />,
+      createForm: () => <NewWorkspaceForm baseDir={baseDir} say={say} onCreated={load} edit={edit} />,
     },
     agents: {
       title: 'Agents', singular: 'agent', note: 'who does the work',

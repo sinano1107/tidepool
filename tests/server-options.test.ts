@@ -43,6 +43,7 @@ function composition(): BoardComposition {
     advisorDisabled: false,
     workspaceName: "sandbox",
     workspacesDir: "/nonexistent/workspaces",
+    workspacesDirSource: "configured",
     defaultAgentName: "tako",
     auditorName: "shako",
     boardState: [],
@@ -348,6 +349,9 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   });
   dirs.push(registryDir);
   const workspacesDir = "/base/workspaces";
+  // composition() の既定は "configured" —— ここだけ "default" に振ることで、
+  // 一覧の口が定数を焼き付けている綴りと区別がつく(ADR 0082 決定2)
+  const workspacesDirSource = "default" as const;
   // ADR 0024: 盤面の GitHub 身元。token ファイルは読まれるまで触られないので、実在
   // しないパスでも「身元を持つ盤面」を組める(同一性だけを見る下の assertion 用)
   const githubAuth = new GitHubAuth("/nonexistent/github-token");
@@ -355,6 +359,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
     ...composition(),
     registryDir,
     workspacesDir,
+    workspacesDirSource,
     githubAuth,
     // `workspaceName` と `defaultAgentName` と `auditorName` はどれも string で、
     // 取り違えても型検査は黙る。fixture に実在するのは前2つが指す名前だけなので、
@@ -387,6 +392,12 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // registry ゲートで初めて立つ口
   expect(options.draftClient).toBeDefined();
   expect(options.workspaceAdmin).toBeDefined();
+  // ADR 0082 決定1/2: 登録の門が着地先とその出所を見せる材料は一覧の口から来る。
+  // 基点と出所は別々の口から合流するので、片方だけ配線しても型検査は黙る
+  expect(options.workspaceAdmin?.list?.().workspacesBaseDir).toEqual({
+    path: workspacesDir,
+    source: workspacesDirSource,
+  });
   expect(options.profileAdmin).toBeDefined();
   const swept = options.boardState?.listWorkspaces().map((ws) => ws.name);
   expect(swept?.sort()).toEqual(["derived", "guarded", "tidepool"]);

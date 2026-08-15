@@ -44,6 +44,7 @@ import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
   type WorkspaceConfig,
+  type WorkspacesBaseDirSource,
 } from "./workspace.js";
 import {
   createWorkspace,
@@ -115,6 +116,9 @@ export interface BoardComposition {
   workspaceName: string;
   /** ADR 0018: path を省いた workspace エントリが解決される基底ディレクトリ。 */
   workspacesDir: string;
+  /** ADR 0082 決定2: 上の値が `TIDEPOOL_WORKSPACES_DIR` 由来か既定か。登録の門が
+   *  着地先に添えて見せるので、env を読む合成 root から届く。 */
+  workspacesDirSource: WorkspacesBaseDirSource;
   /** ADR 0012 / issue #36: assignee 未設定のタスクが解決される既定 agent。 */
   defaultAgentName: string;
   /** issue #15 layer 2 / CONTEXT.md の Auditor。 */
@@ -447,7 +451,7 @@ function workspaceAdmin(
   };
   return {
     create: (input) => createWorkspace(input, { ...deps, github }),
-    list: () => listWorkspaceViews(deps),
+    list: () => listWorkspaceViews(deps, board.workspacesDirSource),
     update: (input) => updateWorkspace(input, deps),
     // ADR 0066 決定2 / ADR 0067 決定8: push は `githubAuth` で撃ち、宛先への到達性
     // probe は `github` があるときだけ撃つ —— どちらも上の deps と同じ組である

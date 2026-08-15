@@ -13,7 +13,7 @@ import { startServer } from "./server.js";
 import { buildServerOptions, declaredRegistryMode } from "./server-options.js";
 import { DEFAULT_AUDITOR_NAME } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
-import { resolveWorkspacesBaseDir } from "./workspace.js";
+import { resolveWorkspacesBaseDir, workspacesBaseDirSource } from "./workspace.js";
 
 const port = Number(process.env.PORT ?? 4589);
 // /mcp's own 127.0.0.1-only port (issue #37) — kept off `port` so
@@ -23,6 +23,8 @@ const registryDir = process.env.TIDEPOOL_REGISTRY;
 const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? "sandbox";
 // ADR 0018: base directory a path-omitting workspace entry derives from.
 const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_DIR);
+// ADR 0082 決定2: 同じ env の値から出所も導く(登録の門が着地先に添えて見せる)。
+const workspacesDirSource = workspacesBaseDirSource(process.env.TIDEPOOL_WORKSPACES_DIR);
 // ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
 // pre-set delegation to a different registry name overrides it per task
@@ -136,6 +138,7 @@ const server = await startServer(
     advisorDisabled,
     workspaceName,
     workspacesDir,
+    workspacesDirSource,
     defaultAgentName,
     auditorName,
     boardState,

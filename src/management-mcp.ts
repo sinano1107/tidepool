@@ -229,14 +229,17 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "create_workspace",
     {
-      description: "Create a workspace in the human-managed registry.",
+      // ADR 0082 決定1: this gate decides and registers in one call, so the
+      // landing place has to be readable before (the description) and after
+      // (the result) — the WebUI's "see it, then decide" has no MCP shape.
+      description:
+        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default.",
       inputSchema: createWorkspaceSchema,
     },
     async (input) => {
       if (!deps.workspaceAdmin?.create) return toolError("workspace administration is not configured");
       try {
-        await deps.workspaceAdmin.create(input);
-        return toolResult({});
+        return toolResult({ path: await deps.workspaceAdmin.create(input) });
       } catch (err) {
         return registryToolError(err);
       }
@@ -248,7 +251,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async () => {
       if (!deps.workspaceAdmin?.list) return toolError("workspace administration is not configured");
       try {
-        return toolResult({ workspaces: deps.workspaceAdmin.list() });
+        return toolResult(deps.workspaceAdmin.list());
       } catch (err) {
         return registryToolError(err);
       }

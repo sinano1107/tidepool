@@ -8,6 +8,7 @@ import {
   resolveExecutionWorkspace,
   resolveWorkspacesBaseDir,
   UnknownWorkspaceError,
+  workspacesBaseDirSource,
 } from "../src/workspace.js";
 
 describe("resolveWorkspacesBaseDir", () => {
@@ -19,6 +20,12 @@ describe("resolveWorkspacesBaseDir", () => {
     expect(resolveWorkspacesBaseDir("/mnt/ssd/tidepool-workspaces")).toBe(
       "/mnt/ssd/tidepool-workspaces",
     );
+  });
+
+  // ADR 0082 決定2: パスだけでは「意図した設定」と「未設定の既定」が区別できない。
+  it("同じ env の値から出所を判定する", () => {
+    expect(workspacesBaseDirSource(undefined)).toBe("default");
+    expect(workspacesBaseDirSource("/mnt/workspaces")).toBe("configured");
   });
 });
 

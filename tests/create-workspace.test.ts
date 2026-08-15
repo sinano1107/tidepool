@@ -77,9 +77,11 @@ describe("createWorkspace: 新規作成モード(issue #57 / ADR 0066)", () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
 
-    await createWorkspace({ mode: "create", name: "lagoon" }, deps);
+    const path = await createWorkspace({ mode: "create", name: "lagoon" }, deps);
 
     expect(deps.github.repoAccessCalls).toBe(0);
+    // ADR 0082 決定1: 規約導出モードの着地先は、決めた側へ返って初めて読める
+    expect(path).toBe(join(deps.workspacesBaseDir, "lagoon"));
     expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(true);
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({});
   });
@@ -215,9 +217,9 @@ describe("createWorkspace: clone モード(issue #57)", () => {
     const deps = await makeDeps(registryDir);
     const upstream = await makeUpstream();
 
-    await createWorkspace({ mode: "clone", name: "lagoon", repo: upstream }, deps);
+    const cloneDir = await createWorkspace({ mode: "clone", name: "lagoon", repo: upstream }, deps);
 
-    const cloneDir = join(deps.workspacesBaseDir, "lagoon");
+    expect(cloneDir).toBe(join(deps.workspacesBaseDir, "lagoon"));
     expect(git(cloneDir, "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo: upstream });
   });

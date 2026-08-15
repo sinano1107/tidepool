@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test, workspaceList } from "./fixtures.js";
 
 // Issue #208 で昇格した恒久 smoke。目次 → 各セクション → レコード → Edit → Cancel、
 // unavailable の見え方と未保存破棄ガードを実ブラウザで通す。
@@ -55,7 +55,7 @@ const PROFILES = [
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const seams = {
-  workspaceAdmin: { list: () => WORKSPACES as any },
+  workspaceAdmin: { list: () => workspaceList(WORKSPACES) as any },
   agentAdmin: {
     list: () => AGENTS as any,
     authorityProfiles: () => ["implementer", "reviewer"],
