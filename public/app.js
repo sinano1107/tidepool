@@ -2659,18 +2659,16 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         onChange: (e) => setDump(e.target.value),
         placeholder: "dump it \u2014 the LLM structures it into the six fields below"
       }
-    ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, disabled: !dump.trim() || drafting, onClick: draft }, drafting ? "Drafting\u2026" : "Draft handoff")), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, HANDOFF_FIELDS.map(([field, label]) => /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, disabled: !dump.trim() || drafting, onClick: draft }, drafting ? "Drafting\u2026" : "Draft handoff")), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, HANDOFF_FIELDS.map(([field, label]) => /* @__PURE__ */ React.createElement("div", { key: field }, /* @__PURE__ */ React.createElement(
       Input,
       {
-        key: field,
         label,
         multiline: true,
         rows: 2,
         value: fields[field] ?? "",
-        hint: missing.includes(field) ? "\u26A0 the draft found nothing for this \u2014 optional" : void 0,
         onChange: (e) => setFields((f) => ({ ...f, [field]: e.target.value }))
       }
-    )), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
+    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this \u2014 optional"))), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
   );
 }
 function App() {

@@ -2527,10 +2527,18 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         </Button>
       </Card>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* 警告は DS の hint(muted)でも error(coral)でもない — 埋まらなかった欄は
+            強制されないので危険色は誇張になる。kit のモックと同じ sun-4 で言う */}
         {HANDOFF_FIELDS.map(([field, label]) => (
-          <Input key={field} label={label} multiline rows={2} value={fields[field] ?? ''}
-            hint={missing.includes(field) ? '⚠ the draft found nothing for this — optional' : undefined}
-            onChange={(e) => setFields((f) => ({ ...f, [field]: e.target.value }))} />
+          <div key={field}>
+            <Input label={label} multiline rows={2} value={fields[field] ?? ''}
+              onChange={(e) => setFields((f) => ({ ...f, [field]: e.target.value }))} />
+            {missing.includes(field) && (
+              <span style={{ display: 'block', marginTop: 5, fontSize: 'var(--text-xs)', color: 'var(--sun-4)' }}>
+                ⚠ the draft found nothing for this — optional
+              </span>
+            )}
+          </div>
         ))}
         <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Done</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Not yet</Button>

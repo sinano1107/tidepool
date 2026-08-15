@@ -21,11 +21,12 @@ test("孤立した human タスクは Your tasks に現れ、ワンタップの 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Queue" }).click();
 
-  const row = page.getByText(title).locator("..");
-  await expect(row).toBeVisible();
-  // 塞いでいる親が無いので確認ダイアログは挟まらない
-  await row.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByText(title)).toBeVisible();
+  // Done は Your tasks の行にしか無い。塞いでいる親が無いので確認ダイアログも挟まらない
+  const done = page.getByRole("button", { name: "Done" });
+  await expect(done).toHaveCount(1);
+  await done.click();
 
   await expect(page.getByText(title)).toHaveCount(0);
-  await expect(page.getByText("none.")).toBeVisible();
+  await expect(done).toHaveCount(0);
 });

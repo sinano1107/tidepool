@@ -30,7 +30,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
-import { IssueContentCache, type LiveBoardTask } from "./issue-view.js";
+import { IssueContentCache, type Live } from "./issue-view.js";
 import { getPaceOffsets, isValidOffset, setPaceOffsets } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
 import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
@@ -1615,7 +1615,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       throw err;
     }
   };
-  const presentLive = (tasks: BoardTask[]): Promise<LiveBoardTask[]> =>
+  const presentLive = <T extends BoardTask>(tasks: T[]): Promise<Array<Live<T>>> =>
     Promise.all(
       tasks.map((task) =>
         issueContent.present(task, github, displayWorkspacePath(task.workspace), clock.now()),
@@ -1627,9 +1627,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   // the persistent your-tasks list (issue #13): every unsettled human-
-  // assignee task, never the execution queue's business
-  router.get("/your-tasks", (_req, res) => {
-    res.json(listYourTasks(db));
+  // assignee task, never the execution queue's business. Live-expanded like
+  // every other board read口 (issue #301) — an issue-backed human task must
+  // show the issue's own title, not the "#N" placeholder.
+  router.get("/your-tasks", async (_req, res) => {
+    res.json(await presentLive(listYourTasks(db)));
   });
 
   // the queue view (#10): an envelope (ADR 0068 決定3) — `halts` says why the
