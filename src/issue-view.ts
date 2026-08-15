@@ -8,7 +8,12 @@ import { type BoardTask, contentSourceFor, type TaskContent } from "./tasks.js";
  *  carry this field. */
 export type IssueLiveState = "live" | "stale" | "unavailable";
 
-export type LiveBoardTask = BoardTask & { issue_live_state?: IssueLiveState };
+/** A row of any board read口, live-expanded. Generic in the row so a read口
+ *  with fields of its own (`listYourTasks`'s `blocking`) keeps them — `present`
+ *  spreads the task it was handed, so this is what it actually returns. */
+export type Live<T extends BoardTask> = T & { issue_live_state?: IssueLiveState };
+
+export type LiveBoardTask = Live<BoardTask>;
 
 /** The UI-display use-moment of ADR 0016's live 参照, as a process-wide
  *  short-TTL cache: the board's GET endpoints poll every 15s, and every
@@ -28,12 +33,12 @@ export class IssueContentCache {
   // promise instead of each hitting GitHub
   private readonly inFlight = new Map<string, Promise<TaskContent>>();
 
-  async present(
-    task: BoardTask,
+  async present<T extends BoardTask>(
+    task: T,
     github: GitHubClient | undefined,
     workspacePath: () => string | undefined,
     now: Date,
-  ): Promise<LiveBoardTask> {
+  ): Promise<Live<T>> {
     if (task.github_issue_number == null) return task;
     const path = workspacePath();
     // without a workspace path (or a GitHub seam at all) the content can't

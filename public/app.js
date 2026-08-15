@@ -768,7 +768,7 @@ function liveTitle(t) {
   if (t.issue_live_state === "unavailable") return `${t.title} (unavailable)`;
   return t.title;
 }
-function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }) {
+function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }, yourTasks = []) {
   const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === "pause");
   const throttle = pause.throttle;
@@ -952,9 +952,12 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     board: cols,
     icons,
     scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
-    // empty until their domain slices exist: human tasks / agent registry /
-    // out-of-authority approval questions — the kit sections render empty
-    humanTasks: [],
+    // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
+    // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
+    // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
+    humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
+    // empty until its domain slice exists: the agent registry — the kit section
+    // renders empty
     agents: [],
     slot,
     pickupHalt,
@@ -971,15 +974,16 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   };
 }
 async function fetchData() {
-  const [board, log, pause, candidates, triage, queue] = await Promise.all([
+  const [board, log, pause, candidates, triage, queue, yourTasks] = await Promise.all([
     fetch("/api/tasks").then((r) => r.json()),
     fetch("/api/log").then((r) => r.json()),
     fetch("/api/pause").then((r) => r.json()),
     fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} })),
     fetch("/api/triage").then((r) => r.json()),
-    fetch("/api/queue").then((r) => r.json())
+    fetch("/api/queue").then((r) => r.json()),
+    fetch("/api/your-tasks").then((r) => r.json())
   ]);
-  return mapData(board, log, pause, candidates.icons, triage, queue);
+  return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);
 }
 function TpTideWash({ label, emoji, duration = 1250 }) {
   const dur = `${duration}ms`;
@@ -2601,6 +2605,72 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   };
   return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Cancel task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, 'cancels "', task.title, '" and its unfinished descendants \u2014 the record is kept, never erased'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value), placeholder: "left blank, only the fact of the cancel is recorded" }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Cancel this task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep it")));
 }
+const HANDOFF_FIELDS = [
+  ["outcome", "outcome vs criteria"],
+  ["deliverables", "deliverable location"],
+  ["decision_refs", "key decision refs"],
+  ["dead_ends", "dead ends"],
+  ["resume_context", "context to resume"],
+  ["known_issues", "known issues (no task)"]
+];
+function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
+  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [dump, setDump] = React.useState("");
+  const [fields, setFields] = React.useState({});
+  const [missing, setMissing] = React.useState([]);
+  const [drafting, setDrafting] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const draft = async () => {
+    setDrafting(true);
+    try {
+      const d = await api(`/api/tasks/${task.id}/complete/draft`, { dump: dump.trim() });
+      setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ""])));
+      setMissing(d.missing ?? []);
+    } catch (err) {
+      say("info", "no draft \u2014 fill it in yourself", String(err.message || err));
+    }
+    setDrafting(false);
+  };
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const handoff = Object.fromEntries(
+        HANDOFF_FIELDS.map(([f]) => [f, (fields[f] ?? "").trim()]).filter(([, v]) => v)
+      );
+      await api(`/api/tasks/${task.id}/complete`, { handoff });
+      say("success", "task completed", task.id);
+      await onCompleted();
+      onClose();
+    } catch (err) {
+      say("danger", "complete failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return (
+    // 6欄 + ダンプ欄はビューポートより高くなる。DS の Dialog は高さを縛らないので
+    // この面自身が巻き取る — kit のモック(TpHandoffSheet)が持つ設計そのもの
+    /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", maxHeight: "70vh", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Complete task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, '"', task.title, '" blocks ', task.blocking, " \u2014 the handoff is what that parent reads when it resumes"), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        label: "How did it go?",
+        multiline: true,
+        rows: 3,
+        value: dump,
+        onChange: (e) => setDump(e.target.value),
+        placeholder: "dump it \u2014 the LLM structures it into the six fields below"
+      }
+    ), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, disabled: !dump.trim() || drafting, onClick: draft }, drafting ? "Drafting\u2026" : "Draft handoff")), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, HANDOFF_FIELDS.map(([field, label]) => /* @__PURE__ */ React.createElement("div", { key: field }, /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        label,
+        multiline: true,
+        rows: 2,
+        value: fields[field] ?? "",
+        onChange: (e) => setFields((f) => ({ ...f, [field]: e.target.value }))
+      }
+    ), missing.includes(field) && /* @__PURE__ */ React.createElement("span", { style: { display: "block", marginTop: 5, fontSize: "var(--text-xs)", color: "var(--sun-4)" } }, "\u26A0 the draft found nothing for this \u2014 optional"))), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Done"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Not yet")))
+  );
+}
 function App() {
   const { Toast, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const [data, setData] = React.useState(null);
@@ -2612,6 +2682,7 @@ function App() {
   const [actionsTask, setActionsTask] = React.useState(null);
   const [editTaskCard, setEditTaskCard] = React.useState(null);
   const [cancelTaskCard, setCancelTaskCard] = React.useState(null);
+  const [completeHumanCard, setCompleteHumanCard] = React.useState(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get("question")
   );
@@ -2867,6 +2938,20 @@ function App() {
       say("danger", "move failed", String(err.message || err));
     }
   };
+  const doneHuman = async (id) => {
+    const task = data.humanTasks.find((t) => t.id === id);
+    if (task?.blocking) {
+      setCompleteHumanCard(task);
+      return;
+    }
+    try {
+      await api(`/api/tasks/${id}/complete`, {});
+      say("success", "task completed", id);
+      await refreshFull();
+    } catch (err) {
+      say("danger", "complete failed", String(err.message || err));
+    }
+  };
   const togglePause = async () => {
     const next = !data.paused;
     try {
@@ -2982,8 +3067,7 @@ function App() {
       loadPreview,
       onTranslate: onTranslateProp
     }
-  ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, slotState: data.running ? "busy" : data.throttled ? "limit" : "free", paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: () => {
-  }, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, registerLeaveGuard: (fn) => {
+  ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, slotState: data.running ? "busy" : data.throttled ? "limit" : "free", paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: doneHuman, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, registerLeaveGuard: (fn) => {
     leaveGuard.current = fn;
   } }))), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 86, left: "50%", transform: "translateX(-50%)", zIndex: 50, width: "calc(100% - 32px)", maxWidth: 408 } }, /* @__PURE__ */ React.createElement("div", { className: toast.leaving ? "tp-toast-out" : "tp-toast-in" }, /* @__PURE__ */ React.createElement(Toast, { kind: toast.kind, detail: toast.detail, onDismiss: dismissToast }, toast.msg))), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!addChildParent, onClose: () => setAddChildParent(null) }, addChildParent && /* @__PURE__ */ React.createElement(RegisterScreen, { parentTask: addChildParent, onRegister: addChild, onClose: () => setAddChildParent(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!actionsTask, onClose: () => setActionsTask(null) }, actionsTask && /* @__PURE__ */ React.createElement(
     TaskActionsDialog,
@@ -3003,7 +3087,7 @@ function App() {
       },
       onClose: () => setActionsTask(null)
     }
-  )), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!editTaskCard, onClose: () => setEditTaskCard(null) }, editTaskCard && /* @__PURE__ */ React.createElement(EditTaskDialog, { taskCard: editTaskCard, say, onSaved: refreshFull, onClose: () => setEditTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!cancelTaskCard, onClose: () => setCancelTaskCard(null) }, cancelTaskCard && /* @__PURE__ */ React.createElement(CancelTaskDialog, { task: cancelTaskCard, say, onCancelled: refreshFull, onClose: () => setCancelTaskCard(null) })), /* @__PURE__ */ React.createElement("nav", { style: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 440, display: "flex", background: "var(--surface-card)", borderTop: "1px solid var(--border-hairline)", zIndex: 20 } }, tabs.map((t) => {
+  )), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!editTaskCard, onClose: () => setEditTaskCard(null) }, editTaskCard && /* @__PURE__ */ React.createElement(EditTaskDialog, { taskCard: editTaskCard, say, onSaved: refreshFull, onClose: () => setEditTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!cancelTaskCard, onClose: () => setCancelTaskCard(null) }, cancelTaskCard && /* @__PURE__ */ React.createElement(CancelTaskDialog, { task: cancelTaskCard, say, onCancelled: refreshFull, onClose: () => setCancelTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!completeHumanCard, onClose: () => setCompleteHumanCard(null) }, completeHumanCard && /* @__PURE__ */ React.createElement(CompleteHumanTaskDialog, { task: completeHumanCard, say, onCompleted: refreshFull, onClose: () => setCompleteHumanCard(null) })), /* @__PURE__ */ React.createElement("nav", { style: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 440, display: "flex", background: "var(--surface-card)", borderTop: "1px solid var(--border-hairline)", zIndex: 20 } }, tabs.map((t) => {
     const active = tab === t.key;
     return /* @__PURE__ */ React.createElement(
       "button",
