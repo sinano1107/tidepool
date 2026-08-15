@@ -210,7 +210,9 @@ export function openDb(path: string): Db {
     -- checkout): marked needs-human, its tasks stay out of the slot until a
     -- human repairs it (issue #8)
     -- ADR 0064 決定6: ref_snapshot は pickup の瞬間に撮った全 ref の写像
-    -- (for-each-ref のソート済み出力そのもの)。slot 解放時にこれと現在を比べ、
+    -- (for-each-ref のソート済み出力 = refname 順の "値 refname"。値は
+    -- objectname だが、symref の行だけは指し先 "symref=<refname>" である ——
+    -- ADR 0081)。slot 解放時にこれと現在を比べ、
     -- タスクブランチ以外が1つでも動いていれば quarantine する。worker が書けない
     -- 場所であることが要件なので git の ref ではなくここに置く。
     CREATE TABLE IF NOT EXISTS workspace_state (
