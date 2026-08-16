@@ -84,6 +84,8 @@ future-ideas)/ Knowledge の git 併用(CLAUDE.md は人間が書くものに戻
 
 ## 退けた案
 
+(OSS 各候補の事実は `docs/agent-memory-oss-survey.md` にまとめてある。)
+
 - **semantica を長期記憶 + decision intelligence 層として採用する** — bi-temporal + PROV-O + LLM 不要抽出を
   1プロセスで持つ点は魅力だが、MCP は stdio のみ、graph はプロセス単一の singleton で `conversation_id /
   user_id` は分離ではなく metadata filter、記憶形(store / search)の tool は無く、TS パッケージも無い。
