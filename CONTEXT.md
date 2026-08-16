@@ -103,6 +103,19 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 
 唯一の例外が **kill switch(緊急マスク)**: 盤面ホストの運用設定で全 advisor を一時停止できる。registry には置かない — エージェントの定義ではなく運用上の緊急マスクであり、advisor 側の障害・仕様変更時に agent.md を1枚も触らず止められることが存在理由(experimental な機能をフリート全員に配る代償)。「盤面側のオーバーライドを持たない」の線とは矛盾しない — マスクは advisor を**足す**方向には一切効かず、実効構成を濁らせずに一律ゼロへ倒すだけで、その事実もイベント履歴に残る。
 
+## Memory(記憶)
+
+盤面の記録(イベント履歴と worker transcript)から派生した索引(ADR 0083)。新しい知識源ではなく、記録に無いことは記憶にも無い — 「生きた記憶は存在しない」(ADR 0045)は破られない。worker が引くのは過去の記録であって過去のセッションではない。存在理由は、人間が指示文を書き直さずに agent が育つこと(prompt engineering を非技術者に課さない)。
+
+- **種別**: **Knowledge**(事実。承認不要、出所必須)と **Behavior**(振る舞い。承認必須)。**Precedent** は過去の判断 + outcome + 機械観測された行動列の投影であり、Behavior を起草する材料。
+- **状態**: `candidate` / `approved`。worker に注入・retrieval されるのは approved のみ。承認は文言に対して行い、統合で書き換えたら再承認。「振る舞いの変更は人間承認」の線は、記憶がどのファイルに住むかではなく、この状態に引かれる。
+- **不変条件**: 削除は無く無効化のみ。すべてのエントリはイベント id か commit に遡れる。記憶は決裁権を広げない — 位置づけは Advisor と同じで、変わるのは権限内判断の質だけ。
+- **スコープ**: workspace(+盤面全体の少数)。agent ごとに隔離した記憶は作らない。Precedent は (workspace, agent) で引け、各 episode に当時の agent 定義の版を刻む。
+- **書き手**: Precedent は盤面が投影し agent は書かない。Knowledge は worker の明示 tool と人間。Behavior の candidate は fix-forward RCA(review layer 2)、approved 提案は meta-review(layer 3)が起草し、承認 question を経て確定する。
+- **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)。
+
+registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタにとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。
+
 ## Decision log(判断ログ)
 
 権限内判断の1行記録と完了報告が流れる、人間向けの流し読みビュー。独立したエンティティではなくイベント履歴への絞り込みであり、未読カーソル(前進のみ)を持つ。表示は workspace 単位に束ねられ、束の中は時系列に流れる — 既定で視界に入るのは未読だけで、既読と未読ゼロの workspace は畳まれて退く(Board と同じく視界からのみの退場であり、記録は何も消えない)。エントリの workspace 帰属は焼き込まれた値ではなく表示の瞬間に解決される参照(Workspace の「既定への参照」と同型)。完了エントリ(完了基準に対する結果1行 + ハンドオフドキュメントへの参照)は通常の判断行と視覚的に区別されて流れる。
@@ -414,7 +427,7 @@ work タスク完了時に必須の引き継ぎ文書。行動可能な情報は
 
 ## Swell / Condensation
 
-Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。
+Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。ADR 0083 でループの形が定まった: 学習の入力は異議(完了エントリへの異議を含む)だけで、正の信号は Displayed(表示済み・異議なし)から機械導出する。異議ごとに fix-forward RCA が Memory の Behavior candidate を書き、周期(盤面設定、既定は週次)の meta-review が candidate 群の繰り返しを**判断で**見て approved 提案を起草し、人間承認 question で確定する — 数値閾値は使わない。人間の明示指示は1回で候補化してよいが承認 question は経由する。authority の変更は従来どおり registry への diff。
 
 ## Display language(表示言語)
 
