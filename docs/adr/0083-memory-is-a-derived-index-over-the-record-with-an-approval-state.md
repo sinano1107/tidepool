@@ -58,10 +58,12 @@
 12. **agent.md は担当範囲(引き受ける仕事 / 引き受けない仕事)+ 判断の優先順位 + 制約 + 従うワークフロー
     skill へのポインタ、にとどまる。** ペルソナ(「あなたは敏腕○○です」)は書かない — 一貫した性能向上を示さず
     悪化する場合もあるという報告があり、載せる理由がない。repo 固有の事実は Knowledge、「前に X で失敗したから
-    Y」は Behavior、手順は skills へ。ワークフロー skill(複数 skill を組み合わせる meta skill)は workspace 階層に
-    置く — skill 機構自体が依存を厳密に検証せず利用時の LLM に読ませる形であり、allowlist の名前は参照であって
-    在庫の主張ではない(ADR 0023)ので、workspace に無い skill へのポインタは無害に不発になる。「skill X に
-    則って作業して」と agent.md に書くことは許す(手順のベタ書きではなくポインタ1行)。ワークフローに従うことの
+    Y」は Behavior、手順は skills へ。ワークフロー skill(複数 skill を組み合わせる meta skill)の**置き場は作者の
+    判断に任せる**(workspace / plugin / どこでも) — 盤面から skill を作成する想定は現状なく、skill 機構自体が依存を
+    厳密に検証せず利用時の LLM に読ませる形であり、allowlist の名前は参照であって在庫の主張ではない(ADR 0023)
+    ので、どこに置いても・無い場所でも無害に不発になる。参照は agent.md のポインタと authority / skills allowlist
+    から行う。skill に知識のない人への UX/UI 的配慮は後回し。「skill X に則って作業して」と agent.md に書くことは
+    許す(手順のベタ書きではなくポインタ1行)。ワークフローに従うことの
     機械的な強制は無い — 盤面が skill 本文を spawn 時に流し込む機構は作らない(progressive disclosure を壊し、
     ポインタと二重になる)。従ったかどうかは決定8の transcript 観測で見え、逸脱は異議 → Behavior で直る
     (fix-forward の線)。運用が始まったら「agent.md が育つ速さ」自体が Memory が機能しているかの指標になる —
