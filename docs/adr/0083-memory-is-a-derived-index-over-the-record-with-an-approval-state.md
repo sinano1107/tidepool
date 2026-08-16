@@ -13,7 +13,8 @@
    worker が引くのは過去の**記録**であって過去の**セッション**ではない。
 2. **種別は Knowledge(事実。承認不要、出所必須)と Behavior(振る舞い。承認必須)の2つ。** Precedent
    (過去の判断 + outcome + 機械観測された行動列)は記録からの投影であり、Behavior を起草するときの材料。
-   ChatGPT 案にあった Human Review は独立種ではなく Precedent の属性、Judgment/Experience は Behavior に畳む。
+   検討中の案では Knowledge / Experience / Judgment / Human Review の4種を立てていたが、人間のレビュー結果は独立種では
+   なく Precedent の属性(outcome の一部)であり、Experience と Judgment は Behavior に畳む。
 3. **承認の線は「どのファイルに住むか」ではなく「記憶エントリの状態」に引く。** エントリは `candidate` /
    `approved` を持ち、worker に注入・retrieval されるのは approved のみ。承認は condensation の question
    (人間承認)を通る。これにより「振る舞いの変更は人間承認」(overview の Condensation の線)を守りながら、
@@ -91,7 +92,7 @@ future-ideas)/ Knowledge の git 併用(CLAUDE.md は人間が書くものに戻
 - **agentmemory / mem0 TS oss / cognee をサイドカーに** — それぞれ TS・出所・監査・スコープのどれかを持つが
   fit は 6〜7割で、残り(承認状態・events への出所)は自前になる。薄い検索のために依存を1つ抱える価値が無い。
 - **Heuristic を memory に持たず registry の agent.md / workspace CLAUDE.md への instruction diff としてのみ
-  扱う**(grilling 途中の線)— ファイルが育ち続け、毎セッション全量注入される。承認の線を状態に引き直した
+  扱う**(本 ADR に至る議論の途中まで採っていた線)— ファイルが育ち続け、毎セッション全量注入される。承認の線を状態に引き直した
   (決定3)ことで、承認の不変条件を守ったままコンパクトに保てる。
 - **数値閾値で candidate → approved を判定する** — 決定9。
 - **盤面が spawn 時に必須 skill の本文を注入する** — 決定12。
