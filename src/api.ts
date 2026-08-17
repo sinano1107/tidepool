@@ -937,8 +937,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (err instanceof UnknownAuthorityProfileError) {
         res.status(404).json({ error: err.message });
       } else if (err instanceof ProfileConfirmationRequiredError) {
-        // 危険な値の 409 は WebUI のダイアログが理由コードをそのまま読む
-        // (ADR 0061 決定1 — workspace の 409 と同じ本文の形)
         res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });

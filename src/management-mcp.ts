@@ -365,8 +365,6 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Create an authority profile in the human-managed registry. Set confirm_dangerous to true only after obtaining the human's explicit confirmation.",
       inputSchema: profileFieldsSchema.extend({ name: z.string().min(1) }),
     },
-    // 危険な値の門はドメイン側に1つだけ(ADR 0061 決定1)— この扉は名前を
-    // 揃えて渡し、拒否は registryToolError が本文ごと写す
     async ({ confirm_dangerous, ...input }) => {
       if (!deps.profileAdmin?.create) return toolError("profile administration is not configured");
       try {
