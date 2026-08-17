@@ -389,31 +389,6 @@ it("PATCH は触っていないフィールドを載せない — guidance だ�
   expect(calls).toEqual([{ name: "roamer", guidance: "Reworded." }]);
 });
 
-it("PATCH で危険な値を書いたら confirmDangerous なしは 409 + 理由コード", async () => {
-  const calls: UpdateProfileInput[] = [];
-  t = await bootUpdateOnly(calls);
-
-  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", { merge: "auto_if_ci_green" });
-
-  expect(res.status).toBe(409);
-  expect(res.json.confirm_required).toBe(true);
-  expect(res.json.dangerous_values).toEqual(["merge_auto_if_ci_green"]);
-  expect(calls).toEqual([]);
-});
-
-it("PATCH の危険な値も confirmDangerous: true なら通り、フラグは domain へ渡らない", async () => {
-  const calls: UpdateProfileInput[] = [];
-  t = await bootUpdateOnly(calls);
-
-  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", {
-    assignable_to: ["*"],
-    confirmDangerous: true,
-  });
-
-  expect(res.status).toBe(200);
-  expect(calls).toEqual([{ name: "roamer", assignable_to: ["*"] }]);
-});
-
 it("PATCH の空配列は安全側 — 確認なしで通る", async () => {
   const calls: UpdateProfileInput[] = [];
   t = await bootUpdateOnly(calls);
@@ -444,3 +419,29 @@ it("部分パッチでも未知キーは 400 — strict は緩めない", async 
   expect((await api(t.baseUrl, "PATCH", "/api/profiles/roamer", { bogus: 1 })).status).toBe(400);
   expect(calls).toEqual([]);
 });
+
+// 危険な値を「書いた」パッチは、どの理由コードでも同じ2段(confirmDangerous なしは
+// 409、付ければ保存)を通る。issue #266 の受け入れ条件が3ペイロード × 両半分を
+// 名指しするので、扉のレベルで表にして揃える。
+const DANGEROUS_PATCHES: [string, Record<string, unknown>][] = [
+  ["merge_auto_if_ci_green", { merge: "auto_if_ci_green" }],
+  ["assignable_to_wildcard", { assignable_to: ["*"] }],
+  ["allowed_workspaces_wildcard", { allowed_workspaces: ["*"] }],
+];
+
+for (const [reason, patch] of DANGEROUS_PATCHES) {
+  it(`PATCH の ${reason}: confirmDangerous なしは 409、付ければ保存`, async () => {
+    const calls: UpdateProfileInput[] = [];
+    t = await bootUpdateOnly(calls);
+
+    const denied = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", patch);
+    expect(denied.status).toBe(409);
+    expect(denied.json.confirm_required).toBe(true);
+    expect(denied.json.dangerous_values).toEqual([reason]);
+    expect(calls).toEqual([]);
+
+    const saved = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", { ...patch, confirmDangerous: true });
+    expect(saved.status).toBe(200);
+    expect(calls).toEqual([{ name: "roamer", ...patch }]);
+  });
+}

@@ -1187,18 +1187,6 @@ function sameStrings(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-// The four profile fields as the create door wants them: all four always
-// present — the registry schema requires every one, merge included (ADR 0079).
-// The edit door is a partial patch and builds its own body (ADR 0086 決定3/4).
-function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
-  return {
-    guidance,
-    assignable_to: assignableTo,
-    allowed_workspaces: allowedWorkspaces,
-    merge,
-  };
-}
-
 // A list field for a profile's assignable_to / allowed_workspaces (issue #78):
 // picks from the registry's existing agents / workspaces rather than free text,
 // so a value can't be a typo for a name that doesn't exist. Selected entries
@@ -1472,8 +1460,11 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   });
 
   const submit = () => {
-    const values = { guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge };
-    const body = Object.fromEntries(Object.keys(changed).filter((k) => changed[k]).map((k) => [k, values[k]]));
+    const body = {};
+    if (changed.guidance) body.guidance = guidance;
+    if (changed.assignable_to) body.assignable_to = assignableTo;
+    if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
+    if (changed.merge) body.merge = merge;
     save(`/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH', body, 'updated', profile.name);
   };
 
@@ -1832,9 +1823,10 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
     || allowedWorkspaces.length > 0 || !!merge;
   useDirtySignal(edit, true, dirty);
 
+  // 作成扉は4フィールドすべてを常に載せる(ADR 0079 決定1 / ADR 0086 決定3)
   const submit = () => save(
     '/api/profiles', 'POST',
-    { name: name.trim(), ...profileBody(guidance, assignableTo, allowedWorkspaces, merge) },
+    { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge },
     'created', name.trim(),
   );
 
