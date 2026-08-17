@@ -302,9 +302,16 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed"] as const
  *  event's own task's `workspace`, or the board's default when the task
  *  carries none — resolved fresh at read time, never stamped onto the event
  *  itself (same "resolved fresh every use, not pinned" reference semantics
- *  as `resolveExecutionWorkspace`, ADR 0009). */
+ *  as `resolveExecutionWorkspace`, ADR 0009). Also carries every objection
+ *  ever raised against the entry (ADR 0085) — the annotation is a fact of
+ *  the entry, not a session's state, so bundled and still commit-pending
+ *  objections both ride along. `session_id` is the sole fact the read model
+ *  hands the caller for telling the two apart (against the current open
+ *  session, if any); `at` and who raised it are deliberately left out
+ *  (issue #371). */
 export interface LogEntry extends EventRow {
   workspace: string | null;
+  objections: { comment: string; session_id: number }[];
 }
 
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
@@ -321,7 +328,26 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS) as Array<
     Omit<EventRow, "payload"> & { payload: string; workspace: string | null }
   >;
-  return rows.map((r) => ({ ...r, payload: JSON.parse(r.payload) as EventPayload }));
+  // a second, flat query rather than N+1 per entry — grouped in JS below
+  const objectionRows = db
+    .prepare(
+      `SELECT json_extract(payload, '$.entry_id') AS entry_id,
+              json_extract(payload, '$.comment') AS comment,
+              json_extract(payload, '$.session_id') AS session_id
+         FROM events WHERE kind = 'objection_raised' ORDER BY id`,
+    )
+    .all() as Array<{ entry_id: number; comment: string; session_id: number }>;
+  const objectionsByEntry = new Map<number, { comment: string; session_id: number }[]>();
+  for (const o of objectionRows) {
+    const list = objectionsByEntry.get(o.entry_id) ?? [];
+    list.push({ comment: o.comment, session_id: o.session_id });
+    objectionsByEntry.set(o.entry_id, list);
+  }
+  return rows.map((r) => ({
+    ...r,
+    payload: JSON.parse(r.payload) as EventPayload,
+    objections: objectionsByEntry.get(r.id) ?? [],
+  }));
 }
 
 export function getLogCursor(db: Db): number {

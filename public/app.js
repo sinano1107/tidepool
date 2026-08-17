@@ -353,6 +353,12 @@ function groupLogEntries(entries) {
   return groups;
 }
 const objectionBadge = (comments) => comments?.length > 1 ? comments.map((c) => `- ${c}`).join("\n") : comments?.[0];
+function commitPendingObjectionKeys(log, localObjections) {
+  return /* @__PURE__ */ new Set([
+    ...Object.keys(localObjections),
+    ...log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id))
+  ]);
+}
 function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, onTranslate }) {
   const { Button, Input, LogEntry, QueueItem, Switch } = window.TidepoolDesignSystem_8a0ead;
   const nQuestions = data.questions.length;
@@ -540,7 +546,24 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     const renderLogRow = (l) => {
       const k = logKey(l);
       const hasHandoff = l.kind === "completion" && (l.handoff != null || loadHandoff && l.handoffPresent);
-      return /* @__PURE__ */ React.createElement("div", { key: k, "data-entry-id": l.unread && l.id != null ? l.id : void 0 }, /* @__PURE__ */ React.createElement(LogEntry, { entry: { ...l, objection: objectionBadge(objections[k]) }, active: objecting === k, onObject: () => toggleObjecting(k), onExpand: hasHandoff ? () => toggleHandoff(k, l) : void 0 }), logTranslateOn && logTranslations[k] && logTranslations[k].status !== "throttled" && /* @__PURE__ */ React.createElement("div", { style: { padding: "2px 14px 10px", background: "var(--surface-recessed)" } }, logTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)" } }, logTranslations[k].text) : /* @__PURE__ */ React.createElement(TpTranslationNote, { result: logTranslations[k] })), handoffOpen[k] && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px 12px", background: "var(--surface-recessed)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "handoff \u2014 ", l.taskId), onTranslate && /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: !!handoffTranslateOn[k], onChange: (next) => setHandoffTranslate(k, l, next), style: { marginLeft: "auto" } })), /* @__PURE__ */ React.createElement("pre", { style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--text-body)", overflowX: "auto" } }, handoffCache.current[k]), handoffTranslateOn[k] && handoffTranslations[k] && (handoffTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("pre", { style: { margin: "8px 0 0", paddingTop: 8, borderTop: "1px dashed var(--border-hairline)", whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--tide-5)", overflowX: "auto" } }, handoffTranslations[k].doc) : /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: handoffTranslations[k] }))), objecting !== k && /* @__PURE__ */ React.createElement("button", { onClick: () => toggleObjecting(k), style: { background: "none", border: "none", color: "var(--coral-4)", fontSize: "var(--text-xs)", cursor: "pointer", padding: "8px 0 0", display: "block" } }, "object to this entry\u2026")), objecting === k && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", background: "var(--coral-1)", display: "flex", gap: 8, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "direction \u2014 steering, not rollback", value: draft, onChange: (e) => setDraft(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: !draft.trim(), onClick: async () => {
+      return /* @__PURE__ */ React.createElement("div", { key: k, "data-entry-id": l.unread && l.id != null ? l.id : void 0 }, /* @__PURE__ */ React.createElement(
+        LogEntry,
+        {
+          entry: {
+            ...l,
+            // server-delivered commit-pending + this tab's own immediate
+            // reflection never overlap: `data.log` is a fixed snapshot
+            // for the whole triage flow (App component), so an entry
+            // objected-to in this same load never re-appears from the
+            // server mid-session (issue #371)
+            objection: objectionBadge([...l.pendingObjections ?? [], ...objections[k] ?? []]),
+            bundledObjection: objectionBadge(l.bundledObjections)
+          },
+          active: objecting === k,
+          onObject: () => toggleObjecting(k),
+          onExpand: hasHandoff ? () => toggleHandoff(k, l) : void 0
+        }
+      ), logTranslateOn && logTranslations[k] && logTranslations[k].status !== "throttled" && /* @__PURE__ */ React.createElement("div", { style: { padding: "2px 14px 10px", background: "var(--surface-recessed)" } }, logTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)" } }, logTranslations[k].text) : /* @__PURE__ */ React.createElement(TpTranslationNote, { result: logTranslations[k] })), handoffOpen[k] && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 14px 12px", background: "var(--surface-recessed)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "handoff \u2014 ", l.taskId), onTranslate && /* @__PURE__ */ React.createElement(Switch, { label: "\u8A33\u3092\u6DFB\u3048\u308B", checked: !!handoffTranslateOn[k], onChange: (next) => setHandoffTranslate(k, l, next), style: { marginLeft: "auto" } })), /* @__PURE__ */ React.createElement("pre", { style: { margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--text-body)", overflowX: "auto" } }, handoffCache.current[k]), handoffTranslateOn[k] && handoffTranslations[k] && (handoffTranslations[k].status === "translated" ? /* @__PURE__ */ React.createElement("pre", { style: { margin: "8px 0 0", paddingTop: 8, borderTop: "1px dashed var(--border-hairline)", whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", lineHeight: 1.6, color: "var(--tide-5)", overflowX: "auto" } }, handoffTranslations[k].doc) : /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement(TpTranslationNote, { result: handoffTranslations[k] }))), objecting !== k && /* @__PURE__ */ React.createElement("button", { onClick: () => toggleObjecting(k), style: { background: "none", border: "none", color: "var(--coral-4)", fontSize: "var(--text-xs)", cursor: "pointer", padding: "8px 0 0", display: "block" } }, "object to this entry\u2026")), objecting === k && /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 12px", background: "var(--coral-1)", display: "flex", gap: 8, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "direction \u2014 steering, not rollback", value: draft, onChange: (e) => setDraft(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: !draft.trim(), onClick: async () => {
         if (onObject) {
           try {
             await onObject(l, draft);
@@ -577,7 +600,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
   })(), section === 2 && (() => {
-    const nObjections = Object.keys(objections).length;
+    const nObjections = commitPendingObjectionKeys(data.log, objections).size;
     const scratchPanel = scratch.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 } }, "scratchpad \u2014 triage before commit"), scratch.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%", fontSize: "var(--text-sm)", color: (scratchKinds[l.id] || "task") === "discard" ? "var(--text-muted)" : "var(--text-body)", textDecoration: (scratchKinds[l.id] || "task") === "discard" ? "line-through" : "none" } }, l.text), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4 } }, TP_SCRATCH_KINDS.map((k) => {
       const picked = (scratchKinds[l.id] || "task") === k.key;
       return /* @__PURE__ */ React.createElement(
@@ -795,6 +818,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       }))
     };
   });
+  const openSessionId = triage.session?.id ?? null;
   const logEntries = [...log.entries].reverse().map((e) => ({
     id: e.id,
     time: fmtTime(e.created_at),
@@ -806,7 +830,9 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     text: e.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
     unread: e.unread,
     handoffPresent: e.kind === "task_completed" && !!e.payload.handoff_present,
-    workspace: e.workspace ?? null
+    workspace: e.workspace ?? null,
+    pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+    bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
   }));
   const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
     id: t.id,
@@ -2881,7 +2907,7 @@ function App() {
       cursorNote = " \xB7 read cursor NOT advanced (retry from the log)";
     }
     const answered = Object.values(answers).filter(Boolean).length;
-    const repairTasks = new Set(Object.keys(objections).map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId).filter(Boolean)).size;
+    const repairTasks = new Set([...commitPendingObjectionKeys(data.log, objections)].map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId).filter(Boolean)).size;
     const summary = [`${data.log.filter((entry) => entry.unread).length} read`];
     if (answered) summary.push(`${answered} answered`);
     if (repairTasks) summary.push(`${repairTasks} repair`);

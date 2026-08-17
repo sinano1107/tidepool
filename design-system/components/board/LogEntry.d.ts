@@ -13,8 +13,12 @@ export interface LogEntryProps {
     human?: boolean;
     kind?: 'decision' | 'completion' | 'escalation' | 'objection';
     text?: string;
-    /** Existing objection comment, rendered as a coral annotation. */
+    /** Commit-pending objection comment(s), rendered as a coral annotation. */
     objection?: string;
+    /** Already-bundled objection comment(s) from a closed session, rendered
+     *  as a dimmed annotation with a "bundled" label (ADR 0085). Renders
+     *  after `objection` when both are present. */
+    bundledObjection?: string;
     /** Teal unread bar (entries since last skim). */
     unread?: boolean;
   };

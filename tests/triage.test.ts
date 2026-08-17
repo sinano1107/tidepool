@@ -177,6 +177,38 @@ it("an objection needs a direction comment and lands durably on the log entry", 
   expect(objections[0].payload.comment).toBe("plan B breaks the fixtures — go back to plan A");
 });
 
+it("ログ配信がエントリごとの異議注釈を運ぶ — 束ね済みも commit 待ちも全件、無い場合は空配列(issue #371)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "objected work");
+  await t.clock.advance(HOUR);
+  const objectedEntry = await loggedEntry(t, task.id, "went with plan B");
+  const untouchedEntry = await loggedEntry(t, task.id, "an unrelated decision");
+
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: objectedEntry.id,
+    comment: "束ね済みになる1件目",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/close"); // commits session 1, bundles the objection above
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: objectedEntry.id,
+    comment: "commit 待ちの2件目",
+  }); // opens a fresh session 2
+
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  const entries = log.entries as any[];
+  const objected = entries.find((e) => e.id === objectedEntry.id);
+  const untouched = entries.find((e) => e.id === untouchedEntry.id);
+
+  expect(untouched.objections).toEqual([]);
+  expect(objected.objections).toHaveLength(2);
+  expect(objected.objections.map((o: any) => o.comment)).toEqual([
+    "束ね済みになる1件目",
+    "commit 待ちの2件目",
+  ]);
+  // 異なるセッション由来であることが読み分けの唯一の事実(ADR 0085)
+  expect(objected.objections[0].session_id).not.toBe(objected.objections[1].session_id);
+});
+
 it("the S3 preview stages the queue with this session's front-inserts highlighted", async () => {
   t = await bootTidepool();
   const { question } = await escalatedBoard(t);
