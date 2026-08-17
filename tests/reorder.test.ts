@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
+import { quarantineWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -35,6 +35,18 @@ async function occupySlot(t: Tidepool) {
   const filler = await registerWork(t, "occupies the slot");
   await t.clock.advance(HOUR);
   return filler;
+}
+
+/** An unanswered question under `parentId`, which holds every sibling below
+ *  it out of the slot — a `todo` row in the table that can never be picked. */
+function holdChildren(t: Tidepool, parentId: string) {
+  registerQuestion(t, {
+    title: "unrelated decision",
+    purpose: "a human wants steering input",
+    completion_criteria: "answered",
+    parent_id: parentId,
+    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
+  });
 }
 
 /** A child under `parentId` — which makes the parent `blocked` (unfinished
@@ -169,13 +181,7 @@ it("a held row at the raw head does not swallow the ↑ of the task below it", a
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   const child = await registerChild(t, "child", parent.id);
-  registerQuestion(t, {
-    title: "unrelated decision",
-    purpose: "a human wants steering input",
-    completion_criteria: "answered",
-    parent_id: parent.id,
-    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
-  });
+  holdChildren(t, parent.id);
   const other = await registerWork(t, "other");
 
   // park the held child at the raw head — it is `todo` in the table (so the
@@ -190,17 +196,9 @@ it("a held row at the raw head does not swallow the ↑ of the task below it", a
 });
 
 it("a skipped row at the raw head does not swallow the ↑ of the task below it", async () => {
-  const sandbox = await makeWorkspace(dirs, "sandbox");
-  const prod = await makeWorkspace(dirs, "prod");
-  const registry = { sandbox, prod };
-  t = await bootTidepool({
-    workspace: sandbox,
-    resolveWorkspace: (name) => {
-      const ws = registry[(name ?? "sandbox") as keyof typeof registry];
-      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-      return ws;
-    },
-  });
+  // only the board's own workspace needs a real checkout — the stuck task's
+  // "prod" is never picked up, so it exists as a name in workspace_state alone
+  t = await bootTidepool({ workspace: await makeWorkspace(dirs, "sandbox") });
   const stuck = await registerWork(t, "stuck in prod", "prod");
   const db = openDb(join(t.dir, "board.sqlite"));
   quarantineWorkspace(db, "prod", new Error("tree rule failed"), t.clock.now());
@@ -229,13 +227,7 @@ it("with no pickable candidate at all, ↑ fires nothing — there is nothing to
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
   const child = await registerChild(t, "child", parent.id);
-  registerQuestion(t, {
-    title: "unrelated decision",
-    purpose: "a human wants steering input",
-    completion_criteria: "answered",
-    parent_id: parent.id,
-    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
-  });
+  holdChildren(t, parent.id);
 
   // every row is out of the slot: the parent is blocked, its only child held
   await api(t.baseUrl, "POST", `/api/tasks/${child.id}/move`, { after: null });

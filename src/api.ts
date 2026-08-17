@@ -1035,14 +1035,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // `GET /queue` passes — a raw head that could never be picked (a blocked
     // parent, a held row, a quarantined workspace/agent, an assignee over the
     // fable line) must not swallow the human's first ↑.
-    const headBefore =
-      nextSlotTask(
-        db,
-        workspace?.name,
-        defaultAgentName,
-        auditorName,
-        isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
-      )?.id ?? null;
+    const headBefore = nextSlotTask(
+      db,
+      workspace?.name,
+      defaultAgentName,
+      auditorName,
+      isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
+    )?.id;
     const moved = moveTask(db, task, after, clock.now());
     // "run now" is specifically a todo already at the pickable head, moved to
     // the head again — an explicit immediate-poll trigger (issue #82
