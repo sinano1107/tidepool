@@ -1,16 +1,26 @@
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
+import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
   HOUR,
+  makeWorkspace,
   mcpClient,
+  registerQuestion,
   registerWork,
   type Tidepool,
 } from "./harness.js";
 
 let t: Tidepool;
-afterEach(() => t?.stop());
+const dirs: string[] = [];
+afterEach(async () => {
+  await t?.stop();
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
 
 function queueIds(list: any[]): string[] {
   // "work" only: a restart-time failure escalation (#9) can add its own
@@ -25,6 +35,20 @@ async function occupySlot(t: Tidepool) {
   const filler = await registerWork(t, "occupies the slot");
   await t.clock.advance(HOUR);
   return filler;
+}
+
+/** A child under `parentId` — which makes the parent `blocked` (unfinished
+ *  child), so the parent sits at the raw head while never being pickable. */
+async function registerChild(t: Tidepool, title: string, parentId: string) {
+  const res = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title,
+    purpose: `purpose of ${title}`,
+    completion_criteria: `criteria of ${title}`,
+    parent_id: parentId,
+    decompose_reason: `split ${title} from its parent`,
+  });
+  return res.json;
 }
 
 it("moving a task to the head (after: null) reorders the queue, surviving a restart", async () => {
@@ -119,6 +143,104 @@ it("a promoted task can then be run now once it is the head", async () => {
   await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null }); // b is now head: run now
   expect(t.worker.started.map((x) => x.id)).toEqual([b.id]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${b.id}`)).json.status).toBe("in_progress");
+});
+
+it("a task under a blocked parent at the raw head is the pickable head: one ↑ runs it now", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  const child = await registerChild(t, "child", parent.id);
+
+  // the raw todo head is the parent, but it has an unfinished child, so the
+  // slot could never take it — the child is what a pickup would actually run
+  const q = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks.map((x: any) => [
+    x.title,
+    x.status,
+  ]);
+  expect(q).toEqual([
+    ["parent", "blocked"],
+    ["child", "todo"],
+  ]);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${child.id}/move`, { after: null });
+  expect(t.worker.started.map((x) => x.id)).toEqual([child.id]);
+});
+
+it("a held row at the raw head does not swallow the ↑ of the task below it", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  const child = await registerChild(t, "child", parent.id);
+  registerQuestion(t, {
+    title: "unrelated decision",
+    purpose: "a human wants steering input",
+    completion_criteria: "answered",
+    parent_id: parent.id,
+    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
+  });
+  const other = await registerWork(t, "other");
+
+  // park the held child at the raw head — it is `todo` in the table (so the
+  // old raw-head query saw it), but the unanswered question holds it out of
+  // the slot
+  await api(t.baseUrl, "POST", `/api/tasks/${child.id}/move`, { after: null });
+  expect(t.worker.started).toEqual([]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${child.id}`)).json.status).toBe("held");
+
+  await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
+  expect(t.worker.started.map((x) => x.id)).toEqual([other.id]);
+});
+
+it("a skipped row at the raw head does not swallow the ↑ of the task below it", async () => {
+  const sandbox = await makeWorkspace(dirs, "sandbox");
+  const prod = await makeWorkspace(dirs, "prod");
+  const registry = { sandbox, prod };
+  t = await bootTidepool({
+    workspace: sandbox,
+    resolveWorkspace: (name) => {
+      const ws = registry[(name ?? "sandbox") as keyof typeof registry];
+      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
+      return ws;
+    },
+  });
+  const stuck = await registerWork(t, "stuck in prod", "prod");
+  const db = openDb(join(t.dir, "board.sqlite"));
+  quarantineWorkspace(db, "prod", new Error("tree rule failed"), t.clock.now());
+  db.close();
+  const runnable = await registerWork(t, "keeps flowing in sandbox", "sandbox");
+
+  // the raw todo head is the quarantined-workspace task; the slot skips it
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks;
+  expect(queue.find((x: any) => x.id === stuck.id).status).toBe("skipped");
+
+  await api(t.baseUrl, "POST", `/api/tasks/${runnable.id}/move`, { after: null });
+  expect(t.worker.started.map((x) => x.id)).toEqual([runnable.id]);
+});
+
+it("a blocked parent is never the pickable head: ↑ on it fires nothing, however often", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  await registerChild(t, "child", parent.id);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/move`, { after: null });
+  await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/move`, { after: null });
+  expect(t.worker.started).toEqual([]);
+});
+
+it("with no pickable candidate at all, ↑ fires nothing — there is nothing to match", async () => {
+  t = await bootTidepool();
+  const parent = await registerWork(t, "parent");
+  const child = await registerChild(t, "child", parent.id);
+  registerQuestion(t, {
+    title: "unrelated decision",
+    purpose: "a human wants steering input",
+    completion_criteria: "answered",
+    parent_id: parent.id,
+    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
+  });
+
+  // every row is out of the slot: the parent is blocked, its only child held
+  await api(t.baseUrl, "POST", `/api/tasks/${child.id}/move`, { after: null });
+  await api(t.baseUrl, "POST", `/api/tasks/${child.id}/move`, { after: null });
+  expect(t.worker.started).toEqual([]);
 });
 
 it("a reorder that leaves the queue head unchanged does not fire an immediate poll", async () => {

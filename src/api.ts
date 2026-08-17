@@ -63,6 +63,7 @@ import {
   listQueue,
   listYourTasks,
   moveTask,
+  nextSlotTask,
   presentTask,
   type Task,
 } from "./tasks.js";
@@ -440,13 +441,6 @@ const closeSchema = z.object({
     )
     .default([]),
 });
-
-function queueHeadId(db: Db): string | null {
-  const head = db
-    .prepare("SELECT id FROM tasks WHERE status = 'todo' ORDER BY sort_key LIMIT 1")
-    .get() as { id: string } | undefined;
-  return head?.id ?? null;
-}
 
 export interface ApiRouterDeps {
   db: Db;
@@ -1036,15 +1030,28 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       }
       after = found;
     }
-    const headBefore = queueHeadId(db);
+    // the *pickable* head, not the raw todo head (issue #299): the same
+    // predicate the slot itself walks, with the same argument tuple
+    // `GET /queue` passes — a raw head that could never be picked (a blocked
+    // parent, a held row, a quarantined workspace/agent, an assignee over the
+    // fable line) must not swallow the human's first ↑.
+    const headBefore =
+      nextSlotTask(
+        db,
+        workspace?.name,
+        defaultAgentName,
+        auditorName,
+        isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
+      )?.id ?? null;
     const moved = moveTask(db, task, after, clock.now());
-    // "run now" is specifically a todo already at the head, moved to the
-    // head again — an explicit immediate-poll trigger (issue #82 follow-up).
-    // Promoting a *different* task to the head is pure reordering: it
-    // never itself forces a pickup attempt, waiting instead for the next
-    // natural trigger (the running task finishing, or the hourly tick) —
-    // otherwise every reorder, drag included, would silently double as a
-    // pickup request.
+    // "run now" is specifically a todo already at the pickable head, moved to
+    // the head again — an explicit immediate-poll trigger (issue #82
+    // follow-up). Promoting a *different* task to the head is pure
+    // reordering: it never itself forces a pickup attempt, waiting instead
+    // for the next natural trigger (the running task finishing, or the hourly
+    // tick) — otherwise every reorder, drag included, would silently double
+    // as a pickup request. No pickable candidate at all → nothing to match,
+    // so nothing fires.
     if (after === null && moved.status === "todo" && headBefore === task.id) {
       onQueueHeadChanged();
     }
