@@ -289,6 +289,12 @@ function groupLogEntries(entries) {
   return groups;
 }
 
+// Multiple objections on one entry render as a bullet list, matching the
+// server's own bundling (renderObjectionPairs in src/triage.ts); a single
+// objection keeps its original plain-text look (issue #251).
+const objectionBadge = (comments) =>
+  comments?.length > 1 ? comments.map((c) => `- ${c}`).join('\n') : comments?.[0];
+
 // Live-mode props (all optional — absent, the screen runs standalone on mock
 // data): onAnswer / onObject / onScratchAdd persist immediately (中断安全),
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
@@ -562,7 +568,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
           return (
             <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
-              <LogEntry entry={{ ...l, objection: objections[k] }} active={objecting === k} onObject={() => toggleObjecting(k)} onExpand={hasHandoff ? () => toggleHandoff(k, l) : undefined} />
+              <LogEntry entry={{ ...l, objection: objectionBadge(objections[k]) }} active={objecting === k} onObject={() => toggleObjecting(k)} onExpand={hasHandoff ? () => toggleHandoff(k, l) : undefined} />
               {logTranslateOn && logTranslations[k] && logTranslations[k].status !== 'throttled' && (
                 <div style={{ padding: '2px 14px 10px', background: 'var(--surface-recessed)' }}>
                   {logTranslations[k].status === 'translated'
@@ -597,7 +603,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
                     if (onObject) {
                       try { await onObject(l, draft); } catch { return; }
                     }
-                    setObjections({ ...objections, [k]: draft });
+                    setObjections({ ...objections, [k]: [...(objections[k] ?? []), draft] });
                     setObjecting(null);
                   }}>Object</Button>
                 </div>
