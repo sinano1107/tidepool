@@ -36,12 +36,9 @@ export type DangerousValueReason =
  *  values that widen the board's **unattended** outward effect — which is why
  *  `merge: external` is deliberately absent (ADR 0079 決定5). This layer only
  *  reports — it never blocks a write; enforcing confirmation on a dangerous
- *  profile is phase 2's API contract.
- *
- *  Every field is optional because the edit door is a partial patch (issue
- *  #266 / ADR 0086): an absent field was not touched, so it cannot be
- *  something the human just wrote, and it never enters the judgment. Create
- *  passes all three, so its verdicts are unchanged. */
+ *  profile is phase 2's API contract. Every field is optional because an
+ *  absent one was not written by the human, so it never enters the judgment
+ *  (issue #266 / ADR 0086) — create passes all three and is unchanged. */
 export function dangerousValues(
   input: Partial<Pick<CreateProfileInput, "assignable_to" | "allowed_workspaces" | "merge">>,
 ): DangerousValueReason[] {
@@ -104,11 +101,8 @@ export async function updateProfile(input: UpdateProfileInput, deps: ProfileAdmi
 }
 
 /** パッチを既存エントリに重ねて、4フィールド揃った profile にする(ADR 0086
- *  決定1: absent はパッチ語彙の中だけの概念で、キー削除ではない)。既存側の
- *  `??` は TS 上の optional(registry.ts — コード側で組む profile のための形)
- *  を埋めるだけ。registry から読んだエントリは schema で4フィールド必須なので
- *  実行時には発火しないが、万一のときは確認を要する `auto_if_ci_green` ではなく
- *  人間に聞く `escalate` 側へ落ちる。 */
+ *  決定1)。既存側の `??` は registry.ts の TS optional を埋めるだけで、schema を
+ *  通ったエントリでは発火しない — 万一のときは人間に聞く `escalate` 側へ落ちる。 */
 function mergePatch(existing: AuthorityProfile, patch: UpdateProfileInput): CreateProfileInput {
   return {
     name: patch.name,

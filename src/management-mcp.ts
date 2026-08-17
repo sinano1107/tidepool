@@ -134,14 +134,6 @@ const profileFieldsSchema = z.object({
   confirm_dangerous: z.boolean().default(false),
 });
 
-// the edit door is a partial patch (issue #266 / ADR 0086), the create door
-// keeps every field required — absent means untouched, so it never reaches the
-// pure-payload danger judgment. Same contract as PATCH /api/profiles/:name;
-// splitting the two doors here is what keeps them from drifting apart.
-const profilePatchSchema = profileFieldsSchema.partial().extend({
-  confirm_dangerous: z.boolean().default(false),
-});
-
 /** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
 function registryToolError(err: unknown) {
   if (err instanceof GitHubIdentityMissingError) return toolError(`registry configuration missing: ${err.message}`);
@@ -403,7 +395,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Update an authority profile in the human-managed registry. Fields omitted from the request are left unchanged. Set confirm_dangerous to true only after obtaining the human's explicit confirmation.",
-      inputSchema: profilePatchSchema.extend({ name: z.string().min(1) }),
+      // 部分パッチ(issue #266 / ADR 0086)— create 扉は全フィールド必須のまま
+      inputSchema: profileFieldsSchema.partial().extend({ name: z.string().min(1) }),
     },
     async ({ confirm_dangerous, ...input }) => {
       if (!deps.profileAdmin?.update) return toolError("profile administration is not configured");

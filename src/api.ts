@@ -278,13 +278,9 @@ const createProfileSchema = authorityProfileSchema.extend({
 });
 
 // edit is a partial patch (issue #266 / ADR 0086): `name` comes from the URL
-// and every field is optional — absent means untouched, so it never reaches
-// the pure-payload danger judgment. An empty value is still a value (`""` /
-// `[]`). Unknown keys stay a 400 (`.partial()` keeps the strictObject strict);
-// confirmDangerous rides along because a dangerous value can enter on edit too
-const updateProfileSchema = authorityProfileSchema.partial().extend({
-  confirmDangerous: z.boolean().optional(),
-});
+// and absent means untouched, so it never reaches the pure-payload danger
+// judgment. `.partial()` keeps the strictObject strict — unknown keys stay 400.
+const updateProfileSchema = createProfileSchema.omit({ name: true }).partial();
 
 /** The #77 confirmation contract, enforced at the server boundary (ADR 0027):
  *  a save payload carrying any dangerous value (issue #76's `dangerousValues`)
