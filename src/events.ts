@@ -302,12 +302,13 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed"] as const
  *  event's own task's `workspace`, or the board's default when the task
  *  carries none — resolved fresh at read time, never stamped onto the event
  *  itself (same "resolved fresh every use, not pinned" reference semantics
- *  as `resolveExecutionWorkspace`, ADR 0009). */
-/** ADR 0085: the annotation is a fact of the entry, not a session's state —
- *  every objection ever raised against this entry, bundled or still
- *  commit-pending. `session_id` is the sole fact the read model hands the
- *  caller for telling the two apart (against the current open session, if
- *  any); `at` and who raised it are deliberately left out (issue #371). */
+ *  as `resolveExecutionWorkspace`, ADR 0009). Also carries every objection
+ *  ever raised against the entry (ADR 0085) — the annotation is a fact of
+ *  the entry, not a session's state, so bundled and still commit-pending
+ *  objections both ride along. `session_id` is the sole fact the read model
+ *  hands the caller for telling the two apart (against the current open
+ *  session, if any); `at` and who raised it are deliberately left out
+ *  (issue #371). */
 export interface LogEntry extends EventRow {
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
