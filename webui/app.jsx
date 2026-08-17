@@ -2815,14 +2815,7 @@ function App() {
       cursorNote = ' · read cursor NOT advanced (retry from the log)';
     }
     const answered = Object.values(answers).filter(Boolean).length;
-    // commit-pending only (ADR 0085): this tab's own immediate reflection
-    // union the server-delivered entries already carrying a commit-pending
-    // objection — matches TriageScreen's own nObjections derivation.
-    const objectedKeys = new Set([
-      ...Object.keys(objections),
-      ...data.log.filter((e) => e.pendingObjections?.length).map((e) => String(e.id)),
-    ]);
-    const repairTasks = new Set([...objectedKeys]
+    const repairTasks = new Set([...commitPendingObjectionKeys(data.log, objections)]
       .map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId)
       .filter(Boolean)).size;
     const summary = [`${data.log.filter((entry) => entry.unread).length} read`];

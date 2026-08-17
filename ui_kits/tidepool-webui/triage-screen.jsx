@@ -295,6 +295,18 @@ function groupLogEntries(entries) {
 const objectionBadge = (comments) =>
   comments?.length > 1 ? comments.map((c) => `- ${c}`).join('\n') : comments?.[0];
 
+// The entry keys with a commit-pending objection (ADR 0085): the union of
+// this tab's own immediate reflection (`localObjections`, populated the
+// moment Object is tapped) and the server-delivered entries whose
+// objections already resolved as commit-pending. Shared by TriageScreen's
+// own nObjections and webui/app.jsx's commit summary — the same count.
+function commitPendingObjectionKeys(log, localObjections) {
+  return new Set([
+    ...Object.keys(localObjections),
+    ...log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id)),
+  ]);
+}
+
 // Live-mode props (all optional — absent, the screen runs standalone on mock
 // data): onAnswer / onObject / onScratchAdd persist immediately (中断安全),
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
@@ -678,13 +690,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       })()}
 
       {section === 2 && (() => {
-        // commit-pending only (ADR 0085): the union of this tab's own
-        // immediate reflection and the server-delivered entries whose
-        // objections are already commit-pending — never the bundled ones.
-        const nObjections = new Set([
-          ...Object.keys(objections),
-          ...data.log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id)),
-        ]).size;
+        const nObjections = commitPendingObjectionKeys(data.log, objections).size;
         const scratchPanel = scratch.length > 0 && (
           <div style={{ marginTop: 20, background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', padding: 14 }}>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>scratchpad — triage before commit</div>

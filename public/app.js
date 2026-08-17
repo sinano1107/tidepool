@@ -353,6 +353,12 @@ function groupLogEntries(entries) {
   return groups;
 }
 const objectionBadge = (comments) => comments?.length > 1 ? comments.map((c) => `- ${c}`).join("\n") : comments?.[0];
+function commitPendingObjectionKeys(log, localObjections) {
+  return /* @__PURE__ */ new Set([
+    ...Object.keys(localObjections),
+    ...log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id))
+  ]);
+}
 function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, onTranslate }) {
   const { Button, Input, LogEntry, QueueItem, Switch } = window.TidepoolDesignSystem_8a0ead;
   const nQuestions = data.questions.length;
@@ -594,10 +600,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
   })(), section === 2 && (() => {
-    const nObjections = (/* @__PURE__ */ new Set([
-      ...Object.keys(objections),
-      ...data.log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id))
-    ])).size;
+    const nObjections = commitPendingObjectionKeys(data.log, objections).size;
     const scratchPanel = scratch.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 } }, "scratchpad \u2014 triage before commit"), scratch.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%", fontSize: "var(--text-sm)", color: (scratchKinds[l.id] || "task") === "discard" ? "var(--text-muted)" : "var(--text-body)", textDecoration: (scratchKinds[l.id] || "task") === "discard" ? "line-through" : "none" } }, l.text), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4 } }, TP_SCRATCH_KINDS.map((k) => {
       const picked = (scratchKinds[l.id] || "task") === k.key;
       return /* @__PURE__ */ React.createElement(
@@ -2904,11 +2907,7 @@ function App() {
       cursorNote = " \xB7 read cursor NOT advanced (retry from the log)";
     }
     const answered = Object.values(answers).filter(Boolean).length;
-    const objectedKeys = /* @__PURE__ */ new Set([
-      ...Object.keys(objections),
-      ...data.log.filter((e) => e.pendingObjections?.length).map((e) => String(e.id))
-    ]);
-    const repairTasks = new Set([...objectedKeys].map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId).filter(Boolean)).size;
+    const repairTasks = new Set([...commitPendingObjectionKeys(data.log, objections)].map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId).filter(Boolean)).size;
     const summary = [`${data.log.filter((entry) => entry.unread).length} read`];
     if (answered) summary.push(`${answered} answered`);
     if (repairTasks) summary.push(`${repairTasks} repair`);
