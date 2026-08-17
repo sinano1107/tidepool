@@ -95,7 +95,8 @@ it("PR body は handoff の直後・`Closes #N` の直前に盤面の定型フ�
   await client.close();
 
   const body = t.github.requests[0]?.body ?? "";
-  const handoffEnd = body.indexOf("notes.txt on the task branch") + "notes.txt on the task branch".length;
+  const marker = "notes.txt on the task branch";
+  const handoffEnd = body.indexOf(marker) + marker.length;
   const closesStart = body.indexOf("Closes #49");
   const footer = body.slice(handoffEnd, closesStart);
   expect(footer).toMatch(/board/i);
