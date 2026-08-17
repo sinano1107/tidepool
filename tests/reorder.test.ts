@@ -8,9 +8,10 @@ import {
   bootTidepool,
   FULL_HANDOFF as fullHandoff,
   HOUR,
+  holdChildren,
   makeWorkspace,
   mcpClient,
-  registerQuestion,
+  registerChild,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -35,32 +36,6 @@ async function occupySlot(t: Tidepool) {
   const filler = await registerWork(t, "occupies the slot");
   await t.clock.advance(HOUR);
   return filler;
-}
-
-/** An unanswered question under `parentId`, which holds every sibling below
- *  it out of the slot — a `todo` row in the table that can never be picked. */
-function holdChildren(t: Tidepool, parentId: string) {
-  registerQuestion(t, {
-    title: "unrelated decision",
-    purpose: "a human wants steering input",
-    completion_criteria: "answered",
-    parent_id: parentId,
-    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
-  });
-}
-
-/** A child under `parentId` — which makes the parent `blocked` (unfinished
- *  child), so the parent sits at the raw head while never being pickable. */
-async function registerChild(t: Tidepool, title: string, parentId: string) {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-    parent_id: parentId,
-    decompose_reason: `split ${title} from its parent`,
-  });
-  return res.json;
 }
 
 it("moving a task to the head (after: null) reorders the queue, surviving a restart", async () => {

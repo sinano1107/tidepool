@@ -588,6 +588,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.use(json());
   // one cache per router = per process (the API is booted once per board)
   const issueContent = new IssueContentCache();
+  /** fable 線の超過中だけ渡す除外集合(ADR 0030)。pickup の述語(`nextSlotTask`)と
+   *  キュービューの skipped 表示は同じ集合を見なければならない(tasks.ts の
+   *  「乖離させない」の線) — 述語だけでなく、そこへ渡す引数も1つの式から出す。 */
+  const fableExcludedAssignees = () =>
+    isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined;
 
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
@@ -1040,7 +1045,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       workspace?.name,
       defaultAgentName,
       auditorName,
-      isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
+      fableExcludedAssignees(),
     )?.id;
     const moved = moveTask(db, task, after, clock.now());
     // "run now" is specifically a todo already at the pickable head, moved to
@@ -1648,15 +1653,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json({
       halts: boardHalts(db, throttleRevalidating),
       tasks: await presentLive(
-        listQueue(
-          db,
-          workspace?.name,
-          defaultAgentName,
-          auditorName,
-          // fable 線の超過中は fable モデルのタスクだけが skipped に見える
-          // (ADR 0030) — 資源単位の絞りなので行に現れる
-          isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined,
-        ),
+        // fable 線の超過中は fable モデルのタスクだけが skipped に見える
+        // (ADR 0030) — 資源単位の絞りなので行に現れる
+        listQueue(db, workspace?.name, defaultAgentName, auditorName, fableExcludedAssignees()),
       ),
     });
   });
