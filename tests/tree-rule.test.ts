@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -55,14 +56,15 @@ it("pickup 時にタスクブランチが作成・checkout され、作業はそ
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
 });
 
-it("complete による解放で WIP コミットが強制され、ツリーがクリーンに戻る", async () => {
+// ADR 0084 以降、完了は例外である: worker のコミットが門で要求されるので、完了の
+// 解放で WIP が生まれることはもう無い(退避は完了**以外**の解放の手段になった)
+it("complete による解放ではツリーがクリーンに戻り、WIP コミットは増えない", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write things");
   await t.clock.advance(HOUR);
 
-  // エージェントの善意に依存しない: ワーカーはコミットせず散らかしたまま完了する
-  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  commitWork(ws.path, "notes.txt", "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
     name: "complete_task",
@@ -71,9 +73,8 @@ it("complete による解放で WIP コミットが強制され、ツリーが�
   expect(res.isError ?? false).toBe(false);
   await client.close();
 
-  // WIP はタスクブランチのコミットとして退避され、ツリーはクリーン
   expect(git(ws.path, "status", "--porcelain")).toBe("");
-  expect(git(ws.path, "log", "--format=%s", `task/${task.id}`)).toContain(`WIP: task ${task.id}`);
+  expect(git(ws.path, "log", "--format=%s", `task/${task.id}`)).not.toContain("WIP: task");
   expect(git(ws.path, "show", `task/${task.id}:notes.txt`)).toBe("half-finished work");
   // main には何も書かれていない
   expect(() => git(ws.path, "show", "main:notes.txt")).toThrow();
@@ -93,9 +94,9 @@ it("release は既知パス・untracked・0バイトをすべて満たす sandbo
     mkdirSync(dirname(join(ws.path, path)), { recursive: true });
     writeFileSync(join(ws.path, path), "");
   }
-  writeFileSync(join(ws.path, ".zshrc"), "real workspace content\n");
-  writeFileSync(join(ws.path, ".future-shadow"), "");
-  writeFileSync(join(ws.path, "notes.txt"), "work product\n");
+  commitWork(ws.path, ".zshrc", "real workspace content\n");
+  commitWork(ws.path, ".future-shadow", "");
+  commitWork(ws.path, "notes.txt", "work product\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -120,9 +121,16 @@ it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面�
   const task = await registerWork(t, "write things");
   await t.clock.advance(HOUR);
 
+  // 退避が生まれるのは完了**以外**の解放(ADR 0084)—— エスカレーションで測る
   writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
-  await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
+  await client.callTool({
+    name: "escalate",
+    arguments: {
+      context: "outside my authority",
+      questions: [{ title: "which approach?", options: ["a", "b"], recommendation: "a" }],
+    },
+  });
   await client.close();
 
   // WIP は盤面の tree rule が機械的に打つコミット — quarantine/watchdog question
@@ -182,7 +190,7 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
   await t.clock.advance(HOUR);
 
   // リポジトリ自体を壊して WIP コミットを失敗させる(コンフリクト等の代役)
-  writeFileSync(join(ws.path, "junk.txt"), "uncommittable\n");
+  commitWork(ws.path, "junk.txt", "uncommittable\n");
   await rm(join(ws.path, ".git"), { recursive: true, force: true });
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -247,13 +255,17 @@ it("ワーカーが main に逃げていても WIP は main にコミットさ�
   const task = await registerWork(t, "rogue work");
   await t.clock.advance(HOUR);
 
-  // 規律を破るワーカー: セッション中に main へ checkout し、散らかしたまま完了する
+  // 規律を破るワーカー: セッション中に main へ checkout し、散らかしたままエスカレート
+  // する(完了は ADR 0084 の門がコミット済みを要求するので、退避が生まれる解放で測る)
   git(ws.path, "checkout", "main");
   writeFileSync(join(ws.path, "rogue.txt"), "must not land on main\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
-    name: "complete_task",
-    arguments: { handoff: fullHandoff },
+    name: "escalate",
+    arguments: {
+      context: "stuck after wandering off the branch",
+      questions: [{ title: "what now?", options: ["a", "b"], recommendation: "a" }],
+    },
   });
   expect(res.isError ?? false).toBe(false);
   await client.close();
@@ -261,9 +273,12 @@ it("ワーカーが main に逃げていても WIP は main にコミットさ�
   // main には何もコミットされていない(初期コミットのみ)— tree rule は
   // タスクブランチ以外への WIP コミットを拒否する
   expect(git(ws.path, "log", "--format=%s", "main")).toBe("initial");
-  // 拒否は隔離として扱われる: question が生まれ、pickup が止まる
+  // 拒否は隔離として扱われる: workspace の question が生まれ、pickup が止まる
+  // (エスカレーション自身の question とは別に立つ)
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(list.find((x: any) => x.type === "question")).toBeDefined();
+  expect(
+    list.find((x: any) => x.type === "question" && x.title.includes("sandbox")),
+  ).toBeDefined();
   await registerWork(t, "stalled work");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);

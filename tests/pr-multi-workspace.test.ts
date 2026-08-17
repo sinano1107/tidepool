@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   bootTidepool,
+  commitWork,
   FULL_HANDOFF,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -36,7 +37,7 @@ it("prod workspace のタスクを complete すると、PR は sandbox ではな
 
   const task = await registerWork(t, "ship in prod", "prod");
   await t.clock.advance(HOUR);
-  writeFileSync(join(prod.path, "release.txt"), "finished\n");
+  commitWork(prod.path, "release.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

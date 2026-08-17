@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF,
   git,
   HOUR,
@@ -29,7 +30,7 @@ it("promotion retry の時点で差分ゼロなら、人間にエラーを返し
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "feature.txt"), "finished\n");
+  commitWork(workspace.path, "feature.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

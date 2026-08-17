@@ -6,6 +6,7 @@ import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import {
   bootTidepool,
+  commitWork,
   HOUR,
   makeRemoteBackedWorkspace,
   mcpClient,
@@ -47,7 +48,7 @@ it("issue参照タスクの complete_task 成立後、PR body の末尾に空行
   });
 
   await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "issue-fix.txt"), "finished\n");
+  commitWork(ws.path, "issue-fix.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -82,7 +83,7 @@ it("通常タスク(github_issue_number なし)の complete_task 成立後、PR 
   db.close();
 
   await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "notes.txt"), "finished\n");
+  commitWork(ws.path, "notes.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({

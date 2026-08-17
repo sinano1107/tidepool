@@ -6,6 +6,7 @@ import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -55,7 +56,7 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     expect(git(sandbox.path, "status", "--porcelain")).toBe("");
 
     // break prod's tree rule so completing it quarantines only "prod"
-    writeFileSync(join(prod.path, "junk.txt"), "uncommittable\n");
+    commitWork(prod.path, "junk.txt", "uncommittable\n");
     await rm(join(prod.path, ".git"), { recursive: true, force: true });
     const c2 = await mcpClient(t.mcpBaseUrl, inProd.id);
     await c2.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });

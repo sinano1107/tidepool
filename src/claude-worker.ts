@@ -123,6 +123,8 @@ The tidepool MCP verbs are your only channel back to the board. Invent no side
 channels: no direct edits to the board, no unrecorded decisions. If it is not
 in an MCP verb, it did not happen.
 
+Commit your work before completing: \`complete_task\` refuses a dirty tree, and the commit body is where you say what changed and why.
+
 Escalating is never wrong; guessing outside your authority is. When a decision
 is outside your authority or you hit a dead end, escalate rather than guess.
 

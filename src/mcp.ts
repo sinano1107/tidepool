@@ -42,6 +42,7 @@ import {
   taskBranch,
   taskHasCommitsToLand,
   UnknownWorkspaceError,
+  uncommittedChanges,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "./workspace.js";
@@ -332,6 +333,43 @@ async function runVerb(
   }
 }
 
+/** 完了の門(ADR 0084 / issue #240): work タスクは作業ツリーがコミット済みでなければ
+ *  完了できない。門を機械で閉じるのは、protocol 文の指示が追従されるとは限らないから
+ *  であり、盤面は本文を起草しない —— WIP コミットは完了**以外**の解放の退避手段へ
+ *  退き、完了時の履歴は worker が書いた本文だけになる。
+ *
+ *  handoff invariant と同じ形の domain error(protocol エラーではない)なので、拒否では
+ *  セッション・slot・ツリーのどれも動かない。門が worker MCP の verb 側に立つのは、
+ *  `completeTask` を人間経路(/api・管理MCP)と共有しているためである —— 人間の完了は
+ *  ワークスペースを持たないし、コミットを求める相手もいない。
+ *
+ *  review の完了に掛けないのは review が書けないからで、escalate / decompose に掛け
+ *  ないのは「作業が終わっていない」解放だからである(そこでは WIP 退避が正しい)。
+ *  workspace が解決できない・quarantine 中のタスクは現行どおり素通しする。 */
+function assertWorkTreeCommitted(deps: McpDeps, task: Task): void {
+  if (task.type !== "work") return;
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (!resolve) return;
+  const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+  if (!workspace || workspaceNeedsHuman(deps.db, workspace.name)) return;
+  // ツリーを**観測できない**(git repository 自体が壊れている等)ときは門を素通しする。
+  // 「commit してから呼び直せ」は worker に実行不能なことを求める指示になり、この直後の
+  // 解放で tree rule 自身が同じ git に躓いて quarantine へ落ちる —— 盤面の資源の故障は
+  // 完了を止めずに封じ込めへ回す、という既存の線(releaseWorkspace)をここでも切らない
+  let changes: string[];
+  try {
+    changes = uncommittedChanges(workspace);
+  } catch {
+    return;
+  }
+  if (changes.length === 0) return;
+  throw new DomainError(
+    "the task workspace has uncommitted changes — commit them on the task branch first, " +
+      "with a message whose body says what changed and why in a few lines, readable from " +
+      "the git history alone, then call complete_task again",
+  );
+}
+
 /** Verbs that end the slot session (complete, decompose, escalate): run the
  *  domain verb attributed to the slot worker, then free the slot. Work
  *  completion opts into lineage merge-back; every other release only stashes
@@ -450,7 +488,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "complete_task",
     {
       description:
-        "Complete the current task. Work tasks require the full 6-field handoff doc.",
+        "Complete the current task. Work tasks require the full 6-field handoff doc " +
+        "and a committed work tree — commit your changes before calling this.",
       // the schema stays permissive: the handoff invariant is enforced inside
       // the verb so callers get a domain error, not a protocol error
       inputSchema: {
@@ -465,6 +504,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         deps,
         attributedTaskId,
         (task, workerId, now) => {
+          assertWorkTreeCommitted(deps, task);
           const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
           completed = done;
           return { id: done.id, status: done.status };

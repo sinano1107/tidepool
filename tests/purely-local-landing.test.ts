@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF,
   git,
   HOUR,
@@ -27,7 +28,7 @@ it("purely-local の root work 完了は PR を試みず、代わりに着地 qu
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "feature.txt"), "finished\n");
+  commitWork(workspace.path, "feature.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({
@@ -57,7 +58,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   });
   const task = await registerWork(t, "ship automatically");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "automatic.txt"), "finished\n");
+  commitWork(workspace.path, "automatic.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -79,7 +80,7 @@ it("着地 question に merge と答えると保護ブランチを task branch �
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land the feature");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "feature.txt"), "finished\n");
+  commitWork(workspace.path, "feature.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -106,7 +107,7 @@ it("保護ブランチが帯域外で進んで fast-forward できないと work
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land without overwriting main");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "feature.txt"), "finished\n");
+  commitWork(workspace.path, "feature.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
@@ -138,7 +139,7 @@ it("着地 question に hold と答えると保護ブランチを動かさず決
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "keep the result on its task branch");
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "held.txt"), "held result\n");
+  commitWork(workspace.path, "held.txt", "held result\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });

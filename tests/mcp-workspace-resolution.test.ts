@@ -11,7 +11,7 @@ import { Slot } from "../src/slot.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
-import { FULL_HANDOFF as fullHandoff, git, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF as fullHandoff, git, makeWorkspace } from "./harness.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -63,10 +63,20 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
     const client = new Client({ name: "test", version: "0.0.0" });
     await client.connect(new StreamableHTTPClientTransport(url));
 
-    // dirty the prod checkout, exactly like the WorkerAdapter never committing
+    // dirty the prod checkout: the completion gate (ADR 0084) must read *prod*
+    // — sandbox is clean, so a gate resolving the board default would let this
+    // through
     await import("node:fs").then((fs) =>
       fs.writeFileSync(join(prod.path, "notes.txt"), "half-finished\n"),
     );
+    const denied: any = await client.callTool({
+      name: "complete_task",
+      arguments: { handoff: fullHandoff },
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0].text).toContain("uncommitted changes");
+
+    commitWork(prod.path, "notes.txt", "half-finished\n");
     const res: any = await client.callTool({
       name: "complete_task",
       arguments: { handoff: fullHandoff },
@@ -77,11 +87,9 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
       listener.close((err) => (err ? reject(err) : resolve())),
     );
 
-    // the WIP landed on prod's task branch, not sandbox's
+    // the release ran on prod's checkout, not sandbox's
     expect(git(prod.path, "status", "--porcelain")).toBe("");
-    expect(git(prod.path, "log", "--format=%s", `task/${task.id}`)).toContain(
-      `WIP: task ${task.id}`,
-    );
+    expect(git(prod.path, "show", `task/${task.id}:notes.txt`)).toBe("half-finished");
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   });
 });

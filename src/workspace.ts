@@ -501,11 +501,49 @@ export function rebaselinePublishedRefs(db: Db, workspace: WorkspaceConfig, refs
   for (const ref of refs) rebaselineRef(db, workspace, ref);
 }
 
+/** ADR 0069 の3条件 —— **既知パス・untracked・0 バイト**をすべて満たすファイルだけが
+ *  「セッションの遺物ではないと確定的に識別できるもの」である。tree rule の退避除外と
+ *  完了の門(ADR 0084)の dirty 判定は同じ集合を見なければならない —— 2箇所に綴りが
+ *  分かれれば、片方だけが残骸を数えて無実の拒否や取りこぼしが生まれる。 */
+function shadowRemnants(workspace: WorkspaceConfig): string[] {
+  return SANDBOX_SHADOW_PATHS.filter((path) => {
+    const stat = lstatSync(join(workspace.path, path), { throwIfNoEntry: false });
+    if (!stat?.isFile() || stat.size !== 0) return false;
+    return git(workspace.path, "ls-files", "--cached", "--", path) === "";
+  });
+}
+
+/** ADR 0084 の完了の門が読む「作業ツリーに未コミットの変更が残っているか」。tree rule と
+ *  同じ基準 —— shadow 残骸(上記)だけは数えない —— で、こちらは**何も変えない**。
+ *
+ *  `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
+ *  ディレクトリを `?? .claude/` の1行に畳むので、残骸の除外がパス一致で効かなくなり
+ *  `.claude/agents` だけの残骸が dirty に数えられる。 */
+export function uncommittedChanges(workspace: WorkspaceConfig): string[] {
+  const remnants = new Set<string>(shadowRemnants(workspace));
+  return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
+    .split("\n")
+    .filter((line) => line !== "" && !remnants.has(line.slice(3)));
+}
+
+/** ADR 0084: 退避コミットの subject にタスクの title を添える —— 完了の門が入った後に
+ *  WIP が残るのは完了**以外**の解放だけなので、履歴を読む人間には「どのタスクの
+ *  途中なのか」が id だけでは足りない。本文の起草はしない(盤面は LLM を焚かない)。
+ *
+ *  issue-backed タスクの stored title は `#N` プレースホルダのままである(本物は
+ *  `TaskContentSource.expand()` が使用の瞬間に解決する)。ここは同期の機械処理なので
+ *  GitHub を叩かず、プレースホルダのときは素の形に落ちる。 */
+function wipSubject(task: Task): string {
+  const bare = `WIP: task ${task.id}`;
+  return task.title === `#${task.github_issue_number}` ? bare : `${bare} — ${task.title}`;
+}
+
 /** The slot-release tree rule: whatever the session left behind is stashed as
  *  a WIP commit on the task branch, and the tree is verified clean before the
  *  slot goes free. Mechanical, on every release — completion, escalation or
  *  failure alike — so nothing rests on the agent having tidied up. */
-export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
+export function releaseTree(workspace: WorkspaceConfig, task: Task): void {
+  const taskId = task.id;
   // the WIP commit lands on the task branch or nowhere: a session that
   // wandered off its branch (e.g. onto main) must not have its leavings
   // committed there — refusing here is what makes the main-write ban
@@ -516,16 +554,12 @@ export function releaseTree(workspace: WorkspaceConfig, taskId: string): void {
       `workspace ${workspace.name} is on '${head}', not '${taskBranch(taskId)}' — refusing to commit`,
     );
   }
-  for (const path of SANDBOX_SHADOW_PATHS) {
-    const absolutePath = join(workspace.path, path);
-    const stat = lstatSync(absolutePath, { throwIfNoEntry: false });
-    if (!stat?.isFile() || stat.size !== 0) continue;
-    if (git(workspace.path, "ls-files", "--cached", "--", path) !== "") continue;
-    rmSync(absolutePath, { force: true });
+  for (const path of shadowRemnants(workspace)) {
+    rmSync(join(workspace.path, path), { force: true });
   }
   git(workspace.path, "add", "-A");
   if (git(workspace.path, "status", "--porcelain") !== "") {
-    git(workspace.path, "commit", "-m", `WIP: task ${taskId}`);
+    git(workspace.path, "commit", "-m", wipSubject(task));
   }
   if (git(workspace.path, "status", "--porcelain") !== "") {
     throw new Error(`workspace ${workspace.name} still dirty after WIP commit`);
@@ -797,7 +831,7 @@ export function releaseWorkspace(
   githubAuth?: GitHubAuth,
 ): void {
   try {
-    releaseTree(workspace, task.id);
+    releaseTree(workspace, task);
     // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
     // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
     assertOnlyTaskBranchMoved(db, workspace, task.id);

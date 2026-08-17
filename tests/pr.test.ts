@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   api,
   bootTidepool,
+  commitWork,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -36,7 +37,7 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "build the thing");
   await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "result.txt"), "finished\n");
+  commitWork(ws.path, "result.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -60,7 +61,7 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write the report");
   await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "report.txt"), "finished\n");
+  commitWork(ws.path, "report.txt", "finished\n");
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
@@ -87,7 +88,7 @@ it("PR 作成が失敗しても complete_task 自体は成立し、ツリーは�
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
 
-  writeFileSync(join(ws.path, "notes.txt"), "shipped\n");
+  commitWork(ws.path, "notes.txt", "shipped\n");
   t.github.scriptFailure(new Error("GitHub API is down"));
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -100,9 +101,7 @@ it("PR 作成が失敗しても complete_task 自体は成立し、ツリーは�
   const done = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
   expect(done.status).toBe("done");
   expect(git(ws.path, "status", "--porcelain")).toBe("");
-  expect(git(ws.path, "log", "--format=%s", `task/${task.id}`)).toContain(
-    `WIP: task ${task.id}`,
-  );
+  expect(git(ws.path, "show", `task/${task.id}:notes.txt`)).toBe("shipped");
 });
 
 it("review タスクの complete_task では PR が作られない", async () => {
@@ -133,7 +132,7 @@ it("tree rule が失敗して workspace が quarantine された場合は PR が
   await t.clock.advance(HOUR);
 
   // tree-rule.test.ts と同じ代役: リポジトリ自体を壊して WIP コミットを失敗させる
-  writeFileSync(join(ws.path, "junk.txt"), "uncommittable\n");
+  commitWork(ws.path, "junk.txt", "uncommittable\n");
   await rm(join(ws.path, ".git"), { recursive: true, force: true });
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({

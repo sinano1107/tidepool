@@ -11,6 +11,7 @@ import { publishWorkspace } from "../src/workspace-create.js";
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -192,7 +193,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
   t = await bootTidepool({ workspace: ws });
   const landing = await registerWork(t, "lands through the merge question");
   await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "landed.txt"), "finished\n");
+  commitWork(ws.path, "landed.txt", "finished\n");
   await complete(t, landing.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.question_pending_local_merge_task_id === landing.id,
@@ -200,7 +201,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
 
   const running = await registerWork(t, "runs while the human answers");
   await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "in-flight.txt"), "still working\n");
+  commitWork(ws.path, "in-flight.txt", "still working\n");
 
   expect(
     (await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["merge"] }))
