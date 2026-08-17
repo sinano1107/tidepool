@@ -26,7 +26,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { toolError, toolResult } from "./mcp.js";
-import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
+import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
   InvalidAgentNameError,
   InvalidAllowedDomainError,
@@ -155,7 +155,8 @@ function registryToolError(err: unknown) {
     err instanceof InvalidSkillAllowlistError ||
     err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAllowedDomainError ||
-    err instanceof InvalidAuthorityProfileNameError
+    err instanceof InvalidAuthorityProfileNameError ||
+    err instanceof ProfileConfirmationRequiredError
   ) {
     return toolError(err.message);
   }
@@ -364,14 +365,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "Create an authority profile in the human-managed registry. Set confirm_dangerous to true only after obtaining the human's explicit confirmation.",
       inputSchema: profileFieldsSchema.extend({ name: z.string().min(1) }),
     },
+    // 危険な値の門はドメイン側に1つだけ(ADR 0061 決定1)— この扉は名前を
+    // 揃えて渡し、拒否は registryToolError が本文ごと写す
     async ({ confirm_dangerous, ...input }) => {
       if (!deps.profileAdmin?.create) return toolError("profile administration is not configured");
-      const dangerous = dangerousValues(input);
-      if (dangerous.length > 0 && !confirm_dangerous) {
-        return toolError(`profile contains dangerous values; human confirmation is required: ${dangerous.join(", ")}`);
-      }
       try {
-        await deps.profileAdmin.create(input);
+        await deps.profileAdmin.create({ ...input, confirmDangerous: confirm_dangerous });
         return toolResult({});
       } catch (err) {
         return registryToolError(err);
@@ -400,12 +399,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ confirm_dangerous, ...input }) => {
       if (!deps.profileAdmin?.update) return toolError("profile administration is not configured");
-      const dangerous = dangerousValues(input);
-      if (dangerous.length > 0 && !confirm_dangerous) {
-        return toolError(`profile contains dangerous values; human confirmation is required: ${dangerous.join(", ")}`);
-      }
       try {
-        await deps.profileAdmin.update(input);
+        await deps.profileAdmin.update({ ...input, confirmDangerous: confirm_dangerous });
         return toolResult({});
       } catch (err) {
         return registryToolError(err);

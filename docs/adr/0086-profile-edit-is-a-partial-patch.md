@@ -37,3 +37,10 @@ profile の編集扉(`PATCH /api/profiles/:name` と管理MCP の `update_profil
 `src/api.ts` の `updateProfileSchema` と PATCH ルート、`src/profile-create.ts`(`dangerousValues` の引数を
 optional 化、`updateProfile` は既存エントリとマージしてから `sameEffectiveFields`)、`src/management-mcp.ts` の
 `update_profile`、`webui/app.jsx` の profile edit card。issue #266。
+
+あわせて、危険な値の**執行**を ADR 0061 決定1 の形へ寄せた —— `rejectUnconfirmedDanger`(API 境界)と
+`management-mcp.ts` の二重実装をやめ、`ProfileConfirmationRequiredError` を投げる門を `createProfile` /
+`updateProfile` に1つだけ置き、API が 409 `confirm_required` に、管理MCP が `registryToolError` に写す。
+判定は引き続きペイロードの純関数(決定1 のとおり、編集ではマージ前のパッチを見る)。確認で買えないもの —
+create の名前の綴り、edit の存在しない名前 —— は門より前に弾く(ADR 0061 根拠5)ので、その2つの角では
+409 ではなく 400 / 404 が出る。

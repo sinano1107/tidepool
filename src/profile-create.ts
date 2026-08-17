@@ -20,7 +20,13 @@ import { AUTHORITY_WILDCARD } from "./tasks.js";
  *  so the two never drift — `name` picks the file, never written into it
  *  (same as parseAuthorityFile). Unlike agents, profiles carry no
  *  machine-stamped version. */
-export type CreateProfileInput = z.infer<typeof authorityProfileSchema> & { name: string };
+export type CreateProfileInput = z.infer<typeof authorityProfileSchema> & {
+  name: string;
+  /** 危険な値への人間の明示同意(ADR 0061 決定1)— workspace の `confirm` と
+   *  同じく入力に同乗する。profile の4フィールドではないので、ファイルには
+   *  書かれない(serializeProfileFile は4キーしか読まない)。 */
+  confirmDangerous?: boolean;
+};
 
 /** Machine-readable reason codes `dangerousValues` can return — stable
  *  strings a downstream consumer (phase 2's API contract) matches on rather
@@ -35,10 +41,10 @@ export type DangerousValueReason =
  *  wildcard (unrestricted delegation/workspace access). The enumeration counts
  *  values that widen the board's **unattended** outward effect — which is why
  *  `merge: external` is deliberately absent (ADR 0079 決定5). This layer only
- *  reports — it never blocks a write; enforcing confirmation on a dangerous
- *  profile is phase 2's API contract. Every field is optional because an
- *  absent one was not written by the human, so it never enters the judgment
- *  (issue #266 / ADR 0086) — create passes all three and is unchanged. */
+ *  reports — `assertConfirmed` below is what turns a verdict into a refusal.
+ *  Every field is optional because an absent one was not written by the human,
+ *  so it never enters the judgment (issue #266 / ADR 0086) — create passes all
+ *  three and is unchanged. */
 export function dangerousValues(
   input: Partial<Pick<CreateProfileInput, "assignable_to" | "allowed_workspaces" | "merge">>,
 ): DangerousValueReason[] {
@@ -49,6 +55,32 @@ export function dangerousValues(
     reasons.push("allowed_workspaces_wildcard");
   }
   return reasons;
+}
+
+/** 危険な値を載せたペイロードが `confirmDangerous` なしで届いた(ADR 0061 決定1
+ *  が workspace で採った形を profile へ:執行はドメイン側に1つだけ置き、API は
+ *  409 `confirm_required` に、管理MCP は registryToolError に写す)。理由コードは
+ *  構造化フィールドと本文の両方で運ぶ — MCP 側は本文しか読めない。 */
+export class ProfileConfirmationRequiredError extends Error {
+  constructor(
+    name: string,
+    public readonly reasons: DangerousValueReason[],
+  ) {
+    super(
+      `authority profile "${name}" contains dangerous values (${reasons.join(", ")}); human confirmation is required`,
+    );
+    this.name = "ProfileConfirmationRequiredError";
+  }
+}
+
+/** 危険な値の門。判定は**ペイロードだけ**を見る(ADR 0061 決定2)ので、編集では
+ *  マージ前のパッチを渡す — 触っていない値は現れず、確認は人間が実際に危険な値を
+ *  書いた瞬間にだけ出る。 */
+function assertConfirmed(input: UpdateProfileInput): void {
+  const reasons = dangerousValues(input);
+  if (reasons.length > 0 && input.confirmDangerous !== true) {
+    throw new ProfileConfirmationRequiredError(input.name, reasons);
+  }
 }
 
 /** What every profile-admin verb needs: which registry clone to write
@@ -72,6 +104,8 @@ export async function createProfile(input: CreateProfileInput, deps: ProfileAdmi
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidAuthorityProfileName(registry, input.name);
+  // 名前の綴りは confirm では買えないので、確認より前に弾く(ADR 0061 根拠5)
+  assertConfirmed(input);
   commitProfileFile(deps, input, `create authority profile ${input.name} via WebUI`);
 }
 
@@ -84,13 +118,16 @@ export async function createProfile(input: CreateProfileInput, deps: ProfileAdmi
  *  profile with all four keys (hand-written YAML comments are the accepted
  *  cost of a profile entering UI management — same tradeoff as updateAgent).
  *  Unlike agents, profiles carry no version to bump. */
-export type UpdateProfileInput = { name: string } & Partial<z.infer<typeof authorityProfileSchema>>;
+export type UpdateProfileInput = Partial<CreateProfileInput> & { name: string };
 
 export async function updateProfile(input: UpdateProfileInput, deps: ProfileAdminDeps): Promise<void> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.authority, input.name);
   if (!existing) throw new UnknownAuthorityProfileError(input.name);
+  // 存在しない名前が confirm より先に出る理由は create 側の名前検査と同じ —
+  // 確認で買えないものは確認より前に弾く(ADR 0061 根拠5)
+  assertConfirmed(input);
   const merged = mergePatch(existing, input);
   // no-change 編集はコミットなしの成功(updateAgent の sameEffectiveFields と
   // 同じ狙い)— 空パッチもここに着地する。配列フィールドは中身の一致で比較する

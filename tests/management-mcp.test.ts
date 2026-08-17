@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
+import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
+import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
@@ -345,17 +347,24 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
     expect(updateAgent).toHaveBeenCalledWith({ ...agentFields, systemPrompt: system_prompt });
 
     expect(readToolPayload(await client.callTool({ name: "create_profile", arguments: profile }))).toEqual({});
-    expect(createProfile).toHaveBeenCalledWith(profile);
+    // 確認フラグは扉で消えずドメインへ運ばれる(ADR 0061 決定1 — 門は1つ)
+    expect(createProfile).toHaveBeenCalledWith({ ...profile, confirmDangerous: false });
     expect(readToolPayload(await client.callTool({ name: "list_profiles", arguments: {} }))).toEqual({ profiles: [] });
     expect(readToolPayload(await client.callTool({ name: "update_profile", arguments: profile }))).toEqual({});
-    expect(updateProfile).toHaveBeenCalledWith(profile);
+    expect(updateProfile).toHaveBeenCalledWith({ ...profile, confirmDangerous: false });
   } finally {
     await client.close();
   }
 });
 
 it("管理MCP は人間の明示確認なしに危険な profile を保存しない(issue #193)", async () => {
-  const create = vi.fn(async () => {});
+  // 判定と拒否はドメイン側(ADR 0061 決定1)。この扉が見るのは、確認フラグを運ぶ
+  // ことと ProfileConfirmationRequiredError を理由コードごと tool error に写すこと
+  const create = vi.fn(async (input: CreateProfileInput) => {
+    if (input.confirmDangerous !== true) {
+      throw new ProfileConfirmationRequiredError(input.name, ["assignable_to_wildcard"]);
+    }
+  });
   t = await bootTidepool({ profileAdmin: { create } });
   const client = await managementMcpClient(t.baseUrl);
   const dangerous = {
@@ -368,15 +377,17 @@ it("管理MCP は人間の明示確認なしに危険な profile を保存しな
   try {
     const denied: any = await client.callTool({ name: "create_profile", arguments: dangerous });
     expect(denied.isError).toBe(true);
-    expect(denied.content[0].text).toContain("human confirmation is required");
-    expect(create).not.toHaveBeenCalled();
+    expect(denied.content[0].text).toContain("assignable_to_wildcard");
+    // 扉は同意を捏造しない — 確認なしの呼びは confirmDangerous: false で届く
+    expect(create).toHaveBeenCalledWith({ ...dangerous, confirmDangerous: false });
+    create.mockClear();
 
     const confirmed: any = await client.callTool({
       name: "create_profile",
       arguments: { ...dangerous, confirm_dangerous: true },
     });
     expect(confirmed.isError ?? false).toBe(false);
-    expect(create).toHaveBeenCalledWith(dangerous);
+    expect(create).toHaveBeenCalledWith({ ...dangerous, confirmDangerous: true });
 
     const { tools } = await client.listTools();
     expect(tools.find((tool) => tool.name === "create_profile")?.description).toContain("human's explicit confirmation");
@@ -877,7 +888,11 @@ it("register_task は同じ issue reference の未決着二重登録を拒否す
 });
 
 it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", async () => {
-  const update = vi.fn(async () => {});
+  const update = vi.fn(async (input: UpdateProfileInput) => {
+    if (input.merge === "auto_if_ci_green" && input.confirmDangerous !== true) {
+      throw new ProfileConfirmationRequiredError(input.name, ["merge_auto_if_ci_green"]);
+    }
+  });
   t = await bootTidepool({ profileAdmin: { update } });
   const client = await managementMcpClient(t.baseUrl);
   try {
@@ -887,7 +902,7 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
         await client.callTool({ name: "update_profile", arguments: { name: "roamer", guidance: "Reworded." } }),
       ),
     ).toEqual({});
-    expect(update).toHaveBeenCalledWith({ name: "roamer", guidance: "Reworded." });
+    expect(update).toHaveBeenCalledWith({ name: "roamer", guidance: "Reworded.", confirmDangerous: false });
 
     // 危険な値を書いたパッチは confirm_dangerous を要求する
     update.mockClear();
@@ -897,14 +912,15 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
     });
     expect(denied.isError).toBe(true);
     expect(denied.content[0].text).toContain("merge_auto_if_ci_green");
-    expect(update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green", confirmDangerous: false });
+    update.mockClear();
 
     const confirmed: any = await client.callTool({
       name: "update_profile",
       arguments: { name: "roamer", merge: "auto_if_ci_green", confirm_dangerous: true },
     });
     expect(confirmed.isError ?? false).toBe(false);
-    expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green" });
+    expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green", confirmDangerous: true });
 
     // 空配列は安全側 — 確認なしで通る
     update.mockClear();
@@ -913,7 +929,7 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
         await client.callTool({ name: "update_profile", arguments: { name: "roamer", assignable_to: [] } }),
       ),
     ).toEqual({});
-    expect(update).toHaveBeenCalledWith({ name: "roamer", assignable_to: [] });
+    expect(update).toHaveBeenCalledWith({ name: "roamer", assignable_to: [], confirmDangerous: false });
 
     // 省略の意味が tool description に書かれている(エージェントはこれだけを読む)
     const { tools } = await client.listTools();

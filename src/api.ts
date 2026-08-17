@@ -1,4 +1,4 @@
-import { json, type Response, Router } from "express";
+import { json, Router } from "express";
 import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
 import {
@@ -33,7 +33,7 @@ import {
 import { IssueContentCache, type Live } from "./issue-view.js";
 import { getPaceOffsets, isValidOffset, setPaceOffsets } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
-import { dangerousValues, type ProfileAdmin } from "./profile-create.js";
+import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
 import {
@@ -281,29 +281,6 @@ const createProfileSchema = authorityProfileSchema.extend({
 // and absent means untouched, so it never reaches the pure-payload danger
 // judgment. `.partial()` keeps the strictObject strict — unknown keys stay 400.
 const updateProfileSchema = createProfileSchema.omit({ name: true }).partial();
-
-/** The #77 confirmation contract, enforced at the server boundary (ADR 0027):
- *  a save payload carrying any dangerous value (issue #76's `dangerousValues`)
- *  must also carry `confirmDangerous: true`. Without it, 409 with the stable
- *  reason codes phase 3's dialog reads directly — a body distinct from the
- *  busy-clone 409 by its `confirm_required` flag (same shape as the unprotect
- *  409). Returns true once it has sent the 409, so the caller returns without
- *  saving; the check is a pure function of the payload, so create and edit
- *  share it. */
-function rejectUnconfirmedDanger(
-  res: Response,
-  profile: Parameters<typeof dangerousValues>[0],
-  confirmDangerous: boolean | undefined,
-): boolean {
-  const reasons = dangerousValues(profile);
-  if (reasons.length === 0 || confirmDangerous) return false;
-  res.status(409).json({
-    error: "profile contains dangerous values; resubmit with confirmDangerous: true",
-    confirm_required: true,
-    dangerous_values: reasons,
-  });
-  return true;
-}
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
@@ -915,16 +892,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(503).json({ error: "profile settings not configured" });
       return;
     }
-    // confirmDangerous is a request-envelope flag (issue #77), never a profile
-    // field — strip it before the value reaches the domain verb
-    const { confirmDangerous, ...profile } = parsed.data;
-    if (rejectUnconfirmedDanger(res, profile, confirmDangerous)) return;
     try {
-      await profileAdmin.create(profile);
+      // confirmDangerous rides into the domain verb, which owns the danger gate
+      // (ADR 0061 決定1) — the flag is not a profile field, so it never reaches
+      // the file (serializeProfileFile writes the four keys only)
+      await profileAdmin.create(parsed.data);
       res.status(201).json({});
     } catch (err) {
       if (err instanceof InvalidAuthorityProfileNameError) {
         res.status(400).json({ error: err.message });
+      } else if (err instanceof ProfileConfirmationRequiredError) {
+        res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -952,15 +930,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(503).json({ error: "profile settings not configured" });
       return;
     }
-    const { confirmDangerous, ...fields } = parsed.data;
-    const profile = { name: req.params.name, ...fields };
-    if (rejectUnconfirmedDanger(res, profile, confirmDangerous)) return;
     try {
-      await profileAdmin.update(profile);
+      await profileAdmin.update({ name: req.params.name, ...parsed.data });
       res.json({});
     } catch (err) {
       if (err instanceof UnknownAuthorityProfileError) {
         res.status(404).json({ error: err.message });
+      } else if (err instanceof ProfileConfirmationRequiredError) {
+        // 危険な値の 409 は WebUI のダイアログが理由コードをそのまま読む
+        // (ADR 0061 決定1 — workspace の 409 と同じ本文の形)
+        res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
