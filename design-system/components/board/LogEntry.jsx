@@ -8,7 +8,7 @@ const kindColors = {
 };
 
 export function LogEntry({ entry = {}, onObject, onExpand, active = false, style }) {
-  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, unread = false } = entry;
+  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, unread = false } = entry;
   const completion = kind === 'completion';
   const clickable = !!onObject;
   return (
@@ -43,6 +43,12 @@ export function LogEntry({ entry = {}, onObject, onExpand, active = false, style
           {objection && (
             <div style={{ marginTop: 6, padding: '6px 10px', background: 'var(--coral-1)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--coral-4)', whiteSpace: 'pre-wrap' }}>
               objection: {objection}
+            </div>
+          )}
+          {bundledObjection && (
+            <div style={{ marginTop: 6, padding: '6px 10px', background: 'var(--surface-recessed)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 6 }}>bundled</span>
+              {bundledObjection}
             </div>
           )}
         </div>

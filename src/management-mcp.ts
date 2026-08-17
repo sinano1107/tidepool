@@ -223,8 +223,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       return task ? toolResult({ ...task, events: listEvents(deps.db, task.id) }) : toolError("task not found");
     },
   );
-  server.registerTool("read_decision_log", { description: "Read the decision log without marking it seen." }, async () =>
-    toolResult({ entries: listLog(deps.db, deps.workspace?.name), cursor: getLogCursor(deps.db) }),
+  server.registerTool(
+    "read_decision_log",
+    {
+      description:
+        "Read the decision log without marking it seen. Each entry carries every objection ever raised against it (bundled and still commit-pending alike).",
+    },
+    async () =>
+      toolResult({ entries: listLog(deps.db, deps.workspace?.name), cursor: getLogCursor(deps.db) }),
   );
   server.registerTool(
     "create_workspace",

@@ -226,14 +226,16 @@ it("the log is a filtered view of the event stream, not a copy in its own table"
 
   // the same records, byte for byte — same ids, same payloads, same
   // timestamps; the log view additionally carries resolved `workspace`
-  // (issue #44) and `unread` (ADR 0065) presentation annotations that the raw
-  // event view doesn't have
+  // (issue #44), `unread` (ADR 0065), and `objections` (ADR 0085)
+  // presentation annotations that the raw event view doesn't have
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
   const humanFacing = events.filter((e: any) =>
     ["decision_logged", "task_completed"].includes(e.kind),
   );
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
-  expect(log.entries.map(({ workspace, unread, ...rest }: any) => rest)).toEqual(humanFacing);
+  expect(log.entries.map(({ workspace, unread, objections, ...rest }: any) => rest)).toEqual(
+    humanFacing,
+  );
   expect(humanFacing.length).toBeGreaterThan(0);
 });
 

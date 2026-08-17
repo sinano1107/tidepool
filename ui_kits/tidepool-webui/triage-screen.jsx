@@ -568,7 +568,21 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
           return (
             <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
-              <LogEntry entry={{ ...l, objection: objectionBadge(objections[k]) }} active={objecting === k} onObject={() => toggleObjecting(k)} onExpand={hasHandoff ? () => toggleHandoff(k, l) : undefined} />
+              <LogEntry
+                entry={{
+                  ...l,
+                  // server-delivered commit-pending + this tab's own immediate
+                  // reflection never overlap: `data.log` is a fixed snapshot
+                  // for the whole triage flow (App component), so an entry
+                  // objected-to in this same load never re-appears from the
+                  // server mid-session (issue #371)
+                  objection: objectionBadge([...(l.pendingObjections ?? []), ...(objections[k] ?? [])]),
+                  bundledObjection: objectionBadge(l.bundledObjections),
+                }}
+                active={objecting === k}
+                onObject={() => toggleObjecting(k)}
+                onExpand={hasHandoff ? () => toggleHandoff(k, l) : undefined}
+              />
               {logTranslateOn && logTranslations[k] && logTranslations[k].status !== 'throttled' && (
                 <div style={{ padding: '2px 14px 10px', background: 'var(--surface-recessed)' }}>
                   {logTranslations[k].status === 'translated'
@@ -664,7 +678,13 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       })()}
 
       {section === 2 && (() => {
-        const nObjections = Object.keys(objections).length;
+        // commit-pending only (ADR 0085): the union of this tab's own
+        // immediate reflection and the server-delivered entries whose
+        // objections are already commit-pending — never the bundled ones.
+        const nObjections = new Set([
+          ...Object.keys(objections),
+          ...data.log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id)),
+        ]).size;
         const scratchPanel = scratch.length > 0 && (
           <div style={{ marginTop: 20, background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', padding: 14 }}>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>scratchpad — triage before commit</div>

@@ -163,6 +163,10 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   // newest first for the skim; unread is the server's cursor + authorship
   // decision. workspace grouping/fold (issue #44) is pure view derivation the
   // kit does itself from this flat, order-independent list — see triage-screen.jsx.
+  // ADR 0085: the read model's own `objections` (every one ever raised) is
+  // split here by whether it belongs to the currently open session — the
+  // sole fact `session_id` carries — into commit-pending vs. already-bundled.
+  const openSessionId = triage.session?.id ?? null;
   const logEntries = [...log.entries].reverse().map((e) => ({
     id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
     agentIcon: icons[e.worker_id], human: e.worker_id === 'human',
@@ -171,6 +175,8 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     unread: e.unread,
     handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
+    pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+    bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
   }));
   // the queue is the todo order the slot walks, straight from /api/queue (ADR
   // 0068 決定6) — the server's own row set and its resource-scoped `skipped`,
@@ -2809,7 +2815,14 @@ function App() {
       cursorNote = ' · read cursor NOT advanced (retry from the log)';
     }
     const answered = Object.values(answers).filter(Boolean).length;
-    const repairTasks = new Set(Object.keys(objections)
+    // commit-pending only (ADR 0085): this tab's own immediate reflection
+    // union the server-delivered entries already carrying a commit-pending
+    // objection — matches TriageScreen's own nObjections derivation.
+    const objectedKeys = new Set([
+      ...Object.keys(objections),
+      ...data.log.filter((e) => e.pendingObjections?.length).map((e) => String(e.id)),
+    ]);
+    const repairTasks = new Set([...objectedKeys]
       .map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId)
       .filter(Boolean)).size;
     const summary = [`${data.log.filter((entry) => entry.unread).length} read`];
