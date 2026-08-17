@@ -333,34 +333,21 @@ async function runVerb(
   }
 }
 
-/** 完了の門(ADR 0084 / issue #240): work タスクは作業ツリーがコミット済みでなければ
- *  完了できない。門を機械で閉じるのは、protocol 文の指示が追従されるとは限らないから
- *  であり、盤面は本文を起草しない —— WIP コミットは完了**以外**の解放の退避手段へ
- *  退き、完了時の履歴は worker が書いた本文だけになる。
- *
- *  handoff invariant と同じ形の domain error(protocol エラーではない)なので、拒否では
- *  セッション・slot・ツリーのどれも動かない。門が worker MCP の verb 側に立つのは、
- *  `completeTask` を人間経路(/api・管理MCP)と共有しているためである —— 人間の完了は
- *  ワークスペースを持たないし、コミットを求める相手もいない。
- *
- *  review の完了に掛けないのは review が書けないからで、escalate / decompose に掛け
- *  ないのは「作業が終わっていない」解放だからである(そこでは WIP 退避が正しい)。
- *  workspace が解決できない・quarantine 中のタスクは現行どおり素通しする。 */
-function assertWorkTreeCommitted(deps: McpDeps, task: Task): void {
-  if (task.type !== "work") return;
+/** タスク自身の実行 workspace(issue #26 / ADR 0009 —— 盤面の既定ではない)。解決できない
+ *  名前は `resolveOrQuarantine` が quarantine する**副作用を持つ**ので、1つの verb 呼び出しで
+ *  2度撃たない(2度目は同じ観測を cause として重ねて記録するだけである)。 */
+function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-  if (!resolve) return;
-  const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-  if (!workspace || workspaceNeedsHuman(deps.db, workspace.name)) return;
-  // ツリーを**観測できない**(git repository 自体が壊れている等)ときは門を素通しする。
-  // 「commit してから呼び直せ」は worker に実行不能なことを求める指示になり、この直後の
-  // 解放で tree rule 自身が同じ git に躓いて quarantine へ落ちる —— 盤面の資源の故障は
-  // 完了を止めずに封じ込めへ回す、という既存の線(releaseWorkspace)をここでも切らない
-  try {
-    if (!treeIsDirty(workspace)) return;
-  } catch {
-    return;
-  }
+  if (!resolve) return undefined;
+  return resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+}
+
+/** 完了の門(ADR 0084 決定1・2 / issue #240)。ここに立つのは `completeTask` を人間経路
+ *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
+ *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
+function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
+  if (task.type !== "work" || workspaceNeedsHuman(deps.db, workspace.name)) return;
+  if (!treeIsDirty(workspace)) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
       "with a message whose body says what changed and why in a few lines, readable from " +
@@ -371,35 +358,37 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task): void {
 /** Verbs that end the slot session (complete, decompose, escalate): run the
  *  domain verb attributed to the slot worker, then free the slot. Work
  *  completion opts into lineage merge-back; every other release only stashes
- *  WIP. A domain error keeps the slot — the session continues. */
+ *  WIP. A domain error keeps the slot — the session continues.
+ *
+ *  `gate` は verb の**前**に走る(ADR 0084 の完了の門)。門を持つ verb だけが workspace を
+ *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
+ *  error で終わった escalate / decompose にまでその副作用が及ぶ。 */
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
   verb: (task: Task, workerId: string, now: Date) => unknown,
   mergeBack = false,
+  gate?: (task: Task, workspace: WorkspaceConfig) => void,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
+    let workspace = gate ? resolveTaskWorkspace(deps, task) : undefined;
+    if (gate && workspace) gate(task, workspace);
     const result = verb(task, attributedWorkerId(deps, task), deps.clock.now());
     // the tree rule runs between the domain verb and the release: a domain
     // error above keeps the session (and its tree) alive, but once the verb
     // lands the WIP is stashed before anything else can enter the workspace.
     // A tree-rule failure falls back to quarantine — the verb already
     // landed, so the release stands, and needs-human halts further pickups.
-    // Resolved against the task's own execution workspace (issue #26 / ADR
-    // 0009), never just the board's default.
-    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-    if (resolve) {
-      const resolved = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-      if (resolved) {
-        releaseWorkspace(
-          deps.db,
-          resolved,
-          task,
-          deps.clock.now(),
-          mergeBack && task.type === "work",
-          deps.githubAuth,
-        );
-      }
+    if (!gate) workspace = resolveTaskWorkspace(deps, task);
+    if (workspace) {
+      releaseWorkspace(
+        deps.db,
+        workspace,
+        task,
+        deps.clock.now(),
+        mergeBack && task.type === "work",
+        deps.githubAuth,
+      );
     }
     deps.slot.release();
     return result;
@@ -502,12 +491,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         deps,
         attributedTaskId,
         (task, workerId, now) => {
-          assertWorkTreeCommitted(deps, task);
           const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
           completed = done;
           return { id: done.id, status: done.status };
         },
         true,
+        (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
       );
       if (completed) await openHandoffPr(deps, completed);
       return result;

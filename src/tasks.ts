@@ -196,7 +196,7 @@ function parseJson<T>(json: string | null): T | null {
  *  messages) sees this instead of real content — only
  *  TaskContentSource.expand(), called at the actual use-moments (spawn, UI
  *  display, PR title), ever resolves the real title/purpose/completion_criteria. */
-function issueRefPlaceholder(githubIssueNumber: number): string {
+export function issueRefPlaceholder(githubIssueNumber: number): string {
   return `#${githubIssueNumber}`;
 }
 

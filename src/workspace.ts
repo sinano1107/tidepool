@@ -14,7 +14,13 @@ import {
   type WorkspaceEntry,
 } from "./registry.js";
 import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
-import { BOARD_WORKER_ID, getTask, registerTask, type Task } from "./tasks.js";
+import {
+  BOARD_WORKER_ID,
+  getTask,
+  issueRefPlaceholder,
+  registerTask,
+  type Task,
+} from "./tasks.js";
 
 export { BOARD_WORKER_ID } from "./tasks.js";
 
@@ -518,12 +524,22 @@ function shadowRemnants(workspace: WorkspaceConfig): string[] {
  *
  *  `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
  *  ディレクトリを `?? .claude/` の1行に畳むので、残骸の除外がパス一致で効かなくなり
- *  `.claude/agents` だけの残骸が dirty に数えられる。 */
+ *  `.claude/agents` だけの残骸が dirty に数えられる。
+ *
+ *  **観測に失敗したら `false` を返す**(ADR 0084 決定2): git repository 自体が壊れている
+ *  workspace で「commit してから呼び直せ」は worker に実行不能なことを求める指示になる。
+ *  握り潰しをここに置くのは、飲むのを**この関数自身の git 観測に限る**ためである ——
+ *  呼び出し側のロジックの失敗まで一緒に飲むと、門が理由なく開く。黙って開くわけでも
+ *  ない: 直後の解放で tree rule が同じ git に躓き、quarantine が人間に届く。 */
 export function treeIsDirty(workspace: WorkspaceConfig): boolean {
-  const remnants = new Set<string>(shadowRemnants(workspace));
-  return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
-    .split("\n")
-    .some((line) => line !== "" && !remnants.has(line.slice(3)));
+  try {
+    const remnants = new Set<string>(shadowRemnants(workspace));
+    return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
+      .split("\n")
+      .some((line) => line !== "" && !remnants.has(line.slice(3)));
+  } catch {
+    return false;
+  }
 }
 
 /** ADR 0084: 退避コミットの subject にタスクの title を添える —— 完了の門が入った後に
@@ -535,7 +551,9 @@ export function treeIsDirty(workspace: WorkspaceConfig): boolean {
  *  GitHub を叩かず、プレースホルダのときは素の形に落ちる。 */
 function wipSubject(task: Task): string {
   const bare = `WIP: task ${task.id}`;
-  return task.title === `#${task.github_issue_number}` ? bare : `${bare} — ${task.title}`;
+  const placeholder =
+    task.github_issue_number !== null && task.title === issueRefPlaceholder(task.github_issue_number);
+  return placeholder ? bare : `${bare} — ${task.title}`;
 }
 
 /** The slot-release tree rule: whatever the session left behind is stashed as
