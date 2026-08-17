@@ -292,10 +292,8 @@ function groupLogEntries(entries) {
 // Multiple objections on one entry render as a bullet list, matching the
 // server's own bundling (renderObjectionPairs in src/triage.ts); a single
 // objection keeps its original plain-text look (issue #251).
-function objectionBadge(comments) {
-  if (!comments || comments.length === 0) return undefined;
-  return comments.length === 1 ? comments[0] : comments.map((c) => `- ${c}`).join('\n');
-}
+const objectionBadge = (comments) =>
+  comments?.length > 1 ? comments.map((c) => `- ${c}`).join('\n') : comments?.[0];
 
 // Live-mode props (all optional — absent, the screen runs standalone on mock
 // data): onAnswer / onObject / onScratchAdd persist immediately (中断安全),

@@ -352,10 +352,7 @@ function groupLogEntries(entries) {
   });
   return groups;
 }
-function objectionBadge(comments) {
-  if (!comments || comments.length === 0) return void 0;
-  return comments.length === 1 ? comments[0] : comments.map((c) => `- ${c}`).join("\n");
-}
+const objectionBadge = (comments) => comments?.length > 1 ? comments.map((c) => `- ${c}`).join("\n") : comments?.[0];
 function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, onTranslate }) {
   const { Button, Input, LogEntry, QueueItem, Switch } = window.TidepoolDesignSystem_8a0ead;
   const nQuestions = data.questions.length;
