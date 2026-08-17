@@ -162,6 +162,70 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
   });
 });
 
+describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触らない)", () => {
+  const AUTO_MERGE_PROFILE = {
+    "authority/roamer.yaml":
+      "guidance: old guidance\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: auto_if_ci_green\n",
+  };
+
+  it("guidance だけのパッチは他の3フィールドを既存値のまま残す", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+
+    await updateProfile(
+      { name: "roamer", guidance: "new guidance" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    // strict + 全フィールド必須の authorityProfileSchema を通って読み戻せること
+    // 自体が「保存されたファイルは4キー揃っている」の証明(ADR 0079 決定1)
+    expect(loadRegistry(registryDir, "purely-local").authority.roamer).toEqual({
+      name: "roamer",
+      guidance: "new guidance",
+      assignable_to: ["deckhand"],
+      allowed_workspaces: ["tidepool"],
+      merge: "auto_if_ci_green",
+    });
+  });
+
+  it("空パッチ(全フィールド absent)はコミットなしの成功", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await updateProfile({ name: "roamer" }, { registry: { dir: registryDir, mode: "purely-local" } });
+
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("空の値は値として保存される — guidance: \"\" は空文字、assignable_to: [] は「誰にも」", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+
+    await updateProfile(
+      { name: "roamer", guidance: "", assignable_to: [] },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").authority.roamer).toEqual({
+      name: "roamer",
+      guidance: "",
+      assignable_to: [],
+      allowed_workspaces: ["tidepool"],
+      merge: "auto_if_ci_green",
+    });
+  });
+
+  it("既存値と同じ値を明示的に送ったパッチもコミットなしの成功", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await updateProfile(
+      { name: "roamer", merge: "auto_if_ci_green" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+});
+
 describe("updateProfile: 存在しないプロファイル(issue #76 — 編集は既存名のみ)", () => {
   it("registry にない名前は UnknownAuthorityProfileError で拒否され、ファイルもコミットも増えない", async () => {
     const registryDir = await makeMainRegistry();

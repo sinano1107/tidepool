@@ -1187,8 +1187,9 @@ function sameStrings(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-// The four profile fields as the API wants them: all four always present —
-// the registry schema requires every one, merge included (ADR 0079).
+// The four profile fields as the create door wants them: all four always
+// present — the registry schema requires every one, merge included (ADR 0079).
+// The edit door is a partial patch and builds its own body (ADR 0086 決定3/4).
 function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
   return {
     guidance,
@@ -1451,11 +1452,16 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const [merge, setMerge] = React.useState(profile.merge ?? '');
   const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onChanged(); });
 
-  const dirty =
-    guidance !== (profile.guidance ?? '') ||
-    !sameStrings(assignableTo, profile.assignable_to ?? []) ||
-    !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []) ||
-    (merge || '') !== (profile.merge ?? '');
+  // Per-field, because the wire body carries exactly the changed fields
+  // (ADR 0086 決定4) — one source for the dirty flag and for what travels, so
+  // an untouched value can never sneak into the danger judgment.
+  const changed = {
+    guidance: guidance !== (profile.guidance ?? ''),
+    assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
+    allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
+    merge: (merge || '') !== (profile.merge ?? ''),
+  };
+  const dirty = Object.values(changed).some(Boolean);
   useDirtySignal(edit, open, dirty);
 
   const startEdit = () => edit.open(id, () => {
@@ -1465,10 +1471,11 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
     setMerge(profile.merge ?? '');
   });
 
-  const submit = () => save(
-    `/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH',
-    profileBody(guidance, assignableTo, allowedWorkspaces, merge), 'updated', profile.name,
-  );
+  const submit = () => {
+    const values = { guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge };
+    const body = Object.fromEntries(Object.keys(changed).filter((k) => changed[k]).map((k) => [k, values[k]]));
+    save(`/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH', body, 'updated', profile.name);
+  };
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

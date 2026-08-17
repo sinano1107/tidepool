@@ -68,3 +68,17 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
     );
   });
 });
+
+describe("dangerousValues: 部分パッチ(issue #266 / ADR 0086 — 現れなかったフィールドは判定に出ない)", () => {
+  it("空のパッチは何も検知しない", () => {
+    expect(dangerousValues({})).toEqual([]);
+  });
+
+  it("merge だけを書いたパッチは merge の理由だけを返す", () => {
+    expect(dangerousValues({ merge: "auto_if_ci_green" })).toEqual(["merge_auto_if_ci_green"]);
+  });
+
+  it("空配列は安全側 —— 「誰にも / どこにも」なので確認は出ない", () => {
+    expect(dangerousValues({ assignable_to: [], allowed_workspaces: [] })).toEqual([]);
+  });
+});

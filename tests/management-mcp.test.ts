@@ -875,3 +875,50 @@ it("register_task は同じ issue reference の未決着二重登録を拒否す
     await client.close();
   }
 });
+
+it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", async () => {
+  const update = vi.fn(async () => {});
+  t = await bootTidepool({ profileAdmin: { update } });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    // guidance だけのパッチ: 危険判定に現れるフィールドがないので確認は不要
+    expect(
+      readToolPayload(
+        await client.callTool({ name: "update_profile", arguments: { name: "roamer", guidance: "Reworded." } }),
+      ),
+    ).toEqual({});
+    expect(update).toHaveBeenCalledWith({ name: "roamer", guidance: "Reworded." });
+
+    // 危険な値を書いたパッチは confirm_dangerous を要求する
+    update.mockClear();
+    const denied: any = await client.callTool({
+      name: "update_profile",
+      arguments: { name: "roamer", merge: "auto_if_ci_green" },
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0].text).toContain("merge_auto_if_ci_green");
+    expect(update).not.toHaveBeenCalled();
+
+    const confirmed: any = await client.callTool({
+      name: "update_profile",
+      arguments: { name: "roamer", merge: "auto_if_ci_green", confirm_dangerous: true },
+    });
+    expect(confirmed.isError ?? false).toBe(false);
+    expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green" });
+
+    // 空配列は安全側 — 確認なしで通る
+    update.mockClear();
+    expect(
+      readToolPayload(
+        await client.callTool({ name: "update_profile", arguments: { name: "roamer", assignable_to: [] } }),
+      ),
+    ).toEqual({});
+    expect(update).toHaveBeenCalledWith({ name: "roamer", assignable_to: [] });
+
+    // 省略の意味が tool description に書かれている(エージェントはこれだけを読む)
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "update_profile")?.description).toContain("left unchanged");
+  } finally {
+    await client.close();
+  }
+});

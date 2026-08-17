@@ -36,14 +36,19 @@ export type DangerousValueReason =
  *  values that widen the board's **unattended** outward effect — which is why
  *  `merge: external` is deliberately absent (ADR 0079 決定5). This layer only
  *  reports — it never blocks a write; enforcing confirmation on a dangerous
- *  profile is phase 2's API contract. */
+ *  profile is phase 2's API contract.
+ *
+ *  Every field is optional because the edit door is a partial patch (issue
+ *  #266 / ADR 0086): an absent field was not touched, so it cannot be
+ *  something the human just wrote, and it never enters the judgment. Create
+ *  passes all three, so its verdicts are unchanged. */
 export function dangerousValues(
-  input: Pick<CreateProfileInput, "assignable_to" | "allowed_workspaces" | "merge">,
+  input: Partial<Pick<CreateProfileInput, "assignable_to" | "allowed_workspaces" | "merge">>,
 ): DangerousValueReason[] {
   const reasons: DangerousValueReason[] = [];
   if (input.merge === "auto_if_ci_green") reasons.push("merge_auto_if_ci_green");
-  if (input.assignable_to.includes(AUTHORITY_WILDCARD)) reasons.push("assignable_to_wildcard");
-  if (input.allowed_workspaces.includes(AUTHORITY_WILDCARD)) {
+  if (input.assignable_to?.includes(AUTHORITY_WILDCARD)) reasons.push("assignable_to_wildcard");
+  if (input.allowed_workspaces?.includes(AUTHORITY_WILDCARD)) {
     reasons.push("allowed_workspaces_wildcard");
   }
   return reasons;
@@ -73,23 +78,45 @@ export async function createProfile(input: CreateProfileInput, deps: ProfileAdmi
   commitProfileFile(deps, input, `create authority profile ${input.name} via WebUI`);
 }
 
-/** The edit half (issue #76): the form resubmits the whole profile and the
- *  file is rewritten wholesale (hand-written YAML comments are the accepted
- *  cost of a profile entering UI management — same tradeoff as
- *  updateAgent). `name` picks the existing profile; unlike agents, profiles
- *  carry no version to bump. */
-export type UpdateProfileInput = CreateProfileInput;
+/** The edit half (issue #76, partial since issue #266 / ADR 0086): a patch
+ *  over the existing profile. `name` picks it; every other field is optional
+ *  and **absent means untouched** — that is what keeps the pure-payload
+ *  danger judgment from asking about a value the human never wrote. An empty
+ *  value is a value (`guidance: ""` saves the empty string, `[]` means "to
+ *  nobody" / "nowhere"). The file is still rewritten wholesale from the merged
+ *  profile with all four keys (hand-written YAML comments are the accepted
+ *  cost of a profile entering UI management — same tradeoff as updateAgent).
+ *  Unlike agents, profiles carry no version to bump. */
+export type UpdateProfileInput = { name: string } & Partial<z.infer<typeof authorityProfileSchema>>;
 
 export async function updateProfile(input: UpdateProfileInput, deps: ProfileAdminDeps): Promise<void> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.authority, input.name);
   if (!existing) throw new UnknownAuthorityProfileError(input.name);
+  const merged = mergePatch(existing, input);
   // no-change 編集はコミットなしの成功(updateAgent の sameEffectiveFields と
-  // 同じ狙い)— 配列フィールドは中身の一致で比較する(参照比較は常に不一致)
-  if (!sameEffectiveFields(existing, input)) {
-    commitProfileFile(deps, input, `update authority profile ${input.name} via WebUI`);
+  // 同じ狙い)— 空パッチもここに着地する。配列フィールドは中身の一致で比較する
+  // (参照比較は常に不一致)
+  if (!sameEffectiveFields(existing, merged)) {
+    commitProfileFile(deps, merged, `update authority profile ${input.name} via WebUI`);
   }
+}
+
+/** パッチを既存エントリに重ねて、4フィールド揃った profile にする(ADR 0086
+ *  決定1: absent はパッチ語彙の中だけの概念で、キー削除ではない)。既存側の
+ *  `??` は TS 上の optional(registry.ts — コード側で組む profile のための形)
+ *  を埋めるだけ。registry から読んだエントリは schema で4フィールド必須なので
+ *  実行時には発火しないが、万一のときは確認を要する `auto_if_ci_green` ではなく
+ *  人間に聞く `escalate` 側へ落ちる。 */
+function mergePatch(existing: AuthorityProfile, patch: UpdateProfileInput): CreateProfileInput {
+  return {
+    name: patch.name,
+    guidance: patch.guidance ?? existing.guidance,
+    assignable_to: patch.assignable_to ?? existing.assignable_to ?? [],
+    allowed_workspaces: patch.allowed_workspaces ?? existing.allowed_workspaces ?? [],
+    merge: patch.merge ?? existing.merge ?? "escalate",
+  };
 }
 
 /** One authority profile as the settings surface's edit form needs it
@@ -117,9 +144,9 @@ function sameStringArray(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, i) => value === b[i]);
 }
 
-/** 全フィールド(編集フォームが送るもの)の一致。`name` は比較しない —
- *  updateProfile はそもそも既存名の profile を編集するので常に一致する。 */
-function sameEffectiveFields(existing: AuthorityProfile, input: UpdateProfileInput): boolean {
+/** 既存エントリと、パッチをマージした後の完全な profile の一致。`name` は
+ *  比較しない — updateProfile はそもそも既存名の profile を編集する。 */
+function sameEffectiveFields(existing: AuthorityProfile, input: CreateProfileInput): boolean {
   return (
     existing.guidance === input.guidance &&
     sameStringArray(existing.assignable_to ?? [], input.assignable_to) &&

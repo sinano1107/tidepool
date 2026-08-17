@@ -365,3 +365,82 @@ it("その他の外部失敗は 502", async () => {
 
   expect(res.status).toBe(502);
 });
+
+// --- 部分パッチ(issue #266 / ADR 0086) ---
+
+/** 部分パッチ系のテストが共有する形: update だけ配線し、届いた入力を集める。 */
+async function bootUpdateOnly(calls: UpdateProfileInput[]): Promise<Tidepool> {
+  return bootTidepool({
+    profileAdmin: {
+      update: async (input) => {
+        calls.push(input);
+      },
+    },
+  });
+}
+
+it("PATCH は触っていないフィールドを載せない — guidance だけのパッチは 409 にならず、そのまま届く", async () => {
+  const calls: UpdateProfileInput[] = [];
+  t = await bootUpdateOnly(calls);
+
+  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", { guidance: "Reworded." });
+
+  expect(res.status).toBe(200);
+  expect(calls).toEqual([{ name: "roamer", guidance: "Reworded." }]);
+});
+
+it("PATCH で危険な値を書いたら confirmDangerous なしは 409 + 理由コード", async () => {
+  const calls: UpdateProfileInput[] = [];
+  t = await bootUpdateOnly(calls);
+
+  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", { merge: "auto_if_ci_green" });
+
+  expect(res.status).toBe(409);
+  expect(res.json.confirm_required).toBe(true);
+  expect(res.json.dangerous_values).toEqual(["merge_auto_if_ci_green"]);
+  expect(calls).toEqual([]);
+});
+
+it("PATCH の危険な値も confirmDangerous: true なら通り、フラグは domain へ渡らない", async () => {
+  const calls: UpdateProfileInput[] = [];
+  t = await bootUpdateOnly(calls);
+
+  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", {
+    assignable_to: ["*"],
+    confirmDangerous: true,
+  });
+
+  expect(res.status).toBe(200);
+  expect(calls).toEqual([{ name: "roamer", assignable_to: ["*"] }]);
+});
+
+it("PATCH の空配列は安全側 — 確認なしで通る", async () => {
+  const calls: UpdateProfileInput[] = [];
+  t = await bootUpdateOnly(calls);
+
+  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", {
+    assignable_to: [],
+    allowed_workspaces: [],
+  });
+
+  expect(res.status).toBe(200);
+  expect(calls).toEqual([{ name: "roamer", assignable_to: [], allowed_workspaces: [] }]);
+});
+
+it("空パッチ {} は 200 — no-change の扱いは domain 側(コミットなしの成功)", async () => {
+  const calls: UpdateProfileInput[] = [];
+  t = await bootUpdateOnly(calls);
+
+  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", {});
+
+  expect(res.status).toBe(200);
+  expect(calls).toEqual([{ name: "roamer" }]);
+});
+
+it("部分パッチでも未知キーは 400 — strict は緩めない", async () => {
+  const calls: UpdateProfileInput[] = [];
+  t = await bootUpdateOnly(calls);
+
+  expect((await api(t.baseUrl, "PATCH", "/api/profiles/roamer", { bogus: 1 })).status).toBe(400);
+  expect(calls).toEqual([]);
+});
