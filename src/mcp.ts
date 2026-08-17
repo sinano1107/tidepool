@@ -109,14 +109,23 @@ export interface McpDeps {
   listAgents?: () => RosterAgent[];
 }
 
+/** handoff doc は PR 昇格より前に worker が書き終えているので、着地状態(push /
+ *  PR / merge)については構造的に古い(issue #303)。PR 本文にだけ盤面がこの
+ *  定型行を足す — handoff 自体(DB・翻訳・WebUI 表示)は無改変。PR 番号は
+ *  `createPullRequest` が返る前に本文を組み立てるため書けない。 */
+const LANDING_NOTICE =
+  "This PR was opened by the tidepool board after the task completed. The handoff doc " +
+  "above was written by the worker before PR promotion, so it does not reflect landing " +
+  "state (push / PR / merge).";
+
 /** 完了の逆方向は GitHub ネイティブに委ねる(issue #49, ADR 0016) — issue-backed
  *  task の PR body に `Closes #N` を追記し、merge が issue を閉じる。PR を伴わない
  *  完了と cancel はこの経路自体を通らないので issue に触れない。 */
-function prBody(handoffDoc: string | null, githubIssueNumber: number | null): string {
+export function prBody(handoffDoc: string | null, githubIssueNumber: number | null): string {
   const doc = handoffDoc ?? "";
-  if (githubIssueNumber == null) return doc;
-  const closes = `Closes #${githubIssueNumber}`;
-  return doc ? `${doc}\n\n${closes}` : closes;
+  const withNotice = doc ? `${doc}\n\n${LANDING_NOTICE}` : LANDING_NOTICE;
+  if (githubIssueNumber == null) return withNotice;
+  return `${withNotice}\n\nCloses #${githubIssueNumber}`;
 }
 
 /** Root work-task completion → landing (issue #19 / ADR 0053 / ADR 0073): by the time this
@@ -476,7 +485,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Complete the current task. Work tasks require the full 6-field handoff doc " +
-        "and a committed work tree — commit your changes before calling this.",
+        "and a committed work tree — commit your changes before calling this. " +
+        "resume_context is what the next session needs to pick the work back up — " +
+        "do not describe landing state (push / PR / merge): the board lands the " +
+        "branch after you complete, and you cannot observe that.",
       // the schema stays permissive: the handoff invariant is enforced inside
       // the verb so callers get a domain error, not a protocol error
       inputSchema: {
