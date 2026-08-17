@@ -115,3 +115,7 @@ lineage から切られるようになり、その前提は解けている。
 
 サーバ/ドメイン側は issue #264、settings 画面側は issue #265。決定2 の議論中に見つかった profile 側の確認摩耗
 (この決定とは独立に残る)は issue #266 —— ADR 0086 で決定2 を profile 扉へ拡張して解消。
+
+決定1 が「踏襲しない」と書いた profile 側の二重実装(`rejectUnconfirmedDanger` + `management-mcp.ts`)も同じ
+issue #266 で解消した —— 門は `ProfileConfirmationRequiredError` を投げる `createProfile` / `updateProfile` に
+1つだけになり、両扉は写すだけになった。決定1 本文の現在形の記述は、書かれた時点(2026-08-10)の姿である。

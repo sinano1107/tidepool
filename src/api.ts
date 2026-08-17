@@ -500,11 +500,10 @@ export interface ApiRouterDeps {
    *  reports 503. */
   agentAdmin?: Partial<AgentAdmin>;
   /** The settings surface's profile verbs (issue #77), agentAdmin's twin —
-   *  threaded in by main.ts with the registry clone already bound. The route
-   *  layer runs the real `dangerousValues` gate on top of these (ADR 0027:
-   *  the confirmation contract is fixed at the server boundary). Absent (or a
-   *  verb absent — tests fake them singly) → not configured, the route reports
-   *  503. */
+   *  threaded in by main.ts with the registry clone already bound. The danger
+   *  gate lives inside these verbs (ADR 0061 決定1); this layer only maps their
+   *  `ProfileConfirmationRequiredError` to a 409. Absent (or a verb absent —
+   *  tests fake them singly) → not configured, the route reports 503. */
   profileAdmin?: Partial<ProfileAdmin>;
   /** The skills picker's candidate source (issue #106 / ADR 0025 点4), bound by
    *  main.ts to the adapter's neutral-cwd `/usage` ping (claude-worker.ts's

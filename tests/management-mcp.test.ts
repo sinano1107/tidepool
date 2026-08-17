@@ -378,6 +378,10 @@ it("管理MCP は人間の明示確認なしに危険な profile を保存しな
     const denied: any = await client.callTool({ name: "create_profile", arguments: dangerous });
     expect(denied.isError).toBe(true);
     expect(denied.content[0].text).toContain("assignable_to_wildcard");
+    // registryToolError の既知分類に入っていること — fallback の
+    // "registry upstream error" は盤面側の障害の顔なので、確認要求がそこへ
+    // 落ちたら「同意すれば通る」が読み取れない
+    expect(denied.content[0].text).not.toContain("registry upstream error");
     // 扉は同意を捏造しない — 確認なしの呼びは confirmDangerous: false で届く
     expect(create).toHaveBeenCalledWith({ ...dangerous, confirmDangerous: false });
     create.mockClear();

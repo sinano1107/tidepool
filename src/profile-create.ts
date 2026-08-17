@@ -75,7 +75,8 @@ export class ProfileConfirmationRequiredError extends Error {
 
 /** 危険な値の門。判定は**ペイロードだけ**を見る(ADR 0061 決定2)ので、編集では
  *  マージ前のパッチを渡す — 触っていない値は現れず、確認は人間が実際に危険な値を
- *  書いた瞬間にだけ出る。 */
+ *  書いた瞬間にだけ出る。引数型は両方の扉の入力を受ける最も広い形で、作成の
+ *  `CreateProfileInput` もこれを満たす(update 専用ではない)。 */
 function assertConfirmed(input: UpdateProfileInput): void {
   const reasons = dangerousValues(input);
   if (reasons.length > 0 && input.confirmDangerous !== true) {
