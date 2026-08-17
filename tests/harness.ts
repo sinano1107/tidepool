@@ -330,16 +330,14 @@ export function commitWork(path: string, file: string, body: string): void {
   // その1ファイルだけを stage する: `add -A` だと、テストがわざと untracked のまま
   // 残している sandbox shadow まで巻き込んで測りたい差を消す
   git(path, "add", "--", file);
-  git(path, "commit", "-m", `${file}: ${body.trim().split("\n")[0] || "(empty)"}`);
+  git(path, "commit", "-m", `add ${file}`);
 }
 
 /** 「ワーカーがこのタスクの成果を出した」の fixture。ADR 0084 の完了の門が入って以降、
  *  成果はコミット済みでなければ完了できない —— 書きっぱなしにすると完了が拒否され、
  *  着地も PR も測れない。 */
 export function addTaskChange(path: string, taskId: string): void {
-  writeFileSync(join(path, `${taskId}.txt`), "finished\n");
-  git(path, "add", "-A");
-  git(path, "commit", "-m", `finish task ${taskId}`);
+  commitWork(path, `${taskId}.txt`, "finished\n");
 }
 
 /** A fresh temp git checkout named `name`, one commit deep. The path is

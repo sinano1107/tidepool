@@ -41,8 +41,8 @@ import {
   resolveOrQuarantine,
   taskBranch,
   taskHasCommitsToLand,
+  treeIsDirty,
   UnknownWorkspaceError,
-  uncommittedChanges,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "./workspace.js";
@@ -356,13 +356,11 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task): void {
   // 「commit してから呼び直せ」は worker に実行不能なことを求める指示になり、この直後の
   // 解放で tree rule 自身が同じ git に躓いて quarantine へ落ちる —— 盤面の資源の故障は
   // 完了を止めずに封じ込めへ回す、という既存の線(releaseWorkspace)をここでも切らない
-  let changes: string[];
   try {
-    changes = uncommittedChanges(workspace);
+    if (!treeIsDirty(workspace)) return;
   } catch {
     return;
   }
-  if (changes.length === 0) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
       "with a message whose body says what changed and why in a few lines, readable from " +

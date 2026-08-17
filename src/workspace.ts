@@ -519,11 +519,11 @@ function shadowRemnants(workspace: WorkspaceConfig): string[] {
  *  `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
  *  ディレクトリを `?? .claude/` の1行に畳むので、残骸の除外がパス一致で効かなくなり
  *  `.claude/agents` だけの残骸が dirty に数えられる。 */
-export function uncommittedChanges(workspace: WorkspaceConfig): string[] {
+export function treeIsDirty(workspace: WorkspaceConfig): boolean {
   const remnants = new Set<string>(shadowRemnants(workspace));
   return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
     .split("\n")
-    .filter((line) => line !== "" && !remnants.has(line.slice(3)));
+    .some((line) => line !== "" && !remnants.has(line.slice(3)));
 }
 
 /** ADR 0084: 退避コミットの subject にタスクの title を添える —— 完了の門が入った後に
