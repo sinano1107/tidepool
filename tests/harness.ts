@@ -415,6 +415,33 @@ export async function registerWork(
   return res.json;
 }
 
+/** A child under `parentId` — which makes the parent `blocked` (unfinished
+ *  child), so the parent sits at the raw head while never being pickable. */
+export async function registerChild(t: Tidepool, title: string, parentId: string): Promise<any> {
+  const res = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title,
+    purpose: `purpose of ${title}`,
+    completion_criteria: `criteria of ${title}`,
+    parent_id: parentId,
+    decompose_reason: `split ${title} from its parent`,
+  });
+  return res.json;
+}
+
+/** An unanswered question under `parentId`, which holds every sibling below it
+ *  out of the slot — `todo` rows in the table that can never be picked. Returns
+ *  the question so a test can answer it and watch the hold release. */
+export function holdChildren(t: Tidepool, parentId: string): Task {
+  return registerQuestion(t, {
+    title: "unrelated decision",
+    purpose: "a human wants steering input",
+    completion_criteria: "answered",
+    parent_id: parentId,
+    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
+  });
+}
+
 /** Fabricates a question task directly against the board's own DB file,
  *  mirroring how tidepool's internal callers (watchdog/quarantine/merge/
  *  decompose) register one. The human-facing `/api/tasks` door refuses

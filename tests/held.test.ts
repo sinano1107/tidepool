@@ -1,32 +1,22 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, registerQuestion, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  HOUR,
+  holdChildren,
+  registerChild,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-async function registerWork(t: Tidepool, title: string, parent_id?: string) {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-    ...(parent_id && { parent_id }),
-    ...(parent_id && { decompose_reason: `split ${title} from its parent` }),
-  });
-  return res.json;
-}
-
 it("祖先の未回答 question に held されたタスクは、回答されるまで slot に入らない", async () => {
   t = await bootTidepool();
   const parent = await registerWork(t, "parent");
-  const child = await registerWork(t, "child", parent.id);
-  const question = registerQuestion(t, {
-    title: "unrelated decision",
-    purpose: "a human wants steering input",
-    completion_criteria: "answered",
-    parent_id: parent.id,
-    question: [{ title: "unrelated decision", options: ["yes", "no"], recommendation: "yes" }],
-  });
+  const child = await registerChild(t, "child", parent.id);
+  const question = holdChildren(t, parent.id);
 
   // child has no unfinished children of its own — it would be plain 'todo'
   // (and pickable) without the held rule

@@ -2862,7 +2862,11 @@ function App() {
   // toast just has to describe honestly what actually happened rather than
   // always claiming success (#79's lesson, ADR 0028).
   const moveFront = async (id) => {
-    const wasHead = data.queue[0]?.id === id;
+    // the *pickable* head, the same predicate the server fires on (issue
+    // #299) — not `queue[0]`, which can be a row the slot could never take.
+    // held / question / human rows never reach `data.queue` at all (mapData
+    // above), so what is left to skip here is blocked and skipped.
+    const wasHead = data.queue.find((r) => !r.blocked && !r.skipped)?.id === id;
     try {
       await api(`/api/tasks/${id}/move`, { after: null });
       markFront(id);

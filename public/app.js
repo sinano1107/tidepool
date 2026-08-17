@@ -2921,7 +2921,7 @@ function App() {
     }
   };
   const moveFront = async (id) => {
-    const wasHead = data.queue[0]?.id === id;
+    const wasHead = data.queue.find((r) => !r.blocked && !r.skipped)?.id === id;
     try {
       await api(`/api/tasks/${id}/move`, { after: null });
       markFront(id);
