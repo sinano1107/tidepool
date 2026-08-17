@@ -503,6 +503,39 @@ it("異議されたエントリを event id 順の対として修理タスクへ
   );
 });
 
+it("同一ログエントリへの2件目の異議は1件目を上書きせず、修理タスクと self/auditor RCA の purpose に両方とも並ぶ(issue #251)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "二重の異議");
+  await t.clock.advance(HOUR);
+  const decision = await loggedEntry(t, task.id, "一度きりの判断");
+
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: decision.id,
+    comment: "1件目の方向コメント",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: decision.id,
+    comment: "2件目の方向コメント",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/close");
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  const expectedPair = "> 一度きりの判断\n- 1件目の方向コメント\n- 2件目の方向コメント";
+  const repair = board.find((entry: any) => entry.title === "repair: 二重の異議");
+  expect(repair.purpose).toBe(
+    'objections raised against decisions of "二重の異議":\n\n' + expectedPair,
+  );
+  const selfReview = board.find((entry: any) => entry.title === "rca (self): 二重の異議");
+  expect(selfReview.purpose).toBe(
+    'objections raised against decisions fake-worker made on "二重の異議":\n\n' + expectedPair,
+  );
+  const auditorReview = board.find((entry: any) => entry.title === "rca (auditor): 二重の異議");
+  expect(auditorReview.purpose).toBe(
+    'objections raised against decisions of "二重の異議":\n\n' + expectedPair,
+  );
+});
+
 it("result が null の完了エントリへの異議には no outcome recorded を差し込む", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "完了報告なし", undefined, false, "human");
