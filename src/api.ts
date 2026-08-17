@@ -269,8 +269,9 @@ const updateAgentSchema = createAgentSchema.omit({ name: true });
 
 // the profile save payload (issue #77): every authority-profile field, reused
 // straight from the registry's own schema so the two never drift, plus `name`
-// (picks the file) and `confirmDangerous` — a request-envelope flag, not a
-// profile field, so it is stripped before the value reaches the domain verb.
+// (picks the file) and `confirmDangerous` — the human's consent to the
+// dangerous values in this payload, which rides into the domain verb that owns
+// the gate (ADR 0061 決定1).
 // The strictObject stays strict through .extend(), so an unknown key is a 400.
 const createProfileSchema = authorityProfileSchema.extend({
   name: z.string().min(1),
