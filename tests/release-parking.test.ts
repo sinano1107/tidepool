@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -41,7 +42,7 @@ it("slot 解放で checkout が保護ブランチへ戻る", async () => {
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "leaves work behind");
   await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "notes.txt"), "half-finished work\n");
+  commitWork(ws.path, "notes.txt", "half-finished work\n");
 
   await complete(t, task.id);
 

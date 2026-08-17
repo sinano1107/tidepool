@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF,
   git,
   HOUR,
@@ -72,7 +73,7 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
   await t.clock.advance(HOUR);
   expect(git(workspace.path, "show", `task/${child.id}:parent.txt`)).toBe("parent work");
 
-  writeFileSync(join(workspace.path, "child.txt"), "child work\n");
+  commitWork(workspace.path, "child.txt", "child work\n");
   await complete(child.id);
 
   expect(git(workspace.path, "show", `task/${parent.id}:child.txt`)).toBe("child work");
@@ -90,7 +91,7 @@ it("完了時 review は元 PR が merge 済みでも被レビュータスクの
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship reviewed work", undefined, true);
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "reviewed.txt"), "review this\n");
+  commitWork(workspace.path, "reviewed.txt", "review this\n");
   await complete(reviewed.id);
 
   git(workspace.path, "merge", "--no-ff", `task/${reviewed.id}`, "-m", "merge reviewed work");
@@ -112,7 +113,7 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "review without branch pollution", undefined, true);
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "reviewed.txt"), "reviewed work\n");
+  commitWork(workspace.path, "reviewed.txt", "reviewed work\n");
   await complete(reviewed.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -120,7 +121,7 @@ it("review の完了は生成物を被レビュー work ブランチへ merge ba
   );
   await t.clock.advance(HOUR);
   const reviewedHead = git(workspace.path, "rev-parse", `task/${reviewed.id}`);
-  writeFileSync(join(workspace.path, "review-output.txt"), "generated during review\n");
+  commitWork(workspace.path, "review-output.txt", "generated during review\n");
 
   const client = await mcpClient(t.mcpBaseUrl, review.id);
   await client.callTool({ name: "complete_task", arguments: {} });
@@ -137,7 +138,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship repairable work", undefined, true);
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "reviewed.txt"), "needs review\n");
+  commitWork(workspace.path, "reviewed.txt", "needs review\n");
   await complete(reviewed.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -153,7 +154,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
     git(workspace.path, "rev-parse", `task/${reviewed.id}`),
   );
 
-  writeFileSync(join(workspace.path, "repair.txt"), "fixed\n");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
   await complete(repair.id);
 
   expect(git(workspace.path, "show", `task/${reviewed.id}:repair.txt`)).toBe("fixed");
@@ -165,7 +166,7 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "ship merged work", undefined, true);
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "reviewed.txt"), "merged work\n");
+  commitWork(workspace.path, "reviewed.txt", "merged work\n");
   await complete(reviewed.id);
   git(workspace.path, "push", "origin", `task/${reviewed.id}:main`);
 
@@ -182,7 +183,7 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
     git(workspace.path, "rev-parse", "main"),
   );
 
-  writeFileSync(join(workspace.path, "repair.txt"), "fixed after merge\n");
+  commitWork(workspace.path, "repair.txt", "fixed after merge\n");
   await complete(repair.id);
 
   expect(t.github.requests).toHaveLength(2);
@@ -264,7 +265,7 @@ it("先行する兄弟の merge back 後に pickup された兄弟は、その�
     (task: any) => task.parent_id === parent.id,
   );
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "first.txt"), "first result\n");
+  commitWork(workspace.path, "first.txt", "first result\n");
   await complete(children[0].id);
   await t.clock.advance(HOUR);
 
@@ -300,7 +301,7 @@ it("decompose 子の review 修理は、着地済みの子ブランチを飛ば�
     (task: any) => task.parent_id === parent.id && task.type === "work",
   );
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "child.txt"), "child result\n");
+  commitWork(workspace.path, "child.txt", "child result\n");
   await complete(child.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -335,7 +336,7 @@ it("付帯子の実行中に祖先が着地したら、完了時の再解決で�
   t = await bootTidepool({ workspace });
   const reviewed = await registerWork(t, "work that lands during repair", undefined, true);
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "reviewed.txt"), "reviewed work\n");
+  commitWork(workspace.path, "reviewed.txt", "reviewed work\n");
   await complete(reviewed.id);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
@@ -361,7 +362,7 @@ it("付帯子の実行中に祖先が着地したら、完了時の再解決で�
   git(merger, "merge", "--no-ff", "landed", "-m", "merge reviewed work");
   git(merger, "push", "origin", "main");
 
-  writeFileSync(join(workspace.path, "repair.txt"), "repair after landing\n");
+  commitWork(workspace.path, "repair.txt", "repair after landing\n");
   await complete(repair.id);
 
   expect(t.github.requests).toHaveLength(2);
@@ -416,7 +417,7 @@ it("merge back が conflict すると完了は維持したまま workspace を q
   git(workspace.path, "worktree", "remove", parentCheckout);
 
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["mine"] });
-  writeFileSync(join(workspace.path, "shared.txt"), "child version\n");
+  commitWork(workspace.path, "shared.txt", "child version\n");
 
   await complete(child.id);
 
@@ -476,7 +477,7 @@ it("兄弟が親ブランチを進めた後の merge back は ff-only にせず�
     (task: any) => task.type === "question" && task.parent_id === children[0].id,
   );
   await t.clock.advance(HOUR);
-  writeFileSync(join(workspace.path, "finished.txt"), "finished result\n");
+  commitWork(workspace.path, "finished.txt", "finished result\n");
   await complete(children[1].id);
 
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["continue"] });

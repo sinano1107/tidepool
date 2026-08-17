@@ -6,6 +6,7 @@ import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js
 import {
   api,
   bootTidepool,
+  commitWork,
   FULL_HANDOFF,
   HOUR,
   makeWorkspace,
@@ -38,7 +39,7 @@ it("workspace が quarantine された間、その workspace の todo タスク�
   await t.clock.advance(HOUR);
 
   // break prod's tree rule so completing it quarantines "prod"
-  writeFileSync(join(prod.path, "junk.txt"), "uncommittable\n");
+  commitWork(prod.path, "junk.txt", "uncommittable\n");
   await rm(join(prod.path, ".git"), { recursive: true, force: true });
   const client = await mcpClient(t.mcpBaseUrl, inProd.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
