@@ -1187,17 +1187,6 @@ function sameStrings(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-// The four profile fields as the API wants them: all four always present —
-// the registry schema requires every one, merge included (ADR 0079).
-function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
-  return {
-    guidance,
-    assignable_to: assignableTo,
-    allowed_workspaces: allowedWorkspaces,
-    merge,
-  };
-}
-
 // A list field for a profile's assignable_to / allowed_workspaces (issue #78):
 // picks from the registry's existing agents / workspaces rather than free text,
 // so a value can't be a typo for a name that doesn't exist. Selected entries
@@ -1451,11 +1440,16 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const [merge, setMerge] = React.useState(profile.merge ?? '');
   const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onChanged(); });
 
-  const dirty =
-    guidance !== (profile.guidance ?? '') ||
-    !sameStrings(assignableTo, profile.assignable_to ?? []) ||
-    !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []) ||
-    (merge || '') !== (profile.merge ?? '');
+  // Per-field, because the wire body carries exactly the changed fields
+  // (ADR 0086 決定4) — one source for the dirty flag and for what travels, so
+  // an untouched value can never sneak into the danger judgment.
+  const changed = {
+    guidance: guidance !== (profile.guidance ?? ''),
+    assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
+    allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
+    merge: (merge || '') !== (profile.merge ?? ''),
+  };
+  const dirty = Object.values(changed).some(Boolean);
   useDirtySignal(edit, open, dirty);
 
   const startEdit = () => edit.open(id, () => {
@@ -1465,10 +1459,14 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
     setMerge(profile.merge ?? '');
   });
 
-  const submit = () => save(
-    `/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH',
-    profileBody(guidance, assignableTo, allowedWorkspaces, merge), 'updated', profile.name,
-  );
+  const submit = () => {
+    const body = {};
+    if (changed.guidance) body.guidance = guidance;
+    if (changed.assignable_to) body.assignable_to = assignableTo;
+    if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
+    if (changed.merge) body.merge = merge;
+    save(`/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH', body, 'updated', profile.name);
+  };
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1825,9 +1823,10 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
     || allowedWorkspaces.length > 0 || !!merge;
   useDirtySignal(edit, true, dirty);
 
+  // 作成扉は4フィールドすべてを常に載せる(ADR 0079 決定1 / ADR 0086 決定3)
   const submit = () => save(
     '/api/profiles', 'POST',
-    { name: name.trim(), ...profileBody(guidance, assignableTo, allowedWorkspaces, merge) },
+    { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge },
     'created', name.trim(),
   );
 

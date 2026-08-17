@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { createProfile, listProfileViews } from "../src/profile-create.js";
+import { createProfile, listProfileViews, ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAuthorityProfileNameError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -31,6 +31,9 @@ describe("createProfile: 正常系(issue #76)", () => {
         assignable_to: ["deckhand", "tako"],
         allowed_workspaces: ["tidepool"],
         merge: "auto_if_ci_green",
+        // 危険な値を含むペイロードなので確認が要る(ADR 0061 決定1)— この
+        // テストの主題はラウンドトリップで、門そのものは別 describe が見る
+        confirmDangerous: true,
       },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
@@ -60,6 +63,7 @@ describe("createProfile: 正常系(issue #76)", () => {
         assignable_to: ["*"],
         allowed_workspaces: ["*"],
         merge: "external",
+        confirmDangerous: true,
       },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
@@ -121,6 +125,7 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
     assignable_to: ["*"],
     allowed_workspaces: ["*"],
     merge: "escalate" as const,
+    confirmDangerous: true,
   };
 
   it("registry クローンが registry-edit タスクのブランチに居ても、リモート main へコミットが着地する", async () => {
@@ -175,7 +180,7 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
   it("registry の全プロファイルを全フィールドで返す", async () => {
     const registryDir = await makeMainRegistry();
     await createProfile(
-      { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "external" },
+      { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "external", confirmDangerous: true },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
@@ -189,5 +194,67 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
       allowed_workspaces: ["*"],
       merge: "external",
     });
+  });
+});
+
+describe("createProfile: 危険な値の確認(ADR 0061 決定1 — 執行はドメイン側に1つ)", () => {
+  const DANGEROUS = {
+    name: "risky",
+    guidance: "g",
+    assignable_to: ["*"],
+    allowed_workspaces: ["tidepool"],
+    merge: "escalate" as const,
+  };
+
+  it("confirmDangerous なしは拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      createProfile(DANGEROUS, { registry: { dir: registryDir, mode: "purely-local" } }),
+    ).rejects.toThrow(ProfileConfirmationRequiredError);
+
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    expect(loadRegistry(registryDir, "purely-local").authority.risky).toBeUndefined();
+  });
+
+  it("拒否は理由コードを構造化フィールドと本文の両方で運ぶ", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      createProfile(
+        { ...DANGEROUS, merge: "auto_if_ci_green" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toMatchObject({
+      name: "ProfileConfirmationRequiredError",
+      reasons: ["merge_auto_if_ci_green", "assignable_to_wildcard"],
+      message: expect.stringContaining("merge_auto_if_ci_green"),
+    });
+  });
+
+  it("confirmDangerous: true なら保存される — フラグはファイルに書かれない", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await createProfile(
+      { ...DANGEROUS, confirmDangerous: true },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").authority.risky).toEqual({
+      name: "risky",
+      guidance: "g",
+      assignable_to: ["*"],
+      allowed_workspaces: ["tidepool"],
+      merge: "escalate",
+    });
+  });
+
+  it("不正な名前は confirm では買えない — 危険な値より先に名前で弾く(ADR 0061 根拠5)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      createProfile({ ...DANGEROUS, name: "../escape" }, { registry: { dir: registryDir, mode: "purely-local" } }),
+    ).rejects.toThrow(InvalidAuthorityProfileNameError);
   });
 });

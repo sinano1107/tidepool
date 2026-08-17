@@ -1595,14 +1595,6 @@ const MERGE_OPTIONS = [
 function sameStrings(a, b) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
-function profileBody(guidance, assignableTo, allowedWorkspaces, merge) {
-  return {
-    guidance,
-    assignable_to: assignableTo,
-    allowed_workspaces: allowedWorkspaces,
-    merge
-  };
-}
 function ProfileListInput({ label, hint, candidates, wildcardHint, values, onChange }) {
   const { Select, Tag } = window.TidepoolDesignSystem_8a0ead;
   const addable = candidates.filter((c) => !values.includes(c));
@@ -1787,7 +1779,13 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
     edit.close();
     await onChanged();
   });
-  const dirty = guidance !== (profile.guidance ?? "") || !sameStrings(assignableTo, profile.assignable_to ?? []) || !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []) || (merge || "") !== (profile.merge ?? "");
+  const changed = {
+    guidance: guidance !== (profile.guidance ?? ""),
+    assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
+    allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
+    merge: (merge || "") !== (profile.merge ?? "")
+  };
+  const dirty = Object.values(changed).some(Boolean);
   useDirtySignal(edit, open, dirty);
   const startEdit = () => edit.open(id, () => {
     setGuidance(profile.guidance ?? "");
@@ -1795,13 +1793,14 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
     setAllowedWorkspaces(profile.allowed_workspaces ?? []);
     setMerge(profile.merge ?? "");
   });
-  const submit = () => save(
-    `/api/profiles/${encodeURIComponent(profile.name)}`,
-    "PATCH",
-    profileBody(guidance, assignableTo, allowedWorkspaces, merge),
-    "updated",
-    profile.name
-  );
+  const submit = () => {
+    const body = {};
+    if (changed.guidance) body.guidance = guidance;
+    if (changed.assignable_to) body.assignable_to = assignableTo;
+    if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
+    if (changed.merge) body.merge = merge;
+    save(`/api/profiles/${encodeURIComponent(profile.name)}`, "PATCH", body, "updated", profile.name);
+  };
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, profile.name)), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "guidance", kind: profile.guidance ? "text" : "unset", value: profile.guidance ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
@@ -2116,7 +2115,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
   const submit = () => save(
     "/api/profiles",
     "POST",
-    { name: name.trim(), ...profileBody(guidance, assignableTo, allowedWorkspaces, merge) },
+    { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge },
     "created",
     name.trim()
   );

@@ -110,6 +110,9 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
       assignable_to: ["*"],
       allowed_workspaces: ["*"],
       merge: "external" as const,
+      // no-change でも確認は要る — 判定はペイロードだけを見るので、"*" を
+      // 「書いた」ことに変わりはない(ADR 0061 決定2)
+      confirmDangerous: true,
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
@@ -162,6 +165,70 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
   });
 });
 
+describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触らない)", () => {
+  const AUTO_MERGE_PROFILE = {
+    "authority/roamer.yaml":
+      "guidance: old guidance\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: auto_if_ci_green\n",
+  };
+
+  it("guidance だけのパッチは他の3フィールドを既存値のまま残す", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+
+    await updateProfile(
+      { name: "roamer", guidance: "new guidance" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    // strict + 全フィールド必須の authorityProfileSchema を通って読み戻せること
+    // 自体が「保存されたファイルは4キー揃っている」の証明(ADR 0079 決定1)
+    expect(loadRegistry(registryDir, "purely-local").authority.roamer).toEqual({
+      name: "roamer",
+      guidance: "new guidance",
+      assignable_to: ["deckhand"],
+      allowed_workspaces: ["tidepool"],
+      merge: "auto_if_ci_green",
+    });
+  });
+
+  it("空パッチ(全フィールド absent)はコミットなしの成功", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await updateProfile({ name: "roamer" }, { registry: { dir: registryDir, mode: "purely-local" } });
+
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("空の値は値として保存される — guidance: \"\" は空文字、assignable_to: [] は「誰にも」", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+
+    await updateProfile(
+      { name: "roamer", guidance: "", assignable_to: [] },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").authority.roamer).toEqual({
+      name: "roamer",
+      guidance: "",
+      assignable_to: [],
+      allowed_workspaces: ["tidepool"],
+      merge: "auto_if_ci_green",
+    });
+  });
+
+  it("既存値と同じ値を明示的に送ったパッチもコミットなしの成功", async () => {
+    const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await updateProfile(
+      { name: "roamer", merge: "auto_if_ci_green", confirmDangerous: true },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+});
+
 describe("updateProfile: 存在しないプロファイル(issue #76 — 編集は既存名のみ)", () => {
   it("registry にない名前は UnknownAuthorityProfileError で拒否され、ファイルもコミットも増えない", async () => {
     const registryDir = await makeMainRegistry();
@@ -175,5 +242,61 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").authority.ghost).toBeUndefined();
+  });
+});
+
+describe("updateProfile: 危険な値の確認(ADR 0061 決定1 — 執行はドメイン側に1つ)", () => {
+  const SAFE_PROFILE = {
+    "authority/roamer.yaml":
+      "guidance: old guidance\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
+  };
+  // 受け入れ条件が名指しする3ペイロード × 両半分を、判定が住むこの層で揃える
+  const DANGEROUS_PATCHES: [string, Record<string, unknown>][] = [
+    ["merge_auto_if_ci_green", { merge: "auto_if_ci_green" }],
+    ["assignable_to_wildcard", { assignable_to: ["*"] }],
+    ["allowed_workspaces_wildcard", { allowed_workspaces: ["*"] }],
+  ];
+
+  for (const [reason, patch] of DANGEROUS_PATCHES) {
+    it(`${reason}: confirmDangerous なしは拒否してコミットを積まず、付ければ保存される`, async () => {
+      const registryDir = await makeMainRegistry(SAFE_PROFILE);
+      const before = git(registryDir, "rev-parse", "HEAD");
+
+      await expect(
+        updateProfile({ name: "roamer", ...patch }, { registry: { dir: registryDir, mode: "purely-local" } }),
+      ).rejects.toMatchObject({ name: "ProfileConfirmationRequiredError", reasons: [reason] });
+      expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+
+      await updateProfile(
+        { name: "roamer", ...patch, confirmDangerous: true },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      );
+      expect(loadRegistry(registryDir, "purely-local").authority.roamer).toMatchObject(patch);
+    });
+  }
+
+  it("判定はパッチだけを見る — auto_if_ci_green の profile への guidance だけのパッチは確認を要求しない", async () => {
+    const registryDir = await makeMainRegistry({
+      "authority/roamer.yaml":
+        "guidance: old guidance\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: auto_if_ci_green\n",
+    });
+
+    await updateProfile(
+      { name: "roamer", guidance: "new guidance" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").authority.roamer?.guidance).toBe("new guidance");
+  });
+
+  it("存在しない名前は confirm では買えない — 危険な値より先に名前で弾く", async () => {
+    const registryDir = await makeMainRegistry(SAFE_PROFILE);
+
+    await expect(
+      updateProfile(
+        { name: "ghost", assignable_to: ["*"] },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toThrow(UnknownAuthorityProfileError);
   });
 });
