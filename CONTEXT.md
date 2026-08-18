@@ -107,7 +107,7 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 
 盤面の記録(イベント履歴と worker transcript)から派生した索引(ADR 0083)。新しい知識源ではなく、記録に無いことは記憶にも無い — 「生きた記憶は存在しない」(ADR 0045)は破られない。worker が引くのは過去の記録であって過去のセッションではない。存在理由は、人間が指示文を書き直さずに agent が育つこと(prompt engineering を非技術者に課さない)。
 
-- **種別**: **Knowledge**(事実。承認不要、出所必須)と **Behavior**(振る舞い。承認必須)。**Precedent** は過去の判断 + outcome + 機械観測された行動列の投影であり、Behavior を起草する材料。
+- **種別**: **Knowledge**(事実。承認不要、出所必須)と **Behavior**(振る舞い。承認必須)。**Precedent** は過去の判断 + outcome + 機械観測された行動列の投影であり、Behavior を起草する材料。その単位は **Episode** = worker session 1回で、中身は tool 呼び出し1回を最小粒度とする行動列と、その中に位置を持つ decision のマーカー、outcome(decision 単位の表示済み・異議、session 単位の完了・PR merge・exit)、当時の agent 定義の版(2026-08-18 の grilling、issue #356)。decision は軸ではなくマーカーであり、「ある判断までに何をしたか」は読み出し時のスライスである。
 - **状態**: `candidate` / `approved`。worker に注入・retrieval されるのは approved のみ。承認は文言に対して行い、統合で書き換えたら再承認。「振る舞いの変更は人間承認」の線は、記憶がどのファイルに住むかではなく、この状態に引かれる。
 - **不変条件**: 削除は無く無効化のみ。すべてのエントリはイベント id か commit に遡れる。記憶は決裁権を広げない — 位置づけは Advisor と同じで、変わるのは権限内判断の質だけ。
 - **スコープ**: workspace(+盤面全体の少数)。agent ごとに隔離した記憶は作らない。Precedent は (workspace, agent) で引け、各 episode に当時の agent 定義の版を刻む。

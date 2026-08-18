@@ -100,3 +100,19 @@ future-ideas)/ Knowledge の git 併用(CLAUDE.md は人間が書くものに戻
 - **盤面が spawn 時に必須 skill の本文を注入する** — 決定12。
 - **完了時レビューに accept / reject の二択 UI を足す** — 既存の異議一本で始め、正の信号は Displayed から導出
   (決定7)。
+
+## 追記(2026-08-18 の grilling、issue #356)
+
+**Precedent の episode 単位は worker session であり、最小粒度は tool 呼び出し1回、`decision_logged` は行動列の中の
+マーカー(位置を持つ注釈)であって軸ではない。** decision の粒度は agent の申告頻度でばらつくので、decision を軸にすると
+「言ったこと vs やったこと」の照合が申告の疎密に歪む — tool 呼び出し単位なら列は申告に依らず完全で、「直前の
+decision からここまで」の窓は保存時の決定ではなく読み出し時のスライスになる。turn の本文は写さない: transcript が
+逐語の正本として残るので、各行動は transcript 行への参照を持つだけでよい(派生は薄く、原文は1箇所)。
+
+**decision と transcript の結合キーは盤面が発行する event id** — `log_decision` の応答にその id を載せ、transcript
+の tool_result に写ったものを照合する(自己申告ではなく盤面発行のキーが transcript に写るだけで、events は書き換えない)。
+出現順や文言一致に頼る対応付けは同一性を保てない(subagent 由来の decision・retry による transcript の欠落・応答経路の
+非対称で列がずれ、文言一致でフィルタしていれば誤結合が「一致した」ように見える)。event id を持たない旧記録だけ
+順序 + 文言 + 時刻単調性のヒューリスティックで結び、結合の種別を刻む。欠測は理由コードとして明示し、
+「空 = 何もしなかった」と区別する。前提として、盤面 verb は親スレッド専用(ADR 0010 追記)であり、transcript は
+worker session ごとに1本残る。

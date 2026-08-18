@@ -14,3 +14,13 @@ Considered options:
 - **ユーティリティ型のallowlist** — 「どのagentをsubagentに使えるかをtidepoolから管理する」という当初構想に最も近いが、列挙対象がvendor固有の型名になりvendor知識がregistryに漏れる(ADR 0005の緊張)。ユーティリティ間の差が説明責任上の差を生まない以上、盤面が区別する根拠も薄い。
 - **全面無効化** — 線の運用を信用できるまで封じる案。探索subagentによる文脈管理(大量のファイルを読んで要約だけ返す)まで失い、長いタスクで親セッションの文脈消費が悪化する副作用がある。
 - **判断の有無で線を引く(判断を含む作業はすべてタスク化、subagentは検索・要約のみ)** — 親エージェント自身がセッション内で無数のミクロ判断をしており(decision logに載るのは権限内判断の1行記録だけ)、subagentにのみ判断禁止を課す根拠が薄い。実際の関節で切っていない。
+
+## 追記(2026-08-18 の grilling、issue #356)
+
+**盤面 verb(管理MCP の `log_decision` / `decompose` / `complete_task` 等)は親スレッド専用であり、subagent からの呼び出しは
+adapter が機械的に拒否する。** subagent は既定で親の MCP tool を継承するため、放置すると説明責任の面そのもの(人間が異議を
+打ち RCA が読む decision log)を親が読みもしない subagent が書ける。これは説明責任の分割の密輸であり、教義の散文ではなく
+仕組みで塞ぐ — spawn 時に渡す per-task 設定の PreToolUse hook が、subagent 由来(hook 入力に subagent 識別子がある)の
+盤面 verb 呼び出しを deny する。本 ADR の「盤面は subagent の authority ダイヤルを持たない」とは矛盾しない: profile ごとの
+目盛りではなく、Workflow 禁止と同じ一律のカテゴリ規則を spawn 時のフラグ相当で強制する形である。
+
