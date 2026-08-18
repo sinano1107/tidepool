@@ -100,6 +100,29 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
     ).rejects.toMatchObject({ name: "DeletionBlockedError", reasons: [{ code: "board_default" }] });
   });
 
+  it("profile の allowed_workspaces に列挙されているだけの workspace は消せる(ADR 0087 決定2)", async () => {
+    const registryDir = await makeRegistry({
+      "authority/standard.yaml":
+        "guidance: lists tidepool as an allowed workspace\nassignable_to: []\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
+    });
+    git(registryDir, "branch", "-M", "main");
+
+    await deleteWorkspace(
+      { name: "tidepool", confirm: true },
+      {
+        registry: { dir: registryDir, mode: "purely-local" },
+        workspacesBaseDir: "/workspaces",
+        ...NO_REFERENCES,
+      },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
+    // 掃除は不要 —— 許可先が1つ消えるだけで無害である
+    expect(
+      loadRegistry(registryDir, "purely-local").authority.standard?.allowed_workspaces,
+    ).toEqual(["tidepool"]);
+  });
+
   it("盤面自身の registry clone は永久に消せない(RegistrySelfDeleteError)", async () => {
     const registryDir = await makeMainRegistry();
     // registry clone 自身を workspace として登録した状態(ADR 0052 決定3)

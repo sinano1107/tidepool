@@ -1168,6 +1168,15 @@ const DANGEROUS_REASON_LABEL = {
     'Review-allowed commands is non-empty — review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.',
   allowed_domains_set:
     'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
+  // ADR 0087 の削除の扉。確認で買える拒否は1つだけ(「本当に消すのか」)なので、
+  // 資源ごとに1行ずつ — 確認では買えない拒否(参照中・既定・registry 自身)は
+  // 409 blocked の本文がそのまま理由を述べるので、ここには現れない
+  delete_agent:
+    'This agent is being removed from the registry. Its definition stays in git history, but the board stops offering it.',
+  delete_workspace:
+    'This workspace is being removed from the registry. The checkout on the host is left untouched — the board just stops knowing about it.',
+  delete_profile:
+    'This authority profile is being removed from the registry. Its file stays in git history, but no agent can be pointed at it again.',
 };
 
 // The merge dial (registry.ts): required and three-valued since ADR 0079, so
@@ -1345,6 +1354,40 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
   );
 }
 
+// The record-level delete door (ADR 0087 / issue #205). WebUI-only (ADR 0088):
+// the management MCP has no delete verb at all. Two-phase like every other
+// dangerous action — the first request omits `confirm`, the server's 409
+// `confirm_required` opens the dialog, and accepting resends the same request
+// with the flag. A 409 that carries `blocked` instead is a refusal no
+// confirmation can buy (referenced by unsettled tasks, the board's default, the
+// registry clone itself); it lands on the ordinary failure toast, whose message
+// already spells out the count / agent names the server counted.
+function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
+  const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
+  const { busy, save, dialog } = useDangerousSave(say, onDeleted, {
+    noun: section.singular,
+    confirmKey: 'confirm',
+    dialogTitle: `Delete this ${section.singular}?`,
+    dialogLead: 'Deleting removes the entry from the registry\u2019s main. The file stays in git history.',
+    confirmLabel: 'Delete',
+    successDetail: section.deleteDetail,
+  });
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <p style={{ margin: 0, fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+          {section.deleteNote}
+        </p>
+        <Button variant="danger" size="sm" disabled={busy}
+          onClick={() => save(`/api/${sectionKey}/${encodeURIComponent(name)}`, 'DELETE', {}, 'deleted', name)}>
+          Delete {section.singular}
+        </Button>
+      </div>
+      {dialog}
+    </Card>
+  );
+}
+
 // The two-phase dangerous-value save (issue #78, #55 phase 3; generalized to
 // workspaces by ADR 0061 決定1), shared by every door that can carry a
 // dangerous value. The first attempt omits the confirm flag; when the payload
@@ -1356,7 +1399,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
 // workspaces — ADR 0061 決定1 kept the workspace door's existing flag name
 // rather than adding a second boolean). Returns the busy flag, the save
 // entrypoint, and the dialog element the caller renders inline.
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null); // { reasons, resend } | null while safe
@@ -1364,10 +1407,12 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
     const attempt = async (confirmed) => {
       setBusy(true);
       try {
-        await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
+        // 応答は捨てない: workspace の削除だけは「残る checkout の場所」を
+        // 返すので(ADR 0087 決定4)、完了表示がそれを名指しできる
+        const result = await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
         setConfirm(null);
-        say('success', `${noun} ${verb} — committed to the registry`, name);
-        await onDone();
+        say('success', `${noun} ${verb} — committed to the registry`, successDetail ? successDetail(result, name) : name);
+        await onDone(result);
       } catch (err) {
         // the #77 confirmation 409 is distinguished from any other failure
         // (bad input, a push that never landed — ADR 0052 決定1) by its
@@ -1388,7 +1433,7 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       footer={
         <React.Fragment>
           <Button variant="secondary" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
-          <Button variant="danger" disabled={busy} onClick={() => confirm && confirm.resend()}>Save anyway</Button>
+          <Button variant="danger" disabled={busy} onClick={() => confirm && confirm.resend()}>{confirmLabel ?? 'Save anyway'}</Button>
         </React.Fragment>
       }>
       <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>{dialogLead}</p>
@@ -2032,6 +2077,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       rowSummary: (w) => w.repo || w.path || '—',
       record: (rec) => <WorkspaceRecord ws={rec} baseDir={baseDir} say={say} onChanged={load} edit={edit} />,
       createForm: () => <NewWorkspaceForm baseDir={baseDir} say={say} onCreated={load} edit={edit} />,
+      reload: load,
+      deleteNote: 'removes the registry entry only — the checkout on this host is left where it is',
+      // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
+      deleteDetail: (result, name) => (result?.checkout ? `checkout remains at ${result.checkout}` : name),
     },
     agents: {
       title: 'Agents', singular: 'agent', note: 'who does the work',
@@ -2048,6 +2097,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         <NewAgentForm authorityProfiles={authorityProfiles} hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onCreated={loadAgents} edit={edit} />
       ),
+      reload: loadAgents,
+      deleteNote: 'removes agents/<name>.md from the registry — past tasks still read the body at their own commit',
     },
     profiles: {
       title: 'Authority Profiles', singular: 'authority profile',
@@ -2065,6 +2116,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         <NewProfileForm agentNames={agentNames} workspaceNames={workspaceNames}
           say={say} onCreated={refreshAfterProfile} edit={edit} />
       ),
+      reload: refreshAfterProfile,
+      deleteNote: 'removes authority/<name>.yaml from the registry — an agent still pointing at it blocks the delete',
     },
   };
   // one cascade for "unreachable / still loading / here is the count", read by
@@ -2202,6 +2255,12 @@ function SettingsScreen({ say, registerLeaveGuard }) {
           </Card>
         )}
         {rec && sec.record(rec)}
+        {/* 編集中は出さない: 未保存のカードを開いたまま消せると、破棄の問い
+            (決定4)を素通りする */}
+        {rec && editing === null && (
+          <DeleteRecord section={sec} sectionKey={sectionKey} name={recordName} say={say}
+            onDeleted={async () => { await sec.reload(); go([sectionKey]); }} />
+        )}
         <p style={settingsFootnote}>{sec.footnote}</p>
       </React.Fragment>
     );
