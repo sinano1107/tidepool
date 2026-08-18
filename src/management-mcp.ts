@@ -131,7 +131,6 @@ const profileFieldsSchema = z.object({
   assignable_to: z.array(z.string()),
   allowed_workspaces: z.array(z.string()),
   merge: z.enum(MERGE_DIAL_VALUES),
-  confirm_dangerous: z.boolean().default(false),
 });
 
 /** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
@@ -143,7 +142,6 @@ function registryToolError(err: unknown) {
     err instanceof RepoAccessMissingError ||
     err instanceof NotAGitRepositoryError ||
     err instanceof UnknownWorkspaceError ||
-    err instanceof WorkspaceConfirmationRequiredError ||
     err instanceof RegistrySelfUnprotectError ||
     err instanceof WorkspaceAlreadyPublishedError ||
     err instanceof CheckoutHasOriginError ||
@@ -155,10 +153,16 @@ function registryToolError(err: unknown) {
     err instanceof InvalidSkillAllowlistError ||
     err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAllowedDomainError ||
-    err instanceof InvalidAuthorityProfileNameError ||
-    err instanceof ProfileConfirmationRequiredError
+    err instanceof InvalidAuthorityProfileNameError
   ) {
     return toolError(err.message);
+  }
+  // ADR 0088: 危険な値の確認は WebUI 専用の扉 — 管理MCP に確認引数は無いので、
+  // この門はここでは絶対に開けない。理由コードを畳まず、案内だけ乗せる。
+  if (err instanceof WorkspaceConfirmationRequiredError || err instanceof ProfileConfirmationRequiredError) {
+    return toolError(
+      `dangerous values (${err.reasons.join(", ")}) require human confirmation; confirm and save this in the WebUI's settings screen.`,
+    );
   }
   return toolError(`registry upstream error: ${err instanceof Error ? err.message : String(err)}`);
 }
@@ -178,13 +182,15 @@ conversation with (prosthetic-hand model). Every operation you perform here
 is attributed to that human, not to you — exactly as if they had clicked the
 WebUI themselves. This implies:
 
-- Do not answer a question task, cancel a task, or confirm a dangerous
-  registry value — an authority profile's, a workspace's — unless the human
-  has explicitly made that judgment in your conversation. When in doubt, show
+- Do not answer a question task or cancel a task unless the human has
+  explicitly made that judgment in your conversation. When in doubt, show
   the human the task and ask. Answers you submit are counted as human
   decisions in the board's statistics.
 - Registry changes you make (agents, profiles, workspaces) are committed to
-  main as human-authored changes.
+  main as human-authored changes. Authority profile and workspace edits that
+  carry a dangerous value (unattended merge, a wildcard, unprotecting, a
+  non-empty allowlist) are rejected here outright — confirm and save those in
+  the WebUI's settings screen instead.
 - Reading the decision log here does NOT mark it as seen by the human. The
   board's unread cursor advances only in the WebUI. If the human relies on
   you for log awareness, relay what you read; the same entries will still
@@ -273,10 +279,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         notes: z.string().optional(),
         protected: z.boolean().optional(),
         // ADR 0061 / 0072: both workspace allowlists are editable here too —
-        // `[]` removes one. Non-empty needs `confirm`, same as unprotecting.
+        // `[]` removes one. Non-empty is a dangerous value (ADR 0088): this
+        // door has no `confirm`, so the domain gate always rejects it.
         review_allowed_commands: z.array(z.string()).optional(),
         allowed_domains: z.array(z.string()).optional(),
-        confirm: z.boolean().optional(),
       }),
     },
     async (input) => {
@@ -361,14 +367,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "create_profile",
     {
-      description:
-        "Create an authority profile in the human-managed registry. Set confirm_dangerous to true only after obtaining the human's explicit confirmation.",
+      description: "Create an authority profile in the human-managed registry.",
       inputSchema: profileFieldsSchema.extend({ name: z.string().min(1) }),
     },
-    async ({ confirm_dangerous, ...input }) => {
+    async (input) => {
       if (!deps.profileAdmin?.create) return toolError("profile administration is not configured");
       try {
-        await deps.profileAdmin.create({ ...input, confirmDangerous: confirm_dangerous });
+        await deps.profileAdmin.create(input);
         return toolResult({});
       } catch (err) {
         return registryToolError(err);
@@ -391,14 +396,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "update_profile",
     {
       description:
-        "Update an authority profile in the human-managed registry. Fields omitted from the request are left unchanged. Set confirm_dangerous to true only after obtaining the human's explicit confirmation.",
+        "Update an authority profile in the human-managed registry. Fields omitted from the request are left unchanged.",
       // 部分パッチ(issue #266 / ADR 0086)— create 扉は全フィールド必須のまま
       inputSchema: profileFieldsSchema.partial().extend({ name: z.string().min(1) }),
     },
-    async ({ confirm_dangerous, ...input }) => {
+    async (input) => {
       if (!deps.profileAdmin?.update) return toolError("profile administration is not configured");
       try {
-        await deps.profileAdmin.update({ ...input, confirmDangerous: confirm_dangerous });
+        await deps.profileAdmin.update(input);
         return toolResult({});
       } catch (err) {
         return registryToolError(err);
