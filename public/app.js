@@ -1714,7 +1714,31 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
     }
   ), /* @__PURE__ */ React.createElement(Select, { label: "Merge authority", options: MERGE_OPTIONS, value: merge, onChange: (e) => setMerge(e.target.value) }));
 }
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead }) {
+function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
+  const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
+  const { busy, save, dialog } = useDangerousSave(say, onDeleted, {
+    noun: section.singular,
+    confirmKey: "confirm",
+    dialogTitle: `Delete this ${section.singular}?`,
+    // 削除の確認に理由コードは無い(危険な値と違い「消す」1つきり)ので、
+    // ダイアログの本文がそのまま資源ごとの説明である
+    dialogLead: section.deleteLead,
+    confirmLabel: "Delete",
+    successDetail: section.deleteDetail
+  });
+  return /* @__PURE__ */ React.createElement(Card, null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 } }, /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, section.deleteNote), /* @__PURE__ */ React.createElement(
+    Button,
+    {
+      variant: "danger",
+      size: "sm",
+      disabled: busy,
+      onClick: () => save(`/api/${sectionKey}/${encodeURIComponent(name)}`, "DELETE", {}, "deleted", name)
+    },
+    "Delete ",
+    section.singular
+  )), dialog);
+}
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null);
@@ -1722,10 +1746,10 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
     const attempt = async (confirmed) => {
       setBusy(true);
       try {
-        await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
+        const result = await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
         setConfirm(null);
-        say("success", `${noun} ${verb} \u2014 committed to the registry`, name);
-        await onDone();
+        say("success", `${noun} ${verb} \u2014 committed to the registry`, successDetail ? successDetail(result, name) : name);
+        await onDone(result);
       } catch (err) {
         if (err.status === 409 && err.detail?.confirm_required) {
           setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
@@ -1744,7 +1768,7 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       open: !!confirm,
       title: dialogTitle,
       onClose: () => setConfirm(null),
-      footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: busy, onClick: () => setConfirm(null) }, "Cancel"), /* @__PURE__ */ React.createElement(Button, { variant: "danger", disabled: busy, onClick: () => confirm && confirm.resend() }, "Save anyway"))
+      footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: busy, onClick: () => setConfirm(null) }, "Cancel"), /* @__PURE__ */ React.createElement(Button, { variant: "danger", disabled: busy, onClick: () => confirm && confirm.resend() }, confirmLabel ?? "Save anyway"))
     },
     /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 8px", fontSize: "var(--text-sm)" } }, dialogLead),
     /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, fontSize: "var(--text-sm)", display: "flex", flexDirection: "column", gap: 6 } }, (confirm?.reasons ?? []).map((r) => /* @__PURE__ */ React.createElement("li", { key: r }, DANGEROUS_REASON_LABEL[r] ?? r)))
@@ -2313,7 +2337,12 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       rowIdentity: (w) => ({ label: w.name }),
       rowSummary: (w) => w.repo || w.path || "\u2014",
       record: (rec) => /* @__PURE__ */ React.createElement(WorkspaceRecord, { ws: rec, baseDir, say, onChanged: load, edit }),
-      createForm: () => /* @__PURE__ */ React.createElement(NewWorkspaceForm, { baseDir, say, onCreated: load, edit })
+      createForm: () => /* @__PURE__ */ React.createElement(NewWorkspaceForm, { baseDir, say, onCreated: load, edit }),
+      reload: load,
+      deleteNote: "removes the registry entry only \u2014 the checkout on this host is left where it is",
+      deleteLead: "This workspace is being removed from the registry. The checkout on the host is left untouched \u2014 the board just stops knowing about it.",
+      // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
+      deleteDetail: (result, name) => result?.checkout ? `checkout remains at ${result.checkout}` : name
     },
     agents: {
       title: "Agents",
@@ -2347,7 +2376,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
           onCreated: loadAgents,
           edit
         }
-      )
+      ),
+      reload: loadAgents,
+      deleteNote: "removes agents/<name>.md from the registry \u2014 past tasks still read the body at their own commit",
+      deleteLead: "This agent is being removed from the registry. Its definition stays in git history, but the board stops offering it."
     },
     profiles: {
       title: "Authority Profiles",
@@ -2380,7 +2412,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
           onCreated: refreshAfterProfile,
           edit
         }
-      )
+      ),
+      reload: refreshAfterProfile,
+      deleteNote: "removes authority/<name>.yaml from the registry \u2014 an agent still pointing at it blocks the delete",
+      deleteLead: "This authority profile is being removed from the registry. Its file stays in git history, but no agent can be pointed at it again."
     }
   };
   const sectionSummary = (s, count = (items) => `${items.length} registered`) => s.unavailable ? "no registry configured" : s.items === null ? "loading\u2026" : count(s.items);
@@ -2467,7 +2502,19 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         meta: rec ? `${sec.singular} \xB7 ${idx + 1} of ${items.length}` : sec.singular,
         onBack: () => go([sectionKey])
       }
-    ), !rec && sec.items === null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), !rec && sec.items !== null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "no longer in the registry \u2014 it may have been removed outside the board"), rec && sec.record(rec), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, sec.footnote));
+    ), !rec && sec.items === null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), !rec && sec.items !== null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "no longer in the registry \u2014 it may have been removed outside the board"), rec && sec.record(rec), rec && editing === null && /* @__PURE__ */ React.createElement(
+      DeleteRecord,
+      {
+        section: sec,
+        sectionKey,
+        name: recordName,
+        say,
+        onDeleted: async () => {
+          await sec.reload();
+          go([sectionKey]);
+        }
+      }
+    ), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, sec.footnote));
   }
   return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 14 } }, body, /* @__PURE__ */ React.createElement(
     PortalDialog,

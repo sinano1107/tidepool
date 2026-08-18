@@ -2,7 +2,11 @@ import { afterEach, expect, it } from "vitest";
 import { InvalidWorkspaceNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
-import { BoardStateOverlapError, type CreateWorkspaceInput } from "../src/workspace-create.js";
+import {
+  BoardStateOverlapError,
+  type CreateWorkspaceInput,
+  OrphanCheckoutMismatchError,
+} from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -163,4 +167,24 @@ it("その他の外部失敗(clone 失敗など)は 502", async () => {
   });
 
   expect(res.status).toBe(502);
+});
+
+it("整合しない孤児 checkout(OrphanCheckoutMismatchError)は 400 で場所を名指しして返す(ADR 0087 決定5)", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async () => {
+        throw new OrphanCheckoutMismatchError("/mnt/workspaces/lagoon", "its 'origin' is absent, expected none");
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "POST", "/api/workspaces", {
+    mode: "clone",
+    name: "lagoon",
+    repo: "https://github.com/sinano1107/lagoon",
+  });
+
+  // 400: 帯域外で片付けるか register モードで拾えば通る呼び出し側の状態の問題
+  expect(res.status).toBe(400);
+  expect(res.json.error).toContain("/mnt/workspaces/lagoon");
 });

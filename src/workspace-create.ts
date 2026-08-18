@@ -13,7 +13,13 @@ import {
   type RegistrySource,
   type WorkspaceEntry,
 } from "./registry.js";
-import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
+import {
+  commitToRegistry,
+  DeletionBlockedError,
+  type DeletionBlockedReason,
+  DeletionConfirmationRequiredError,
+  refreshRegistryForWrite,
+} from "./registry-write.js";
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import {
   conventionCheckoutPath,
@@ -102,6 +108,13 @@ export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
  *  偽造した remote-tracking ref まで「盤面が書いた」に化け、ADR 0064 が閉じた潜在バグ
  *  (偽造 → 無実の次セッションへの誤帰属)がそのまま戻る。 */
 export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<string[]>;
+/** 返すのは**残る** checkout の場所(ADR 0087 決定4): 消えるのは registry エントリ
+ *  だけなので、応答はホスト上に残った checkout を名指しする。参照検査の事実を
+ *  第2引数で受ける形は `DeleteAgentFn` と同じ。 */
+export type DeleteWorkspaceFn = (
+  input: DeleteWorkspaceInput,
+  refs: WorkspaceDeletionReferences,
+) => Promise<string>;
 
 /** The settings surface's workspace verbs as one bundle (issue #57): they
  *  exist together or not at all (a registry is configured, or none is), so
@@ -113,6 +126,8 @@ export interface WorkspaceAdmin {
   update: UpdateWorkspaceFn;
   /** ADR 0066 決定2/8: purely-local → remote-backed の遷移を与える4つ目の動詞。 */
   publish: PublishWorkspaceFn;
+  /** ADR 0087 / issue #205 の削除の扉(WebUI 専用 — ADR 0088)。 */
+  delete: DeleteWorkspaceFn;
 }
 
 /** publish の3つ目の拒否(ADR 0066 決定5 / issue #285): 盤面が GitHub 身元
@@ -305,6 +320,69 @@ export async function updateWorkspace(input: UpdateWorkspaceInput, deps: Workspa
   commitWorkspaceEntry(deps, input.name, next, `update workspace ${input.name} via WebUI`);
 }
 
+/** ADR 0087 決定1/4 の workspace 半分: registry エントリだけを committed main から
+ *  除去する。ホスト上の checkout(決着後も残るタスクブランチ = 差分の恒久記録を
+ *  含む)と GitHub 側のリポジトリは触らない —— 返すのは残る checkout の場所である。 */
+export interface DeleteWorkspaceInput {
+  name: string;
+  /** 人間の明示同意(ADR 0087)。無いと門が拒む。 */
+  confirm?: boolean;
+}
+
+/** 参照検査に要る**盤面側**の事実(ADR 0087 決定2/3)。agent 側の
+ *  `AgentDeletionReferences` の双子で、束ねるのは API 層である。 */
+export interface WorkspaceDeletionReferences {
+  /** この workspace を持つ未決着タスクの件数。 */
+  unsettledTaskCount: number;
+  /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
+  defaultWorkspaceName?: string;
+}
+
+/** 盤面自身の registry clone の削除(ADR 0087 決定3)。`RegistrySelfUnprotectError`
+ *  と同じ、確認でも状況の変化でも決して通らない拒否である。 */
+export class RegistrySelfDeleteError extends Error {
+  constructor(name: string) {
+    super(`workspace "${name}" is the board's own registry clone — it cannot be deleted here`);
+    this.name = "RegistrySelfDeleteError";
+  }
+}
+
+export async function deleteWorkspace(
+  input: DeleteWorkspaceInput,
+  deps: WorkspaceAdminDeps & WorkspaceDeletionReferences,
+): Promise<string> {
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  const entry = ownEntry(registry.workspaces, input.name);
+  if (!entry) throw new UnknownWorkspaceError(input.name);
+  // 永久に通らない拒否が先(updateWorkspace の自己拒否と同じ順序)
+  if (resolvesToRegistryClone(entry, input.name, deps.registry.dir, deps.workspacesBaseDir)) {
+    throw new RegistrySelfDeleteError(input.name);
+  }
+  const reasons: DeletionBlockedReason[] = [];
+  if (deps.unsettledTaskCount > 0) {
+    reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
+  }
+  if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
+  if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
+  if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
+  // checkout の場所はエントリを消す前に読む —— 消した後の registry からは
+  // `path` も規約パスの根拠も引けない
+  const checkout = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
+  commitToRegistry(
+    deps.registry,
+    deps.githubAuth,
+    (worktreeDir) => {
+      const file = join(worktreeDir, "workspaces.yaml");
+      const doc = parseDocument(readFileSync(file, "utf8"));
+      doc.delete(input.name);
+      writeFileSync(file, doc.toString());
+    },
+    `delete workspace ${input.name} via WebUI`,
+  );
+  return checkout;
+}
+
 /** ADR 0066 決定2 の入力: publish するのはどの workspace か、宛先の repo URL はどこか。
  *  宛先は**毎回人間が打つ値**であり、盤面は所有者も綴りも検証しない —— 打ち間違いは
  *  人間の入力の範疇で、権限が無ければ push が落ちるだけである。 */
@@ -433,6 +511,32 @@ async function buildEntry(
   return createLocalCheckout(input.name, deps);
 }
 
+/** ADR 0087 決定5: 規約パスに既にある checkout が、この作成の要求と整合しない。
+ *  流用は「前回失敗の孤児」を済んだ手順として引き継ぐためのものであって、中身を
+ *  見ない流用は削除済み workspace の残骸を同名の別 repo として静かに採用する。
+ *  拒否は場所を名指しする —— 人間は register モードで拾うか、帯域外で片付ける。 */
+export class OrphanCheckoutMismatchError extends Error {
+  constructor(path: string, reason: string) {
+    super(
+      `${path} already holds a checkout that does not match this creation (${reason}) — register it with the register mode, or move it aside by hand`,
+    );
+    this.name = "OrphanCheckoutMismatchError";
+  }
+}
+
+/** 既存ディレクトリを流用してよいかの1箇所の判定(ADR 0087 決定5)。`wanted` は
+ *  clone モードの要求 repo、create モードでは undefined(= origin を持たないこと
+ *  が整合の条件)。URL は綴りそのままで比べる —— `git clone` は渡された綴りを
+ *  そのまま `origin` に記録するので、同じ入力の再送はここを通る。 */
+function assertReusableOrphan(dir: string, wanted: string | undefined): void {
+  const origin = originUrl(dir);
+  if (origin === wanted) return;
+  throw new OrphanCheckoutMismatchError(
+    dir,
+    `its 'origin' is ${origin ?? "absent"}, expected ${wanted ?? "none"}`,
+  );
+}
+
 /** ADR 0066 決定1 の create モードの外部半分: GitHub に一切出ず、規約由来の場所
  *  (ADR 0018)に `git init -b main` + 初期コミットで checkout を作る。
  *
@@ -446,7 +550,9 @@ function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): Workspace
   // idempotent retry (issue #57): 規約どおりの場所に既にある checkout は、前回
   // registry コミット直前で失敗した孤児 —— 済んだ手順として流用する(clone
   // モードの cloneAndDescribe と同じ形)
-  if (!existsSync(dir)) {
+  // create が作る checkout は purely-local なので、`origin` を持つ残骸は別物である
+  if (existsSync(dir)) assertReusableOrphan(dir, undefined);
+  else {
     // git init creates any missing directories itself, mkdir first is redundant
     git(deps.workspacesBaseDir, "init", "-b", "main", dir);
     writeFileSync(join(dir, "README.md"), `# ${name}\n`);
@@ -481,7 +587,7 @@ async function assertRepoAccess(repo: string, github: GitHubClient | undefined):
  *  registration time** (ADR 0052 決定3), and an object that cannot be observed
  *  must not get a written declaration in its place. */
 export class NotAGitRepositoryError extends Error {
-  constructor(public readonly path: string) {
+  constructor(path: string) {
     super(`${path} is not a git repository`);
     this.name = "NotAGitRepositoryError";
   }
@@ -525,7 +631,9 @@ function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps)
   // failed before the registry commit — not a conflict
   // a private repo's clone needs the machine-user token too (ADR 0024) —
   // same injection path as every other board-driven git network call
-  if (!existsSync(dir)) authedGit(deps.githubAuth, deps.workspacesBaseDir, "clone", repo, dir);
+  // 流用してよいのは `origin` が要求 repo と一致するときだけ(ADR 0087 決定5)
+  if (existsSync(dir)) assertReusableOrphan(dir, repo);
+  else authedGit(deps.githubAuth, deps.workspacesBaseDir, "clone", repo, dir);
   // a fresh clone's HEAD is the upstream default branch — recorded when it
   // isn't "main" so branch discipline and the PR base start out right
   // (issue #27); "main" stays implicit (protectedBranch's default)

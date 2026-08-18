@@ -973,3 +973,19 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
     await client.close();
   }
 });
+
+it("管理MCP に registry リソースの削除 verb は無い(ADR 0088 / issue #205)", async () => {
+  t = await bootTidepool({
+    agentAdmin: { delete: async () => {} },
+    profileAdmin: { delete: async () => {} },
+    workspaceAdmin: { delete: async () => "/work/lagoon" },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const { tools } = await client.listTools();
+    // 扉は WebUI のみ —— 配線されていても MCP には現れない
+    expect(tools.map((tool) => tool.name).filter((name) => name.startsWith("delete_"))).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});

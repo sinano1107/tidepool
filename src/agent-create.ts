@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { UnknownAgentError } from "./agent.js";
@@ -14,7 +14,13 @@ import {
   type RegistrySource,
   UnknownAuthorityProfileError,
 } from "./registry.js";
-import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
+import {
+  commitToRegistry,
+  DeletionBlockedError,
+  type DeletionBlockedReason,
+  DeletionConfirmationRequiredError,
+  refreshRegistryForWrite,
+} from "./registry-write.js";
 
 /** The WebUI's agent-creation verb (issue #70, #54 phase 1): every field an
  *  agent definition carries except `version` — that one is machine-stamped
@@ -162,7 +168,61 @@ export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
   return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents);
 }
 
+/** ADR 0087 決定1 の agent 半分: `agents/<name>.md` を committed main から除去する。
+ *  過去タスクが読む agent 本文は commit 指定(ADR 0020 / `agentBodyAtCommit`)なので、
+ *  HEAD から消えても履歴参照は壊れない。 */
+export interface DeleteAgentInput {
+  name: string;
+  /** 人間の明示同意(ADR 0087)。無いと門が拒む。 */
+  confirm?: boolean;
+}
+
+/** 参照検査に要る**盤面側**の事実(ADR 0087 決定2/3)。registry からは読めない
+ *  ので deps に同乗させる —— 束ねるのは API 層(db と既定 agent 名を既に持つ
+ *  唯一の場所)で、判定と執行はこの verb の中に1箇所だけ置く。 */
+export interface AgentDeletionReferences {
+  /** この agent を assignee に持つ未決着タスクの件数。 */
+  unsettledTaskCount: number;
+  /** 盤面の既定 agent 名(ADR 0012)。一致すれば消せない —— 既定はポインタなので、
+   *  指し先を消せば assignee 未指定のタスクが全部止まる。 */
+  defaultAgentName?: string;
+}
+
+export async function deleteAgent(
+  input: DeleteAgentInput,
+  deps: AgentAdminDeps & AgentDeletionReferences,
+): Promise<void> {
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  if (!ownEntry(registry.agents, input.name)) throw new UnknownAgentError(input.name);
+  // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序)。profile の
+  // `assignable_to` に名前が並んでいるだけは参照ではない(ADR 0087 決定2)
+  const reasons: DeletionBlockedReason[] = [];
+  if (deps.unsettledTaskCount > 0) {
+    reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
+  }
+  if (deps.defaultAgentName === input.name) reasons.push({ code: "board_default" });
+  if (reasons.length > 0) throw new DeletionBlockedError("agent", input.name, reasons);
+  if (input.confirm !== true) throw new DeletionConfirmationRequiredError("agent", input.name);
+  commitToRegistry(
+    deps.registry,
+    deps.githubAuth,
+    (worktreeDir) => {
+      unlinkSync(join(worktreeDir, "agents", `${input.name}.md`));
+    },
+    `delete agent ${input.name} via WebUI`,
+  );
+}
+
 export type CreateAgentFn = (input: CreateAgentInput) => Promise<void>;
+/** 削除だけが2引数なのは、参照検査の事実が registry ではなく**盤面**の側にある
+ *  ためである(ADR 0087 決定2/3)。合成 root は registry 由来の deps を束ね、
+ *  API 層が db と既定 agent 名から `refs` を足す —— 判定はどちらでもなく verb の
+ *  中で1回だけ起きる。 */
+export type DeleteAgentFn = (
+  input: DeleteAgentInput,
+  refs: AgentDeletionReferences,
+) => Promise<void>;
 export type UpdateAgentFn = (input: UpdateAgentInput) => Promise<void>;
 
 /** The settings surface's agent verbs as one bundle, WorkspaceAdmin's twin
@@ -172,6 +232,8 @@ export interface AgentAdmin {
   create: CreateAgentFn;
   list: () => AgentView[];
   update: UpdateAgentFn;
+  /** ADR 0087 / issue #205 の削除の扉(WebUI 専用 — ADR 0088)。 */
+  delete: DeleteAgentFn;
   /** The authority select's candidates — the registry's existing profile
    *  names (issue #71) — a sibling of `list`, not a reshape of it: GET
    *  /api/agents bundles the two into one round trip at the route layer, but

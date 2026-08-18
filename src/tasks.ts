@@ -430,6 +430,24 @@ export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber
   }
 }
 
+/** ADR 0087 決定2 の参照検査が数えるもの: この名前を `assignee` / `workspace` に
+ *  持つ未決着(done/cancelled でない)タスクの件数。削除の扉はこの件数を人間に
+ *  返す —— 先に cancel か再割当をするのが筋だからである。列名はリテラル合併なので
+ *  そのまま埋め込んでよい(`settledTreeSql` と同じ流儀)。 */
+export function countUnsettledTasksReferencing(
+  db: Db,
+  column: "assignee" | "workspace",
+  name: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM tasks
+       WHERE ${column} = ? AND status NOT IN ('done', 'cancelled')`,
+    )
+    .get(name) as { n: number };
+  return row.n;
+}
+
 /** Derives an issue-backed task's three content fields from its live GitHub
  *  issue (issue #49, ADR 0016): title and purpose come straight from the
  *  issue's own title and body, completion_criteria is a fixed template

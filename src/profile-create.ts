@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import type { z } from "zod";
@@ -12,7 +12,12 @@ import {
   type RegistrySource,
   UnknownAuthorityProfileError,
 } from "./registry.js";
-import { commitToRegistry, refreshRegistryForWrite } from "./registry-write.js";
+import {
+  commitToRegistry,
+  DeletionBlockedError,
+  DeletionConfirmationRequiredError,
+  refreshRegistryForWrite,
+} from "./registry-write.js";
 import { AUTHORITY_WILDCARD } from "./tasks.js";
 
 /** The WebUI's profile-creation verb (issue #76, #55 phase 1): the schema's
@@ -159,8 +164,47 @@ export function listProfileViews(deps: ProfileAdminDeps): ProfileView[] {
   return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).authority);
 }
 
+/** ADR 0087 決定1 の profile 半分: `authority/<name>.yaml` を committed main から
+ *  除去する。無効化フラグは残さない —— registry は git リポジトリなので、記録は
+ *  履歴が保つ。 */
+export interface DeleteProfileInput {
+  name: string;
+  /** 人間の明示同意(ADR 0087 決定2 の扉)。無いと門が拒む。 */
+  confirm?: boolean;
+}
+
+export async function deleteProfile(input: DeleteProfileInput, deps: ProfileAdminDeps): Promise<void> {
+  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
+  if (!ownEntry(registry.authority, input.name)) throw new UnknownAuthorityProfileError(input.name);
+  // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序): 参照中の profile を
+  // 消せば、その agent の spawn は quarantine ではなく素の失敗に落ちる(ADR 0087
+  // 決定2)。`assignable_to` / `allowed_workspaces` に名前が並んでいるだけの
+  // agent / workspace は参照ではない —— 許可先が1つ消えるだけで無害である。
+  const holders = Object.values(registry.agents)
+    .filter((agent) => agent.authority === input.name)
+    .map((agent) => agent.name);
+  if (holders.length > 0) {
+    throw new DeletionBlockedError("profile", input.name, [
+      { code: "referenced_by_agents", agents: holders },
+    ]);
+  }
+  if (input.confirm !== true) throw new DeletionConfirmationRequiredError("profile", input.name);
+  commitToRegistry(
+    deps.registry,
+    deps.githubAuth,
+    (worktreeDir) => {
+      unlinkSync(join(worktreeDir, "authority", `${input.name}.yaml`));
+    },
+    `delete authority profile ${input.name} via WebUI`,
+  );
+}
+
 export type CreateProfileFn = (input: CreateProfileInput) => Promise<void>;
 export type UpdateProfileFn = (input: UpdateProfileInput) => Promise<void>;
+/** agent / workspace の削除と違って1引数なのは、profile の参照検査(どの agent が
+ *  `authority` で指しているか)が registry の中だけで完結するからである。 */
+export type DeleteProfileFn = (input: DeleteProfileInput) => Promise<void>;
 
 /** The settings surface's profile verbs as one bundle, AgentAdmin's twin
  *  (issue #76): they exist together or not at all, so the composition root
@@ -170,6 +214,8 @@ export interface ProfileAdmin {
   create: CreateProfileFn;
   list: () => ProfileView[];
   update: UpdateProfileFn;
+  /** ADR 0087 / issue #205 の削除の扉(WebUI 専用 — ADR 0088)。 */
+  delete: DeleteProfileFn;
 }
 
 function sameStringArray(a: string[], b: string[]): boolean {

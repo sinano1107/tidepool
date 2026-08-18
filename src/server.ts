@@ -312,16 +312,20 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     create: rebaselineAfter(options.workspaceAdmin.create, rebaselineRegistry),
     update: rebaselineAfter(options.workspaceAdmin.update, rebaselineRegistry),
     publish: publishRebaseliner(db, options, rebaselineRegistry),
+    // ADR 0087 の削除も registry clone の ref を動かす口なので、同じ層で包む
+    delete: rebaselineAfter(options.workspaceAdmin.delete, rebaselineRegistry),
   };
   const agentAdmin = options.agentAdmin && {
     ...options.agentAdmin,
     create: rebaselineAfter(options.agentAdmin.create, rebaselineRegistry),
     update: rebaselineAfter(options.agentAdmin.update, rebaselineRegistry),
+    delete: rebaselineAfter(options.agentAdmin.delete, rebaselineRegistry),
   };
   const profileAdmin = options.profileAdmin && {
     ...options.profileAdmin,
     create: rebaselineAfter(options.profileAdmin.create, rebaselineRegistry),
     update: rebaselineAfter(options.profileAdmin.update, rebaselineRegistry),
+    delete: rebaselineAfter(options.profileAdmin.delete, rebaselineRegistry),
   };
   const registryReachability = rebaselineAfter(options.registryReachability, rebaselineRegistry);
   // ADR 0052 決定2 の起動時 refresh は**ここには無い**。合成 root
