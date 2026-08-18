@@ -966,6 +966,9 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
     // 省略の意味が tool description に書かれている(エージェントはこれだけを読む)
     const { tools } = await client.listTools();
     expect(tools.find((tool) => tool.name === "update_profile")?.description).toContain("left unchanged");
+    expect(
+      (tools.find((tool) => tool.name === "update_profile") as any).inputSchema.properties.confirm_dangerous,
+    ).toBeUndefined();
   } finally {
     await client.close();
   }
