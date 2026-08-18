@@ -76,7 +76,19 @@ it("管理MCP の initialize は人間面の義手モデル instructions を返�
   }
 });
 
-it("update_workspace は review_allowed_commands を受け取り、確認要求は理由コードごと tool error になる(issue #264)", async () => {
+it("instructions は危険な値の確認を人間に求める prose を持たず、WebUI 専用の扉である旨だけを書く(issue #267 / ADR 0088)", async () => {
+  t = await bootTidepool();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const instructions = client.getInstructions();
+    expect(instructions).not.toContain("confirm a dangerous");
+    expect(instructions).toContain("WebUI's settings screen");
+  } finally {
+    await client.close();
+  }
+});
+
+it("update_workspace は confirm を持たず、危険な値は WebUI への案内つき tool error で拒まれる(issue #267 / ADR 0088)", async () => {
   const calls: UpdateWorkspaceInput[] = [];
   t = await bootTidepool({
     workspaceAdmin: {
@@ -90,27 +102,33 @@ it("update_workspace は review_allowed_commands を受け取り、確認要求�
   });
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const confirmed: any = await client.callTool({
-      name: "update_workspace",
-      arguments: { name: "lagoon", review_allowed_commands: ["npm test"], confirm: true },
-    });
-    expect(confirmed.isError).toBeFalsy();
-    expect(calls).toEqual([
-      { name: "lagoon", review_allowed_commands: ["npm test"], confirm: true },
-    ]);
-
     const unconfirmed: any = await client.callTool({
       name: "update_workspace",
       arguments: { name: "lagoon", review_allowed_commands: ["npm test"] },
     });
     expect(unconfirmed.isError).toBe(true);
     expect(unconfirmed.content[0].text).toContain("review_allowed_commands_set");
+    expect(unconfirmed.content[0].text).toContain("WebUI's settings screen");
+
+    // 扉の zod スキーマは confirm を知らない — 忍ばせても剥がれてドメインに届く
+    const smuggled: any = await client.callTool({
+      name: "update_workspace",
+      arguments: { name: "lagoon", review_allowed_commands: ["npm test"], confirm: true },
+    });
+    expect(smuggled.isError).toBe(true);
+    expect(calls).toEqual([
+      { name: "lagoon", review_allowed_commands: ["npm test"] },
+      { name: "lagoon", review_allowed_commands: ["npm test"] },
+    ]);
+
+    const { tools } = await client.listTools();
+    expect((tools.find((tool) => tool.name === "update_workspace") as any).inputSchema.properties.confirm).toBeUndefined();
   } finally {
     await client.close();
   }
 });
 
-it("update_workspace は allowed_domains を confirm ごと人間面へ渡す(issue #321)", async () => {
+it("update_workspace は allowed_domains を人間面へ渡す(issue #321)", async () => {
   const calls: UpdateWorkspaceInput[] = [];
   t = await bootTidepool({
     workspaceAdmin: {
@@ -126,13 +144,12 @@ it("update_workspace は allowed_domains を confirm ごと人間面へ渡す(is
       arguments: {
         name: "lagoon",
         allowed_domains: ["registry.npmjs.org"],
-        confirm: true,
       },
     });
 
     expect(result.isError).toBeFalsy();
     expect(calls).toEqual([
-      { name: "lagoon", allowed_domains: ["registry.npmjs.org"], confirm: true },
+      { name: "lagoon", allowed_domains: ["registry.npmjs.org"] },
     ]);
   } finally {
     await client.close();
@@ -154,7 +171,6 @@ it("update_workspace の不正 allowed_domains は registry 文法エラーと�
       arguments: {
         name: "lagoon",
         allowed_domains: ["100.100.100.100"],
-        confirm: true,
       },
     });
 
@@ -357,9 +373,10 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
   }
 });
 
-it("管理MCP は人間の明示確認なしに危険な profile を保存しない(issue #193)", async () => {
-  // 判定と拒否はドメイン側(ADR 0061 決定1)。この扉が見るのは、確認フラグを運ぶ
-  // ことと ProfileConfirmationRequiredError を理由コードごと tool error に写すこと
+it("管理MCP は危険な profile の確認を持たず、常にドメインの門へ突き当たる(issue #267 / ADR 0088)", async () => {
+  // 判定と拒否はドメイン側(ADR 0061 決定1)。扉はもう確認フラグを持たない —
+  // 常に confirmDangerous: false で呼び、ProfileConfirmationRequiredError を
+  // 理由コード + WebUI への案内つき tool error に写すことだけがこの扉の仕事
   const create = vi.fn(async (input: CreateProfileInput) => {
     if (input.confirmDangerous !== true) {
       throw new ProfileConfirmationRequiredError(input.name, ["assignable_to_wildcard"]);
@@ -378,26 +395,29 @@ it("管理MCP は人間の明示確認なしに危険な profile を保存しな
     const denied: any = await client.callTool({ name: "create_profile", arguments: dangerous });
     expect(denied.isError).toBe(true);
     expect(denied.content[0].text).toContain("assignable_to_wildcard");
+    expect(denied.content[0].text).toContain("WebUI's settings screen");
     // registryToolError の既知分類に入っていること — fallback の
     // "registry upstream error" は盤面側の障害の顔なので、確認要求がそこへ
-    // 落ちたら「同意すれば通る」が読み取れない
+    // 落ちたら「WebUI で確認すれば通る」が読み取れない
     expect(denied.content[0].text).not.toContain("registry upstream error");
     // 扉は同意を捏造しない — 確認なしの呼びは confirmDangerous: false で届く
     expect(create).toHaveBeenCalledWith({ ...dangerous, confirmDangerous: false });
     create.mockClear();
 
-    const confirmed: any = await client.callTool({
+    // 扉の zod スキーマは confirm_dangerous を知らない — 忍ばせても剥がれ、
+    // ドメインには confirmDangerous: false のまま届いて同じ門に当たる
+    const smuggled: any = await client.callTool({
       name: "create_profile",
       arguments: { ...dangerous, confirm_dangerous: true },
     });
-    expect(confirmed.isError ?? false).toBe(false);
-    expect(create).toHaveBeenCalledWith({ ...dangerous, confirmDangerous: true });
+    expect(smuggled.isError).toBe(true);
+    expect(create).toHaveBeenCalledWith({ ...dangerous, confirmDangerous: false });
 
     const { tools } = await client.listTools();
-    expect(tools.find((tool) => tool.name === "create_profile")?.description).toContain("human's explicit confirmation");
-    expect((tools.find((tool) => tool.name === "create_profile") as any).inputSchema.properties.confirm_dangerous.default).toBe(
-      false,
-    );
+    expect(tools.find((tool) => tool.name === "create_profile")?.description).not.toContain("confirm");
+    expect(
+      (tools.find((tool) => tool.name === "create_profile") as any).inputSchema.properties.confirm_dangerous,
+    ).toBeUndefined();
   } finally {
     await client.close();
   }
@@ -908,7 +928,8 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
     ).toEqual({});
     expect(update).toHaveBeenCalledWith({ name: "roamer", guidance: "Reworded.", confirmDangerous: false });
 
-    // 危険な値を書いたパッチは confirm_dangerous を要求する
+    // 危険な値を書いたパッチはこの扉から通せない —— confirm_dangerous を
+    // 忍ばせても zod スキーマに無いので剥がれ、ドメインの門に当たる
     update.mockClear();
     const denied: any = await client.callTool({
       name: "update_profile",
@@ -916,15 +937,16 @@ it("管理MCP の update_profile は部分パッチ(issue #266 / ADR 0086)", asy
     });
     expect(denied.isError).toBe(true);
     expect(denied.content[0].text).toContain("merge_auto_if_ci_green");
+    expect(denied.content[0].text).toContain("WebUI's settings screen");
     expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green", confirmDangerous: false });
     update.mockClear();
 
-    const confirmed: any = await client.callTool({
+    const smuggled: any = await client.callTool({
       name: "update_profile",
       arguments: { name: "roamer", merge: "auto_if_ci_green", confirm_dangerous: true },
     });
-    expect(confirmed.isError ?? false).toBe(false);
-    expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green", confirmDangerous: true });
+    expect(smuggled.isError).toBe(true);
+    expect(update).toHaveBeenCalledWith({ name: "roamer", merge: "auto_if_ci_green", confirmDangerous: false });
 
     // 空配列は安全側 — 確認なしで通る
     update.mockClear();
