@@ -536,9 +536,7 @@ function assertReusableOrphan(dir: string, wanted: string | undefined): void {
   if (origin === wanted) return;
   throw new OrphanCheckoutMismatchError(
     dir,
-    wanted === undefined
-      ? `it already has an 'origin' (${origin})`
-      : `its 'origin' is ${origin ?? "absent"}, not ${wanted}`,
+    `its 'origin' is ${origin ?? "absent"}, expected ${wanted ?? "none"}`,
   );
 }
 
@@ -555,11 +553,9 @@ function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): Workspace
   // idempotent retry (issue #57): 規約どおりの場所に既にある checkout は、前回
   // registry コミット直前で失敗した孤児 —— 済んだ手順として流用する(clone
   // モードの cloneAndDescribe と同じ形)
-  if (existsSync(dir)) {
-    // 流用してよいのは要求と整合するときだけ(ADR 0087 決定5): create が作る
-    // checkout は purely-local なので、`origin` を持つ残骸は別物である
-    assertReusableOrphan(dir, undefined);
-  } else {
+  // create が作る checkout は purely-local なので、`origin` を持つ残骸は別物である
+  if (existsSync(dir)) assertReusableOrphan(dir, undefined);
+  else {
     // git init creates any missing directories itself, mkdir first is redundant
     git(deps.workspacesBaseDir, "init", "-b", "main", dir);
     writeFileSync(join(dir, "README.md"), `# ${name}\n`);

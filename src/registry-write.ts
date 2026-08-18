@@ -38,20 +38,17 @@ export function refreshRegistryForWrite(registry: RegistrySource, auth: GitHubAu
  *  (ADR 0061 決定1)と同じく執行はドメインの verb 内に1箇所、API は 409
  *  `confirm_required` に写す。理由コードは WebUI の確認ダイアログがそのまま
  *  列挙できるよう、危険な値と同じ「安定文字列」の流儀で運ぶ。 */
-export type DeletionResource = "agent" | "workspace" | "authority profile";
+type DeletionResource = "agent" | "workspace" | "profile";
 
 export class DeletionConfirmationRequiredError extends Error {
   /** 危険な値の 409 と同じ形の理由コード配列にするための1要素 —— WebUI の
    *  `useDangerousSave` は `dangerous_values` を配列として読むので、削除も同じ
    *  器に載せれば確認ダイアログを作り直さずに済む。 */
   readonly reasons: string[];
-  constructor(
-    resource: DeletionResource,
-    public readonly resourceName: string,
-  ) {
+  constructor(resource: DeletionResource, resourceName: string) {
     super(`deleting ${resource} "${resourceName}" requires human confirmation`);
     this.name = "DeletionConfirmationRequiredError";
-    this.reasons = [`delete_${resource === "authority profile" ? "profile" : resource}`];
+    this.reasons = [`delete_${resource}`];
   }
 }
 

@@ -176,9 +176,7 @@ export interface DeleteProfileInput {
 export async function deleteProfile(input: DeleteProfileInput, deps: ProfileAdminDeps): Promise<void> {
   refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
-  if (!ownEntry(registry.authority, input.name)) {
-    throw new UnknownAuthorityProfileError(input.name);
-  }
+  if (!ownEntry(registry.authority, input.name)) throw new UnknownAuthorityProfileError(input.name);
   // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序): 参照中の profile を
   // 消せば、その agent の spawn は quarantine ではなく素の失敗に落ちる(ADR 0087
   // 決定2)。`assignable_to` / `allowed_workspaces` に名前が並んでいるだけの
@@ -187,13 +185,11 @@ export async function deleteProfile(input: DeleteProfileInput, deps: ProfileAdmi
     .filter((agent) => agent.authority === input.name)
     .map((agent) => agent.name);
   if (holders.length > 0) {
-    throw new DeletionBlockedError("authority profile", input.name, [
+    throw new DeletionBlockedError("profile", input.name, [
       { code: "referenced_by_agents", agents: holders },
     ]);
   }
-  if (input.confirm !== true) {
-    throw new DeletionConfirmationRequiredError("authority profile", input.name);
-  }
+  if (input.confirm !== true) throw new DeletionConfirmationRequiredError("profile", input.name);
   commitToRegistry(
     deps.registry,
     deps.githubAuth,

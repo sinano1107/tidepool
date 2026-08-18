@@ -105,6 +105,7 @@ import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
   NotAGitRepositoryError,
+  OrphanCheckoutMismatchError,
   RegistrySelfDeleteError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
@@ -727,7 +728,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof InvalidWorkspaceNameError ||
         err instanceof BoardStateOverlapError ||
         err instanceof RepoAccessMissingError ||
-        err instanceof NotAGitRepositoryError
+        err instanceof NotAGitRepositoryError ||
+        // ADR 0087 決定5: 規約パスに整合しない checkout が居る —— 帯域外で片付けるか
+        // register モードで拾えば通る、呼び出し側の状態の問題である
+        err instanceof OrphanCheckoutMismatchError
       ) {
         res.status(400).json({ error: err.message });
       } else {
