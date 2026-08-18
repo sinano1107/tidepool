@@ -10,7 +10,7 @@ import type {
   WorkspaceDeletionReferences,
 } from "../src/workspace-create.js";
 import { RegistrySelfDeleteError } from "../src/workspace-create.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { AUTH_HEADERS, api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -62,7 +62,25 @@ it("DELETE /api/agents/:name は確認なしの拒否を 409 confirm_required �
 
   expect(res.status).toBe(409);
   expect(res.json.confirm_required).toBe(true);
-  expect(res.json.dangerous_values).toEqual(["delete_agent"]);
+  // 削除は「権限を広げる値」ではないので、危険な値の理由コード列には載らない
+  expect(res.json.dangerous_values).toBeUndefined();
+});
+
+it("本文なしの DELETE も確認の門まで届く(400 のスキーマ拒否で止まらない)", async () => {
+  t = await bootTidepool({
+    agentAdmin: {
+      delete: async () => {
+        throw new DeletionConfirmationRequiredError("agent", "tako");
+      },
+    },
+  });
+
+  const res = await fetch(`${t.baseUrl}/api/agents/tako`, {
+    method: "DELETE",
+    headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+  });
+
+  expect(res.status).toBe(409);
 });
 
 it("DELETE /api/agents/:name は確認で買えない拒否を 409 blocked と理由で返す", async () => {

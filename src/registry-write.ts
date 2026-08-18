@@ -36,19 +36,16 @@ export function refreshRegistryForWrite(registry: RegistrySource, auth: GitHubAu
  *  (agent / profile / workspace)で共有する —— 削除は資源によらず同じ1つの理由
  *  で確認を要求するので、資源ごとにクラスを分ける意味が無い。危険な値の確認
  *  (ADR 0061 決定1)と同じく執行はドメインの verb 内に1箇所、API は 409
- *  `confirm_required` に写す。理由コードは WebUI の確認ダイアログがそのまま
- *  列挙できるよう、危険な値と同じ「安定文字列」の流儀で運ぶ。 */
+ *  `confirm_required` に写す。**理由コードは持たない**: 危険な値の
+ *  `DangerousValueReason` は「権限を広げる値」の列挙(CONTEXT.md 危険な値)で
+ *  あって削除はその族ではなく、削除に問う理由は「消すのか」1つきりだから
+ *  である —— 資源ごとの説明は WebUI 側の文言が持つ。 */
 type DeletionResource = "agent" | "workspace" | "profile";
 
 export class DeletionConfirmationRequiredError extends Error {
-  /** 危険な値の 409 と同じ形の理由コード配列にするための1要素 —— WebUI の
-   *  `useDangerousSave` は `dangerous_values` を配列として読むので、削除も同じ
-   *  器に載せれば確認ダイアログを作り直さずに済む。 */
-  readonly reasons: string[];
   constructor(resource: DeletionResource, resourceName: string) {
     super(`deleting ${resource} "${resourceName}" requires human confirmation`);
     this.name = "DeletionConfirmationRequiredError";
-    this.reasons = [`delete_${resource}`];
   }
 }
 

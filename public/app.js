@@ -1584,13 +1584,7 @@ const DANGEROUS_REASON_LABEL = {
   allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.',
   unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
   review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.",
-  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains.",
-  // ADR 0087 の削除の扉。確認で買える拒否は1つだけ(「本当に消すのか」)なので、
-  // 資源ごとに1行ずつ — 確認では買えない拒否(参照中・既定・registry 自身)は
-  // 409 blocked の本文がそのまま理由を述べるので、ここには現れない
-  delete_agent: "This agent is being removed from the registry. Its definition stays in git history, but the board stops offering it.",
-  delete_workspace: "This workspace is being removed from the registry. The checkout on the host is left untouched \u2014 the board just stops knowing about it.",
-  delete_profile: "This authority profile is being removed from the registry. Its file stays in git history, but no agent can be pointed at it again."
+  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains."
 };
 const MERGE_OPTIONS = [
   { value: "", label: "choose one \u2014 the dial is required" },
@@ -1726,7 +1720,9 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
     noun: section.singular,
     confirmKey: "confirm",
     dialogTitle: `Delete this ${section.singular}?`,
-    dialogLead: "Deleting removes the entry from the registry\u2019s main. The file stays in git history.",
+    // 削除の確認に理由コードは無い(危険な値と違い「消す」1つきり)ので、
+    // ダイアログの本文がそのまま資源ごとの説明である
+    dialogLead: section.deleteLead,
     confirmLabel: "Delete",
     successDetail: section.deleteDetail
   });
@@ -2344,6 +2340,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       createForm: () => /* @__PURE__ */ React.createElement(NewWorkspaceForm, { baseDir, say, onCreated: load, edit }),
       reload: load,
       deleteNote: "removes the registry entry only \u2014 the checkout on this host is left where it is",
+      deleteLead: "This workspace is being removed from the registry. The checkout on the host is left untouched \u2014 the board just stops knowing about it.",
       // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
       deleteDetail: (result, name) => result?.checkout ? `checkout remains at ${result.checkout}` : name
     },
@@ -2381,7 +2378,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         }
       ),
       reload: loadAgents,
-      deleteNote: "removes agents/<name>.md from the registry \u2014 past tasks still read the body at their own commit"
+      deleteNote: "removes agents/<name>.md from the registry \u2014 past tasks still read the body at their own commit",
+      deleteLead: "This agent is being removed from the registry. Its definition stays in git history, but the board stops offering it."
     },
     profiles: {
       title: "Authority Profiles",
@@ -2416,7 +2414,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         }
       ),
       reload: refreshAfterProfile,
-      deleteNote: "removes authority/<name>.yaml from the registry \u2014 an agent still pointing at it blocks the delete"
+      deleteNote: "removes authority/<name>.yaml from the registry \u2014 an agent still pointing at it blocks the delete",
+      deleteLead: "This authority profile is being removed from the registry. Its file stays in git history, but no agent can be pointed at it again."
     }
   };
   const sectionSummary = (s, count = (items) => `${items.length} registered`) => s.unavailable ? "no registry configured" : s.items === null ? "loading\u2026" : count(s.items);

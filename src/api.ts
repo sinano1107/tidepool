@@ -551,9 +551,10 @@ export interface ApiRouterDeps {
  *  確認不足、確認では買えない拒否、そして外部の一手(fetch / push)の失敗。 */
 function respondToDeletionFailure(res: Response, err: unknown): void {
   if (err instanceof DeletionConfirmationRequiredError) {
-    // 危険な値の 409 と同じ器(`dangerous_values`)に載せる —— WebUI の確認
-    // ダイアログは理由コードの配列しか読まないので、削除も同じ往復で通る
-    res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
+    // 危険な値の 409 と同じ `confirm_required` の往復に乗る(WebUI 側の
+    // `useDangerousSave` がそのまま使える)が、`dangerous_values` は載せない ——
+    // 削除は「権限を広げる値」ではないので、その列挙に紛れ込ませない
+    res.status(409).json({ error: err.message, confirm_required: true });
   } else if (err instanceof DeletionBlockedError) {
     // 409 だが `confirm_required` は立てない: 確認では買えず、参照が決着するまで
     // 状況が変わらない限り出し直しても通らない
@@ -920,7 +921,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // 同じ器なので、WebUI の確認ダイアログをそのまま使える)、確認では買えない拒否は
   // 409 `blocked` + 明細つき理由、永久に通らない自己拒否だけが 403。
   router.delete("/agents/:name", async (req, res) => {
-    const parsed = deleteResourceSchema.safeParse(req.body);
+    // 本文なしの DELETE は「確認なしの要求」であって不正な本文ではない ——
+    // express の json() は本文が無ければ req.body を undefined のまま残す
+    const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
@@ -950,7 +953,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.delete("/workspaces/:name", async (req, res) => {
-    const parsed = deleteResourceSchema.safeParse(req.body);
+    // 本文なしの DELETE は「確認なしの要求」であって不正な本文ではない ——
+    // express の json() は本文が無ければ req.body を undefined のまま残す
+    const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
@@ -983,7 +988,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.delete("/profiles/:name", async (req, res) => {
-    const parsed = deleteResourceSchema.safeParse(req.body);
+    // 本文なしの DELETE は「確認なしの要求」であって不正な本文ではない ——
+    // express の json() は本文が無ければ req.body を undefined のまま残す
+    const parsed = deleteResourceSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
