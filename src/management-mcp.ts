@@ -373,7 +373,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) => {
       if (!deps.profileAdmin?.create) return toolError("profile administration is not configured");
       try {
-        await deps.profileAdmin.create({ ...input, confirmDangerous: false });
+        await deps.profileAdmin.create(input);
         return toolResult({});
       } catch (err) {
         return registryToolError(err);
@@ -403,7 +403,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     async (input) => {
       if (!deps.profileAdmin?.update) return toolError("profile administration is not configured");
       try {
-        await deps.profileAdmin.update({ ...input, confirmDangerous: false });
+        await deps.profileAdmin.update(input);
         return toolResult({});
       } catch (err) {
         return registryToolError(err);
