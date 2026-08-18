@@ -516,10 +516,7 @@ async function buildEntry(
  *  見ない流用は削除済み workspace の残骸を同名の別 repo として静かに採用する。
  *  拒否は場所を名指しする —— 人間は register モードで拾うか、帯域外で片付ける。 */
 export class OrphanCheckoutMismatchError extends Error {
-  constructor(
-    public readonly path: string,
-    reason: string,
-  ) {
+  constructor(path: string, reason: string) {
     super(
       `${path} already holds a checkout that does not match this creation (${reason}) — register it with the register mode, or move it aside by hand`,
     );
@@ -590,7 +587,7 @@ async function assertRepoAccess(repo: string, github: GitHubClient | undefined):
  *  registration time** (ADR 0052 決定3), and an object that cannot be observed
  *  must not get a written declaration in its place. */
 export class NotAGitRepositoryError extends Error {
-  constructor(public readonly path: string) {
+  constructor(path: string) {
     super(`${path} is not a git repository`);
     this.name = "NotAGitRepositoryError";
   }
