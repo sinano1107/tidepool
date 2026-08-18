@@ -32,6 +32,58 @@ export function refreshRegistryForWrite(registry: RegistrySource, auth: GitHubAu
   }
 }
 
+/** ADR 0087 の削除の扉が、確認なしの要求に返す拒否。3つの admin モジュール
+ *  (agent / profile / workspace)で共有する —— 削除は資源によらず同じ1つの理由
+ *  で確認を要求するので、資源ごとにクラスを分ける意味が無い。危険な値の確認
+ *  (ADR 0061 決定1)と同じく執行はドメインの verb 内に1箇所、API は 409
+ *  `confirm_required` に写す。理由コードは WebUI の確認ダイアログがそのまま
+ *  列挙できるよう、危険な値と同じ「安定文字列」の流儀で運ぶ。 */
+export type DeletionResource = "agent" | "workspace" | "authority profile";
+
+export class DeletionConfirmationRequiredError extends Error {
+  /** 危険な値の 409 と同じ形の理由コード配列にするための1要素 —— WebUI の
+   *  `useDangerousSave` は `dangerous_values` を配列として読むので、削除も同じ
+   *  器に載せれば確認ダイアログを作り直さずに済む。 */
+  readonly reasons: string[];
+  constructor(
+    resource: DeletionResource,
+    public readonly resourceName: string,
+  ) {
+    super(`deleting ${resource} "${resourceName}" requires human confirmation`);
+    this.name = "DeletionConfirmationRequiredError";
+    this.reasons = [`delete_${resource === "authority profile" ? "profile" : resource}`];
+  }
+}
+
+/** 確認では買えない削除の拒否(ADR 0087 決定2/3): 参照中・盤面の既定。理由は
+ *  件数や agent 名という**明細つき**で返る必要があるので、危険な値の裸の文字列
+ *  ではなく判別可能なオブジェクトの列にする。盤面自身の registry clone だけは
+ *  別クラス(`RegistrySelfDeleteError` — 出し直しでも状況が変わっても決して通ら
+ *  ないので 403、`RegistrySelfUnprotectError` と同じ扱い)。 */
+export type DeletionBlockedReason =
+  | { code: "unsettled_tasks"; count: number }
+  | { code: "board_default" }
+  | { code: "referenced_by_agents"; agents: string[] };
+
+export class DeletionBlockedError extends Error {
+  constructor(
+    resource: DeletionResource,
+    resourceName: string,
+    public readonly reasons: DeletionBlockedReason[],
+  ) {
+    super(`${resource} "${resourceName}" cannot be deleted: ${reasons.map(describeReason).join("; ")}`);
+    this.name = "DeletionBlockedError";
+  }
+}
+
+function describeReason(reason: DeletionBlockedReason): string {
+  if (reason.code === "unsettled_tasks") {
+    return `${reason.count} unsettled task(s) still reference it`;
+  }
+  if (reason.code === "board_default") return "it is the board's default";
+  return `authority of agent(s): ${reason.agents.join(", ")}`;
+}
+
 /** ADR 0052 決定1: push(または purely-local での着地)の成功が「効いた」の定義
  *  ——失敗はここで投げる。issue #57 が非致命とした根拠(「盤面はローカル clone を
  *  読むのだから、エントリは既に効いている」)は S1 で読み取りがリモートへ移った

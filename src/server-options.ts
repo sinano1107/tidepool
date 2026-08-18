@@ -1,6 +1,12 @@
 import { platform } from "node:process";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
-import { type AgentAdmin, createAgent, listAgentViews, updateAgent } from "./agent-create.js";
+import {
+  type AgentAdmin,
+  createAgent,
+  deleteAgent,
+  listAgentViews,
+  updateAgent,
+} from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
 import type { BoardStatePath } from "./board-state.js";
 import { createClaudeCliAuthCheck } from "./claude-cli-auth.js";
@@ -18,6 +24,7 @@ import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   createProfile,
+  deleteProfile,
   listProfileViews,
   type ProfileAdmin,
   updateProfile,
@@ -48,6 +55,7 @@ import {
 } from "./workspace.js";
 import {
   createWorkspace,
+  deleteWorkspace,
   listWorkspaceViews,
   publishWorkspace,
   updateWorkspace,
@@ -456,6 +464,9 @@ function workspaceAdmin(
     // ADR 0066 決定2 / ADR 0067 決定8: push は `githubAuth` で撃ち、宛先への到達性
     // probe は `github` があるときだけ撃つ —— どちらも上の deps と同じ組である
     publish: (input) => publishWorkspace(input, { ...deps, github }),
+    // ADR 0087: 参照検査の事実(件数・既定名)は API 層が足す —— registry 側の
+    // deps だけをここで束ねる
+    delete: (input, refs) => deleteWorkspace(input, { ...deps, ...refs }),
   };
 }
 
@@ -471,6 +482,7 @@ function agentAdmin(board: BoardComposition): AgentAdmin | undefined {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
     update: (input) => updateAgent(input, deps),
+    delete: (input, refs) => deleteAgent(input, { ...deps, ...refs }),
     // registry-global, not per-agent (issue #71) — read directly here, same
     // posture as registryCandidates()/agentRegisteredChecker() above
     authorityProfiles: () => Object.keys(loadBoardRegistry(board).authority),
@@ -489,6 +501,7 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),
     update: (input) => updateProfile(input, deps),
+    delete: (input) => deleteProfile(input, deps),
   };
 }
 

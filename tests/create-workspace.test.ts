@@ -11,6 +11,7 @@ import {
   BoardStateOverlapError,
   createWorkspace,
   NotAGitRepositoryError,
+  OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -62,6 +63,15 @@ async function makeLocalOnlyCheckout(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-local-only-"));
   git(dir, "init", "-b", "main");
   return dir;
+}
+
+/** 実 clone をネットワークへ出さずに「規約どおりの場所に要求 repo の孤児が居る」
+ *  状態を作る: ローカル upstream から clone して origin だけ要求 URL に差し替える
+ *  (ADR 0087 決定5 の流用条件を満たす最小の形)。 */
+function placeMatchingOrphan(baseDir: string, name: string, upstream: string, repo: string): void {
+  const dir = join(baseDir, name);
+  git(baseDir, "clone", "--quiet", upstream, dir);
+  git(dir, "remote", "set-url", "origin", repo);
 }
 
 async function makeDeps(registryDir: string) {
@@ -265,8 +275,9 @@ describe("createWorkspace: clone モード(issue #57)", () => {
     const deps = await makeDeps(registryDir);
     const upstream = await makeUpstream();
     // 規約どおりの場所に前回の孤児が居る形を借りて、実 clone をネットワークへ
-    // 出さずに門の先まで通す(冪等リトライは下のテストが単独で押さえている)
-    git(deps.workspacesBaseDir, "clone", upstream, join(deps.workspacesBaseDir, "lagoon"));
+    // 出さずに門の先まで通す(冪等リトライは下のテストが単独で押さえている)。
+    // origin は要求 repo に揃える —— 流用は要求と整合するときだけ(ADR 0087 決定5)
+    placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", upstream, "https://github.com/sinano1107/tidepool");
     deps.github.scriptInvitation(111, "sinano1107/tidepool");
     deps.github.scriptInvitation(222, "someone/else");
 
@@ -294,9 +305,9 @@ describe("createWorkspace: clone モード(issue #57)", () => {
   it("盤面が GitHub 身元を持たない(deps.github 不在)なら probe を撃たず今日の挙動のまま", async () => {
     const registryDir = await makeMainRegistry();
     const { github: _github, ...deps } = await makeDeps(registryDir);
-    // 規約どおりの場所に clone を置いておけば、身元なしでもネットワークに出ずに通る
+    // 規約どおりの場所に要求 repo の孤児を置いておけば、身元なしでもネットワークに出ずに通る
     const upstream = await makeUpstream();
-    git(deps.workspacesBaseDir, "clone", upstream, join(deps.workspacesBaseDir, "lagoon"));
+    placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", upstream, "https://github.com/sinano1107/tidepool");
 
     await createWorkspace(
       { mode: "clone", name: "lagoon", repo: "https://github.com/sinano1107/tidepool" },
@@ -408,7 +419,7 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
     const upstream = await makeUpstream();
     // 規約どおりの場所に前回の孤児を置き、実 clone をネットワークへ出さずに
     // probe の先まで通す(冪等リトライは clone モードの別テストが単独で押さえている)
-    git(deps.workspacesBaseDir, "clone", upstream, join(deps.workspacesBaseDir, "lagoon"));
+    placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", upstream, "https://github.com/sinano1107/tidepool");
     deps.github.scriptRepositoryPermission("sinano1107/tidepool", "WRITE");
     // 遅い外部手順(repo-access probe)の間に registry-edit タスクがブランチを
     // checkout する — worktree は毎回その場で切るので、この移動に影響されない
@@ -476,5 +487,38 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
     expect(git(registryDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/registry-edit-1");
+  });
+});
+
+describe("createWorkspace: 孤児流用の門(ADR 0087 決定5 / issue #205)", () => {
+  it("clone モード: 規約パスの既存 checkout の origin が要求 repo と違えば、その場所を名指しして拒否する", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const stale = await makeUpstream();
+    const wanted = await makeUpstream();
+    // 削除済み workspace の checkout が残っている状態を模す
+    git(deps.workspacesBaseDir, "clone", stale, join(deps.workspacesBaseDir, "lagoon"));
+
+    await expect(
+      createWorkspace({ mode: "clone", name: "lagoon", repo: wanted }, deps),
+    ).rejects.toThrow(OrphanCheckoutMismatchError);
+
+    await expect(
+      createWorkspace({ mode: "clone", name: "lagoon", repo: wanted }, deps),
+    ).rejects.toThrow(join(deps.workspacesBaseDir, "lagoon"));
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toBeUndefined();
+  });
+
+  it("新規作成モード: 規約パスの既存 checkout が origin を持てば流用せず拒否する", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const upstream = await makeUpstream();
+    git(deps.workspacesBaseDir, "clone", upstream, join(deps.workspacesBaseDir, "lagoon"));
+
+    await expect(createWorkspace({ mode: "create", name: "lagoon" }, deps)).rejects.toThrow(
+      OrphanCheckoutMismatchError,
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toBeUndefined();
   });
 });

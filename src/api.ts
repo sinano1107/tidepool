@@ -1,4 +1,4 @@
-import { json, Router } from "express";
+import { json, type Response, Router } from "express";
 import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
 import {
@@ -47,12 +47,17 @@ import {
   type RegistryCandidates,
   type RegistryReachabilityCheck,
 } from "./registry.js";
+import {
+  DeletionBlockedError,
+  DeletionConfirmationRequiredError,
+} from "./registry-write.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
   cancelTaskDirectly,
   completeTask,
+  countUnsettledTasksReferencing,
   DomainError,
   editTask,
   getTask,
@@ -100,6 +105,7 @@ import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
   NotAGitRepositoryError,
+  RegistrySelfDeleteError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
   type WorkspaceAdmin,
@@ -282,6 +288,11 @@ const createProfileSchema = authorityProfileSchema.extend({
 // and absent means untouched, so it never reaches the pure-payload danger
 // judgment. `.partial()` keeps the strictObject strict — unknown keys stay 400.
 const updateProfileSchema = createProfileSchema.omit({ name: true }).partial();
+
+// ADR 0087 / issue #205 の削除の扉の本文: 人間の明示同意だけ。名前は URL から来る。
+const deleteResourceSchema = z.object({
+  confirm: z.boolean().optional(),
+});
 
 const moveTaskSchema = z.object({
   after: z.string().nullable(),
@@ -532,6 +543,24 @@ export interface ApiRouterDeps {
    *  board's own state. Absent → no state paths to protect (a board booted
    *  without them, e.g. most test boards). */
   boardState?: BoardStatePath[];
+}
+
+/** ADR 0087 の3つの削除の扉が共有する失敗の写し。資源固有の 404 / 403 は
+ *  呼び出し側が先に拾い、ここに来るのは「どの扉でも同じ意味を持つ」3つだけ:
+ *  確認不足、確認では買えない拒否、そして外部の一手(fetch / push)の失敗。 */
+function respondToDeletionFailure(res: Response, err: unknown): void {
+  if (err instanceof DeletionConfirmationRequiredError) {
+    // 危険な値の 409 と同じ器(`dangerous_values`)に載せる —— WebUI の確認
+    // ダイアログは理由コードの配列しか読まないので、削除も同じ往復で通る
+    res.status(409).json({ error: err.message, confirm_required: true, dangerous_values: err.reasons });
+  } else if (err instanceof DeletionBlockedError) {
+    // 409 だが `confirm_required` は立てない: 確認では買えず、参照が決着するまで
+    // 状況が変わらない限り出し直しても通らない
+    res.status(409).json({ error: err.message, blocked: true, reasons: err.reasons });
+  } else {
+    // ADR 0052 決定1: 着地しなかった削除は起きなかった削除である
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 export function createApiRouter(deps: ApiRouterDeps): Router {
@@ -878,6 +907,95 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         res.status(400).json({ error: err.message });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+
+  // ADR 0087 の削除の扉。WebUI 専用(ADR 0088)で、管理MCP には置かない。
+  // 3つの扉に共通する写し: 確認不足は 409 `confirm_required`(危険な値の 409 と
+  // 同じ器なので、WebUI の確認ダイアログをそのまま使える)、確認では買えない拒否は
+  // 409 `blocked` + 明細つき理由、永久に通らない自己拒否だけが 403。
+  router.delete("/agents/:name", async (req, res) => {
+    const parsed = deleteResourceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!agentAdmin?.delete) {
+      res.status(503).json({ error: "agent settings not configured" });
+      return;
+    }
+    try {
+      // 参照検査の事実はここで足す(ADR 0087 決定2/3): db と既定 agent 名を
+      // 両方持つのはこの層だけで、判定と執行は verb の中に1箇所ある
+      await agentAdmin.delete(
+        { name: req.params.name, ...parsed.data },
+        {
+          unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
+          defaultAgentName,
+        },
+      );
+      res.json({});
+    } catch (err) {
+      if (err instanceof UnknownAgentError) {
+        res.status(404).json({ error: err.message });
+      } else {
+        respondToDeletionFailure(res, err);
+      }
+    }
+  });
+
+  router.delete("/workspaces/:name", async (req, res) => {
+    const parsed = deleteResourceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!workspaceAdmin?.delete) {
+      res.status(503).json({ error: "workspace settings not configured" });
+      return;
+    }
+    try {
+      const checkout = await workspaceAdmin.delete(
+        { name: req.params.name, ...parsed.data },
+        {
+          unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", req.params.name),
+          defaultWorkspaceName: workspace?.name,
+        },
+      );
+      // ADR 0087 決定4: 消えるのは registry エントリだけ —— 残る checkout の
+      // 場所を応答が名指しする
+      res.json({ checkout });
+    } catch (err) {
+      if (err instanceof UnknownWorkspaceError) {
+        res.status(404).json({ error: err.message });
+      } else if (err instanceof RegistrySelfDeleteError) {
+        // 403: 出し直しでも状況の変化でも決して通らない(RegistrySelfUnprotectError と同じ)
+        res.status(403).json({ error: err.message });
+      } else {
+        respondToDeletionFailure(res, err);
+      }
+    }
+  });
+
+  router.delete("/profiles/:name", async (req, res) => {
+    const parsed = deleteResourceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    if (!profileAdmin?.delete) {
+      res.status(503).json({ error: "profile settings not configured" });
+      return;
+    }
+    try {
+      await profileAdmin.delete({ name: req.params.name, ...parsed.data });
+      res.json({});
+    } catch (err) {
+      if (err instanceof UnknownAuthorityProfileError) {
+        res.status(404).json({ error: err.message });
+      } else {
+        respondToDeletionFailure(res, err);
       }
     }
   });
