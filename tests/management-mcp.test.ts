@@ -128,12 +128,15 @@ it("update_workspace は confirm を持たず、危険な値は WebUI への案�
   }
 });
 
-it("update_workspace は allowed_domains を人間面へ渡す(issue #321)", async () => {
+it("update_workspace の allowed_domains は非空だと危険な値として拒まれる(issue #321 / #267)", async () => {
   const calls: UpdateWorkspaceInput[] = [];
   t = await bootTidepool({
     workspaceAdmin: {
       update: async (input) => {
         calls.push(input);
+        if (input.allowed_domains?.length) {
+          throw new WorkspaceConfirmationRequiredError(input.name, ["allowed_domains_set"]);
+        }
       },
     },
   });
@@ -147,7 +150,9 @@ it("update_workspace は allowed_domains を人間面へ渡す(issue #321)", asy
       },
     });
 
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("allowed_domains_set");
+    expect(result.content[0].text).toContain("WebUI's settings screen");
     expect(calls).toEqual([
       { name: "lagoon", allowed_domains: ["registry.npmjs.org"] },
     ]);
