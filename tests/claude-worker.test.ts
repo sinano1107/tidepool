@@ -1085,7 +1085,11 @@ describe("ClaudeCodeWorker", () => {
     expect(question?.purpose).not.toContain("settings.local.json");
   });
 
-  it("sandbox を含まない通常の project settings(hooks 等)は spawn を止めない", async () => {
+  // issue #378 で反転: かつて hooks は「sandbox を含まない通常の settings」として
+  // 素通しだった。disableAllHooks の blanket が外れた今、workspace の hook は
+  // worker セッション内で実際に発火しうる(本体はサンドボックス外で走り、
+  // worker が書ける)ので、床キーと同格に spawn を止める。
+  it("hooks を持つ project settings は spawn を止めて quarantine する(issue #378 — disableAllHooks 廃止の代替)", async () => {
     const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
     await mkdir(join(wsDir, ".claude"), { recursive: true });
     await writeFile(
@@ -1096,6 +1100,21 @@ describe("ClaudeCodeWorker", () => {
       "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
     });
     start("task-sbx-plain-settings");
+    expect(calls).toEqual([]);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+  });
+
+  it("床キーを持たない通常の project settings(model 等)は spawn を止めない", async () => {
+    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
+    await mkdir(join(wsDir, ".claude"), { recursive: true });
+    await writeFile(
+      join(wsDir, ".claude", "settings.json"),
+      JSON.stringify({ model: "sonnet" }),
+    );
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+    });
+    start("task-sbx-harmless-settings");
     expect(calls).toHaveLength(1);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });

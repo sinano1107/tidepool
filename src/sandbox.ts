@@ -15,16 +15,30 @@ import type { Task } from "./tasks.js";
  *  `buildSandboxSettings` keeps its name — ADRs 0033/0035/0037 and several
  *  issues cite it, and a rename would quietly break those references. */
 export interface WorkerSessionSettings {
-  /** ADR 0037: hooks declared by the workspace's own `.claude/settings.json`
-   *  run harness-side — outside the very sandbox this file builds — so a `work`
-   *  session that can write its checkout can execute arbitrary commands off the
-   *  floor. Measured (2.1.220 / Pi 2.1.207): this stops project hooks firing, a
-   *  workspace's own `disableAllHooks: false` does not cancel it (the flag tier
-   *  wins), and a hook hot-loaded *mid-session* is stopped too — which is what
-   *  makes it reach the one-session escalation a spawn-time check cannot.
-   *  The workspace's skills (`@workspace` scope) and CLAUDE.md survive, which
-   *  `--setting-sources user` would have taken down with it (ADR 0025). */
-  disableAllHooks: true;
+  /** issue #378 (ADR 0010 addendum): the board's own PreToolUse hook, the one
+   *  mechanical seam that can tell a subagent's tool call from the parent's —
+   *  hook input carries `agent_id` only for subagent calls (measured, 2.1.235).
+   *  Subagents inherit the parent's MCP tools wholesale, so without this a
+   *  built-in Explore could write the decision log the parent never reads.
+   *
+   *  This key *replaces* ADR 0037's `disableAllHooks: true`: the two are
+   *  mutually exclusive (measured — the blanket kills same-tier flag hooks
+   *  too, and the managed tier, the one source that survives it, is a
+   *  root-owned host-wide file with its override env var inert on 2.1.235).
+   *  What the blanket covered is re-covered without it: checked-in workspace
+   *  hooks now refuse the spawn (`floorOverridingSettings`, `hooks` key), and
+   *  the mid-session hot-load path was already independently closed by ADR
+   *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
+   *  both measured and re-measured by the deploy canary). The workspace's
+   *  skills and CLAUDE.md are untouched, as before (ADR 0025). */
+  hooks: {
+    PreToolUse: [
+      {
+        matcher: string;
+        hooks: [{ type: "command"; command: string }];
+      },
+    ];
+  };
   /** ADR 0037's second layer, and the one the sandbox cannot provide: the
    *  sandbox confines Bash alone, so the Write/Edit tools reach
    *  `.claude/settings.json` straight through `filesystem.denyWrite`
@@ -239,6 +253,48 @@ function settingsDenyWrite(workspacePath: string): string[] {
  *  widening any floor first. */
 const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${name})`);
 
+/** issue #378 (ADR 0010 addendum): board verbs are main-thread only. The CLI
+ *  hands every MCP tool of the parent to its subagents wholesale (measured:
+ *  a general-purpose subagent called an MCP verb over the parent's shared
+ *  connection), and neither `--agents` (a merge, not a closed roster —
+ *  un-shadowed built-ins keep everything) nor any per-source flag can stop
+ *  it. The PreToolUse hook is the one seam that sees who is calling: its
+ *  input carries `agent_id` only for subagent calls (measured 2.1.235 —
+ *  absent on the parent's own calls).
+ *
+ *  The command is deliberately self-contained (`node -e`): no script file to
+ *  deploy, no path to resolve, and the floor stays one code constant
+ *  (ADR 0013). node is guaranteed — the board itself runs on it.
+ *
+ *  Two guards inside, both fail-closed toward the *board*, open toward the
+ *  worker's other tools:
+ *  - unparseable hook input denies (we could not establish "parent thread";
+ *    the matcher has already scoped the blast radius to board verbs, so a
+ *    vendor change that breaks the input format fails loudly on board calls
+ *    instead of silently waving subagents through);
+ *  - the tool-name prefix is re-checked in the script, so if the vendor's
+ *    matcher semantics ever broaden, subagents' non-board tools (Read, Grep,
+ *    …) are still never denied — restricting those is out of scope for the
+ *    board (issue #378 のやらないこと).
+ *
+ *  The deny reason is worker-facing text, hence English. */
+const SUBAGENT_BOARD_VERB_DENY = {
+  matcher: "mcp__tidepool__.*",
+  hooks: [
+    {
+      type: "command",
+      command:
+        `node -e '` +
+        `let d="";process.stdin.on("data",c=>d+=c);process.stdin.on("end",()=>{` +
+        `let deny=true;` +
+        `try{const i=JSON.parse(d);deny=i.agent_id!==undefined&&String(i.tool_name).startsWith("mcp__tidepool__")}catch{}` +
+        `if(deny)console.log(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",` +
+        `permissionDecision:"deny",` +
+        `permissionDecisionReason:"Board verbs are main-thread only; make this call from the parent thread, not a subagent."}}))})'`,
+    },
+  ],
+} as const satisfies WorkerSessionSettings["hooks"]["PreToolUse"][0];
+
 /** A skill name safe to map into a path: no separator, no `..`, no leading dot.
  *  Plugin-prefixed names (`plugin:skill`) are excluded by the same rule — their
  *  directory lives under a version-stamped plugin cache path the board cannot
@@ -365,9 +421,10 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
   const { taskType, workspacePath, permittedSkills, allowedDomains } = input;
   const readOnly = taskType === "review";
   return {
-    // ADR 0037: not keyed on the profile — a hook fires harness-side whichever
-    // kind of worker is running, and the floor never depends on data (ADR 0013).
-    disableAllHooks: true,
+    // issue #378: not keyed on the profile — a subagent can smuggle a board
+    // verb from either kind of worker, and the floor never depends on data
+    // (ADR 0013).
+    hooks: { PreToolUse: [SUBAGENT_BOARD_VERB_DENY] },
     // ADR 0037: the tool-layer half of the same ban, likewise on both profiles.
     permissions: { deny: [...SETTINGS_TOOL_DENY] },
     sandbox: {
@@ -494,10 +551,15 @@ const defaultRunOk: RunOkFn = (command, args) => {
 
 /** The settings keys that define a worker session's floor rather than its
  *  conveniences — `sandbox` for the OS layer (ADR 0033), `permissions` for the
- *  permission layer review's write floor now rests on (ADR 0035). A checkout
- *  naming either is claiming authorship of the floor, which is the board's
+ *  permission layer review's write floor now rests on (ADR 0035), and `hooks`
+ *  since issue #378 retired ADR 0037's `disableAllHooks` blanket: a project
+ *  hook runs harness-side — outside the sandbox — and its body (the
+ *  `node_modules/.bin` a `npx …` resolves, the `scripts/*.sh` it invokes) is
+ *  worker-writable even where the settings file itself is not, so a checkout
+ *  carrying hooks is carrying arbitrary off-floor execution. A checkout naming
+ *  any of these is claiming authorship of the floor, which is the board's
  *  alone. */
-const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
+const FLOOR_DEFINING_KEYS = ["sandbox", "permissions", "hooks"];
 
 /** The floor's one data-dependent guard, and deliberately a guard rather than
  *  part of the floor (ADR 0013:「床はデータの状態に依存しない」— the profile

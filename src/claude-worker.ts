@@ -102,7 +102,11 @@ tool.
 
 The Workflow tool is off-limits in task sessions: a workflow script is a
 decompose plan that never reached the board. If you find yourself wanting to
-write one, register that split with the tidepool MCP's decompose instead.`;
+write one, register that split with the tidepool MCP's decompose instead.
+
+Board verbs (the tidepool MCP tools) are main-thread only: a subagent's call
+is denied by the harness, not by an attacker. If a subagent reports that
+denial, make the call yourself from the main thread.`;
 
 // ADR 0017: the worker protocol (rules of the road for a board worker) is a
 // board-wide doctrine, so it lives here and is injected into every session —
@@ -1580,8 +1584,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         workspace.name,
         new Error(
           `workspace carries .claude/${overriding.join(", .claude/")} declaring its own ` +
-            "sandbox or permissions settings, which would widen the worker floor " +
-            "(ADR 0033 / ADR 0035) — remove the sandbox and permissions blocks",
+            "sandbox, permissions, or hooks settings, which would widen the worker floor " +
+            "(ADR 0033 / ADR 0035 / issue #378: a project hook runs outside the sandbox and " +
+            "its body is worker-writable) — remove the sandbox, permissions, and hooks blocks",
         ),
         this.options.clock.now(),
       );

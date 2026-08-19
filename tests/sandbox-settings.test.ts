@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -175,12 +176,15 @@ describe("floorOverridingSettings", () => {
     return dir;
   }
 
-  // ADR 0037: `hooks` を FLOOR_DEFINING_KEYS に足さない、を行動として固定する。
-  // hooks はハーネス側(サンドボックス外)で走るので床を運ぶキーに見えるが、
-  // `disableAllHooks: true` が無害化した以上、hooks を持つだけの workspace を
-  // quarantine するのは過剰であり、biome hook を持つ **tidepool 自身が永久
-  // quarantine** になる。親切心で足そうとした読者はここで落ちる。
-  it("hooks だけを持つ project settings は素通しする — 無害化は disableAllHooks の仕事で、quarantine の理由にはならない(ADR 0037)", async () => {
+  // issue #378 でこの主張は**反転した**: かつては「無害化は disableAllHooks の
+  // 仕事なので hooks は素通し」だったが、盤面自身の deny hook と disableAllHooks
+  // は排他(実測)なので blanket は外れ、workspace hook の無害化はこの guard が
+  // 引き受ける。hook はハーネス側=サンドボックスの外で走り、その本体
+  // (`npx biome` の node_modules/.bin、`scripts/*.sh` 等)は worker が書ける —
+  // 文面が人間author でも本体は信用できない、が quarantine の理由。
+  // tidepool 自身の biome hook はこのために repo から settings.local.json
+  // (gitignore 済み、fresh clone に付いてこない)へ退去した。
+  it("hooks を持つ project settings は検出する — hook はサンドボックスの外で走り、その本体は worker が書ける(issue #378 / ADR 0037 改訂)", async () => {
     const dir = await workspaceWith({
       "settings.json": JSON.stringify({
         hooks: {
@@ -188,7 +192,7 @@ describe("floorOverridingSettings", () => {
         },
       }),
     });
-    expect(floorOverridingSettings(dir)).toEqual([]);
+    expect(floorOverridingSettings(dir)).toEqual(["settings.json"]);
   });
 
   it(".claude が無い workspace は素通しする", async () => {
@@ -253,27 +257,51 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
   });
 });
 
-/** ADR 0037(issue #143 / #160): workspace checkout の `.claude/settings.json` は
- *  per-task `--settings` でサンドボックス化された Bash の**外側**に効く経路を2つ
- *  持つ — hook のハーネス側実行と、`sandbox` ブロックによる床の再定義(後者は
- *  ホットリロードされるので spawn 時ガードでは届かない)。work セッションは自分の
- *  checkout に書けるので、どちらも worker 自身が仕込める。
+/** issue #378(ADR 0010 追記 / ADR 0037 改訂): subagent は親の MCP tool を
+ *  継承するので、盤面 verb(`mcp__tidepool__*`)を subagent からも呼べてしまう —
+ *  decision log は説明責任の面そのもので、親が読まない subagent が書けるのは
+ *  説明責任分割の密輸。機械的に塞げる唯一の口は PreToolUse hook で、hook 入力の
+ *  `agent_id` は subagent の呼び出しにだけ付く(実測 CLI 2.1.235: 親スレッドの
+ *  呼び出しには無く、subagent の呼び出しには `agent_id`/`agent_type` が付く)。
  *
- *  実測(CLI 2.1.220 / macOS、本番 Pi 2.1.207 / bwrap、すべて control つき):
- *  `disableAllHooks: true` は project hook の発火を止め、workspace 側の
- *  `disableAllHooks: false` では打ち消せず(flag tier 勝ち)、ホットリロードで
- *  途中配置された hook も止める。偽キー `disableHooks` は素通り(negative
- *  control)なので、これは「未知キーの黙殺」ではなく実在キーである。 */
-describe("buildSandboxSettings の disableAllHooks(ADR 0037)", () => {
-  it("どちらのプロファイルも hooks を無効化する — hook はサンドボックスの外で走るので、床はデータに依存しないコード定数で殺す(ADR 0013)", () => {
+ *  この hook は ADR 0037 の `disableAllHooks: true` と排他だった(実測: 同じ
+ *  flag tier の hook も巻き添えで死ぬ)。そこで blanket は外し、workspace 側
+ *  hook の無害化は floorOverridingSettings の quarantine(下の describe)へ移る。
+ *  hot-load 経路(worker が settings を書いて次の呼び出しで hook を効かせる)は
+ *  ADR 0037 の書き込み2層(sandbox denyWrite + Edit() deny)が既に独立に閉じて
+ *  いる。 */
+describe("buildSandboxSettings の hooks(issue #378: 盤面 verb は親スレッド専用)", () => {
+  it("disableAllHooks はもう置かない — 盤面自身の deny hook と排他だった(実測: flag tier の hook も殺す)", () => {
     for (const taskType of ["work", "review"] as const) {
       expect(
-        buildSandboxSettings({
-          taskType,
-          workspacePath: "/home/pi/work/tidepool",
-          permittedSkills: "all",
-        }).disableAllHooks,
-      ).toBe(true);
+        "disableAllHooks" in
+          buildSandboxSettings({
+            taskType,
+            workspacePath: "/home/pi/work/tidepool",
+            permittedSkills: "all",
+          }),
+      ).toBe(false);
+    }
+  });
+
+  it("どちらのプロファイルも盤面 verb への PreToolUse deny hook を運ぶ — matcher は盤面 verb だけを見る(subagent の非盤面 tool は issue #378 のやらないこと)", () => {
+    for (const taskType of ["work", "review"] as const) {
+      const { hooks } = buildSandboxSettings({
+        taskType,
+        workspacePath: "/home/pi/work/tidepool",
+        permittedSkills: "all",
+      });
+      expect(hooks.PreToolUse).toHaveLength(1);
+      expect(hooks.PreToolUse[0]?.matcher).toBe("mcp__tidepool__.*");
+      expect(hooks.PreToolUse[0]?.hooks).toHaveLength(1);
+      const hook = hooks.PreToolUse[0]?.hooks[0];
+      expect(hook?.type).toBe("command");
+      // コマンドは自己完結(node -e)— ファイル配備もパス解決も持ち込まない。
+      // 文言は英語(worker 向けテキストは英語統一)。挙動そのものは下の
+      // describe が実行して確かめるので、ここでは床の骨格だけを固定する。
+      expect(hook?.command).toContain("node -e");
+      expect(hook?.command).toContain("agent_id");
+      expect(hook?.command).toContain('permissionDecision:"deny"');
     }
   });
 });
@@ -319,6 +347,62 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
       buildSandboxSettings({ taskType: "review", workspacePath, permittedSkills: "all" })
         .permissions.deny;
     expect(at("/home/pi/work/tidepool")).toEqual(at("/some/other/checkout"));
+  });
+});
+
+/** issue #378 の deny hook の挙動そのもの。テストは組み立てた settings から
+ *  コマンドを取り出して**実行**する(literal の写しではなく、盤面が実際に spawn
+ *  へ渡す文字列が動くことを確かめる)。判定の情報源は hook 入力の `agent_id` —
+ *  実測(CLI 2.1.235)で subagent の tool 呼び出しにだけ付き、親スレッドの
+ *  呼び出しには付かないことを確認済み。 */
+describe("盤面 verb deny hook の挙動(issue #378)", () => {
+  const command = () =>
+    buildSandboxSettings({
+      taskType: "work",
+      workspacePath: "/home/pi/work/tidepool",
+      permittedSkills: "all",
+    }).hooks.PreToolUse[0].hooks[0].command;
+
+  const runHook = (stdin: string) => {
+    const result = spawnSync("sh", ["-c", command()], { input: stdin, encoding: "utf8" });
+    expect(result.error).toBeUndefined();
+    return result.stdout;
+  };
+
+  it("subagent(agent_id あり)からの盤面 verb は deny — 理由は英語で親スレッドへ誘導する", () => {
+    const out = runHook(
+      JSON.stringify({
+        agent_id: "a310473ecb0af5373",
+        agent_type: "general-purpose",
+        tool_name: "mcp__tidepool__log_decision",
+        tool_input: {},
+      }),
+    );
+    const parsed = JSON.parse(out);
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(parsed.hookSpecificOutput.permissionDecisionReason).toContain("main-thread only");
+  });
+
+  it("親スレッド(agent_id なし)からの盤面 verb は素通し — hook は何も言わない", () => {
+    expect(
+      runHook(JSON.stringify({ tool_name: "mcp__tidepool__log_decision", tool_input: {} })),
+    ).toBe("");
+  });
+
+  it("読めない hook 入力は deny に倒す — 「親スレッドだと確認できた」ときだけ通す(fail-closed)", () => {
+    // matcher が盤面 verb に絞っているので、この fail-closed の爆風半径は盤面
+    // verb だけ — vendor が入力形式を変えた日に、subagent を黙って通すのではなく
+    // 盤面呼び出しが音を立てて落ちる側に倒れる。
+    const parsed = JSON.parse(runHook("{ not json"));
+    expect(parsed.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("subagent でも盤面 verb 以外は deny しない — vendor の matcher 意味論が広がっても非盤面 tool の制限(やらないこと)に染み出さない", () => {
+    expect(
+      runHook(
+        JSON.stringify({ agent_id: "a310473ecb0af5373", tool_name: "Read", tool_input: {} }),
+      ),
+    ).toBe("");
   });
 });
 
