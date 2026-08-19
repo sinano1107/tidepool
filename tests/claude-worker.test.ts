@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -1210,28 +1210,63 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
-    const { start, stdout, logDir } = await makeWorker();
+    const { start, stdout, logDir, db } = await makeWorker();
     start("task-7");
     stdout.write(`{"type":"system","subtype":"init"}\n`);
     stdout.write(`{"type":"result","result":"done"}\n`);
     stdout.end();
+    // issue #379: ファイル名は worker_spawned の event id を挟んでセッションごとに
+    // 一意 — その id はイベントログから読み返す(採番自体はここでは検証しない)
+    const spawnedId = listEvents(db, "task-7").find((e) => e.kind === "worker_spawned")!.id;
     await vi.waitFor(async () => {
-      const transcript = await readFile(join(logDir, "task-7.stream.jsonl"), "utf8");
+      const transcript = await readFile(
+        join(logDir, `task-7.${spawnedId}.stream.jsonl`),
+        "utf8",
+      );
       expect(transcript).toBe(
         `{"type":"system","subtype":"init"}\n{"type":"result","result":"done"}\n`,
       );
     });
   });
 
-  it("セッションの stderr を <taskId>.stderr.log として stream.jsonl の隣に全量保存する(issue #125)", async () => {
-    const { start, stderr, logDir } = await makeWorker();
+  it("セッションの stderr を <taskId>.<event id>.stderr.log として stream.jsonl の隣に全量保存する(issue #125 / #379)", async () => {
+    const { start, stderr, logDir, db } = await makeWorker();
     start("task-stderr");
     stderr.write("Error: Invalid API key\n");
     stderr.write("(run /login to authenticate)\n");
     stderr.end();
+    const spawnedId = listEvents(db, "task-stderr").find((e) => e.kind === "worker_spawned")!.id;
     await vi.waitFor(async () => {
-      const log = await readFile(join(logDir, "task-stderr.stderr.log"), "utf8");
+      const log = await readFile(join(logDir, `task-stderr.${spawnedId}.stderr.log`), "utf8");
       expect(log).toBe("Error: Invalid API key\n(run /login to authenticate)\n");
+    });
+  });
+
+  it("同一タスクを2回 spawn すると、両方の worker session の transcript が別ファイルで残る(issue #379)", async () => {
+    const { worker, start, logDir } = await makeWorker();
+    const task = start("task-retry");
+    // retry / decompose 復帰 / quarantine 復帰はいずれも同じ task を worker が
+    // 再度 start する形なので、直接 worker.start を2回呼んで再現する
+    worker.start(task);
+    await vi.waitFor(async () => {
+      const files = (await readdir(logDir)).filter((name) => name.startsWith("task-retry."));
+      expect(files.filter((name) => name.endsWith(".stream.jsonl"))).toHaveLength(2);
+      expect(files.filter((name) => name.endsWith(".stderr.log"))).toHaveLength(2);
+    });
+  });
+
+  it("worker_exited は自分を開いた worker_spawned の event id を持ち、そのセッションの transcript ファイル名を再構成できる(issue #379 code review)", async () => {
+    const { start, emitExit, db, logDir } = await makeWorker();
+    const task = start("task-exit-pointer");
+    emitExit(0, null);
+    const spawned = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!;
+    const exited = listEvents(db, task.id).find((e) => e.kind === "worker_exited")!;
+    const payload = exited.payload as Extract<EventPayload, { kind: "worker_exited" }>;
+    expect(payload.worker_spawned_event_id).toBe(spawned.id);
+    await vi.waitFor(async () => {
+      await expect(
+        readFile(join(logDir, `${task.id}.${payload.worker_spawned_event_id}.stream.jsonl`), "utf8"),
+      ).resolves.not.toThrow();
     });
   });
 
@@ -1610,6 +1645,7 @@ describe("ClaudeCodeWorker", () => {
       })}\n`,
     );
     emitExit(0, null);
+    const spawned = listEvents(db, "task-usage").find((e) => e.kind === "worker_spawned");
     const exited = listEvents(db, "task-usage").find((e) => e.kind === "worker_exited");
     expect(exited?.payload).toEqual({
       kind: "worker_exited",
@@ -1618,6 +1654,8 @@ describe("ClaudeCodeWorker", () => {
       // stderr を一切書かず終わったセッション — 「stderr が無かった」ことが
       // null で残る(空文字とは違い、捕捉の欠落と区別できる — issue #125)
       stderr_tail: null,
+      // このセッションを開いた worker_spawned を指す(issue #379)
+      worker_spawned_event_id: spawned?.id,
       usage: {
         input_tokens: 100,
         output_tokens: 50,
@@ -1750,12 +1788,14 @@ describe("ClaudeCodeWorker", () => {
     const { start, emitExit, db } = await makeWorker();
     start("task-killed");
     emitExit(null, "SIGKILL");
+    const spawned = listEvents(db, "task-killed").find((e) => e.kind === "worker_spawned");
     const exited = listEvents(db, "task-killed").find((e) => e.kind === "worker_exited");
     expect(exited?.payload).toEqual({
       kind: "worker_exited",
       exit_code: null,
       signal: "SIGKILL",
       stderr_tail: null,
+      worker_spawned_event_id: spawned?.id,
       usage: null,
     });
   });

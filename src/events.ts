@@ -201,6 +201,13 @@ export type EventPayload =
       // adapter alongside its transcript (adapter-specific layout — ADR
       // 0005); this field is the event-side pointer into it.
       stderr_tail: string | null;
+      // issue #379: the id of the `worker_spawned` event that opened this
+      // same session — a task can have several worker sessions (retry /
+      // decompose 統合復帰 / quarantine 復帰), and the adapter now names each
+      // session's transcript/stderr file `<taskId>.<this id>.stream.jsonl` /
+      // `.stderr.log`, so this is what lets a reader of worker_exited
+      // reconstruct which file belongs to it.
+      worker_spawned_event_id: number;
       usage: {
         input_tokens: number;
         output_tokens: number;
