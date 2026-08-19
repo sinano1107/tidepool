@@ -67,7 +67,7 @@ review タスクは親なしの**ルート**としても登録できる。入口
 
 ## Auditor(監査ポインタ)
 
-独立レビューのタスクが解決される先。default agent・既定 workspace と同型の、盤面が持つ第3のポインタであり、registry の普通のエージェント(レビュー専門の instructions を持つ)を指す。常に値を持ち「未設定」という状態はない — 解決できない名前は既存の agent quarantine が封じ込める(auditor 依存のタスクだけが止まり、盤面の他は流れ続ける)。「auditor」はエージェントの属性ではなく盤面が持つ役割の割当。
+独立レビューのタスクが解決される先。default agent・既定 workspace と同型の、盤面が持つ第3のポインタであり、registry の普通のエージェント(レビュー専門の instructions を持つ)を指す。常に値を持ち「未設定」という状態はない — 解決できない名前は既存の agent quarantine が封じ込める(auditor 依存のタスクだけが止まり、盤面の他は流れ続ける)。「auditor」はエージェントの属性ではなく盤面が持つ役割の割当。ポインタの既定名は `fugu` 🐡(ADR 0089 — 命名は ADR 0017 の線、役割名 `auditor` は profile 側に置く)。
 
 review type の未指定 assignee がこのポインタへ解決されることは、Assignee の解決規則の type 別の枝であって別の規則ではない。したがって**同じ到達範囲を要求する** — ゲート・表示・帰属の記録のすべてが、type を見た解決を通る。この解決を問える相手は実行される type に限られる: **question は解決先を持たない**(回答されるものであって pickup されるものではないため、走らせるエージェントが存在しない)。「どのエージェントとして走るか」と「このカードは誰のものか」は別の問いであり、後者に対してのみ question は答えを持つ(あなた) — 1つの規則に両方を答えさせると、実行側の読み口が一つずつ「ただし question は別」と打ち消すことになる(2026-08-09 の grilling)。
 
@@ -391,6 +391,8 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 **agent 名は専門性の連続性を担う**(ADR 0019): 定義の編集は洗練(refinement)に限られ、転生(repurposing — 専門性の別物への書き換え)は禁止。専門性を変えるときは新名で作成し、旧名は削除する(削除の余波は agent quarantine が受け止める)。この連続性が「修理・self RCA は現在の定義で走らせてよい」の根拠。
 
 **削除は committed main からエントリを除去することであり、記録は消えない**(2026-08-18 の grilling、issue #205 / ADR 0087)。registry は git リポジトリであり、過去タスクが参照する agent 本文は commit 指定で読まれるので、HEAD から消えても履歴参照は壊れない — 無効化フラグは持たない(Memory の「削除は無く無効化のみ」は DB 内エントリの線)。人間面の削除の扉は事故を作らない門であり、未決着タスクが参照している agent / workspace、いずれかの agent が参照している profile、盤面自身の registry clone、既定 agent / 既定 workspace は消せない。profile の許可先(`assignable_to` / `allowed_workspaces`)に列挙されているだけの資源は消せる — 存在しない名前は許可先が1つ消えるだけで無害。ADR 0019 の「余波は quarantine が受け止める」は帯域外の手作業の安全網であって、扉が意図的に quarantine を作ることの根拠ではない。workspace の削除はエントリだけで、ホスト上の checkout(決着後も残るタスクブランチ = 差分の恒久記録)と GitHub 側のリポジトリは触らない。
+
+**種まき(Seed)**: 空のリモートに最初の registry(既定 agent・authority profile・auditor・既定 workspace)を載せる、boot 前の人間の一発コマンド(2026-08-19 の grilling、issue #365 / ADR 0089)。盤面は boot 時に既定 workspace を registry から解決するので空のリモートを指す盤面は起動できず、資源を作る人間面の動詞は WebUI にしかない — 鶏と卵を盤面の外で断つ。盤面が初回起動時に自動で作ることはしない(自動作成は boot 時の push であり、誰の資格情報で押すかを盤面は持たない)。空でないリモートには効かない — 直す道具ではない。
 
 ## Workspace(ワークスペース)
 
