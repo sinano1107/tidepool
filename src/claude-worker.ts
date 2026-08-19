@@ -107,6 +107,9 @@ write one, register that split with the tidepool MCP's decompose instead.
 Board verbs (the tidepool MCP tools) are main-thread only: a subagent's call
 is denied by the harness, not by an attacker. If a subagent reports that
 denial, make the call yourself from the main thread.`;
+// ^ the denial this paragraph teaches recovery from is SUBAGENT_BOARD_VERB_DENY
+// (src/sandbox.ts) — its "main-thread only" wording, this paragraph, and the
+// canary's BOARD_HOOK_WORDING move together.
 
 // ADR 0017: the worker protocol (rules of the road for a board worker) is a
 // board-wide doctrine, so it lives here and is injected into every session —

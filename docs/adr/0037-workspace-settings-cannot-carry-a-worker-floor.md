@@ -93,4 +93,6 @@ blanket を外しても床の勘定は合う:
 - **mid-session の hot-load(実測 1)** → 機構2の書き込み二層(`denyWrite` + `Edit()` deny、どちらも実測済みで canary が毎デプロイ再測定)が既に独立に閉じている。worker は settings ファイルを書けないので、hot-load させる手段がない。残余は「セッション中に worker 以外の何か(人間・別プロセス)が外から hook を置く」形だけで、これは ADR 0064(セッション中の checkout は盤面の専有領域)が散文で禁じている状態 — 受け入れた残余として記録する。
 - **機構2は無傷** — 変更は機構1の担い手が「キー」から「ガード + 書き込み禁止」へ移っただけ。
 
-**canary は測る対象ごと作り直した**(hook-canary.sh): 「workspace hook は沈黙する」は測る意味を失い(その状態は spawn 前に quarantine される — vitest の領分)、代わりに「盤面の deny hook が subagent の盤面 verb を止め、親を通す」を、呼び出しを実受する stub MCP のログで測る。control は hooks キーを削った同一プロファイルで subagent が届くこと — 届かなければ live の沈黙は配線切れと区別できず VACUOUS。deny / deny/scope 行は変更なし。実測 2026-08-19(macOS 2.1.235): 4行 PASS、subagent の拒否は hook 自身の文言(「main-thread only」)で観測。
+**canary は測る対象ごと作り直した**(hook-canary.sh): 「workspace hook は沈黙する」は測る意味を失い(その状態は spawn 前に quarantine される — vitest の領分)、代わりに「盤面の deny hook が subagent の盤面 verb を止め、親を通す」を、呼び出しを実受する stub MCP のログで測る。control は hooks キーを削った同一プロファイルで subagent が届くこと — 届かなければ live の沈黙は配線切れと区別できず VACUOUS。deny / deny/scope 行は変更なし。測定結果は issue #378 のコメントを参照(measurement belongs to the issue)。
+
+**hook の判定は「`agent_id` が付いていること」に依存し、JSON は読めるが `agent_id` が無い入力は素通しする(その形が親スレッドだから)。** つまり vendor が `agent_id` を**改名**した日は subagent が無音で通る — 壊れた JSON への deny(fail-closed)はこの改名を覆わない。それを検出するのが canary の live 行であり、この床は canary の定期実行(CLI 更新ごと)とセットでしか成立しない。

@@ -266,18 +266,24 @@ const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${
  *  deploy, no path to resolve, and the floor stays one code constant
  *  (ADR 0013). node is guaranteed — the board itself runs on it.
  *
- *  Two guards inside, both fail-closed toward the *board*, open toward the
- *  worker's other tools:
+ *  Two guards inside:
  *  - unparseable hook input denies (we could not establish "parent thread";
- *    the matcher has already scoped the blast radius to board verbs, so a
- *    vendor change that breaks the input format fails loudly on board calls
- *    instead of silently waving subagents through);
+ *    the matcher has already scoped the blast radius to board verbs). Honest
+ *    scope note: this only catches a vendor change that breaks the JSON —
+ *    input that still parses but carries no `agent_id` is waved through,
+ *    because that is exactly what the parent's own calls look like. A
+ *    *renamed* `agent_id` therefore fails open, silently; the deploy canary's
+ *    live row (hook-canary.sh, re-run on every CLI update) is the guard for
+ *    that, and this floor does not stand without it;
  *  - the tool-name prefix is re-checked in the script, so if the vendor's
  *    matcher semantics ever broaden, subagents' non-board tools (Read, Grep,
  *    …) are still never denied — restricting those is out of scope for the
  *    board (issue #378 のやらないこと).
  *
- *  The deny reason is worker-facing text, hence English. */
+ *  The deny reason is worker-facing text, hence English — and its "main-thread
+ *  only" phrasing is load-bearing twice over: BOARD_DOCTRINE (claude-worker.ts)
+ *  tells workers how to recover from this exact denial, and the deploy canary
+ *  greps for the phrase (BOARD_HOOK_WORDING). Reword all three together. */
 const SUBAGENT_BOARD_VERB_DENY: WorkerSessionSettings["hooks"]["PreToolUse"][0] = {
   matcher: "mcp__tidepool__.*",
   hooks: [
