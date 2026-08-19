@@ -80,3 +80,19 @@ hooks / settings 書き込みの封じ込めは ADR 0033 の封じ込め能力�
 二層目の `permissions.deny` はパスを名指しする形なので、覆っているのは checkout 内の2ファイルだけである。**`~/.claude/settings.json`(user tier)への Write は本 ADR の射程外**で、そこは #151(work プロファイルのツール層にサンドボックスの床が掛かっていない)の領分になる。
 
 ただしその迂回路は #151 自身に**劣後する** — 床を広げてから Bash で読むより、Read ツールで `~/.claude/.credentials.json` を直接読むほうが早い。したがって user tier をここで列挙して追いかけるより、#151 を対処候補2(work も `--permission-mode manual`)で解く方が筋がよい。そちらが入れば、この射程外だった経路も同時に閉じる。
+
+## 追記: issue #378 が機構1を置き換えた(2026-08-19)
+
+**`disableAllHooks: true` は退役し、hooks の無害化は spawn 時ガード(`floorOverridingSettings` の `hooks` キー)へ移った。** 本文の「`FLOOR_DEFINING_KEYS` に `hooks` は足さない」決定はここで反転している。
+
+契機は ADR 0010 追記(盤面 verb は親スレッド専用): subagent からの盤面 verb を機械的に拒否できる唯一の継ぎ目は per-task `--settings` の PreToolUse hook(hook 入力の `agent_id` は subagent の呼び出しにだけ付く — 実測 2.1.235)だが、**`disableAllHooks` は同じ flag tier の盤面自身の hook も殺す**(実測)。managed(policy)層の hooks だけがこれを生き残る設計だが、その差し替え env var(`CLAUDE_CODE_MANAGED_SETTINGS_PATH`)は 2.1.235 で外から与えても不活性で、残る固定パスは root 所有のホスト全体設定 — per-task でなく sudo 配備を要し、「盤面は自分が管理しないものをセッションに持ち込まない」(ADR 0033)に反するため採らなかった。
+
+blanket を外しても床の勘定は合う:
+
+- **checked-in の workspace hook** → ガードが spawn を拒否して quarantine(この ADR の実測 4「文面が人間 merge 済みでも本体が worker 可書き」がそのまま quarantine の理由になる)。tidepool 自身の biome hook は repo から `settings.local.json`(gitignore 済み — fresh clone に付いてこないのでガードに当たらない)へ退去した。
+- **mid-session の hot-load(実測 1)** → 機構2の書き込み二層(`denyWrite` + `Edit()` deny、どちらも実測済みで canary が毎デプロイ再測定)が既に独立に閉じている。worker は settings ファイルを書けないので、hot-load させる手段がない。残余は「セッション中に worker 以外の何か(人間・別プロセス)が外から hook を置く」形だけで、これは ADR 0064(セッション中の checkout は盤面の専有領域)が散文で禁じている状態 — 受け入れた残余として記録する。
+- **機構2は無傷** — 変更は機構1の担い手が「キー」から「ガード + 書き込み禁止」へ移っただけ。
+
+**canary は測る対象ごと作り直した**(hook-canary.sh): 「workspace hook は沈黙する」は測る意味を失い(その状態は spawn 前に quarantine される — vitest の領分)、代わりに「盤面の deny hook が subagent の盤面 verb を止め、親を通す」を、呼び出しを実受する stub MCP のログで測る。control は hooks キーを削った同一プロファイルで subagent が届くこと — 届かなければ live の沈黙は配線切れと区別できず VACUOUS。deny / deny/scope 行は変更なし。測定結果は issue #378 のコメントを参照(measurement belongs to the issue)。
+
+**hook の判定は「`agent_id` が付いていること」に依存し、JSON は読めるが `agent_id` が無い入力は素通しする(その形が親スレッドだから)。** つまり vendor が `agent_id` を**改名**した日は subagent が無音で通る — 壊れた JSON への deny(fail-closed)はこの改名を覆わない。それを検出するのが canary の live 行であり、この床は canary の定期実行(CLI 更新ごと)とセットでしか成立しない。
