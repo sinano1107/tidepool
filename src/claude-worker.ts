@@ -625,8 +625,9 @@ export function agentGitIdentityEnv(agentName: string): Record<string, string> {
 
 type WorkerExitedUsage = Extract<EventPayload, { kind: "worker_exited" }>["usage"];
 
-// issue #125: worker_exited が運ぶ stderr 末尾の行数。全量は <taskId>.stderr.log
-// に残るので、イベント側は失敗形の判別に足る末尾だけを持つ。
+// issue #125: worker_exited が運ぶ stderr 末尾の行数。全量は
+// <taskId>.<worker_spawned event id>.stderr.log(issue #379)に残るので、
+// イベント側は失敗形の判別に足る末尾だけを持つ。
 const STDERR_TAIL_LINES = 20;
 
 /** Per-chunk trim for the in-memory stderr tail (issue #125): keeps the last
@@ -1864,12 +1865,47 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         env: { ...workerSpawnEnv(advisor), ...agentGitIdentityEnv(agent.name) },
       },
     );
+    // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
+    // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
+    // transcript / stderr のファイル名をセッションごとに一意にする。イベント
+    // は監査ログの正本として元々書いていたもの — ファイル名を確定できる位置
+    // まで先に書くだけで、書く内容も呼び出し側からの見え方も変わらない。
+    const spawnedEventId = appendEvent(this.options.db, {
+      taskId: task.id,
+      // attributed to whichever agent actually got spawned (ADR 0012 / issue
+      // #36) — not this worker's configured default, which a pre-set
+      // delegation may override
+      workerId: agent.name,
+      origin: "board",
+      // issue #127: this records the *attempt* to spawn, not a successful
+      // session — spawn() has already returned synchronously by this point,
+      // but Node's "error" can still fire after this write if the process
+      // never actually came into being (ENOENT etc.). That is not a false
+      // record: every fact this event carries (the resolved definition, the
+      // registry commit read) is true regardless of whether the process
+      // starts. spawn_failed, when it follows, closes the pair honestly
+      // rather than this event needing to be walked back.
+      payload: {
+        kind: "worker_spawned",
+        registry_commit: registry.commit,
+        definition_version: definition.version,
+        // issue #33 判断6: what the board pinned, not what the frontmatter said
+        // — the two differ under the kill switch, and only the frontmatter is
+        // recoverable from registry_commit above.
+        advisor: advisor ?? null,
+      },
+      at: this.options.clock.now(),
+    });
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
-    child.stdout.pipe(createWriteStream(join(this.logDir, `${task.id}.stream.jsonl`)));
+    child.stdout.pipe(
+      createWriteStream(join(this.logDir, `${task.id}.${spawnedEventId}.stream.jsonl`)),
+    );
     // stderr は CLI レベルの失敗(spawn 即死・limit 強制終了・認証エラー)が
     // 唯一証拠を残す面 — stream.jsonl の隣に全量保存する(issue #125)
-    child.stderr.pipe(createWriteStream(join(this.logDir, `${task.id}.stderr.log`)));
+    child.stderr.pipe(
+      createWriteStream(join(this.logDir, `${task.id}.${spawnedEventId}.stderr.log`)),
+    );
     // stdout の lastResult と同じ tee 形: worker_exited がファイルを読み返さず
     // に末尾要約を載せられるよう、イベント用の末尾だけをメモリに保つ。
     // chunk 単位の toString() は UTF-8 文字を境界で割ると置換文字に化けるので、
@@ -1911,32 +1947,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
     });
     this.running.set(task.id, child);
-    appendEvent(this.options.db, {
-      taskId: task.id,
-      // attributed to whichever agent actually got spawned (ADR 0012 / issue
-      // #36) — not this worker's configured default, which a pre-set
-      // delegation may override
-      workerId: agent.name,
-      origin: "board",
-      // issue #127: this records the *attempt* to spawn, not a successful
-      // session — spawn() has already returned synchronously by this point,
-      // but Node's "error" can still fire after this write if the process
-      // never actually came into being (ENOENT etc.). That is not a false
-      // record: every fact this event carries (the resolved definition, the
-      // registry commit read) is true regardless of whether the process
-      // starts. spawn_failed, when it follows, closes the pair honestly
-      // rather than this event needing to be walked back.
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: registry.commit,
-        definition_version: definition.version,
-        // issue #33 判断6: what the board pinned, not what the frontmatter said
-        // — the two differ under the kill switch, and only the frontmatter is
-        // recoverable from registry_commit above.
-        advisor: advisor ?? null,
-      },
-      at: this.options.clock.now(),
-    });
     // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH
     // misconfig) fires "error" but never "exit" — the process never comes
     // into being, so the "exit" handler below never runs and worker_exited
@@ -1994,6 +2004,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           exit_code: code,
           signal,
           stderr_tail: stderrTail(stderrBuffered),
+          worker_spawned_event_id: spawnedEventId,
           usage: lastResult ? toUsage(lastResult, advisorObserved) : null,
         },
         at: this.options.clock.now(),
