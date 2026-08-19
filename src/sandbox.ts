@@ -278,7 +278,7 @@ const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${
  *    board (issue #378 のやらないこと).
  *
  *  The deny reason is worker-facing text, hence English. */
-const SUBAGENT_BOARD_VERB_DENY = {
+const SUBAGENT_BOARD_VERB_DENY: WorkerSessionSettings["hooks"]["PreToolUse"][0] = {
   matcher: "mcp__tidepool__.*",
   hooks: [
     {
@@ -293,7 +293,7 @@ const SUBAGENT_BOARD_VERB_DENY = {
         `permissionDecisionReason:"Board verbs are main-thread only; make this call from the parent thread, not a subagent."}}))})'`,
     },
   ],
-} as const satisfies WorkerSessionSettings["hooks"]["PreToolUse"][0];
+};
 
 /** A skill name safe to map into a path: no separator, no `..`, no leading dot.
  *  Plugin-prefixed names (`plugin:skill`) are excluded by the same rule — their

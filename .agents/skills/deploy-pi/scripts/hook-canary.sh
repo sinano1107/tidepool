@@ -96,8 +96,9 @@
 # Read-only file system`). With `failIfUnavailable: true` that kills the session
 # outright, so it would otherwise surface as a silent VACUOUS. Caught by name.
 #
-# EXIT CODES: 0 = every row measured and refused. 1 = something got out (a hook
-# fired, a settings write landed, an unhonoured rule, or the sandbox died).
+# EXIT CODES: 0 = every row measured and refused. 1 = something got out (a
+# subagent board verb reached the stub, a settings write landed, an unhonoured
+# rule, or the sandbox died).
 # 2 = nothing got out but a row could not be measured. Same three-valued reading
 # as containment-canary.sh, and for the same reason.
 set -uo pipefail
@@ -484,7 +485,7 @@ run_role() {
   if grep -qE "bwrap: Can.t create file|sandbox failed to start" <<< "$out"; then
     fail "the sandbox did not start in the $role session — this is the file-level denyWrite regression"
     fail "  (ADR 0037 / #143 G table: naming the .claude DIRECTORY breaks bwrap. Read the output above.)"
-    record "hook/$role" "$want_key" "sandbox died" "-" "FAIL"
+    record "sandbox/$role" "emitted profile" "sandbox died" "-" "FAIL"
     return
   fi
 
