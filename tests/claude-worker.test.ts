@@ -18,6 +18,7 @@ import {
 import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
+import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
@@ -1272,6 +1273,31 @@ describe("ClaudeCodeWorker", () => {
       expect(files.filter((name) => name.endsWith(".stream.jsonl"))).toHaveLength(2);
       expect(files.filter((name) => name.endsWith(".stderr.log"))).toHaveLength(2);
     });
+  });
+
+  it("worker session の終わりに transcript を Precedent に投影する — 書き込みが flush され worker_exited が記録されたあと(issue #356)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    const task = start("task-precedent", "tidepool", "deckhand");
+    stdout.write(`{"type":"system","subtype":"init","claude_code_version":"9.9.9"}\n`);
+    stdout.write(
+      `{"type":"assistant","uuid":"u1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}\n`,
+    );
+    stdout.end();
+    emitExit(0, null);
+
+    const episode = await vi.waitFor(() => {
+      const [found] = listEpisodes(db, { workspace: "tidepool", agent: "deckhand" });
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(episode.taskId).toBe(task.id);
+    expect(episode.actions.map((a) => [a.tool, a.args])).toEqual([["Bash", "ls"]]);
+    expect(episode.claudeCodeVersion).toBe("9.9.9");
+    // exit の事実は投影の入力 — worker_exited を書いたあとに投影している証拠
+    expect(episode.exitCode).toBe(0);
+    expect(episode.workerExitedEventId).toBe(
+      listEvents(db, task.id).find((e) => e.kind === "worker_exited")!.id,
+    );
   });
 
   it("worker_exited は自分を開いた worker_spawned の event id を持ち、そのセッションの transcript ファイル名を再構成できる(issue #379 code review)", async () => {
