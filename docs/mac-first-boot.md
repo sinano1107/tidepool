@@ -102,10 +102,8 @@ Expect both ports listening only on `127.0.0.1`.
 
 ## First task
 
-In the WebUI, open the **Register** tab (Source: `manual`). Describe the task in the text box in
-your own words and press **Draft fields** — the board drafts Title, Purpose and Completion criteria
-for you to check and edit. If drafting is unavailable, **use the plain form** and type the fields
-yourself. Either way, register these:
+In the WebUI, open the **Register** tab (Source: `manual`), click **use the plain form**, fill in
+the fields below and press **Register**:
 
 ```text
 Title: Resolve the README TODO
@@ -114,7 +112,8 @@ Completion criteria: README.md contains that sentence and no longer contains the
 ```
 
 Completion criteria are what the worker checks itself, so keep them to things it can see in the
-workspace — not to what happens on the board afterwards.
+workspace — not to what happens on the board afterwards. For your next tasks, the text box on the
+same screen takes a description in your own words and **Draft fields** turns it into these fields.
 
 What you should see: the task is picked up, the worker finishes, and a merge question appears for
 you to answer. The worker sandbox uses macOS's built-in `sandbox-exec` — nothing to install. If
