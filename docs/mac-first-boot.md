@@ -119,7 +119,3 @@ was skipped — redo it and restart the board.
 
 Adding your own GitHub repository as a workspace waits on issue #392. Until that lands, stay on the local `sandbox` workspace from this
 guide.
-
-## Feedback
-
-Send feedback to the Slack `#tidepool` channel — note the time and where you got stuck.
