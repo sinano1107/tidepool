@@ -118,7 +118,7 @@ function main(): void {
     git(workspacesDir, "init", "-b", "main", workspaceDir);
     writeFileSync(
       join(workspaceDir, "README.md"),
-      `# ${workspaceName}\n\nTODO: Describe what this workspace is for.\n`,
+      `# ${workspaceName}\n\nTODO: replace this line with a one-sentence description of this workspace.\n`,
     );
     git(workspaceDir, "add", "README.md");
     const name = git(registryDir, "config", "user.name");
@@ -135,7 +135,7 @@ function main(): void {
     );
   }
 
-  process.stdout.write(`Registry seeded with agent "${agentName}", auditor "${auditorName}", and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n3. Register the first task below.\n\nFirst task example\nTitle: Resolve the README TODO\nPurpose: Replace the TODO in ${workspaceName}/README.md with a short description of this workspace.\nCompletion criteria: README.md contains the description and the task reaches the merge question.\n`);
+  process.stdout.write(`Registry seeded with agent "${agentName}", auditor "${auditorName}", and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n3. Register the first task below.\n\nFirst task example\nTitle: Resolve the README TODO\nPurpose: README.md has a TODO line asking for a one-sentence description of this workspace. Replace that line with: "A scratch workspace for trying out Tidepool."\nCompletion criteria: README.md contains that sentence and no longer contains the word TODO.\n`);
 }
 
 try {

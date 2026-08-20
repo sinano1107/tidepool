@@ -102,16 +102,22 @@ Expect both ports listening only on `127.0.0.1`.
 
 ## First task
 
-Open the WebUI and register the task printed by the init command:
+In the WebUI, open the **Register** tab (Source: `manual`). Describe the task in the text box in
+your own words and press **Draft fields** — the board drafts Title, Purpose and Completion criteria
+for you to check and edit. If drafting is unavailable, **use the plain form** and type the fields
+yourself. Either way, register these:
 
 ```text
 Title: Resolve the README TODO
-Purpose: Replace the TODO in sandbox/README.md with a short description of this workspace.
-Completion criteria: README.md contains the description and the task reaches the merge question.
+Purpose: README.md has a TODO line asking for a one-sentence description of this workspace. Replace that line with: "A scratch workspace for trying out Tidepool."
+Completion criteria: README.md contains that sentence and no longer contains the word TODO.
 ```
 
-The expected manual path is pickup, completion, then the merge question for the purely-local
-workspace. The worker sandbox uses macOS's built-in `sandbox-exec` — nothing to install. If
+Completion criteria are what the worker checks itself, so keep them to things it can see in the
+workspace — not to what happens on the board afterwards.
+
+What you should see: the task is picked up, the worker finishes, and a merge question appears for
+you to answer. The worker sandbox uses macOS's built-in `sandbox-exec` — nothing to install. If
 nothing is picked up, the WebUI shows why; "usage check unavailable" means the trust step above
 was skipped — redo it and restart the board.
 
