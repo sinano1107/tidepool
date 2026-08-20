@@ -23,7 +23,7 @@ Either way, before touching the branch, say which models the run will use. They 
 - **`/code-review`** — its sub-agents take the review strength.
 - **`/ponytail`** and **`/ponytail-review`** — never moved. Both run inline in the implementation thread at the implementation's own setting. They are different things: `/ponytail` is the standing mode that biases how the code gets written, `/ponytail-review` is a one-shot pass over a diff.
 
-**Effort is the one dial this skill cannot set.** Sub-agents inherit this session's effort, so it has to be right at launch. State the effort you are running at alongside the models, and if it is below what the decision calls for, stop and say so rather than implementing at the wrong tier.
+**Effort behaves differently per provider.** Where the sub-agent spawn takes an effort — Codex — pass the decided one alongside the model; a model on its own does not fix the compute budget. Where it does not — Claude Code, whose sub-agents inherit the session's effort — the decided effort is a check rather than a setting: state the effort this session is running at, and if it is below what the decision calls for, stop and say so rather than implementing at the wrong tier.
 
 ## Before writing code
 
