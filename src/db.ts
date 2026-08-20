@@ -362,6 +362,71 @@ export function openDb(path: string): Db {
       pr_number INTEGER NOT NULL
     );
 
+    -- Precedent(前例)の派生索引 — 盤面の記録(events + worker transcript)から
+    -- 投影した Episode(ADR 0083 決定8 / 追記 2、issue #356)。記録が正本なので
+    -- この3表は何度でも作り直せ、削除・修正は投影のやり直しでしかない。
+    -- 同一性キーは worker session を開いた worker_spawned の event id で、
+    -- 投影器の版と対で一意 — 版を上げれば同じ session を読み直せる。
+    CREATE TABLE IF NOT EXISTS episodes (
+      id                      INTEGER PRIMARY KEY,
+      worker_spawned_event_id INTEGER NOT NULL,
+      extractor_version       TEXT NOT NULL,
+      task_id                 TEXT NOT NULL REFERENCES tasks(id),
+      -- 引き口 (workspace, agent) の2列。workspace は tasks 行、agent は
+      -- worker_spawned の worker_id(実際に起こされた agent — ADR 0012)。
+      workspace               TEXT,
+      agent                   TEXT NOT NULL,
+      registry_commit         TEXT,
+      definition_version      TEXT,
+      -- transcript を書いた CLI の版(init 行)。未知行の増減が投影器の変更か
+      -- CLI の変更かを分ける唯一の手がかり(ADR 0083 追記 2 決定7)。
+      claude_code_version     TEXT,
+      -- 完了の outcome。null = この session では完了していない(handoff の
+      -- 有無と result の有無は別なので、完了したかどうかは handoff 列で見る)。
+      completed_handoff       INTEGER,
+      completed_result        TEXT,
+      exit_code               INTEGER,
+      signal                  TEXT,
+      -- session 単位の消費の正本への参照。トークンは写さない(ADR 0083 追記 2)。
+      worker_exited_event_id  INTEGER,
+      -- 欠測統計3値 + 未知の内訳(JSON)。内訳は可変キーの集計なので1列。
+      lines                   TEXT NOT NULL,
+      unrecognized_format     INTEGER NOT NULL DEFAULT 0 CHECK (unrecognized_format IN (0, 1)),
+      UNIQUE (worker_spawned_event_id, extractor_version)
+    );
+
+    -- 行動列: tool 呼び出し1回 = 1行。トークン欄を持たないのは、assistant 行の
+    -- usage が message 開始時のスナップショットであって行動単位の消費ではない
+    -- ため(ADR 0083 追記 2、実測)。本文は写さず transcript 行を参照する。
+    CREATE TABLE IF NOT EXISTS episode_actions (
+      episode_id      INTEGER NOT NULL REFERENCES episodes(id),
+      idx             INTEGER NOT NULL,
+      tool            TEXT NOT NULL,
+      -- 抽出表に載っていない tool は null = 「引数を抽出しない」であって欠測ではない
+      args            TEXT,
+      failed          INTEGER NOT NULL CHECK (failed IN (0, 1)),
+      transcript_uuid TEXT NOT NULL,
+      tool_use_id     TEXT NOT NULL,
+      subagent        INTEGER NOT NULL CHECK (subagent IN (0, 1)),
+      -- subagent 起動行にだけ付く、その subagent 自身の消費(合算外の観測)
+      subagent_usage  TEXT,
+      PRIMARY KEY (episode_id, idx)
+    );
+
+    -- 行動列の中に位置を持つ注釈。decision は軸ではなくマーカーで(ADR 0083 追記)、
+    -- 構造マーカーは compaction / commit / advisor の3つ(追記 2 決定5)。
+    -- position が null = 結べなかった decision — 消さずに欠測理由を持って残る。
+    CREATE TABLE IF NOT EXISTS episode_markers (
+      episode_id      INTEGER NOT NULL REFERENCES episodes(id),
+      seq             INTEGER NOT NULL,
+      kind            TEXT NOT NULL CHECK (kind IN ('decision', 'compaction', 'commit', 'advisor')),
+      position        INTEGER,
+      event_id        INTEGER,
+      missing_reason  TEXT CHECK (missing_reason IN ('no_event_id', 'unmatched')),
+      transcript_uuid TEXT,
+      PRIMARY KEY (episode_id, seq)
+    );
+
     -- append-only is enforced by structure, not convention
     ${EVENTS_APPEND_ONLY_TRIGGERS}
   `);

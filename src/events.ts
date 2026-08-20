@@ -23,13 +23,21 @@ export interface AdvisorRecord {
    *  because cost alone cannot tell "one consultation in a long conversation"
    *  from "three in a short one".
    *
-   *  It counts the **parent thread only** — a subagent's consultations never
-   *  appear in the parent's stream (measured) while their cost still lands in
-   *  the session total, so this and `usage` have different denominators and
-   *  **`usage` is not divisible by `consultations`**: any per-consultation
-   *  cost derived from the pair is wrong. By the same asymmetry, a session
-   *  where only subagents consulted reports the whole record as null while its
-   *  advisor cost is still inside `estimated_cost_usd`. */
+   *  It counts the **parent thread only** — a **subagent's own advisor
+   *  consultations** never appear in the parent's stream (measured 2026-08-04,
+   *  issue #33; not re-verified against the 2.1.237 fixture of issue #386)
+   *  while their cost still lands in the session total, so this and `usage`
+   *  have different denominators and **`usage` is not divisible by
+   *  `consultations`**: any per-consultation cost derived from the pair is
+   *  wrong. By the same asymmetry, a session where only subagents consulted
+   *  reports the whole record as null while its advisor cost is still inside
+   *  `estimated_cost_usd`.
+   *
+   *  The narrow subject matters: the subagent's *other* activity — its prompt,
+   *  its `tool_use` and `tool_result` — **does** appear in the parent's stream,
+   *  carrying `parent_tool_use_id` (measured on 2.1.237, issue #386 / ADR 0083
+   *  追記 2). That is what `projectEpisode` reads to flag subagent-origin
+   *  actions; only the advisor block is absent. */
   consultations: number;
   /** The advisor's own slice of the session's consumption — the same shape the
    *  enclosing `usage` reports for the main model, hence the same name
