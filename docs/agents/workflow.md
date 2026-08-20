@@ -53,7 +53,9 @@ So the boundary is which command you launched:
 
 **The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` dispatches it; the `SubagentStart` hook carries the live mode into the sub-agent, so the loop is ponytail-aware without anything extra — provided the session was launched as a build one.
 
-That variable lives in the shell profile, not in this repo. Without it the default is `full` — the built-in and `~/.config/ponytail/config.json` both say so — which would leave design sessions arguing you out of options. A machine that has ponytail but not those launcher functions needs `PONYTAIL_DEFAULT_MODE=off` before this workflow behaves.
+**Say so when the session is in the wrong mode.** The launcher variable lives in a shell profile, not in this repo, and no repo-level setting can enforce it on either provider — so detection replaces prevention. A session with ponytail active carries the plugin's ruleset in its context: if that is there while you are grilling or writing a spec, stop and tell the user before going on. The reverse costs less and is partly self-healing, since `/ponytail-review` runs as a beat regardless of the mode.
+
+The variable's absence is not a repo bug. Without it the default is `full` — the built-in and `~/.config/ponytail/config.json` both say so — which would leave design sessions arguing you out of options. See [machine-setup.md](./machine-setup.md) for the one-time setup.
 
 ## Choosing the model
 
