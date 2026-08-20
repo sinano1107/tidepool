@@ -165,9 +165,6 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
           <IdChip id={slot.taskId} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
         )}
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
-        {/* meta always drops to its own row (issue #396) — line and the pause
-           button never compete with it for width, so neither gets crushed */}
-        <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{slot.meta}</span>
         {onTogglePause && (
           <button onClick={onTogglePause} aria-pressed={paused}
             aria-label={paused ? 'resume pickup' : 'pause pickup'}
@@ -186,6 +183,11 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
             </span>
           </button>
         )}
+        {/* meta always drops to its own row (issue #396) — placed after the
+           button in DOM order so row 1 is slot/IdChip/line/button and only
+           meta (flexBasis 100%) wraps to row 2; before the button it would
+           itself fill row 2, pushing the button into a stray row 3 */}
+        <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{slot.meta}</span>
       </div>
       {/* waterline — dashed while paused: the tide level holds, nothing flows */}
       <div style={{
