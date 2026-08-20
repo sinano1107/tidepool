@@ -158,14 +158,13 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
       <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>Queue</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>FIFO · new tasks append · reorder never resets · concurrency=1</p>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, minHeight: 30 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10, minHeight: 30 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: slot.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
         {/* real deployments only */}
         {slot.taskId && (
           <IdChip id={slot.taskId} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
         )}
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>{slot.meta}</span>
         {onTogglePause && (
           <button onClick={onTogglePause} aria-pressed={paused}
             aria-label={paused ? 'resume pickup' : 'pause pickup'}
@@ -184,6 +183,13 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
             </span>
           </button>
         )}
+        {/* meta always drops to its own row (issue #396) — placed after the
+           button in DOM order so row 1 is slot/IdChip/line/button and only
+           meta (flexBasis 100%) wraps to row 2; before the button it would
+           itself fill row 2, pushing the button into a stray row 3. Guarded
+           because an empty meta (a running task with no assignee) would still
+           claim the row and its gap, pushing the waterline down for nothing */}
+        {slot.meta && <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{slot.meta}</span>}
       </div>
       {/* waterline — dashed while paused: the tide level holds, nothing flows */}
       <div style={{
