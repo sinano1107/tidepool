@@ -1,25 +1,29 @@
 ---
 name: implement-tidepool
-description: Build a ready-for-agent tidepool issue end to end — delegation decision, branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, and a PR that records how every review finding was handled. Use this instead of /implement in this repo.
+description: Build a ready-for-agent tidepool issue end to end — branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, and a PR that records how every review finding was handled. Use this instead of /implement in this repo.
 disable-model-invocation: true
-argument-hint: "<issue> [review-model]"
+argument-hint: "<issue> [impl-model] [review-model]"
 ---
 
 # Implement (tidepool)
 
 A tidepool-local derivative of `/implement`. Upstream `/implement` is deliberately left untouched, so skills that route to it — `ask-matt`, `to-tickets` — keep pointing at the canonical one. In this repo, reach for this skill instead: it adds the delegation decision, the branch, the ponytail-review beat, the code-review follow-through, and the pull request — all of which upstream leaves to the human.
 
-`$ARGUMENTS` is the issue number, optionally followed by the model and effort to run `/code-review` at, which overrides the decision below.
+`$ARGUMENTS` is the issue number, optionally followed by the model for the implementation and then the strength for `/code-review`.
 
 ## Model and effort
 
-Run `/implementation-delegation <issue>` first, and state its decision before touching the branch. It places the models for the rest of the run:
+`/implementation-delegation` is what picks the implementation model, the effort, and the review strength.
 
-- **Implementation** — the TDD loop goes to a sub-agent at the decided model.
-- **`/code-review`** — its sub-agents take the decided review strength, or the second argument when one is given.
+**A model in `$ARGUMENTS` means that decision has already been taken — do not run the delegation skill again.** The first model is the implementation's; the second is the review's, and falls back to the implementation's own setting when it is absent. With no model given, run `/implementation-delegation <issue>` yourself and state what it decided.
+
+Either way, before touching the branch, say which models the run will use. They land like this:
+
+- **Implementation** — the TDD loop goes to a sub-agent at the implementation model.
+- **`/code-review`** — its sub-agents take the review strength.
 - **`/ponytail`** and **`/ponytail-review`** — never moved. Both run inline in the implementation thread at the implementation's own setting. They are different things: `/ponytail` is the standing mode that biases how the code gets written, `/ponytail-review` is a one-shot pass over a diff.
 
-**Effort is the one dial this skill cannot set.** Sub-agents inherit this session's effort, so it has to be right at launch. State the effort you are running at alongside the decision, and if it is below what the decision calls for, stop and say so rather than implementing at the wrong tier.
+**Effort is the one dial this skill cannot set.** Sub-agents inherit this session's effort, so it has to be right at launch. State the effort you are running at alongside the models, and if it is below what the decision calls for, stop and say so rather than implementing at the wrong tier.
 
 ## Before writing code
 
@@ -31,7 +35,7 @@ Stay in this thread for all three:
 
 ## The implementation sub-agent
 
-Dispatch one sub-agent at the decided model, carrying the issue number, the agreed seams, and the ADRs that govern the area. Have it open with `/ponytail full` so the mode is on for the whole loop. It owns two commits and returns what it did:
+Dispatch one sub-agent at the implementation model, carrying the issue number, the agreed seams, and the ADRs that govern the area. Have it open with `/ponytail full` so the mode is on for the whole loop. It owns two commits and returns what it did:
 
 1. **Implementation** — `/tdd` at the agreed seams, one red-green slice at a time, typechecking and running single test files as it goes. Full suite green, then commit.
 2. **ponytail-review** — `/ponytail-review` over its own diff, inline in the same thread, applying what it finds. This is a separate beat from the mode above, not a substitute for it. Full suite green, then commit.
