@@ -166,9 +166,12 @@ function readSubagentUsage(value: unknown): SubagentUsage | null {
   return { total_tokens, tool_uses, duration_ms };
 }
 
-/** 未知行の内訳キー。subtype があれば `type/subtype`。 */
-const lineKey = (parsed: Record<string, unknown>): string =>
-  parsed.subtype == null ? String(parsed.type) : `${String(parsed.type)}/${String(parsed.subtype)}`;
+/** 未知行を1つ数える。`type`、subtype があれば `type/subtype`、壊れた行は
+ *  `unparseable`。 */
+function countUnknown(lines: EpisodeLineStats, key: string): void {
+  lines.unknown += 1;
+  lines.unknownKinds[key] = (lines.unknownKinds[key] ?? 0) + 1;
+}
 
 /** 純関数。DB もファイルシステムも触らない。フィクスチャ2本から Episode を
  *  組めることが受け入れの中心(issue #356)。 */
@@ -197,33 +200,30 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     lines.total += 1;
     const parsed = parseStreamLine(line);
     if (parsed === null) {
-      lines.unknown += 1;
-      lines.unknownKinds.unparseable = (lines.unknownKinds.unparseable ?? 0) + 1;
+      countUnknown(lines, "unparseable");
       continue;
     }
     const type = String(parsed.type);
     const subtype = parsed.subtype == null ? null : String(parsed.subtype);
-    const known =
+    // system 行だけ subtype で分かれる(result の subtype は結末の種別であって
+    // 行の形ではない)。3値のどれでもない = 未知。
+    const [interpreted, ignored] =
       type === "system"
-        ? (subtype !== null && INTERPRETED_SYSTEM_SUBTYPES.has(subtype)) ||
-          (subtype !== null && IGNORED_SYSTEM_SUBTYPES.has(subtype))
-        : INTERPRETED_TYPES.has(type) || IGNORED_TYPES.has(type);
-    if (!known) {
-      // 未知の行は数えて残す — fail-closed は行単位で、session 単位で
-      // 「無かったこと」にはしない(issue #356 完了基準5)
-      lines.unknown += 1;
-      const key = lineKey(parsed);
-      lines.unknownKinds[key] = (lines.unknownKinds[key] ?? 0) + 1;
-      continue;
-    }
-    const ignored =
-      type === "system" ? IGNORED_SYSTEM_SUBTYPES.has(subtype ?? "") : IGNORED_TYPES.has(type);
+        ? [INTERPRETED_SYSTEM_SUBTYPES.has(subtype ?? ""), IGNORED_SYSTEM_SUBTYPES.has(subtype ?? "")]
+        : [INTERPRETED_TYPES.has(type), IGNORED_TYPES.has(type)];
     if (ignored) {
       lines.ignored += 1;
       continue;
     }
+    if (!interpreted) {
+      // 未知の行は数えて残す — fail-closed は行単位で、session 単位で
+      // 「無かったこと」にはしない(issue #356 完了基準5)
+      countUnknown(lines, subtype === null ? type : `${type}/${subtype}`);
+      continue;
+    }
     lines.interpreted += 1;
 
+    const uuid = typeof parsed.uuid === "string" ? parsed.uuid : "";
     claudeCodeVersion = readInitVersion(parsed) ?? claudeCodeVersion;
     const structural = subtype === null ? undefined : STRUCTURAL_MARKER_SUBTYPE[subtype];
     if (type === "system" && structural) {
@@ -232,7 +232,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         position: actions.length,
         eventId: null,
         missingReason: null,
-        transcriptUuid: typeof parsed.uuid === "string" ? parsed.uuid : "",
+        transcriptUuid: uuid,
       });
       continue;
     }
@@ -262,7 +262,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
           position: actions.length,
           eventId: null,
           missingReason: null,
-          transcriptUuid: typeof parsed.uuid === "string" ? parsed.uuid : "",
+          transcriptUuid: uuid,
         });
       }
       if (blockType === "tool_use" && typeof name === "string" && typeof id === "string") {
@@ -273,7 +273,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
           tool: name,
           args: typeof value === "string" ? value : null,
           failed: false,
-          transcriptUuid: typeof parsed.uuid === "string" ? parsed.uuid : "",
+          transcriptUuid: uuid,
           toolUseId: id,
           subagent: parsed.parent_tool_use_id != null,
           subagentUsage: null,
@@ -287,25 +287,27 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         action.failed = is_error === true;
         const eventId = readLoggedEventId(action.tool, (block as Record<string, unknown>).content);
         if (eventId !== null) {
-          loggedAt.set(eventId, {
-            position: action.index,
-            transcriptUuid: typeof parsed.uuid === "string" ? parsed.uuid : "",
-          });
+          loggedAt.set(eventId, { position: action.index, transcriptUuid: uuid });
         }
       }
     }
   }
 
-  const exited = findExited(input);
-  const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
-  const completed = input.events.find(
+  // この spawn を閉じた worker_exited は issue #379 が置いたポインタで引く。
+  // 1タスクに複数の worker session がありうる(retry / 統合復帰 / quarantine
+  // 復帰)ので、以降は spawn ~ exit の窓に入るイベントだけを見る — 窓で切らないと
+  // 同じタスクの前の session の判断がこの Episode に湧く。
+  const exited = input.events.find(
     (e) =>
-      e.kind === "task_completed" &&
-      e.task_id === spawned.task_id &&
-      e.id > spawned.id &&
-      e.id <= (exited?.id ?? Number.POSITIVE_INFINITY),
+      e.payload.kind === "worker_exited" &&
+      e.payload.worker_spawned_event_id === input.workerSpawnedEventId,
   );
-  markers.push(...decisionMarkers(input, spawned, exited, loggedAt));
+  const end = exited?.id ?? Number.POSITIVE_INFINITY;
+  const inSession = (e: EventRow) =>
+    e.task_id === spawned.task_id && e.id > spawned.id && e.id <= end;
+  const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
+  const completed = input.events.find((e) => e.kind === "task_completed" && inSession(e));
+  markers.push(...decisionMarkers(input.events, inSession, loggedAt));
   // 位置順。結べなかった decision(position null)は末尾に残る — 消さないことが
   // 「空 = 何もしなかった」との区別そのもの。
   markers.sort(
@@ -332,36 +334,16 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
   };
 }
 
-/** この spawn を閉じた `worker_exited`(issue #379 が置いたポインタで引く)。 */
-const findExited = (input: ProjectEpisodeInput): EventRow | undefined =>
-  input.events.find(
-    (e) =>
-      e.payload.kind === "worker_exited" &&
-      e.payload.worker_spawned_event_id === input.workerSpawnedEventId,
-  );
-
 /** この session の `decision_logged` を、盤面が発行した event id の**完全一致**で
  *  行動列に結ぶ(ADR 0083 追記 2 — ヒューリスティック結合は作らない)。出現順や
  *  文言では結ばない: フィクスチャの events 6 と 7 は文言が完全に同一である。 */
 function decisionMarkers(
-  input: ProjectEpisodeInput,
-  spawned: EventRow,
-  exited: EventRow | undefined,
+  events: EventRow[],
+  inSession: (e: EventRow) => boolean,
   loggedAt: Map<number, { position: number; transcriptUuid: string }>,
 ): EpisodeMarker[] {
-  // 1タスクに複数の worker session がありうる(retry / 統合復帰 / quarantine
-  // 復帰 — issue #379)ので、この spawn ~ exit の窓に入る decision だけを見る。
-  // 窓で切らないと、同じタスクの前の session の判断が全部この Episode の
-  // `unmatched` として湧く。
-  const end = exited?.id ?? Number.POSITIVE_INFINITY;
-  return input.events
-    .filter(
-      (e) =>
-        e.kind === "decision_logged" &&
-        e.task_id === spawned.task_id &&
-        e.id > spawned.id &&
-        e.id <= end,
-    )
+  return events
+    .filter((e) => e.kind === "decision_logged" && inSession(e))
     .map((e) => {
       const hit = loggedAt.get(e.id);
       return {
@@ -403,9 +385,8 @@ export const EXTRACTOR_VERSION = "1";
  *  戻り値は書いた episode の id、既にあるか投影できなかったときは null。 */
 export function projectAndPersist(
   db: Db,
-  opts: { workerSpawnedEventId: number; transcriptPath: string; extractorVersion?: string },
+  opts: { workerSpawnedEventId: number; transcriptPath: string },
 ): number | null {
-  const extractorVersion = opts.extractorVersion ?? EXTRACTOR_VERSION;
   const spawned = getEvent(db, opts.workerSpawnedEventId);
   if (!spawned || spawned.payload.kind !== "worker_spawned") return null;
   const episode = projectEpisode({
@@ -414,7 +395,7 @@ export function projectAndPersist(
     // 「events 側の read API を新設しない」)
     events: listEvents(db, spawned.task_id),
     workerSpawnedEventId: opts.workerSpawnedEventId,
-    extractorVersion,
+    extractorVersion: EXTRACTOR_VERSION,
   });
   const workspace = (
     db.prepare("SELECT workspace FROM tasks WHERE id = ?").get(spawned.task_id) as
@@ -434,7 +415,7 @@ export function projectAndPersist(
       )
       .run(
         episode.workerSpawnedEventId,
-        extractorVersion,
+        EXTRACTOR_VERSION,
         episode.taskId,
         workspace ?? null,
         spawned.worker_id,
@@ -490,7 +471,6 @@ export interface StoredMarker extends EpisodeMarker {
 }
 
 export interface StoredEpisode extends Omit<Episode, "markers"> {
-  id: number;
   workspace: string | null;
   agent: string;
   markers: StoredMarker[];
@@ -504,10 +484,12 @@ export interface StoredEpisode extends Omit<Episode, "markers"> {
  *  `position` で `actions` を切る読み出し時のスライスである(ADR 0083 追記)。 */
 export function listEpisodes(
   db: Db,
-  filter: { workspace?: string; agent?: string; extractorVersion?: string },
+  filter: { workspace?: string; agent?: string },
 ): StoredEpisode[] {
+  // 版で絞るのは、同じ session を新しい投影器で読み直したときに古い Episode が
+  // 二重に返らないため。読む版は常に今の投影器の版(古い版の行は残ってよい)。
   const where: string[] = ["extractor_version = ?"];
-  const params: unknown[] = [filter.extractorVersion ?? EXTRACTOR_VERSION];
+  const params: unknown[] = [EXTRACTOR_VERSION];
   if (filter.workspace !== undefined) {
     where.push("workspace = ?");
     params.push(filter.workspace);
@@ -535,9 +517,9 @@ export function listEpisodes(
     )
     .all(...rows.map((r) => r.id)) as MarkerRow[];
   const decisions = decisionOutcomes(db, markerRows);
+  const mergedPrs = mergedPrByTask(db, [...new Set(rows.map((r) => r.task_id))]);
 
   return rows.map((row) => ({
-    id: row.id,
     workerSpawnedEventId: row.worker_spawned_event_id,
     taskId: row.task_id,
     workspace: row.workspace,
@@ -555,7 +537,7 @@ export function listEpisodes(
     workerExitedEventId: row.worker_exited_event_id,
     lines: JSON.parse(row.lines) as EpisodeLineStats,
     unrecognizedFormat: row.unrecognized_format === 1,
-    prMerged: readMergedPr(db, row.task_id),
+    prMerged: mergedPrs.get(row.task_id) ?? null,
     actions: actionRows
       .filter((a) => a.episode_id === row.id)
       .map((a) => ({
@@ -617,16 +599,18 @@ function decisionOutcomes(
   return out;
 }
 
-/** この Episode のタスクの PR が merge されたか。盤面が merge した場合と、
- *  merge 済みだと観測した場合の両方(ADR 0079 決定4)。 */
-function readMergedPr(db: Db, taskId: string): number | null {
-  const row = db
+/** タスクごとの merge 済み PR。盤面が merge した場合と、merge 済みだと観測した
+ *  場合の両方(ADR 0079 決定4)。Episode ごとに1本引かず平らに1本(`listLog` が
+ *  異議を引くのと同じ形)。 */
+function mergedPrByTask(db: Db, taskIds: string[]): Map<string, number> {
+  const rows = db
     .prepare(
-      `SELECT json_extract(payload, '$.pr_number') AS pr_number FROM events
-        WHERE task_id = ? AND kind IN ('pr_merged', 'pr_merge_observed') ORDER BY id DESC LIMIT 1`,
+      `SELECT task_id, json_extract(payload, '$.pr_number') AS pr_number FROM events
+        WHERE kind IN ('pr_merged', 'pr_merge_observed')
+          AND task_id IN (${taskIds.map(() => "?").join(", ")}) ORDER BY id`,
     )
-    .get(taskId) as { pr_number: number } | undefined;
-  return row?.pr_number ?? null;
+    .all(...taskIds) as Array<{ task_id: string; pr_number: number }>;
+  return new Map(rows.map((r) => [r.task_id, r.pr_number]));
 }
 
 interface EpisodeRow {
