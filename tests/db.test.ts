@@ -4,7 +4,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { getSpendDown } from "../src/spend-down.js";
+import { getSpendDown, setSpendDown } from "../src/spend-down.js";
 import { getThrottleState, reportThrottle } from "../src/throttle.js";
 
 it("単一行の旧 spend_down_state は再オープン時に捨て、window keyed の空集合へ移行する", async () => {
@@ -22,12 +22,11 @@ it("単一行の旧 spend_down_state は再オープン時に捨て、window key
   legacy.close();
 
   const db = openDb(dbPath);
-  expect(getSpendDown(db)).toEqual({ session: null, week: null });
-  expect(
-    (db.prepare("PRAGMA table_info(spend_down_state)").all() as Array<{ name: string }>).map(
-      (column) => column.name,
-    ),
-  ).toEqual(["window", "activated_at"]);
+  setSpendDown(db, "week", new Date("2026-08-20T12:00:00.000Z"));
+  expect(getSpendDown(db)).toEqual({
+    session: null,
+    week: { activatedAt: new Date("2026-08-20T12:00:00.000Z") },
+  });
   db.close();
 });
 
