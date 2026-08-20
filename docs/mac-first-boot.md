@@ -1,7 +1,7 @@
 # Tidepool first boot on a Mac
 
-This covers stage 1: a purely-local board on your own Apple Silicon Mac, ending with your first
-task completed against the local `sandbox` workspace. Budget about 30 minutes.
+This covers a purely-local board on your own Apple Silicon Mac, ending with your first task
+completed against the local `sandbox` workspace. Budget about 30 minutes.
 
 ## Prerequisites
 
@@ -21,16 +21,21 @@ cd tidepool
 npm install
 ```
 
+`npm install` compiles two native modules (`better-sqlite3`, `node-pty`). If it fails there, install
+the Xcode Command Line Tools (`xcode-select --install`) and rerun it.
+
 ## Trust the checkout in Claude Code
 
-Run `claude` once from inside the checkout, accept "Yes, I trust this folder", then quit:
+Run `claude` once from inside the checkout, accept "Yes, I trust this folder", dismiss any
+what's-new screen so the prompt is visible, then quit:
 
 ```bash
 claude
 ```
 
-The board scrapes `/usage` from an interactive `claude` session run in this same directory; an
-untrusted folder makes that scrape fail closed, and the board picks up nothing without saying why.
+The board scrapes `/usage` from an interactive `claude` session run in this same directory. In an
+untrusted folder that scrape fails closed: the WebUI shows "usage check unavailable" and nothing
+starts, but it cannot tell you that trust is the cause.
 
 ## Environment file: `~/.tidepool/env`
 
@@ -83,13 +88,16 @@ caffeinate -i -s npm start
 
 Run this in the foreground. `caffeinate` keeps the Mac from idle-sleeping while the board runs
 (`-s` only holds while on AC power); closing the lid still sleeps the machine. There is no
-launchd unit for this stage.
+launchd unit.
 
-First boot prints a one-time bootstrap URL for the WebUI credential — open it. See
+The WebUI is at `http://127.0.0.1:4589`. First boot prints a one-time bootstrap URL that sets the
+WebUI credential in your browser — open that URL first. See
 [docs/human-surface-credential.md](human-surface-credential.md) for how to rotate it if you lose
 it.
 
 ## Checklist
+
+In a second terminal, with the board still running:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4589/api/tasks
@@ -102,7 +110,7 @@ lsof -nP -iTCP:4589 -iTCP:4590 -sTCP:LISTEN
 Expect both ports listening only on `127.0.0.1`.
 
 ```bash
-env | grep ^TIDEPOOL_
+grep ^export ~/.tidepool/env
 ```
 Expect `TIDEPOOL_REGISTRY`, `TIDEPOOL_DB`, and `TIDEPOOL_WORKER_LOGS` to be listed.
 
@@ -118,7 +126,8 @@ Completion criteria: README.md contains the description and the task reaches the
 
 The expected manual path is pickup, completion, then the merge question for the purely-local
 workspace. The worker sandbox uses macOS's built-in `sandbox-exec` — nothing to install. If
-pickup stalls, the WebUI shows the halt reason.
+nothing is picked up, the WebUI shows why; "usage check unavailable" means the trust step above
+was skipped — redo it and restart the board.
 
 ## Own repository
 

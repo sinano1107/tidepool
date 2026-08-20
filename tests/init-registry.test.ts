@@ -389,20 +389,17 @@ describe("npm run init-registry", () => {
       expect(guide).toContain(line);
     }
 
-    expect(result.stdout.indexOf("First task example")).toBeLessThan(
-      result.stdout.indexOf("Add your own repository"),
-    );
-    expect(guide.indexOf("### First task example")).toBeLessThan(
-      guide.indexOf("add it from the WebUI workspace registration screen"),
-    );
+    // 自分の repo を足す案内は #392 が着地するまで出さない(ADR 0090 決定4)
+    expect(result.stdout).not.toContain("Add your own repository");
+    expect(guide.indexOf("## First task")).toBeLessThan(guide.indexOf("## Own repository"));
 
     const orderedSteps = [
-      "## Prepare the registry on a Mac",
+      "## Prepare the registry",
       "gh repo create",
-      "git clone",
+      "git clone git@github.com:YOUR_GITHUB_LOGIN",
       "npm run init-registry",
       "npm start",
-      "First task example",
+      "## First task",
     ];
     let previous = -1;
     for (const step of orderedSteps) {

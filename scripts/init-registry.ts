@@ -135,7 +135,7 @@ function main(): void {
     );
   }
 
-  process.stdout.write(`Registry seeded with agent "${agentName}", auditor "${auditorName}", and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n3. Register the first task below.\n\nFirst task example\nTitle: Resolve the README TODO\nPurpose: Replace the TODO in ${workspaceName}/README.md with a short description of this workspace.\nCompletion criteria: README.md contains the description and the task reaches the merge question.\n\n4. Add your own repository from the WebUI workspace registration screen using the clone option when ready.\n`);
+  process.stdout.write(`Registry seeded with agent "${agentName}", auditor "${auditorName}", and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n3. Register the first task below.\n\nFirst task example\nTitle: Resolve the README TODO\nPurpose: Replace the TODO in ${workspaceName}/README.md with a short description of this workspace.\nCompletion criteria: README.md contains the description and the task reaches the merge question.\n`);
 }
 
 try {
