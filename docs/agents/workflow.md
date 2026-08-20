@@ -58,7 +58,7 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
-`/ponytail` and `/ponytail-review` come from a plugin rather than this repo. `.claude/settings.json` declares the marketplace and enables it, so Claude Code picks it up from a fresh clone; on Codex it has to be enabled on that side. Everything else the flow calls — `/implementation-delegation`, `/tdd`, `/code-review` — is vendored under `.agents/skills/`, so a clone has it.
+`/ponytail` and `/ponytail-review` come from a plugin rather than this repo. `.claude/settings.json` declares the marketplace and enables it, so Claude Code picks it up from a fresh clone; on Codex it has to be enabled per machine — Codex discovers skills from `.agents/skills` and can disable them in `~/.codex/config.toml`, but has no per-repository way to require one, so there is nothing to declare here. Everything else the flow calls — `/implementation-delegation`, `/tdd`, `/code-review` — is vendored under `.agents/skills/`, so a clone has it.
 
 One issue per session, cleared between them. Two implementation sessions in one checkout share an index, a `HEAD`, and `refs/stash`, and corrupt each other.
 
