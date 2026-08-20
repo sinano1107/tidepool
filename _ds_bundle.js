@@ -247,9 +247,9 @@ function QueueItem({ position, task = {}, skipped = false, skipReason, frontInse
     draggable && /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", "data-testid": "queue-drag-handle", style: { color: "var(--rock-3)", cursor: "grab", fontSize: 14, lineHeight: 1, letterSpacing: "-2px" } }, "\u283F"),
     /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", background: frontInserted ? "var(--surface-card)" : "var(--tide-1)", borderRadius: "var(--radius-full)", padding: "2px 8px", flexShrink: 0 } }, position),
     /* @__PURE__ */ React.createElement(__ds_scope.IdChip, { id, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }),
-    /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
+    /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 80, fontSize: "var(--text-sm)", fontWeight: "var(--weight-medium)", color: "var(--text-heading)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title),
     task.risk && /* @__PURE__ */ React.createElement(__ds_scope.RiskFlag, null),
-    skipped && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)" } }, skipReason ? `skipped \xB7 ${skipReason}` : "skipped"),
+    skipped && /* @__PURE__ */ React.createElement("span", { title: skipReason, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--status-skipped-fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, skipReason ? `skipped \xB7 ${skipReason}` : "skipped"),
     frontInserted && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)" } }, "front-inserted"),
     /* @__PURE__ */ React.createElement(__ds_scope.AgentChip, { name: assignee, icon: assigneeIcon, size: "sm" }),
     onFront && // the head row's button is "run now" (tide fill, immediate-poll
