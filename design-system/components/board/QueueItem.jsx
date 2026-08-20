@@ -23,9 +23,9 @@ export function QueueItem({ position, task = {}, skipped = false, skipReason, fr
       {draggable && <span aria-hidden="true" data-testid="queue-drag-handle" style={{ color: 'var(--rock-3)', cursor: 'grab', fontSize: 14, lineHeight: 1, letterSpacing: '-2px' }}>⠿</span>}
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', background: frontInserted ? 'var(--surface-card)' : 'var(--tide-1)', borderRadius: 'var(--radius-full)', padding: '2px 8px', flexShrink: 0 }}>{position}</span>
       <IdChip id={id} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
-      <span style={{ flex: 1, fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-medium)', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
+      <span style={{ flex: 1, minWidth: 80, fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-medium)', color: 'var(--text-heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
       {task.risk && <RiskFlag />}
-      {skipped && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)' }}>{skipReason ? `skipped · ${skipReason}` : 'skipped'}</span>}
+      {skipped && <span title={skipReason} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--status-skipped-fg)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{skipReason ? `skipped · ${skipReason}` : 'skipped'}</span>}
       {frontInserted && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)' }}>front-inserted</span>}
       <AgentChip name={assignee} icon={assigneeIcon} size="sm" />
       {onFront && (
