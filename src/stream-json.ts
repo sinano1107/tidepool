@@ -76,23 +76,29 @@ export function readInitVersion(parsed: Record<string, unknown> | null): string 
   return typeof version === "string" ? version : null;
 }
 
-/** How many advisor consultations one assistant line carries (issue #33).
- *  The advisor is a **server tool**: it shows up as a `server_tool_use` block
- *  named `advisor` beside ordinary `tool_use` blocks in the same stream, so the
- *  block type has to be checked too — an ordinary tool that happened to be
- *  named `advisor` is not a consultation. The advice itself is encrypted
- *  (`advisor_redacted_result`), so the fact and the count are all that is
- *  observable; that is exactly what is being counted here.
+/** Is this content block one advisor consultation (issue #33)? The advisor is a
+ *  **server tool**: it shows up as a `server_tool_use` block named `advisor`
+ *  beside ordinary `tool_use` blocks in the same stream, so the block type has
+ *  to be checked too — an ordinary tool that happened to be named `advisor` is
+ *  not a consultation. The advice itself is encrypted
+ *  (`advisor_redacted_result`), so the fact is all that is observable.
  *
  *  ADR 0039's init-line observation cannot substitute: a server tool appears
- *  neither in init's `tools` array nor as an `advisorModel` field (measured). */
+ *  neither in init's `tools` array nor as an `advisorModel` field (measured).
+ *
+ *  Two readers ask this — the live tee counts them, the projector places them
+ *  as markers (ADR 0083 追記 2) — and the vendor's spelling is what would move,
+ *  so it is spelled once. */
+export function isAdvisorBlock(block: unknown): boolean {
+  if (typeof block !== "object" || block === null) return false;
+  const { type, name } = block as Record<string, unknown>;
+  return type === "server_tool_use" && name === "advisor";
+}
+
+/** How many advisor consultations one assistant line carries (issue #33). */
 export function countAdvisorConsultations(parsed: Record<string, unknown> | null): number {
   if (parsed === null || parsed.type !== "assistant") return 0;
   const content = (parsed.message as { content?: unknown } | undefined)?.content;
   if (!Array.isArray(content)) return 0;
-  return content.filter((block) => {
-    if (typeof block !== "object" || block === null) return false;
-    const { type, name } = block as Record<string, unknown>;
-    return type === "server_tool_use" && name === "advisor";
-  }).length;
+  return content.filter(isAdvisorBlock).length;
 }

@@ -171,3 +171,24 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
   });
   expect(episode!.exitCode).toBe(0);
 });
+
+it("読み口は同じ (workspace, agent) の Episode を時系列(session を開いた順)で返す", () => {
+  const db = seedBoard();
+  const dir = logDir();
+  // 同じタスクの2本目の session。1本目は id 5 で始まり 11 で閉じている
+  db.prepare(
+    "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    12, FIXTURE_TASK, "tako", "board", "worker_spawned",
+    JSON.stringify({ kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null }),
+    "2026-08-20T06:30:00.000Z",
+  );
+  writeTranscript(dir, `${FIXTURE_TASK}.12.stream.jsonl`);
+  writeTranscript(dir, `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`);
+
+  // backfill はファイル名順に走るので、投影の順序は読み出しの順序を保証しない
+  expect(backfillEpisodes(db, dir)).toEqual({ projected: 2, skipped: 0 });
+  expect(
+    listEpisodes(db, { workspace: "sandbox", agent: "tako" }).map((e) => e.workerSpawnedEventId),
+  ).toEqual([SPAWNED_EVENT_ID, 12]);
+});

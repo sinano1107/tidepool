@@ -242,3 +242,26 @@ it("未知の行だけの transcript は tool 呼び出し 0 件 + unrecognized_
     unknownKinds: { "quantum_flux/entangled": 2, telepathy: 1, unparseable: 1 },
   });
 });
+
+it("worker_exited が無いまま終わった session の窓は、次の worker_spawned で閉じる(backfill 経路)", () => {
+  const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
+  const at = "2026-08-20T06:30:00.000Z";
+  // 盤面が落ちて exit を書けなかった session — worker_exited だけを落とす
+  const events: EventRow[] = [
+    ...fixtureEvents().filter((e) => e.kind !== "worker_exited"),
+    {
+      id: 12, task_id: task, worker_id: "tako", origin: "board", kind: "worker_spawned",
+      payload: { kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null },
+      created_at: at,
+    },
+    {
+      id: 13, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged",
+      payload: { kind: "decision_logged", line: "2本目の session の判断" }, created_at: at,
+    },
+  ];
+
+  const episode = project({ events });
+  // 13 は次の session のもの — 窓を開けっぱなしにすると unmatched として湧く
+  expect(episode.markers.filter((m) => m.kind === "decision").map((m) => m.eventId)).toEqual([6, 7, 8]);
+  expect(episode.workerExitedEventId).toBeNull();
+});

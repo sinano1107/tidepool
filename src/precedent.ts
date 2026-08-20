@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { type EventRow, getEvent, listEvents } from "./events.js";
-import { parseStreamLine, readInitVersion } from "./stream-json.js";
+import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から
  *  Episode を決定論的に組む(ADR 0083 決定8 / 追記 / 追記 2、issue #356)。
@@ -256,7 +256,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
       // advisor 相談はマーカーだけ(ADR 0083 追記 2 決定5)。server tool なので
       // 普通の tool_use ブロックと同じ行に並ぶが、行動行にすると3マーカーと
       // 二重になり、結果は暗号化されていて抽出するものも無い。
-      if (blockType === "server_tool_use" && name === "advisor") {
+      if (isAdvisorBlock(block)) {
         markers.push({
           kind: "advisor",
           position: actions.length,
@@ -302,9 +302,16 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
       e.payload.kind === "worker_exited" &&
       e.payload.worker_spawned_event_id === input.workerSpawnedEventId,
   );
-  const end = exited?.id ?? Number.POSITIVE_INFINITY;
+  // exit イベントが無い session(盤面が落ちたまま終わった記録)でも窓は閉じる:
+  // 次の `worker_spawned` が来た時点でこの session は終わっている。開けっぱなしに
+  // すると次の session の判断と完了がこの Episode に焼かれる — exit 時の投影には
+  // 常に exited があるので、これが起きるのは backfill 経路だけ。
+  const nextSpawnedId = input.events
+    .filter((e) => e.kind === "worker_spawned" && e.task_id === spawned.task_id && e.id > spawned.id)
+    .reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
+  const endExclusive = exited ? exited.id + 1 : nextSpawnedId;
   const inSession = (e: EventRow) =>
-    e.task_id === spawned.task_id && e.id > spawned.id && e.id <= end;
+    e.task_id === spawned.task_id && e.id > spawned.id && e.id < endExclusive;
   const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
   const completed = input.events.find((e) => e.kind === "task_completed" && inSession(e));
   markers.push(...decisionMarkers(input.events, inSession, loggedAt));
@@ -463,6 +470,8 @@ export function projectAndPersist(
 /** 読み出し時に結ぶ outcome を持つマーカー。表示済み・異議は投影のあとに届く
  *  ので派生表には焼かない(ADR 0083 決定7: 正の信号は「表示済み・異議なし」から
  *  機械導出する — 分母は Displayed)。 */
+type DecisionOutcome = Pick<StoredMarker, "line" | "displayed" | "objections">;
+
 export interface StoredMarker extends EpisodeMarker {
   /** decision の文言。transcript と events が正本なので、読み出し時に引く。 */
   line: string | null;
@@ -558,23 +567,24 @@ export function listEpisodes(
         eventId: m.event_id,
         missingReason: m.missing_reason,
         transcriptUuid: m.transcript_uuid,
-        ...(decisions.get(m.event_id ?? -1) ?? { line: null, displayed: false, objections: [] }),
+        ...(decisions.get(m.event_id ?? -1) ?? noOutcome()),
       })),
   }));
 }
 
+/** decision 以外のマーカー、および events から何も見つからなかった decision の
+ *  outcome。`objections` は積まれるので、共有せず毎回新しく作る。 */
+const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [] });
+
 /** decision マーカーの outcome — 表示済み(異議の分母)と異議の本文。`listLog` と
  *  同じ形で `entry_id` で引く: エントリを指す id であって task_id ではないので、
  *  同じタスクかどうかは仮定しない。 */
-function decisionOutcomes(
-  db: Db,
-  markerRows: MarkerRow[],
-): Map<number, { line: string | null; displayed: boolean; objections: string[] }> {
+function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, DecisionOutcome> {
   const ids = [...new Set(markerRows.map((m) => m.event_id).filter((id) => id !== null))];
-  const out = new Map<number, { line: string | null; displayed: boolean; objections: string[] }>();
+  const out = new Map<number, DecisionOutcome>();
   if (ids.length === 0) return out;
   const placeholders = ids.map(() => "?").join(", ");
-  for (const id of ids) out.set(id, { line: null, displayed: false, objections: [] });
+  for (const id of ids) out.set(id, noOutcome());
   for (const row of db
     .prepare(`SELECT id, json_extract(payload, '$.line') AS line FROM events WHERE id IN (${placeholders})`)
     .all(...ids) as Array<{ id: number; line: string | null }>) {
