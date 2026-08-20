@@ -46,7 +46,9 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 **The mode** stays off while deciding — `/grill-with-docs`, `/to-spec` — so YAGNI pressure does not kill options before they have been weighed. Turn it on at `full` when `/to-tickets` starts: over-decomposition is the most reported friction on that skill, and this is cheaper than asking it to merge tickets at every quiz. Nothing switches it automatically, so run `/ponytail full` before `/to-tickets` — whoever is driving, human or agent.
 
-**The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` dispatches it, and puts the mode on in the same sub-agent, so from that point on neither is manual.
+**The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` runs it, and sets the mode before dispatching so the plugin's `SubagentStart` hook carries it into the sub-agent.
+
+**The mode is one global flag, and it is sticky.** It lives in `~/.claude/.ponytail-active` (`$PLUGIN_DATA` on Codex) — not per session, not per project — so it survives `/clear`, new sessions, and the end of the work. Nothing turns it back off. **Run `/ponytail off` when you return to designing**, or the next grilling session inherits `full` from the last implementation and argues you out of options before you have weighed them.
 
 ## Choosing the model
 
