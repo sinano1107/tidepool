@@ -6,7 +6,7 @@ completed against the local `sandbox` workspace. Budget about 30 minutes.
 ## Prerequisites
 
 - An Apple Silicon Mac.
-- Node 22.x (see `.nvmrc`).
+- Node 22.x.
 - The `claude` CLI installed and logged in — run `/login` inside it once. Do not use
   `claude setup-token`; that form is for unattended hosts, not your own machine.
 - The `gh` CLI logged in (`gh auth login`).
