@@ -50,7 +50,7 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 ## Choosing the model
 
-`/implementation-delegation` decides the implementation model, the effort, and the review strength. `/implement-tidepool` runs it when no model is passed to it, and places the models either way — with one exception: **sub-agents inherit the session's effort**, so effort has to be right at launch, whoever decided it. Implementation goes to Codex by default; only work that loops through the Design project stays on Claude.
+`/implementation-delegation` decides the implementation model, the effort, and the review strength. `/implement-tidepool` runs it when nothing follows the issue number, and places the models either way — with one exception: **sub-agents inherit the session's effort**, so effort has to be right at launch, whoever decided it. Implementation goes to Codex by default; only work that loops through the Design project stays on Claude.
 
 ## Building
 
