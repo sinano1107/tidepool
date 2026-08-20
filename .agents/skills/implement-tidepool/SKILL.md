@@ -17,7 +17,7 @@ Run `/implementation-delegation <issue>` first, and state its decision before to
 
 - **Implementation** — the TDD loop goes to a sub-agent at the decided model.
 - **`/code-review`** — its sub-agents take the decided review strength, or the second argument when one is given.
-- **`/ponytail-review`** — never moved. It runs inline in the implementation thread at the implementation's own setting.
+- **`/ponytail`** and **`/ponytail-review`** — never moved. Both run inline in the implementation thread at the implementation's own setting. They are different things: `/ponytail` is the standing mode that biases how the code gets written, `/ponytail-review` is a one-shot pass over a diff.
 
 **Effort is the one dial this skill cannot set.** Sub-agents inherit this session's effort, so it has to be right at launch. State the effort you are running at alongside the decision, and if it is below what the decision calls for, stop and say so rather than implementing at the wrong tier.
 
@@ -31,10 +31,10 @@ Stay in this thread for all three:
 
 ## The implementation sub-agent
 
-Dispatch one sub-agent at the decided model, carrying the issue number, the agreed seams, and the ADRs that govern the area. It owns two commits and returns what it did:
+Dispatch one sub-agent at the decided model, carrying the issue number, the agreed seams, and the ADRs that govern the area. Have it open with `/ponytail full` so the mode is on for the whole loop. It owns two commits and returns what it did:
 
 1. **Implementation** — `/tdd` at the agreed seams, one red-green slice at a time, typechecking and running single test files as it goes. Full suite green, then commit.
-2. **ponytail-review** — `/ponytail-review` at intensity `full` over its own diff, inline in the same thread, applying what it finds. Full suite green, then commit.
+2. **ponytail-review** — `/ponytail-review` over its own diff, inline in the same thread, applying what it finds. This is a separate beat from the mode above, not a substitute for it. Full suite green, then commit.
 
 A stage with no diff produces no commit. Never amend: keeping the stages apart is what makes each applied change reviewable and revertible on its own.
 

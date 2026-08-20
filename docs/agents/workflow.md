@@ -40,9 +40,11 @@ Do not `/compact` or `/clear` between `/to-spec` and `/to-tickets`: re-fetching 
 
 ## ponytail
 
-Off while deciding — `/grill-with-docs` and `/to-spec` — so that YAGNI pressure does not kill options before they have been considered.
+`/ponytail` is a standing mode that biases how work gets done; `/ponytail-review` is a one-shot pass over a diff. The two are separate, and neither substitutes for the other.
 
-On at `full` from `/to-tickets` onward — the mode throughout the work, and `/ponytail-review` as its own beat inside implementation. Over-decomposition is the most reported friction on `/to-tickets`, and this is cheaper than asking it to merge tickets at every quiz.
+**The mode** stays off while deciding — `/grill-with-docs`, `/to-spec` — so YAGNI pressure does not kill options before they have been weighed. Turn it on at `full` when `/to-tickets` starts: over-decomposition is the most reported friction on that skill, and this is cheaper than asking it to merge tickets at every quiz. Nothing switches it automatically, so run `/ponytail full` before `/to-tickets` — whoever is driving, human or agent.
+
+**The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` dispatches it, and puts the mode on in the same sub-agent, so from that point on neither is manual.
 
 ## Choosing the model
 
