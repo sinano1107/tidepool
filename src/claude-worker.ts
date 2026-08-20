@@ -2051,7 +2051,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // of the vendor's TUI, not one this board placed here.
         env: boardCallEnv(),
       });
-    } catch {
+    } catch (err) {
+      // PTY が立たない(例: 新規 npm install 直後の node-pty spawn-helper に
+      // 実行ビットが無い)と観測不能 = fail-closed に畳まれるが、原因は
+      // ここでしか見えないので1行だけ残す
+      console.warn("[usage] could not spawn the usage TUI", err);
       return null;
     }
 
