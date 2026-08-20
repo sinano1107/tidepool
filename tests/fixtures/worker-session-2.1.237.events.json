@@ -1,0 +1,153 @@
+[
+  {
+    "id": 1,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "human",
+    "origin": "webui",
+    "kind": "task_registered",
+    "payload": {
+      "kind": "task_registered",
+      "type": "work",
+      "title": "[#356 fixture capture] transcript capture run"
+    },
+    "created_at": "2026-08-20T05:50:48.374Z"
+  },
+  {
+    "id": 2,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "human",
+    "origin": "webui",
+    "kind": "task_moved",
+    "payload": {
+      "kind": "task_moved",
+      "after": null
+    },
+    "created_at": "2026-08-20T05:50:55.145Z"
+  },
+  {
+    "id": 3,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "human",
+    "origin": "webui",
+    "kind": "task_moved",
+    "payload": {
+      "kind": "task_moved",
+      "after": null
+    },
+    "created_at": "2026-08-20T05:54:57.308Z"
+  },
+  {
+    "id": 4,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "tako",
+    "origin": "board",
+    "kind": "task_picked_up",
+    "payload": {
+      "kind": "task_picked_up"
+    },
+    "created_at": "2026-08-20T06:21:10.318Z"
+  },
+  {
+    "id": 5,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "tako",
+    "origin": "board",
+    "kind": "worker_spawned",
+    "payload": {
+      "kind": "worker_spawned",
+      "registry_commit": "85c5bbb987ce03e6bce0b46f64ac6c511e3e69e2",
+      "definition_version": "0.1.1",
+      "advisor": "opus"
+    },
+    "created_at": "2026-08-20T06:21:15.034Z"
+  },
+  {
+    "id": 6,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "tako",
+    "origin": "worker",
+    "kind": "decision_logged",
+    "payload": {
+      "kind": "decision_logged",
+      "line": "kept the note to three bullets"
+    },
+    "created_at": "2026-08-20T06:21:24.134Z"
+  },
+  {
+    "id": 7,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "tako",
+    "origin": "worker",
+    "kind": "decision_logged",
+    "payload": {
+      "kind": "decision_logged",
+      "line": "kept the note to three bullets"
+    },
+    "created_at": "2026-08-20T06:22:04.392Z"
+  },
+  {
+    "id": 8,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "tako",
+    "origin": "worker",
+    "kind": "decision_logged",
+    "payload": {
+      "kind": "decision_logged",
+      "line": "subagent reported notes.md word count as 62"
+    },
+    "created_at": "2026-08-20T06:22:05.786Z"
+  },
+  {
+    "id": 9,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "tako",
+    "origin": "worker",
+    "kind": "task_completed",
+    "payload": {
+      "kind": "task_completed",
+      "handoff_present": true,
+      "result": "Created notes.md with 3 bullets on tide pools; logged 3 decisions (2 identical); used 1 subagent and 1 advisor consult."
+    },
+    "created_at": "2026-08-20T06:22:11.181Z"
+  },
+  {
+    "id": 10,
+    "task_id": "609d9475-0191-4a7f-b5bf-5b939695315a",
+    "worker_id": "tidepool",
+    "origin": "board",
+    "kind": "task_registered",
+    "payload": {
+      "kind": "task_registered",
+      "type": "question",
+      "title": "land completed task: [#356 fixture capture] transcript capture run"
+    },
+    "created_at": "2026-08-20T06:22:11.349Z"
+  },
+  {
+    "id": 11,
+    "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
+    "worker_id": "tako",
+    "origin": "board",
+    "kind": "worker_exited",
+    "payload": {
+      "kind": "worker_exited",
+      "exit_code": 0,
+      "signal": null,
+      "stderr_tail": null,
+      "worker_spawned_event_id": 5,
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 1255,
+        "cache_read_tokens": 336664,
+        "cache_creation_tokens": 39809,
+        "estimated_cost_usd": 0.7102510000000001,
+        "advisor": {
+          "model": null,
+          "consultations": 1,
+          "usage": null
+        }
+      }
+    },
+    "created_at": "2026-08-20T06:22:13.478Z"
+  }
+]
