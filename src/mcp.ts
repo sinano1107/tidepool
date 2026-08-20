@@ -526,7 +526,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async ({ line }) =>
       runVerb(deps, attributedTaskId, (task) => {
         // so the worker's transcript carries this decision's board-issued key (ADR 0083)
-        const event_id = logDecision(
+        const eventId = logDecision(
           deps.db,
           task,
           line,
@@ -534,7 +534,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           deps.clock.now(),
           "worker",
         );
-        return { logged: true, event_id };
+        return { logged: true, event_id: eventId };
       }),
   );
 
