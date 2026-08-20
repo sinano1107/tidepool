@@ -279,3 +279,28 @@ it("log_decision records a one-line decision that appears in the log view", asyn
     "chose recursive descent over a parser generator: no new build dep",
   );
 });
+
+it("log_decision returns the id of the event it appended, distinct per call", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "build the parser");
+  await t.clock.advance(HOUR); // picked up into the slot
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  // the same line twice: the id is what tells the two apart, not the text
+  const first: any = await client.callTool({
+    name: "log_decision",
+    arguments: { line: "kept the grammar LL(1)" },
+  });
+  const second: any = await client.callTool({
+    name: "log_decision",
+    arguments: { line: "kept the grammar LL(1)" },
+  });
+  await client.close();
+
+  // the id the worker sees in its transcript is the board-issued event id
+  // (ADR 0083): it matches the record exactly, so a later reader can join on it
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  const results = [first, second].map((r) => JSON.parse(r.content[0].text));
+  expect(results.map((r) => r.logged)).toEqual([true, true]);
+  expect(results.map((r) => r.event_id)).toEqual(log.entries.map((e: any) => e.id));
+  expect(results[0].event_id).not.toBe(results[1].event_id);
+});

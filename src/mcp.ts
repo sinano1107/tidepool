@@ -525,8 +525,17 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async ({ line }) =>
       runVerb(deps, attributedTaskId, (task) => {
-        logDecision(deps.db, task, line, attributedWorkerId(deps, task), deps.clock.now(), "worker");
-        return { logged: true };
+        // the appended event's id goes back to the caller, so the worker's own
+        // transcript carries the board-issued key for this decision (ADR 0083)
+        const event_id = logDecision(
+          deps.db,
+          task,
+          line,
+          attributedWorkerId(deps, task),
+          deps.clock.now(),
+          "worker",
+        );
+        return { logged: true, event_id };
       }),
   );
 
