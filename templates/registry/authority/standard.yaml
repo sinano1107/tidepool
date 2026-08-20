@@ -1,0 +1,6 @@
+guidance: Prefer reversible work and escalate decisions outside the stated authority.
+assignable_to:
+  - "*"
+allowed_workspaces:
+  - "*"
+merge: escalate

@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, taskDecisionLog } from "./events.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
+
+export { DEFAULT_AUDITOR_NAME };
 
 /** Worker id attributed to bare (non ?task=) sessions, e.g. the JSON API. */
 export const HUMAN_WORKER_ID = "human";
@@ -39,10 +42,8 @@ export const BOARD_WORKER_ID = "tidepool";
 
 /** Fallback for the board's Auditor pointer (CONTEXT.md) when no
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
- *  はない" (ADR 0013's issue #15 grilling notes), so the literal lives here
- *  rather than requiring every call site to supply one. */
-export const DEFAULT_AUDITOR_NAME = "auditor";
-
+ *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
+ *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
 export type TaskType = "work" | "question" | "review";
 /** `blocked` is deliberately absent: it is derived from unfinished children
  *  the parent waits for (CONTEXT.md), never stored. */
