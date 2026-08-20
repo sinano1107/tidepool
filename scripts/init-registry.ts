@@ -24,15 +24,6 @@ function git(cwd: string, ...args: string[]): string {
     .trim();
 }
 
-function gitRefExists(cwd: string, ref: string): boolean {
-  try {
-    git(cwd, "rev-parse", "--verify", "--quiet", ref);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function copyTemplate(source: string, destination: string): void {
   mkdirSync(dirname(destination), { recursive: true });
   writeFileSync(destination, readFileSync(join(TEMPLATE_ROOT, source)));
@@ -66,7 +57,13 @@ function main(): void {
     throw new Error(`${registryDir} has no origin remote`);
   }
   git(registryDir, "fetch", "--quiet", "origin");
-  if (gitRefExists(registryDir, "refs/remotes/origin/main")) {
+  let originMainExists = true;
+  try {
+    git(registryDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main");
+  } catch {
+    originMainExists = false;
+  }
+  if (originMainExists) {
     throw new Error(
       "origin/main is not empty; init-registry only seeds an empty remote and does not repair an existing registry",
     );
