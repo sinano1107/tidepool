@@ -12,7 +12,7 @@ Everything the workflow calls is vendored under `.agents/skills/`, so a clone ha
 
 The workflow runs ponytail off while deciding and `full` while building (see [workflow.md](./workflow.md)). Which one a session gets is decided at launch, by `PONYTAIL_DEFAULT_MODE`: the plugin's `SessionStart` hook re-reads it on every `startup`, `resume`, `clear`, and `compact`.
 
-**The default is `full`** — both the plugin's built-in and `~/.config/ponytail/config.json` say so — so without the line below, grilling sessions run with ponytail on and argue you out of options before you have weighed them.
+**Ponytail's own default is `full`** (`DEFAULT_MODE` in the plugin's `hooks/ponytail-config.js`, as of 4.9.0), so without the line below, grilling sessions run with ponytail on and argue you out of options before you have weighed them. A `defaultMode` in `~/.config/ponytail/config.json` takes precedence over that built-in, and the environment variable takes precedence over both — which is why setting it in the shell is enough, whatever the config file says.
 
 ```zsh
 # Ponytail off unless a build session asks for it

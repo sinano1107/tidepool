@@ -44,7 +44,7 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 `/ponytail` is a standing mode that biases how work gets done; `/ponytail-review` is a one-shot pass over a diff. The two are separate, and neither substitutes for the other.
 
-**The mode is chosen by the launcher, once per session.** `claude-design` / `codex-design` start a session with `PONYTAIL_DEFAULT_MODE=off`; `claude-build` / `codex-build` start one with `full` (shell functions in `~/.zshrc`). The plugin's `SessionStart` hook re-derives the mode from that variable on every `startup`, `resume`, `clear`, and `compact`, so it never carries over and there is nothing to unset by hand.
+**The mode is chosen by the launcher, once per session.** `claude-design` / `codex-design` start a session with `PONYTAIL_DEFAULT_MODE=off`; `claude-build` / `codex-build` start one with `full` — shell functions you add per machine, listed in [machine-setup.md](./machine-setup.md). The plugin's `SessionStart` hook re-derives the mode from that variable on every `startup`, `resume`, `clear`, and `compact`, so it never carries over and there is nothing to unset by hand.
 
 So the boundary is which command you launched:
 
@@ -55,7 +55,7 @@ So the boundary is which command you launched:
 
 **Say so when the session is in the wrong mode.** The launcher variable lives in a shell profile, not in this repo, and no repo-level setting can enforce it on either provider — so detection replaces prevention. A session with ponytail active carries the plugin's ruleset in its context: if that is there while you are grilling or writing a spec, stop and tell the user before going on. The reverse costs less and is partly self-healing, since `/ponytail-review` runs as a beat regardless of the mode.
 
-The variable's absence is not a repo bug. Without it the default is `full` — the built-in and `~/.config/ponytail/config.json` both say so — which would leave design sessions arguing you out of options. See [machine-setup.md](./machine-setup.md) for the one-time setup.
+The variable's absence is not a repo bug. Without it ponytail's own built-in default applies, which is `full` — leaving design sessions arguing you out of options. See [machine-setup.md](./machine-setup.md) for the one-time setup.
 
 ## Choosing the model
 
