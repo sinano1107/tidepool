@@ -2,20 +2,20 @@
 name: implement-tidepool
 description: Build a ready-for-agent tidepool issue end to end — branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, and a PR that records how every review finding was handled. Use this instead of /implement in this repo.
 disable-model-invocation: true
-argument-hint: "<issue> [impl-model] [review-model]"
+argument-hint: "<issue> [decision already taken]"
 ---
 
 # Implement (tidepool)
 
 A tidepool-local derivative of `/implement`. Upstream `/implement` is deliberately left untouched, so skills that route to it — `ask-matt`, `to-tickets` — keep pointing at the canonical one. In this repo, reach for this skill instead: it adds the delegation decision, the branch, the ponytail-review beat, the code-review follow-through, and the pull request — all of which upstream leaves to the human.
 
-`$ARGUMENTS` is the issue number, optionally followed by the model for the implementation and then the strength for `/code-review`.
+`$ARGUMENTS` is the issue number, optionally followed by a delegation decision already taken — written however `/implementation-delegation` phrased it, e.g. `378 Opus 5 / high, review at Fable 5`.
 
 ## Model and effort
 
 `/implementation-delegation` is what picks the implementation model, the effort, and the review strength.
 
-**A model in `$ARGUMENTS` means that decision has already been taken — do not run the delegation skill again.** The first model is the implementation's; the second is the review's, and falls back to the implementation's own setting when it is absent. With no model given, run `/implementation-delegation <issue>` yourself and state what it decided.
+**Anything after the issue number is a decision already taken — do not run the delegation skill again.** Read it as prose rather than by position: model names carry spaces (`Opus 5 / high`, `Sol / xhigh`), so there is nothing to split on. When it names one model, that is the implementation's and the review takes the same setting. With nothing after the issue number, run `/implementation-delegation <issue>` yourself and state what it decided.
 
 Either way, before touching the branch, say which models the run will use. They land like this:
 

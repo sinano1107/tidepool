@@ -54,7 +54,7 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 ## Building
 
-`/implement-tidepool <issue> [impl-model] [review-model]` — pass the models when they are already decided, omit them to have the skill decide. See [the skill](../../.agents/skills/implement-tidepool/SKILL.md) for what one run does.
+`/implement-tidepool <issue> [decision already taken]` — pass the delegation decision when it exists, omit it to have the skill run `/implementation-delegation` itself. See [the skill](../../.agents/skills/implement-tidepool/SKILL.md) for what one run does.
 
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
