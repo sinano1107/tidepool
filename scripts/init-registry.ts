@@ -13,6 +13,11 @@ import {
   DEFAULT_AUDITOR_NAME,
   DEFAULT_WORKSPACE_NAME,
 } from "../src/defaults.js";
+import {
+  assertValidAgentName,
+  assertValidWorkspaceName,
+  type Registry,
+} from "../src/registry.js";
 import { resolveWorkspacesBaseDir } from "../src/workspace.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,6 +41,13 @@ function main(): void {
   const agentName = process.env.TIDEPOOL_AGENT ?? DEFAULT_AGENT_NAME;
   const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
   const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? DEFAULT_WORKSPACE_NAME;
+  const emptyRegistry: Registry = { commit: "", agents: {}, authority: {}, workspaces: {} };
+  assertValidAgentName(emptyRegistry, agentName);
+  assertValidAgentName(emptyRegistry, auditorName);
+  if (agentName === auditorName) {
+    throw new Error("TIDEPOOL_AGENT and TIDEPOOL_AUDITOR must name different agents");
+  }
+  assertValidWorkspaceName(emptyRegistry, workspaceName);
   const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_DIR);
   const workspaceDir = join(workspacesDir, workspaceName);
 
@@ -57,16 +69,27 @@ function main(): void {
     throw new Error(`${registryDir} has no origin remote`);
   }
   git(registryDir, "fetch", "--quiet", "origin");
-  let originMainExists = true;
-  try {
-    git(registryDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main");
-  } catch {
-    originMainExists = false;
-  }
-  if (originMainExists) {
+  const remoteRefs = git(registryDir, "ls-remote", "--heads", "--tags", "origin");
+  if (remoteRefs.includes("refs/heads/main")) {
     throw new Error(
       "origin/main is not empty; init-registry only seeds an empty remote and does not repair an existing registry",
     );
+  }
+  if (remoteRefs) {
+    throw new Error(
+      "origin is not empty; init-registry only seeds an empty remote and does not repair an existing registry",
+    );
+  }
+
+  let localCommitExists = true;
+  try {
+    git(registryDir, "rev-parse", "--verify", "--quiet", "HEAD");
+  } catch {
+    localCommitExists = false;
+  }
+  if (localCommitExists) throw new Error(`${registryDir} already has a local commit`);
+  if (git(registryDir, "status", "--porcelain")) {
+    throw new Error(`${registryDir} has local changes; init-registry will not overwrite them`);
   }
 
   copyTemplate("agents/default-agent.md", join(registryDir, "agents", `${agentName}.md`));
@@ -112,7 +135,7 @@ function main(): void {
     );
   }
 
-  process.stdout.write(`Registry seeded with agent "${agentName}", auditor "${auditorName}", and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n3. Register the first task below.\n4. Add your own repository from the WebUI workspace registration screen using the clone option when ready.\n\nFirst task example\nTitle: Resolve the README TODO\nPurpose: Replace the TODO in ${workspaceName}/README.md with a short description of this workspace.\nCompletion criteria: README.md contains the description and the task reaches the merge question.\n`);
+  process.stdout.write(`Registry seeded with agent "${agentName}", auditor "${auditorName}", and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n3. Register the first task below.\n\nFirst task example\nTitle: Resolve the README TODO\nPurpose: Replace the TODO in ${workspaceName}/README.md with a short description of this workspace.\nCompletion criteria: README.md contains the description and the task reaches the merge question.\n\n4. Add your own repository from the WebUI workspace registration screen using the clone option when ready.\n`);
 }
 
 try {

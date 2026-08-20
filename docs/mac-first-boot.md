@@ -49,7 +49,7 @@ Keep the same environment and start the board:
 npm start
 ```
 
-Open the WebUI and register the task printed by the init command. When you are ready to use your own repository, add it from the WebUI workspace registration screen using the clone entrance.
+Open the WebUI and register the task printed by the init command.
 
 ### First task example
 
@@ -60,3 +60,5 @@ Completion criteria: README.md contains the description and the task reaches the
 ```
 
 The expected manual path is pickup, completion, then the merge question for the purely-local workspace.
+
+When you are ready to use your own repository, add it from the WebUI workspace registration screen using the clone entrance.

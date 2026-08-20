@@ -182,6 +182,74 @@ describe("npm run init-registry", () => {
     expect(existsSync(workspacesDir)).toBe(false);
   });
 
+  it("refuses a non-empty origin whose commit is on another branch", async () => {
+    const { clone, origin, root } = await emptyRegistryClone();
+    const workspacesDir = join(root, "workspaces");
+    await writeFile(join(clone, "existing.txt"), "existing registry\n");
+    git(clone, "add", "existing.txt");
+    git(clone, "commit", "-m", "Existing registry");
+    git(clone, "push", "origin", "HEAD:develop");
+    const before = git(clone, "rev-parse", "HEAD");
+
+    const result = runInit(
+      cleanEnv({
+        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_WORKSPACES_DIR: workspacesDir,
+      }),
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe(
+      "Error: origin is not empty; init-registry only seeds an empty remote and does not repair an existing registry\n",
+    );
+    expect(git(clone, "rev-parse", "HEAD")).toBe(before);
+    expect(git(root, "ls-remote", "--heads", origin)).toContain("refs/heads/develop");
+    expect(existsSync(workspacesDir)).toBe(false);
+  });
+
+  it("refuses a local registry commit that has not been pushed", async () => {
+    const { clone, origin, root } = await emptyRegistryClone();
+    const workspacesDir = join(root, "workspaces");
+    await writeFile(join(clone, "local.txt"), "local registry\n");
+    git(clone, "add", "local.txt");
+    git(clone, "commit", "-m", "Local registry");
+    const before = git(clone, "rev-parse", "HEAD");
+
+    const result = runInit(
+      cleanEnv({
+        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_WORKSPACES_DIR: workspacesDir,
+      }),
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${clone} already has a local commit`);
+    expect(git(clone, "rev-parse", "HEAD")).toBe(before);
+    expect(git(root, "ls-remote", "--heads", origin)).toBe("");
+    expect(existsSync(workspacesDir)).toBe(false);
+  });
+
+  it("refuses a dirty empty clone without overwriting local registry files", async () => {
+    const { clone, origin, root } = await emptyRegistryClone();
+    const workspacesDir = join(root, "workspaces");
+    const localAgent = join(clone, "agents", "tako.md");
+    await mkdir(dirname(localAgent), { recursive: true });
+    await writeFile(localAgent, "human draft\n");
+
+    const result = runInit(
+      cleanEnv({
+        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_WORKSPACES_DIR: workspacesDir,
+      }),
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${clone} has local changes`);
+    expect(readFileSync(localAgent, "utf8")).toBe("human draft\n");
+    expect(git(root, "ls-remote", "--heads", origin)).toBe("");
+    expect(existsSync(workspacesDir)).toBe(false);
+  });
+
   it("refuses a registry clone with no origin before changing either location", async () => {
     const root = await mkdtemp(join(tmpdir(), "tidepool-init-no-origin-"));
     const clone = join(root, "registry");
@@ -258,6 +326,34 @@ describe("npm run init-registry", () => {
     );
   });
 
+  it.each([
+    ["TIDEPOOL_WORKSPACE", "../escape", "invalid workspace name"],
+    ["TIDEPOOL_AGENT", "bad/agent", "invalid agent name"],
+    ["TIDEPOOL_AUDITOR", "bad/auditor", "invalid agent name"],
+    [
+      "TIDEPOOL_AUDITOR",
+      "tako",
+      "TIDEPOOL_AGENT and TIDEPOOL_AUDITOR must name different agents",
+    ],
+  ])("refuses unsafe %s values before changing either location", async (key, value, message) => {
+    const { clone, origin, root } = await emptyRegistryClone();
+    const workspacesDir = join(root, "workspaces");
+
+    const result = runInit(
+      cleanEnv({
+        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_WORKSPACES_DIR: workspacesDir,
+        [key]: value,
+      }),
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(git(root, "ls-remote", "--heads", origin)).toBe("");
+    expect(git(clone, "status", "--short")).toBe("");
+    expect(existsSync(workspacesDir)).toBe(false);
+  });
+
   it("uses ~/tidepool-workspaces when TIDEPOOL_WORKSPACES_DIR is absent", async () => {
     const { clone, root } = await emptyRegistryClone();
 
@@ -292,6 +388,13 @@ describe("npm run init-registry", () => {
       expect(result.stdout).toContain(line);
       expect(guide).toContain(line);
     }
+
+    expect(result.stdout.indexOf("First task example")).toBeLessThan(
+      result.stdout.indexOf("Add your own repository"),
+    );
+    expect(guide.indexOf("### First task example")).toBeLessThan(
+      guide.indexOf("add it from the WebUI workspace registration screen"),
+    );
 
     const orderedSteps = [
       "## Prepare the registry on a Mac",
