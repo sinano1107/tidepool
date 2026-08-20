@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"design-system/components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"design-system/components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"design-system/components/board/AgentChip.jsx"},{"name":"IdChip","sourcePath":"design-system/components/board/IdChip.jsx"},{"name":"LogEntry","sourcePath":"design-system/components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"design-system/components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"design-system/components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"design-system/components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"design-system/components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"design-system/components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"design-system/components/forms/Checkbox.jsx"},{"name":"FieldRow","sourcePath":"design-system/components/forms/FieldRow.jsx"},{"name":"Input","sourcePath":"design-system/components/forms/Input.jsx"},{"name":"Select","sourcePath":"design-system/components/forms/Select.jsx"},{"name":"Switch","sourcePath":"design-system/components/forms/Switch.jsx"},{"name":"NavRow","sourcePath":"design-system/components/navigation/NavRow.jsx"},{"name":"ScreenHeader","sourcePath":"design-system/components/navigation/ScreenHeader.jsx"},{"name":"Card","sourcePath":"design-system/components/surfaces/Card.jsx"},{"name":"Dialog","sourcePath":"design-system/components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"design-system/components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"design-system/components/surfaces/Toast.jsx"}]} */
+/* @ds-bundle: {"format":4,"namespace":"TidepoolDesignSystem_8a0ead","components":[{"name":"Button","sourcePath":"design-system/components/actions/Button.jsx"},{"name":"IconButton","sourcePath":"design-system/components/actions/IconButton.jsx"},{"name":"AgentChip","sourcePath":"design-system/components/board/AgentChip.jsx"},{"name":"IdChip","sourcePath":"design-system/components/board/IdChip.jsx"},{"name":"LogEntry","sourcePath":"design-system/components/board/LogEntry.jsx"},{"name":"QueueItem","sourcePath":"design-system/components/board/QueueItem.jsx"},{"name":"RiskFlag","sourcePath":"design-system/components/board/RiskFlag.jsx"},{"name":"StatusBadge","sourcePath":"design-system/components/board/StatusBadge.jsx"},{"name":"TaskCard","sourcePath":"design-system/components/board/TaskCard.jsx"},{"name":"TypeBadge","sourcePath":"design-system/components/board/TypeBadge.jsx"},{"name":"Checkbox","sourcePath":"design-system/components/forms/Checkbox.jsx"},{"name":"FieldRow","sourcePath":"design-system/components/forms/FieldRow.jsx"},{"name":"Input","sourcePath":"design-system/components/forms/Input.jsx"},{"name":"Select","sourcePath":"design-system/components/forms/Select.jsx"},{"name":"Switch","sourcePath":"design-system/components/forms/Switch.jsx"},{"name":"NavRow","sourcePath":"design-system/components/navigation/NavRow.jsx"},{"name":"ScreenHeader","sourcePath":"design-system/components/navigation/ScreenHeader.jsx"},{"name":"Card","sourcePath":"design-system/components/surfaces/Card.jsx"},{"name":"FadeScroll","sourcePath":"design-system/components/surfaces/FadeScroll.jsx"},{"name":"Dialog","sourcePath":"design-system/components/surfaces/Dialog.jsx"},{"name":"Tag","sourcePath":"design-system/components/surfaces/Tag.jsx"},{"name":"Toast","sourcePath":"design-system/components/surfaces/Toast.jsx"}]} */
 
 (() => {
 
@@ -792,6 +792,37 @@ function Card({ children, padding = "var(--space-4)", interactive = false, selec
 Object.assign(__ds_scope, { Card });
 })(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/surfaces/Card.jsx", error: String((e && e.message) || e) }); }
 
+// design-system/components/surfaces/FadeScroll.jsx
+try { (() => {
+function FadeScroll({ children, style }) {
+  const ref = React.useRef(null);
+  const [edges, setEdges] = React.useState({ top: false, bottom: false });
+  const update = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const top = el.scrollTop > 2;
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 2;
+    setEdges((e) => e.top === top && e.bottom === bottom ? e : { top, bottom });
+  }, []);
+  React.useEffect(() => {
+    update();
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [update, children]);
+  const fade = 28;
+  const stops = [
+    edges.top ? `transparent 0, black ${fade}px` : "black 0",
+    edges.bottom ? `black calc(100% - ${fade}px), transparent 100%` : "black 100%"
+  ].join(", ");
+  const mask = `linear-gradient(to bottom, ${stops})`;
+  return /* @__PURE__ */ React.createElement("div", { ref, onScroll: update, className: "tp-scroll", style: { WebkitMaskImage: mask, maskImage: mask, ...style } }, children);
+}
+Object.assign(__ds_scope, { FadeScroll });
+})(); } catch (e) { __ds_ns.__errors.push({ path: "design-system/components/surfaces/FadeScroll.jsx", error: String((e && e.message) || e) }); }
+
 // design-system/components/surfaces/Dialog.jsx
 try { (() => {
 function Dialog({ open = true, title, children, footer, onClose, width = 420 }) {
@@ -820,16 +851,19 @@ function Dialog({ open = true, title, children, footer, onClose, width = 420 }) 
         style: {
           width: "100%",
           maxWidth: width,
+          maxHeight: "100%",
           boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
           background: "var(--surface-card)",
           borderRadius: "var(--radius-lg)",
           boxShadow: "var(--shadow-overlay)",
           padding: "var(--space-6)"
         }
       },
-      title && /* @__PURE__ */ React.createElement("h2", { style: { margin: "0 0 var(--space-3)", fontSize: "var(--text-lg)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)" } }, title),
-      /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-md)", color: "var(--text-body)" } }, children),
-      footer && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: "var(--space-2)", marginTop: "var(--space-6)" } }, footer)
+      title && /* @__PURE__ */ React.createElement("h2", { style: { flexShrink: 0, margin: "0 0 var(--space-3)", fontSize: "var(--text-lg)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)" } }, title),
+      /* @__PURE__ */ React.createElement(__ds_scope.FadeScroll, { style: { minHeight: 0, overflowY: "auto", fontSize: "var(--text-md)", color: "var(--text-body)" } }, children),
+      footer && /* @__PURE__ */ React.createElement("div", { style: { flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: "var(--space-2)", marginTop: "var(--space-6)" } }, footer)
     )
   );
 }
@@ -926,6 +960,8 @@ __ds_ns.NavRow = __ds_scope.NavRow;
 __ds_ns.ScreenHeader = __ds_scope.ScreenHeader;
 
 __ds_ns.Card = __ds_scope.Card;
+
+__ds_ns.FadeScroll = __ds_scope.FadeScroll;
 
 __ds_ns.Dialog = __ds_scope.Dialog;
 

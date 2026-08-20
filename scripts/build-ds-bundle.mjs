@@ -36,6 +36,7 @@ const COMPONENTS = [
   ['NavRow', `${DS_SRC}/navigation/NavRow.jsx`],
   ['ScreenHeader', `${DS_SRC}/navigation/ScreenHeader.jsx`],
   ['Card', `${DS_SRC}/surfaces/Card.jsx`],
+  ['FadeScroll', `${DS_SRC}/surfaces/FadeScroll.jsx`],
   ['Dialog', `${DS_SRC}/surfaces/Dialog.jsx`],
   ['Tag', `${DS_SRC}/surfaces/Tag.jsx`],
   ['Toast', `${DS_SRC}/surfaces/Toast.jsx`],

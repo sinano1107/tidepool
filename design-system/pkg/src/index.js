@@ -20,6 +20,7 @@ export { Switch } from '../../components/forms/Switch.jsx';
 export { NavRow } from '../../components/navigation/NavRow.jsx';
 export { ScreenHeader } from '../../components/navigation/ScreenHeader.jsx';
 export { Card } from '../../components/surfaces/Card.jsx';
+export { FadeScroll } from '../../components/surfaces/FadeScroll.jsx';
 export { Dialog } from '../../components/surfaces/Dialog.jsx';
 export { Tag } from '../../components/surfaces/Tag.jsx';
 export { Toast } from '../../components/surfaces/Toast.jsx';

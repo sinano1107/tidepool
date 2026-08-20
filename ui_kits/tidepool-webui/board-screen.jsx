@@ -1,39 +1,7 @@
-// Vertically scrollable list that fades content out at the clipped edge(s).
-function TpFadeScroll({ children, style }) {
-  const ref = React.useRef(null);
-  const [edges, setEdges] = React.useState({ top: false, bottom: false });
-  const update = React.useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    const top = el.scrollTop > 2;
-    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 2;
-    setEdges((e) => (e.top === top && e.bottom === bottom ? e : { top, bottom }));
-  }, []);
-  React.useEffect(() => {
-    update();
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [update, children]);
-  const fade = 28;
-  const stops = [
-    edges.top ? `transparent 0, black ${fade}px` : 'black 0',
-    edges.bottom ? `black calc(100% - ${fade}px), transparent 100%` : 'black 100%',
-  ].join(', ');
-  const mask = `linear-gradient(to bottom, ${stops})`;
-  return (
-    <div ref={ref} onScroll={update} className="tp-scroll" style={{ WebkitMaskImage: mask, maskImage: mask, ...style }}>
-      {children}
-    </div>
-  );
-}
-
 // Kanban board — progress overview. skipped is never shown here.
 // Fills available height; each column scrolls vertically on overflow.
 function BoardScreen({ data, onOpenTask }) {
-  const { TaskCard } = window.TidepoolDesignSystem_8a0ead;
+  const { FadeScroll, TaskCard } = window.TidepoolDesignSystem_8a0ead;
   const cols = ['todo', 'in_progress', 'blocked', 'done'];
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -49,11 +17,11 @@ function BoardScreen({ data, onOpenTask }) {
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', fontWeight: 500, color: 'var(--text-secondary)' }}>{key}</span>
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{data.board[key].length}</span>
               </div>
-              <TpFadeScroll style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
+              <FadeScroll style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
                 {data.board[key].map((t) => (
                   <TaskCard key={t.id} task={{ ...t, status: key }} onClick={() => onOpenTask && onOpenTask(t)} style={{ flexShrink: 0 }} />
                 ))}
-              </TpFadeScroll>
+              </FadeScroll>
             </div>
           ))}
         </div>
@@ -62,4 +30,4 @@ function BoardScreen({ data, onOpenTask }) {
   );
 }
 
-Object.assign(window, { BoardScreen, TpFadeScroll });
+Object.assign(window, { BoardScreen });
