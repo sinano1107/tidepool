@@ -6,12 +6,16 @@ import { boardStatePaths } from "./board-state.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
 import { resolveCliAuthExpiry } from "./cli-auth.js";
 import { SystemClock } from "./clock.js";
+import {
+  DEFAULT_AGENT_NAME,
+  DEFAULT_AUDITOR_NAME,
+  DEFAULT_WORKSPACE_NAME,
+} from "./defaults.js";
 import { loadGitHubAuth } from "./github-auth.js";
 import { parseGlossary } from "./glossary.js";
 import type { VapidConfig } from "./push.js";
 import { startServer } from "./server.js";
 import { buildServerOptions, declaredRegistryMode } from "./server-options.js";
-import { DEFAULT_AUDITOR_NAME } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import { resolveWorkspacesBaseDir, workspacesBaseDirSource } from "./workspace.js";
 
@@ -20,7 +24,7 @@ const port = Number(process.env.PORT ?? 4589);
 // `tailscale serve <port>` never also publishes MCP tool calls
 const mcpPort = Number(process.env.MCP_PORT ?? port + 1);
 const registryDir = process.env.TIDEPOOL_REGISTRY;
-const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? "sandbox";
+const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? DEFAULT_WORKSPACE_NAME;
 // ADR 0018: base directory a path-omitting workspace entry derives from.
 const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_DIR);
 // ADR 0082 決定2: 同じ env の値から出所も導く(登録の門が着地先に添えて見せる)。
@@ -28,7 +32,7 @@ const workspacesDirSource = workspacesBaseDirSource(process.env.TIDEPOOL_WORKSPA
 // ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
 // pre-set delegation to a different registry name overrides it per task
-const defaultAgentName = process.env.TIDEPOOL_AGENT ?? "tako";
+const defaultAgentName = process.env.TIDEPOOL_AGENT ?? DEFAULT_AGENT_NAME;
 // issue #15 layer 2 / CONTEXT.md's Auditor: same shape as TIDEPOOL_AGENT
 // above, a pointer to the board's independent-review agent.
 const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
