@@ -186,8 +186,10 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
         {/* meta always drops to its own row (issue #396) — placed after the
            button in DOM order so row 1 is slot/IdChip/line/button and only
            meta (flexBasis 100%) wraps to row 2; before the button it would
-           itself fill row 2, pushing the button into a stray row 3 */}
-        <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{slot.meta}</span>
+           itself fill row 2, pushing the button into a stray row 3. Guarded
+           because an empty meta (a running task with no assignee) would still
+           claim the row and its gap, pushing the waterline down for nothing */}
+        {slot.meta && <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{slot.meta}</span>}
       </div>
       {/* waterline — dashed while paused: the tide level holds, nothing flows */}
       <div style={{

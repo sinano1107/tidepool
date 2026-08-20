@@ -164,7 +164,7 @@ function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false
       }
     },
     /* @__PURE__ */ React.createElement("span", { key: paused ? "play" : "pause", style: { display: "inline-flex", width: 13, height: 13 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": paused ? "play" : "pause", style: { width: 13, height: 13 } }))
-  ), /* @__PURE__ */ React.createElement("span", { style: { flexBasis: "100%", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, slot.meta)), /* @__PURE__ */ React.createElement("div", { style: {
+  ), slot.meta && /* @__PURE__ */ React.createElement("span", { style: { flexBasis: "100%", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, slot.meta)), /* @__PURE__ */ React.createElement("div", { style: {
     height: 2,
     borderRadius: 1,
     marginBottom: 14,
