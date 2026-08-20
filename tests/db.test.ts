@@ -4,7 +4,32 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { getSpendDown } from "../src/spend-down.js";
 import { getThrottleState, reportThrottle } from "../src/throttle.js";
+
+it("単一行の旧 spend_down_state は再オープン時に捨て、window keyed の空集合へ移行する", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-db-migrate-spend-down-"));
+  const dbPath = join(dir, "board.sqlite");
+  const legacy = new Database(dbPath);
+  legacy.exec(`
+    CREATE TABLE spend_down_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      window TEXT NOT NULL CHECK (window IN ('session', 'week')),
+      activated_at TEXT NOT NULL
+    );
+    INSERT INTO spend_down_state VALUES (1, 'session', '2026-08-20T10:00:00.000Z');
+  `);
+  legacy.close();
+
+  const db = openDb(dbPath);
+  expect(getSpendDown(db)).toEqual({ session: null, week: null });
+  expect(
+    (db.prepare("PRAGMA table_info(spend_down_state)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  ).toEqual(["window", "activated_at"]);
+  db.close();
+});
 
 it("throttle_state の旧スキーマ(state/utilization)を持つ既存 board は、再オープン時に新スキーマ(throttled)へ移行される(ADR 0008)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-db-migrate-"));

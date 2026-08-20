@@ -395,10 +395,10 @@ const pauseSchema = z.object({
   paused: z.boolean(),
 });
 
-// Spend-down (ADR 0030 / issue #128) — pause と同じ人間専用の盤面状態。
-// window: null が手動取り消し。
+// Spend-down (ADR 0030 / 0091) — pause と同じ人間専用の盤面状態。
 const spendDownSchema = z.object({
-  window: z.enum(["session", "week"]).nullable(),
+  window: z.enum(["session", "week"]),
+  active: z.boolean(),
 });
 
 const objectionSchema = z.object({
@@ -1556,9 +1556,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // Spend-down は pause と同じ「盤面状態」応答に同乗する — UI の露出面が同格
   // (ADR 0030: settings ではなく盤面状態としての表示・操作面)
-  function spendDownJson(): { window: string; activatedAt: string } | null {
+  function spendDownJson() {
     const state = getSpendDown(db);
-    return state && { window: state.window, activatedAt: state.activatedAt.toISOString() };
+    return {
+      session: state.session && { activatedAt: state.session.activatedAt.toISOString() },
+      week: state.week && { activatedAt: state.week.activatedAt.toISOString() },
+    };
   }
 
   // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。`throttle` は資源単位の
@@ -1579,10 +1582,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    if (parsed.data.window === null) {
-      clearSpendDown(db);
-    } else {
+    if (parsed.data.active) {
       setSpendDown(db, parsed.data.window, clock.now());
+    } else {
+      clearSpendDown(db, parsed.data.window);
     }
     // 有効化(今すぐ残りを燃やせ)も取り消しも即時再評価 — 取り消し側を tick 待ち
     // にすると、spend-down 時代の throttle_state が最大1時間 UI に残る

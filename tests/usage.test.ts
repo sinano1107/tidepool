@@ -446,7 +446,8 @@ it("idle の session は fail-closed の入力にせず、健全な week と合�
 it("対象窓が idle なら spend-down は失効する — 観測できた不在はリセット済みの証拠(issue #287)", () => {
   expect(
     isSpendDownExpired(
-      { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+      "session",
+      { activatedAt: new Date("2026-07-22T11:00:00.000Z") },
       { session: "idle", week: { percent: 30, resetsAt: WEEK_RESETS }, fable: null },
     ),
   ).toBe(true);
@@ -467,7 +468,7 @@ it("spend-down(session) は session のペース線を外す — 線超過(70 > 
     OFFSETS,
     PACE_NOW,
     // 現 session ウィンドウ(開始 08:00)内の有効化 — 失効していない
-    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
   );
 
   expect(decision).toEqual({
@@ -490,7 +491,7 @@ it("spend-down 中も 100% ハードキャップは残る — 到達で throttle
     },
     OFFSETS,
     PACE_NOW,
-    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
   );
 
   expect(decision.throttled).toBe(true);
@@ -508,7 +509,7 @@ it("spend-down(session) 中も week の線は生き続ける — session 使い�
     },
     OFFSETS,
     PACE_NOW,
-    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
   );
 
   expect(decision.throttled).toBe(true);
@@ -527,7 +528,33 @@ it("spend-down(week) は week と fable の線を一緒に外す(同じ瞬間に
     OFFSETS,
     PACE_NOW,
     // 現 week ウィンドウ(開始 Jul 17 12:00)内の有効化
-    { window: "week", activatedAt: new Date("2026-07-21T12:00:00.000Z") },
+    { session: null, week: { activatedAt: new Date("2026-07-21T12:00:00.000Z") } },
+  );
+
+  expect(decision).toEqual({
+    throttled: false,
+    resetsAt: null,
+    windows: {
+      session: { throttled: false, resumeAt: null },
+      week: { throttled: false, resumeAt: null },
+      fable: { throttled: false, resumeAt: null },
+    },
+  });
+});
+
+it("spend-down(session / week) を両方有効にすると session / week / fable のペース線をすべて外す", () => {
+  const decision = evaluateThrottle(
+    {
+      session: { percent: 70, resetsAt: SESSION_RESETS },
+      week: { percent: 85, resetsAt: WEEK_RESETS },
+      fable: { percent: 85, resetsAt: WEEK_RESETS },
+    },
+    OFFSETS,
+    PACE_NOW,
+    {
+      session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+      week: { activatedAt: new Date("2026-07-21T12:00:00.000Z") },
+    },
   );
 
   expect(decision).toEqual({
@@ -551,7 +578,7 @@ it("spend-down(session) は fable の線に触れない — fable は週次予�
     },
     OFFSETS,
     PACE_NOW,
-    { window: "session", activatedAt: new Date("2026-07-22T11:00:00.000Z") },
+    { session: { activatedAt: new Date("2026-07-22T11:00:00.000Z") }, week: null },
   );
 
   expect(decision.throttled).toBe(false);
@@ -572,7 +599,7 @@ it("有効化が現ウィンドウの開始より前(= 対象はリセット済�
     OFFSETS,
     PACE_NOW,
     // 現 session ウィンドウの開始は 08:00 — それより前の有効化は前ウィンドウのもの
-    { window: "session", activatedAt: new Date("2026-07-22T07:00:00.000Z") },
+    { session: { activatedAt: new Date("2026-07-22T07:00:00.000Z") }, week: null },
   );
 
   expect(decision.throttled).toBe(true);

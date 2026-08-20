@@ -108,7 +108,7 @@ it("pause 状態はサーバー再起動を跨いで維持される", async () =
       revalidating: false,
       windows: { session: null, week: null, fable: null },
     },
-    spendDown: null,
+    spendDown: { session: null, week: null },
   });
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);

@@ -18,40 +18,57 @@ function sessionOverPace(resetsAt: Date): string {
   });
 }
 
-it("POST /api/spend-down で対象ウィンドウを有効化すると、GET /api/pause の盤面状態に window と有効化時刻が載る", async () => {
+it("POST /api/spend-down で session / week を独立に有効化でき、GET /api/pause に両方の状態が載る", async () => {
   t = await bootTidepool();
 
-  const res = await api(t.baseUrl, "POST", "/api/spend-down", { window: "session" });
+  const res = await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
   expect(res.status).toBe(200);
   expect(res.json).toEqual({
-    spendDown: { window: "session", activatedAt: t.clock.now().toISOString() },
+    spendDown: {
+      session: { activatedAt: t.clock.now().toISOString() },
+      week: null,
+    },
   });
+
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week", active: true });
 
   const pause = (await api(t.baseUrl, "GET", "/api/pause")).json;
   expect(pause.spendDown).toEqual({
-    window: "session",
-    activatedAt: t.clock.now().toISOString(),
+    session: { activatedAt: t.clock.now().toISOString() },
+    week: { activatedAt: t.clock.now().toISOString() },
   });
 });
 
-it("window: null で手動取り消しできる — 盤面状態から消える", async () => {
+it("active: false で対象ウィンドウだけ手動取り消しできる", async () => {
   t = await bootTidepool();
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week" });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week", active: true });
 
-  const res = await api(t.baseUrl, "POST", "/api/spend-down", { window: null });
+  const res = await api(t.baseUrl, "POST", "/api/spend-down", { window: "week", active: false });
   expect(res.status).toBe(200);
-  expect(res.json).toEqual({ spendDown: null });
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toBeNull();
+  expect(res.json.spendDown).toEqual({
+    session: { activatedAt: t.clock.now().toISOString() },
+    week: null,
+  });
 });
 
-it("session / week / null 以外の window は入口で弾く(fable は対象外 — week に束ねられる)", async () => {
+it("session / week 以外の window と boolean でない active は入口で弾く(fable は対象外)", async () => {
   t = await bootTidepool();
 
-  for (const window of ["fable", "day", 1, undefined]) {
-    const res = await api(t.baseUrl, "POST", "/api/spend-down", { window });
+  for (const body of [
+    { window: "fable", active: true },
+    { window: "day", active: true },
+    { window: 1, active: true },
+    { window: "session", active: "yes" },
+    { window: "session" },
+  ]) {
+    const res = await api(t.baseUrl, "POST", "/api/spend-down", body);
     expect(res.status).toBe(400);
   }
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toBeNull();
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
+    session: null,
+    week: null,
+  });
 });
 
 it("ペース線超過で skip された盤面は、spend-down(session) の有効化で(hourly tick を待たず)即時 pickup が走る", async () => {
@@ -65,7 +82,7 @@ it("ペース線超過で skip された盤面は、spend-down(session) の有�
   expect(t.worker.started).toEqual([]);
 
   // 有効化そのものが再評価の発火点 — ペース線が外れ 85 < 100 で通る
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session" });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });
 
@@ -82,7 +99,7 @@ it("100% キャップで止まった spend-down はリセット時刻に再評�
       week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
     }),
   );
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session" });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
   expect(t.worker.started).toEqual([]);
 
   // リセット後の実世界: 新ウィンドウ(開始 t=1.5h、resets t=6.5h)の観測
@@ -95,12 +112,44 @@ it("100% キャップで止まった spend-down はリセット時刻に再評�
   // t=1.5h: リセットタイマーの poll が失効を観測して状態をクリア。新ウィンドウは
   // 予約期間(経過0%・線 −20)なのでペース判定で絞られたまま — 失効の放置はない
   await t.clock.advance(90 * MIN);
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toBeNull();
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
+    session: null,
+    week: null,
+  });
   expect(t.worker.started).toEqual([]);
 
   // 通常判定に戻った証拠: catch-up(経過45% = t=3.75h)を跨げば普通に流れる
   await t.clock.advance(150 * MIN);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+});
+
+it("両方有効なとき session のリセットを poll が観測すると session だけ失効し week は残る", async () => {
+  t = await bootTidepool();
+  await registerWork(t, "waits for the session reset");
+  const t0 = t.clock.now();
+  const sessionResetsAt = new Date(t0.getTime() + 90 * MIN);
+  const weekResetsAt = new Date(t0.getTime() + 24 * HOUR);
+  t.worker.scriptUsage(
+    usagePanelText({
+      session: { percent: 100, resetsAt: sessionResetsAt },
+      week: { percent: 85, resetsAt: weekResetsAt },
+    }),
+  );
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week", active: true });
+
+  t.worker.scriptUsage(
+    usagePanelText({
+      session: { percent: 25, resetsAt: new Date(t0.getTime() + 6.5 * HOUR) },
+      week: { percent: 85, resetsAt: weekResetsAt },
+    }),
+  );
+  await t.clock.advance(90 * MIN);
+
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
+    session: null,
+    week: { activatedAt: t0.toISOString() },
+  });
 });
 
 it("spend-down(week) は fable のタスク単位 skip も解除する — 同じ瞬間に失効する予算(ADR 0030)", async () => {
@@ -119,7 +168,7 @@ it("spend-down(week) は fable のタスク単位 skip も解除する — 同�
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
 
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week" });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week", active: true });
   expect(t.worker.started.map((x) => x.id)).toEqual([fableTask.id]);
 });
 
@@ -130,7 +179,7 @@ it("Pause が勝つ — pause 中は spend-down を有効化しても pickup せ
   // ペース判定なら絞られる観測(t=1h 時点で経過40%・線20、85 は超過)
   t.worker.scriptUsage(sessionOverPace(new Date(t.clock.now().getTime() + 4 * HOUR)));
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session" });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
 
@@ -151,7 +200,7 @@ it("手動取り消しも再評価を発火する — 取り消し後の観測�
       week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
     }),
   );
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session" });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
   expect(t.worker.started).toEqual([]);
 
   // 使用状況が健全に変わった後の取り消し — 発火しなければ次の tick まで観測されない
@@ -161,7 +210,7 @@ it("手動取り消しも再評価を発火する — 取り消し後の観測�
       week: { percent: 5, resetsAt: new Date(resetsAt.getTime() + 24 * HOUR) },
     }),
   );
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: null });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: false });
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });
 
@@ -175,14 +224,15 @@ it("spend-down は人間専用の操舵チャネル: MCP には一切公開さ�
 
 it("spend-down 状態はサーバー再起動を跨いで維持される", async () => {
   t = await bootTidepool();
-  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week" });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "session", active: true });
+  await api(t.baseUrl, "POST", "/api/spend-down", { window: "week", active: true });
   const activatedAt = t.clock.now().toISOString();
 
   await t.stopServer();
   t = await bootTidepool({ dir: t.dir });
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
-    window: "week",
-    activatedAt,
+    session: { activatedAt },
+    week: { activatedAt },
   });
 });
