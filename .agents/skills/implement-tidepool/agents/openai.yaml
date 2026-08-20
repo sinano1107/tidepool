@@ -1,0 +1,5 @@
+interface:
+  display_name: "Implement (tidepool)"
+  short_description: "Build a tidepool issue end to end"
+policy:
+  allow_implicit_invocation: false

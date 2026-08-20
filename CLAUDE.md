@@ -14,3 +14,8 @@ Uses the canonical five-role label vocabulary (`needs-triage`, `needs-info`, `re
 ### Domain docs
 
 Single-context — one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Workflow
+
+Entry points, when work gets written up as a spec or tickets, and how it is built. Build with
+`/implement-tidepool`, not `/implement`. See `docs/agents/workflow.md`.
