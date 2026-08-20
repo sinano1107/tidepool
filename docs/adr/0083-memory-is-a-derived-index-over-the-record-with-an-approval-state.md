@@ -116,3 +116,36 @@ decision からここまで」の窓は保存時の決定ではなく読み出�
 順序 + 文言 + 時刻単調性のヒューリスティックで結び、結合の種別を刻む。欠測は理由コードとして明示し、
 「空 = 何もしなかった」と区別する。前提として、盤面 verb は親スレッド専用(ADR 0010 追記)であり、transcript は
 worker session ごとに1本残る。
+
+## 追記 2(2026-08-20 の grilling、issue #356 — フィクスチャ取得 #386 の実測を受けて)
+
+**ヒューリスティック結合は作らない。** 上の追記が「event id を持たない旧記録だけ順序 + 文言 + 時刻単調性で結ぶ」と
+した線は撤回する。その対象になる記録は、スライス A(`log_decision` が event id を返す)より前に開発用の盤面が書いた
+transcript だけで、対応する必要がない。結合は event id の完全一致の1種類しか存在せず、event id を持たない
+`decision_logged` は結合を試みず欠測理由(`no_event_id`)を持つマーカーとして残る — 「欠測は理由コードで明示し、
+空と区別する」の線はそのまま。Episode の同一性は `worker_spawned` の event id で、それをファイル名に持たない
+transcript は backfill の走査対象にしない(数えて報告はする)。
+
+**行動行はトークンを持たない。** 同一 `message.id` を持つ複数の assistant 行(thinking / text / tool_use が別行に割れる)
+は同じ `usage` を繰り返し持ち(実測)、さらにそれを message 単位で親スレッドだけ合算しても result 行の session 合計と
+一致しない(output 138 対 1255、input / cache も不一致)— stream の assistant 行の `usage` は message 開始時のスナップ
+ショットであって行動単位の消費ではない。行動単位で意味を持つ数が無いものを派生表に写すと後で足して使われるので、
+行動行が持つのは transcript 行への参照だけとし、session 単位の消費は `worker_exited.usage` を正本として参照する。
+意味のある読み方が見つかれば投影器の版を上げて足せばよい(派生は作り直せる)。
+
+**subagent の活動は親 stream に出る**(実測、`parent_tool_use_id` 付き)— `events.ts` の「subagent の活動は親 stream に
+出ない」という注記は、主語を「subagent 発の advisor 相談」に狭めて直す(その狭い主張は 2026-08-04 / issue #33 で測定済みであり、2.1.237 のフィクスチャでは再検証していない — 測定の記録は消さない)。
+加えて subagent の lifecycle 行(`task_notification`)は subagent 自身の消費(tokens / tool 回数 / 所要時間)を運ぶので、
+subagent を起動した行動行に添付する。「合算は親スレッドのみ」の線は変えず、添付は合算外の観測である。
+
+**構造マーカーは3つ** — compaction 境界、`vcs_state_changed`(commit)、advisor 相談。subagent の lifecycle は行動行と
+`parent_tool_use_id` で既に表現されるので重ねない。**欠測統計は3値**(解釈した / 既知だが解釈しない / 未知)— rate limit
+や thinking token の通知のような「知っていて捨てる」行を未知に混ぜると、形式変更の信号が常時のノイズに埋もれる。
+**版は3つ刻む** — `registry_commit`、投影器の版、transcript を書いた CLI の版(init 行)。未知行の増減が投影器の変更か
+CLI の変更かを分ける手がかりがこれしかない。
+
+**CLI の版の下限を盤面の門にはしない。** tool 名の変化(`Task` → `Agent`、ただし init の `tools` には `Task` が残る)を
+受けて版の下限で quarantine する案を検討し、退けた。綴りの消失は既存のツール面 probe が捕まえ、行の形の変化は上の
+欠測統計と CLI 版の刻印に観測として出る。Precedent は派生で作り直せるので、投影の取りこぼしは走らせて危険な状態では
+ない。版番号は代理変数であり、この盤面はホストの性質を版ではなく実挙動で測る(ADR 0042 と同じ線)。抽出表は `Task` /
+`Agent` の両名を subagent 起動として持つ。
