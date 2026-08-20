@@ -53,12 +53,8 @@ Run `source ~/.tidepool/env` in every shell that runs `init-registry` or starts 
 
 ## Prepare the registry
 
-```bash
-source ~/.tidepool/env
-```
-
-Create an empty private repository with your own GitHub credentials, then clone it to
-`$TIDEPOOL_REGISTRY`:
+With `~/.tidepool/env` sourced, create an empty private repository with your own GitHub
+credentials, then clone it to `$TIDEPOOL_REGISTRY`:
 
 ```bash
 gh repo create YOUR_GITHUB_LOGIN/tidepool-registry --private
