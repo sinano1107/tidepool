@@ -44,11 +44,16 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 `/ponytail` is a standing mode that biases how work gets done; `/ponytail-review` is a one-shot pass over a diff. The two are separate, and neither substitutes for the other.
 
-**The mode** stays off while deciding — `/grill-with-docs`, `/to-spec` — so YAGNI pressure does not kill options before they have been weighed. Turn it on at `full` when `/to-tickets` starts: over-decomposition is the most reported friction on that skill, and this is cheaper than asking it to merge tickets at every quiz. Nothing switches it automatically, so run `/ponytail full` before `/to-tickets` — whoever is driving, human or agent.
+**The mode is chosen by the launcher, once per session.** `claude-design` / `codex-design` start a session with `PONYTAIL_DEFAULT_MODE=off`; `claude-build` / `codex-build` start one with `full` (shell functions in `~/.zshrc`). The plugin's `SessionStart` hook re-derives the mode from that variable on every `startup`, `resume`, `clear`, and `compact`, so it never carries over and there is nothing to unset by hand.
 
-**The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` runs it, and sets the mode before dispatching so the plugin's `SubagentStart` hook carries it into the sub-agent.
+So the boundary is which command you launched:
 
-**The mode is one global flag, and it is sticky.** It lives in `~/.claude/.ponytail-active` (`$PLUGIN_DATA` on Codex) — not per session, not per project — so it survives `/clear`, new sessions, and the end of the work. Nothing turns it back off. **Run `/ponytail off` when you return to designing**, or the next grilling session inherits `full` from the last implementation and argues you out of options before you have weighed them.
+- **Design session** — `/grill-with-docs`, `/to-spec`. Off, so YAGNI pressure does not kill options before they have been weighed.
+- **Build session** — `/to-tickets`, `/implement-tidepool`. Full. Over-decomposition is the most reported friction on `/to-tickets`, and the mode is cheaper than asking it to merge tickets at every quiz.
+
+**The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` dispatches it; the `SubagentStart` hook carries the live mode into the sub-agent, so the loop is ponytail-aware without anything extra — provided the session was launched as a build one.
+
+That variable lives in the shell profile, not in this repo. Without it the default is `full` — the built-in and `~/.config/ponytail/config.json` both say so — which would leave design sessions arguing you out of options. A machine that has ponytail but not those launcher functions needs `PONYTAIL_DEFAULT_MODE=off` before this workflow behaves.
 
 ## Choosing the model
 
