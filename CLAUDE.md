@@ -17,5 +17,7 @@ Single-context — one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/
 
 ### Workflow
 
-Entry points, when work gets written up as a spec or tickets, and how it is built. Build with
-`/implement-tidepool`, not `/implement`. See `docs/agents/workflow.md`.
+**Read `docs/agents/workflow.md` before starting a grilling, spec, or ticket step** — it decides
+which skills run, in what order, and where this repo departs from what those skills assume. Build
+with `/implement-tidepool`, not `/implement`. `/ponytail` stays off while deciding and goes to
+`full` from `/to-tickets` onward.
