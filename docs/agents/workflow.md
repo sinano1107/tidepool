@@ -44,7 +44,7 @@ Specs and tickets are GitHub issues here, not files — the `.scratch/` layout i
 
 `/ponytail` is a standing mode that biases how work gets done; `/ponytail-review` is a one-shot pass over a diff. The two are separate, and neither substitutes for the other.
 
-**The mode is chosen by the launcher, once per session.** `claude-design` / `codex-design` start a session with `PONYTAIL_DEFAULT_MODE=off`; `claude-build` / `codex-build` start one with `full` — shell functions you add per machine, listed in [machine-setup.md](./machine-setup.md). The plugin's `SessionStart` hook re-derives the mode from that variable on every `startup`, `resume`, `clear`, and `compact`, so it never carries over and there is nothing to unset by hand.
+**The mode is chosen by the launcher, once per session.** `claude-design` / `codex-design` start off; `claude-build` / `codex-build` start at `full`. It is re-derived at every session boundary, so it never carries over and there is nothing to unset by hand. Those functions are per-machine setup — [machine-setup.md](./machine-setup.md).
 
 So the boundary is which command you launched:
 
@@ -53,9 +53,7 @@ So the boundary is which command you launched:
 
 **The review** runs inside implementation as its own beat, with its own commit. `/implement-tidepool` dispatches it; the `SubagentStart` hook carries the live mode into the sub-agent, so the loop is ponytail-aware without anything extra — provided the session was launched as a build one.
 
-**Say so when the session is in the wrong mode.** The launcher variable lives in a shell profile, not in this repo, and no repo-level setting can enforce it on either provider — so detection replaces prevention. A session with ponytail active carries the plugin's ruleset in its context: if that is there while you are grilling or writing a spec, stop and tell the user before going on. The reverse costs less and is partly self-healing, since `/ponytail-review` runs as a beat regardless of the mode.
-
-The variable's absence is not a repo bug. Without it ponytail's own built-in default applies, which is `full` — leaving design sessions arguing you out of options. See [machine-setup.md](./machine-setup.md) for the one-time setup.
+**Say so when the session is in the wrong mode.** No repo-level setting can enforce the launcher on either provider — so detection replaces prevention. A session with ponytail active carries the plugin's ruleset in its context: if that is there while you are grilling or writing a spec, stop and tell the user before going on. The reverse costs less and is partly self-healing, since `/ponytail-review` runs as a beat regardless of the mode.
 
 ## Choosing the model
 
@@ -67,7 +65,7 @@ The variable's absence is not a repo bug. Without it ponytail's own built-in def
 
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
-`/ponytail` and `/ponytail-review` come from a plugin rather than this repo. `.claude/settings.json` declares the marketplace and enables it, so Claude Code picks it up from a fresh clone; on Codex it has to be enabled per machine — Codex discovers skills from `.agents/skills` and can disable them in `~/.codex/config.toml`, but has no per-repository way to require one, so there is nothing to declare here. Everything else the flow calls — `/implementation-delegation`, `/tdd`, `/code-review` — is vendored under `.agents/skills/`, so a clone has it.
+Everything the flow calls — `/implementation-delegation`, `/tdd`, `/code-review` — is vendored under `.agents/skills/`, so a clone has it. ponytail is the exception: it is a plugin, and getting it onto a machine is [machine-setup.md](./machine-setup.md).
 
 One issue per session, cleared between them. Two implementation sessions in one checkout share an index, a `HEAD`, and `refs/stash`, and corrupt each other.
 

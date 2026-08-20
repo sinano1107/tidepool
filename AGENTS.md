@@ -20,7 +20,8 @@ Single-context — one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/
 **Read `docs/agents/workflow.md` before starting a grilling, spec, or ticket step** — it decides
 which skills run, in what order, and where this repo departs from what those skills assume. Build
 with `/implement-tidepool`, not `/implement`. `/ponytail` stays off while deciding and goes to
-`full` from `/to-tickets` onward.
+`full` from `/to-tickets` onward. On a machine that has not run this workflow before, start from
+`docs/agents/machine-setup.md`.
 
 ### Test runtime
 
