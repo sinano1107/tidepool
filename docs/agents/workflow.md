@@ -36,6 +36,8 @@ The branch is about sessions, not about size in the abstract and not about who i
 
 Do not `/compact` or `/clear` between `/to-spec` and `/to-tickets`: re-fetching a large spec out of an issue truncates.
 
+Specs and tickets are GitHub issues here, not files — the `.scratch/` layout in those skills belongs to the local-markdown tracker, which this repo does not use (see [issue-tracker.md](./issue-tracker.md)). Nothing lands in the working tree, so a machine that only has the issue number has everything it needs.
+
 **The slice count does not have to be settled first.** `/to-tickets` quizzes you on the breakdown *before* it publishes anything, so when it is unclear, run it — if one ticket comes back, don't publish, and carry on with the spec issue.
 
 ## ponytail
