@@ -129,6 +129,12 @@ const THROTTLE_STATE_TABLE_DDL = `
       observed_at        TEXT
     )`;
 
+const SPEND_DOWN_STATE_TABLE_DDL = `
+    CREATE TABLE spend_down_state (
+      window       TEXT PRIMARY KEY CHECK (window IN ('session', 'week')),
+      activated_at TEXT NOT NULL
+    )`;
+
 // Shared between the fresh-board CREATE and #190's event-table rebuild. The
 // database is the audit record's final backstop, so its route vocabulary is
 // constrained here as well as by EventOrigin in TypeScript.
@@ -257,16 +263,9 @@ export function openDb(path: string): Db {
       paused INTEGER NOT NULL
     );
 
-    -- Spend-down (ADR 0030 / issue #128): the human-only end-of-window
-    -- burn-down state — drops the target window's pace line, leaving only the
-    -- 100% hard cap. One row; no row means inactive. Unlike pause_state it
-    -- auto-expires: activated_at predating the target window's observed start
-    -- means the window has reset, and the scheduler clears the row.
-    CREATE TABLE IF NOT EXISTS spend_down_state (
-      id           INTEGER PRIMARY KEY CHECK (id = 1),
-      window       TEXT NOT NULL CHECK (window IN ('session', 'week')),
-      activated_at TEXT NOT NULL
-    );
+    -- Spend-down (ADR 0091): one independently expiring row per active
+    -- window. No row for a window means its pace line remains in force.
+    ${SPEND_DOWN_STATE_TABLE_DDL.replace("CREATE TABLE spend_down_state", "CREATE TABLE IF NOT EXISTS spend_down_state")};
 
     -- Web Push subscriptions (issue #14): one row per installed PWA that
     -- opted into push. endpoint is the browser's own dedup key (a fresh
@@ -430,6 +429,17 @@ export function openDb(path: string): Db {
     -- append-only is enforced by structure, not convention
     ${EVENTS_APPEND_ONLY_TRIGGERS}
   `);
+  // ADR 0091: the old table could hold only one target. Spend-down expires
+  // on its own, so legacy state is disposable; rebuild it as a keyed set.
+  const spendDownCols = (
+    db.prepare("PRAGMA table_info(spend_down_state)").all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  if (spendDownCols.includes("id")) {
+    db.exec(`
+      DROP TABLE spend_down_state;
+      ${SPEND_DOWN_STATE_TABLE_DDL};
+    `);
+  }
   // ADR 0065: session closure records who closed it so the next terminal
   // commit can report a timeout once. Scratchpad lines belong to the board,
   // not to a session; SQLite on the deployed Pi supports this direct drop.

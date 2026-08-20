@@ -330,8 +330,8 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     agents: [],
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
-    // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
-    spendDown: pause.spendDown ?? null,
+    // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
+    spendDown: pause.spendDown ?? { session: null, week: null },
     throttled,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled, fableResumesAt,
@@ -2989,15 +2989,15 @@ function App() {
     }
   };
 
-  // Spend-down (ADR 0030 / issue #128) — pause と同格の盤面状態。有効化は
+  // Spend-down (ADR 0091) — pause と同格の盤面状態。有効化は
   // サーバー側が即時 poll を発火する(残りを今すぐ燃やす操作なので)。
-  const setSpendDown = async (window) => {
+  const setSpendDown = async (window, active) => {
     try {
-      await api('/api/spend-down', { window });
+      await api('/api/spend-down', { window, active });
       await refresh();
-      say(window ? 'warn' : 'info',
-        window ? `spend-down armed · ${window}` : 'spend-down cancelled',
-        window
+      say(active ? 'warn' : 'info',
+        active ? `spend-down armed · ${window}` : `spend-down cancelled · ${window}`,
+        active
           ? 'pace line off — burns to the 100% cap, expires at the window reset'
           : 'pace line back on');
     } catch (err) {

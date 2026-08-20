@@ -30,7 +30,7 @@ test("spend-down の有効化・取り消しは、再評価中を示して新し
       release = resolve;
     }),
   );
-  await page.getByRole("button", { name: "session", exact: true }).click();
+  await page.getByRole("button", { name: "arm session", exact: true }).click();
   await expect(page.getByText("usage re-evaluation in progress · nothing starts")).toBeVisible();
   await expect(page.getByText(/last observed \d{2}:\d{2}/)).toBeVisible();
 
@@ -44,7 +44,7 @@ test("spend-down の有効化・取り消しは、再評価中を示して新し
       release = resolve;
     }),
   );
-  await page.getByRole("button", { name: "cancel", exact: true }).click();
+  await page.getByRole("button", { name: "cancel session", exact: true }).click();
   await expect(page.getByText("usage re-evaluation in progress · nothing starts")).toBeVisible();
 
   release();
