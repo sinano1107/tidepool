@@ -454,6 +454,10 @@ export interface ApiRouterDeps {
   github?: GitHubClient;
   /** Retries a failed PR promotion from a failure question (issue #66). */
   retryPrPromotion?: (task: Task) => Promise<void>;
+  /** 付帯子が決着したとき、待っていた祖先の着地を撃ち直す(ADR 0092 決定3)。
+   *  人間面で決着が起こる3経路(complete / cancel / abandon)がこれを撃つ。
+   *  Absent → 着地の面を持たない盤面(PR 昇格を持たないのと同じ姿)。 */
+  relandRootAncestor?: (task: Task) => Promise<void>;
   /** Assignee/workspace name candidates for the registration screen (issue
    *  #12), resolved from the agent registry by the caller (main.ts) — the
    *  API layer never touches the filesystem/git registry loader itself.
@@ -575,6 +579,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     resolveWorkspace,
     github,
     retryPrPromotion,
+    relandRootAncestor,
     registryCandidates,
     draftClient,
     defaultAgentName,
@@ -1220,7 +1225,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // gates it — the domain (cancelTaskDirectly) enforces all of this; the route
   // passes the default workspace/agent pointers the quarantine half of the
   // gate resolves against.
-  router.post("/tasks/:id/cancel", (req, res) => {
+  router.post("/tasks/:id/cancel", async (req, res) => {
     const parsed = cancelTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
@@ -1245,6 +1250,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // same trigger the /complete route uses (CONTEXT.md: cancelled の親を
       // 塞がない導出は既存機構をそのまま使う).
       pollIfParentUnblocked(db, task, onQueueHeadChanged);
+      // 付帯子の決着は、待っていた祖先の着地を起こす(ADR 0092 決定3)
+      await relandRootAncestor?.(task);
       res.json(presentTask(db, getTask(db, task.id)!));
     } catch (err) {
       if (err instanceof DomainError) {
@@ -1278,6 +1285,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           resolveWorkspace,
           github,
           retryPrPromotion,
+          relandRootAncestor,
           agentRegistered,
           containment,
           registryReachability,
@@ -1314,7 +1322,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // opening, tree-rule release) — this route is never a shortcut around it.
   // Not gated on "blocks a parent" too: AC4's orphan human task must stay
   // completable through this same route.
-  router.post("/tasks/:id/complete", (req, res) => {
+  router.post("/tasks/:id/complete", async (req, res) => {
     const parsed = completeTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
@@ -1341,6 +1349,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         "webui",
       );
       pollIfParentUnblocked(db, done, onQueueHeadChanged);
+      await relandRootAncestor?.(done);
       res.json(presentTask(db, done));
     } catch (err) {
       if (err instanceof DomainError) {

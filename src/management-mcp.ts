@@ -75,6 +75,8 @@ export interface ManagementMcpDeps {
   draftClient?: DraftClient;
   onQueueHeadChanged: () => void;
   retryPrPromotion?: (task: import("./tasks.js").Task) => Promise<void>;
+  /** 付帯子の決着で祖先の着地を撃ち直す(ADR 0092 決定3)— WebUI 側と同じ配線。 */
+  relandRootAncestor?: (task: import("./tasks.js").Task) => Promise<void>;
   defaultAgentName?: string;
   auditorName?: string;
   agentRegistered?: (name: string) => boolean;
@@ -429,6 +431,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           "mcp",
         );
         pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
+        // 付帯子の決着は、待っていた祖先の着地を起こす(ADR 0092 決定3)
+        await deps.relandRootAncestor?.(task);
         return toolResult(getTask(deps.db, task.id)!);
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
@@ -531,6 +535,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       try {
         const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, deps.clock.now(), "mcp");
         pollIfParentUnblocked(deps.db, done, deps.onQueueHeadChanged);
+        await deps.relandRootAncestor?.(done);
         return toolResult(done);
       } catch (err) {
         if (err instanceof DomainError) return toolError(err.message);
@@ -619,6 +624,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               resolveWorkspace: deps.resolveWorkspace,
               github: deps.github,
               retryPrPromotion: deps.retryPrPromotion,
+              relandRootAncestor: deps.relandRootAncestor,
               agentRegistered: deps.agentRegistered,
               containment: deps.containment,
               registryReachability: deps.registryReachability,

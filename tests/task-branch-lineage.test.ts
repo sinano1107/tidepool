@@ -158,7 +158,15 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
   await complete(repair.id);
 
   expect(git(workspace.path, "show", `task/${reviewed.id}:repair.txt`)).toBe("fixed");
+  // 被レビュー work の着地は付帯子(review)の決着待ちで、修理を取り込んでから
+  // 1本だけ開く(ADR 0092 決定1)
+  expect(t.github.requests).toEqual([]);
+  await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
+  await t.clock.advance(HOUR);
+  await complete(review.id);
+
   expect(t.github.requests).toHaveLength(1);
+  expect(t.github.requests[0]?.branch).toBe(`task/${reviewed.id}`);
 });
 
 it("review の修理は元 PR が merge 済みなら保護ブランチから切られ、自分の PR を開く", async () => {
@@ -186,8 +194,10 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
   commitWork(workspace.path, "repair.txt", "fixed after merge\n");
   await complete(repair.id);
 
-  expect(t.github.requests).toHaveLength(2);
-  expect(t.github.requests[1]?.branch).toBe(`task/${repair.id}`);
+  // 被レビュー work 側の PR は付帯子(review)の決着待ちで開かない(ADR 0092 決定1)
+  // ので、開くのは修理自身の1本だけ
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.requests[0]?.branch).toBe(`task/${repair.id}`);
 });
 
 it("ルート review の修理子は work の祖先がないため保護ブランチから切られる", async () => {
@@ -365,8 +375,10 @@ it("付帯子の実行中に祖先が着地したら、完了時の再解決で�
   commitWork(workspace.path, "repair.txt", "repair after landing\n");
   await complete(repair.id);
 
-  expect(t.github.requests).toHaveLength(2);
-  expect(t.github.requests[1]?.branch).toBe(`task/${repair.id}`);
+  // 祖先の PR は付帯子(review)の決着待ちで開かない(ADR 0092 決定1)ので、開くのは
+  // 帰り先を切り替えた修理自身の1本だけ
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.requests[0]?.branch).toBe(`task/${repair.id}`);
   expect(git(workspace.path, "diff", "--name-only", `task/${reviewed.id}..task/${repair.id}`)).toBe(
     "repair.txt",
   );

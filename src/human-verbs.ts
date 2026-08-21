@@ -276,6 +276,7 @@ export interface SubmitAnswerDeps {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
   retryPrPromotion?: (task: Task) => Promise<void>;
+  relandRootAncestor?: (task: Task) => Promise<void>;
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
   registryReachability?: RegistryReachabilityCheck;
@@ -525,6 +526,12 @@ export async function submitAnswer(
       now(),
       origin,
     );
+  }
+  // abandon は失敗タスクの木を丸ごと cancel する — そこに付帯子が居たなら、待って
+  // いた祖先の着地はここで起きる(ADR 0092 決定3: cancel も決着)
+  if (task.question_cancel_option !== null && answers[0] === task.question_cancel_option) {
+    const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
+    if (abandoned) await deps.relandRootAncestor?.(abandoned);
   }
   // An unblocked parent or reinstated quarantined resource can make the queue
   // head pickable immediately. During triage, staging keeps both flags false.

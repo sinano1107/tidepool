@@ -2090,6 +2090,59 @@ export function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR ${rowRef}.type = 'question')`;
 }
 
+/** 着地の門(ADR 0092 決定1): 着地するタスクの子孫全体に付いた、未決着の付帯子の数。
+ *  付帯子は型で列挙せず `awaitedChildSql` の補集合で取る(ADR 0049)— 完了時レビューも
+ *  異議修理も RCA も等しく数え、新しい種類の子が生えても黙って古くならない。範囲が
+ *  直下でなく子孫全体なのは、決着済み分解子への修理も、その修理に付いたレビューも、
+ *  系譜経由で着地する枝へ merge back されるから(ADR 0053)— 着地する枝へ流れ込むもの
+ *  すべてが門の対象。 */
+export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
+  const { n } = db
+    .prepare(
+      `WITH RECURSIVE subtree(id) AS (
+         SELECT ?
+         UNION
+         SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id
+       )
+       SELECT COUNT(*) AS n FROM tasks c JOIN subtree s ON c.parent_id = s.id
+        WHERE c.status NOT IN ('done', 'cancelled') AND NOT ${awaitedChildSql("c")}`,
+    )
+    .get(taskId) as { n: number };
+  return n;
+}
+
+/** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
+ *  つき一度きりなので、「この待ちで既に刻んだか」は「このタスクに landing_deferred が
+ *  あるか」で足りる — 付帯子が決着するたびの再検査で重複させない。 */
+export function recordLandingDeferred(db: Db, taskId: string, unsettled: number, now: Date): void {
+  const already = db
+    .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind = 'landing_deferred'")
+    .get(taskId);
+  if (already) return;
+  appendEvent(db, {
+    taskId,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "landing_deferred", unsettled_attached_children: unsettled },
+    at: now,
+  });
+}
+
+/** 着地が済んでいるか(ADR 0092 決定3): 付帯子の決着が撃ち直す着地を、同じタスクで
+ *  二重に起こさないための門。着地の3面それぞれが残す痕跡 — PR(`pr_opened`)、
+ *  着地対象なし(`nothing_to_land`)、purely-local の着地 question — を見る。
+ *  question は status を問わない: `hold` と答えた決定を再提示してはならない。 */
+export function taskHasLanded(db: Db, taskId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 WHERE EXISTS (SELECT 1 FROM events
+                               WHERE task_id = ? AND kind IN ('pr_opened', 'nothing_to_land'))
+                OR EXISTS (SELECT 1 FROM tasks WHERE question_pending_local_merge_task_id = ?)`,
+    )
+    .get(taskId, taskId);
+  return row !== undefined;
+}
+
 /** The one SQL shape of "this task's execution workspace is quarantined"
  *  (issue #26 / ADR 0009), shared by `nextSlotTask`'s pickup gate and
  *  `listQueue`'s skipped display — both gate on the same
