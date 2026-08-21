@@ -87,6 +87,7 @@ import {
   closeTriageSessionOnly,
   commitTriage,
   consumePendingDump,
+  landingAnnotation,
   listPendingDumps,
   listScratchpad,
   raiseObjection,
@@ -395,10 +396,10 @@ const pauseSchema = z.object({
   paused: z.boolean(),
 });
 
-// Spend-down (ADR 0030 / issue #128) — pause と同じ人間専用の盤面状態。
-// window: null が手動取り消し。
+// Spend-down (ADR 0030 / 0091) — pause と同じ人間専用の盤面状態。
 const spendDownSchema = z.object({
-  window: z.enum(["session", "week"]).nullable(),
+  window: z.enum(["session", "week"]),
+  active: z.boolean(),
 });
 
 const objectionSchema = z.object({
@@ -454,6 +455,10 @@ export interface ApiRouterDeps {
   github?: GitHubClient;
   /** Retries a failed PR promotion from a failure question (issue #66). */
   retryPrPromotion?: (task: Task) => Promise<void>;
+  /** 付帯子が決着したとき、待っていた祖先の着地を撃ち直す(ADR 0092 決定3)。
+   *  人間面で決着が起こる3経路(complete / cancel / abandon)がこれを撃つ。
+   *  Absent → 着地の面を持たない盤面(PR 昇格を持たないのと同じ姿)。 */
+  relandRootAncestor?: (task: Task) => Promise<void>;
   /** Assignee/workspace name candidates for the registration screen (issue
    *  #12), resolved from the agent registry by the caller (main.ts) — the
    *  API layer never touches the filesystem/git registry loader itself.
@@ -575,6 +580,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     resolveWorkspace,
     github,
     retryPrPromotion,
+    relandRootAncestor,
     registryCandidates,
     draftClient,
     defaultAgentName,
@@ -1220,7 +1226,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // gates it — the domain (cancelTaskDirectly) enforces all of this; the route
   // passes the default workspace/agent pointers the quarantine half of the
   // gate resolves against.
-  router.post("/tasks/:id/cancel", (req, res) => {
+  router.post("/tasks/:id/cancel", async (req, res) => {
     const parsed = cancelTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
@@ -1245,6 +1251,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // same trigger the /complete route uses (CONTEXT.md: cancelled の親を
       // 塞がない導出は既存機構をそのまま使う).
       pollIfParentUnblocked(db, task, onQueueHeadChanged);
+      // 付帯子の決着は、待っていた祖先の着地を起こす(ADR 0092 決定3)
+      await relandRootAncestor?.(task);
       res.json(presentTask(db, getTask(db, task.id)!));
     } catch (err) {
       if (err instanceof DomainError) {
@@ -1278,6 +1286,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           resolveWorkspace,
           github,
           retryPrPromotion,
+          relandRootAncestor,
           agentRegistered,
           containment,
           registryReachability,
@@ -1314,7 +1323,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // opening, tree-rule release) — this route is never a shortcut around it.
   // Not gated on "blocks a parent" too: AC4's orphan human task must stay
   // completable through this same route.
-  router.post("/tasks/:id/complete", (req, res) => {
+  router.post("/tasks/:id/complete", async (req, res) => {
     const parsed = completeTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
@@ -1341,6 +1350,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         "webui",
       );
       pollIfParentUnblocked(db, done, onQueueHeadChanged);
+      await relandRootAncestor?.(done);
       res.json(presentTask(db, done));
     } catch (err) {
       if (err instanceof DomainError) {
@@ -1556,9 +1566,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // Spend-down は pause と同じ「盤面状態」応答に同乗する — UI の露出面が同格
   // (ADR 0030: settings ではなく盤面状態としての表示・操作面)
-  function spendDownJson(): { window: string; activatedAt: string } | null {
+  function spendDownJson() {
     const state = getSpendDown(db);
-    return state && { window: state.window, activatedAt: state.activatedAt.toISOString() };
+    return {
+      session: state.session && { activatedAt: state.session.activatedAt.toISOString() },
+      week: state.week && { activatedAt: state.week.activatedAt.toISOString() },
+    };
   }
 
   // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。`throttle` は資源単位の
@@ -1579,10 +1592,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    if (parsed.data.window === null) {
-      clearSpendDown(db);
-    } else {
+    if (parsed.data.active) {
       setSpendDown(db, parsed.data.window, clock.now());
+    } else {
+      clearSpendDown(db, parsed.data.window);
     }
     // 有効化(今すぐ残りを燃やせ)も取り消しも即時再評価 — 取り消し側を tick 待ち
     // にすると、spend-down 時代の throttle_state が最大1時間 UI に残る
@@ -1740,8 +1753,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ),
     );
 
+  // ADR 0092 決定4: question 行は「一般 question」と「着地 question」に分かれて出る。
+  // 着地 question は `landing` を持ち、その `blocked_by` が回答可否そのもの — 判定は
+  // ここ(盤面)で行い、WebUI は描画だけを担う。
   router.get("/tasks", async (_req, res) => {
-    res.json(await presentLive(listBoard(db, defaultAgentName, auditorName)));
+    const board = await presentLive(listBoard(db, defaultAgentName, auditorName));
+    res.json(
+      board.map((task) =>
+        task.type === "question" ? { ...task, landing: landingAnnotation(db, task) } : task,
+      ),
+    );
   });
 
   // the persistent your-tasks list (issue #13): every unsettled human-

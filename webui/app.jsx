@@ -152,6 +152,10 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
         agentIcon: isBoard ? undefined : icons[q.registrant],
         board: isBoard,
         context: q.purpose,
+        // 着地 question(purely-local の land question / PR の merge question)は
+        // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
+        // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
+        landing: q.landing ?? null,
         // 1-4 items, each with its own title/detail/options (issue #30) — a
         // single-item bundle is the degenerate, most common case
         items: (q.question_items ?? []).map((item) => ({
@@ -330,8 +334,8 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     agents: [],
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
-    // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
-    spendDown: pause.spendDown ?? null,
+    // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
+    spendDown: pause.spendDown ?? { session: null, week: null },
     throttled,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled, fableResumesAt,
@@ -2837,6 +2841,17 @@ function App() {
     }));
   };
 
+  // S3 — 着地 question の回答可否は盤面が今この瞬間に答える(ADR 0092 決定4)。
+  // triage の data は フロー1回分の凍結 snapshot なので、この面に来るまでに打った
+  // 異議は snapshot の注釈には映らない — merge 判断に入るたびに読み直す。
+  const loadLanding = async () => {
+    const res = await fetch('/api/tasks');
+    if (!res.ok) throw new Error(res.statusText);
+    const board = await res.json();
+    return Object.fromEntries(
+      board.filter((t) => t.type === 'question' && t.landing).map((t) => [t.id, t.landing]));
+  };
+
   // Commit = close + cursor (ADR 0065 decision 2 / consequences): two calls,
   // composed client-side. /api/triage/close applies scratchpad dispositions
   // and closes an open session when there is one — only that first call can
@@ -2989,15 +3004,15 @@ function App() {
     }
   };
 
-  // Spend-down (ADR 0030 / issue #128) — pause と同格の盤面状態。有効化は
+  // Spend-down (ADR 0091) — pause と同格の盤面状態。有効化は
   // サーバー側が即時 poll を発火する(残りを今すぐ燃やす操作なので)。
-  const setSpendDown = async (window) => {
+  const setSpendDown = async (window, active) => {
     try {
-      await api('/api/spend-down', { window });
+      await api('/api/spend-down', { window, active });
       await refresh();
-      say(window ? 'warn' : 'info',
-        window ? `spend-down armed · ${window}` : 'spend-down cancelled',
-        window
+      say(active ? 'warn' : 'info',
+        active ? `spend-down armed · ${window}` : `spend-down cancelled · ${window}`,
+        active
           ? 'pace line off — burns to the 100% cap, expires at the window reset'
           : 'pace line back on');
     } catch (err) {
@@ -3140,7 +3155,7 @@ function App() {
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
         {tab === 'triage' && (data.questions.length || unreadCount || data.scratchpad.length
           ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff}
-              onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview}
+              onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview} loadLanding={loadLanding}
               onTranslate={onTranslateProp} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>
               <div style={{ fontSize: 28, marginBottom: 6 }}>🐚</div>

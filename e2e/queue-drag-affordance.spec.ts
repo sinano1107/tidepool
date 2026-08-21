@@ -17,6 +17,7 @@ test("triage の読み取り専用 preview はドラッグ可能に見せず、Q
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: /^left/ }).click();
   await page.getByRole("button", { name: "Log skim" }).click();
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
 
   await expect(page.getByText("The tide is going out.")).toBeVisible();

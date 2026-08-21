@@ -26,8 +26,9 @@ import {
   registerTask,
   settleMergeQuestionAsObserved,
   type Task,
+  taskIdForPr,
 } from "./tasks.js";
-import { stageFrontInsert, triageActivity } from "./triage.js";
+import { landingBlock, stageFrontInsert, triageActivity } from "./triage.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
@@ -276,6 +277,7 @@ export interface SubmitAnswerDeps {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
   retryPrPromotion?: (task: Task) => Promise<void>;
+  relandRootAncestor?: (task: Task) => Promise<void>;
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
   registryReachability?: RegistryReachabilityCheck;
@@ -310,6 +312,21 @@ export function humanCancelDefaults(
     defaultAgentName,
     auditorName,
   };
+}
+
+/** ADR 0092 決定5: 着地 question への `merge` 回答を受理する直前の検証。門(決定1)は
+ *  question が立つ瞬間の盤面しか見ていないので、立った後に付いた付帯子や、この triage で
+ *  出た未束ねの異議はここでしか捕まらない。異議は Commit で修理子へ束ねられ(ADR 0046)、
+ *  以後は (a) 側で捕まるので、2つの検査は同じ待ちを別の時刻から見た姿である。
+ *  `hold` は検証しない — 着地しない決定はいつでもできる。 */
+function assertLandingAllowed(db: Db, landingTaskId: string): void {
+  const block = landingBlock(db, landingTaskId);
+  if (!block) return;
+  throw new DomainError(
+    block.kind === "attached_children"
+      ? `cannot merge yet: ${block.count} attached child task(s) unsettled`
+      : `cannot merge yet: ${block.count} objection(s) raised in this triage await commit`,
+  );
 }
 
 /** A settled child can make its parent immediately pickable on either human surface. */
@@ -360,6 +377,7 @@ export async function submitAnswer(
   const wantsLocalMerge =
     localMergeTaskId !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsLocalMerge) {
+    assertLandingAllowed(deps.db, localMergeTaskId);
     const mergeWorkspace = resolveWorkspaceForAnswer(
       deps,
       task.workspace,
@@ -399,6 +417,7 @@ export async function submitAnswer(
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsMerge) {
+    assertLandingAllowed(deps.db, taskIdForPr(deps.db, mergePr, task.workspace));
     if (!deps.github) {
       throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
     }
@@ -525,6 +544,12 @@ export async function submitAnswer(
       now(),
       origin,
     );
+  }
+  // abandon は失敗タスクの木を丸ごと cancel する — そこに付帯子が居たなら、待って
+  // いた祖先の着地はここで起きる(ADR 0092 決定3: cancel も決着)
+  if (task.question_cancel_option !== null && answers[0] === task.question_cancel_option) {
+    const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
+    if (abandoned) await deps.relandRootAncestor?.(abandoned);
   }
   // An unblocked parent or reinstated quarantined resource can make the queue
   // head pickable immediately. During triage, staging keeps both flags false.

@@ -968,10 +968,7 @@ export interface CancelDefaults {
  *   - a **quarantine Confirmation** whose resource is used by a subtree task,
  *     marked by `question_quarantine_workspace` or `_agent`. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
-  const subtree = `WITH RECURSIVE subtree(id) AS (
-      SELECT @root
-      UNION
-      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id)`;
+  const subtree = subtreeSql("@root");
   const failure = db
     .prepare(
       `${subtree}
@@ -1470,6 +1467,19 @@ export function registerMergeQuestion(
   );
 }
 
+/** merge question は PR 番号しか持たないので、着地するタスクは「同じ workspace で
+ *  その PR を開いたタスク」で引く(PR 番号は repo 内でしか一意でない)。`recordPrOpened`
+ *  が `pr_number` を書いてから question を立てるので、開いている question には必ず対応
+ *  する行がある。 */
+export function taskIdForPr(db: Db, prNumber: number, workspace: string | null): string {
+  const row = db
+    .prepare("SELECT id FROM tasks WHERE pr_number = ? AND workspace IS ?")
+    .get(prNumber, workspace) as { id: string } | undefined;
+  // 引けないなら門を素通りさせず止める(fail-closed — ADR 0092 決定5 は UI に依らず盤面が守る)
+  if (!row) throw new DomainError(`cannot merge: no task in this workspace opened PR #${prNumber}`);
+  return row.id;
+}
+
 /** ADR 0079 決定3/4: retires a merge question whose PR turned out to be
  *  already merged outside the board. Deliberately not `answerQuestion`:
  *  nobody decided anything, so there is no `question_answered` event, no
@@ -1484,6 +1494,36 @@ export function settleMergeQuestionAsObserved(
   prNumber: number,
   now: Date,
 ): void {
+  settleQuestionAsObserved(db, questionId, { kind: "pr_merge_observed", pr_number: prNumber }, now);
+}
+
+/** ADR 0092 決定3 の再発火が着地を成立させたら、同じタスクを指す PR 昇格失敗の
+ *  question はもう誰にも訊くことがない(issue #406)。開いたままにすると `retry` が
+ *  既に開いている PR へ `gh pr create` を撃ち、`abandon promotion` は「PR は無い」と
+ *  事実と逆の決定を記録する。引退は上と同じ観測決着 —— 再発火は人間の決定ではない。
+ *  再発火が二度失敗して失敗 question が積み上がっている場合もあるので、todo の行は
+ *  すべて引退させる。 */
+export function settlePrPromotionQuestionsAsObserved(db: Db, taskId: string, now: Date): void {
+  const rows = db
+    .prepare(
+      "SELECT id FROM tasks WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo'",
+    )
+    .all(taskId) as Array<{ id: string }>;
+  for (const { id } of rows) {
+    settleQuestionAsObserved(db, id, { kind: "pr_promotion_observed" }, now);
+  }
+}
+
+/** 観測決着の1つの綴り: `status='todo'` 限定の UPDATE で question を閉じ、盤面名義の
+ *  観測 event を1件だけ残す。`answerQuestion` を通さないので `question_answered` も
+ *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
+ *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。 */
+function settleQuestionAsObserved(
+  db: Db,
+  questionId: string,
+  payload: EventPayload,
+  now: Date,
+): void {
   db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
@@ -1493,7 +1533,7 @@ export function settleMergeQuestionAsObserved(
       taskId: questionId,
       workerId: BOARD_WORKER_ID,
       origin: "board",
-      payload: { kind: "pr_merge_observed", pr_number: prNumber },
+      payload,
       at: now,
     });
   })();
@@ -2088,6 +2128,65 @@ export function unfinishedChildSql(parentRef: string): string {
  *  per read口. `rowRef` is the SQL alias of the child row. */
 export function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR ${rowRef}.type = 'question')`;
+}
+
+/** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
+ *  (`?` か名前つきパラメータ)。着地の門と直接 cancel の question gate、triage の異議
+ *  勘定が同じ「系譜をたどる」形を共有する。 */
+export function subtreeSql(rootRef: string): string {
+  return `WITH RECURSIVE subtree(id) AS (
+      SELECT ${rootRef}
+      UNION
+      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id)`;
+}
+
+/** 着地の門(ADR 0092 決定1): 着地するタスクの子孫全体に付いた、未決着の付帯子の数。
+ *  付帯子は型で列挙せず `awaitedChildSql` の補集合で取る(ADR 0049)— 完了時レビューも
+ *  異議修理も RCA も等しく数え、新しい種類の子が生えても黙って古くならない。範囲が
+ *  直下でなく子孫全体なのは、決着済み分解子への修理も、その修理に付いたレビューも、
+ *  系譜経由で着地する枝へ merge back されるから(ADR 0053)— 着地する枝へ流れ込むもの
+ *  すべてが門の対象。 */
+export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
+  const { n } = db
+    .prepare(
+      `${subtreeSql("?")}
+       SELECT COUNT(*) AS n FROM tasks c JOIN subtree s ON c.parent_id = s.id
+        WHERE c.status NOT IN ('done', 'cancelled') AND NOT ${awaitedChildSql("c")}`,
+    )
+    .get(taskId) as { n: number };
+  return n;
+}
+
+/** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
+ *  つき一度きりなので、「この待ちで既に刻んだか」は「このタスクに landing_deferred が
+ *  あるか」で足りる — 付帯子が決着するたびの再検査で重複させない。 */
+export function recordLandingDeferred(db: Db, taskId: string, unsettled: number, now: Date): void {
+  const already = db
+    .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind = 'landing_deferred'")
+    .get(taskId);
+  if (already) return;
+  appendEvent(db, {
+    taskId,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "landing_deferred", unsettled_attached_children: unsettled },
+    at: now,
+  });
+}
+
+/** 着地が済んでいるか(ADR 0092 決定3): 付帯子の決着が撃ち直す着地を、同じタスクで
+ *  二重に起こさないための門。着地の3面それぞれが残す痕跡 — PR(`pr_opened`)、
+ *  着地対象なし(`nothing_to_land`)、purely-local の着地 question — を見る。
+ *  question は status を問わない: `hold` と答えた決定を再提示してはならない。 */
+export function taskHasLanded(db: Db, taskId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 WHERE EXISTS (SELECT 1 FROM events
+                               WHERE task_id = ? AND kind IN ('pr_opened', 'nothing_to_land'))
+                OR EXISTS (SELECT 1 FROM tasks WHERE question_pending_local_merge_task_id = ?)`,
+    )
+    .get(taskId, taskId);
+  return row !== undefined;
 }
 
 /** The one SQL shape of "this task's execution workspace is quarantined"

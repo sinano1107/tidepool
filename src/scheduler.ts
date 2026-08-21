@@ -72,12 +72,14 @@ async function checkThrottle(
     resultText !== null
       ? parseUsage(resultText, clock.now())
       : { session: null, week: null, fable: null };
-  // Spend-down (ADR 0030 / issue #128) も poll ごとに読む — 対象ウィンドウの
-  // リセットが観測されたらここで自動失効させる(取り残された状態は必ず放置)。
-  let spendDown = getSpendDown(db);
-  if (spendDown && isSpendDownExpired(spendDown, snapshot)) {
-    clearSpendDown(db);
-    spendDown = null;
+  // Spend-down (ADR 0091) も poll ごとに読み、各対象を自分のリセットで失効させる。
+  const spendDown = getSpendDown(db);
+  for (const window of ["session", "week"] as const) {
+    const state = spendDown[window];
+    if (state && isSpendDownExpired(window, state, snapshot)) {
+      clearSpendDown(db, window);
+      spendDown[window] = null;
+    }
   }
   const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now(), spendDown);
   reportThrottle(db, decision, clock.now());

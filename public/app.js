@@ -131,10 +131,11 @@ const TP_SLOT_STATES = {
   warning: { color: "var(--sun-4)", line: "close to limit \xB7 finishing tp-0142, starting nothing new", meta: "per Anthropic threshold" },
   limit: { color: "var(--coral-4)", line: "usage limit \xB7 nothing starts", meta: "resumes 06:12 \xB7 immediate poll at reset" }
 };
-function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false, onTogglePause, spendDown = null, onSpendDown, onFront, onDoneHuman, onReorder }) {
+function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false, onTogglePause, spendDown = { session: null, week: null }, onSpendDown, onFront, onDoneHuman, onReorder }) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const alert = wsAlert ? data.workspaceAlert : null;
+  const activeSpendDown = ["session", "week"].filter((window2) => spendDown?.[window2]);
   const headId = data.queue[0]?.id ?? null;
   React.useEffect(() => {
     lucide.createIcons();
@@ -169,7 +170,7 @@ function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false
     borderRadius: 1,
     marginBottom: 14,
     background: paused ? "repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)" : slot.color
-  } }), onSpendDown && (spendDown ? /* @__PURE__ */ React.createElement("div", { key: "spend-down-active", style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 14, background: "var(--sun-1)", border: "1px solid var(--sun-2)", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "spend-down \xB7 burning the ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, spendDown.window), " budget to the 100% cap"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", flexShrink: 0 } }, "expires at reset"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(null) }, "cancel")) : /* @__PURE__ */ React.createElement("div", { key: "spend-down-idle", style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down"), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "burn what's left of a window before it expires"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("session") }, "session"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown("week") }, "week"))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: data.queue, onReorder, onFront, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
+  } }), onSpendDown && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", marginBottom: 14, background: activeSpendDown.length ? "var(--sun-1)" : "transparent", border: activeSpendDown.length ? "1px solid var(--sun-2)" : "1px solid transparent", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, activeSpendDown.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: activeSpendDown.length ? "var(--text-body)" : "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down", activeSpendDown.length ? ` \xB7 ${activeSpendDown.join(" + ")}` : "")), ["session", "week"].map((window2) => /* @__PURE__ */ React.createElement("div", { key: window2, style: { display: "flex", alignItems: "center", gap: 8, minHeight: 30 } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: spendDown?.[window2] ? "var(--text-body)" : "var(--text-muted)" } }, spendDown?.[window2] ? `${window2} \xB7 100% cap \xB7 expires at reset` : `${window2} \xB7 pace line on`), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(window2, !spendDown?.[window2]) }, spendDown?.[window2] ? `cancel ${window2}` : `arm ${window2}`)))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: data.queue, onReorder, onFront, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
 }
 Object.assign(window, { QueueScreen, TpQueueList });
 
@@ -321,6 +322,15 @@ const TP_SCRATCH_KINDS = [
   { key: "register", label: "register" },
   { key: "discard", label: "discard" }
 ];
+const S_QUESTIONS = 0;
+const S_LOG = 1;
+const S_MERGE = 2;
+const S_QUEUE = 3;
+const S_COMMIT = 4;
+const TP_LANDING_BLOCKED = {
+  attached_children: "attached children unsettled",
+  objections: "objections await commit"
+};
 const LOG_READ_BATCH = 8;
 const NO_WORKSPACE_LABEL = "no workspace";
 function groupLogEntries(entries) {
@@ -359,10 +369,12 @@ function commitPendingObjectionKeys(log, localObjections) {
     ...log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id))
   ]);
 }
-function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, onTranslate }) {
+function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }) {
   const { Button, Input, LogEntry, QueueItem, Switch } = window.TidepoolDesignSystem_8a0ead;
-  const nQuestions = data.questions.length;
-  const [section, setSection] = React.useState(nQuestions ? 0 : 1);
+  const generalQuestions = data.questions.filter((q) => !q.landing);
+  const landingQuestions = data.questions.filter((q) => q.landing);
+  const nQuestions = generalQuestions.length;
+  const [section, setSection] = React.useState(nQuestions ? S_QUESTIONS : S_LOG);
   const [answers, setAnswers] = React.useState({});
   const [objections, setObjections] = React.useState({});
   const [objecting, setObjecting] = React.useState(null);
@@ -372,6 +384,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [scratchKinds, setScratchKinds] = React.useState({});
   const scratchSeq = React.useRef(0);
   const [preview, setPreview] = React.useState(null);
+  const [landingNow, setLandingNow] = React.useState(null);
   const answerQ = async (q, a) => {
     if (onAnswer) {
       if (!a || answers[q.id]) return;
@@ -404,12 +417,16 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     });
   };
   React.useEffect(() => {
-    if (section === 2) refreshPreview();
+    if (section === S_QUEUE) refreshPreview();
+  }, [section]);
+  React.useEffect(() => {
+    if (section === S_MERGE && loadLanding) loadLanding().then(setLandingNow).catch(() => {
+    });
   }, [section]);
   const logListRef = React.useRef(null);
   const displayedSeen = React.useRef(/* @__PURE__ */ new Set());
   React.useEffect(() => {
-    if (section !== 1 || !onDisplayed || !logListRef.current) return;
+    if (section !== S_LOG || !onDisplayed || !logListRef.current) return;
     const byId = new Map(data.log.filter((l) => l.unread).map((l) => [String(l.id), l]));
     const io = new IntersectionObserver((observed) => {
       const shown = [];
@@ -529,20 +546,27 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     handoffTranslateRequested.current.add(k);
     runTranslate(onTranslate, { type: "handoff", task_id: entry.taskId }, (result) => setHandoffTranslations((prev) => ({ ...prev, [k]: result })));
   };
-  const answered = Object.values(answers).filter(Boolean).length;
+  const answered = generalQuestions.filter((q) => answers[q.id]).length;
+  const nObjections = commitPendingObjectionKeys(data.log, objections).size;
   const unread = data.log.filter((l) => l.unread);
-  const progress = (section + (section === 0 ? answered / Math.max(1, nQuestions) : 0)) / 3;
-  const heads = [
-    { step: "1 / 3 \u2014 questions", title: `The tide brought ${nQuestions} question${nQuestions === 1 ? "" : "s"}.`, sub: "answers persist at once; unblocked parents surface at the front on commit.", next: answered === nQuestions ? "Log skim" : `Log skim (${nQuestions - answered} unanswered)` },
-    { step: nQuestions ? "2 / 3 \u2014 decision log" : "2 / 3 \u2014 decision log \xB7 no questions today", title: `${unread.length} decisions made overnight.`, sub: "silence is consent \u2014 tap an entry to object.", next: "Queue check" },
-    { step: "3 / 3 \u2014 queue", title: "The tide is going out.", sub: loadPreview ? "front-inserted by this session highlighted. read-only \u2014 reorder on the Queue screen. applies at commit." : "front-inserted by this session highlighted. reorder is optional.", next: "Commit" }
+  const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / (S_COMMIT + 1);
+  const landingBlockOf = (q) => (landingNow?.[q.id] ?? q.landing).blocked_by;
+  const landingReady = landingQuestions.filter((q) => answers[q.id] || landingBlockOf(q) === null);
+  const landingBlocked = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
+  const steps = [
+    { step: "questions", title: `The tide brought ${nQuestions} question${nQuestions === 1 ? "" : "s"}.`, sub: "answers persist at once; unblocked parents surface at the front on commit.", next: answered === nQuestions ? "Log skim" : `Log skim (${nQuestions - answered} unanswered)` },
+    { step: nQuestions ? "decision log" : "decision log \xB7 no questions today", title: `${unread.length} decisions made overnight.`, sub: "silence is consent \u2014 tap an entry to object.", next: "Merge decisions" },
+    { step: "merge decisions", title: `${landingReady.length} branch${landingReady.length === 1 ? "" : "es"} ready to land.`, sub: "you have read the decisions behind these \u2014 merge or hold.", next: "Queue check" },
+    { step: "queue", title: "The tide is going out.", sub: loadPreview ? "front-inserted by this session highlighted. read-only \u2014 reorder on the Queue screen. applies at commit." : "front-inserted by this session highlighted. reorder is optional.", next: "Wrap up" },
+    { step: "commit", title: "One last sort.", sub: "lines you leave unsorted carry over to the next triage.", next: "Commit" }
   ];
+  const heads = steps.map((head, i) => ({ ...head, step: `${i + 1} / ${S_COMMIT + 1} \u2014 ${head.step}` }));
   const cur = heads[section];
   const scratchResolved = () => [
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || "task" })),
     ...dropped.map((s) => ({ id: s.id, text: s.text, kind: "discard" }))
   ];
-  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === 0 ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: data.questions.length, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === 0 && /* @__PURE__ */ React.createElement("div", null, data.questions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!onAnswer && !!answers[q.id], onTranslate })))), section === 1 && (() => {
+  return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!onAnswer && !!answers[q.id], onTranslate })))), section === S_LOG && (() => {
     const renderLogRow = (l) => {
       const k = logKey(l);
       const hasHandoff = l.kind === "completion" && (l.handoff != null || loadHandoff && l.handoffPresent);
@@ -599,9 +623,22 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         " \u2014 show"
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
-  })(), section === 2 && (() => {
-    const nObjections = commitPendingObjectionKeys(data.log, objections).size;
-    const scratchPanel = scratch.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 } }, "scratchpad \u2014 triage before commit"), scratch.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%", fontSize: "var(--text-sm)", color: (scratchKinds[l.id] || "task") === "discard" ? "var(--text-muted)" : "var(--text-body)", textDecoration: (scratchKinds[l.id] || "task") === "discard" ? "line-through" : "none" } }, l.text), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4 } }, TP_SCRATCH_KINDS.map((k) => {
+  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!onAnswer && !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
+    const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
+    if (blocked.length === 0) return null;
+    return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, blocked.length, " landing question", blocked.length > 1 ? "s" : "", " not yet answerable \u2014 ", TP_LANDING_BLOCKED[kind]);
+  })), section === S_QUEUE && (() => {
+    if (loadPreview) {
+      return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: preview ?? [] }));
+    }
+    const pending = Object.entries(answers).filter(([, a]) => a).map(([qid]) => data.questions.find((x) => x.id === qid)).filter((q) => q.parent).map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, assigneeIcon: q.agentIcon, frontInserted: true }));
+    if (nObjections > 0) {
+      pending.push({ id: "tp-0151", title: `repair task \u2014 ${nObjections} objection${nObjections > 1 ? "s" : ""} bundled`, assignee: "reef-crab", frontInserted: true });
+    }
+    const previewQueue = data.queue.filter((t) => !pending.some((p) => p.id === t.id));
+    return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, pending.map((t, i) => /* @__PURE__ */ React.createElement(QueueItem, { key: t.id, position: i + 1, task: t, frontInserted: true })), /* @__PURE__ */ React.createElement(TpQueueList, { tasks: previewQueue, baseIndex: pending.length, onReorder: onReorderQueue, onFront, headId: data.queue[0]?.id }));
+  })(), section === S_COMMIT && (() => {
+    return /* @__PURE__ */ React.createElement("div", null, nObjections > 0 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: 0 } }, nObjections, " objection", nObjections > 1 ? "s" : "", " bundle into repair tasks at commit \u2014 one per objected task, queue tail"), scratch.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 } }, "scratchpad \u2014 triage before commit"), scratch.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%", fontSize: "var(--text-sm)", color: (scratchKinds[l.id] || "task") === "discard" ? "var(--text-muted)" : "var(--text-body)", textDecoration: (scratchKinds[l.id] || "task") === "discard" ? "line-through" : "none" } }, l.text), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4 } }, TP_SCRATCH_KINDS.map((k) => {
       const picked = (scratchKinds[l.id] || "task") === k.key;
       return /* @__PURE__ */ React.createElement(
         "button",
@@ -621,17 +658,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         },
         k.label
       );
-    })))));
-    if (loadPreview) {
-      return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: preview ?? [] })), nObjections > 0 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginTop: 10 } }, nObjections, " objection", nObjections > 1 ? "s" : "", " bundle into repair tasks at commit \u2014 one per objected task, queue tail"), scratchPanel);
-    }
-    const pending = Object.entries(answers).filter(([, a]) => a).map(([qid]) => data.questions.find((x) => x.id === qid)).filter((q) => q.parent).map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, assigneeIcon: q.agentIcon, frontInserted: true }));
-    if (nObjections > 0) {
-      pending.push({ id: "tp-0151", title: `repair task \u2014 ${nObjections} objection${nObjections > 1 ? "s" : ""} bundled`, assignee: "reef-crab", frontInserted: true });
-    }
-    const previewQueue = data.queue.filter((t) => !pending.some((p) => p.id === t.id));
-    return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, pending.map((t, i) => /* @__PURE__ */ React.createElement(QueueItem, { key: t.id, position: i + 1, task: t, frontInserted: true })), /* @__PURE__ */ React.createElement(TpQueueList, { tasks: previewQueue, baseIndex: pending.length, onReorder: onReorderQueue, onFront, headId: data.queue[0]?.id })), scratchPanel);
-  })(), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 20 } }, section > (nQuestions ? 0 : 1) && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", onClick: () => setSection(section - 1) }, "Back"), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: () => section < 2 ? setSection(section + 1) : onCommit(answers, objections, scratchResolved()) }, cur.next)), /* @__PURE__ */ React.createElement(TpScratchpad, { lines: scratch, onAdd: addScratch, onRemove: removeScratch }), section === 2 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, "commit applies scratchpad dispositions and advances the read cursor"));
+    }))))));
+  })(), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 20 } }, section > (nQuestions ? S_QUESTIONS : S_LOG) && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", onClick: () => setSection(section - 1) }, "Back"), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: () => section < S_COMMIT ? setSection(section + 1) : onCommit(answers, objections, scratchResolved()) }, cur.next)), /* @__PURE__ */ React.createElement(TpScratchpad, { lines: scratch, onAdd: addScratch, onRemove: removeScratch }), section === S_COMMIT && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, "commit applies scratchpad dispositions and advances the read cursor"));
 }
 Object.assign(window, { TriageScreen, TpQuestionCard, TpQuestionItemPicker, TpWaterline, TpSegmentGauge });
 
@@ -783,6 +811,10 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       agentIcon: isBoard ? void 0 : icons[q.registrant],
       board: isBoard,
       context: q.purpose,
+      // 着地 question(purely-local の land question / PR の merge question)は
+      // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
+      // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
+      landing: q.landing ?? null,
       // 1-4 items, each with its own title/detail/options (issue #30) — a
       // single-item bundle is the degenerate, most common case
       items: (q.question_items ?? []).map((item) => ({
@@ -965,8 +997,8 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     running: !!running,
     paused: !!paused,
     triageActive: halts.some((h) => h.kind === "triage"),
-    // Spend-down (ADR 0030 / issue #128) — pause と同じ盤面状態応答から素通し
-    spendDown: pause.spendDown ?? null,
+    // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
+    spendDown: pause.spendDown ?? { session: null, week: null },
     throttled,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled,
@@ -2898,6 +2930,14 @@ function App() {
       frontInserted: t.front_inserted
     }));
   };
+  const loadLanding = async () => {
+    const res = await fetch("/api/tasks");
+    if (!res.ok) throw new Error(res.statusText);
+    const board = await res.json();
+    return Object.fromEntries(
+      board.filter((t) => t.type === "question" && t.landing).map((t) => [t.id, t.landing])
+    );
+  };
   const closeTriage = (body) => api("/api/triage/close", body);
   const commitTriage = async (answers, objections, scratch) => {
     let result;
@@ -3013,14 +3053,14 @@ function App() {
       say("danger", "pause toggle failed", String(err.message || err));
     }
   };
-  const setSpendDown = async (window2) => {
+  const setSpendDown = async (window2, active) => {
     try {
-      await api("/api/spend-down", { window: window2 });
+      await api("/api/spend-down", { window: window2, active });
       await refresh();
       say(
-        window2 ? "warn" : "info",
-        window2 ? `spend-down armed \xB7 ${window2}` : "spend-down cancelled",
-        window2 ? "pace line off \u2014 burns to the 100% cap, expires at the window reset" : "pace line back on"
+        active ? "warn" : "info",
+        active ? `spend-down armed \xB7 ${window2}` : `spend-down cancelled \xB7 ${window2}`,
+        active ? "pace line off \u2014 burns to the 100% cap, expires at the window reset" : "pace line back on"
       );
     } catch (err) {
       say("danger", "spend-down failed", String(err.message || err));
@@ -3112,6 +3152,7 @@ function App() {
       onScratchAdd: scratchAdd,
       onDisplayed: reportDisplayed,
       loadPreview,
+      loadLanding,
       onTranslate: onTranslateProp
     }
   ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, slotState: data.running ? "busy" : data.throttled ? "limit" : "free", paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: doneHuman, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, registerLeaveGuard: (fn) => {

@@ -141,7 +141,7 @@ const TP_SLOT_STATES = {
   limit: { color: 'var(--coral-4)', line: 'usage limit · nothing starts', meta: 'resumes 06:12 · immediate poll at reset' },
 };
 
-function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false, onTogglePause, spendDown = null, onSpendDown, onFront, onDoneHuman, onReorder }) {
+function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false, onTogglePause, spendDown = { session: null, week: null }, onSpendDown, onFront, onDoneHuman, onReorder }) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   // real deployments pass live slot content via data.slot; the canned states
   // remain for the mock. Pause は行を作り直さない — 停止の並び順はサーバの列挙が
@@ -149,6 +149,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
   // 残るのは pause ボタン・波線・文字色といった pause の操作面のためである。
   const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const alert = wsAlert ? data.workspaceAlert : null;
+  const activeSpendDown = ['session', 'week'].filter((window) => spendDown?.[window]);
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
   const headId = data.queue[0]?.id ?? null;
@@ -199,31 +200,28 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
           : slot.color,
       }}></div>
 
-      {/* Spend-down (ADR 0030 / issue #128) — board state, same exposure rank as
-         Pause: drops the target window's pace line, only the 100% cap remains.
-         Auto-expires at the target window's reset; cancel is the manual out. */}
-      {/* the two branches are both plain divs in the same slot — without keys
-         React would diff them in place and trip over the lucide-replaced <i>
-         (the same trap the pause button's keyed span guards against) */}
-      {onSpendDown && (spendDown ? (
-        <div key="spend-down-active" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 14, background: 'var(--sun-1)', border: '1px solid var(--sun-2)', borderRadius: 'var(--radius-md)' }}>
-          <span style={{ display: 'inline-flex', width: 13, height: 13, color: 'var(--sun-4)', flexShrink: 0 }}>
-            <i data-lucide="flame" style={{ width: 13, height: 13 }}></i>
-          </span>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>
-            spend-down · burning the <span style={{ fontFamily: 'var(--font-mono)' }}>{spendDown.window}</span> budget to the 100% cap
-          </span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }}>expires at reset</span>
-          <Button variant="secondary" size="sm" onClick={() => onSpendDown(null)}>cancel</Button>
+      {/* Spend-down (ADR 0091): each window is an independent target and
+         expires at its own reset. week also carries fable on the server. */}
+      {onSpendDown && (
+        <div style={{ padding: '8px 12px', marginBottom: 14, background: activeSpendDown.length ? 'var(--sun-1)' : 'transparent', border: activeSpendDown.length ? '1px solid var(--sun-2)' : '1px solid transparent', borderRadius: 'var(--radius-md)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            {activeSpendDown.length > 0 && <span style={{ display: 'inline-flex', width: 13, height: 13, color: 'var(--sun-4)', flexShrink: 0 }}><i data-lucide="flame" style={{ width: 13, height: 13 }}></i></span>}
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: activeSpendDown.length ? 'var(--text-body)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              spend-down{activeSpendDown.length ? ` · ${activeSpendDown.join(' + ')}` : ''}
+            </span>
+          </div>
+          {['session', 'week'].map((window) => (
+            <div key={window} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 30 }}>
+              <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-xs)', color: spendDown?.[window] ? 'var(--text-body)' : 'var(--text-muted)' }}>
+                {spendDown?.[window] ? `${window} · 100% cap · expires at reset` : `${window} · pace line on`}
+              </span>
+              <Button variant="secondary" size="sm" onClick={() => onSpendDown(window, !spendDown?.[window])}>
+                {spendDown?.[window] ? `cancel ${window}` : `arm ${window}`}
+              </Button>
+            </div>
+          ))}
         </div>
-      ) : (
-        <div key="spend-down-idle" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>spend-down</span>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>burn what's left of a window before it expires</span>
-          <Button variant="secondary" size="sm" onClick={() => onSpendDown('session')}>session</Button>
-          <Button variant="secondary" size="sm" onClick={() => onSpendDown('week')}>week</Button>
-        </div>
-      ))}
+      )}
 
       {alert && (
         <Card style={{ background: 'var(--coral-1)', border: '1px solid var(--coral-2)', padding: '12px 14px', marginBottom: 14 }}>

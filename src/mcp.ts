@@ -14,6 +14,7 @@ import {
   BOARD_WORKER_ID,
   completeTask,
   contentSourceFor,
+  countUnsettledAttachedChildren,
   DEFAULT_AUDITOR_NAME,
   DomainError,
   decomposeTask,
@@ -23,11 +24,14 @@ import {
   HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
   logDecision,
+  recordLandingDeferred,
   recordPrOpened,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
   resolveTaskAgent,
+  settlePrPromotionQuestionsAsObserved,
   type Task,
+  taskHasLanded,
   taskHistory,
 } from "./tasks.js";
 import {
@@ -190,6 +194,18 @@ export async function handleRootWorkLanding(
     });
     return;
   }
+  // 着地の門(ADR 0092 決定1): 分解ツリー全体に未決着の付帯子が1つでもあれば、
+  // 3面(purely-local の merge question / PR 昇格 / auto-merge キュー投入)のどれも
+  // 走らせない。門が分岐の手前・`nothing_to_land` の後ろにあるので、差分ゼロの完了は
+  // 付帯子に関係なく従来どおり即座に記録される(ADR 0073)。
+  const unsettled = countUnsettledAttachedChildren(deps.db, task.id);
+  if (unsettled > 0) {
+    if (strict) {
+      throw new Error(`review still running: ${unsettled} attached child task(s) unsettled`);
+    }
+    recordLandingDeferred(deps.db, task.id, unsettled, deps.clock.now());
+    return;
+  }
   if (!isRemoteBacked(workspace)) {
     if (strict) {
       throw new Error("purely-local work lands through a merge question, not PR promotion");
@@ -250,6 +266,34 @@ async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
       err instanceof Error ? err.message : String(err),
       deps.clock.now(),
     );
+    return;
+  }
+  // 着地が成立したかは「throw しなかったこと」では測れない —— 非 strict の
+  // `handleRootWorkLanding` は workspace 不在・needs-human・門の不成立で黙って
+  // return する。痕跡を読み直してから、開いたままの PR 昇格失敗 question を引退
+  // させる(issue #406)。共有の `handleRootWorkLanding` 側に置かないのは、strict
+  // retry 経路では同じ question がまだ回答処理の途中にいるため。
+  if (taskHasLanded(deps.db, task.id)) {
+    settlePrPromotionQuestionsAsObserved(deps.db, task.id, deps.clock.now());
+  }
+}
+
+/** 付帯子が決着した瞬間に、その祖先の着地を撃ち直す(ADR 0092 決定3)。走査は新設
+ *  せず、決着を起こす経路(worker の complete、人間面の complete / cancel / abandon)が
+ *  そのまま発火点になる。着地の根は系譜で決まり木の頂点とは限らない(着地済みの根の
+ *  下で切られた修理は自分が根になる — ADR 0053)ので、完了済みの work 祖先すべてに
+ *  撃つ: 根でない祖先は `handleRootWorkLanding` が系譜で飛ばし、着地済みの祖先は
+ *  `taskHasLanded` が飛ばす。門はその中で読み直されるので、待っている間に新しい付帯子が
+ *  付いていればもう一度待つ。 */
+export async function relandRootAncestor(deps: McpDeps, settled: Task): Promise<void> {
+  for (
+    let ancestor = settled.parent_id ? getTask(deps.db, settled.parent_id) : undefined;
+    ancestor;
+    ancestor = ancestor.parent_id ? getTask(deps.db, ancestor.parent_id) : undefined
+  ) {
+    if (ancestor.type !== "work" || ancestor.status !== "done") continue;
+    if (taskHasLanded(deps.db, ancestor.id)) continue;
+    await openHandoffPr(deps, ancestor);
   }
 }
 
@@ -510,7 +554,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         true,
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
       );
-      if (completed) await openHandoffPr(deps, completed);
+      if (completed) {
+        await openHandoffPr(deps, completed);
+        // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
+        await relandRootAncestor(deps, completed);
+      }
       return result;
     },
   );
