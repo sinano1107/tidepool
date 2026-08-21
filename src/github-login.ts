@@ -2,14 +2,9 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-export type GitHubFetch = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
-
 export interface GitHubDeviceFlowDependencies {
   clientId: string;
-  fetch: GitHubFetch;
+  fetch: typeof globalThis.fetch;
   wait: (milliseconds: number) => Promise<void>;
   output: (line: string) => void;
   writeToken: (token: string) => Promise<void>;
@@ -17,7 +12,7 @@ export interface GitHubDeviceFlowDependencies {
 
 export interface GitHubLoginMainDependencies {
   env?: NodeJS.ProcessEnv;
-  fetch?: GitHubFetch;
+  fetch?: typeof globalThis.fetch;
   wait?: (milliseconds: number) => Promise<void>;
   output?: (line: string) => void;
   errorOutput?: (line: string) => void;
@@ -68,7 +63,7 @@ export async function writeGitHubTokenFile(path: string, token: string): Promise
 }
 
 async function postForm(
-  fetch: GitHubFetch,
+  fetch: typeof globalThis.fetch,
   url: string,
   values: Record<string, string>,
 ): Promise<Record<string, unknown>> {

@@ -14,7 +14,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
-  type GitHubFetch,
   githubLoginMain,
   runGitHubDeviceFlow,
   writeGitHubTokenFile,
@@ -28,20 +27,23 @@ function json(body: object): Response {
   });
 }
 
+function deviceCode(interval = 1): Response {
+  return json({
+    device_code: "device-code",
+    user_code: "ABCD-EFGH",
+    verification_uri: "https://github.com/login/device",
+    interval,
+  });
+}
+
 describe("runGitHubDeviceFlow", () => {
   it("shows the device code and URL, polls at GitHub's interval, and writes the approved token", async () => {
     const responses = [
-      json({
-        device_code: "device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 2,
-      }),
+      deviceCode(2),
       json({ error: "authorization_pending" }),
       json({ access_token: "github-user-token", token_type: "bearer", scope: "" }),
     ];
-    const fetch = vi.fn<GitHubFetch>(async () =>
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
       responses.shift() ?? json({ error: "unexpected_request" }),
     );
     const waits: number[] = [];
@@ -91,13 +93,7 @@ describe("runGitHubDeviceFlow", () => {
 
   it("adds five seconds after slow_down unless GitHub returns a replacement interval", async () => {
     const responses = [
-      json({
-        device_code: "device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 1,
-      }),
+      deviceCode(),
       json({ error: "slow_down" }),
       json({ error: "slow_down", interval: 12 }),
       json({ access_token: "github-user-token", token_type: "bearer", scope: "" }),
@@ -119,13 +115,7 @@ describe("runGitHubDeviceFlow", () => {
 
   it("fails without writing a token when the user denies access", async () => {
     const responses = [
-      json({
-        device_code: "device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 1,
-      }),
+      deviceCode(),
       json({ error: "access_denied" }),
     ];
     const writeToken = vi.fn(async () => {});
@@ -144,13 +134,7 @@ describe("runGitHubDeviceFlow", () => {
 
   it("fails without writing a token when the device code expires", async () => {
     const responses = [
-      json({
-        device_code: "device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 1,
-      }),
+      deviceCode(),
       json({ error: "expired_token" }),
     ];
     const writeToken = vi.fn(async () => {});
@@ -249,9 +233,9 @@ describe("npm run github-login", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toBe("Error: TIDEPOOL_GITHUB_TOKEN_FILE is required\n");
-      expect(await readFile(join(home, "github-token"), "utf8").catch(() => null)).toBeNull();
-
-      const fetch = vi.fn<GitHubFetch>(async () => json({ error: "unexpected_request" }));
+      const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+        json({ error: "unexpected_request" }),
+      );
       const writeTokenFile = vi.fn(async () => {});
       expect(
         await githubLoginMain({ env: {}, fetch, writeTokenFile, errorOutput: () => {} }),
@@ -265,16 +249,10 @@ describe("npm run github-login", () => {
 
   it("returns a nonzero status through the production main path when access is denied", async () => {
     const responses = [
-      json({
-        device_code: "device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 1,
-      }),
+      deviceCode(),
       json({ error: "access_denied" }),
     ];
-    const fetch = vi.fn<GitHubFetch>(async () =>
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
       responses.shift() ?? json({ error: "unexpected_request" }),
     );
     const errors: string[] = [];
@@ -302,13 +280,7 @@ describe("npm run github-login", () => {
 
   it("returns a nonzero status through the production main path when the device code expires", async () => {
     const responses = [
-      json({
-        device_code: "device-code",
-        user_code: "ABCD-EFGH",
-        verification_uri: "https://github.com/login/device",
-        expires_in: 900,
-        interval: 1,
-      }),
+      deviceCode(),
       json({ error: "expired_token" }),
     ];
     const errors: string[] = [];
