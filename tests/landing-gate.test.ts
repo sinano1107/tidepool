@@ -32,6 +32,23 @@ async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
 }
 
 
+/** 「PR 昇格が失敗して失敗 question が立っている根 work」—— 失敗のあとに何が起きるかを
+ *  測るテストの共通の出発点。 */
+async function failedPromotion() {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  t.github.scriptFailure(new Error("token expired"));
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const failure = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
+  );
+  expect(t.github.requests).toHaveLength(1);
+  return { workspace, task, failure };
+}
+
 it("purely-local: 未決着の付帯子がある間は着地 question を立てず、付帯子の完了で立つ", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace });
@@ -271,16 +288,7 @@ it("差分ゼロの完了は付帯子に関係なく着地対象なしを即座�
 });
 
 it("strict 経路(PR 昇格失敗の retry)では、門の不成立が付帯子を指す例外になる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace });
-  t.github.scriptFailure(new Error("token expired"));
-  const task = await registerWork(t, "ship the feature");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
-  await completeViaMcp(t, task.id);
-  const failure = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
-  );
+  const { task, failure } = await failedPromotion();
   // 着地済みタスクへ後から出た異議の修理と同じ形
   attachChild(t, task.id, "repair: ship the feature");
   t.github.scriptFailure(null);
@@ -562,6 +570,75 @@ it("PR の merge question も同じ検証を通る — 未決着の付帯子が�
   expect(t.github.merged).toEqual([]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${merge.id}`)).json).toMatchObject({
     status: "todo",
+    question_answer: null,
+  });
+});
+
+it("再発火で PR が開いたら、PR 昇格失敗 question は観測で引退する", async () => {
+  const { workspace, task, failure } = await failedPromotion();
+
+  const repair = attachChild(t, task.id, "repair: ship the feature");
+  t.github.scriptFailure(null);
+  await pickUp(t, repair.id);
+  commitWork(workspace.path, "repair.txt", "repaired\n");
+  await completeViaMcp(t, repair.id);
+
+  expect(t.github.requests).toHaveLength(2);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: null,
+  });
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "question_answered")).toEqual([]);
+  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toMatchObject([
+    { worker_id: "tidepool", origin: "board", payload: { kind: "pr_promotion_observed" } },
+  ]);
+
+  // 引退済みなので retry は受理されず、既存 PR へ `gh pr create` を撃ち直さない
+  expect(await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] })).toMatchObject({
+    status: 409,
+    json: { error: "a done question cannot be answered" },
+  });
+  expect(t.github.requests).toHaveLength(2);
+});
+
+it("再発火が門で止まったら、PR 昇格失敗 question は開いたまま残る", async () => {
+  const { task, failure } = await failedPromotion();
+
+  const first = attachChild(t, task.id, "repair: ship the feature", "human");
+  attachChild(t, task.id, "review: ship the feature", "human");
+  t.github.scriptFailure(null);
+  await api(t.baseUrl, "POST", `/api/tasks/${first.id}/complete`, {});
+
+  // 再発火は走った上で門に止まった —— 走らなかったのと区別する
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
+    expect.objectContaining({
+      kind: "landing_deferred",
+      payload: { kind: "landing_deferred", unsettled_attached_children: 1 },
+    }),
+  );
+  expect(t.github.requests).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
+});
+
+it("再発火が着地対象なしを記録した場合も、PR 昇格失敗 question は引退する", async () => {
+  const { workspace, task, failure } = await failedPromotion();
+
+  // 失敗した昇格の間に、その成果は別経路で保護ブランチへ載った = 再発火には運ぶ差分がない
+  git(workspace.path, "push", "--quiet", "origin", `task/${task.id}:main`);
+  const repair = attachChild(t, task.id, "repair: ship the feature", "human");
+  t.github.scriptFailure(null);
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
+
+  expect(t.github.requests).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
+    expect.objectContaining({ kind: "nothing_to_land" }),
+  );
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "done",
     question_answer: null,
   });
 });

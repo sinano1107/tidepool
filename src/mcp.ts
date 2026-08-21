@@ -29,6 +29,7 @@ import {
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
   resolveTaskAgent,
+  settlePrPromotionQuestionsAsObserved,
   type Task,
   taskHasLanded,
   taskHistory,
@@ -265,6 +266,15 @@ async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
       err instanceof Error ? err.message : String(err),
       deps.clock.now(),
     );
+    return;
+  }
+  // 着地が成立したかは「throw しなかったこと」では測れない —— 非 strict の
+  // `handleRootWorkLanding` は workspace 不在・needs-human・門の不成立で黙って
+  // return する。痕跡を読み直してから、開いたままの PR 昇格失敗 question を引退
+  // させる(issue #406)。共有の `handleRootWorkLanding` 側に置かないのは、strict
+  // retry 経路では同じ question がまだ回答処理の途中にいるため。
+  if (taskHasLanded(deps.db, task.id)) {
+    settlePrPromotionQuestionsAsObserved(deps.db, task.id, deps.clock.now());
   }
 }
 

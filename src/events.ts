@@ -95,6 +95,11 @@ export type EventPayload =
   // record only for merges the board decides) is unverifiable without the
   // distinction
   | { kind: "pr_merge_observed"; pr_number: number }
+  // ADR 0092 決定3 の再発火が、PR 昇格失敗の question を人間の回答なしに引退させた
+  // (issue #406)。`pr_merge_observed` と同じ「執行ではなく観測」の記録で、決着した
+  // 着地そのもの(`pr_opened` / `nothing_to_land`)は question が指すタスクの側に
+  // 残っているので、この行は payload を持たない
+  | { kind: "pr_promotion_observed" }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join
