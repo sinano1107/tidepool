@@ -4,7 +4,12 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
+import {
+  authedGitBounded,
+  GIT_NETWORK_TIMEOUT_MS,
+  type GitHubAuth,
+  originRepo,
+} from "./github-auth.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -449,14 +454,13 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
 
 /** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
- *  `execFileSync` なので同期である —— 起動時の refresh は `buildServerOptions` が
- *  自分で registry を読むより前に撃たなければ意味がなく、そこは同期の文脈だから。
- *  非同期の面が要る口(`RegistryReachabilityCheck` は `ContainmentCheck` と型を
- *  揃えてある)は呼び出し側が `async () => refreshRegistry(...)` で包む —— 1回の
- *  fetch に輸出名を2つ与えると、ADR と CONTEXT.md が「refresh」1語で呼ぶものの
- *  語彙が割れる。
+ *  **非同期である**: 仲介から installation token を取る往復が中に入る(ADR 0093
+ *  決定2)。fetch そのものは今も `execFileSync` の同期呼び出しで、非同期なのは
+ *  token の取得だけである。起動時の refresh(`bootRefresh`)もこの await を連れて
+ *  `buildServerOptions` の先頭に留まるので、「registry を1文字も読む前に撃つ」
+ *  という順序は変わらない。
  *
- *  **machine user 名義で撃つ**(ADR 0024 / CONTEXT.md の GitHub identity:
+ *  **`tidepool[bot]` 名義で撃つ**(ADR 0093 / CONTEXT.md の GitHub identity:
  *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
  *  registry は private なので認証が要り、しかも `authedGit` の credential 引数は
  *  ホストに設定済みの helper を**先にクリアする** —— つまりこの1行は「認証を足す」
@@ -469,16 +473,24 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *  委ねる。private な remote ならそこで失敗し、レジストリ到達性の quarantine が
  *  人間を呼ぶ。
  *
+ *  token の取得を try の**内側**に置くのがこの関数の要点である(ADR 0093 決定7):
+ *  仲介の不達・user token の失効・5xx はここで「registry が refresh できなかった」
+ *  1つの答えに畳まれ、既存の到達性 quarantine がそのまま受ける —— 新しい失敗の
+ *  語彙は盤面側に現れない。
+ *
  *  Failure is returned as data so the caller can quarantine or warn instead of
  *  throwing. */
-export function refreshRegistry(
+export async function refreshRegistry(
   dir: string,
   auth: GitHubAuth | undefined,
-): RegistryReachability {
+): Promise<RegistryReachability> {
   try {
+    const repo = originRepo(dir);
+    await auth?.ensure(repo);
     authedGitBounded(
       auth,
       dir,
+      repo,
       GIT_NETWORK_TIMEOUT_MS,
       "fetch",
       "--quiet",

@@ -107,7 +107,7 @@ export interface ProfileAdminDeps {
  *  a WebUI-initiated registry change is the human's explicit act. */
 export async function createProfile(input: CreateProfileInput, deps: ProfileAdminDeps): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4) — agent-create.ts と同じ二段検査
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidAuthorityProfileName(registry, input.name);
   // 名前の綴りは confirm では買えないので、確認より前に弾く(ADR 0061 根拠5)
@@ -127,7 +127,7 @@ export async function createProfile(input: CreateProfileInput, deps: ProfileAdmi
 export type UpdateProfileInput = Partial<CreateProfileInput> & { name: string };
 
 export async function updateProfile(input: UpdateProfileInput, deps: ProfileAdminDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.authority, input.name);
   if (!existing) throw new UnknownAuthorityProfileError(input.name);
@@ -174,7 +174,7 @@ export interface DeleteProfileInput {
 }
 
 export async function deleteProfile(input: DeleteProfileInput, deps: ProfileAdminDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   if (!ownEntry(registry.authority, input.name)) throw new UnknownAuthorityProfileError(input.name);
   // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序): 参照中の profile を

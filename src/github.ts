@@ -1,5 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { authedGit, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
+import {
+  authedGit,
+  GIT_NETWORK_TIMEOUT_MS,
+  type GitHubAuth,
+  originRepo,
+} from "./github-auth.js";
 
 /** Everything a PR needs to exist, independent of how it's actually opened
  *  (issue #19): which task branch, onto which base, with what title/body. */
@@ -153,18 +158,30 @@ export interface RepoInvitation {
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
 
-/** Real implementation: shells out to `gh`/`git` as the board's machine user
- *  (ADR 0024) — every call injects the token into the child env fresh via
- *  GitHubAuth, never the host's ambient `gh auth`. `gh` prints the new PR's
- *  URL on stdout; the number is the last path segment. */
+/** Real implementation: shells out to `gh`/`git` as `tidepool[bot]` (ADR 0093)
+ *  — every call injects a repo-scoped installation token into the child env
+ *  fresh via GitHubAuth, never the host's ambient `gh auth`. `gh` prints the
+ *  new PR's URL on stdout; the number is the last path segment. */
 export class GhCliClient implements GitHubClient {
   constructor(private readonly auth: GitHubAuth) {}
+
+  /** One call's env, for a `gh`/`git` invocation that runs inside a workspace
+   *  checkout: the installation token is per-repository (ADR 0093 決定2), so
+   *  the repo is read off that checkout's `origin` and the broker round trip
+   *  happens here, before the synchronous `execFileSync`. */
+  private async envFor(cwd: string): Promise<NodeJS.ProcessEnv> {
+    const repo = originRepo(cwd);
+    await this.auth.ensure(repo);
+    return this.auth.env(repo);
+  }
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     // `gh pr create --head <branch>` needs the branch to already exist on the
     // remote — run non-interactively, it cannot fall back to its "push now?"
     // prompt.
-    authedGit(this.auth, input.path, "push", "-u", "origin", input.branch);
+    const repo = originRepo(input.path);
+    await this.auth.ensure(repo);
+    authedGit(this.auth, input.path, repo, "push", "-u", "origin", input.branch);
     const url = execFileSync(
       "gh",
       [
@@ -179,7 +196,7 @@ export class GhCliClient implements GitHubClient {
         "--body",
         input.body,
       ],
-      { cwd: input.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
     )
       .toString()
       .trim();
@@ -198,7 +215,7 @@ export class GhCliClient implements GitHubClient {
       output = execFileSync(
         "gh",
         ["pr", "checks", String(ref.number), "--json", "bucket"],
-        { cwd: ref.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
+        { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
     } catch (err) {
       output = (err as { stdout?: Buffer }).stdout?.toString() ?? "[]";
@@ -212,7 +229,7 @@ export class GhCliClient implements GitHubClient {
   async mergePullRequest(ref: PrRef): Promise<void> {
     execFileSync("gh", ["pr", "merge", String(ref.number), "--merge"], {
       cwd: ref.path,
-      env: this.auth.env(),
+      env: await this.envFor(ref.path),
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
@@ -220,7 +237,7 @@ export class GhCliClient implements GitHubClient {
   async isPullRequestMerged(ref: PrRef): Promise<boolean> {
     const output = execFileSync("gh", ["pr", "view", String(ref.number), "--json", "state"], {
       cwd: ref.path,
-      env: this.auth.env(),
+      env: await this.envFor(ref.path),
       stdio: ["ignore", "pipe", "pipe"],
     }).toString();
     return (JSON.parse(output) as { state: string }).state === "MERGED";
@@ -232,7 +249,7 @@ export class GhCliClient implements GitHubClient {
       output = execFileSync(
         "gh",
         ["issue", "view", String(ref.number), "--json", "title,body,comments,state"],
-        { cwd: ref.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
+        { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
     } catch (err) {
       // gh's not-found failure ("GraphQL: Could not resolve to an issue or
@@ -269,7 +286,7 @@ export class GhCliClient implements GitHubClient {
         "--json",
         "number,title",
       ],
-      { cwd: ref.path, env: this.auth.env(), stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
     ).toString();
     return JSON.parse(output) as OpenIssue[];
   }
@@ -277,7 +294,7 @@ export class GhCliClient implements GitHubClient {
   async addIssueComment(ref: IssueRef, body: string): Promise<void> {
     execFileSync("gh", ["issue", "comment", String(ref.number), "--body", body], {
       cwd: ref.path,
-      env: this.auth.env(),
+      env: await this.envFor(ref.path),
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
@@ -333,7 +350,11 @@ export class GhCliClient implements GitHubClient {
    *  local-binary probe's. */
   private gh(args: string[]): string {
     return execFileSync("gh", args, {
-      env: this.auth.env(),
+      // #423 がこの4本ごと消す(installation token では動かない呼び出しなので
+      // ADR 0093 決定8 で仲介への token 要求に置き換わる)。それまでは user token
+      // をそのまま渡す —— GH_TOKEN を外すと `gh` がホストの keyring に落ち、
+      // ADR 0024 が消したはずの ambient な人間の identity で答えることになる。
+      env: { ...process.env, GH_TOKEN: this.auth.token(), GIT_TERMINAL_PROMPT: "0" },
       stdio: ["ignore", "pipe", "pipe"],
       timeout: GIT_NETWORK_TIMEOUT_MS,
     }).toString();

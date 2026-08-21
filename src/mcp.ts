@@ -36,6 +36,7 @@ import {
 } from "./tasks.js";
 import {
   buildWorkspaceResolver,
+  ensureWorkspaceToken,
   isRemoteBacked,
   lineageTaskBranch,
   protectedBranch,
@@ -72,7 +73,7 @@ export interface McpDeps {
    *  to a PR through here. Absent → no PR is ever opened (e.g. a workspaceless
    *  board). */
   github?: GitHubClient;
-  /** The board's machine-user identity for completion-time workspace refresh. */
+  /** The board's GitHub identity (ADR 0093) for completion-time workspace refresh. */
   githubAuth?: GitHubAuth;
   /** This board's one configured worker's authority profile (issue #11).
    *  Absent → assignable_to and allowed_workspaces are both unrestricted.
@@ -431,7 +432,7 @@ function runReleasingVerb(
   mergeBack = false,
   gate?: (task: Task, workspace: WorkspaceConfig) => void,
 ) {
-  return runVerb(deps, attributedTaskId, (task) => {
+  return runVerb(deps, attributedTaskId, async (task) => {
     let workspace = gate ? resolveTaskWorkspace(deps, task) : undefined;
     if (gate && workspace) gate(task, workspace);
     const result = verb(task, attributedWorkerId(deps, task), deps.clock.now());
@@ -442,14 +443,11 @@ function runReleasingVerb(
     // landed, so the release stands, and needs-human halts further pickups.
     if (!gate) workspace = resolveTaskWorkspace(deps, task);
     if (workspace) {
-      releaseWorkspace(
-        deps.db,
-        workspace,
-        task,
-        deps.clock.now(),
-        mergeBack && task.type === "work",
-        deps.githubAuth,
-      );
+      const merge = mergeBack && task.type === "work";
+      // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の
+      // 取得だけがネットワークなので、同期の `releaseWorkspace` の手前で撃つ。
+      if (merge) await ensureWorkspaceToken(workspace, deps.githubAuth);
+      releaseWorkspace(deps.db, workspace, task, deps.clock.now(), merge, deps.githubAuth);
     }
     deps.slot.release();
     return result;
@@ -552,7 +550,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     },
     async ({ handoff }) => {
       let completed: Task | undefined;
-      const result = runReleasingVerb(
+      // await が要る: `runReleasingVerb` は release の中で仲介への往復を挟みうる
+      // ので、待たずに PR を開くと tree rule / merge-back より先に昇格が走る。
+      const result = await runReleasingVerb(
         deps,
         attributedTaskId,
         (task, workerId, now) => {

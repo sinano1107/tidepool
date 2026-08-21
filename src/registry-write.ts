@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { authedGit, type GitHubAuth } from "./github-auth.js";
+import { authedGit, type GitHubAuth, originRepo } from "./github-auth.js";
 import { REGISTRY_BRANCH, type RegistrySource, refreshRegistry, registryRef } from "./registry.js";
 import { git } from "./workspace.js";
 
@@ -24,9 +24,12 @@ export class RegistryFetchFailedError extends Error {
  *  リポジトリ作成・clone)を await で挟むため、その間に別の書き込みが先に着地
  *  すれば ref は動きうる —— その場合は worktree がより新しい内容から fork する
  *  だけで、着地時の fast-forward 検査(`commitToRegistry`)が壊れた状態を防ぐ。 */
-export function refreshRegistryForWrite(registry: RegistrySource, auth: GitHubAuth | undefined): void {
+export async function refreshRegistryForWrite(
+  registry: RegistrySource,
+  auth: GitHubAuth | undefined,
+): Promise<void> {
   if (registry.mode !== "remote-backed") return;
-  const reachability = refreshRegistry(registry.dir, auth);
+  const reachability = await refreshRegistry(registry.dir, auth);
   if (!reachability.available) {
     throw new RegistryFetchFailedError(reachability.reason ?? "registry remote is unreachable");
   }
@@ -140,7 +143,11 @@ export function commitToRegistry(
 function land(registry: RegistrySource, worktreeDir: string, baseSha: string, auth: GitHubAuth | undefined): void {
   try {
     if (registry.mode === "remote-backed") {
-      authedGit(auth, worktreeDir, "push", "origin", `HEAD:${REGISTRY_BRANCH}`);
+      // 同期のまま撃てるのは、同じ verb の入口の `refreshRegistryForWrite` が
+      // 既にこの repo の installation token を温めているからである(ADR 0066
+      // 決定5 が要求する「publish の同期区間に await を入れない」の帰結)。
+      // worktree は元の clone の config を共有するので origin は同じ1つ。
+      authedGit(auth, worktreeDir, originRepo(worktreeDir), "push", "origin", `HEAD:${REGISTRY_BRANCH}`);
     } else {
       const newSha = git(worktreeDir, "rev-parse", "HEAD");
       git(registry.dir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha);

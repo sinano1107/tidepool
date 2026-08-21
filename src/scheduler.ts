@@ -209,8 +209,7 @@ export function startScheduler(deps: {
   }
 
   /** ADR 0067 決定2 の pickup 側の扉。`prepareWorkspaceAtPickup` が落ちた瞬間に**1回
-   *  だけ**修復を試み、pickup を続けてよいかを返す。同期の `prepareWorkspaceAtPickup`
-   *  のシグネチャは変えない —— 非同期なのは修復の側だけである。
+   *  だけ**修復を試み、pickup を続けてよいかを返す。
    *
    *  撃たない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
    *  (盤面が GitHub 身元を持たない)と、`repo` が github.com を指していない(非
@@ -238,7 +237,7 @@ export function startScheduler(deps: {
     }
     if (repair?.accepted && !repair.guidance) {
       try {
-        prepareWorkspaceAtPickup(db, workspace, task, { githubAuth, registry });
+        await prepareWorkspaceAtPickup(db, workspace, task, { githubAuth, registry });
         return true;
       } catch (retryErr) {
         err = retryErr;
@@ -298,7 +297,7 @@ export function startScheduler(deps: {
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
       // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
       try {
-        prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
+        await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
       } catch (err) {
         if (!(await repairRepoAccessAtPickup(resolved, picked, err))) return;
       }

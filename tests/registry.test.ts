@@ -62,7 +62,7 @@ describe("loadRegistry", () => {
       `---\nname: deckhand\ndescription: Merged registry definition\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are the merged Deckhand.\n`,
       "merged registry change",
     );
-    refreshRegistry(registryDir, undefined);
+    await refreshRegistry(registryDir, undefined);
 
     expect({
       remote: loadRegistry(registryDir, "remote-backed").agents.deckhand!.version,

@@ -79,6 +79,7 @@ const ROUTE_URL: Record<string, (fx: { taskId: string }) => string> = {
   "/settings/pace-offsets": () => "/settings/pace-offsets",
   "/settings/timezone": () => "/settings/timezone",
   "/settings/display-language": () => "/settings/display-language",
+  "/settings/github": () => "/settings/github",
   "/pause": () => "/pause",
   "/triage": () => "/triage",
   "/pending-dumps": () => "/pending-dumps",

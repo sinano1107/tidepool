@@ -228,6 +228,11 @@ export interface ServerOptions {
    *  → the board declares no GitHub identity and those fetches run bare, the
    *  same posture as the optional `github` client above. */
   githubAuth?: GitHubAuth;
+  /** ADR 0093 決定5: the user token file's path, for the settings surface's
+   *  "logged in to GitHub" reading. The path, not the resolved identity above:
+   *  `npm run github-login` writes the file while the board runs, and the
+   *  screen has to show that without a restart. */
+  githubTokenFile?: string;
   /** ADR 0052 決定3 / issue #211: which registry clone the board reads, plus its
    *  remote-source-of-truth declaration. Needed at pickup because the registry
    *  clone can also be a registered workspace, and then it carries **two**
@@ -513,6 +518,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentAdmin,
       profileAdmin,
       hostSkills: options.hostSkills,
+      githubTokenFile: options.githubTokenFile,
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
       isProtectedWorkspace: options.isProtectedWorkspace,

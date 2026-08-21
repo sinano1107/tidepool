@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
@@ -13,6 +13,7 @@ import {
   RegistrySelfPublishError,
   WorkspaceAlreadyPublishedError,
 } from "../src/workspace-create.js";
+import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -26,15 +27,24 @@ function git(cwd: string, ...args: string[]): string {
     .trim();
 }
 
-/** 盤面の GitHub 身元(ADR 0024)。mode 600 の検査は `loadGitHubAuth` の側にあるので、
- *  ここは token ファイルを1つ置くだけでよい —— テストの push 先は file:// なので
- *  credential そのものは使われない。 */
+/** 盤面の GitHub 身元(ADR 0093)。mode 600 の検査は `loadGitHubAuth` の側にあるので、
+ *  ここは user token ファイルを1つ置くだけでよい。宛先が github.com を指すケース
+ *  (到達性 probe の各テスト)では publish が仲介へ token を要求するので、仲介の
+ *  代役も一緒に立てる —— テストの push 先は file:// なので token そのものは
+ *  使われない。 */
+const brokers: FakeBroker[] = [];
+afterEach(async () => {
+  for (const broker of brokers.splice(0)) await broker.close();
+});
+
 async function makeGitHubAuth(): Promise<GitHubAuth> {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-token-"));
   const file = join(dir, "token");
-  await writeFile(file, "ghp_test\n");
+  await writeFile(file, "gho_test\n");
   await chmod(file, 0o600);
-  return new GitHubAuth(file);
+  const broker = await startFakeBroker(() => issuedToken("installation-token"));
+  brokers.push(broker);
+  return new GitHubAuth(file, broker.url);
 }
 
 /** purely-local な workspace を1つ持つ registry と、その checkout。 */

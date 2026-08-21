@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { GitHubClient } from "./github.js";
-import { authedGit, type GitHubAuth } from "./github-auth.js";
+import { authedGit, type GitHubAuth, repoKey } from "./github-auth.js";
 import {
   assertValidAllowedDomains,
   assertValidReviewAllowedCommands,
@@ -172,7 +172,7 @@ function intendedCheckoutPath(input: CreateWorkspaceInput, deps: WorkspaceAdminD
  *  commit strictly last (issue #57) — a mid-way failure leaves only orphans
  *  the registry never knew about, never a half-registered entry. */
 export async function createWorkspace(input: CreateWorkspaceInput, deps: WorkspaceGitHubDeps): Promise<string> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidWorkspaceName(registry, input.name);
   const path = intendedCheckoutPath(input, deps);
@@ -271,7 +271,7 @@ export class RegistrySelfUnprotectError extends Error {
 
 
 export async function updateWorkspace(input: UpdateWorkspaceInput, deps: WorkspaceAdminDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
@@ -351,7 +351,7 @@ export async function deleteWorkspace(
   input: DeleteWorkspaceInput,
   deps: WorkspaceAdminDeps & WorkspaceDeletionReferences,
 ): Promise<string> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
@@ -436,7 +436,7 @@ export async function publishWorkspace(
   input: PublishWorkspaceInput,
   deps: WorkspaceGitHubDeps,
 ): Promise<string[]> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
@@ -452,6 +452,10 @@ export async function publishWorkspace(
   // 招待を忘れた」を、push が落ちる**前に**招待1枚で直す。位置は `remote add` の手前で
   // なければならない —— 直せなかったとき、巻き戻す痕跡がそもそも作られない側に立つ。
   await assertRepoAccess(input.repo, deps.github);
+  // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
+  // `authedGit` は温まったキャッシュから同期に注入するだけなので、下の「await は
+  // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
+  await deps.githubAuth.ensure(repoKey(input.repo));
   // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedGit` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
@@ -478,7 +482,7 @@ export async function publishWorkspace(
     // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
     // `--all` は `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
     // (ADR 0066 決定6)。上限は掛けない: 人間が起こす一括転送なので clone と同じ扱い。
-    authedGit(deps.githubAuth, dir, "push", "--atomic", "--all", "origin");
+    authedGit(deps.githubAuth, dir, repoKey(input.repo), "push", "--atomic", "--all", "origin");
     commitWorkspaceEntry(
       deps,
       input.name,
@@ -506,6 +510,7 @@ async function buildEntry(
   if (input.mode === "register") return registerExistingCheckout(input.path);
   if (input.mode === "clone") {
     await assertRepoAccess(input.repo, deps.github);
+    await deps.githubAuth?.ensure(repoKey(input.repo));
     return cloneAndDescribe(input.name, input.repo, deps);
   }
   return createLocalCheckout(input.name, deps);
@@ -629,11 +634,13 @@ function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps)
   // idempotent retry (issue #57): a checkout already at the convention-derived
   // location is a completed step — the orphan a previous attempt left when it
   // failed before the registry commit — not a conflict
-  // a private repo's clone needs the machine-user token too (ADR 0024) —
-  // same injection path as every other board-driven git network call
+  // a private repo's clone needs the App's installation token too (ADR 0093) —
+  // same injection path as every other board-driven git network call. clone に
+  // はまだ checkout が無いので、宛先は clone する URL そのものが名指す(token は
+  // `buildEntry` が先に温めてある)。
   // 流用してよいのは `origin` が要求 repo と一致するときだけ(ADR 0087 決定5)
   if (existsSync(dir)) assertReusableOrphan(dir, repo);
-  else authedGit(deps.githubAuth, deps.workspacesBaseDir, "clone", repo, dir);
+  else authedGit(deps.githubAuth, deps.workspacesBaseDir, repoKey(repo), "clone", repo, dir);
   // a fresh clone's HEAD is the upstream default branch — recorded when it
   // isn't "main" so branch discipline and the PR base start out right
   // (issue #27); "main" stays implicit (protectedBranch's default)

@@ -1,5 +1,9 @@
-import { rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { GitHubAuth } from "../src/github-auth.js";
+import { type FakeBroker, startFakeBroker } from "./fake-broker.js";
 import {
   api,
   bootTidepool,
@@ -13,8 +17,10 @@ import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
+const brokers: FakeBroker[] = [];
 afterEach(async () => {
   await t?.stop();
+  for (const broker of brokers.splice(0)) await broker.close();
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
@@ -133,4 +139,36 @@ it("registry clone でない workspace は盤面の registryMode と突き合わ
 
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
   expect(await questionTitles(t)).toEqual([]);
+});
+
+// ADR 0093 決定7: 仲介が token を出せない(不達 / user token 失効 / 5xx)ことは
+// 「GitHub が遠い」の一形態であって、盤面側に新しい失敗の資源も語彙も作らない ——
+// fetch できない workspace として、上と**同じ** quarantine に落ちる。
+it("仲介が installation token を出せない workspace は、fetch 失敗と同じ quarantine に落ちる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  // 宣言も remote も正しく github.com を指す = token が要る形。仲介が断るので
+  // fetch は撃たれる前に止まる(実ネットワークへは出ない)
+  git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/sandbox.git");
+  const broker = await startFakeBroker(() => ({
+    status: 401,
+    body: { error: "invalid_user_token" },
+  }));
+  brokers.push(broker);
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
+  dirs.push(dir);
+  const tokenFile = join(dir, "github-token");
+  await writeFile(tokenFile, "gho_user\n");
+  await chmod(tokenFile, 0o600);
+
+  t = await bootTidepool({ workspace, githubAuth: new GitHubAuth(tokenFile, broker.url) });
+  await registerWork(t, "needs a token for the remote");
+  await t.clock.advance(HOUR);
+
+  expect(t.worker.started).toEqual([]);
+  expect(await questionTitles(t)).toEqual([
+    expect.stringContaining("workspace sandbox needs human attention"),
+  ]);
+  // 人間が読む理由に仲介の断り方が残る —— #423 が案内文(再ログインのコマンド)を
+  // 足すまでの間、診断できる材料はこれである
+  expect(await quarantineReason(t)).toContain("invalid_user_token");
 });

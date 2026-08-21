@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
+import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { git } from "./harness.js";
 
 let repoPath: string | undefined;
@@ -13,6 +14,7 @@ let binPath: string | undefined;
 let authPath: string | undefined;
 let originalPath: string | undefined;
 let savedGhToken: string | undefined;
+const brokers: FakeBroker[] = [];
 
 beforeEach(() => {
   savedGhToken = process.env.GH_TOKEN;
@@ -29,19 +31,23 @@ afterEach(async () => {
   for (const p of [repoPath, remotePath, binPath, authPath]) {
     if (p) await rm(p, { recursive: true, force: true });
   }
+  for (const broker of brokers.splice(0)) await broker.close();
   repoPath = remotePath = binPath = authPath = originalPath = undefined;
 });
 
-/** ADR 0024 の secrets ファイルの代役: mode 600 のトークンファイルを実体で
- *  作る — GhCliClient はここから読んだトークンを各呼び出しの env に都度
- *  注入する(process.env には決して書かない)。 */
-async function makeAuth(token = "test-token"): Promise<GitHubAuth> {
+/** ADR 0093 の user token ファイルの代役: mode 600 のファイルを実体で作り、
+ *  仲介の代役を1つ立てて繋ぐ — GhCliClient は checkout の `origin` が名指す repo
+ *  の installation token を各呼び出しの env に都度注入する(process.env には
+ *  決して書かない)。 */
+async function makeAuth(installationToken = "installation-token"): Promise<GitHubAuth> {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
   authPath = dir;
   const file = join(dir, "github-token");
-  writeFileSync(file, `${token}\n`);
+  writeFileSync(file, "gho_user\n");
   chmodSync(file, 0o600);
-  return new GitHubAuth(file);
+  const broker = await startFakeBroker(() => issuedToken(installationToken));
+  brokers.push(broker);
+  return new GitHubAuth(file, broker.url);
 }
 
 /** Stands in for the real `gh` binary on PATH: git itself stays real (the
@@ -102,7 +108,7 @@ it("gh pr create の前にタスクブランチを origin へ push する", asyn
   expect(invocations).toContain("task/abc");
 });
 
-it("トークンは gh の子プロセス env にだけ注入され、盤面プロセスの env には載らない(ADR 0024)", async () => {
+it("トークンは gh の子プロセス env にだけ注入され、盤面プロセスの env には載らない(ADR 0093)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
   binPath = dir;
   const logPath = join(dir, "gh-invocations.log");
@@ -110,12 +116,18 @@ it("トークンは gh の子プロセス env にだけ注入され、盤面プ�
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
+  // installation token は repo 単位(ADR 0093 決定2)なので、呼び出し元の
+  // checkout が github.com の origin を持っていなければ要求する先が無い
+  repoPath = await mkdtemp(join(tmpdir(), "tidepool-repo-"));
+  git(repoPath, "init", "-b", "main");
+  git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
 
-  await new GhCliClient(await makeAuth()).mergePullRequest({ path: "/tmp", number: 7 });
+  await new GhCliClient(await makeAuth()).mergePullRequest({ path: repoPath, number: 7 });
 
-  // gh 側(子プロセス)はトークンを見え、worker が丸ごと継承する側の
-  // process.env には現れない — issue #50 の「worker は credential ゼロ」
-  expect(await readFile(logPath, "utf8")).toContain("token=test-token");
+  // gh 側(子プロセス)が見るのは**仲介が発行した installation token**であって
+  // ファイルの中身(user token)ではない。worker が丸ごと継承する側の process.env
+  // には現れない — issue #50 の「worker は credential ゼロ」
+  expect(await readFile(logPath, "utf8")).toContain("token=installation-token");
   expect(process.env.GH_TOKEN).toBeUndefined();
 });
 

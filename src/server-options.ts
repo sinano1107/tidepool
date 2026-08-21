@@ -137,6 +137,10 @@ export interface BoardComposition {
    *  側の I/O なので、ここには解決済みの値だけが来る。未設定 → GitHub 機能は
    *  すべて fail-closed で off。 */
   githubAuth: GitHubAuth | undefined;
+  /** `TIDEPOOL_GITHUB_TOKEN_FILE` そのもの(ADR 0093 決定5)。`githubAuth` は
+   *  起動時に解決した結果なので、起動後のログインを映せない —— settings の
+   *  「ログイン済みか」は毎回このパスを検査し直す。 */
+  githubTokenFile: string | undefined;
   /** issue #14: VAPID の3点セット。「3つ揃うか、1つも無いか」のゲートは env を
    *  読む合成 root 側にあり、ここは push クライアントと公開鍵の**両方**をこの
    *  1つから導く — 2つの口が別々の判定を持つと黙ってずれる。 */
@@ -272,10 +276,10 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
  *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
  *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
  *  出ることである。 */
-function bootRefresh(board: BoardComposition): void {
+async function bootRefresh(board: BoardComposition): Promise<void> {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return;
-  const reachability = refreshRegistry(registryDir, board.githubAuth);
+  const reachability = await refreshRegistry(registryDir, board.githubAuth);
   if (reachability.available) return;
   console.error(
     "[registry] startup refresh failed; the board is starting anyway and the next pickup " +
@@ -291,14 +295,13 @@ function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
 }
 
 /** ADR 0052 決定2 の pickup / 回答時の refresh 点。remote 正本を宣言していない
- *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。同期の
- *  `refreshRegistry` を非同期の口の形に合わせるのはここ。 */
+ *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
 function registryReachabilityCheck(
   board: BoardComposition,
 ): (() => Promise<RegistryReachability>) | undefined {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return undefined;
-  return async () => refreshRegistry(registryDir, board.githubAuth);
+  return () => refreshRegistry(registryDir, board.githubAuth);
 }
 
 /** The board's own view of the workspace (branch discipline + tree rule):
@@ -512,10 +515,10 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
  *
  *  ADR 0027 の線には触れない: server 境界の**上**にある合成の検査であって、
  *  境界の下に新しいテスト層を作る話ではない。 */
-export function buildServerOptions(board: BoardComposition): ServerOptions {
+export async function buildServerOptions(board: BoardComposition): Promise<ServerOptions> {
   // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
   // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
-  bootRefresh(board);
+  await bootRefresh(board);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
@@ -553,10 +556,12 @@ export function buildServerOptions(board: BoardComposition): ServerOptions {
     registryReachability: registryReachabilityCheck(board),
     cliAuth: createClaudeCliAuthCheck(),
     cliAuthExpiresAt: board.cliAuthExpiresAt,
-    // ADR 0024 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
-    // machine user 名義で撃つ。落とすと private な remote の workspace が黙って
+    // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
+    // `tidepool[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って
     // quarantine に落ち続ける(fail-closed だが理由が「認証が無い」になる)。
     githubAuth: board.githubAuth,
+    // ADR 0093 決定5: settings が「ログイン済みか」を毎回読み直す先。
+    githubTokenFile: board.githubTokenFile,
     // ADR 0052 決定3 / issue #211: registry clone が workspace としても登録されている
     // ときの「2つの宣言」の突き合わせ先。registry が無い盤面には食い違う相手が無い。
     registry: registrySource(board),
