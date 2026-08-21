@@ -245,6 +245,30 @@ export type EventPayload =
          *  the warning is still retained verbatim in stderr_tail for the
          *  operational question. */
         advisor: AdvisorRecord | null;
+        /** ADR 0094 決定2: the CLI result line's per-model `modelUsage` carried
+         *  as observed, keyed by the model id the CLI reports for that entry.
+         *  This is raw observation, not attribution — the board does NOT
+         *  infer which entry is the advisor from this breakdown (the "main
+         *  vs. everything else" rule matched 7/7 in a measurement but reads
+         *  the fact of a helper model having run, which this codebase does
+         *  not treat as machine-observed); a reader who wants to pair a
+         *  model id with the advisor does so themselves, against the
+         *  session's `worker_spawned.advisor` pin (the spawn event
+         *  `worker_spawned_event_id` points at). Optional and omitted
+         *  (never null) when the result line carries no readable breakdown
+         *  at all — a session with no models here says nothing about
+         *  whether one ran, only that this field could not be filled in;
+         *  same fail-closed, all-or-nothing posture as `isStreamResultEvent`. */
+        models?: Record<
+          string,
+          {
+            input_tokens: number;
+            output_tokens: number;
+            cache_read_tokens: number;
+            cache_creation_tokens: number;
+            estimated_cost_usd: number;
+          }
+        >;
       } | null;
     }
   // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —

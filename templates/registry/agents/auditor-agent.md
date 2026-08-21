@@ -2,7 +2,6 @@
 version: "1"
 authority: auditor
 description: Reviews work independently against its completion criteria.
-advisor: opus
 icon: "🐡"
 skills:
   - "@workspace"
