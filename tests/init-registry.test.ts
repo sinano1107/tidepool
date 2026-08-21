@@ -132,7 +132,8 @@ describe("npm run init-registry", () => {
     expect(git(workspace, "rev-list", "--count", "HEAD")).toBe("1");
     expect(result.stdout).toContain('Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".');
     expect(result.stdout).toContain("First task example");
-    expect(result.stdout).toContain("merge question");
+    // merge question は worker が感知できない盤面側の出来事なので completion criteria には書かない
+    expect(result.stdout).not.toContain("merge question");
   });
 
   it("refuses an existing non-git workspace before changing the registry or workspace", async () => {
@@ -382,27 +383,24 @@ describe("npm run init-registry", () => {
     for (const line of [
       'Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".',
       "Title: Resolve the README TODO",
-      "Purpose: Replace the TODO in sandbox/README.md with a short description of this workspace.",
-      "Completion criteria: README.md contains the description and the task reaches the merge question.",
+      'Purpose: README.md has a TODO line asking for a one-sentence description of this workspace. Replace that line with: "A scratch workspace for trying out Tidepool."',
+      "Completion criteria: README.md contains that sentence and no longer contains the word TODO.",
     ]) {
       expect(result.stdout).toContain(line);
       expect(guide).toContain(line);
     }
 
-    expect(result.stdout.indexOf("First task example")).toBeLessThan(
-      result.stdout.indexOf("Add your own repository"),
-    );
-    expect(guide.indexOf("### First task example")).toBeLessThan(
-      guide.indexOf("add it from the WebUI workspace registration screen"),
-    );
+    // 自分の repo を足す案内は #392 が着地するまで出さない(ADR 0090 決定4)
+    expect(result.stdout).not.toContain("Add your own repository");
+    expect(guide.indexOf("## First task")).toBeLessThan(guide.indexOf("## Own repository"));
 
     const orderedSteps = [
-      "## Prepare the registry on a Mac",
+      "## Prepare the registry",
       "gh repo create",
-      "git clone",
+      "git clone git@github.com:YOUR_GITHUB_LOGIN",
       "npm run init-registry",
       "npm start",
-      "First task example",
+      "## First task",
     ];
     let previous = -1;
     for (const step of orderedSteps) {
