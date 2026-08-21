@@ -150,12 +150,22 @@ A code and a URL are printed; open the URL, enter the code, and approve. The tok
 gh repo create YOUR_GITHUB_LOGIN/tidepool-trial --private
 ```
 
-Leave it empty — no README. Then install the App on it **and on `tidepool-registry`**:
+Leave it empty — no README. Then install the App on it **and on `tidepool-registry`**. Open:
 
 https://github.com/apps/tidepool-board/installations/new
 
-Choose **Only select repositories** and pick exactly those two. **The registry one is not
-optional**: once the board is logged in, it reads the registry through the App as well, and a
+The page is titled "Install tidepool-board". If you belong to organizations it first asks where
+to install — pick your own account. Then:
+
+1. Select **Only select repositories**.
+2. In the **Select repositories** dropdown, search for and add `tidepool-trial` and
+   `tidepool-registry`.
+3. Press the green **Install** button at the bottom.
+
+To add a repository later, go to https://github.com/settings/installations, find
+`tidepool-board`, press **Configure**, and add it under "Repository access".
+
+**The registry one is not optional**: once the board is logged in, it reads the registry through the App as well, and a
 registry without the App shows up at the next start as
 `the GitHub token broker refused a token for …/tidepool-registry (HTTP 404: repo_unreachable)`
 — the board starts, then stops picking up until you install the App and answer the question it
@@ -201,8 +211,9 @@ Expect `1` — the login works and the App is installed where you can reach it.
 
 ## Stage three (optional): an existing repository
 
-The same mechanics apply to a repository you already work in. Install the App on it (the link
-above; a repository you do not administer needs its admin to do it), then in the settings tab add
+The same mechanics apply to a repository you already work in. Add it to the App's installation
+(https://github.com/settings/installations → `tidepool-board` → **Configure**; a repository you
+do not administer needs its admin to install the App from the link above), then in the settings tab add
 a workspace with **clone a repository** and its clone URL. The board refuses the registration with
 the install link when the App is missing or you cannot push to the repository.
 
