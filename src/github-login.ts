@@ -19,13 +19,14 @@ interface GitHubLoginMainDependencies {
   writeTokenFile?: (path: string, token: string) => Promise<void>;
 }
 
-const DEFAULT_GITHUB_CLIENT_ID = "registration-pending-issue-424";
+const DEFAULT_GITHUB_CLIENT_ID = "Iv23li5YIlI9mWD649t2";
 
-/** App の slug(ADR 0093 決定8 の install リンク `https://github.com/apps/<slug>/
- *  installations/new` が要る)。client id と同じく #424 の App 登録で実物が決まる
- *  —— それまではリンク自体が 404 になる、という設計どおりの症状で立つ。 */
+/** 公式 App の slug(ADR 0093 決定8 の install リンク `https://github.com/apps/<slug>/
+ *  installations/new` が要る)。`tidepool` はアカウント名として予約済みで取れなかった
+ *  (#424)。ずれればリンク自体が 404 になる、という設計どおりの症状で立つ。fork は
+ *  `TIDEPOOL_GITHUB_APP_SLUG` で自分の App を指す。 */
 export const GITHUB_APP_SLUG =
-  process.env.TIDEPOOL_GITHUB_APP_SLUG ?? "registration-pending-issue-424";
+  process.env.TIDEPOOL_GITHUB_APP_SLUG ?? "tidepool-board";
 
 export async function githubLoginMain({
   env = process.env,

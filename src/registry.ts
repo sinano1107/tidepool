@@ -460,7 +460,7 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *  `buildServerOptions` の先頭に留まるので、「registry を1文字も読む前に撃つ」
  *  という順序は変わらない。
  *
- *  **`tidepool[bot]` 名義で撃つ**(ADR 0093 / CONTEXT.md の GitHub identity:
+ *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093 / CONTEXT.md の GitHub identity:
  *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
  *  registry は private なので認証が要り、しかも `authedGit` の credential 引数は
  *  ホストに設定済みの helper を**先にクリアする** —— つまりこの1行は「認証を足す」

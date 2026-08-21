@@ -3,5 +3,5 @@ main = "src/worker.ts"
 compatibility_date = "2026-08-21"
 
 [vars]
-GITHUB_APP_ID = "set-before-deploy"
-GITHUB_CLIENT_ID = "set-before-deploy"
+GITHUB_APP_ID = "4669579"
+GITHUB_CLIENT_ID = "Iv23li5YIlI9mWD649t2"

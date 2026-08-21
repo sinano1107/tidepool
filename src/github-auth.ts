@@ -101,7 +101,7 @@ export class GitHubAuth {
 /** The official App's broker (ADR 0093 決定1). A public value, not a secret,
  *  and not one of the six board-behaviour keys — unset is the normal state.
  *  Forks override it with `TIDEPOOL_GITHUB_BROKER_URL`. */
-const DEFAULT_GITHUB_BROKER_URL = "https://registration-pending-issue-424.invalid";
+const DEFAULT_GITHUB_BROKER_URL = "https://tidepool-token-broker.tidepool.workers.dev";
 
 /** ADR 0093 決定6. */
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60_000;
@@ -178,7 +178,7 @@ export const GIT_CREDENTIAL_ARGS = [
 
 /** The authenticated twin of workspace.ts's `git()`, for the board's git
  *  network calls (push, clone). Local plumbing keeps using the plain helper;
- *  anything that must reach GitHub as `tidepool[bot]` comes through here.
+ *  anything that must reach GitHub as `tidepool-board[bot]` comes through here.
  *
  *  `repo` names which installation token to serve and must already be in the
  *  cache (`await auth.ensureToken(repo)`). Without an identity (`auth` absent) or

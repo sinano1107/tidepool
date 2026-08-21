@@ -155,7 +155,7 @@ const CI_FAILED = [
   "ERROR",
 ];
 
-/** Real implementation: shells out to `gh`/`git` as `tidepool[bot]` (ADR 0093)
+/** Real implementation: shells out to `gh`/`git` as `tidepool-board[bot]` (ADR 0093)
  *  — every call injects a repo-scoped installation token into the child env
  *  fresh via GitHubAuth, never the host's ambient `gh auth`. `gh` prints the
  *  new PR's URL on stdout; the number is the last path segment. */

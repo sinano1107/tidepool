@@ -43,8 +43,12 @@ cat > ~/.tidepool/env <<'EOF'
 export TIDEPOOL_REGISTRY="$HOME/tidepool-registry"
 export TIDEPOOL_DB="$HOME/.tidepool/board.sqlite"
 export TIDEPOOL_WORKER_LOGS="$HOME/.tidepool/worker-logs"
+export TIDEPOOL_GITHUB_TOKEN_FILE="$HOME/.tidepool/github-token"
 EOF
 ```
+
+`TIDEPOOL_GITHUB_TOKEN_FILE` is the path the GitHub login below writes to — the path goes in this
+file, never the token itself.
 
 Run `source ~/.tidepool/env` in every shell that runs `init-registry` or starts the board.
 
@@ -63,6 +67,24 @@ From the Tidepool checkout, seed the empty remote and create the initial local w
 ```bash
 npm run init-registry
 ```
+
+## GitHub identity
+
+The board acts on GitHub as the `tidepool-board` GitHub App, never as you. Two steps, once:
+
+```bash
+npm run github-login
+```
+A code and a URL are printed; open the URL, enter the code, and approve. The token lands in
+`$TIDEPOOL_GITHUB_TOKEN_FILE` (mode 600). Re-run the same command if you ever revoke it.
+
+Then install the App on every repository the board will touch — **the registry repository
+included**:
+
+https://github.com/apps/tidepool-board/installations/new
+
+Choose "Only select repositories" and add `tidepool-registry` (and, later, any repository you
+register as a workspace). A repository you do not administer needs its admin to do this.
 
 With the defaults, the command confirms:
 
@@ -100,6 +122,13 @@ lsof -nP -iTCP:4589 -iTCP:4590 -sTCP:LISTEN
 ```
 Expect both ports listening only on `127.0.0.1`.
 
+```bash
+curl -s -H "Authorization: Bearer $(cat ~/.tidepool/github-token)" \
+  https://api.github.com/user/installations | grep -c tidepool-board
+```
+Expect `1` or more — the login works and the App is installed somewhere you can reach. The
+settings tab of the WebUI also shows "GitHub: logged in".
+
 ## First task
 
 In the WebUI, open the **Register** tab (Source: `manual`), click **use the plain form**, fill in
@@ -122,5 +151,6 @@ was skipped — redo it and restart the board.
 
 ## Own repository
 
-Adding your own GitHub repository as a workspace waits on issue #392. Until that lands, stay on the local `sandbox` workspace from this
-guide.
+Install the `tidepool-board` App on the repository (the link above), then register it as a
+workspace from the WebUI settings tab using its clone URL. The board refuses the registration
+with the install link when the App is missing or you cannot push to the repository.
