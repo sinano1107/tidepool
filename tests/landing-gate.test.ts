@@ -8,6 +8,7 @@ import {
   bootTidepool,
   commitWork,
   FULL_HANDOFF,
+  git,
   HOUR,
   makeRemoteBackedWorkspace,
   makeWorkspace,
@@ -413,4 +414,195 @@ it("着地済みの根の下で自分が着地の根になった付帯子も、�
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toMatchObject([
     { question_pending_local_merge_task_id: repair.id },
   ]);
+});
+
+/** 異議は log entry に対して出る — 完了報告(`task_completed`)がそのエントリ。 */
+async function completionEntry(pool: Tidepool, taskId: string): Promise<any> {
+  const log = (await api(pool.baseUrl, "GET", "/api/log")).json;
+  return log.entries.find((entry: any) => entry.kind === "task_completed" && entry.task_id === taskId);
+}
+
+/** commit が束ねた子(修理 + RCA レビュー)を全部決着させる。commit の即時 poll が
+ *  すでに1つを slot へ入れているので、in_progress のものから順に完了させる。 */
+async function settleAttachedChildren(pool: Tidepool, taskId: string): Promise<void> {
+  for (;;) {
+    const board = (await api(pool.baseUrl, "GET", "/api/tasks")).json;
+    const pending = board.filter(
+      (candidate: any) =>
+        candidate.parent_id === taskId && !["done", "cancelled"].includes(candidate.status),
+    );
+    if (pending.length === 0) return;
+    const child = pending.find((candidate: any) => candidate.status === "in_progress") ?? pending[0];
+    if (child.status !== "in_progress") await pickUp(pool, child.id);
+    const res = await completeViaMcp(pool, child.id, child.type === "work");
+    expect(res.isError ?? false).toBe(false);
+  }
+}
+
+/** 門(#402)を抜けて question が立った**後**に付帯子が付く盤面 — 回答時検証が要る理由そのもの。 */
+async function landingQuestionThenAttachedChild(): Promise<{ task: any; landing: any; workspace: any }> {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const [landing] = await questions(t);
+  attachChild(t, task.id, "repair: ship the feature", "human");
+  return { task, landing, workspace };
+}
+
+it("着地 question への merge 回答は、後から付いた未決着の付帯子を理由に 409 になり question は開いたまま", async () => {
+  const { task, landing, workspace } = await landingQuestionThenAttachedChild();
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered).toMatchObject({
+    status: 409,
+    json: { error: "cannot merge yet: 1 attached child task(s) unsettled" },
+  });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${landing.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${task.id}`)).toBe("1");
+});
+
+it("hold は付帯子が未決着でも受理される — 着地しない決定はいつでもできる", async () => {
+  const { task, landing, workspace } = await landingQuestionThenAttachedChild();
+  const entry = await completionEntry(t, task.id);
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: entry.id,
+    comment: "この方針では直らない — やり直してほしい",
+  });
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, {
+    answers: ["hold"],
+  });
+
+  expect(answered.status).toBe(200);
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${task.id}`)).toBe("1");
+});
+
+it("open な triage session の未束ねの異議は、着地 question への merge 回答を 409 にする", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "ship the objected feature");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const [landing] = await questions(t);
+  const entry = await completionEntry(t, task.id);
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: entry.id,
+    comment: "この完了報告の判断に異議がある",
+  });
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered).toMatchObject({
+    status: 409,
+    json: { error: "cannot merge yet: 1 objection(s) raised in this triage await commit" },
+  });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${landing.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${task.id}`)).toBe("1");
+});
+
+it("分解子の判断への異議も親の着地 question を 409 にし、commit 後は付帯子として捕まり、決着で受理される", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const parent = await registerWork(t, "integrate the feature");
+  await t.clock.advance(HOUR);
+  const decomposer = await mcpClient(t.mcpBaseUrl, parent.id);
+  await decomposer.callTool({
+    name: "decompose",
+    arguments: {
+      reason: "the child can be implemented independently",
+      children: [
+        {
+          title: "implement the child",
+          purpose: "finish one part",
+          completion_criteria: "the child artifact exists",
+        },
+      ],
+    },
+  });
+  await decomposer.close();
+  const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (candidate: any) => candidate.parent_id === parent.id && candidate.type === "work",
+  );
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "child.txt", "child work\n");
+  await completeViaMcp(t, child.id);
+  await t.clock.advance(HOUR);
+  await completeViaMcp(t, parent.id);
+  const [landing] = await questions(t);
+  const entry = await completionEntry(t, child.id);
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: entry.id,
+    comment: "分解子の判断に異議がある",
+  });
+
+  const objected = await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(objected).toMatchObject({
+    status: 409,
+    json: { error: "cannot merge yet: 1 objection(s) raised in this triage await commit" },
+  });
+
+  // commit が異議を修理子へ束ねる — 以後は (b) ではなく (a) の付帯子側で捕まる
+  await api(t.baseUrl, "POST", "/api/triage/close");
+  const bundled = await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(bundled.status).toBe(409);
+  expect(bundled.json.error).toContain("attached child task(s) unsettled");
+
+  await settleAttachedChildren(t, child.id);
+  const landed = await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(landed.status).toBe(200);
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${parent.id}`)).toBe("0");
+});
+
+it("PR の merge question も同じ検証を通る — 未決着の付帯子があれば CI も見ずに 409", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({
+    workspace,
+    authority: { name: "standard", guidance: "", merge: "escalate" },
+  });
+  const task = await registerWork(t, "ship remotely");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const [merge] = await questions(t);
+  expect(merge.question_pending_merge_pr).toBe(1);
+  attachChild(t, task.id, "repair: ship remotely", "human");
+  t.github.scriptCiStatus("success");
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${merge.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered).toMatchObject({
+    status: 409,
+    json: { error: "cannot merge yet: 1 attached child task(s) unsettled" },
+  });
+  expect(t.github.merged).toEqual([]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${merge.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
 });
