@@ -390,9 +390,11 @@ describe("npm run init-registry", () => {
       expect(guide).toContain(line);
     }
 
-    // 自分の repo を足す案内は #392 が着地するまで出さない(ADR 0090 決定4)
+    // 自分の repo を足す段(第2段)は第1段の完走の後に置く(ADR 0090 決定4 — #392 が
+    // 着地したので手順としては書かれているが、init-registry の出力は第1段だけを案内する)
     expect(result.stdout).not.toContain("Add your own repository");
-    expect(guide.indexOf("## First task")).toBeLessThan(guide.indexOf("## Own repository"));
+    expect(guide.indexOf("## First task")).toBeLessThan(guide.indexOf("## Stage two"));
+    expect(guide.indexOf("## Stage two")).toBeLessThan(guide.indexOf("npm run github-login"));
 
     const orderedSteps = [
       "## Prepare the registry",
