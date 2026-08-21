@@ -22,6 +22,7 @@ import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
+import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -643,6 +644,7 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain(
       "Write everything you put on the board — decision log lines, child task fields, handoff docs, results — in English, even when the task's payload is in another language. Human-authored text you quote stays in its original language.",
     );
+    expect(systemPrompt).not.toContain(BOARD_WRITE_LANGUAGE_RULE);
   });
 
   it("許可ドメインがある session は実効 egress とリトライ禁止を英語で伝える(ADR 0072)", async () => {
