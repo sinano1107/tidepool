@@ -13,6 +13,7 @@
     "e2e": "playwright test",
     "e2e:scratch": "PLAYWRIGHT_SCRATCH=1 playwright test",
     "start": "tsx src/main.ts",
+    "github-login": "tsx scripts/github-login.ts",
     "init-registry": "tsx scripts/init-registry.ts",
     "token": "tsx scripts/token.ts",
     "start:live": "TIDEPOOL_REGISTRY=$HOME/tidepool-registry tsx src/main.ts",
