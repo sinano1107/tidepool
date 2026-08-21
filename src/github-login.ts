@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-export interface GitHubDeviceFlowDependencies {
+interface GitHubDeviceFlowDependencies {
   clientId: string;
   fetch: typeof globalThis.fetch;
   wait: (milliseconds: number) => Promise<void>;
@@ -10,7 +10,7 @@ export interface GitHubDeviceFlowDependencies {
   writeToken: (token: string) => Promise<void>;
 }
 
-export interface GitHubLoginMainDependencies {
+interface GitHubLoginMainDependencies {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof globalThis.fetch;
   wait?: (milliseconds: number) => Promise<void>;
@@ -19,7 +19,7 @@ export interface GitHubLoginMainDependencies {
   writeTokenFile?: (path: string, token: string) => Promise<void>;
 }
 
-export const DEFAULT_GITHUB_CLIENT_ID = "registration-pending-issue-424";
+const DEFAULT_GITHUB_CLIENT_ID = "registration-pending-issue-424";
 
 export async function githubLoginMain({
   env = process.env,

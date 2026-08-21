@@ -113,11 +113,11 @@ describe("runGitHubDeviceFlow", () => {
     expect(waits).toEqual([1_000, 6_000, 12_000]);
   });
 
-  it("fails without writing a token when the user denies access", async () => {
-    const responses = [
-      deviceCode(),
-      json({ error: "access_denied" }),
-    ];
+  it.each([
+    ["access_denied", "GitHub login was denied"],
+    ["expired_token", "GitHub device code expired"],
+  ])("fails without writing a token for %s", async (error, message) => {
+    const responses = [deviceCode(), json({ error })];
     const writeToken = vi.fn(async () => {});
 
     await expect(
@@ -128,26 +128,7 @@ describe("runGitHubDeviceFlow", () => {
         output: () => {},
         writeToken,
       }),
-    ).rejects.toThrow("GitHub login was denied");
-    expect(writeToken).not.toHaveBeenCalled();
-  });
-
-  it("fails without writing a token when the device code expires", async () => {
-    const responses = [
-      deviceCode(),
-      json({ error: "expired_token" }),
-    ];
-    const writeToken = vi.fn(async () => {});
-
-    await expect(
-      runGitHubDeviceFlow({
-        clientId: "test-client-id",
-        fetch: async () => responses.shift() ?? json({ error: "unexpected_request" }),
-        wait: async () => {},
-        output: () => {},
-        writeToken,
-      }),
-    ).rejects.toThrow("GitHub device code expired");
+    ).rejects.toThrow(message);
     expect(writeToken).not.toHaveBeenCalled();
   });
 });
@@ -247,11 +228,11 @@ describe("npm run github-login", () => {
     }
   });
 
-  it("returns a nonzero status through the production main path when access is denied", async () => {
-    const responses = [
-      deviceCode(),
-      json({ error: "access_denied" }),
-    ];
+  it.each([
+    ["access_denied", "GitHub login was denied"],
+    ["expired_token", "GitHub device code expired"],
+  ])("returns nonzero through the production main path for %s", async (error, message) => {
+    const responses = [deviceCode(), json({ error })];
     const fetch = vi.fn<typeof globalThis.fetch>(async () =>
       responses.shift() ?? json({ error: "unexpected_request" }),
     );
@@ -271,35 +252,10 @@ describe("npm run github-login", () => {
     });
 
     expect(status).toBe(1);
-    expect(errors).toEqual(["Error: GitHub login was denied"]);
+    expect(errors).toEqual([`Error: ${message}`]);
     expect(writeTokenFile).not.toHaveBeenCalled();
     expect(new URLSearchParams(String(fetch.mock.calls[0]?.[1]?.body)).get("client_id")).toBe(
       "test-client-id",
     );
-  });
-
-  it("returns a nonzero status through the production main path when the device code expires", async () => {
-    const responses = [
-      deviceCode(),
-      json({ error: "expired_token" }),
-    ];
-    const errors: string[] = [];
-    const writeTokenFile = vi.fn(async () => {});
-
-    const status = await githubLoginMain({
-      env: {
-        TIDEPOOL_GITHUB_TOKEN_FILE: "/unused/github-token",
-        TIDEPOOL_GITHUB_CLIENT_ID: "test-client-id",
-      },
-      fetch: async () => responses.shift() ?? json({ error: "unexpected_request" }),
-      wait: async () => {},
-      output: () => {},
-      errorOutput: (line) => errors.push(line),
-      writeTokenFile,
-    });
-
-    expect(status).toBe(1);
-    expect(errors).toEqual(["Error: GitHub device code expired"]);
-    expect(writeTokenFile).not.toHaveBeenCalled();
   });
 });
