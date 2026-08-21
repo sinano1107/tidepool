@@ -48,6 +48,7 @@ function composition(): BoardComposition {
     auditorName: "shako",
     boardState: [],
     githubAuth: undefined,
+    githubTokenFile: undefined,
     vapid: undefined,
     translationClient: new FakeTranslationClient(),
     cliAuthExpiresAt: undefined,
@@ -84,7 +85,7 @@ it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 
   const { registryDir } = await makeRemoteBackedRegistry();
   dirs.push(registryDir);
 
-  const options = buildServerOptions({
+  const options = await buildServerOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -109,7 +110,7 @@ it("origin/main がまだ無い remote-backed 盤面でも、起動時 refresh �
   // remote は生きているが tracking ref だけが無い = 張り直した直後の姿
   execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: registryDir });
 
-  const options = buildServerOptions({
+  const options = await buildServerOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -129,7 +130,7 @@ it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ
   });
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const options = buildServerOptions({
+  const options = await buildServerOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -159,7 +160,7 @@ it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0
     "remote registry definition",
   );
 
-  const options = buildServerOptions({
+  const options = await buildServerOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -185,8 +186,8 @@ function optionalFields(file: string, name: string): string[] {
 
 // #172 そのもの。本番の盤面は watchdog を**必ず**持つ — 持たない盤面は、詰まった
 // セッションが唯一の slot を握ったまま誰にも回収されない盤面である。
-it("組み立てられたオプションは watchdog を持つ(#172)", () => {
-  const options = buildServerOptions(composition());
+it("組み立てられたオプションは watchdog を持つ(#172)", async () => {
+  const options = await buildServerOptions(composition());
 
   expect(options.watchdog).toBe(WATCHDOG);
 });
@@ -216,14 +217,14 @@ it("question には時間リミットを持たせない(#172)", () => {
  *  なかった。ServerOptions の任意フィールドを**ソースから読み直して**、本番が
  *  実際に組み立てたオブジェクトと突き合わせるので、口を1つ落とせばその名前で
  *  ここが落ちる。 */
-it("ServerOptions の任意フィールドは authority を除いて全て組み立てられる(#172)", () => {
+it("ServerOptions の任意フィールドは authority を除いて全て組み立てられる(#172)", async () => {
   const optional = optionalFields("server.ts", "ServerOptions");
   // 走査そのものが壊れていないことの control。件数だけでは正規表現が**部分的に**
   // 効かなくなった場合を見逃すので、性質の違う3つを名指しで要求する:
   // 素の口・短縮記法で渡される口・入れ子の口。
   expect(optional).toEqual(expect.arrayContaining(["watchdog", "github", "containment"]));
 
-  const emitted = new Set(Object.keys(buildServerOptions(composition())));
+  const emitted = new Set(Object.keys(await buildServerOptions(composition())));
   // 意図的な不在は `authority` だけ(ADR 0012 / issue #36 の `resolveAuthority` に
   // 置換済み)。**この期待値は src ではなくここに置く** — 除外を1つ増やすことは
   // 「その口は本番で永久に立たない」という宣言であり、#172 と同じ穴を開け直す
@@ -355,7 +356,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ADR 0024: 盤面の GitHub 身元。token ファイルは読まれるまで触られないので、実在
   // しないパスでも「身元を持つ盤面」を組める(同一性だけを見る下の assertion 用)
   const githubAuth = new GitHubAuth("/nonexistent/github-token");
-  const options = buildServerOptions({
+  const options = await buildServerOptions({
     ...composition(),
     registryDir,
     workspacesDir,

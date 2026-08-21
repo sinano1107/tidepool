@@ -130,7 +130,7 @@ for (const message of messages) {
 // 渡し忘れても型もテストも何も言わない(watchdog が本番で一度も走っていなかった
 // のがその形)。口の一覧は server-options.ts が単独で持ち、テストがそれを観測する。
 const server = await startServer(
-  buildServerOptions({
+  await buildServerOptions({
     dbPath,
     port,
     mcpPort,
@@ -146,10 +146,15 @@ const server = await startServer(
     defaultAgentName,
     auditorName,
     boardState,
-    // ADR 0024 / issue #50: the board's GitHub identity is the machine-user
-    // token in this mode-600 secrets file — no file, no identity. The token
-    // itself never enters process.env: workers inherit that wholesale.
-    githubAuth: loadGitHubAuth(githubTokenFile),
+    // ADR 0093 / issue #50: the board's GitHub identity is the GitHub App, and
+    // this mode-600 file holds the user token the board presents to the broker
+    // — no file, no identity. Neither token ever enters process.env: workers
+    // inherit that wholesale. The broker URL is a public default (ADR 0093
+    // 決定1), overridable for forks running their own App.
+    githubAuth: loadGitHubAuth(githubTokenFile, process.env.TIDEPOOL_GITHUB_BROKER_URL),
+    // the settings surface re-reads this path per request, so a login that
+    // happens while the board runs shows up without a restart (ADR 0093 決定5)
+    githubTokenFile,
     vapid: vapidConfig(),
     translationClient: translationClientFactory(),
     cliAuthExpiresAt: resolveCliAuthExpiry(process.env.TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT),

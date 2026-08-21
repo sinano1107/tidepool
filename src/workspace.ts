@@ -4,7 +4,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
+import {
+  authedGitBounded,
+  GIT_NETWORK_TIMEOUT_MS,
+  type GitHubAuth,
+  originRepo,
+} from "./github-auth.js";
 import {
   ownEntry,
   REGISTRY_BRANCH,
@@ -107,16 +112,23 @@ export function protectedBranchRef(workspace: WorkspaceConfig): string {
 /** The board's own git identity: the author on the tree rule's WIP commits
  *  (releaseTree) and on the registry commits the WebUI flows make (issue #57,
  *  workspace-create.ts) — one authorship for everything tidepool itself
- *  commits. The email is the #50 machine user's GitHub noreply (issue #53 /
- *  ADR 0024 point 4): the board's mechanical execution shows up under the same
- *  tidepool-bot account its GitHub operations do, extending the "board acts as
- *  Tidepool, not as a person" line (quarantine/watchdog questions already
- *  register under this name) onto git author. */
+ *  commits. The email is the GitHub App bot's noreply (ADR 0093 決定9): the
+ *  board's mechanical execution shows up under the same `tidepool[bot]` the
+ *  board's GitHub operations do, extending the "board acts as Tidepool, not as
+ *  a person" line (quarantine/watchdog questions already register under this
+ *  name) onto git author.
+ *
+ *  ADR 0071: env 注入であってフラグではない — worker セッションが立てる ambient
+ *  な `GIT_*` に負けないため。 */
+const TIDEPOOL_BOT_NOREPLY_EMAIL =
+  // 公式 App の bot noreply(公開値)。#424 が App を登録したときに実際の bot user id
+  // が入る。fork が自分の App で動かすときは env で差し替える(ADR 0093 決定9)。
+  process.env.TIDEPOOL_GITHUB_BOT_EMAIL ?? "000000+tidepool[bot]@users.noreply.github.com";
 const TIDEPOOL_GIT_IDENTITY_ENV = {
   GIT_AUTHOR_NAME: "tidepool",
-  GIT_AUTHOR_EMAIL: "306969821+tidepool-bot@users.noreply.github.com",
+  GIT_AUTHOR_EMAIL: TIDEPOOL_BOT_NOREPLY_EMAIL,
   GIT_COMMITTER_NAME: "tidepool",
-  GIT_COMMITTER_EMAIL: "306969821+tidepool-bot@users.noreply.github.com",
+  GIT_COMMITTER_EMAIL: TIDEPOOL_BOT_NOREPLY_EMAIL,
 } as const;
 
 /** Shared by every board-driven git call (here and workspace-create.ts).
@@ -320,24 +332,53 @@ function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
   );
 }
 
+/** ADR 0093: workspace を fetch する前に、その checkout の `origin` 宛ての
+ *  installation token を用意する。取得(ネットワーク)と注入(同期)を分けるのは
+ *  ADR 0066 決定5 と同じ理由で、fetch そのものを同期に保つためである —— 宣言
+ *  (`repo`)ではなく `origin` から決めるのは、token が repo 単位で、fetch が実際に
+ *  触る remote と宛先が一致していなければならないからである(`repo` は人間向けの
+ *  provenance でもあって綴りの一致を要求しない: ADR 0052)。
+ *
+ *  仲介の不達はここで投げ、呼び出し元の quarantine がそのまま受ける。 */
+export async function ensureWorkspaceToken(
+  workspace: WorkspaceConfig,
+  auth: GitHubAuth | undefined,
+): Promise<void> {
+  if (!isRemoteBacked(workspace)) return;
+  await auth?.ensureToken(originRepo(workspace.path));
+}
+
 /** ADR 0052 決定2 の pickup 直前の refresh を workspace 側にも(issue #211 やること4)。
  *  remote 正本を宣言した workspace だけが fetch する —— 宣言の無い workspace には
  *  fetch する先が無い。
  *
- *  **machine user 名義で撃つ**(ADR 0024): workspace の remote も private でありうる
- *  し、`authedGit` の credential 引数はホストに設定済みの helper を先にクリアする ——
- *  「人間の `gh` ログインに寄りかからない」がここでも同時に成立する。上限つきの面を
- *  使うのは、詰まった接続が同期呼び出しで event loop ごと止めてはならないからである
- *  (`GIT_NETWORK_TIMEOUT_MS`)。
+ *  **`tidepool[bot]` 名義で撃つ**(ADR 0093): workspace の remote も private であり
+ *  うるし、`authedGit` の credential 引数はホストに設定済みの helper を先にクリア
+ *  する ——「人間の `gh` ログインに寄りかからない」がここでも同時に成立する。上限
+ *  つきの面を使うのは、詰まった接続が同期呼び出しで event loop ごと止めてはならない
+ *  からである(`GIT_NETWORK_TIMEOUT_MS`)。
+ *
+ *  token を要求する repo は**宣言(`repo`)ではなく checkout の `origin`** から
+ *  決める。installation token は repo 単位なので、fetch が実際に触る remote と
+ *  token の宛先は同じでなければならない —— `repo` は人間向けの provenance でも
+ *  あって綴りの一致を要求しない(ADR 0052)ので、宣言から導くと別の repo 宛ての
+ *  token を持って行きうる。
+ *
+ *  **同期のまま**なのは呼び出し元の都合である: `releaseWorkspace` は watchdog の
+ *  tick(`setInterval` のコールバック)からも来る。したがって token の取得だけを
+ *  `ensureWorkspaceToken` に分け、fetch する2つの経路がその手前で必ず撃つ ——
+ *  温まっていなければここが fail-closed に落ちる(`GitHubAuth.env`)。
  *
  *  失敗は投げる —— 呼び出し元(pickup / completion release)がその workspace を
- *  quarantine する。registry の到達不能と違って盤面全体は止めない: これは特定
- *  workspace の性質なので、資源単位の原則がそのまま適用できる(ADR 0052 決定5)。 */
+ *  quarantine する。仲介の不達もここに落ちる(ADR 0093 決定7)。registry の到達
+ *  不能と違って盤面全体は止めない: これは特定 workspace の性質なので、資源単位の
+ *  原則がそのまま適用できる(ADR 0052 決定5)。 */
 function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
   if (!isRemoteBacked(workspace)) return;
   authedGitBounded(
     auth,
     workspace.path,
+    originRepo(workspace.path),
     GIT_NETWORK_TIMEOUT_MS,
     "fetch",
     "--quiet",
@@ -375,14 +416,15 @@ function assertRegistryRoleAgrees(
  *  quarantine —— だからである(scheduler 側の try/catch 1つが全部受ける)。順序は
  *  意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
  *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
-export function prepareWorkspaceAtPickup(
+export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
   board: { githubAuth?: GitHubAuth; registry?: RegistrySource },
-): void {
+): Promise<void> {
   assertRegistryRoleAgrees(workspace, board.registry);
   assertRemoteDeclarationMatchesClone(workspace);
+  await ensureWorkspaceToken(workspace, board.githubAuth);
   refreshWorkspace(workspace, board.githubAuth);
   ensureTaskBranch(db, workspace, task);
   // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
@@ -847,13 +889,21 @@ export function releaseWorkspace(
   now: Date,
   mergeBack = false,
   githubAuth?: GitHubAuth,
+  tokenFailure?: unknown,
 ): void {
   try {
     releaseTree(workspace, task);
     // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
     // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
     assertOnlyTaskBranchMoved(db, workspace, task.id);
-    if (mergeBack) refreshWorkspace(workspace, githubAuth);
+    // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
+    // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
+    // 失敗を fetch が落ちたのと同じ位置で投げる —— WIP は既に退避済みで、行き先は
+    // 同じ quarantine(ADR 0052)。呼び出し元で投げると slot が解放されない。
+    if (mergeBack) {
+      if (tokenFailure !== undefined) throw tokenFailure;
+      refreshWorkspace(workspace, githubAuth);
+    }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
     if (target) {
       git(workspace.path, "checkout", target);

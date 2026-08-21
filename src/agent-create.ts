@@ -90,7 +90,7 @@ export interface AgentAdminDeps {
 export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps): Promise<void> {
   // 入口で fetch してから読む(ADR 0052 決定2/4): fetch できなければ push もでき
   // ず、その編集は最初から成立していない — workspace-create と同じ二段検査
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   assertValidAgentName(registry, input.name);
   assertKnownAuthority(registry, input.authority);
@@ -112,7 +112,7 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
 export type UpdateAgentInput = CreateAgentInput;
 
 export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps): Promise<void> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
@@ -192,7 +192,7 @@ export async function deleteAgent(
   input: DeleteAgentInput,
   deps: AgentAdminDeps & AgentDeletionReferences,
 ): Promise<void> {
-  refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   if (!ownEntry(registry.agents, input.name)) throw new UnknownAgentError(input.name);
   // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序)。profile の

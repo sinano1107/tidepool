@@ -1557,6 +1557,26 @@ const settingsCardLabel = {
 // draft prompt's language instruction and a later display-time-translation
 // feature read — a plain board-wide setting, not gated on the registry like the
 // workspaces/agents/profiles sections.
+// GitHub login state (ADR 0093 決定5). Read-only on purpose: logging in writes a
+// credential, and that door stays on the terminal — this card only says whether
+// the board has one, and names the command that makes it.
+function GitHubLoginCard({ loggedIn }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <span style={settingsCardLabel}>github</span>
+      <FieldRow label="login" kind={loggedIn ? 'mono' : 'unset'}
+        value={loggedIn ? 'logged in' : ''} unsetLabel="not logged in" />
+      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+        the board acts on GitHub as tidepool[bot], and reaches only the repositories the
+        Tidepool App is installed on. run <code>npm run github-login</code> in a terminal on
+        this host to log in — the same command re-logs in, and the board picks it up without
+        a restart.
+      </p>
+    </Card>
+  );
+}
+
 function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
   const { Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:language';
@@ -1936,6 +1956,15 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   };
   React.useEffect(() => { loadPaceOffsets(); }, []);
 
+  // ADR 0093 決定5: read-only. null → still loading; the card only appears once
+  // the board has answered, so "not logged in" is never shown speculatively.
+  const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
+  React.useEffect(() => {
+    api('/api/settings/github', undefined, 'GET')
+      .then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn))
+      .catch(() => setGithubLoggedIn(null));
+  }, []);
+
 
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
   // ADR 0082 決定1: 規約導出の着地先を合成するための基点 — { path, source }。
@@ -2192,6 +2221,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         {paceOffsets && (
           <PaceOffsetsCard offsets={paceOffsets} say={say} onSaved={loadPaceOffsets} edit={edit} />
         )}
+        {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}

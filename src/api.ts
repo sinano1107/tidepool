@@ -20,6 +20,7 @@ import {
 import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
+import { githubLoggedIn } from "./github-auth.js";
 import {
   addIssueCommentThroughHumanDoor,
   assertAssigneeKnown,
@@ -528,6 +529,11 @@ export interface ApiRouterDeps {
    *  null on a failed probe. Absent → no CLI to enumerate against; GET /api/
    *  skills degrades to an empty candidate set (never 503 — see the route). */
   hostSkills?: () => Promise<string[] | null>;
+  /** ADR 0093 決定5: `TIDEPOOL_GITHUB_TOKEN_FILE` の**パス**。settings の
+   *  「GitHub にログイン済みか」は毎回このファイルを検査し直す —— ログインは
+   *  盤面の外(`npm run github-login`)で起きるので、起動時に解決した身元では
+   *  再起動するまで映らない。 */
+  githubTokenFile?: string;
   /** Agent names whose registry model is fable (ADR 0030), read fresh per
    *  request — the queue view marks only their tasks skipped while the fable
    *  line is over pace. Absent → no registry, fable skip never shows. */
@@ -594,6 +600,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     agentAdmin,
     profileAdmin,
     hostSkills,
+    githubTokenFile,
     translationClient,
     fableAgents,
     isProtectedWorkspace,
@@ -1548,6 +1555,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     setBoardTimezone(db, parsed.data.tz);
     res.json({ tz: getQuietHours(db).tz });
+  });
+
+  // ADR 0093 決定5: 読み取り表示だけの面 —— WebUI からログインはできない
+  // (credential を書く扉を人間面に増やさない)。人間が打つコマンドは
+  // 画面側が文言として持つ。
+  router.get("/settings/github", (_req, res) => {
+    res.json({ loggedIn: githubLoggedIn(githubTokenFile) });
   });
 
   router.get("/settings/display-language", (_req, res) => {

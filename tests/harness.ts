@@ -17,6 +17,7 @@ import type { CliAuthCheck } from "../src/cli-auth.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
+import type { GitHubAuth } from "../src/github-auth.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type {
   AuthorityProfile,
@@ -77,6 +78,12 @@ export interface BootOptions {
   workerId?: string;
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
+  /** ADR 0093 決定5: `TIDEPOOL_GITHUB_TOKEN_FILE` のパス。settings の
+   *  「GitHub にログイン済みか」だけがこれを読む。 */
+  githubTokenFile?: string;
+  /** ADR 0093: 盤面の GitHub 身元。pickup / 完了時の fetch が仲介から
+   *  installation token を取る経路を持つ盤面だけが渡す。 */
+  githubAuth?: GitHubAuth;
   /** ADR 0052 / issue #211: どの registry clone を読み書きするか + remote 正本の宣言。
    *  registry clone が workspace としても登録されているときの「2つの宣言」の
    *  突き合わせだけがこれを要る。Absent → registry を持たない盤面 = 突き合わせ無し。 */
@@ -225,6 +232,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     cliAuth: options.cliAuth,
     cliAuthExpiresAt: options.cliAuthExpiresAt,
     registry: options.registry,
+    githubAuth: options.githubAuth,
+    githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
     containment: options.sandboxCapability && {
       sandboxCapability: options.sandboxCapability,
