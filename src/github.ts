@@ -135,8 +135,9 @@ export interface RepoSlug {
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
 
-/** One entry of `gh pr view --json statusCheckRollup`: a CheckRun (`status` +
- *  `conclusion`) or a StatusContext (`state`). */
+/** One entry of `gh pr view --json statusCheckRollup`: a CheckRun carries its
+ *  verdict in `conclusion`, a StatusContext in `state`. Only those two fields
+ *  are read — `status` is implied by an empty `conclusion`. */
 interface RollupEntry {
   conclusion?: string | null;
   state?: string | null;
