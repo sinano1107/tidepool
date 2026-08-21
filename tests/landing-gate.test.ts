@@ -610,6 +610,13 @@ it("再発火が門で止まったら、PR 昇格失敗 question は開いたま
   t.github.scriptFailure(null);
   await api(t.baseUrl, "POST", `/api/tasks/${first.id}/complete`, {});
 
+  // 再発火は走った上で門に止まった —— 走らなかったのと区別する
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
+    expect.objectContaining({
+      kind: "landing_deferred",
+      payload: { kind: "landing_deferred", unsettled_attached_children: 1 },
+    }),
+  );
   expect(t.github.requests).toHaveLength(1);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
     status: "todo",
