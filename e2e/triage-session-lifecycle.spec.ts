@@ -282,3 +282,34 @@ test("開いている triage session 中に queue の ↑ を押すと、停止�
   await expect(page.getByText("triage in progress — pickup is stopped")).not.toBeVisible();
   expect((await api(t.baseUrl, "GET", "/api/log")).json.cursor).toBe(cursorBeforeClose);
 });
+
+test("回答が唯一の項目だった triage も再読み込み後に Commit へ到達できる(#417)", async ({
+  boot,
+  page,
+}) => {
+  const t = await boot();
+  const work = await registerWork(t, "unblocked by the answer");
+  registerQuestion(t, {
+    title: "which way?",
+    purpose: "choose a direction",
+    completion_criteria: "the choice is recorded",
+    parent_id: work.id,
+    question: [{ title: "which way?", options: ["left", "right"], recommendation: "left" }],
+  });
+
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: /^left/ }).click();
+  await expect
+    .poll(async () => (await api(t.baseUrl, "GET", "/api/triage")).json.session)
+    .not.toBe(null);
+
+  await page.reload();
+  await expect(page.getByText("Low tide. Go enjoy your coffee.")).not.toBeVisible();
+  await page.getByRole("button", { name: "Merge decisions" }).click();
+  await page.getByRole("button", { name: "Queue check" }).click();
+  await page.getByRole("button", { name: "Wrap up" }).click();
+  await page.getByRole("button", { name: "Commit" }).click();
+
+  await expect(page.getByText("triage committed — session closed")).toBeVisible();
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBe(null);
+});
