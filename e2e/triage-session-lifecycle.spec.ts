@@ -312,4 +312,8 @@ test("回答が唯一の項目だった triage も再読み込み後に Commit �
 
   await expect(page.getByText("triage committed — session closed")).toBeVisible();
   expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBe(null);
+  // 到達できた commit が、ステージされていた親の解放(front insert)を実際に適用している
+  await expect
+    .poll(() => t.worker.started.map((task) => task.title))
+    .toContain("unblocked by the answer");
 });
