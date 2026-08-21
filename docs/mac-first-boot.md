@@ -243,5 +243,3 @@ the install link when the App is missing or you cannot push to the repository.
 Use a dedicated clone: the board treats a workspace as its own during a task, and a checkout you
 also edit by hand will end up quarantined. Nothing else changes — task branches, pull requests,
 and a merge question you answer.
-
-Send feedback to Slack #tidepool.

@@ -398,7 +398,6 @@ describe("npm run init-registry", () => {
     expect(guide).toContain('echo "required Tidepool environment is set"');
     expect(guide).toContain("### Publish the trial");
     expect(guide).not.toContain("Publish the sandbox");
-    expect(guide.trimEnd().endsWith("Send feedback to Slack #tidepool.")).toBe(true);
     expect(guide.indexOf("## Stage two")).toBeLessThan(guide.indexOf("npm run github-login"));
 
     const orderedSteps = [
