@@ -125,7 +125,7 @@ describe("token broker", () => {
 		);
 	});
 
-	it("reports a repo the user cannot see as not found", async () => {
+	it("reports a repo the user token cannot reach — uninstalled, invisible or absent — with one code", async () => {
 		const userToken = "ghu-user-without-repo-visibility";
 		const githubResponses = [
 			Response.json({ id: 1 }),
@@ -142,11 +142,11 @@ describe("token broker", () => {
 		const body = await response.text();
 
 		expect(response.status).toBe(404);
-		expect(JSON.parse(body)).toEqual({ error: "repo_not_found" });
+		expect(JSON.parse(body)).toEqual({ error: "repo_unreachable" });
 		expect(body).not.toContain(userToken);
 	});
 
-	it("reports an App installation missing from the repo with a distinct forbidden code", async () => {
+	it("maps a missing installation to the same unreachable verdict and leaks nothing from the App lookup", async () => {
 		const userToken = "ghu-user-token-for-uninstalled-repo";
 		const upstreamToken = "ghs-upstream-error-token";
 		const githubRequests: Request[] = [];
@@ -166,8 +166,8 @@ describe("token broker", () => {
 		const response = await worker.fetch(tokenRequest(userToken), env);
 		const body = await response.text();
 
-		expect(response.status).toBe(403);
-		expect(JSON.parse(body)).toEqual({ error: "app_not_installed" });
+		expect(response.status).toBe(404);
+		expect(JSON.parse(body)).toEqual({ error: "repo_unreachable" });
 		expect(githubRequests).toHaveLength(3);
 		expect(githubRequests[2]?.url).toBe(
 			"https://api.github.com/repos/owner/project/installation",

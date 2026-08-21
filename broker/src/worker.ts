@@ -149,7 +149,10 @@ export function createWorker(githubFetch: GitHubFetch = fetch) {
 						method: "GET",
 					},
 				);
-				if (repository.status === 404) return json("repo_not_found", 404);
+				// A user access token only sees repos both the user and the App reach, so
+				// "not installed", "not visible" and "no such repo" all arrive here as 404.
+				// The board's guidance names both causes (ADR 0093 決定8); one code suffices.
+				if (repository.status === 404) return json("repo_unreachable", 404);
 				if (!repository.ok) return json("github_error", 502);
 				const repositoryBody = (await repository.json()) as {
 					permissions?: { push?: unknown };
@@ -170,9 +173,9 @@ export function createWorker(githubFetch: GitHubFetch = fetch) {
 						method: "GET",
 					},
 				);
-				if (installation.status === 404) {
-					return json("app_not_installed", 403);
-				}
+				// Unreachable in practice (the lookup above already failed for an
+				// uninstalled repo); kept as the same verdict so the contract stays one code.
+				if (installation.status === 404) return json("repo_unreachable", 404);
 				if (!installation.ok) return json("github_error", 502);
 				const installationBody = (await installation.json()) as {
 					id?: unknown;
