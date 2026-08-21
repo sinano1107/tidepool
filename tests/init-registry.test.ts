@@ -103,12 +103,7 @@ describe("npm run init-registry", () => {
       advisor: undefined,
       icon: "🐡",
       skills: ["@workspace"],
-      systemPrompt:
-        "Distance from the work is valuable because it reveals different risks.\n" +
-        "Judge the result against its completion criteria.\n" +
-        "Cite the files, behavior, and records you examined.\n" +
-        "Say what you could not verify instead of filling gaps.\n" +
-        "If there are no findings, say so.",
+      systemPrompt: "",
     });
     expect(registry.authority.standard).toEqual({
       name: "standard",
