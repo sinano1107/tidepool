@@ -712,30 +712,18 @@ function isModelUsageEntry(value: unknown): value is ModelUsageEntry {
 }
 
 /** One entry of the result line's per-model breakdown, narrowed for
- *  `worker_exited.usage.models` (ADR 0094 決定2) — deliberately a separate
- *  type/predicate from `ModelUsageEntry`/`isModelUsageEntry` above, not a
- *  widening of them: those three fields are shared with `advisorUsage`,
- *  whose existing callers' fixtures lack the two cache fields this needs,
- *  and `advisorUsage`'s contract (issue #307) stays exactly as it was. */
-interface FullModelUsageEntry {
-  inputTokens: number;
-  outputTokens: number;
+ *  `worker_exited.usage.models` (ADR 0094 決定2). Composed on top of
+ *  `isModelUsageEntry` rather than widening it: that predicate is shared with
+ *  `advisorUsage`, whose contract (issue #307) stays exactly as it was. */
+interface ModelUsageBreakdownEntry extends ModelUsageEntry {
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
-  costUSD: number;
 }
 
-function isFullModelUsageEntry(value: unknown): value is FullModelUsageEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, costUSD } =
-    value as Record<string, unknown>;
-  return (
-    typeof inputTokens === "number" &&
-    typeof outputTokens === "number" &&
-    typeof cacheReadInputTokens === "number" &&
-    typeof cacheCreationInputTokens === "number" &&
-    typeof costUSD === "number"
-  );
+function isModelUsageBreakdownEntry(value: unknown): value is ModelUsageBreakdownEntry {
+  if (!isModelUsageEntry(value)) return false;
+  const { cacheReadInputTokens, cacheCreationInputTokens } = value as Partial<ModelUsageBreakdownEntry>;
+  return typeof cacheReadInputTokens === "number" && typeof cacheCreationInputTokens === "number";
 }
 
 /** The advisor's resolved model id, from the only surface that names it: an
@@ -863,7 +851,7 @@ function modelBreakdownFrom(result: StreamResultEvent): ModelBreakdown {
   if (typeof breakdown !== "object" || breakdown === null) return undefined;
   const models: NonNullable<ModelBreakdown> = {};
   for (const [modelId, entry] of Object.entries(breakdown as Record<string, unknown>)) {
-    if (!isFullModelUsageEntry(entry)) return undefined;
+    if (!isModelUsageBreakdownEntry(entry)) return undefined;
     models[modelId] = {
       input_tokens: entry.inputTokens,
       output_tokens: entry.outputTokens,

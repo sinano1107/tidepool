@@ -59,6 +59,17 @@ export interface AdvisorRecord {
   } | null;
 }
 
+/** One model's (or the whole session's) consumption in the board's own
+ *  vocabulary (ADR 0005 / issue #32) — the shape `worker_exited.usage` reports
+ *  at the top level and per model id in `models`. */
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  estimated_cost_usd: number;
+}
+
 /** Payloads are typed per-kind; adding a kind forces the writer through this
  *  union, which is what kills the "wrote to log but forgot stats" bug class. */
 export type EventPayload =
@@ -225,12 +236,7 @@ export type EventPayload =
       // `.stderr.log`, so this is what lets a reader of worker_exited
       // reconstruct which file belongs to it.
       worker_spawned_event_id: number;
-      usage: {
-        input_tokens: number;
-        output_tokens: number;
-        cache_read_tokens: number;
-        cache_creation_tokens: number;
-        estimated_cost_usd: number;
+      usage: TokenUsage & {
         /** issue #33 判断6: what the advisor **actually did** this session, as
          *  against worker_spawned.advisor's "what the board asked for". null
          *  means no consultation was observed at all — which deliberately
@@ -259,16 +265,7 @@ export type EventPayload =
          *  at all — a session with no models here says nothing about
          *  whether one ran, only that this field could not be filled in;
          *  same fail-closed, all-or-nothing posture as `isStreamResultEvent`. */
-        models?: Record<
-          string,
-          {
-            input_tokens: number;
-            output_tokens: number;
-            cache_read_tokens: number;
-            cache_creation_tokens: number;
-            estimated_cost_usd: number;
-          }
-        >;
+        models?: Record<string, TokenUsage>;
       } | null;
     }
   // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —
