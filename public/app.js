@@ -327,7 +327,6 @@ const S_LOG = 1;
 const S_MERGE = 2;
 const S_QUEUE = 3;
 const S_COMMIT = 4;
-const S_COUNT = 5;
 const TP_LANDING_HELD = {
   attached_children: "attached children unsettled",
   objections: "objections await commit"
@@ -548,9 +547,10 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     runTranslate(onTranslate, { type: "handoff", task_id: entry.taskId }, (result) => setHandoffTranslations((prev) => ({ ...prev, [k]: result })));
   };
   const answered = generalQuestions.filter((q) => answers[q.id]).length;
+  const nObjections = commitPendingObjectionKeys(data.log, objections).size;
   const unread = data.log.filter((l) => l.unread);
-  const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / S_COUNT;
-  const landingBlockOf = (q) => (landingNow && landingNow[q.id] || q.landing).blocked_by;
+  const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / (S_COMMIT + 1);
+  const landingBlockOf = (q) => (landingNow?.[q.id] ?? q.landing).blocked_by;
   const landingReady = landingQuestions.filter((q) => answers[q.id] || landingBlockOf(q) === null);
   const landingHeld = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
   const heads = [
@@ -626,19 +626,17 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     const held = landingHeld.filter((q) => landingBlockOf(q) === kind);
     if (held.length === 0) return null;
     return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, held.length, " landing question", held.length > 1 ? "s" : "", " held \u2014 ", TP_LANDING_HELD[kind]);
-  }), landingReady.length === 0 && landingHeld.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "Nothing waits to land.")), section === S_QUEUE && (() => {
+  })), section === S_QUEUE && (() => {
     if (loadPreview) {
       return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: preview ?? [] }));
     }
     const pending = Object.entries(answers).filter(([, a]) => a).map(([qid]) => data.questions.find((x) => x.id === qid)).filter((q) => q.parent).map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, assigneeIcon: q.agentIcon, frontInserted: true }));
-    const nObjections = commitPendingObjectionKeys(data.log, objections).size;
     if (nObjections > 0) {
       pending.push({ id: "tp-0151", title: `repair task \u2014 ${nObjections} objection${nObjections > 1 ? "s" : ""} bundled`, assignee: "reef-crab", frontInserted: true });
     }
     const previewQueue = data.queue.filter((t) => !pending.some((p) => p.id === t.id));
     return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, pending.map((t, i) => /* @__PURE__ */ React.createElement(QueueItem, { key: t.id, position: i + 1, task: t, frontInserted: true })), /* @__PURE__ */ React.createElement(TpQueueList, { tasks: previewQueue, baseIndex: pending.length, onReorder: onReorderQueue, onFront, headId: data.queue[0]?.id }));
   })(), section === S_COMMIT && (() => {
-    const nObjections = commitPendingObjectionKeys(data.log, objections).size;
     return /* @__PURE__ */ React.createElement("div", null, nObjections > 0 && /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: 0 } }, nObjections, " objection", nObjections > 1 ? "s" : "", " bundle into repair tasks at commit \u2014 one per objected task, queue tail"), scratch.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 20, background: "var(--surface-card)", border: "1px solid var(--border-hairline)", borderRadius: "var(--radius-md)", padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 } }, "scratchpad \u2014 triage before commit"), scratch.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { flex: "1 1 100%", fontSize: "var(--text-sm)", color: (scratchKinds[l.id] || "task") === "discard" ? "var(--text-muted)" : "var(--text-body)", textDecoration: (scratchKinds[l.id] || "task") === "discard" ? "line-through" : "none" } }, l.text), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4 } }, TP_SCRATCH_KINDS.map((k) => {
       const picked = (scratchKinds[l.id] || "task") === k.key;
       return /* @__PURE__ */ React.createElement(

@@ -252,7 +252,6 @@ const S_LOG = 1;
 const S_MERGE = 2;
 const S_QUEUE = 3;
 const S_COMMIT = 4;
-const S_COUNT = 5;
 
 // 盤面が返す回答不能の理由(`landing.blocked_by`)を1行の文言にする。判定は盤面側で
 // 済んでいるので、ここは描画だけ(ADR 0092 決定4)。
@@ -569,11 +568,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       setHandoffTranslations((prev) => ({ ...prev, [k]: result })));
   };
   const answered = generalQuestions.filter((q) => answers[q.id]).length;
+  const nObjections = commitPendingObjectionKeys(data.log, objections).size;
   const unread = data.log.filter((l) => l.unread);
-  const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / S_COUNT;
+  const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / (S_COMMIT + 1);
   // 回答可否は盤面が言う(`landing.blocked_by`)。merge 判断に入ったときの読み直しが
   // あればそれを、無ければ凍結 snapshot の注釈を使う。回答済みは locked のまま残す。
-  const landingBlockOf = (q) => ((landingNow && landingNow[q.id]) || q.landing).blocked_by;
+  const landingBlockOf = (q) => (landingNow?.[q.id] ?? q.landing).blocked_by;
   const landingReady = landingQuestions.filter((q) => answers[q.id] || landingBlockOf(q) === null);
   const landingHeld = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
 
@@ -743,9 +743,6 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
               </p>
             );
           })}
-          {landingReady.length === 0 && landingHeld.length === 0 && (
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>Nothing waits to land.</p>
-          )}
         </div>
       )}
 
@@ -766,7 +763,6 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           .map(([qid]) => data.questions.find((x) => x.id === qid))
           .filter((q) => q.parent)
           .map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, assigneeIcon: q.agentIcon, frontInserted: true }));
-        const nObjections = commitPendingObjectionKeys(data.log, objections).size;
         if (nObjections > 0) {
           pending.push({ id: 'tp-0151', title: `repair task — ${nObjections} objection${nObjections > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true });
         }
@@ -786,7 +782,6 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       {section === S_COMMIT && (() => {
         // 振り分けと束ねの件数は終端に置く(CONTEXT.md の Scratchpad / Objection) —
         // どちらもコミットが適用する行為であって、キューの確認ではない
-        const nObjections = commitPendingObjectionKeys(data.log, objections).size;
         return (
           <div>
             {nObjections > 0 && (
