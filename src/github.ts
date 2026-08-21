@@ -60,10 +60,13 @@ export interface Issue {
   comments: string[];
 }
 
-/** The three-way state gh's per-check "bucket" aggregates to: any failing or
- *  cancelled check is a "failure", any still running is "pending", otherwise
- *  (including a PR with no checks configured at all) "success" — there is
- *  nothing left to block on. */
+/** The three-way state a PR's checks aggregate to: any failing or cancelled
+ *  check is a "failure", any still running is "pending", otherwise (including
+ *  a PR with no checks configured at all) "success" — there is nothing left to
+ *  block on. A check state that could not be **read** is "pending" too, never
+ *  "success" and never "failure" (issue #427): an unobservable CI is not a
+ *  green light (ADR 0052's fail-closed), and inventing a failure would write a
+ *  false observation into the human's failure question (ADR 0079). */
 export type CiStatus = "pending" | "success" | "failure";
 
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
@@ -132,6 +135,25 @@ export interface RepoSlug {
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
 
+/** One entry of `gh pr view --json statusCheckRollup`: a CheckRun (`status` +
+ *  `conclusion`) or a StatusContext (`state`). */
+interface RollupEntry {
+  conclusion?: string | null;
+  state?: string | null;
+}
+
+/** 緑と読める判定値 / 赤と読める判定値(GitHub の CheckConclusionState と
+ *  StatusState)。どちらにも無い値は未完了か未知で、pending。 */
+const CI_PASSED = ["SUCCESS", "SKIPPED", "NEUTRAL"];
+const CI_FAILED = [
+  "FAILURE",
+  "CANCELLED",
+  "TIMED_OUT",
+  "ACTION_REQUIRED",
+  "STARTUP_FAILURE",
+  "ERROR",
+];
+
 /** Real implementation: shells out to `gh`/`git` as `tidepool[bot]` (ADR 0093)
  *  — every call injects a repo-scoped installation token into the child env
  *  fresh via GitHubAuth, never the host's ambient `gh auth`. `gh` prints the
@@ -180,23 +202,27 @@ export class GhCliClient implements GitHubClient {
   }
 
   async getCiStatus(ref: PrRef): Promise<CiStatus> {
-    // `gh pr checks` exits non-zero while any check is pending or failing
-    // (its own documented exit codes) — the JSON it printed to stdout before
-    // exiting is still what we want, so a thrown error's captured stdout is
-    // the fallback, not a propagated failure.
-    let output: string;
+    // `gh pr checks` はチェック未設定でも「非ゼロ終了 + stdout 空」で、認証・
+    // ネットワーク失敗と区別がつかない —— 取得失敗が緑に化ける(issue #427)。
+    // `gh pr view --json statusCheckRollup` は未設定なら exit 0 + 空配列を返し、
+    // 非ゼロ終了は「読めなかった」だけを意味する。token 取得(仲介への往復)も
+    // 同じ try に入れて、どちらの失敗も pending に倒す。
+    let checks: RollupEntry[];
     try {
-      output = execFileSync(
+      const output = execFileSync(
         "gh",
-        ["pr", "checks", String(ref.number), "--json", "bucket"],
+        ["pr", "view", String(ref.number), "--json", "statusCheckRollup"],
         { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
-    } catch (err) {
-      output = (err as { stdout?: Buffer }).stdout?.toString() ?? "[]";
+      checks = (JSON.parse(output) as { statusCheckRollup?: RollupEntry[] }).statusCheckRollup ?? [];
+    } catch {
+      return "pending";
     }
-    const checks = JSON.parse(output.trim() || "[]") as Array<{ bucket: string }>;
-    if (checks.some((c) => c.bucket === "fail" || c.bucket === "cancel")) return "failure";
-    if (checks.some((c) => c.bucket === "pending")) return "pending";
+    // CheckRun は完了時の `conclusion`、StatusContext は `state` に判定を持つ。
+    // どちらも空 = まだ完了していない。知らない判定値は pending 側に落とす。
+    const verdicts = checks.map((c) => c.conclusion || c.state || "");
+    if (verdicts.some((v) => CI_FAILED.includes(v))) return "failure";
+    if (verdicts.some((v) => !CI_PASSED.includes(v))) return "pending";
     return "success";
   }
 
