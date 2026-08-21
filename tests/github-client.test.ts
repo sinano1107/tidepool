@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
+import {
+  type BrokerAnswer,
+  type FakeBroker,
+  issuedToken,
+  startFakeBroker,
+} from "./fake-broker.js";
 import { git } from "./harness.js";
 
 let repoPath: string | undefined;
@@ -39,13 +44,13 @@ afterEach(async () => {
  *  仲介の代役を1つ立てて繋ぐ — GhCliClient は checkout の `origin` が名指す repo
  *  の installation token を各呼び出しの env に都度注入する(process.env には
  *  決して書かない)。 */
-async function makeAuth(installationToken = "installation-token"): Promise<GitHubAuth> {
+async function makeAuth(answer: BrokerAnswer = issuedToken("installation-token")): Promise<GitHubAuth> {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
   authPath = dir;
   const file = join(dir, "github-token");
   writeFileSync(file, "gho_user\n");
   chmodSync(file, 0o600);
-  const broker = await startFakeBroker(() => issuedToken(installationToken));
+  const broker = await startFakeBroker(() => answer);
   brokers.push(broker);
   return new GitHubAuth(file, broker.url);
 }
@@ -131,10 +136,9 @@ it("トークンは gh の子プロセス env にだけ注入され、盤面プ�
   expect(process.env.GH_TOKEN).toBeUndefined();
 });
 
-/** Stands in for `gh pr checks`: prints the given JSON to stdout and exits
- *  with the given code — `gh` itself exits non-zero while any check is
- *  pending or failing (its own documented exit codes), which is exactly the
- *  case getCiStatus's stdout-capture fallback exists for. */
+/** Stands in for `gh pr view --json statusCheckRollup`: prints the given JSON
+ *  to stdout and exits with the given code — 実物はチェックが pending でも
+ *  failing でも exit 0 で、非ゼロ終了は「読めなかった」ときだけ。 */
 async function fakeGhChecks(stdout: string, exitCode: number): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
   binPath = dir;
@@ -145,7 +149,10 @@ async function fakeGhChecks(stdout: string, exitCode: number): Promise<string> {
 }
 
 it("getCiStatus は全チェック pass で success を返す", async () => {
-  const dir = await fakeGhChecks('[{"bucket":"pass"}]', 0);
+  const dir = await fakeGhChecks(
+    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"StatusContext","state":"SUCCESS"}]}',
+    0,
+  );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
@@ -153,8 +160,11 @@ it("getCiStatus は全チェック pass で success を返す", async () => {
   expect(status).toBe("success");
 });
 
-it("getCiStatus は pending なチェックが残っていれば(非ゼロ終了でも)pending を返す", async () => {
-  const dir = await fakeGhChecks('[{"bucket":"pending"}]', 8);
+it("getCiStatus は未完了のチェックが残っていれば pending を返す", async () => {
+  const dir = await fakeGhChecks(
+    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":""}]}',
+    0,
+  );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
@@ -162,8 +172,20 @@ it("getCiStatus は pending なチェックが残っていれば(非ゼロ終了
   expect(status).toBe("pending");
 });
 
-it("getCiStatus は fail バケットがあれば failure を返す", async () => {
-  const dir = await fakeGhChecks('[{"bucket":"pass"},{"bucket":"fail"}]', 1);
+it("getCiStatus はチェックが1つも無い PR を success として読む", async () => {
+  const dir = await fakeGhChecks('{"statusCheckRollup":[]}', 0);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
+  expect(status).toBe("success");
+});
+
+it("getCiStatus は cancel されたチェックを failure として読む", async () => {
+  const dir = await fakeGhChecks(
+    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"CANCELLED"}]}',
+    0,
+  );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
@@ -171,16 +193,46 @@ it("getCiStatus は fail バケットがあれば failure を返す", async () =
   expect(status).toBe("failure");
 });
 
-it("getCiStatus は非ゼロ終了で stdout が全く無い場合、チェック無しとして success を返す", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
-  binPath = dir;
-  writeFileSync(join(dir, "gh"), `#!/bin/sh\nexit 1\n`);
-  chmodSync(join(dir, "gh"), 0o755);
+it("getCiStatus は token を取れなければ(仲介に届かない)pending を返す", async () => {
+  // gh 自身は緑を答える —— pending の出どころが仲介の失敗だけであることを固定する
+  const dir = await fakeGhChecks(
+    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}',
+    0,
+  );
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+  // installation token は repo 単位(ADR 0093 決定2)なので、origin が github.com を
+  // 指す checkout でなければ仲介への往復自体が起きない
+  repoPath = await mkdtemp(join(tmpdir(), "tidepool-repo-"));
+  git(repoPath, "init", "-b", "main");
+  git(repoPath, "remote", "add", "origin", "https://github.com/acme/widget.git");
+
+  const status = await new GhCliClient(await makeAuth({ destroy: true })).getCiStatus({
+    path: repoPath,
+    number: 1,
+  });
+  expect(status).toBe("pending");
+});
+
+it("getCiStatus は失敗したチェックがあれば failure を返す", async () => {
+  const dir = await fakeGhChecks(
+    '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"COMPLETED","conclusion":"FAILURE"}]}',
+    0,
+  );
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
   const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
-  expect(status).toBe("success");
+  expect(status).toBe("failure");
+});
+
+it("getCiStatus は gh が非ゼロ終了したら(到達不能)pending を返す", async () => {
+  const dir = await fakeGhChecks("", 1);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  const status = await new GhCliClient(await makeAuth()).getCiStatus({ path: "/tmp", number: 1 });
+  expect(status).toBe("pending");
 });
 
 /** Stands in for `gh issue view --json title,body,comments`: prints the
