@@ -486,7 +486,7 @@ export async function refreshRegistry(
 ): Promise<RegistryReachability> {
   try {
     const repo = originRepo(dir);
-    await auth?.ensure(repo);
+    await auth?.ensureToken(repo);
     authedGitBounded(
       auth,
       dir,

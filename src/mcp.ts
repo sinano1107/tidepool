@@ -446,8 +446,17 @@ function runReleasingVerb(
       const merge = mergeBack && task.type === "work";
       // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の
       // 取得だけがネットワークなので、同期の `releaseWorkspace` の手前で撃つ。
-      if (merge) await ensureWorkspaceToken(workspace, deps.githubAuth);
-      releaseWorkspace(deps.db, workspace, task, deps.clock.now(), merge, deps.githubAuth);
+      // 失敗は投げずに持ち越す: ここで投げると verb は既に着地しているのに tree rule
+      // も slot の解放も走らない。`releaseWorkspace` が fetch 失敗と同じ位置で投げる。
+      let tokenFailure: unknown;
+      if (merge) {
+        try {
+          await ensureWorkspaceToken(workspace, deps.githubAuth);
+        } catch (err) {
+          tokenFailure = err ?? new Error("GitHub token acquisition failed");
+        }
+      }
+      releaseWorkspace(deps.db, workspace, task, deps.clock.now(), merge, deps.githubAuth, tokenFailure);
     }
     deps.slot.release();
     return result;

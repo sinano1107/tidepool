@@ -7,6 +7,8 @@ import { type FakeBroker, startFakeBroker } from "./fake-broker.js";
 import {
   api,
   bootTidepool,
+  commitWork,
+  completeViaMcp,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -170,5 +172,56 @@ it("仲介が installation token を出せない workspace は、fetch 失敗と
   ]);
   // 人間が読む理由に仲介の断り方が残る —— #423 が案内文(再ログインのコマンド)を
   // 足すまでの間、診断できる材料はこれである
+  expect(await quarantineReason(t)).toContain("invalid_user_token");
+});
+
+// ADR 0093 決定7 の完了側: token の取得は `releaseWorkspace` の手前で await されるが、
+// そこで投げると verb は着地済みなのに tree rule も slot の解放も走らない。失敗は
+// fetch が落ちたのと同じ位置へ持ち越され、同じ quarantine に落ちる。
+it("完了時の merge back で仲介が token を出せなくても、WIP は退避され workspace が quarantine に落ちる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const localOrigin = workspace.repo!;
+  // origin の綴りは github.com(= token が要る形)、実際の往復は insteadOf でローカルの
+  // bare へ —— 実ネットワークへは出ない
+  git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/sandbox.git");
+  git(workspace.path, "config", `url.${localOrigin}.insteadOf`, "https://github.com/acme/sandbox.git");
+  // 1回目(pickup)は 4 分だけ有効な token を出す —— 5 分の余白を切っているので完了時の
+  // ensure は取り直しに行き、2回目で仲介が断る
+  let brokerDown = false;
+  const broker = await startFakeBroker(() =>
+    brokerDown
+      ? { status: 401, body: { error: "invalid_user_token" } }
+      : {
+          status: 200,
+          body: { token: "ghs_short", expires_at: new Date(Date.now() + 4 * 60_000).toISOString() },
+        },
+  );
+  brokers.push(broker);
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
+  dirs.push(dir);
+  const tokenFile = join(dir, "github-token");
+  await writeFile(tokenFile, "gho_user\n");
+  await chmod(tokenFile, 0o600);
+
+  t = await bootTidepool({ workspace, githubAuth: new GitHubAuth(tokenFile, broker.url) });
+  const task = await registerWork(t, "completes while the broker is down");
+  await t.clock.advance(HOUR);
+  // pickup は仲介への実 HTTP 往復を含むので、fake clock の1 tick 分の settle では
+  // 足りない —— worker が立つまで待つ
+  for (let i = 0; i < 200 && t.worker.started.length === 0; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(t.worker.started).toHaveLength(1);
+  commitWork(workspace.path, "work.txt", "done\n");
+  brokerDown = true;
+
+  const result = await completeViaMcp(t, task.id);
+
+  expect(result.isError).toBeFalsy();
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect(await questionTitles(t)).toEqual([
+    expect.stringContaining("workspace sandbox needs human attention"),
+  ]);
   expect(await quarantineReason(t)).toContain("invalid_user_token");
 });

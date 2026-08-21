@@ -120,8 +120,8 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
     const broker = await openBroker((request) => issuedToken(`inst-${request.repo}`, 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
 
-    await auth.ensure("acme/one");
-    await auth.ensure("acme/two");
+    await auth.ensureToken("acme/one");
+    await auth.ensureToken("acme/two");
 
     expect({
       one: auth.env("acme/one").GH_TOKEN,
@@ -147,10 +147,10 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
     );
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
 
-    await auth.ensure("acme/expiring");
-    await auth.ensure("acme/fresh");
-    await auth.ensure("acme/expiring");
-    await auth.ensure("acme/fresh");
+    await auth.ensureToken("acme/expiring");
+    await auth.ensureToken("acme/fresh");
+    await auth.ensureToken("acme/expiring");
+    await auth.ensureToken("acme/fresh");
 
     expect(broker.requests.map((r) => r.repo)).toEqual([
       "acme/expiring",
@@ -164,9 +164,9 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
     const file = await makeTokenFile("old-user-token\n", 0o600);
     const auth = new GitHubAuth(file, broker.url);
 
-    await auth.ensure("acme/one");
+    await auth.ensureToken("acme/one");
     writeFileSync(file, "new-user-token\n");
-    await auth.ensure("acme/one");
+    await auth.ensureToken("acme/one");
 
     expect(broker.requests.map((r) => r.bearer)).toEqual(["old-user-token", "new-user-token"]);
   });
@@ -175,7 +175,7 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
     const broker = await openBroker(() => issuedToken("inst", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
 
-    await auth.ensure(undefined);
+    await auth.ensureToken(undefined);
 
     expect({ asked: broker.requests.length, token: auth.env(undefined).GH_TOKEN }).toEqual({
       asked: 0,
@@ -202,7 +202,7 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
     const broker = await openBroker(() => ({ status, body }));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
 
-    await expect(auth.ensure("acme/one")).rejects.toThrow(
+    await expect(auth.ensureToken("acme/one")).rejects.toThrow(
       new RegExp(`acme/one \\(HTTP ${status}: ${(body as { error: string }).error}\\)`),
     );
   });
@@ -210,19 +210,19 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
   it("接続が切られた / そもそも繋がらない場合も同じ到達失敗として投げる", async () => {
     const broker = await openBroker(() => ({ destroy: true }));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
-    await expect(auth.ensure("acme/one")).rejects.toThrow(/could not be reached for acme\/one/);
+    await expect(auth.ensureToken("acme/one")).rejects.toThrow(/could not be reached for acme\/one/);
 
     const refused = new GitHubAuth(
       await makeTokenFile("gho_user\n", 0o600),
       "http://127.0.0.1:1/",
     );
-    await expect(refused.ensure("acme/one")).rejects.toThrow(/could not be reached for acme\/one/);
+    await expect(refused.ensureToken("acme/one")).rejects.toThrow(/could not be reached for acme\/one/);
   });
 
   it("token / expires_at の欠けた応答は成功として扱わない", async () => {
     const broker = await openBroker(() => ({ body: { token: "inst" } }));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
-    await expect(auth.ensure("acme/one")).rejects.toThrow(/invalid token response/);
+    await expect(auth.ensureToken("acme/one")).rejects.toThrow(/invalid token response/);
   });
 });
 
@@ -254,7 +254,7 @@ describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)"
 
     const broker = await openBroker(() => issuedToken("inst-token", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
-    await auth.ensure("acme/widget");
+    await auth.ensureToken("acme/widget");
     // ローカル remote では credential helper は無害(実物の git で通ることを見る)
     authedGit(auth, repo, "acme/widget", "push", "origin", "main");
 

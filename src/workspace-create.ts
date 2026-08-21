@@ -456,7 +456,7 @@ export async function publishWorkspace(
   // `authedGit` は温まったキャッシュから同期に注入するだけなので、下の「await は
   // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
   const destination = repoKey(input.repo);
-  await deps.githubAuth.ensure(destination);
+  await deps.githubAuth.ensureToken(destination);
   // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedGit` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
@@ -511,7 +511,7 @@ async function buildEntry(
   if (input.mode === "register") return registerExistingCheckout(input.path);
   if (input.mode === "clone") {
     await assertRepoAccess(input.repo, deps.github);
-    await deps.githubAuth?.ensure(repoKey(input.repo));
+    await deps.githubAuth?.ensureToken(repoKey(input.repo));
     return cloneAndDescribe(input.name, input.repo, deps);
   }
   return createLocalCheckout(input.name, deps);

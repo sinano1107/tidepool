@@ -121,8 +121,9 @@ export function protectedBranchRef(workspace: WorkspaceConfig): string {
  *  ADR 0071: env 注入であってフラグではない — worker セッションが立てる ambient
  *  な `GIT_*` に負けないため。 */
 const TIDEPOOL_BOT_NOREPLY_EMAIL =
-  // #424 が App を登録したときに実際の bot user id が入る(公開値・固定値)
-  "000000+tidepool[bot]@users.noreply.github.com";
+  // 公式 App の bot noreply(公開値)。#424 が App を登録したときに実際の bot user id
+  // が入る。fork が自分の App で動かすときは env で差し替える(ADR 0093 決定9)。
+  process.env.TIDEPOOL_GITHUB_BOT_EMAIL ?? "000000+tidepool[bot]@users.noreply.github.com";
 const TIDEPOOL_GIT_IDENTITY_ENV = {
   GIT_AUTHOR_NAME: "tidepool",
   GIT_AUTHOR_EMAIL: TIDEPOOL_BOT_NOREPLY_EMAIL,
@@ -344,7 +345,7 @@ export async function ensureWorkspaceToken(
   auth: GitHubAuth | undefined,
 ): Promise<void> {
   if (!isRemoteBacked(workspace)) return;
-  await auth?.ensure(originRepo(workspace.path));
+  await auth?.ensureToken(originRepo(workspace.path));
 }
 
 /** ADR 0052 決定2 の pickup 直前の refresh を workspace 側にも(issue #211 やること4)。
@@ -888,6 +889,7 @@ export function releaseWorkspace(
   now: Date,
   mergeBack = false,
   githubAuth?: GitHubAuth,
+  tokenFailure?: unknown,
 ): void {
   try {
     releaseTree(workspace, task);
@@ -895,8 +897,13 @@ export function releaseWorkspace(
     // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
     assertOnlyTaskBranchMoved(db, workspace, task.id);
     // merge-back の帰り先はこの fetch の結果で決まる。token は呼び出し元が
-    // `ensureWorkspaceToken` で温めてある(ADR 0093)。
-    if (mergeBack) refreshWorkspace(workspace, githubAuth);
+    // `ensureWorkspaceToken` で温めてある(ADR 0093)。温められなかったときは、その
+    // 失敗を fetch が落ちたのと同じ位置で投げる —— WIP は既に退避済みで、行き先は
+    // 同じ quarantine(ADR 0052)。呼び出し元で投げると slot が解放されない。
+    if (mergeBack) {
+      if (tokenFailure !== undefined) throw tokenFailure;
+      refreshWorkspace(workspace, githubAuth);
+    }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
     if (target) {
       git(workspace.path, "checkout", target);

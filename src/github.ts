@@ -171,7 +171,7 @@ export class GhCliClient implements GitHubClient {
    *  happens here, before the synchronous `execFileSync`. */
   private async envFor(cwd: string): Promise<NodeJS.ProcessEnv> {
     const repo = originRepo(cwd);
-    await this.auth.ensure(repo);
+    await this.auth.ensureToken(repo);
     return this.auth.env(repo);
   }
 
@@ -180,7 +180,7 @@ export class GhCliClient implements GitHubClient {
     // remote — run non-interactively, it cannot fall back to its "push now?"
     // prompt.
     const repo = originRepo(input.path);
-    await this.auth.ensure(repo);
+    await this.auth.ensureToken(repo);
     authedGit(this.auth, input.path, repo, "push", "-u", "origin", input.branch);
     const url = execFileSync(
       "gh",
@@ -351,10 +351,9 @@ export class GhCliClient implements GitHubClient {
   private gh(args: string[]): string {
     return execFileSync("gh", args, {
       // #423 がこの4本ごと消す(installation token では動かない呼び出しなので
-      // ADR 0093 決定8 で仲介への token 要求に置き換わる)。それまでは user token
-      // をそのまま渡す —— GH_TOKEN を外すと `gh` がホストの keyring に落ち、
-      // ADR 0024 が消したはずの ambient な人間の identity で答えることになる。
-      env: { ...process.env, GH_TOKEN: this.auth.token(), GIT_TERMINAL_PROMPT: "0" },
+      // ADR 0093 決定8 で仲介への token 要求に置き換わる)。それまでの注入も
+      // GitHubAuth の中で組む —— credential が効く場所は1箇所のまま。
+      env: this.auth.userTokenEnv(),
       stdio: ["ignore", "pipe", "pipe"],
       timeout: GIT_NETWORK_TIMEOUT_MS,
     }).toString();
