@@ -392,8 +392,13 @@ describe("npm run init-registry", () => {
     expect(guide).toContain("Name: `trial`");
     expect(guide).toContain("`(default workspace)` means `sandbox`");
     expect(guide).toContain("**Workspace** to `trial`");
+    expect(guide).toContain("Title: Create the trial README");
+    expect(guide).toContain("Purpose: Create README.md with this one-sentence description:");
+    expect(guide).toContain("Completion criteria: README.md exists and contains that sentence.");
+    expect(guide).toContain('echo "required Tidepool environment is set"');
     expect(guide).toContain("### Publish the trial");
     expect(guide).not.toContain("Publish the sandbox");
+    expect(guide.trimEnd().endsWith("Send feedback to Slack #tidepool.")).toBe(true);
     expect(guide.indexOf("## Stage two")).toBeLessThan(guide.indexOf("npm run github-login"));
 
     const orderedSteps = [

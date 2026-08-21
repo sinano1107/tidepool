@@ -100,6 +100,14 @@ lsof -nP -iTCP:4589 -iTCP:4590 -sTCP:LISTEN
 ```
 Expect both ports listening only on `127.0.0.1`.
 
+```bash
+test -n "$TIDEPOOL_REGISTRY" && \
+  test -n "$TIDEPOOL_DB" && \
+  test -n "$TIDEPOOL_WORKER_LOGS" && \
+  echo "required Tidepool environment is set"
+```
+Expect `required Tidepool environment is set`.
+
 ## Create a trial workspace
 
 In the WebUI, open the **Settings** tab and add a workspace with:
@@ -120,9 +128,9 @@ the fields below, set **Workspace** to `trial`, and press **Register**. Leaving 
 `(default workspace)` means `sandbox`, so select `trial` explicitly:
 
 ```text
-Title: Resolve the README TODO
-Purpose: README.md has a TODO line asking for a one-sentence description of this workspace. Replace that line with: "A scratch workspace for trying out Tidepool."
-Completion criteria: README.md contains that sentence and no longer contains the word TODO.
+Title: Create the trial README
+Purpose: Create README.md with this one-sentence description: "A scratch workspace for trying out Tidepool."
+Completion criteria: README.md exists and contains that sentence.
 ```
 
 Completion criteria are what the worker checks itself, so keep them to things it can see in the
@@ -235,3 +243,5 @@ the install link when the App is missing or you cannot push to the repository.
 Use a dedicated clone: the board treats a workspace as its own during a task, and a checkout you
 also edit by hand will end up quarantined. Nothing else changes — task branches, pull requests,
 and a merge question you answer.
+
+Send feedback to Slack #tidepool.
