@@ -3153,7 +3153,7 @@ function App() {
 
       <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
-        {tab === 'triage' && (data.questions.length || unreadCount || data.scratchpad.length
+        {tab === 'triage' && (data.questions.length || unreadCount || data.scratchpad.length || data.triageActive
           ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff}
               onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview} loadLanding={loadLanding}
               onTranslate={onTranslateProp} />
