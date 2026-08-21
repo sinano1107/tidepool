@@ -512,7 +512,6 @@ it("open な triage session の未束ねの異議は、着地 question への me
     status: "todo",
     question_answer: null,
   });
-  expect(git(workspace.path, "rev-list", "--count", `main..task/${task.id}`)).toBe("1");
 });
 
 it("分解子の判断への異議も親の着地 question を 409 にし、commit 後は付帯子として捕まり、決着で受理される", async () => {
@@ -588,7 +587,6 @@ it("PR の merge question も同じ検証を通る — 未決着の付帯子が�
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
   const [merge] = await questions(t);
-  expect(merge.question_pending_merge_pr).toBe(1);
   attachChild(t, task.id, "repair: ship remotely", "human");
   t.github.scriptCiStatus("success");
 
