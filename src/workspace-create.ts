@@ -455,7 +455,8 @@ export async function publishWorkspace(
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
   // `authedGit` は温まったキャッシュから同期に注入するだけなので、下の「await は
   // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
-  await deps.githubAuth.ensure(repoKey(input.repo));
+  const destination = repoKey(input.repo);
+  await deps.githubAuth.ensure(destination);
   // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedGit` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
@@ -482,7 +483,7 @@ export async function publishWorkspace(
     // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
     // `--all` は `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
     // (ADR 0066 決定6)。上限は掛けない: 人間が起こす一括転送なので clone と同じ扱い。
-    authedGit(deps.githubAuth, dir, repoKey(input.repo), "push", "--atomic", "--all", "origin");
+    authedGit(deps.githubAuth, dir, destination, "push", "--atomic", "--all", "origin");
     commitWorkspaceEntry(
       deps,
       input.name,

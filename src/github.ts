@@ -196,7 +196,7 @@ export class GhCliClient implements GitHubClient {
         "--body",
         input.body,
       ],
-      { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: input.path, env: this.auth.env(repo), stdio: ["ignore", "pipe", "pipe"] },
     )
       .toString()
       .trim();

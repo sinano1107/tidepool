@@ -100,35 +100,31 @@ export class GitHubAuth {
 /** The official App's broker (ADR 0093 決定1). A public value, not a secret,
  *  and not one of the six board-behaviour keys — unset is the normal state.
  *  Forks override it with `TIDEPOOL_GITHUB_BROKER_URL`. */
-export const DEFAULT_GITHUB_BROKER_URL = "https://registration-pending-issue-424.invalid";
+const DEFAULT_GITHUB_BROKER_URL = "https://registration-pending-issue-424.invalid";
 
 /** ADR 0093 決定6. */
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60_000;
 
+/** The broker's JSON body, or null when there is none to read — an unreadable
+ *  body and a wrong-shaped one are the same answer at both call sites below. */
+async function brokerBody(response: Response): Promise<Record<string, unknown> | null> {
+  return (await response.json().catch(() => null)) as Record<string, unknown> | null;
+}
+
 /** The broker answers every failure with `{ "error": <code> }` and no token
- *  material. A body that is not that shape still has to read as something. */
+ *  material. */
 async function brokerErrorCode(response: Response): Promise<string> {
-  try {
-    const body: unknown = await response.json();
-    const code = (body as { error?: unknown } | null)?.error;
-    return typeof code === "string" ? code : "unrecognised broker error";
-  } catch {
-    return "unrecognised broker error";
-  }
+  const code = (await brokerBody(response))?.error;
+  return typeof code === "string" ? code : "unrecognised broker error";
 }
 
 async function readIssuedToken(
   response: Response,
   repo: string,
 ): Promise<{ token: string; expiresAt: number }> {
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch (err) {
-    throw new Error(`the GitHub token broker returned an unreadable body for ${repo}: ${err}`);
-  }
-  const { token, expires_at } = (body ?? {}) as { token?: unknown; expires_at?: unknown };
-  const expiresAt = typeof expires_at === "string" ? Date.parse(expires_at) : Number.NaN;
+  const body = await brokerBody(response);
+  const token = body?.token;
+  const expiresAt = typeof body?.expires_at === "string" ? Date.parse(body.expires_at) : Number.NaN;
   if (typeof token !== "string" || token === "" || Number.isNaN(expiresAt)) {
     throw new Error(`the GitHub token broker returned an invalid token response for ${repo}`);
   }

@@ -47,17 +47,15 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 
-/** 各 fail-closed ケースは戻り値(undefined = GitHub 身元なし)だけを断言
- *  する — 警告はここでは黙らせるだけ(console を汚さない)。 */
 /** 立てた仲介は afterEach で必ず閉じる。 */
-async function openBroker(
-  reply: Parameters<typeof startFakeBroker>[0],
-): Promise<FakeBroker> {
+async function openBroker(reply: Parameters<typeof startFakeBroker>[0]): Promise<FakeBroker> {
   const started = await startFakeBroker(reply);
   brokers.push(started);
   return started;
 }
 
+/** 各 fail-closed ケースは戻り値(undefined = GitHub 身元なし)だけを断言
+ *  する — 警告はここでは黙らせるだけ(console を汚さない)。 */
 function silenceWarn(): void {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 }
@@ -186,8 +184,7 @@ describe("GitHubAuth: 仲介経由の installation token(ADR 0093 決定2/6)", (
   });
 
   it("ensure を通っていない repo の env は投げる — 同期の注入は fail-closed(ADR 0066 決定5)", async () => {
-    const broker = await openBroker(() => issuedToken("inst", 60));
-    const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
+    const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600));
 
     expect(() => auth.env("acme/one")).toThrow(/no unexpired GitHub installation token/);
   });
