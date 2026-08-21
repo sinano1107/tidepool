@@ -88,7 +88,7 @@ describe("npm run init-registry", () => {
       description: "General work agent for the Tidepool board.",
       model: undefined,
       effort: undefined,
-      advisor: "opus",
+      advisor: undefined,
       icon: "🐙",
       skills: ["*"],
       systemPrompt: "",
@@ -100,7 +100,7 @@ describe("npm run init-registry", () => {
       description: "Reviews work independently against its completion criteria.",
       model: undefined,
       effort: undefined,
-      advisor: "opus",
+      advisor: undefined,
       icon: "🐡",
       skills: ["@workspace"],
       systemPrompt:

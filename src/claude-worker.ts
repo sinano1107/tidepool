@@ -711,6 +711,21 @@ function isModelUsageEntry(value: unknown): value is ModelUsageEntry {
   );
 }
 
+/** One entry of the result line's per-model breakdown, narrowed for
+ *  `worker_exited.usage.models` (ADR 0094 決定2). Composed on top of
+ *  `isModelUsageEntry` rather than widening it: that predicate is shared with
+ *  `advisorUsage`, whose contract (issue #307) stays exactly as it was. */
+interface ModelUsageBreakdownEntry extends ModelUsageEntry {
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+}
+
+function isModelUsageBreakdownEntry(value: unknown): value is ModelUsageBreakdownEntry {
+  if (!isModelUsageEntry(value)) return false;
+  const { cacheReadInputTokens, cacheCreationInputTokens } = value as Partial<ModelUsageBreakdownEntry>;
+  return typeof cacheReadInputTokens === "number" && typeof cacheCreationInputTokens === "number";
+}
+
 /** The advisor's resolved model id, from the only surface that names it: an
  *  `advisor_message` entry in the final turn's iterations (issue #33, measured
  *  2026-08-04). null when the session's last consultation happened in an
@@ -820,6 +835,34 @@ function advisorUsage(
   };
 }
 
+type ModelBreakdown = NonNullable<WorkerExitedUsage>["models"];
+
+/** ADR 0094 決定2: the result line's per-model breakdown carried into
+ *  `worker_exited.usage.models` as observed, board vocabulary only — no
+ *  attribution is inferred here (that is left to a reader pairing this with
+ *  `worker_spawned.advisor`, per the field's own doc comment in events.ts).
+ *
+ *  Fail-closed and all-or-nothing, the same posture as `isStreamResultEvent`:
+ *  `modelUsage` absent or not an object, or any single entry missing one of
+ *  the five numeric fields, omits `models` entirely rather than publish a
+ *  partial breakdown that would read as complete. */
+function modelBreakdownFrom(result: StreamResultEvent): ModelBreakdown {
+  const breakdown = result.modelUsage;
+  if (typeof breakdown !== "object" || breakdown === null) return undefined;
+  const models: NonNullable<ModelBreakdown> = {};
+  for (const [modelId, entry] of Object.entries(breakdown as Record<string, unknown>)) {
+    if (!isModelUsageBreakdownEntry(entry)) return undefined;
+    models[modelId] = {
+      input_tokens: entry.inputTokens,
+      output_tokens: entry.outputTokens,
+      cache_read_tokens: entry.cacheReadInputTokens,
+      cache_creation_tokens: entry.cacheCreationInputTokens,
+      estimated_cost_usd: entry.costUSD,
+    };
+  }
+  return models;
+}
+
 /** Translates the CLI's vendor-shaped result event into the board's own
  *  worker_exited usage vocabulary (ADR 0005 / issue #32): total_cost_usd
  *  becomes estimated_cost_usd, no CLI field names leak past this point.
@@ -827,6 +870,7 @@ function advisorUsage(
  *  The advisor field is the one part that cannot be built from the result line
  *  alone — see AdvisorObservation. */
 function toUsage(result: StreamResultEvent, observed: AdvisorObservation): WorkerExitedUsage {
+  const models = modelBreakdownFrom(result);
   return {
     input_tokens: result.usage.input_tokens,
     output_tokens: result.usage.output_tokens,
@@ -834,6 +878,7 @@ function toUsage(result: StreamResultEvent, observed: AdvisorObservation): Worke
     cache_creation_tokens: result.usage.cache_creation_input_tokens,
     estimated_cost_usd: result.total_cost_usd,
     advisor: toAdvisorRecord(result, observed),
+    ...(models !== undefined ? { models } : {}),
   };
 }
 

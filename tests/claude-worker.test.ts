@@ -2461,8 +2461,22 @@ describe("advisor capability (issue #33)", () => {
         ],
       },
       modelUsage: {
-        "claude-sonnet-5": { inputTokens: 4, outputTokens: 31, costUSD: 0.0968847 },
-        "claude-opus-5": { inputTokens: 38484, outputTokens: 313, costUSD: 0.200245 },
+        "claude-sonnet-5": {
+          inputTokens: 4,
+          outputTokens: 31,
+          cacheReadInputTokens: 61644,
+          cacheCreationInputTokens: 13114,
+          costUSD: 0.0968847,
+        },
+        // 実測: advisor 側の cache_read は常に 0(相談のたび transcript 全体を
+        // 非キャッシュで読む — ADR 0094 測定コメント)。
+        "claude-opus-5": {
+          inputTokens: 38484,
+          outputTokens: 313,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 38484,
+          costUSD: 0.200245,
+        },
       },
       ...over,
     })}\n`;
@@ -2506,6 +2520,25 @@ describe("advisor capability (issue #33)", () => {
         model: "claude-opus-5",
         consultations: 1,
         usage: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 },
+      },
+      // ADR 0094 決定2: 観測された per-model 内訳。帰属は推論しない —— この
+      // モデルが advisor だと分かるのは、この event と同じセッションの
+      // `worker_spawned.advisor` を読者が突き合わせるからで、ここでは決めない。
+      models: {
+        "claude-sonnet-5": {
+          input_tokens: 4,
+          output_tokens: 31,
+          cache_read_tokens: 61644,
+          cache_creation_tokens: 13114,
+          estimated_cost_usd: 0.0968847,
+        },
+        "claude-opus-5": {
+          input_tokens: 38484,
+          output_tokens: 313,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 38484,
+          estimated_cost_usd: 0.200245,
+        },
       },
     });
   });
@@ -2693,6 +2726,42 @@ describe("advisor capability (issue #33)", () => {
       estimated_cost_usd: 0.3,
       advisor: { model: null, consultations: 1, usage: null },
     });
+    // ADR 0094 決定2: modelUsage を持たない result 行では models も丸ごと省略
+    // する —— 部分的な内訳を「完全」と誤読させないための all-or-nothing。
+    expect("models" in usageOf(db, "task-advisor-no-modelusage")!).toBe(false);
+  });
+
+  // ADR 0094 決定2: 1エントリでも五項目のうち欠けがあれば内訳全体を省略する
+  // (`isStreamResultEvent` と同じ fail-closed 姿勢 — 部分的な内訳は「完全」と
+  // 見分けが付かないので、丸ごと落とす)。既存の advisor 判定(advisorUsage は
+  // 別の三項目narrowingのまま)には影響しない。
+  it("modelUsage の1エントリが五項目のうち1つでも欠けば usage.models は丸ごと省略される(ADR 0094)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker(withAdvisor);
+    start("task-models-malformed-entry");
+    stdout.write(initLine("claude-sonnet-5"));
+    stdout.write(consultation("srvtoolu_01"));
+    stdout.write(
+      resultLine({
+        modelUsage: {
+          "claude-sonnet-5": {
+            inputTokens: 4,
+            outputTokens: 31,
+            cacheReadInputTokens: 61644,
+            cacheCreationInputTokens: 13114,
+            costUSD: 0.0968847,
+          },
+          // cacheReadInputTokens が欠けている — この1エントリのせいで
+          // models 全体を省略する
+          "claude-opus-5": { inputTokens: 38484, outputTokens: 313, costUSD: 0.200245 },
+        },
+      }),
+    );
+    emitExit(0, null);
+    const usage = usageOf(db, "task-models-malformed-entry")!;
+    expect("models" in usage).toBe(false);
+    // advisorUsage は既存の三項目 narrowing のままなので、advisor 側の判定は
+    // 影響を受けない(このセルは main と別モデルなので分離できる)。
+    expect(usage.advisor).toMatchObject({ model: "claude-opus-5" });
   });
 
   // 未知のモデルは exit 1・stdout 完全に空(実測)。result 行が無いので usage は
