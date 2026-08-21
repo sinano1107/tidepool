@@ -693,7 +693,7 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
  *
  *  1 workspace = at most 1 open Confirmation question (CONTEXT.md's Quarantine):
  *  a re-fire before the human answers just adds to the record of why, on the
- *  question already standing。*/
+ *  question already standing。 */
 export function noteOnWorkspaceQuarantine(
   db: Db,
   workspaceName: string,

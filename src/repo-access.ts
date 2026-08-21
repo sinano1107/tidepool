@@ -14,7 +14,7 @@ import { GITHUB_APP_SLUG } from "./github-login.js";
  *  人がログインしている形もここに落ちる。
  *
  *  人間向けの面なので英語(CONTEXT.md / 表示言語の正文は常に英語)。 */
-export function repoAccessGuidance(ref: RepoSlug, reason: string): string {
+function repoAccessGuidance(ref: RepoSlug, reason: string): string {
   const repo = `${ref.owner}/${ref.name}`;
   return (
     `the tidepool App is not installed on ${repo}, or you cannot push to it — ` +
