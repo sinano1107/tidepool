@@ -465,6 +465,20 @@ it("a risky decomposed child merges back, then its root integration PR asks for 
   await resumedParent.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await resumedParent.close();
 
+  // risk_flag forces a completion review on both the child and the (now risky)
+  // parent; the integration's landing waits for every one of them (ADR 0092).
+  expect(t.github.requests).toEqual([]);
+  for (const reviewed of [child.id, parent.id]) {
+    const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+      (x: any) => x.type === "review" && x.parent_id === reviewed,
+    );
+    await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
+    await t.clock.advance(HOUR); // the review is picked up
+    const reviewClient = await mcpClient(t.mcpBaseUrl, review.id);
+    await reviewClient.callTool({ name: "complete_task", arguments: {} });
+    await reviewClient.close();
+  }
+
   // The approved child's risk propagated to the parent, so the one integration
   // PR asks right away and is never queued for the unattended poll.
   expect(t.github.requests).toHaveLength(1);

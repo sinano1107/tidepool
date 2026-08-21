@@ -14,6 +14,7 @@ import {
   BOARD_WORKER_ID,
   completeTask,
   contentSourceFor,
+  countUnsettledAttachedChildren,
   DEFAULT_AUDITOR_NAME,
   DomainError,
   decomposeTask,
@@ -23,11 +24,13 @@ import {
   HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
   logDecision,
+  recordLandingDeferred,
   recordPrOpened,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
   resolveTaskAgent,
   type Task,
+  taskHasLanded,
   taskHistory,
 } from "./tasks.js";
 import {
@@ -190,6 +193,18 @@ export async function handleRootWorkLanding(
     });
     return;
   }
+  // 着地の門(ADR 0092 決定1): 分解ツリー全体に未決着の付帯子が1つでもあれば、
+  // 3面(purely-local の merge question / PR 昇格 / auto-merge キュー投入)のどれも
+  // 走らせない。門が分岐の手前・`nothing_to_land` の後ろにあるので、差分ゼロの完了は
+  // 付帯子に関係なく従来どおり即座に記録される(ADR 0073)。
+  const unsettled = countUnsettledAttachedChildren(deps.db, task.id);
+  if (unsettled > 0) {
+    if (strict) {
+      throw new Error(`review still running: ${unsettled} attached child task(s) unsettled`);
+    }
+    recordLandingDeferred(deps.db, task.id, unsettled, deps.clock.now());
+    return;
+  }
   if (!isRemoteBacked(workspace)) {
     if (strict) {
       throw new Error("purely-local work lands through a merge question, not PR promotion");
@@ -251,6 +266,23 @@ async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
       deps.clock.now(),
     );
   }
+}
+
+/** 付帯子が決着した瞬間に、その祖先の着地を撃ち直す(ADR 0092 決定3)。走査は新設
+ *  せず、決着を起こす経路(worker の complete、人間面の complete / cancel / abandon)が
+ *  そのまま発火点になる。着地する枝は根の1本なので、親を持たない祖先まで登って
+ *  そこへ撃つ。門は `handleRootWorkLanding` の中で読み直されるので、待っている間に
+ *  新しい付帯子が付いていればもう一度待つ。 */
+export async function relandRootAncestor(deps: McpDeps, settled: Task): Promise<void> {
+  let root = settled;
+  while (root.parent_id) {
+    const parent = getTask(deps.db, root.parent_id);
+    if (!parent) break;
+    root = parent;
+  }
+  if (root.id === settled.id || root.status !== "done") return;
+  if (taskHasLanded(deps.db, root.id)) return;
+  await openHandoffPr(deps, root);
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's
@@ -510,7 +542,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         true,
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
       );
-      if (completed) await openHandoffPr(deps, completed);
+      if (completed) {
+        await openHandoffPr(deps, completed);
+        // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
+        await relandRootAncestor(deps, completed);
+      }
       return result;
     },
   );
