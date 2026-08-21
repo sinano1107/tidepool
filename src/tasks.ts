@@ -1471,11 +1471,13 @@ export function registerMergeQuestion(
  *  その PR を開いたタスク」で引く(PR 番号は repo 内でしか一意でない)。`recordPrOpened`
  *  が `pr_number` を書いてから question を立てるので、開いている question には必ず対応
  *  する行がある。 */
-export function taskIdForPr(db: Db, prNumber: number, workspace: string | null): string | undefined {
+export function taskIdForPr(db: Db, prNumber: number, workspace: string | null): string {
   const row = db
     .prepare("SELECT id FROM tasks WHERE pr_number = ? AND workspace IS ?")
     .get(prNumber, workspace) as { id: string } | undefined;
-  return row?.id;
+  // 引けないなら門を素通りさせず止める(fail-closed — ADR 0092 決定5 は UI に依らず盤面が守る)
+  if (!row) throw new DomainError(`cannot merge: no task in this workspace opened PR #${prNumber}`);
+  return row.id;
 }
 
 /** ADR 0079 決定3/4: retires a merge question whose PR turned out to be

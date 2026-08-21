@@ -421,9 +421,7 @@ export async function submitAnswer(
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsMerge) {
-    // 着地するタスクが引けないときは今日どおりの経路に落ちる(バックストップと同じ形)
-    const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
-    if (landingTaskId) assertLandingAllowed(deps.db, landingTaskId);
+    assertLandingAllowed(deps.db, taskIdForPr(deps.db, mergePr, task.workspace));
     if (!deps.github) {
       throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
     }

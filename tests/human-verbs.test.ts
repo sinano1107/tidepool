@@ -504,6 +504,8 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     },
     NOW,
   );
+  // 本番では recordPrOpened が pr_number を書いてから question を立てる(#403 の回答時検証はこの行で着地タスクを引く)
+  db.prepare("UPDATE tasks SET pr_number = 42 WHERE id = ?").run(work.id);
   registerMergeQuestion(db, work, 42, "decide whether to merge", "merge", BOARD_WORKER_ID, NOW);
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();

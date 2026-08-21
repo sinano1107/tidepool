@@ -425,7 +425,8 @@ async function completionEntry(pool: Tidepool, taskId: string): Promise<any> {
 /** commit が束ねた子(修理 + RCA レビュー)を全部決着させる。commit の即時 poll が
  *  すでに1つを slot へ入れているので、in_progress のものから順に完了させる。 */
 async function settleAttachedChildren(pool: Tidepool, taskId: string): Promise<void> {
-  for (;;) {
+  for (let round = 0; ; round++) {
+    expect(round, "attached children keep appearing").toBeLessThan(10);
     const board = (await api(pool.baseUrl, "GET", "/api/tasks")).json;
     const pending = board.filter(
       (candidate: any) =>
