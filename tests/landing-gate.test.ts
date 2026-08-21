@@ -1,18 +1,17 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
-import { registerTask } from "../src/tasks.js";
 import {
   api,
+  attachChild,
   bootTidepool,
   commitWork,
-  FULL_HANDOFF,
+  completeViaMcp,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
+  questions,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -25,36 +24,6 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-/** 盤面の DB へ直に付帯子(親を持ち、based_on_decision を持たず、question でない子)を
- *  1つ足す — `bundleObjections` が異議修理を登録するのと同じ形。人間面の /api/tasks は
- *  parent_id つきの登録に decompose_reason を要求する(= 分解子になる)ので、付帯子の
- *  fixture はこの seam を通す(`registerQuestion` と同じ理由)。 */
-function attachChild(pool: Tidepool, parentId: string, title: string, assignee?: string) {
-  const db = openDb(join(pool.dir, "board.sqlite"));
-  try {
-    return registerTask(
-      db,
-      {
-        type: "work",
-        title,
-        purpose: `purpose of ${title}`,
-        completion_criteria: `criteria of ${title}`,
-        parent_id: parentId,
-        ...(assignee !== undefined && { assignee }),
-      },
-      pool.clock.now(),
-    );
-  } finally {
-    db.close();
-  }
-}
-
-async function questions(pool: Tidepool): Promise<any[]> {
-  return (await api(pool.baseUrl, "GET", "/api/tasks")).json.filter(
-    (candidate: any) => candidate.type === "question",
-  );
-}
-
 /** 完了 → slot が空く → 次の todo が拾われる、を待たずに任意のタスクを slot へ入れる。
  *  MCP の verb は slot task にしか attribution できない。 */
 async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
@@ -62,15 +31,6 @@ async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
   await pool.clock.advance(HOUR);
 }
 
-async function completeViaMcp(pool: Tidepool, taskId: string, handoff = true): Promise<any> {
-  const client = await mcpClient(pool.mcpBaseUrl, taskId);
-  const res: any = await client.callTool({
-    name: "complete_task",
-    arguments: handoff ? { handoff: FULL_HANDOFF } : {},
-  });
-  await client.close();
-  return res;
-}
 
 it("purely-local: 未決着の付帯子がある間は着地 question を立てず、付帯子の完了で立つ", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");

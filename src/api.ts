@@ -87,6 +87,7 @@ import {
   closeTriageSessionOnly,
   commitTriage,
   consumePendingDump,
+  landingAnnotation,
   listPendingDumps,
   listScratchpad,
   raiseObjection,
@@ -1752,8 +1753,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ),
     );
 
+  // ADR 0092 決定4: question 行は「一般 question」と「着地 question」に分かれて出る。
+  // 着地 question は `landing` を持ち、その `blocked_by` が回答可否そのもの — 判定は
+  // ここ(盤面)で行い、WebUI は描画だけを担う。
   router.get("/tasks", async (_req, res) => {
-    res.json(await presentLive(listBoard(db, defaultAgentName, auditorName)));
+    const board = await presentLive(listBoard(db, defaultAgentName, auditorName));
+    res.json(
+      board.map((task) =>
+        task.type === "question" ? { ...task, landing: landingAnnotation(db, task) } : task,
+      ),
+    );
   });
 
   // the persistent your-tasks list (issue #13): every unsettled human-

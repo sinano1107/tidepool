@@ -457,6 +457,53 @@ export function registerQuestion(t: Tidepool, input: Omit<RegisterTaskInput, "ty
   }
 }
 
+/** 盤面の DB へ直に付帯子(親を持ち、based_on_decision を持たず、question でない子)を
+ *  1つ足す — `bundleObjections` が異議修理を登録するのと同じ形。人間面の /api/tasks は
+ *  parent_id つきの登録に decompose_reason を要求する(= 分解子になる)ので、付帯子の
+ *  fixture はこの seam を通す(`registerQuestion` と同じ理由)。 */
+export function attachChild(
+  t: Tidepool,
+  parentId: string,
+  title: string,
+  assignee?: string,
+): Task {
+  const db = openDb(join(t.dir, "board.sqlite"));
+  try {
+    return registerTask(
+      db,
+      {
+        type: "work",
+        title,
+        purpose: `purpose of ${title}`,
+        completion_criteria: `criteria of ${title}`,
+        parent_id: parentId,
+        ...(assignee !== undefined && { assignee }),
+      },
+      t.clock.now(),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/** 盤面が今立てている question の行すべて — 読み口(`GET /api/tasks`)から引く。 */
+export async function questions(t: Tidepool): Promise<any[]> {
+  return (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
+    (candidate: any) => candidate.type === "question",
+  );
+}
+
+/** slot task を MCP の `complete_task` で完了させる。 */
+export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true): Promise<any> {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  const res: any = await client.callTool({
+    name: "complete_task",
+    arguments: handoff ? { handoff: FULL_HANDOFF } : {},
+  });
+  await client.close();
+  return res;
+}
+
 /** The 6-field handoff doc, filled in with placeholder content — shared by
  *  every test that just needs *a* valid handoff to complete a work task. */
 export const FULL_HANDOFF = {
