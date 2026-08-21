@@ -95,17 +95,6 @@ export class GitHubAuth {
     }
     return { ...base, GH_TOKEN: held.token };
   }
-
-  /** Transitional (#423 removes every caller): the env for the ADR 0067 calls
-   *  that ask about the token owner rather than a repo (`/user`, invitations,
-   *  `viewerPermission`). Those endpoints do not answer to an installation
-   *  token, so until #423 replaces them with the broker's verdict they carry
-   *  the **user** token — still assembled here, so credentials keep taking
-   *  effect in exactly one place. Dropping GH_TOKEN instead would send `gh` to
-   *  the host keyring, the ambient identity ADR 0024 abolished. */
-  userTokenEnv(): NodeJS.ProcessEnv {
-    return { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_TOKEN: this.token() };
-  }
 }
 
 /** The official App's broker (ADR 0093 決定1). A public value, not a secret,

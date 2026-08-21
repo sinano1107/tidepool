@@ -15,8 +15,6 @@ import type {
   OpenIssue,
   PrRef,
   PrResult,
-  RepoInvitation,
-  RepoPermission,
   RepoRef,
   RepoSlug,
 } from "../src/github.js";
@@ -296,67 +294,25 @@ export class FakeGitHubClient implements GitHubClient {
     this.issueGate = gate;
   }
 
-  /** ADR 0067 の4面が撃たれた回数。「正常時のネットワーク呼び出しを1つも増やさない」
-   *  は数でしか確かめられない —— 到達できている pickup ではこれが 0 のままである。 */
+  /** 修復経路の面(ADR 0093 決定8)が撃たれた回数。「正常時のネットワーク呼び出しを
+   *  1つも増やさない」は数でしか確かめられない —— 到達できている pickup ではこれが
+   *  0 のままである。 */
   repoAccessCalls = 0;
-  readonly acceptedInvitations: number[] = [];
-  private loginName = "tidepool-bot";
-  private invitations: RepoInvitation[] = [];
-  private permissions = new Map<string, RepoPermission>();
+  private unreachable = new Map<string, string>();
 
-  async login(): Promise<string> {
+  async canReach(ref: RepoSlug): Promise<string | null> {
     this.repoAccessCalls++;
-    return this.loginName;
+    return this.unreachable.get(`${ref.owner}/${ref.name}`.toLowerCase()) ?? null;
   }
 
-  async listRepositoryInvitations(): Promise<RepoInvitation[]> {
-    this.repoAccessCalls++;
-    return [...this.invitations];
-  }
-
-  /** 受諾は本物と同じ形にしてある(ADR 0067 実測3/4): 受諾済みは受信箱から消え、
-   *  repo 側の権限が招待の内容ぶんだけ立つ —— `read` の招待は受諾できるのに
-   *  WRITE には届かない、という実測4 がそのまま再現できる。 */
-  async acceptRepositoryInvitation(id: number): Promise<void> {
-    this.repoAccessCalls++;
-    this.acceptedInvitations.push(id);
-    this.onAccept?.();
-    const invitation = this.invitations.find((i) => i.id === id);
-    if (!invitation) throw new Error(`no invitation scripted for ${id}`);
-    this.invitations = this.invitations.filter((i) => i.id !== id);
-    this.permissions.set(
-      invitation.fullName.toLowerCase(),
-      invitation.permissions === "write" ? "WRITE" : "READ",
-    );
-  }
-
-  async getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null> {
-    this.repoAccessCalls++;
-    return this.permissions.get(`${ref.owner}/${ref.name}`.toLowerCase()) ?? null;
-  }
-
-  /** 見えている repo とその権限(招待抜きで既に collaborator である形も含む)。 */
-  scriptRepositoryPermission(fullName: string, permission: RepoPermission): void {
-    this.permissions.set(fullName.toLowerCase(), permission);
-  }
-
-  /** 受信箱に pending 招待を1枚積む。 */
-  scriptInvitation(id: number, fullName: string, permissions: "write" | "read" = "write"): void {
-    this.invitations.push({ id, fullName, permissions });
-  }
-
-  scriptLogin(login: string): void {
-    this.loginName = login;
-  }
-
-  /** 受諾の**外側の効果**を差し込む口: 本物では受諾した瞬間に repo が clone/fetch
-   *  できるようになる。テストからは remote を届く先に差し替えるのに使う —— 「受諾で
-   *  到達可能になった」を fake の中だけで完結させると、再試行が本当に通ったのかが
-   *  測れない。 */
-  private onAccept: (() => void) | undefined;
-
-  scriptOnAccept(effect: () => void): void {
-    this.onAccept = effect;
+  /** 仲介が token を出せない repo と、その理由(仲介の HTTP status + error code)。
+   *  既定は「出せる」—— App が install 済みで push を持つ、盤面が普段見る状態である。 */
+  scriptUnreachable(
+    fullName: string,
+    reason = "the GitHub token broker refused a token for " +
+      `${fullName} (HTTP 404: repo_unreachable)`,
+  ): void {
+    this.unreachable.set(fullName.toLowerCase(), reason);
   }
 }
 

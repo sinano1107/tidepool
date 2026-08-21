@@ -1,84 +1,50 @@
-/** ADR 0067: 到達に失敗した瞬間に、いま到達したい repo 宛ての招待1枚だけを受諾して
- *  直す —— その1手を成す seam と、直せなかったときの人間向けの案内。 */
+/** ADR 0093 決定8: 到達に失敗した瞬間に、その repo の installation token を仲介が
+ *  出せるかだけを確かめ、出せなければ「App を install する」1手を人間に渡す —— その
+ *  seam と案内。 */
 
-import type { GitHubClient, RepoPermission, RepoSlug } from "./github.js";
+import type { GitHubClient, RepoSlug } from "./github.js";
+import { GITHUB_APP_SLUG } from "./github-login.js";
 
-/** WRITE 以上か(ADR 0067 決定3)。合格条件を「見える」ではなく「書ける」に置くのが
- *  この issue の芯である —— `read` の招待は受諾も clone も通してしまい、失敗は PR 昇格
- *  という遠い場所に出る(実測4)。`null`(見えない)も当然 false。 */
-function canWrite(permission: RepoPermission | null): boolean {
-  return permission === "WRITE" || permission === "MAINTAIN" || permission === "ADMIN";
-}
-
-/** ADR 0067 決定1 の seam: **いま到達したい repo** 宛ての pending 招待だけを受諾し、
- *  repo 側の権限を返す。受信箱の掃除はしない —— 一致しない招待は受諾も辞退もしない。
+/** 直せなかったときに人間へ渡す一手(ADR 0093 決定8)。install のリンク1本が主で、
+ *  仲介が言った理由(HTTP status + error code)が従である。
  *
- *  範囲をこの1枚に絞るのは、任意の第三者からの招待を無条件に受ければ盤面の到達範囲が
- *  盤面の知らない理由で黙って広がるからである。3つの扉(登録の門 / pickup の失敗 /
- *  quarantine の解除)すべてがこの同じ規則を共有する。 */
-export async function ensureRepoAccess(
-  github: GitHubClient,
-  ref: RepoSlug,
-): Promise<{ permission: RepoPermission | null; accepted: boolean }> {
-  const permission = await github.getRepositoryPermission(ref);
-  // 既に書けるなら受信箱は読まない —— 正常時に呼び出しを増やさない側の線でもある
-  if (canWrite(permission)) return { permission, accepted: false };
-  const wanted = `${ref.owner}/${ref.name}`.toLowerCase();
-  const invitations = await github.listRepositoryInvitations();
-  const mine = invitations.filter((i) => i.fullName.toLowerCase() === wanted);
-  if (mine.length === 0) return { permission, accepted: false };
-  for (const invitation of mine) await github.acceptRepositoryInvitation(invitation.id);
-  return { permission: await github.getRepositoryPermission(ref), accepted: true };
-}
-
-/** 直せなかったときに人間へ渡す一手(ADR 0067 決定4)。一行コマンドが主でリンクが従 ——
- *  実測6 により、未 collaborator なら招待が出て、READ の collaborator なら即時に昇格
- *  するので、**1つのコマンドが両方の状況を直す**。
+ *  診断を2つ並べるのは、仲介から見て**区別できない**からである: App が install されて
+ *  いない repo は user token に見えず、存在しない repo と同じ 404 に合流する(#419 の
+ *  訂正コメント)。「書けるか」の門(ADR 0067 決定3)は仲介側にあるので、push を持たない
+ *  人がログインしている形もここに落ちる。
  *
- *  人間向けの面なので英語(CONTEXT.md / 表示言語の正文は常に英語)。`login` は
- *  `gh api user --jq .login` の実測値であって定数ではない —— ずれると人間は違う相手を
- *  招待することになる。 */
-export function repoAccessGuidance(
-  ref: RepoSlug,
-  login: string,
-  permission: RepoPermission | null,
-): string {
+ *  人間向けの面なので英語(CONTEXT.md / 表示言語の正文は常に英語)。 */
+export function repoAccessGuidance(ref: RepoSlug, reason: string): string {
   const repo = `${ref.owner}/${ref.name}`;
-  // 見えない側は「無い」と「見えていない」を区別できない(実測7)ので両方を言う
-  const diagnosis =
-    permission === null
-      ? `${repo} either does not exist or is not visible to ${login}`
-      : `${login} only has ${permission} on ${repo} — not enough to push or open a pull request`;
   return (
-    `${diagnosis}. Grant write access with:\n\n` +
-    `  gh api -X PUT repos/${repo}/collaborators/${login} -f permission=push\n\n` +
-    `or from https://github.com/${repo}/settings/access`
+    `the tidepool App is not installed on ${repo}, or you cannot push to it — ` +
+    `the two are indistinguishable here. Install the App on the repository ` +
+    `(a repository you do not own needs its admin to do it):\n\n` +
+    `  https://github.com/apps/${GITHUB_APP_SLUG}/installations/new\n\n` +
+    reason
   );
 }
 
-/** 修復の結果: 受諾が起きたか(= 撃ち直す価値があるか)と、まだ書けないなら人間へ
- *  渡す案内。`guidance` が null なら書けるようになっている。 */
+/** 修復の結果: まだ到達できないなら人間へ渡す案内。`guidance` が null なら、その repo
+ *  の installation token を仲介が出せている = 盤面は書ける。 */
 export interface RepoAccessRepair {
-  accepted: boolean;
   guidance: string | null;
 }
 
-/** 3つの扉(登録の門 / pickup の失敗 / quarantine の解除)が共有する一手: 招待1枚で
- *  直せるなら直し、それでも書けなければ人間向けの案内を返す。書けるようになったなら
- *  `guidance` は null である。
+/** 3つの扉(登録の門 / pickup の失敗 / quarantine の解除)が共有する一手: いま到達したい
+ *  repo の token を仲介に求め、出なければ人間向けの案内を返す(ADR 0093 決定8)。
  *
- *  `login()` は落ちたときにしか撃たない —— 正常時のネットワーク呼び出しを1つも
- *  増やさないのがこの issue の不変条件だからである。 */
+ *  盤面自身が直せる手は無くなった —— install も権限も GitHub 側の人間の操作である。
+ *  撃つのは失敗経路だけで、正常時のネットワーク呼び出しは1つも増えない(ADR 0067 決定2)。 */
 export async function repairRepoAccess(
   github: GitHubClient,
   ref: RepoSlug,
 ): Promise<RepoAccessRepair> {
-  const { permission, accepted } = await ensureRepoAccess(github, ref);
-  if (canWrite(permission)) return { accepted, guidance: null };
-  return { accepted, guidance: repoAccessGuidance(ref, await github.login(), permission) };
+  const reason = await github.canReach(ref);
+  return { guidance: reason === null ? null : repoAccessGuidance(ref, reason) };
 }
 
-/** 登録の門の拒否(ADR 0067 決定3): その repo に WRITE が無いので clone を撃たない。
+/** 登録の門の拒否(ADR 0067 決定3): その repo の token を仲介が出せないので clone を撃たない。
  *  read しか取れない repo を workspace にできなくなるが、read だけで完結する
  *  workspace という概念は作らない —— 監査の発見も修理タスクになり、成果は PR で
  *  着地するので push が要る。案内をそのまま message に載せるので、3枚の扉はこの
@@ -93,7 +59,7 @@ export class RepoAccessMissingError extends Error {
 /** github.com の repo を指す URL から `owner/name` を取り出す。**github.com 以外は
  *  `undefined`** で、それがそのまま「これは GitHub か」の門になる(ADR 0067 決定1):
  *  `clone` の入力欄は「anything git clone accepts」なので、非 GitHub の remote では
- *  probe も受諾も発火せず今日の生エラーのままである。
+ *  probe が発火せず今日の生エラーのままである。
  *
  *  ADR 0052 が拒んだのは URL の**綴りの照合**(ssh / https / ホスト名の別名を別物と
  *  読む誤検出)であって、owner/name の抽出は exact な操作なのでその族ではない。 */

@@ -350,77 +350,23 @@ it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 
   expect(invocations).toContain("the login form submits cleanly");
 });
 
-/** Stands in for a `gh api` / `gh repo view` call: logs its arguments, prints
- *  the given stdout and exits with the given code — the four ADR 0067 calls
- *  are all "what did we ask gh, and what did it answer" (the accept call has
- *  no stdout at all, only the request). */
-async function fakeGhLogging(stdout: string, exitCode = 0): Promise<{ dir: string; logPath: string }> {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
-  binPath = dir;
-  const logPath = join(dir, "gh-invocations.log");
-  writeFileSync(
-    join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '%s' '${stdout}'\nexit ${exitCode}\n`,
+it("canReach は仲介が token を出せれば null、断られたら status と error code を持つ理由を返す(ADR 0093 決定8)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
+  authPath = dir;
+  const file = join(dir, "github-token");
+  writeFileSync(file, "gho_user\n");
+  chmodSync(file, 0o600);
+  const broker = await startFakeBroker((request) =>
+    request.repo === "sinano1107/tidepool"
+      ? issuedToken("installation-token")
+      : { status: 404, body: { error: "repo_unreachable" } },
   );
-  chmodSync(join(dir, "gh"), 0o755);
-  originalPath = process.env.PATH;
-  process.env.PATH = `${dir}:${originalPath}`;
-  return { dir, logPath };
-}
+  brokers.push(broker);
+  const client = new GhCliClient(new GitHubAuth(file, broker.url));
 
-it("login は gh api user --jq .login の実測値を返す(ADR 0067 決定4: 案内の名前は観測であって宣言ではない)", async () => {
-  const { logPath } = await fakeGhLogging("tidepool-bot\n");
+  expect(await client.canReach({ owner: "sinano1107", name: "tidepool" })).toBeNull();
+  const reason = await client.canReach({ owner: "sinano1107", name: "nope" });
 
-  expect(await new GhCliClient(await makeAuth()).login()).toBe("tidepool-bot");
-  expect(await readFile(logPath, "utf8")).toContain("api user --jq .login");
-});
-
-it("listRepositoryInvitations は受信箱を { id, fullName, permissions } に写す", async () => {
-  const { logPath } = await fakeGhLogging(
-    JSON.stringify([
-      { id: 111, repository: { full_name: "sinano1107/tidepool" }, permissions: "write" },
-      { id: 222, repository: { full_name: "other/thing" }, permissions: "read" },
-    ]),
-  );
-
-  expect(await new GhCliClient(await makeAuth()).listRepositoryInvitations()).toEqual([
-    { id: 111, fullName: "sinano1107/tidepool", permissions: "write" },
-    { id: 222, fullName: "other/thing", permissions: "read" },
-  ]);
-  expect(await readFile(logPath, "utf8")).toContain("api user/repository_invitations");
-});
-
-it("acceptRepositoryInvitation は PATCH user/repository_invitations/<id> を撃つ(実測3: 204)", async () => {
-  const { logPath } = await fakeGhLogging("");
-
-  await new GhCliClient(await makeAuth()).acceptRepositoryInvitation(111);
-
-  expect(await readFile(logPath, "utf8")).toContain(
-    "api --method PATCH user/repository_invitations/111",
-  );
-});
-
-it("getRepositoryPermission は viewerPermission を返す(実測5: 書き込み権限を直接読める)", async () => {
-  const { logPath } = await fakeGhLogging(JSON.stringify({ viewerPermission: "WRITE" }));
-
-  const permission = await new GhCliClient(await makeAuth()).getRepositoryPermission({
-    owner: "sinano1107",
-    name: "tidepool",
-  });
-
-  expect(permission).toBe("WRITE");
-  expect(await readFile(logPath, "utf8")).toContain(
-    "repo view sinano1107/tidepool --json viewerPermission",
-  );
-});
-
-it("getRepositoryPermission は見えない repo(アクセス無し / 存在しない)で null を返し、投げない(実測7: 両者は区別できない)", async () => {
-  await fakeGhLogging("", 1);
-
-  const permission = await new GhCliClient(await makeAuth()).getRepositoryPermission({
-    owner: "sinano1107",
-    name: "nope",
-  });
-
-  expect(permission).toBeNull();
+  expect(reason).toContain("HTTP 404");
+  expect(reason).toContain("repo_unreachable");
 });

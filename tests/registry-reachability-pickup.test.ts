@@ -102,6 +102,8 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     started: [],
     questionTitles: ["registry remote is unreachable — pickup is stopped"],
   });
+  // ADR 0093 決定7: user token の失効はまずここに出るので、再ログインのコマンドを名指しする
+  expect(questions[0]?.purpose).toContain("npm run github-login");
   scheduler.stop();
 });
 

@@ -21,6 +21,11 @@ interface GitHubLoginMainDependencies {
 
 const DEFAULT_GITHUB_CLIENT_ID = "registration-pending-issue-424";
 
+/** App の slug(ADR 0093 決定8 の install リンク `https://github.com/apps/<slug>/
+ *  installations/new` が要る)。client id と同じく #424 の App 登録で実物が決まる
+ *  —— それまではリンク自体が 404 になる、という設計どおりの症状で立つ。 */
+export const GITHUB_APP_SLUG = "registration-pending-issue-424";
+
 export async function githubLoginMain({
   env = process.env,
   fetch: fetchGitHub = globalThis.fetch,

@@ -27,7 +27,8 @@ export function quarantineRegistryReachability(db: Db, reason: string, now: Date
         `${reason}. No agent task is picked up while this stands because every spawn depends ` +
         "on the registry source of truth. Repair access to the registry remote, then answer — " +
         "the board refreshes it again before accepting the answer, and keeps any answer text as " +
-        "a repair note (ADR 0052).",
+        "a repair note (ADR 0052). If the board's GitHub login was revoked or is missing, run " +
+        "`npm run github-login` on the board host first (ADR 0093).",
       completion_criteria: "the registry remote main is reachable again",
       question: [
         {

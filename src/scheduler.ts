@@ -8,7 +8,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import { getPaceOffsets } from "./pace-offsets.js";
 import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
-import { parseGitHubRepo, type RepoAccessRepair, repairRepoAccess } from "./repo-access.js";
+import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import {
@@ -33,7 +33,6 @@ import type { WorkerAdapter } from "./worker.js";
 import {
   BOARD_WORKER_ID,
   buildWorkspaceResolver,
-  noteOnWorkspaceQuarantine,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   resolveOrQuarantine,
@@ -208,59 +207,39 @@ export function startScheduler(deps: {
     return !nextSlotTask(db, workspace?.name, worker.id, auditorName);
   }
 
-  /** ADR 0067 決定2 の pickup 側の扉。`prepareWorkspaceAtPickup` が落ちた瞬間に**1回
-   *  だけ**修復を試み、pickup を続けてよいかを返す。
+  /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
+   *  `prepareWorkspaceAtPickup` が落ちた瞬間に**1回だけ**、その repo の token を
+   *  仲介が出せるかを訊き、出せなければ install の案内を quarantine の理由に連ねる。
    *
-   *  撃たない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
+   *  訊かない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
    *  (盤面が GitHub 身元を持たない)と、`repo` が github.com を指していない(非
    *  GitHub の remote / remote 正本の宣言そのものが無い)。
    *
-   *  撃ち直すのは**受諾が1件でも起きたときだけ**である。何も変わっていないのに
-   *  再試行するのは、正常時の呼び出しを増やさないという不変条件の裏側を破る。 */
-  async function repairRepoAccessAtPickup(
+   *  撃ち直しはしない —— install も push 権限も GitHub 側の人間の操作であり、
+   *  盤面がこの場で直せる手は無い。 */
+  async function quarantineWithRepoAccessGuidance(
     workspace: WorkspaceConfig,
-    task: Task,
     err: unknown,
-  ): Promise<boolean> {
+  ): Promise<void> {
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
     const ref = parseGitHubRepo(workspace.repo);
-    let repair: RepoAccessRepair | null = null;
+    let guidance: string | null = null;
     if (github && ref) {
       try {
-        repair = await repairRepoAccess(github, ref);
+        guidance = (await repairRepoAccess(github, ref)).guidance;
       } catch (probeErr) {
-        // probe 自身の失敗(タイムアウト、gh の異常終了)は元の原因を置き換えない ——
-        // 人間が読むべきは fetch がなぜ落ちたかである
+        // probe 自身の失敗は元の原因を置き換えない —— 人間が読むべきは fetch が
+        // なぜ落ちたかである
         console.error(`[scheduler] repo access probe failed for ${workspace.name}:`, probeErr);
-      }
-    }
-    if (repair?.accepted && !repair.guidance) {
-      try {
-        await prepareWorkspaceAtPickup(db, workspace, task, { githubAuth, registry });
-        return true;
-      } catch (retryErr) {
-        err = retryErr;
       }
     }
     // 案内は元の原因を**置き換えず**に連結する —— なぜ落ちたか(生の git のエラー)と
     // 何をすれば直るかは別の情報で、どちらも人間の1つの question に載る
-    const guidance = repair?.guidance;
     const cause = guidance
       ? new Error(`${err instanceof Error ? err.message : String(err)}\n\n${guidance}`)
       : err;
     quarantineWorkspace(db, workspace.name, cause, clock.now());
-    // ADR 0067 決定7: 受諾した事実は、いま立った(あるいは既にあった)確認 question の
-    // イベントとして残す —— 受諾専用の面は作らない
-    if (repair?.accepted) {
-      noteOnWorkspaceQuarantine(
-        db,
-        workspace.name,
-        `accepted a pending repository invitation to ${workspace.repo}`,
-        clock.now(),
-      );
-    }
-    return false;
   }
 
   async function pickup(task: Task): Promise<void> {
@@ -299,7 +278,8 @@ export function startScheduler(deps: {
       try {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
       } catch (err) {
-        if (!(await repairRepoAccessAtPickup(resolved, picked, err))) return;
+        await quarantineWithRepoAccessGuidance(resolved, err);
+        return;
       }
       try {
         worker.start(picked);
