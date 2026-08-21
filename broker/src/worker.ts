@@ -1,7 +1,4 @@
-type GitHubFetch = (
-	input: RequestInfo | URL,
-	init?: RequestInit,
-) => Promise<Response>;
+type GitHubFetch = typeof fetch;
 
 interface Env {
 	GITHUB_APP_ID: string;
@@ -96,7 +93,7 @@ async function appJwt(appId: string, privateKey: string): Promise<string> {
 
 export function createWorker(githubFetch: GitHubFetch = fetch) {
 	return {
-		async fetch(request: Request, env: Env | object): Promise<Response> {
+		async fetch(request: Request, config: Env): Promise<Response> {
 			const url = new URL(request.url);
 			if (request.method !== "POST" || url.pathname !== "/token") {
 				return json("route_not_found", 404);
@@ -120,7 +117,6 @@ export function createWorker(githubFetch: GitHubFetch = fetch) {
 				return json("invalid_request", 400);
 			}
 
-			const config = env as Env;
 			if (
 				!config.GITHUB_APP_ID ||
 				!config.GITHUB_APP_PRIVATE_KEY ||

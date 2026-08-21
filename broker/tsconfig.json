@@ -5,8 +5,7 @@
 		"moduleResolution": "Bundler",
 		"noEmit": true,
 		"strict": true,
-		"target": "ES2022",
-		"types": ["vitest/globals"]
+		"target": "ES2022"
 	},
 	"include": ["src", "tests"]
 }

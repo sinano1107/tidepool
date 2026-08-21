@@ -50,7 +50,7 @@ describe("token broker", () => {
 			new Request("https://broker.example/token"),
 			new Request("https://broker.example/other", { method: "POST" }),
 		]) {
-			const response = await worker.fetch(request, {});
+			const response = await worker.fetch(request, env);
 
 			expect(response.status).toBe(404);
 			expect(await response.json()).toEqual({ error: "route_not_found" });
