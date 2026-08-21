@@ -227,10 +227,7 @@ it("getCiStatus は失敗したチェックがあれば failure を返す", asyn
 });
 
 it("getCiStatus は gh が非ゼロ終了したら(到達不能)pending を返す", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "tidepool-fakebin-"));
-  binPath = dir;
-  writeFileSync(join(dir, "gh"), `#!/bin/sh\nexit 1\n`);
-  chmodSync(join(dir, "gh"), 0o755);
+  const dir = await fakeGhChecks("", 1);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
