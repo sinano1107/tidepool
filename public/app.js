@@ -327,7 +327,7 @@ const S_LOG = 1;
 const S_MERGE = 2;
 const S_QUEUE = 3;
 const S_COMMIT = 4;
-const TP_LANDING_HELD = {
+const TP_LANDING_BLOCKED = {
   attached_children: "attached children unsettled",
   objections: "objections await commit"
 };
@@ -552,14 +552,15 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / (S_COMMIT + 1);
   const landingBlockOf = (q) => (landingNow?.[q.id] ?? q.landing).blocked_by;
   const landingReady = landingQuestions.filter((q) => answers[q.id] || landingBlockOf(q) === null);
-  const landingHeld = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
-  const heads = [
-    { step: "1 / 5 \u2014 questions", title: `The tide brought ${nQuestions} question${nQuestions === 1 ? "" : "s"}.`, sub: "answers persist at once; unblocked parents surface at the front on commit.", next: answered === nQuestions ? "Log skim" : `Log skim (${nQuestions - answered} unanswered)` },
-    { step: nQuestions ? "2 / 5 \u2014 decision log" : "2 / 5 \u2014 decision log \xB7 no questions today", title: `${unread.length} decisions made overnight.`, sub: "silence is consent \u2014 tap an entry to object.", next: "Merge decisions" },
-    { step: "3 / 5 \u2014 merge decisions", title: `${landingReady.length} branch${landingReady.length === 1 ? "" : "es"} ready to land.`, sub: "you have read the decisions behind these \u2014 merge or hold.", next: "Queue check" },
-    { step: "4 / 5 \u2014 queue", title: "The tide is going out.", sub: loadPreview ? "front-inserted by this session highlighted. read-only \u2014 reorder on the Queue screen. applies at commit." : "front-inserted by this session highlighted. reorder is optional.", next: "Wrap up" },
-    { step: "5 / 5 \u2014 commit", title: "One last sort.", sub: "lines you leave unsorted carry over to the next triage.", next: "Commit" }
+  const landingBlocked = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
+  const steps = [
+    { step: "questions", title: `The tide brought ${nQuestions} question${nQuestions === 1 ? "" : "s"}.`, sub: "answers persist at once; unblocked parents surface at the front on commit.", next: answered === nQuestions ? "Log skim" : `Log skim (${nQuestions - answered} unanswered)` },
+    { step: nQuestions ? "decision log" : "decision log \xB7 no questions today", title: `${unread.length} decisions made overnight.`, sub: "silence is consent \u2014 tap an entry to object.", next: "Merge decisions" },
+    { step: "merge decisions", title: `${landingReady.length} branch${landingReady.length === 1 ? "" : "es"} ready to land.`, sub: "you have read the decisions behind these \u2014 merge or hold.", next: "Queue check" },
+    { step: "queue", title: "The tide is going out.", sub: loadPreview ? "front-inserted by this session highlighted. read-only \u2014 reorder on the Queue screen. applies at commit." : "front-inserted by this session highlighted. reorder is optional.", next: "Wrap up" },
+    { step: "commit", title: "One last sort.", sub: "lines you leave unsorted carry over to the next triage.", next: "Commit" }
   ];
+  const heads = steps.map((head, i) => ({ ...head, step: `${i + 1} / ${S_COMMIT + 1} \u2014 ${head.step}` }));
   const cur = heads[section];
   const scratchResolved = () => [
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || "task" })),
@@ -622,10 +623,10 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         " \u2014 show"
       ), visibleReadEntries.map(renderLogRow), unreadEntries.map(renderLogRow));
     })));
-  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!onAnswer && !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_HELD).map((kind) => {
-    const held = landingHeld.filter((q) => landingBlockOf(q) === kind);
-    if (held.length === 0) return null;
-    return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, held.length, " landing question", held.length > 1 ? "s" : "", " held \u2014 ", TP_LANDING_HELD[kind]);
+  })(), section === S_MERGE && /* @__PURE__ */ React.createElement("div", null, landingReady.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!onAnswer && !!answers[q.id], onTranslate }))), Object.keys(TP_LANDING_BLOCKED).map((kind) => {
+    const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
+    if (blocked.length === 0) return null;
+    return /* @__PURE__ */ React.createElement("p", { key: kind, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", margin: "0 0 8px" } }, blocked.length, " landing question", blocked.length > 1 ? "s" : "", " not yet answerable \u2014 ", TP_LANDING_BLOCKED[kind]);
   })), section === S_QUEUE && (() => {
     if (loadPreview) {
       return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: preview ?? [] }));

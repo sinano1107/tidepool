@@ -2,15 +2,16 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { registerTask } from "../src/tasks.js";
 import {
   api,
+  attachChild,
   bootTidepool,
   commitWork,
-  FULL_HANDOFF,
+  completeViaMcp,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
-  mcpClient,
+  questions,
   registerQuestion,
   registerWork,
   type Tidepool,
@@ -23,41 +24,6 @@ afterEach(async () => {
   await t?.stop();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
-
-/** 付帯子(親を持ち、based_on_decision を持たず、question でない子)を盤面の DB へ直に
- *  足す — 人間面の /api/tasks は parent_id つきの登録に decompose_reason を要求する
- *  (= 分解子になる)ので、付帯子の fixture はこの seam を通す。 */
-function attachChild(pool: Tidepool, parentId: string, title: string): void {
-  const db = openDb(join(pool.dir, "board.sqlite"));
-  try {
-    registerTask(
-      db,
-      {
-        type: "work",
-        title,
-        purpose: `purpose of ${title}`,
-        completion_criteria: `criteria of ${title}`,
-        parent_id: parentId,
-        assignee: "human",
-      },
-      pool.clock.now(),
-    );
-  } finally {
-    db.close();
-  }
-}
-
-async function completeViaMcp(pool: Tidepool, taskId: string): Promise<void> {
-  const client = await mcpClient(pool.mcpBaseUrl, taskId);
-  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
-  await client.close();
-}
-
-async function questions(pool: Tidepool): Promise<any[]> {
-  return (await api(pool.baseUrl, "GET", "/api/tasks")).json.filter(
-    (candidate: any) => candidate.type === "question",
-  );
-}
 
 /** 着地 question が立つところまで進めた purely-local な盤面。 */
 async function landedQuestion(): Promise<any> {
@@ -93,7 +59,7 @@ it("読み口は着地 question に回答可否を添え、一般 question は l
 
 it("未決着の付帯子を持つ着地 question は attached_children で回答不能として返る", async () => {
   const task = await landedQuestion();
-  attachChild(t, task.id, "repair: ship the feature");
+  attachChild(t, task.id, "repair: ship the feature", "human");
 
   const [landing] = await questions(t);
 
@@ -118,7 +84,7 @@ it("同じ triage で異議を raise したタスクの着地 question は objec
 
 it("付帯子と異議が両方あれば attached_children を名乗る — 回答経路が返す 409 と同じ理由", async () => {
   const task = await landedQuestion();
-  attachChild(t, task.id, "repair: ship the feature");
+  attachChild(t, task.id, "repair: ship the feature", "human");
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   const entry = log.entries.find(
     (candidate: any) => candidate.kind === "task_completed" && candidate.task_id === task.id,
@@ -135,4 +101,47 @@ it("付帯子と異議が両方あれば attached_children を名乗る — 回�
     (await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, { answers: ["merge"] })).json
       .error,
   ).toContain("attached child task(s) unsettled");
+});
+
+/** PR の merge question が立つところまで進めた remote-backed な盤面(`escalate`)。 */
+async function landedPrQuestion(): Promise<any> {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({
+    workspace,
+    authority: { name: "standard", guidance: "", merge: "escalate" },
+  });
+  const task = await registerWork(t, "ship remotely");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  return task;
+}
+
+it("PR の merge question も着地 question として分かれ、回答可否が付く", async () => {
+  const task = await landedPrQuestion();
+
+  expect(await questions(t)).toMatchObject([
+    { question_pending_merge_pr: 1, landing: { blocked_by: null } },
+  ]);
+
+  attachChild(t, task.id, "repair: ship remotely", "human");
+
+  expect((await questions(t))[0].landing).toEqual({ blocked_by: "attached_children" });
+});
+
+it("PR から着地タスクを引けない merge question は読み口でも回答不能として返る", async () => {
+  await landedPrQuestion();
+  // `taskIdForPr` が引けない盤面を作る — 実際には `recordPrOpened` が pr_number を
+  // 書いてから question を立てるので起きないが、fail-closed は UI に依らず盤面が守る
+  const db = openDb(join(t.dir, "board.sqlite"));
+  try {
+    db.prepare("UPDATE tasks SET pr_number = NULL WHERE pr_number IS NOT NULL").run();
+  } finally {
+    db.close();
+  }
+
+  const [landing] = await questions(t);
+
+  expect(landing.landing).not.toBe(null);
+  expect(landing.landing.blocked_by).not.toBe(null);
 });

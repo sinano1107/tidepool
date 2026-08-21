@@ -3,6 +3,7 @@ import { appendEvent, type EventRow, getEvent, HUMAN_FACING_KINDS } from "./even
 import {
   type BoardTask,
   countUnsettledAttachedChildren,
+  DomainError,
   getTask,
   HUMAN_WORKER_ID,
   listBoard,
@@ -169,7 +170,8 @@ export function landingAnnotation(
   let landingTaskId: string;
   try {
     landingTaskId = local ?? taskIdForPr(db, pr as number, task.workspace);
-  } catch {
+  } catch (err) {
+    if (!(err instanceof DomainError)) throw err;
     // 着地するタスクが引けないなら回答経路も同じところで 409 になる(fail-closed —
     // ADR 0092 決定5)。押せば必ず失敗する merge ボタンを出さないために、読み口でも
     // 回答不能として返す。

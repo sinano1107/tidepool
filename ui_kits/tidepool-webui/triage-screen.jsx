@@ -254,8 +254,10 @@ const S_QUEUE = 3;
 const S_COMMIT = 4;
 
 // 盤面が返す回答不能の理由(`landing.blocked_by`)を1行の文言にする。判定は盤面側で
-// 済んでいるので、ここは描画だけ(ADR 0092 決定4)。
-const TP_LANDING_HELD = {
+// 済んでいるので、ここは描画だけ(ADR 0092 決定4)。"held" とは呼ばない —
+// CONTEXT.md の Held は祖先の未回答 question による導出状態で「question 自身は held の
+// 影響を受けない」と定義されており、同じ画面の `hold` 回答とも読み違えられる。
+const TP_LANDING_BLOCKED = {
   attached_children: 'attached children unsettled',
   objections: 'objections await commit',
 };
@@ -575,15 +577,17 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   // あればそれを、無ければ凍結 snapshot の注釈を使う。回答済みは locked のまま残す。
   const landingBlockOf = (q) => (landingNow?.[q.id] ?? q.landing).blocked_by;
   const landingReady = landingQuestions.filter((q) => answers[q.id] || landingBlockOf(q) === null);
-  const landingHeld = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
+  const landingBlocked = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
 
-  const heads = [
-    { step: '1 / 5 — questions', title: `The tide brought ${nQuestions} question${nQuestions === 1 ? '' : 's'}.`, sub: 'answers persist at once; unblocked parents surface at the front on commit.', next: answered === nQuestions ? 'Log skim' : `Log skim (${nQuestions - answered} unanswered)` },
-    { step: nQuestions ? '2 / 5 — decision log' : '2 / 5 — decision log · no questions today', title: `${unread.length} decisions made overnight.`, sub: 'silence is consent — tap an entry to object.', next: 'Merge decisions' },
-    { step: '3 / 5 — merge decisions', title: `${landingReady.length} branch${landingReady.length === 1 ? '' : 'es'} ready to land.`, sub: 'you have read the decisions behind these — merge or hold.', next: 'Queue check' },
-    { step: '4 / 5 — queue', title: 'The tide is going out.', sub: loadPreview ? 'front-inserted by this session highlighted. read-only — reorder on the Queue screen. applies at commit.' : 'front-inserted by this session highlighted. reorder is optional.', next: 'Wrap up' },
-    { step: '5 / 5 — commit', title: 'One last sort.', sub: 'lines you leave unsorted carry over to the next triage.', next: 'Commit' },
+  const steps = [
+    { step: 'questions', title: `The tide brought ${nQuestions} question${nQuestions === 1 ? '' : 's'}.`, sub: 'answers persist at once; unblocked parents surface at the front on commit.', next: answered === nQuestions ? 'Log skim' : `Log skim (${nQuestions - answered} unanswered)` },
+    { step: nQuestions ? 'decision log' : 'decision log · no questions today', title: `${unread.length} decisions made overnight.`, sub: 'silence is consent — tap an entry to object.', next: 'Merge decisions' },
+    { step: 'merge decisions', title: `${landingReady.length} branch${landingReady.length === 1 ? '' : 'es'} ready to land.`, sub: 'you have read the decisions behind these — merge or hold.', next: 'Queue check' },
+    { step: 'queue', title: 'The tide is going out.', sub: loadPreview ? 'front-inserted by this session highlighted. read-only — reorder on the Queue screen. applies at commit.' : 'front-inserted by this session highlighted. reorder is optional.', next: 'Wrap up' },
+    { step: 'commit', title: 'One last sort.', sub: 'lines you leave unsorted carry over to the next triage.', next: 'Commit' },
   ];
+  // 段数の出所は S_COMMIT ひとつ — ラベルに番号を焼き込むと段を足すたびに全部書き直す
+  const heads = steps.map((head, i) => ({ ...head, step: `${i + 1} / ${S_COMMIT + 1} — ${head.step}` }));
   const cur = heads[section];
   const scratchResolved = () => [
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || 'task' })),
@@ -734,12 +738,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           ))}
           {/* 回答不能な着地 question は件数と理由の1行だけ — 押せば必ず 409 になる
              merge ボタンを出さない。理由は盤面が返した blocked_by をそのまま写す */}
-          {Object.keys(TP_LANDING_HELD).map((kind) => {
-            const held = landingHeld.filter((q) => landingBlockOf(q) === kind);
-            if (held.length === 0) return null;
+          {Object.keys(TP_LANDING_BLOCKED).map((kind) => {
+            const blocked = landingBlocked.filter((q) => landingBlockOf(q) === kind);
+            if (blocked.length === 0) return null;
             return (
               <p key={kind} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '0 0 8px' }}>
-                {held.length} landing question{held.length > 1 ? 's' : ''} held — {TP_LANDING_HELD[kind]}
+                {blocked.length} landing question{blocked.length > 1 ? 's' : ''} not yet answerable — {TP_LANDING_BLOCKED[kind]}
               </p>
             );
           })}

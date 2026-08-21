@@ -72,7 +72,7 @@ test("流し読みで異議を打ったタスクの着地 question は、件数�
 
   await page.getByRole("button", { name: "Merge decisions" }).click();
 
-  await expect(page.getByText("1 landing question held — objections await commit")).toBeVisible();
+  await expect(page.getByText("1 landing question not yet answerable — objections await commit")).toBeVisible();
   await expect(page.getByText("land completed task:")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^merge/ })).toHaveCount(0);
 });
