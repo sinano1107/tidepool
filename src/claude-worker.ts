@@ -122,15 +122,16 @@ denial, make the call yourself from the main thread.`;
 // ADR 0017: the worker protocol (rules of the road for a board worker) is a
 // board-wide doctrine, so it lives here and is injected into every session —
 // not copied into each agent definition, where it would drift the same way
-// BOARD_DOCTRINE would. Only the cross-cutting posture lives here: the MCP
-// tool descriptions already carry each verb's semantics, and "call
-// get_current_task first" already rides the `-p` prompt below — re-listing
-// either here would just relocate the drift ADR 0017 removes. The canonical
-// default agent is therefore an empty-body definition (tako) — it carries no
-// specialty prose, and this section supplies the protocol every worker shares.
+// BOARD_DOCTRINE would. The MCP tool descriptions already carry each verb's
+// semantics, and "call get_current_task first" already rides the `-p` prompt
+// below — re-listing either here would just relocate the drift ADR 0017
+// removes. The board-language rule lives on the write verbs' own tool
+// descriptions, not here (ADR 0015, 2026-08-21 addendum) — a front-loaded
+// instruction here was losing to a task's own non-English payload. The
+// canonical default agent is therefore an empty-body definition (tako) — it
+// carries no specialty prose, and this section supplies the protocol every
+// worker shares.
 const WORKER_PROTOCOL = `## Rules of the road
-
-Write everything you put on the board — decision log lines, child task fields, handoff docs, results — in English, even when the task's payload is in another language. Human-authored text you quote stays in its original language.
 
 Do the work in the current working directory. It is the task's workspace.
 
