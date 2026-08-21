@@ -1,5 +1,7 @@
 # 盤面の GitHub 身元は明示注入された machine user — GitHub 名義は執行者を表す
 
+**Status 追記: 身元の形は [ADR 0093](0093-the-boards-github-identity-is-one-app-and-a-token-broker-mints-per-repo-tokens.md) で machine user の PAT から単一 GitHub App の installation token に変わった(2026-08-21)。** 決定1 の seam(身元は盤面の設定から注入される)・決定2 の「名義 = 執行者」・決定3 の worker ゼロ credential はそのまま。決定4 の「アカウント」は App を指す。
+
 2026-07-15 の grilling(issue #50)で決定。v1 の GitHub 書き込み(PR 作成・CI 確認・merge)は host の `gh auth`、つまり人間本人の ambient 認証にただ乗りしており、worker も盤面プロセスの env をまるごと継承するため同じ認証が worker セッションにも漏れていた。「PR 昇格は worker に託さず盤面だけが行う」(issue #19 の seam)が credential 層では成立していなかった。
 
 決定は4点:

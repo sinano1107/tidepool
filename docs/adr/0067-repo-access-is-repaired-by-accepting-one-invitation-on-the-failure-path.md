@@ -1,5 +1,7 @@
 # repo アクセスは、到達に失敗した瞬間に招待1枚を受諾して直す
 
+**Status 追記: 修復の形は [ADR 0093](0093-the-boards-github-identity-is-one-app-and-a-token-broker-mints-per-repo-tokens.md) で「招待1枚の受諾」から「App を repo に install する」に置き換わった(2026-08-21)。** 決定2(ループは作らない・3つの扉)、決定3(「書けるか」)、決定5〜8 の線は生きている。受諾の seam(決定1)と `viewerPermission` の probe・`gh api user` の観測(決定4)は installation token では動かず、仲介の発行成否に代わる。
+
 issue #213 のグリリング(2026-08-12)で決定。#209 の machine user 対応から派生し、#212 / ADR 0066(所有権と作成経路)とは独立 — org を採っても採らなくても要る。
 
 盤面は GitHub に触れるとき常に tidepool-bot 名義で撃つ(ADR 0024)。したがって外部の repo を workspace として取り込むには、その repo に tidepool-bot のアクセスが要る。今日は `clone` モードが `authedGit(... "clone" ...)` で落ちるだけで、人間には git の生のエラーしか見えず、**何をすれば直るのかが示されない。**
