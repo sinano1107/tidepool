@@ -1,0 +1,7 @@
+name = "tidepool-token-broker"
+main = "src/worker.ts"
+compatibility_date = "2026-08-21"
+
+[vars]
+GITHUB_APP_ID = "set-before-deploy"
+GITHUB_CLIENT_ID = "set-before-deploy"
