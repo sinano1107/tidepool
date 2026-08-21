@@ -36,3 +36,12 @@ boot した盤面を要る。一方で盤面は boot 時に既定 workspace を 
 - **GitHub template repo + doc だけ** — 盤面コード0だが、workspace checkout の `git init` と env の整合を人間の手に
   残す。雛形の中身はこの形にも流用できるよう実ファイルで持つ(決定2)。
 - **初回起動時の自動作成** — 上記のとおり資格情報と発明できない値の問題で退ける。
+
+## 追記(2026-08-21): auditor の雛形本文も空
+
+当初の雛形は auditor に観点5行(距離が価値 / 完了基準で判断 / 出典を示す / 未検証は言う / 所見なしは言う)を
+載せていた。本文空と5行を同じルート review 3本で比べたところ(`docs/experiments/fugu-body-ab/`)、検出・引用・
+餌の非所見化・clean での「所見なし」はどちらも守られ、破られた条項(仕様外の所見の製造)はどちらでも破られた ——
+本文は測定上何も変えなかった。効いている証拠のない散文を種に焼き込むと、template から registry を再構成する
+たびにその含意ごと引き継ぐので、決定3 と同じ線で auditor の本文も空にする。fugu が tako と違う点は frontmatter
+(authority / skills / icon / description)が運ぶ。

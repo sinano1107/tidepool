@@ -7,7 +7,7 @@
 	},
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["**", "!public/app.js", "!public/vendor/**"]
+		"includes": ["**", "!public/app.js", "!public/vendor/**", "!docs/experiments/**/targets/**"]
 	},
 	"formatter": {
 		"enabled": false
