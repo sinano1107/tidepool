@@ -968,10 +968,7 @@ export interface CancelDefaults {
  *   - a **quarantine Confirmation** whose resource is used by a subtree task,
  *     marked by `question_quarantine_workspace` or `_agent`. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
-  const subtree = `WITH RECURSIVE subtree(id) AS (
-      SELECT @root
-      UNION
-      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id)`;
+  const subtree = subtreeSql("@root");
   const failure = db
     .prepare(
       `${subtree}
@@ -1468,6 +1465,19 @@ export function registerMergeQuestion(
     workerId,
     origin,
   );
+}
+
+/** merge question は PR 番号しか持たないので、着地するタスクは「同じ workspace で
+ *  その PR を開いたタスク」で引く(PR 番号は repo 内でしか一意でない)。`recordPrOpened`
+ *  が `pr_number` を書いてから question を立てるので、開いている question には必ず対応
+ *  する行がある。 */
+export function taskIdForPr(db: Db, prNumber: number, workspace: string | null): string {
+  const row = db
+    .prepare("SELECT id FROM tasks WHERE pr_number = ? AND workspace IS ?")
+    .get(prNumber, workspace) as { id: string } | undefined;
+  // 引けないなら門を素通りさせず止める(fail-closed — ADR 0092 決定5 は UI に依らず盤面が守る)
+  if (!row) throw new DomainError(`cannot merge: no task in this workspace opened PR #${prNumber}`);
+  return row.id;
 }
 
 /** ADR 0079 決定3/4: retires a merge question whose PR turned out to be
@@ -2090,6 +2100,16 @@ export function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR ${rowRef}.type = 'question')`;
 }
 
+/** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
+ *  (`?` か名前つきパラメータ)。着地の門と直接 cancel の question gate、triage の異議
+ *  勘定が同じ「系譜をたどる」形を共有する。 */
+export function subtreeSql(rootRef: string): string {
+  return `WITH RECURSIVE subtree(id) AS (
+      SELECT ${rootRef}
+      UNION
+      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id)`;
+}
+
 /** 着地の門(ADR 0092 決定1): 着地するタスクの子孫全体に付いた、未決着の付帯子の数。
  *  付帯子は型で列挙せず `awaitedChildSql` の補集合で取る(ADR 0049)— 完了時レビューも
  *  異議修理も RCA も等しく数え、新しい種類の子が生えても黙って古くならない。範囲が
@@ -2099,11 +2119,7 @@ export function awaitedChildSql(rowRef: string): string {
 export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
   const { n } = db
     .prepare(
-      `WITH RECURSIVE subtree(id) AS (
-         SELECT ?
-         UNION
-         SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id
-       )
+      `${subtreeSql("?")}
        SELECT COUNT(*) AS n FROM tasks c JOIN subtree s ON c.parent_id = s.id
         WHERE c.status NOT IN ('done', 'cancelled') AND NOT ${awaitedChildSql("c")}`,
     )

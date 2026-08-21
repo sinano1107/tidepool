@@ -7,6 +7,7 @@ import {
   listBoard,
   moveTask,
   registerTask,
+  subtreeSql,
   type Task,
 } from "./tasks.js";
 
@@ -114,6 +115,25 @@ export function raiseObjection(
     payload: { kind: "objection_raised", entry_id: entryId, comment, session_id: open.id },
     at: now,
   });
+}
+
+/** ADR 0092 決定5: 着地するタスクの子孫全体に対して、今 open な triage session で
+ *  raise され、まだ修理子へ束ねられていない異議の数。異議は entry の持ち主のタスクに
+ *  刻まれる(`raiseObjection`)ので、分解子の判断への異議もこの範囲に入る — 束ねは
+ *  Commit の行為(ADR 0046)なので、session が閉じるまでは付帯子として現れない。 */
+export function countUnbundledObjections(db: Db, taskId: string): number {
+  const open = activeTriageSession(db);
+  if (!open) return 0;
+  const { n } = db
+    .prepare(
+      `${subtreeSql("?")}
+       SELECT COUNT(*) AS n FROM events
+        WHERE kind = 'objection_raised'
+          AND json_extract(payload, '$.session_id') = ?
+          AND task_id IN (SELECT id FROM subtree)`,
+    )
+    .get(taskId, open.id) as { n: number };
+  return n;
 }
 
 type LogEntry = Omit<EventRow, "payload"> & {

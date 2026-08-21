@@ -13,6 +13,7 @@ import {
   assertAnswerable,
   assertNoUnsettledIssueRef,
   type CancelDefaults,
+  countUnsettledAttachedChildren,
   DomainError,
   getTask,
   HUMAN_WORKER_ID,
@@ -26,8 +27,9 @@ import {
   registerTask,
   settleMergeQuestionAsObserved,
   type Task,
+  taskIdForPr,
 } from "./tasks.js";
-import { stageFrontInsert, triageActivity } from "./triage.js";
+import { countUnbundledObjections, stageFrontInsert, triageActivity } from "./triage.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
@@ -313,6 +315,24 @@ export function humanCancelDefaults(
   };
 }
 
+/** ADR 0092 決定5: 着地 question への `merge` 回答を受理する直前の検証。門(決定1)は
+ *  question が立つ瞬間の盤面しか見ていないので、立った後に付いた付帯子や、この triage で
+ *  出た未束ねの異議はここでしか捕まらない。異議は Commit で修理子へ束ねられ(ADR 0046)、
+ *  以後は (a) 側で捕まるので、2つの検査は同じ待ちを別の時刻から見た姿である。
+ *  `hold` は検証しない — 着地しない決定はいつでもできる。 */
+function assertLandingAllowed(db: Db, landingTaskId: string): void {
+  const unsettled = countUnsettledAttachedChildren(db, landingTaskId);
+  if (unsettled > 0) {
+    throw new DomainError(`cannot merge yet: ${unsettled} attached child task(s) unsettled`);
+  }
+  const objections = countUnbundledObjections(db, landingTaskId);
+  if (objections > 0) {
+    throw new DomainError(
+      `cannot merge yet: ${objections} objection(s) raised in this triage await commit`,
+    );
+  }
+}
+
 /** A settled child can make its parent immediately pickable on either human surface. */
 export function pollIfParentUnblocked(db: Db, task: Task, onQueueHeadChanged: () => void): void {
   if (!task.parent_id) return;
@@ -361,6 +381,7 @@ export async function submitAnswer(
   const wantsLocalMerge =
     localMergeTaskId !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsLocalMerge) {
+    assertLandingAllowed(deps.db, localMergeTaskId);
     const mergeWorkspace = resolveWorkspaceForAnswer(
       deps,
       task.workspace,
@@ -400,6 +421,7 @@ export async function submitAnswer(
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsMerge) {
+    assertLandingAllowed(deps.db, taskIdForPr(deps.db, mergePr, task.workspace));
     if (!deps.github) {
       throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
     }
