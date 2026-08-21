@@ -270,19 +270,21 @@ async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
 
 /** 付帯子が決着した瞬間に、その祖先の着地を撃ち直す(ADR 0092 決定3)。走査は新設
  *  せず、決着を起こす経路(worker の complete、人間面の complete / cancel / abandon)が
- *  そのまま発火点になる。着地する枝は根の1本なので、親を持たない祖先まで登って
- *  そこへ撃つ。門は `handleRootWorkLanding` の中で読み直されるので、待っている間に
- *  新しい付帯子が付いていればもう一度待つ。 */
+ *  そのまま発火点になる。着地の根は系譜で決まり木の頂点とは限らない(着地済みの根の
+ *  下で切られた修理は自分が根になる — ADR 0053)ので、完了済みの work 祖先すべてに
+ *  撃つ: 根でない祖先は `handleRootWorkLanding` が系譜で飛ばし、着地済みの祖先は
+ *  `taskHasLanded` が飛ばす。門はその中で読み直されるので、待っている間に新しい付帯子が
+ *  付いていればもう一度待つ。 */
 export async function relandRootAncestor(deps: McpDeps, settled: Task): Promise<void> {
-  let root = settled;
-  while (root.parent_id) {
-    const parent = getTask(deps.db, root.parent_id);
-    if (!parent) break;
-    root = parent;
+  for (
+    let ancestor = settled.parent_id ? getTask(deps.db, settled.parent_id) : undefined;
+    ancestor;
+    ancestor = ancestor.parent_id ? getTask(deps.db, ancestor.parent_id) : undefined
+  ) {
+    if (ancestor.type !== "work" || ancestor.status !== "done") continue;
+    if (taskHasLanded(deps.db, ancestor.id)) continue;
+    await openHandoffPr(deps, ancestor);
   }
-  if (root.id === settled.id || root.status !== "done") return;
-  if (taskHasLanded(deps.db, root.id)) return;
-  await openHandoffPr(deps, root);
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's

@@ -367,3 +367,50 @@ it("付帯子が abandon で決着した場合も着地する", async () => {
     { question_pending_local_merge_task_id: task.id },
   ]);
 });
+
+it("付帯子の付帯子(修理に付いたレビュー)も、根の着地を待たせる", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  const repair = attachChild(t, task.id, "repair the feature", "human");
+  const repairReview = attachChild(t, repair.id, "review the repair", "human");
+
+  await completeViaMcp(t, task.id);
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
+
+  // 修理は決着したが、その成果は根のブランチへ流れ込んでおり、そのレビューが未決着
+  expect(await questions(t)).toEqual([]);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${repairReview.id}/complete`, {});
+
+  expect(await questions(t)).toMatchObject([
+    { question_pending_local_merge_task_id: task.id },
+  ]);
+});
+
+it("着地済みの根の下で自分が着地の根になった付帯子も、自分の付帯子の決着で着地する", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const [landing] = await questions(t);
+  await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, { answers: ["merge"] });
+
+  // 着地後に付いた修理は保護ブランチと同じ地点から切られるので、自分が着地の根になる
+  const repair = attachChild(t, task.id, "repair the landed feature");
+  const repairReview = attachChild(t, repair.id, "review the repair", "human");
+  await pickUp(t, repair.id);
+  commitWork(workspace.path, "repair.txt", "repaired\n");
+  await completeViaMcp(t, repair.id);
+  expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
+
+  await api(t.baseUrl, "POST", `/api/tasks/${repairReview.id}/complete`, {});
+
+  expect((await questions(t)).filter((q: any) => q.status === "todo")).toMatchObject([
+    { question_pending_local_merge_task_id: repair.id },
+  ]);
+});

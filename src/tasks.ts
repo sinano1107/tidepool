@@ -2090,11 +2090,12 @@ export function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR ${rowRef}.type = 'question')`;
 }
 
-/** 着地の門(ADR 0092 決定1): 着地するタスクの分解ツリー全体に付いた、未決着の
- *  付帯子の数。付帯子は型で列挙せず `awaitedChildSql` の補集合で取る(ADR 0049)—
- *  完了時レビューも異議修理も RCA も等しく数え、新しい種類の子が生えても黙って
- *  古くならない。範囲が直下でなく分解ツリー全体なのは、決着済み分解子への修理が
- *  系譜経由で着地する枝へ merge back されるから(ADR 0053)。 */
+/** 着地の門(ADR 0092 決定1): 着地するタスクの子孫全体に付いた、未決着の付帯子の数。
+ *  付帯子は型で列挙せず `awaitedChildSql` の補集合で取る(ADR 0049)— 完了時レビューも
+ *  異議修理も RCA も等しく数え、新しい種類の子が生えても黙って古くならない。範囲が
+ *  直下でなく子孫全体なのは、決着済み分解子への修理も、その修理に付いたレビューも、
+ *  系譜経由で着地する枝へ merge back されるから(ADR 0053)— 着地する枝へ流れ込むもの
+ *  すべてが門の対象。 */
 export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
   const { n } = db
     .prepare(
@@ -2102,7 +2103,6 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
          SELECT ?
          UNION
          SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id
-          WHERE c.based_on_decision IS NOT NULL
        )
        SELECT COUNT(*) AS n FROM tasks c JOIN subtree s ON c.parent_id = s.id
         WHERE c.status NOT IN ('done', 'cancelled') AND NOT ${awaitedChildSql("c")}`,
