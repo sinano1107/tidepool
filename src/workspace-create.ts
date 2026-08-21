@@ -448,9 +448,9 @@ export async function publishWorkspace(
   const dir = entryCheckoutPath(entry, input.name, deps.workspacesBaseDir);
   const existing = originUrl(dir);
   if (existing !== undefined) throw new CheckoutHasOriginError(input.name, existing);
-  // ADR 0067 決定8: ADR 0066 決定5 が名指しした最頻の人為ミス「repo は作ったが bot の
-  // 招待を忘れた」を、push が落ちる**前に**招待1枚で直す。位置は `remote add` の手前で
-  // なければならない —— 直せなかったとき、巻き戻す痕跡がそもそも作られない側に立つ。
+  // ADR 0067 決定8: ADR 0066 決定5 が名指しした最頻の人為ミス「repo は作ったが App を
+  // install し忘れた」を、push が落ちる**前に**名指しする。位置は `remote add` の手前で
+  // なければならない —— 拒んだとき、巻き戻す痕跡がそもそも作られない側に立つ。
   await assertRepoAccess(input.repo, deps.github);
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
   // `authedGit` は温まったキャッシュから同期に注入するだけなので、下の「await は
@@ -493,7 +493,7 @@ export async function publishWorkspace(
     return branches.map((branch) => `refs/remotes/origin/${branch}`);
   } catch (err) {
     // 巻き戻すのは**自分が足した origin だけ**(上の CheckoutHasOriginError が
-    // その線を引いている)。最も起きる人為ミスは「repo は作ったが bot の招待を
+    // その線を引いている)。最も起きる人為ミスは「repo は作ったが App を install し
     // 忘れた」で、経路は remote add(成功)→ push(失敗)→ registry コミット未実行。
     // registry コミットが落ちた場合もここへ来る: 宣言の無い workspace に origin が
     // 残るほうが ADR 0052 のずれそのものであり、再送は同一 ref の push なので
@@ -568,8 +568,9 @@ function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): Workspace
   return {};
 }
 
-/** 盤面がこれから git でその repo へ出ていく直前に、書けることを1回だけ確かめ、
- *  招待1枚で直せるなら直す(ADR 0067 決定2 の登録の門 = `clone`、決定8 の `publish`)。
+/** 盤面がこれから git でその repo へ出ていく直前に、その repo の installation token を
+ *  仲介が出せることを1回だけ確かめる(ADR 0067 決定2 の登録の門 = `clone`、決定8 の
+ *  `publish`。修復の中身は ADR 0093 決定8)。
  *  撃たないのは2つの場合で、どちらも今日の挙動のまま通す:
  *
  *  - `github` 不在 —— 盤面が GitHub 身元(ADR 0024)を持たないので probe を撃つ相手

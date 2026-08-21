@@ -301,7 +301,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "publish_workspace",
     {
       // ADR 0066 決定2: the board creates nothing on GitHub — the destination
-      // repository is one a human prepared and the bot was invited to.
+      // repository is one a human prepared and installed the App on.
       description:
         "Give a purely-local workspace a remote source of truth: push every branch to an empty repository the human prepared, then record it on the registry entry.",
       inputSchema: z.object({

@@ -247,10 +247,10 @@ describe("createWorkspace: clone モード(issue #57)", () => {
     });
   });
 
-  it("GitHub の repo で WRITE が無ければ clone を撃たずに拒否し、案内の3要素を message に載せる(ADR 0067)", async () => {
+  it("仲介が token を出せない repo は clone を撃たずに拒否し、install の案内を message に載せる(ADR 0093 決定8)", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
-    deps.github.scriptLogin("tidepool-bot");
+    deps.github.scriptUnreachable("sinano1107/tidepool");
 
     const err = await createWorkspace(
       { mode: "clone", name: "lagoon", repo: "https://github.com/sinano1107/tidepool" },
@@ -259,18 +259,14 @@ describe("createWorkspace: clone モード(issue #57)", () => {
 
     expect(err).toBeInstanceOf(RepoAccessMissingError);
     expect((err as Error).message).toContain("sinano1107/tidepool");
-    expect((err as Error).message).toContain(
-      "gh api -X PUT repos/sinano1107/tidepool/collaborators/tidepool-bot -f permission=push",
-    );
-    expect((err as Error).message).toContain(
-      "https://github.com/sinano1107/tidepool/settings/access",
-    );
+    expect((err as Error).message).toContain("/installations/new");
+    expect((err as Error).message).toContain("HTTP 404: repo_unreachable");
     // 門は clone の**前**にある — 拒否は checkout を1つも残さない
     expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toBeUndefined();
   });
 
-  it("一致する招待が pending なら受諾されて登録が通る —— 一致しない招待には触れない", async () => {
+  it("仲介が token を出せる repo は門を通って登録される", async () => {
     const registryDir = await makeMainRegistry();
     const deps = await makeDeps(registryDir);
     const upstream = await makeUpstream();
@@ -278,15 +274,13 @@ describe("createWorkspace: clone モード(issue #57)", () => {
     // 出さずに門の先まで通す(冪等リトライは下のテストが単独で押さえている)。
     // origin は要求 repo に揃える —— 流用は要求と整合するときだけ(ADR 0087 決定5)
     placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", upstream, "https://github.com/sinano1107/tidepool");
-    deps.github.scriptInvitation(111, "sinano1107/tidepool");
-    deps.github.scriptInvitation(222, "someone/else");
 
     await createWorkspace(
       { mode: "clone", name: "lagoon", repo: "https://github.com/sinano1107/tidepool" },
       deps,
     );
 
-    expect(deps.github.acceptedInvitations).toEqual([111]);
+    expect(deps.github.repoAccessCalls).toBe(1);
     expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({
       repo: "https://github.com/sinano1107/tidepool",
     });
@@ -420,11 +414,10 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
     // 規約どおりの場所に前回の孤児を置き、実 clone をネットワークへ出さずに
     // probe の先まで通す(冪等リトライは clone モードの別テストが単独で押さえている)
     placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", upstream, "https://github.com/sinano1107/tidepool");
-    deps.github.scriptRepositoryPermission("sinano1107/tidepool", "WRITE");
     // 遅い外部手順(repo-access probe)の間に registry-edit タスクがブランチを
     // checkout する — worktree は毎回その場で切るので、この移動に影響されない
-    const inner = deps.github.getRepositoryPermission.bind(deps.github);
-    deps.github.getRepositoryPermission = async (ref) => {
+    const inner = deps.github.tokenRefusal.bind(deps.github);
+    deps.github.tokenRefusal = async (ref) => {
       git(registryDir, "checkout", "-b", "task/registry-edit-1");
       return inner(ref);
     };

@@ -463,9 +463,9 @@ export async function submitAnswer(
     }
     // ADR 0067 決定2 の3つ目の扉。remote 正本を宣言した workspace だけが対象で、
     // 「盤面は確認を鵜呑みにせず検証してから受理する」に1条件足すだけである ——
-    // 招待1枚で直るならここで直り、まだ書けなければ回答を拒んで question は開いた
-    // ままになる。ローカルの検査を先に済ませてから撃つので、purely-local な
-    // workspace では1つもネットワークに出ない。
+    // 仲介が token を出せれば受理し、まだ出せなければ回答を拒んで question は開いた
+    // ままになる(ADR 0093 決定8)。ローカルの検査を先に済ませてから撃つので、
+    // purely-local な workspace では1つもネットワークに出ない。
     const ref = parseGitHubRepo(target.repo);
     if (deps.github && ref) {
       const { guidance } = await repairRepoAccess(deps.github, ref);

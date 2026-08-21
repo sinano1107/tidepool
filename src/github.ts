@@ -1,10 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  authedGit,
-  GIT_NETWORK_TIMEOUT_MS,
-  type GitHubAuth,
-  originRepo,
-} from "./github-auth.js";
+import { authedGit, type GitHubAuth, originRepo } from "./github-auth.js";
 
 /** Everything a PR needs to exist, independent of how it's actually opened
  *  (issue #19): which task branch, onto which base, with what title/body. */
@@ -114,46 +109,25 @@ export interface GitHubClient {
    *  issue (GitHub stays the sole source of truth, ADR 0016), never on the
    *  board. */
   addIssueComment(ref: IssueRef, body: string): Promise<void>;
-  /** The login the token actually belongs to (ADR 0067 決定4) — the single
-   *  source of the name the repo-access guidance tells a human to invite. An
-   *  observation, never a constant: a stale spelling makes the human invite
-   *  someone else and the symptom surfaces far away ("I invited them and it
-   *  still doesn't work"). */
-  login(): Promise<string>;
-  /** The token owner's pending repository invitations (ADR 0067 決定1). The
-   *  board never empties this inbox — it reads it to find the one invitation
-   *  for the repo it is trying to reach right now. */
-  listRepositoryInvitations(): Promise<RepoInvitation[]>;
-  /** Accepts one invitation by id. Idempotent in practice: an accepted
-   *  invitation leaves the inbox (ADR 0067 実測3). */
-  acceptRepositoryInvitation(id: number): Promise<void>;
-  /** What the token may do on `ref` — the pass/fail question every ADR 0067
-   *  door asks (実測5). Null means **not visible**: no access and no such
-   *  repository are indistinguishable at this surface (実測7), and so is a
-   *  timeout — all three are read as unreachable, never as fatal. */
-  getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null>;
+  /** Why the broker refused a token for `ref`, or `null` when it minted one
+   *  (ADR 0093 決定8). `null` is CONTEXT.md's "書ける" verdict: the token
+   *  broker issued an installation token for that one
+   *  repository, which it does only when the tidepool App is installed on it
+   *  **and** the logged-in user can push to it (ADR 0067 決定3's "can write",
+   *  now the broker's own gate). A string is why it could not, carrying the
+   *  broker's HTTP status and error code — the diagnostic material the human
+   *  guidance quotes. Not installed, not visible, and no such repository are
+   *  indistinguishable here (#419), and so is a timeout: all of them read as
+   *  unreachable, never as fatal.
+   *
+   *  The board's only repo-access probe, fired on failure paths alone. */
+  tokenRefusal(ref: RepoSlug): Promise<string | null>;
 }
 
 /** Which repository, as GitHub's own `owner/name` (ADR 0067). */
 export interface RepoSlug {
   owner: string;
   name: string;
-}
-
-/** `viewerPermission` as GitHub spells it. The board only ever asks whether
- *  it is WRITE or above (ADR 0067 決定3) — READ is what 実測4's read
- *  invitation leaves behind, and it is exactly the case that used to surface
- *  as a 403 at PR promotion. */
-export type RepoPermission = "READ" | "TRIAGE" | "WRITE" | "MAINTAIN" | "ADMIN";
-
-/** One pending invitation as the board reads it: the id it would accept, the
- *  `owner/name` it is for, and what it would grant (recorded for the record,
- *  never trusted as the verdict — the verdict is the repo's own
- *  `viewerPermission`, ADR 0067 決定3). */
-export interface RepoInvitation {
-  id: number;
-  fullName: string;
-  permissions: string;
 }
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
@@ -299,63 +273,16 @@ export class GhCliClient implements GitHubClient {
     });
   }
 
-  async login(): Promise<string> {
-    return this.gh(["api", "user", "--jq", ".login"]).trim();
-  }
-
-  async listRepositoryInvitations(): Promise<RepoInvitation[]> {
-    const invitations = JSON.parse(this.gh(["api", "user/repository_invitations"])) as Array<{
-      id: number;
-      repository: { full_name: string };
-      permissions: string;
-    }>;
-    return invitations.map((i) => ({
-      id: i.id,
-      fullName: i.repository.full_name,
-      permissions: i.permissions,
-    }));
-  }
-
-  async acceptRepositoryInvitation(id: number): Promise<void> {
-    this.gh(["api", "--method", "PATCH", `user/repository_invitations/${id}`]);
-  }
-
-  async getRepositoryPermission(ref: RepoSlug): Promise<RepoPermission | null> {
-    // every failure maps to null, not just not-found: an invisible repo, a
-    // repo the token has no access to, and a timed-out call are the same
-    // answer here — "cannot confirm WRITE" — and the three doors treat them
-    // identically (ADR 0067 実測7 / 決定6). Unlike getRepository above, this
-    // one must not re-throw an outage: a probe that throws on the pickup
-    // failure path would replace the real cause the human needs to read.
+  async tokenRefusal(ref: RepoSlug): Promise<string | null> {
     try {
-      const output = this.gh([
-        "repo",
-        "view",
-        `${ref.owner}/${ref.name}`,
-        "--json",
-        "viewerPermission",
-      ]);
-      return (JSON.parse(output) as { viewerPermission: RepoPermission }).viewerPermission ?? null;
-    } catch {
+      // 扉は再検査である: キャッシュに残る token で「書ける」と答えてはならない
+      // (install が外された直後でも 1 時間は出せたことになる)。仲介に撃ち直す。
+      await this.auth.ensureToken(`${ref.owner}/${ref.name}`, { fresh: true });
       return null;
+    } catch (err) {
+      // 仲介の断り(status + code)も到達失敗も同じ「まだ出せない」であり、
+      // どちらも人間の案内にそのまま載る材料である
+      return err instanceof Error ? err.message : String(err);
     }
-  }
-
-  /** The four ADR 0067 calls' shared shape: no workspace checkout to run from
-   *  (they ask about the token itself, or about a repo by `owner/name`), and
-   *  **a time limit** — `execFileSync` is synchronous, so a black-holed
-   *  connection on the pickup path would stall the event loop and take the
-   *  human surface ADR 0036 designates as the recovery path down with it. The
-   *  limit is the real-network one (`GIT_NETWORK_TIMEOUT_MS`), not the
-   *  local-binary probe's. */
-  private gh(args: string[]): string {
-    return execFileSync("gh", args, {
-      // #423 がこの4本ごと消す(installation token では動かない呼び出しなので
-      // ADR 0093 決定8 で仲介への token 要求に置き換わる)。それまでの注入も
-      // GitHubAuth の中で組む —— credential が効く場所は1箇所のまま。
-      env: this.auth.userTokenEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: GIT_NETWORK_TIMEOUT_MS,
-    }).toString();
   }
 }

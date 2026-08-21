@@ -45,10 +45,11 @@ export class GitHubAuth {
    *  code so the quarantine reason a human reads names the cause. The shape is
    *  a git network failure's, so the existing fail-closed paths (registry
    *  reachability, workspace quarantine) catch it unchanged (ADR 0093 決定7). */
-  async ensureToken(repo: string | undefined): Promise<void> {
+  async ensureToken(repo: string | undefined, { fresh = false } = {}): Promise<void> {
     if (repo === undefined) return;
     const held = this.tokens.get(repo);
-    if (held && held.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return;
+    // `fresh` は扉(ADR 0067 決定2 の再検査)用: 持っている token を答えにしない
+    if (!fresh && held && held.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return;
     let response: Response;
     try {
       response = await fetch(new URL("/token", this.brokerUrl), {
@@ -94,17 +95,6 @@ export class GitHubAuth {
       throw new Error(`no unexpired GitHub installation token is held for ${repo}`);
     }
     return { ...base, GH_TOKEN: held.token };
-  }
-
-  /** Transitional (#423 removes every caller): the env for the ADR 0067 calls
-   *  that ask about the token owner rather than a repo (`/user`, invitations,
-   *  `viewerPermission`). Those endpoints do not answer to an installation
-   *  token, so until #423 replaces them with the broker's verdict they carry
-   *  the **user** token — still assembled here, so credentials keep taking
-   *  effect in exactly one place. Dropping GH_TOKEN instead would send `gh` to
-   *  the host keyring, the ambient identity ADR 0024 abolished. */
-  userTokenEnv(): NodeJS.ProcessEnv {
-    return { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_TOKEN: this.token() };
   }
 }
 

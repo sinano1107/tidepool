@@ -169,10 +169,10 @@ it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由�
  *  この条件は効いてはならない —— 効いてしまったら `isRemoteBacked` で絞れていない。 */
 const DECLARED = "https://github.com/sinano1107/tidepool";
 
-it("remote 正本を宣言した workspace の解除は、WRITE が見えない間は拒否され question は開いたままである(ADR 0067)", async () => {
+it("remote 正本を宣言した workspace の解除は、仲介が token を出せない間は拒否され question は開いたままである(ADR 0093 決定8)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
-  t.github.scriptLogin("tidepool-bot");
+  t.github.scriptUnreachable("sinano1107/tidepool");
   const db = openDb(join(t.dir, "board.sqlite"));
   quarantineWorkspace(db, "sandbox", new Error("fetch failed"), t.clock.now());
   db.close();
@@ -186,16 +186,14 @@ it("remote 正本を宣言した workspace の解除は、WRITE が見えない�
   });
 
   expect(res.status).toBe(409);
-  expect(res.json.error).toContain(
-    "gh api -X PUT repos/sinano1107/tidepool/collaborators/tidepool-bot -f permission=push",
-  );
+  expect(res.json.error).toContain("/installations/new");
+  expect(res.json.error).toContain("HTTP 404: repo_unreachable");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
 });
 
-it("WRITE が見えていれば解除はそのまま受理される —— 新しい文法は増やしていない", async () => {
+it("token が出せていれば解除はそのまま受理される —— 新しい文法は増やしていない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
-  t.github.scriptRepositoryPermission("sinano1107/tidepool", "WRITE");
   const db = openDb(join(t.dir, "board.sqlite"));
   quarantineWorkspace(db, "sandbox", new Error("fetch failed"), t.clock.now());
   db.close();

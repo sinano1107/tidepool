@@ -154,10 +154,10 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
 // probe は `await` を含むが、まだ外部効果を1つも起こしていない位置(`remote add` の
 // 手前)なので不可分性の要求には触れない。
 describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
-  it("WRITE が無ければ remote add すら撃たずに拒否する", async () => {
+  it("仲介が token を出せなければ remote add すら撃たずに拒否する", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const github = new FakeGitHubClient();
-    github.scriptRepositoryPermission("sinano1107/sandbox", "READ");
+    github.scriptUnreachable("sinano1107/sandbox");
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
@@ -171,10 +171,10 @@ describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
-  it("直せなかったときの案内は repo の名指し・一行コマンド・settings リンクを持つ", async () => {
+  it("直せなかったときの案内は repo の名指し・install リンク・仲介の理由を持つ", async () => {
     const { deps } = await makeBoard();
     const github = new FakeGitHubClient();
-    github.scriptRepositoryPermission("sinano1107/sandbox", "READ");
+    github.scriptUnreachable("sinano1107/sandbox");
 
     const err: Error = await publishWorkspace(
       { name: "sandbox", repo: "https://github.com/sinano1107/sandbox.git" },
@@ -185,10 +185,8 @@ describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
     );
 
     expect(err.message).toContain("sinano1107/sandbox");
-    expect(err.message).toContain(
-      "gh api -X PUT repos/sinano1107/sandbox/collaborators/tidepool-bot -f permission=push",
-    );
-    expect(err.message).toContain("https://github.com/sinano1107/sandbox/settings/access");
+    expect(err.message).toContain("/installations/new");
+    expect(err.message).toContain("HTTP 404: repo_unreachable");
   });
 
   // probe は唯一の `await` なので、その往復が registry を読んでから書くまでの窓を作る。
@@ -197,10 +195,9 @@ describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
   it("probe の往復中に landed した publish を上書きせず、拒否へ落ちる", async () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const github = new FakeGitHubClient();
-    github.scriptRepositoryPermission("sinano1107/sandbox", "WRITE");
     // probe が撃たれた瞬間に、別の扉から publish が landed したことにする
-    const original = github.getRepositoryPermission.bind(github);
-    github.getRepositoryPermission = async (ref) => {
+    const original = github.tokenRefusal.bind(github);
+    github.tokenRefusal = async (ref) => {
       await writeFile(
         join(registryDir, "workspaces.yaml"),
         `sandbox:\n  path: ${checkout}\n  repo: https://github.com/sinano1107/first.git\n`,
