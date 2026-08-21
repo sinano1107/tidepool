@@ -150,12 +150,16 @@ A code and a URL are printed; open the URL, enter the code, and approve. The tok
 gh repo create YOUR_GITHUB_LOGIN/tidepool-trial --private
 ```
 
-Leave it empty — no README. Then install the App on it **and on `tidepool-registry`** (the board
-reads the registry through the same identity):
+Leave it empty — no README. Then install the App on it **and on `tidepool-registry`**:
 
 https://github.com/apps/tidepool-board/installations/new
 
-Choose **Only select repositories** and pick exactly those two.
+Choose **Only select repositories** and pick exactly those two. **The registry one is not
+optional**: once the board is logged in, it reads the registry through the App as well, and a
+registry without the App shows up at the next start as
+`the GitHub token broker refused a token for …/tidepool-registry (HTTP 404: repo_unreachable)`
+— the board starts, then stops picking up until you install the App and answer the question it
+raises.
 
 Restart the board (`caffeinate -i -s npm start`) so it picks up the new environment file. The
 settings tab now shows "GitHub: logged in".
