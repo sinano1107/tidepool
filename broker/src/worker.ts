@@ -138,7 +138,8 @@ export function createWorker(githubFetch: GitHubFetch = fetch) {
 						method: "POST",
 					},
 				);
-				if (!checked.ok) return json("invalid_user_token", 401);
+				if (checked.status === 404) return json("invalid_user_token", 401);
+				if (!checked.ok) return json("github_error", 502);
 
 				const [owner, name] = repo.split("/") as [string, string];
 				const repository = await githubFetch(

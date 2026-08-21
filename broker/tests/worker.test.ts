@@ -80,6 +80,23 @@ describe("token broker", () => {
 		expect(await githubRequests[0]?.json()).toEqual({ access_token: userToken });
 	});
 
+	it("reports a check-token outage as a GitHub failure", async () => {
+		const userToken = "ghu-user-token-during-outage";
+		const worker = createWorker(async () =>
+			Response.json(
+				{ message: `GitHub could not check ${userToken}` },
+				{ status: 503 },
+			),
+		);
+
+		const response = await worker.fetch(tokenRequest(userToken), env);
+		const body = await response.text();
+
+		expect(response.status).toBe(502);
+		expect(JSON.parse(body)).toEqual({ error: "github_error" });
+		expect(body).not.toContain(userToken);
+	});
+
 	it("refuses a repo the user cannot push to", async () => {
 		const userToken = "ghu-read-only-user-token";
 		const githubRequests: Request[] = [];
