@@ -13,7 +13,6 @@ import {
   assertAnswerable,
   assertNoUnsettledIssueRef,
   type CancelDefaults,
-  countUnsettledAttachedChildren,
   DomainError,
   getTask,
   HUMAN_WORKER_ID,
@@ -29,7 +28,7 @@ import {
   type Task,
   taskIdForPr,
 } from "./tasks.js";
-import { countUnbundledObjections, stageFrontInsert, triageActivity } from "./triage.js";
+import { landingBlock, stageFrontInsert, triageActivity } from "./triage.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
@@ -321,16 +320,13 @@ export function humanCancelDefaults(
  *  以後は (a) 側で捕まるので、2つの検査は同じ待ちを別の時刻から見た姿である。
  *  `hold` は検証しない — 着地しない決定はいつでもできる。 */
 function assertLandingAllowed(db: Db, landingTaskId: string): void {
-  const unsettled = countUnsettledAttachedChildren(db, landingTaskId);
-  if (unsettled > 0) {
-    throw new DomainError(`cannot merge yet: ${unsettled} attached child task(s) unsettled`);
-  }
-  const objections = countUnbundledObjections(db, landingTaskId);
-  if (objections > 0) {
-    throw new DomainError(
-      `cannot merge yet: ${objections} objection(s) raised in this triage await commit`,
-    );
-  }
+  const block = landingBlock(db, landingTaskId);
+  if (!block) return;
+  throw new DomainError(
+    block.kind === "attached_children"
+      ? `cannot merge yet: ${block.count} attached child task(s) unsettled`
+      : `cannot merge yet: ${block.count} objection(s) raised in this triage await commit`,
+  );
 }
 
 /** A settled child can make its parent immediately pickable on either human surface. */

@@ -1,4 +1,6 @@
-// Triage flow — section 1 questions → section 2 log skim → section 3 queue check → commit
+// Triage flow (ADR 0092 決定4) — 質問 → ログ流し読み → merge 判断 → キュー確認 → コミット。
+// 着地 question は先頭の質問ステップではなく流し読みの後ろの merge 判断に並ぶ:
+// 流し読みの前に merge を答えれば異議の機会が失われ、後に答えても修理子がまだ無い。
 // Loaded as a text/babel script from index.html; components read from the DS bundle at render time.
 
 function TpWaterline({ progress }) {
@@ -244,6 +246,21 @@ const TP_SCRATCH_KINDS = [
 // the task nor the board names one) — grouping, sort order, and the
 // read/unread fold are all client-side view derivation over that flat list,
 // re-run from scratch on every render (nothing about it is persisted).
+// 一本道の5段。番号を直に書くと「どの section が何か」が読めなくなる
+const S_QUESTIONS = 0;
+const S_LOG = 1;
+const S_MERGE = 2;
+const S_QUEUE = 3;
+const S_COMMIT = 4;
+const S_COUNT = 5;
+
+// 盤面が返す回答不能の理由(`landing.blocked_by`)を1行の文言にする。判定は盤面側で
+// 済んでいるので、ここは描画だけ(ADR 0092 決定4)。
+const TP_LANDING_HELD = {
+  attached_children: 'attached children unsettled',
+  objections: 'objections await commit',
+};
+
 const LOG_READ_BATCH = 8;
 const NO_WORKSPACE_LABEL = 'no workspace';
 
@@ -310,12 +327,17 @@ function commitPendingObjectionKeys(log, localObjections) {
 // Live-mode props (all optional — absent, the screen runs standalone on mock
 // data): onAnswer / onObject / onScratchAdd persist immediately (中断安全),
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
-// staged S3 queue. onCommit always closes the flow.
-function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, onTranslate }) {
+// staged S3 queue, loadLanding re-reads the landing questions' answerability.
+// onCommit always closes the flow.
+function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }) {
   const { Button, Input, LogEntry, QueueItem, Switch } = window.TidepoolDesignSystem_8a0ead;
-  const nQuestions = data.questions.length;
-  // no questions overnight → the flow still exists for the log skim; start at section 2
-  const [section, setSection] = React.useState(nQuestions ? 0 : 1);
+  // 着地 question(`landing` を持つ行)は merge 判断ステップの持ち物 — 先頭の質問
+  // ステップが数えるのも描くのも一般 question だけ(ADR 0092 決定4)
+  const generalQuestions = data.questions.filter((q) => !q.landing);
+  const landingQuestions = data.questions.filter((q) => q.landing);
+  const nQuestions = generalQuestions.length;
+  // no questions overnight → the flow still exists for the log skim; start at the log
+  const [section, setSection] = React.useState(nQuestions ? S_QUESTIONS : S_LOG);
   const [answers, setAnswers] = React.useState({});
   const [objections, setObjections] = React.useState({});
   const [objecting, setObjecting] = React.useState(null);
@@ -325,6 +347,10 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [scratchKinds, setScratchKinds] = React.useState({}); // keyed by line id
   const scratchSeq = React.useRef(0);
   const [preview, setPreview] = React.useState(null);
+  // data.questions はフロー1回分の凍結 snapshot(webui/app.jsx の refresh)なので、
+  // 流し読みで打った異議はそこに映らない。merge 判断に入る瞬間に盤面へ回答可否を
+  // 訊き直す — 判定は盤面側のまま、UI は今の答えを引くだけ(ADR 0092 決定4/決定5)。
+  const [landingNow, setLandingNow] = React.useState(null); // { [questionId]: { blocked_by } }
 
   // live answers are one-way: a persisted answer cannot be untapped or replaced
   const answerQ = async (q, a) => {
@@ -352,14 +378,17 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const refreshPreview = () => {
     if (loadPreview) loadPreview().then(setPreview).catch(() => {});
   };
-  React.useEffect(() => { if (section === 2) refreshPreview(); }, [section]);
+  React.useEffect(() => { if (section === S_QUEUE) refreshPreview(); }, [section]);
+  React.useEffect(() => {
+    if (section === S_MERGE && loadLanding) loadLanding().then(setLandingNow).catch(() => {});
+  }, [section]);
   // "displayed" is an event: the objection-rate denominator counts only what
   // was actually put in front of the human — an entry reports once it is
   // genuinely in the viewport, not merely because the skim section mounted
   const logListRef = React.useRef(null);
   const displayedSeen = React.useRef(new Set());
   React.useEffect(() => {
-    if (section !== 1 || !onDisplayed || !logListRef.current) return;
+    if (section !== S_LOG || !onDisplayed || !logListRef.current) return;
     const byId = new Map(data.log.filter((l) => l.unread).map((l) => [String(l.id), l]));
     const io = new IntersectionObserver((observed) => {
       const shown = [];
@@ -539,14 +568,21 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     runTranslate(onTranslate, { type: 'handoff', task_id: entry.taskId }, (result) =>
       setHandoffTranslations((prev) => ({ ...prev, [k]: result })));
   };
-  const answered = Object.values(answers).filter(Boolean).length;
+  const answered = generalQuestions.filter((q) => answers[q.id]).length;
   const unread = data.log.filter((l) => l.unread);
-  const progress = (section + (section === 0 ? answered / Math.max(1, nQuestions) : 0)) / 3;
+  const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / S_COUNT;
+  // 回答可否は盤面が言う(`landing.blocked_by`)。merge 判断に入ったときの読み直しが
+  // あればそれを、無ければ凍結 snapshot の注釈を使う。回答済みは locked のまま残す。
+  const landingBlockOf = (q) => ((landingNow && landingNow[q.id]) || q.landing).blocked_by;
+  const landingReady = landingQuestions.filter((q) => answers[q.id] || landingBlockOf(q) === null);
+  const landingHeld = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
 
   const heads = [
-    { step: '1 / 3 — questions', title: `The tide brought ${nQuestions} question${nQuestions === 1 ? '' : 's'}.`, sub: 'answers persist at once; unblocked parents surface at the front on commit.', next: answered === nQuestions ? 'Log skim' : `Log skim (${nQuestions - answered} unanswered)` },
-    { step: nQuestions ? '2 / 3 — decision log' : '2 / 3 — decision log · no questions today', title: `${unread.length} decisions made overnight.`, sub: 'silence is consent — tap an entry to object.', next: 'Queue check' },
-    { step: '3 / 3 — queue', title: 'The tide is going out.', sub: loadPreview ? 'front-inserted by this session highlighted. read-only — reorder on the Queue screen. applies at commit.' : 'front-inserted by this session highlighted. reorder is optional.', next: 'Commit' },
+    { step: '1 / 5 — questions', title: `The tide brought ${nQuestions} question${nQuestions === 1 ? '' : 's'}.`, sub: 'answers persist at once; unblocked parents surface at the front on commit.', next: answered === nQuestions ? 'Log skim' : `Log skim (${nQuestions - answered} unanswered)` },
+    { step: nQuestions ? '2 / 5 — decision log' : '2 / 5 — decision log · no questions today', title: `${unread.length} decisions made overnight.`, sub: 'silence is consent — tap an entry to object.', next: 'Merge decisions' },
+    { step: '3 / 5 — merge decisions', title: `${landingReady.length} branch${landingReady.length === 1 ? '' : 'es'} ready to land.`, sub: 'you have read the decisions behind these — merge or hold.', next: 'Queue check' },
+    { step: '4 / 5 — queue', title: 'The tide is going out.', sub: loadPreview ? 'front-inserted by this session highlighted. read-only — reorder on the Queue screen. applies at commit.' : 'front-inserted by this session highlighted. reorder is optional.', next: 'Wrap up' },
+    { step: '5 / 5 — commit', title: 'One last sort.', sub: 'lines you leave unsorted carry over to the next triage.', next: 'Commit' },
   ];
   const cur = heads[section];
   const scratchResolved = () => [
@@ -559,12 +595,12 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
       <div className="tp-rise" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>{cur.step}</div>
       <h1 className="tp-rise" style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 'var(--text-2xl)', fontWeight: 400, color: 'var(--tide-5)', margin: '0 0 4px', lineHeight: 1.15, animationDelay: '60ms' }}>{cur.title}</h1>
       <p className="tp-rise" style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 20px', animationDelay: '120ms' }}>{cur.sub}</p>
-      {section === 0 ? <TpSegmentGauge total={data.questions.length} filled={answered} /> : <TpWaterline progress={progress} />}
+      {section === S_QUESTIONS ? <TpSegmentGauge total={nQuestions} filled={answered} /> : <TpWaterline progress={progress} />}
       <div style={{ height: 20 }}></div>
 
-      {section === 0 && (
+      {section === S_QUESTIONS && (
         <div>
-          {data.questions.map((q, i) => (
+          {generalQuestions.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
               <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!onAnswer && !!answers[q.id]} onTranslate={onTranslate} />
             </div>
@@ -572,7 +608,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         </div>
       )}
 
-      {section === 1 && (() => {
+      {section === S_LOG && (() => {
         // renders one entry row + its handoff/objection expansion — shared by
         // every group's revealed-read and unread rows below
         const renderLogRow = (l) => {
@@ -689,32 +725,31 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         );
       })()}
 
-      {section === 2 && (() => {
-        const nObjections = commitPendingObjectionKeys(data.log, objections).size;
-        const scratchPanel = scratch.length > 0 && (
-          <div style={{ marginTop: 20, background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', padding: 14 }}>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>scratchpad — triage before commit</div>
-            {scratch.map((l) => (
-              <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                <span style={{ flex: '1 1 100%', fontSize: 'var(--text-sm)', color: (scratchKinds[l.id] || 'task') === 'discard' ? 'var(--text-muted)' : 'var(--text-body)', textDecoration: (scratchKinds[l.id] || 'task') === 'discard' ? 'line-through' : 'none' }}>{l.text}</span>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {TP_SCRATCH_KINDS.map((k) => {
-                    const picked = (scratchKinds[l.id] || 'task') === k.key;
-                    return (
-                      <button key={k.key} onClick={() => setScratchKinds({ ...scratchKinds, [l.id]: k.key })}
-                        style={{
-                          fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', cursor: 'pointer',
-                          color: picked ? '#fff' : 'var(--text-secondary)',
-                          background: picked ? (k.key === 'discard' ? 'var(--rock-4)' : 'var(--tide-4)') : 'var(--surface-recessed)',
-                          border: 'none', borderRadius: 'var(--radius-full)', padding: '4px 12px',
-                        }}>{k.label}</button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        );
+      {section === S_MERGE && (
+        <div>
+          {landingReady.map((q, i) => (
+            <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!onAnswer && !!answers[q.id]} onTranslate={onTranslate} />
+            </div>
+          ))}
+          {/* 回答不能な着地 question は件数と理由の1行だけ — 押せば必ず 409 になる
+             merge ボタンを出さない。理由は盤面が返した blocked_by をそのまま写す */}
+          {Object.keys(TP_LANDING_HELD).map((kind) => {
+            const held = landingHeld.filter((q) => landingBlockOf(q) === kind);
+            if (held.length === 0) return null;
+            return (
+              <p key={kind} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: '0 0 8px' }}>
+                {held.length} landing question{held.length > 1 ? 's' : ''} held — {TP_LANDING_HELD[kind]}
+              </p>
+            );
+          })}
+          {landingReady.length === 0 && landingHeld.length === 0 && (
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', margin: 0 }}>Nothing waits to land.</p>
+          )}
+        </div>
+      )}
+
+      {section === S_QUEUE && (() => {
         // live mode: the server's staged preview is the truth — this session's
         // front-inserts arrive on top, already highlighted. Read-only: nothing
         // touches the queue before commit (a mid-session reorder would break
@@ -722,16 +757,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         // reorder/front stay on the queue screen.
         if (loadPreview) {
           return (
-            <div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <TpQueueList tasks={preview ?? []} />
-              </div>
-              {nObjections > 0 && (
-                <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginTop: 10 }}>
-                  {nObjections} objection{nObjections > 1 ? 's' : ''} bundle into repair tasks at commit — one per objected task, queue tail
-                </p>
-              )}
-              {scratchPanel}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <TpQueueList tasks={preview ?? []} />
             </div>
           );
         }
@@ -739,31 +766,68 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
           .map(([qid]) => data.questions.find((x) => x.id === qid))
           .filter((q) => q.parent)
           .map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, assigneeIcon: q.agentIcon, frontInserted: true }));
+        const nObjections = commitPendingObjectionKeys(data.log, objections).size;
         if (nObjections > 0) {
           pending.push({ id: 'tp-0151', title: `repair task — ${nObjections} objection${nObjections > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true });
         }
         // a pending front-insert may already sit in the queue as a blocked row — show it once, up top
         const previewQueue = data.queue.filter((t) => !pending.some((p) => p.id === t.id));
         return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {pending.map((t, i) => <QueueItem key={t.id} position={i + 1} task={t} frontInserted />)}
+            {/* headId is the true queue head, not previewQueue[0] — pending's front-inserts sit
+               above this list, so previewQueue[0] can still be the actual head even though it
+               isn't rendered at this list's own index 0 (issue #82 follow-up) */}
+            <TpQueueList tasks={previewQueue} baseIndex={pending.length} onReorder={onReorderQueue} onFront={onFront} headId={data.queue[0]?.id} />
+          </div>
+        );
+      })()}
+
+      {section === S_COMMIT && (() => {
+        // 振り分けと束ねの件数は終端に置く(CONTEXT.md の Scratchpad / Objection) —
+        // どちらもコミットが適用する行為であって、キューの確認ではない
+        const nObjections = commitPendingObjectionKeys(data.log, objections).size;
+        return (
           <div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {pending.map((t, i) => <QueueItem key={t.id} position={i + 1} task={t} frontInserted />)}
-              {/* headId is the true queue head, not previewQueue[0] — pending's front-inserts sit
-                 above this list, so previewQueue[0] can still be the actual head even though it
-                 isn't rendered at this list's own index 0 (issue #82 follow-up) */}
-              <TpQueueList tasks={previewQueue} baseIndex={pending.length} onReorder={onReorderQueue} onFront={onFront} headId={data.queue[0]?.id} />
-            </div>
-            {scratchPanel}
+            {nObjections > 0 && (
+              <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: 0 }}>
+                {nObjections} objection{nObjections > 1 ? 's' : ''} bundle into repair tasks at commit — one per objected task, queue tail
+              </p>
+            )}
+            {scratch.length > 0 && (
+              <div style={{ marginTop: 20, background: 'var(--surface-card)', border: '1px solid var(--border-hairline)', borderRadius: 'var(--radius-md)', padding: 14 }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>scratchpad — triage before commit</div>
+                {scratch.map((l) => (
+                  <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                    <span style={{ flex: '1 1 100%', fontSize: 'var(--text-sm)', color: (scratchKinds[l.id] || 'task') === 'discard' ? 'var(--text-muted)' : 'var(--text-body)', textDecoration: (scratchKinds[l.id] || 'task') === 'discard' ? 'line-through' : 'none' }}>{l.text}</span>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {TP_SCRATCH_KINDS.map((k) => {
+                        const picked = (scratchKinds[l.id] || 'task') === k.key;
+                        return (
+                          <button key={k.key} onClick={() => setScratchKinds({ ...scratchKinds, [l.id]: k.key })}
+                            style={{
+                              fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', cursor: 'pointer',
+                              color: picked ? '#fff' : 'var(--text-secondary)',
+                              background: picked ? (k.key === 'discard' ? 'var(--rock-4)' : 'var(--tide-4)') : 'var(--surface-recessed)',
+                              border: 'none', borderRadius: 'var(--radius-full)', padding: '4px 12px',
+                            }}>{k.label}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })()}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
-        {section > (nQuestions ? 0 : 1) && <Button variant="ghost" size="lg" onClick={() => setSection(section - 1)}>Back</Button>}
-        <Button variant="primary" size="lg" full onClick={() => (section < 2 ? setSection(section + 1) : onCommit(answers, objections, scratchResolved()))}>{cur.next}</Button>
+        {section > (nQuestions ? S_QUESTIONS : S_LOG) && <Button variant="ghost" size="lg" onClick={() => setSection(section - 1)}>Back</Button>}
+        <Button variant="primary" size="lg" full onClick={() => (section < S_COMMIT ? setSection(section + 1) : onCommit(answers, objections, scratchResolved()))}>{cur.next}</Button>
       </div>
       <TpScratchpad lines={scratch} onAdd={addScratch} onRemove={removeScratch} />
-      {section === 2 && (
+      {section === S_COMMIT && (
         <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textAlign: 'center', marginTop: 12 }}>
           commit applies scratchpad dispositions and advances the read cursor
         </p>

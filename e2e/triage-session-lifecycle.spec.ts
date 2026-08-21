@@ -67,8 +67,10 @@ test("流し読みだけの Triage も queue を確認して commit でき、既
   await expect(page.getByText("1 decisions made overnight.")).toBeVisible();
   const before = (await api(t.baseUrl, "GET", "/api/log")).json;
 
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
   await expect(page.getByText("live queue row")).toBeVisible();
+  await page.getByRole("button", { name: "Wrap up" }).click();
   await page.getByRole("button", { name: "Commit" }).click();
 
   await expect(page.getByText("triage committed — no session was open")).toBeVisible();
@@ -78,7 +80,7 @@ test("流し読みだけの Triage も queue を確認して commit でき、既
   expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBe(null);
 });
 
-test("持ち越した scratchpad 行はセッションがなくても 3/3 に現れる(#279)", async ({
+test("持ち越した scratchpad 行はセッションがなくても 5/5 のコミット画面に現れる(#279)", async ({
   boot,
   page,
 }) => {
@@ -87,7 +89,9 @@ test("持ち越した scratchpad 行はセッションがなくても 3/3 に現
 
   await page.goto(t.baseUrl);
   await expect(page.getByText("0 decisions made overnight.")).toBeVisible();
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
+  await page.getByRole("button", { name: "Wrap up" }).click();
 
   await expect(page.getByText("scratchpad — triage before commit")).toBeVisible();
   await expect(page.getByText("持ち越した苛立ち")).toBeVisible();
@@ -128,7 +132,9 @@ test("タイムアウト済みの Triage は閉じた時刻と適用済みの操
   await page.getByRole("button", { name: "close triage session" }).click();
   await expect(page.getByText("triage session was already closed")).toBeVisible();
 
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
+  await page.getByRole("button", { name: "Wrap up" }).click();
   await page.getByRole("button", { name: "Commit" }).click();
 
   await expect(page.getByText("triage committed — session already timed out")).toBeVisible();
@@ -153,7 +159,9 @@ test("開いているセッションを Triage の Commit が今閉じたと伝�
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: /^left/ }).click();
   await page.getByRole("button", { name: "Log skim" }).click();
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
+  await page.getByRole("button", { name: "Wrap up" }).click();
   await page.getByRole("button", { name: "Commit" }).click();
 
   await expect(page.getByText("triage committed — session closed")).toBeVisible();
@@ -168,6 +176,7 @@ test("本物の commit 失敗では既読カーソルを進めない(#279)", asy
   await page.goto(t.baseUrl);
   const cursorBefore = (await api(t.baseUrl, "GET", "/api/log")).json.cursor;
   const frozenLastLogId = (await api(t.baseUrl, "GET", "/api/log")).json.entries.at(-1).id;
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
   await completeAgentWork(t, "失敗後の再試行で未表示のまま残すログ");
   await page.route("**/api/triage/close", (route) =>
@@ -178,6 +187,7 @@ test("本物の commit 失敗では既読カーソルを進めない(#279)", asy
     }),
   );
 
+  await page.getByRole("button", { name: "Wrap up" }).click();
   await page.getByRole("button", { name: "Commit" }).click();
 
   await expect(

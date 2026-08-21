@@ -25,7 +25,9 @@ test("異議を打った後にリロードしても、同じエントリに注�
   await page.reload();
 
   await expect(page.getByText("objection: リロードしても残るはずの方向コメント")).toBeVisible();
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
+  await page.getByRole("button", { name: "Wrap up" }).click();
   await expect(page.getByText("1 objection bundle into repair tasks at commit")).toBeVisible();
 });
 
@@ -57,6 +59,8 @@ test("異議を打ったセッションが commit で閉じた後にリロード
   await expect(page.getByText("束ね済みになる方向コメント")).toBeVisible();
   // 束ね済みは commit 待ちの見た目(`objection: …` の素の接頭辞)を名乗らない
   await expect(page.getByText("objection: 束ね済みになる方向コメント")).not.toBeVisible();
+  await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
+  await page.getByRole("button", { name: "Wrap up" }).click();
   await expect(page.getByText(/objections? bundle into repair tasks at commit/)).not.toBeVisible();
 });
