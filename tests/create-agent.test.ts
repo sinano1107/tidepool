@@ -69,8 +69,8 @@ describe("createAgent: 正常系(issue #70)", () => {
     // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
     // (ADR 0052 決定6: clone の working tree は正本ではないので触れない)
     expect(git(registryDir, "log", "-1", "--format=%an <%ae>|%cn <%ce>")).toBe(
-      "tidepool <000000+tidepool[bot]@users.noreply.github.com>|" +
-        "tidepool <000000+tidepool[bot]@users.noreply.github.com>",
+      "tidepool <319381852+tidepool-board[bot]@users.noreply.github.com>|" +
+        "tidepool <319381852+tidepool-board[bot]@users.noreply.github.com>",
     );
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("create agent tako via WebUI");
   });

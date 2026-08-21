@@ -557,7 +557,7 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     cliAuth: createClaudeCliAuthCheck(),
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
-    // `tidepool[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って
+    // `tidepool-board[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って
     // quarantine に落ち続ける(fail-closed だが理由が「認証が無い」になる)。
     githubAuth: board.githubAuth,
     // ADR 0093 決定5: settings が「ログイン済みか」を毎回読み直す先。

@@ -135,10 +135,10 @@ it("WIP 退避コミットの author は Tidepool 名義(bot noreply)— 盤面�
 
   // WIP は盤面の tree rule が機械的に打つコミット — quarantine/watchdog question
   // が Tidepool 名義で登録されるのと同じ線を git author に延長する。email は
-  // ADR 0093 決定9: App の bot noreply(GitHub 上で `tidepool[bot]` に紐づく)。
+  // ADR 0093 決定9: App の bot noreply(GitHub 上で `tidepool-board[bot]` に紐づく)。
   expect(git(ws.path, "log", "-1", "--format=%an", `task/${task.id}`)).toBe("tidepool");
   expect(git(ws.path, "log", "-1", "--format=%ae", `task/${task.id}`)).toBe(
-    "000000+tidepool[bot]@users.noreply.github.com",
+    "319381852+tidepool-board[bot]@users.noreply.github.com",
   );
 });
 
