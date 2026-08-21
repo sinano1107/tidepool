@@ -19,7 +19,7 @@ function repoAccessGuidance(ref: RepoSlug, reason: string): string {
   return (
     `the tidepool App is not installed on ${repo}, or you cannot push to it — ` +
     `the two are indistinguishable here. Install the App on the repository ` +
-    `(a repository you do not own needs its admin to do it):\n\n` +
+    `(only a repository admin can install it):\n\n` +
     `  https://github.com/apps/${GITHUB_APP_SLUG}/installations/new\n\n` +
     reason
   );
@@ -40,7 +40,7 @@ export async function repairRepoAccess(
   github: GitHubClient,
   ref: RepoSlug,
 ): Promise<RepoAccessRepair> {
-  const reason = await github.canReach(ref);
+  const reason = await github.tokenRefusal(ref);
   return { guidance: reason === null ? null : repoAccessGuidance(ref, reason) };
 }
 

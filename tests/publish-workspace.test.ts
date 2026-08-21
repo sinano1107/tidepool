@@ -196,8 +196,8 @@ describe("publishWorkspace: 宛先への到達性(ADR 0067 決定8)", () => {
     const { registryDir, deps, checkout } = await makeBoard();
     const github = new FakeGitHubClient();
     // probe が撃たれた瞬間に、別の扉から publish が landed したことにする
-    const original = github.canReach.bind(github);
-    github.canReach = async (ref) => {
+    const original = github.tokenRefusal.bind(github);
+    github.tokenRefusal = async (ref) => {
       await writeFile(
         join(registryDir, "workspaces.yaml"),
         `sandbox:\n  path: ${checkout}\n  repo: https://github.com/sinano1107/first.git\n`,

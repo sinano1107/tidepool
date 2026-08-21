@@ -225,15 +225,8 @@ export function startScheduler(deps: {
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
     const ref = parseGitHubRepo(workspace.repo);
     let guidance: string | null = null;
-    if (github && ref) {
-      try {
-        guidance = (await repairRepoAccess(github, ref)).guidance;
-      } catch (probeErr) {
-        // probe 自身の失敗は元の原因を置き換えない —— 人間が読むべきは fetch が
-        // なぜ落ちたかである
-        console.error(`[scheduler] repo access probe failed for ${workspace.name}:`, probeErr);
-      }
-    }
+    // 仲介の断りも到達失敗も `tokenRefusal` が理由の文字列に畳むので、ここは投げない
+    if (github && ref) guidance = (await repairRepoAccess(github, ref)).guidance;
     // 案内は元の原因を**置き換えず**に連結する —— なぜ落ちたか(生の git のエラー)と
     // 何をすれば直るかは別の情報で、どちらも人間の1つの question に載る
     const cause = guidance

@@ -416,8 +416,8 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
     placeMatchingOrphan(deps.workspacesBaseDir, "lagoon", upstream, "https://github.com/sinano1107/tidepool");
     // 遅い外部手順(repo-access probe)の間に registry-edit タスクがブランチを
     // checkout する — worktree は毎回その場で切るので、この移動に影響されない
-    const inner = deps.github.canReach.bind(deps.github);
-    deps.github.canReach = async (ref) => {
+    const inner = deps.github.tokenRefusal.bind(deps.github);
+    deps.github.tokenRefusal = async (ref) => {
       git(registryDir, "checkout", "-b", "task/registry-edit-1");
       return inner(ref);
     };

@@ -350,7 +350,7 @@ it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 
   expect(invocations).toContain("the login form submits cleanly");
 });
 
-it("canReach は仲介が token を出せれば null、断られたら status と error code を持つ理由を返す(ADR 0093 決定8)", async () => {
+it("tokenRefusal は仲介が token を出せれば null、断られたら status と error code を持つ理由を返す(ADR 0093 決定8)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
   authPath = dir;
   const file = join(dir, "github-token");
@@ -364,9 +364,29 @@ it("canReach は仲介が token を出せれば null、断られたら status �
   brokers.push(broker);
   const client = new GhCliClient(new GitHubAuth(file, broker.url));
 
-  expect(await client.canReach({ owner: "sinano1107", name: "tidepool" })).toBeNull();
-  const reason = await client.canReach({ owner: "sinano1107", name: "nope" });
+  expect(await client.tokenRefusal({ owner: "sinano1107", name: "tidepool" })).toBeNull();
+  const reason = await client.tokenRefusal({ owner: "sinano1107", name: "nope" });
 
   expect(reason).toContain("HTTP 404");
   expect(reason).toContain("repo_unreachable");
+});
+
+it("tokenRefusal は持っている token を答えにせず、扉のたびに仲介へ撃ち直す(再検査)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-secrets-"));
+  authPath = dir;
+  const file = join(dir, "github-token");
+  writeFileSync(file, "gho_user\n");
+  chmodSync(file, 0o600);
+  let installed = true;
+  const broker = await startFakeBroker(() =>
+    installed ? issuedToken("installation-token") : { status: 404, body: { error: "repo_unreachable" } },
+  );
+  brokers.push(broker);
+  const client = new GhCliClient(new GitHubAuth(file, broker.url));
+  const ref = { owner: "sinano1107", name: "tidepool" };
+
+  expect(await client.tokenRefusal(ref)).toBeNull();
+  installed = false; // 1 時間有効な token をキャッシュに持ったまま、App が外された
+
+  expect(await client.tokenRefusal(ref)).toContain("repo_unreachable");
 });

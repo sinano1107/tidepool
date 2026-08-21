@@ -45,10 +45,11 @@ export class GitHubAuth {
    *  code so the quarantine reason a human reads names the cause. The shape is
    *  a git network failure's, so the existing fail-closed paths (registry
    *  reachability, workspace quarantine) catch it unchanged (ADR 0093 決定7). */
-  async ensureToken(repo: string | undefined): Promise<void> {
+  async ensureToken(repo: string | undefined, { fresh = false } = {}): Promise<void> {
     if (repo === undefined) return;
     const held = this.tokens.get(repo);
-    if (held && held.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return;
+    // `fresh` は扉(ADR 0067 決定2 の再検査)用: 持っている token を答えにしない
+    if (!fresh && held && held.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) return;
     let response: Response;
     try {
       response = await fetch(new URL("/token", this.brokerUrl), {

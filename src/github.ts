@@ -109,8 +109,9 @@ export interface GitHubClient {
    *  issue (GitHub stays the sole source of truth, ADR 0016), never on the
    *  board. */
   addIssueComment(ref: IssueRef, body: string): Promise<void>;
-  /** Whether the board can reach `ref` at all (ADR 0093 決定8) — `null` means
-   *  it can: the token broker minted an installation token for that one
+  /** Why the broker refused a token for `ref`, or `null` when it minted one
+   *  (ADR 0093 決定8). `null` is CONTEXT.md's "書ける" verdict: the token
+   *  broker issued an installation token for that one
    *  repository, which it does only when the tidepool App is installed on it
    *  **and** the logged-in user can push to it (ADR 0067 決定3's "can write",
    *  now the broker's own gate). A string is why it could not, carrying the
@@ -120,7 +121,7 @@ export interface GitHubClient {
    *  unreachable, never as fatal.
    *
    *  The board's only repo-access probe, fired on failure paths alone. */
-  canReach(ref: RepoSlug): Promise<string | null>;
+  tokenRefusal(ref: RepoSlug): Promise<string | null>;
 }
 
 /** Which repository, as GitHub's own `owner/name` (ADR 0067). */
@@ -272,9 +273,11 @@ export class GhCliClient implements GitHubClient {
     });
   }
 
-  async canReach(ref: RepoSlug): Promise<string | null> {
+  async tokenRefusal(ref: RepoSlug): Promise<string | null> {
     try {
-      await this.auth.ensureToken(`${ref.owner}/${ref.name}`);
+      // 扉は再検査である: キャッシュに残る token で「書ける」と答えてはならない
+      // (install が外された直後でも 1 時間は出せたことになる)。仲介に撃ち直す。
+      await this.auth.ensureToken(`${ref.owner}/${ref.name}`, { fresh: true });
       return null;
     } catch (err) {
       // 仲介の断り(status + code)も到達失敗も同じ「まだ出せない」であり、

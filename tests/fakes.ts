@@ -300,7 +300,7 @@ export class FakeGitHubClient implements GitHubClient {
   repoAccessCalls = 0;
   private unreachable = new Map<string, string>();
 
-  async canReach(ref: RepoSlug): Promise<string | null> {
+  async tokenRefusal(ref: RepoSlug): Promise<string | null> {
     this.repoAccessCalls++;
     return this.unreachable.get(`${ref.owner}/${ref.name}`.toLowerCase()) ?? null;
   }
