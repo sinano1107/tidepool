@@ -210,6 +210,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
               spend-down{activeSpendDown.length ? ` · ${activeSpendDown.join(' + ')}` : ''}
             </span>
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {['session', 'week'].map((window) => (
             <div key={window} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 30 }}>
               <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-xs)', color: spendDown?.[window] ? 'var(--text-body)' : 'var(--text-muted)' }}>
@@ -220,6 +221,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
               </Button>
             </div>
           ))}
+          </div>
         </div>
       )}
 
