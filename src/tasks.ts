@@ -1494,6 +1494,36 @@ export function settleMergeQuestionAsObserved(
   prNumber: number,
   now: Date,
 ): void {
+  settleQuestionAsObserved(db, questionId, { kind: "pr_merge_observed", pr_number: prNumber }, now);
+}
+
+/** ADR 0092 決定3 の再発火が着地を成立させたら、同じタスクを指す PR 昇格失敗の
+ *  question はもう誰にも訊くことがない(issue #406)。開いたままにすると `retry` が
+ *  既に開いている PR へ `gh pr create` を撃ち、`abandon promotion` は「PR は無い」と
+ *  事実と逆の決定を記録する。引退は上と同じ観測決着 —— 再発火は人間の決定ではない。
+ *  再発火が二度失敗して失敗 question が積み上がっている場合もあるので、todo の行は
+ *  すべて引退させる。 */
+export function settlePrPromotionQuestionsAsObserved(db: Db, taskId: string, now: Date): void {
+  const rows = db
+    .prepare(
+      "SELECT id FROM tasks WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo'",
+    )
+    .all(taskId) as Array<{ id: string }>;
+  for (const { id } of rows) {
+    settleQuestionAsObserved(db, id, { kind: "pr_promotion_observed" }, now);
+  }
+}
+
+/** 観測決着の1つの綴り: `status='todo'` 限定の UPDATE で question を閉じ、盤面名義の
+ *  観測 event を1件だけ残す。`answerQuestion` を通さないので `question_answered` も
+ *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
+ *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。 */
+function settleQuestionAsObserved(
+  db: Db,
+  questionId: string,
+  payload: EventPayload,
+  now: Date,
+): void {
   db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
@@ -1503,7 +1533,7 @@ export function settleMergeQuestionAsObserved(
       taskId: questionId,
       workerId: BOARD_WORKER_ID,
       origin: "board",
-      payload: { kind: "pr_merge_observed", pr_number: prNumber },
+      payload,
       at: now,
     });
   })();
