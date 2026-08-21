@@ -28,6 +28,13 @@ issue #364 のグリリング(2026-08-20)で決定。友人テスト(#367)は「
    検査は3つ(無認証 401、4589 / 4590 が loopback のみ、env キーの存在)で、2本のスクリプトを追従させる負債に
    見合わない。手順が通ったかの最終判定は初回タスクの完走そのものが担う。
 
+## 改訂注記(2026-08-21、issue #364)
+
+決定4 の第1段は purely-local な `sandbox` ではなく、Settings の `create` モードで作る purely-local な
+`trial` workspace で初回タスクを完走する、と読み替える。`sandbox` は registry seed 時から README を持たない
+空コミットだけの実験台として残す。`publish` は状態遷移(ADR 0066)なので、初回タスクを終えた `trial` だけを
+第2段で空の `tidepool-trial` repo へ publish する。
+
 ## Considered options
 
 - **Mac でも setup-token を要求** — 手順が1段増え(`claude setup-token` → env に貼る)、1年後に黙って切れる形を

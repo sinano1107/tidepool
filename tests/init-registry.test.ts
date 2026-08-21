@@ -127,11 +127,12 @@ describe("npm run init-registry", () => {
     expect(registry.workspaces).toEqual({ sandbox: {} });
 
     const workspace = join(workspacesDir, "sandbox");
-    expect(existsSync(join(workspace, "README.md"))).toBe(true);
+    expect(existsSync(join(workspace, "README.md"))).toBe(false);
     expect(git(workspace, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(git(workspace, "rev-list", "--count", "HEAD")).toBe("1");
+    expect(git(workspace, "show", "--format=", "--stat")).toBe("");
     expect(result.stdout).toContain('Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".');
-    expect(result.stdout).toContain("First task example");
+    expect(result.stdout).not.toContain("First task example");
     // merge question は worker が感知できない盤面側の出来事なので completion criteria には書かない
     expect(result.stdout).not.toContain("merge question");
   });
@@ -321,7 +322,7 @@ describe("npm run init-registry", () => {
     const registry = loadRegistry(clone, "remote-backed");
     expect(Object.keys(registry.agents).sort()).toEqual(["ika", "namako"]);
     expect(registry.workspaces).toEqual({ lagoon: {} });
-    expect(existsSync(join(workspacesDir, "lagoon", "README.md"))).toBe(true);
+    expect(existsSync(join(workspacesDir, "lagoon", "README.md"))).toBe(false);
     expect(result.stdout).toContain(
       'Registry seeded with agent "ika", auditor "namako", and workspace "lagoon".',
     );
@@ -366,10 +367,10 @@ describe("npm run init-registry", () => {
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(join(root, "tidepool-workspaces", "sandbox", "README.md"))).toBe(true);
+    expect(existsSync(join(root, "tidepool-workspaces", "sandbox", "README.md"))).toBe(false);
   });
 
-  it("prints the same default config and first-task example as the Mac setup guide", async () => {
+  it("prints only boot steps, while the Mac setup guide keeps the trial on its own workspace", async () => {
     const { clone, root } = await emptyRegistryClone();
     const result = runInit(
       cleanEnv({
@@ -380,20 +381,23 @@ describe("npm run init-registry", () => {
     expect(result.status, result.stderr).toBe(0);
     const guide = readFileSync(join(ROOT, "docs", "mac-first-boot.md"), "utf8");
 
-    for (const line of [
-      'Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".',
-      "Title: Resolve the README TODO",
-      'Purpose: README.md has a TODO line asking for a one-sentence description of this workspace. Replace that line with: "A scratch workspace for trying out Tidepool."',
-      "Completion criteria: README.md contains that sentence and no longer contains the word TODO.",
-    ]) {
-      expect(result.stdout).toContain(line);
-      expect(guide).toContain(line);
-    }
+    expect(result.stdout).toContain('Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".');
+    expect(result.stdout).not.toContain("First task example");
 
     // 自分の repo を足す段(第2段)は第1段の完走の後に置く(ADR 0090 決定4 — #392 が
     // 着地したので手順としては書かれているが、init-registry の出力は第1段だけを案内する)
     expect(result.stdout).not.toContain("Add your own repository");
-    expect(guide.indexOf("## First task")).toBeLessThan(guide.indexOf("## Stage two"));
+    expect(guide.indexOf("## Create a trial workspace")).toBeLessThan(guide.indexOf("## First task"));
+    expect(guide).toContain("Mode: `create`");
+    expect(guide).toContain("Name: `trial`");
+    expect(guide).toContain("`(default workspace)` means `sandbox`");
+    expect(guide).toContain("**Workspace** to `trial`");
+    expect(guide).toContain("Title: Create the trial README");
+    expect(guide).toContain("Purpose: Create README.md with this one-sentence description:");
+    expect(guide).toContain("Completion criteria: README.md exists and contains that sentence.");
+    expect(guide).toContain('echo "required Tidepool environment is set"');
+    expect(guide).toContain("### Publish the trial");
+    expect(guide).not.toContain("Publish the sandbox");
     expect(guide.indexOf("## Stage two")).toBeLessThan(guide.indexOf("npm run github-login"));
 
     const orderedSteps = [
@@ -402,6 +406,7 @@ describe("npm run init-registry", () => {
       "git clone git@github.com:YOUR_GITHUB_LOGIN",
       "npm run init-registry",
       "npm start",
+      "## Create a trial workspace",
       "## First task",
     ];
     let previous = -1;

@@ -1,7 +1,7 @@
 # Tidepool first boot on a Mac
 
 This covers a purely-local board on your own Apple Silicon Mac, ending with your first task
-completed against the local `sandbox` workspace. Budget about 30 minutes.
+completed against a local `trial` workspace. Budget about 30 minutes.
 
 ## Prerequisites
 
@@ -100,15 +100,37 @@ lsof -nP -iTCP:4589 -iTCP:4590 -sTCP:LISTEN
 ```
 Expect both ports listening only on `127.0.0.1`.
 
+```bash
+test -n "$TIDEPOOL_REGISTRY" && \
+  test -n "$TIDEPOOL_DB" && \
+  test -n "$TIDEPOOL_WORKER_LOGS" && \
+  echo "required Tidepool environment is set"
+```
+Expect `required Tidepool environment is set`.
+
+## Create a trial workspace
+
+In the WebUI, open the **Settings** tab and add a workspace with:
+
+```text
+Mode: `create`
+Name: `trial`
+```
+
+Submit the form. This creates a fresh, purely-local Git checkout with an empty initial commit;
+it does not touch GitHub. Leave `sandbox` untouched as the blank local workspace the registry
+seeded.
+
 ## First task
 
 In the WebUI, open the **Register** tab (Source: `manual`), click **use the plain form**, fill in
-the fields below and press **Register**:
+the fields below, set **Workspace** to `trial`, and press **Register**. Leaving Workspace as
+`(default workspace)` means `sandbox`, so select `trial` explicitly:
 
 ```text
-Title: Resolve the README TODO
-Purpose: README.md has a TODO line asking for a one-sentence description of this workspace. Replace that line with: "A scratch workspace for trying out Tidepool."
-Completion criteria: README.md contains that sentence and no longer contains the word TODO.
+Title: Create the trial README
+Purpose: Create README.md with this one-sentence description: "A scratch workspace for trying out Tidepool."
+Completion criteria: README.md exists and contains that sentence.
 ```
 
 Completion criteria are what the worker checks itself, so keep them to things it can see in the
@@ -174,17 +196,18 @@ raises.
 Restart the board (`caffeinate -i -s npm start`) so it picks up the new environment file. The
 settings tab now shows "GitHub: logged in".
 
-### Publish the sandbox
+### Publish the trial
 
-In the settings tab, open the `sandbox` workspace and use **Publish** with the clone URL
+In the settings tab, open the `trial` workspace and use **Publish** with the clone URL
 `https://github.com/YOUR_GITHUB_LOGIN/tidepool-trial.git`. The board pushes every branch the
-sandbox already has — including the `task/…` branch from your first task — and records the
+trial already has — including the `task/…` branch from your first task — and records the
 repository on the workspace. If the App is not installed on the repository, the publish is
 refused with the install link and nothing lands; install and retry.
 
 ### Second task
 
-Register another task on `sandbox` the same way as the first, for example:
+Register another task on `trial` the same way as the first, selecting **Workspace** `trial`, for
+example:
 
 ```text
 Title: Add a usage section to the README

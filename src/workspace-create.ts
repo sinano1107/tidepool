@@ -561,9 +561,7 @@ function createLocalCheckout(name: string, deps: WorkspaceGitHubDeps): Workspace
   else {
     // git init creates any missing directories itself, mkdir first is redundant
     git(deps.workspacesBaseDir, "init", "-b", "main", dir);
-    writeFileSync(join(dir, "README.md"), `# ${name}\n`);
-    git(dir, "add", "-A");
-    git(dir, "commit", "-m", "initial commit");
+    git(dir, "commit", "--allow-empty", "-m", "initial commit");
   }
   return {};
 }
