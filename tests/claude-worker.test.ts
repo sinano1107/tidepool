@@ -18,11 +18,11 @@ import {
 import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
+import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
-import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
