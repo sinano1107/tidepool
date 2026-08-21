@@ -43,12 +43,8 @@ cat > ~/.tidepool/env <<'EOF'
 export TIDEPOOL_REGISTRY="$HOME/tidepool-registry"
 export TIDEPOOL_DB="$HOME/.tidepool/board.sqlite"
 export TIDEPOOL_WORKER_LOGS="$HOME/.tidepool/worker-logs"
-export TIDEPOOL_GITHUB_TOKEN_FILE="$HOME/.tidepool/github-token"
 EOF
 ```
-
-`TIDEPOOL_GITHUB_TOKEN_FILE` is the path the GitHub login below writes to — the path goes in this
-file, never the token itself.
 
 Run `source ~/.tidepool/env` in every shell that runs `init-registry` or starts the board.
 
@@ -67,24 +63,6 @@ From the Tidepool checkout, seed the empty remote and create the initial local w
 ```bash
 npm run init-registry
 ```
-
-## GitHub identity
-
-The board acts on GitHub as the `tidepool-board` GitHub App, never as you. Two steps, once:
-
-```bash
-npm run github-login
-```
-A code and a URL are printed; open the URL, enter the code, and approve. The token lands in
-`$TIDEPOOL_GITHUB_TOKEN_FILE` (mode 600). Re-run the same command if you ever revoke it.
-
-Then install the App on every repository the board will touch — **the registry repository
-included**:
-
-https://github.com/apps/tidepool-board/installations/new
-
-Choose "Only select repositories" and add `tidepool-registry` (and, later, any repository you
-register as a workspace). A repository you do not administer needs its admin to do this.
 
 With the defaults, the command confirms:
 
@@ -122,13 +100,6 @@ lsof -nP -iTCP:4589 -iTCP:4590 -sTCP:LISTEN
 ```
 Expect both ports listening only on `127.0.0.1`.
 
-```bash
-curl -s -H "Authorization: Bearer $(cat ~/.tidepool/github-token)" \
-  https://api.github.com/user/installations | grep -c tidepool-board
-```
-Expect `1` or more — the login works and the App is installed somewhere you can reach. The
-settings tab of the WebUI also shows "GitHub: logged in".
-
 ## First task
 
 In the WebUI, open the **Register** tab (Source: `manual`), click **use the plain form**, fill in
@@ -149,8 +120,88 @@ you to answer. The worker sandbox uses macOS's built-in `sandbox-exec` — nothi
 nothing is picked up, the WebUI shows why; "usage check unavailable" means the trust step above
 was skipped — redo it and restart the board.
 
-## Own repository
+## Stage two: a repository of your own
 
-Install the `tidepool-board` App on the repository (the link above), then register it as a
-workspace from the WebUI settings tab using its clone URL. The board refuses the registration
-with the install link when the App is missing or you cannot push to the repository.
+Everything above ran on a workspace that lives only on your Mac. This stage puts it on GitHub —
+**a fresh, empty repository you create for the trial**, not one you already care about. The board
+pushes as the `tidepool-board` GitHub App, never as you, and what it does to a repository is
+narrow: it writes `task/<id>` branches and opens pull requests; it never writes to `main`
+directly, and it merges only when you answer a merge question. Installing the App is per
+repository and you can remove it at any time from https://github.com/settings/installations —
+the board then stops on that workspace instead of carrying on silently.
+
+### Log the board in to GitHub
+
+Add the token path to `~/.tidepool/env` — the **path** goes in the file, never the token itself —
+and source it in every shell that starts the board:
+
+```bash
+echo 'export TIDEPOOL_GITHUB_TOKEN_FILE="$HOME/.tidepool/github-token"' >> ~/.tidepool/env
+source ~/.tidepool/env
+npm run github-login
+```
+
+A code and a URL are printed; open the URL, enter the code, and approve. The token lands in
+`$TIDEPOOL_GITHUB_TOKEN_FILE` (mode 600). Re-run the same command if you ever revoke it.
+
+### Create the trial repository and install the App on it
+
+```bash
+gh repo create YOUR_GITHUB_LOGIN/tidepool-trial --private
+```
+
+Leave it empty — no README. Then install the App on it **and on `tidepool-registry`** (the board
+reads the registry through the same identity):
+
+https://github.com/apps/tidepool-board/installations/new
+
+Choose **Only select repositories** and pick exactly those two.
+
+Restart the board (`caffeinate -i -s npm start`) so it picks up the new environment file. The
+settings tab now shows "GitHub: logged in".
+
+### Publish the sandbox
+
+In the settings tab, open the `sandbox` workspace and use **Publish** with the clone URL
+`https://github.com/YOUR_GITHUB_LOGIN/tidepool-trial.git`. The board pushes every branch the
+sandbox already has — including the `task/…` branch from your first task — and records the
+repository on the workspace. If the App is not installed on the repository, the publish is
+refused with the install link and nothing lands; install and retry.
+
+### Second task
+
+Register another task on `sandbox` the same way as the first, for example:
+
+```text
+Title: Add a usage section to the README
+Purpose: README.md describes this workspace in one sentence. Add a "Usage" section below it with two short bullet points on how to register a task.
+Completion criteria: README.md has a "Usage" heading followed by two bullet points.
+```
+
+What you should see this time: the worker finishes, a pull request opens on `tidepool-trial`
+authored by `tidepool-board[bot]`, the board asks you a merge question, and answering it merges
+the pull request. The commit's author is `tidepool` with the App's noreply address.
+
+### Checklist
+
+```bash
+gh pr list --repo YOUR_GITHUB_LOGIN/tidepool-trial --state all --json author --jq '.[].author.login'
+```
+Expect `tidepool-board`.
+
+```bash
+curl -s -H "Authorization: Bearer $(cat ~/.tidepool/github-token)" \
+  https://api.github.com/user/installations | grep -c tidepool-board
+```
+Expect `1` — the login works and the App is installed where you can reach it.
+
+## Stage three (optional): an existing repository
+
+The same mechanics apply to a repository you already work in. Install the App on it (the link
+above; a repository you do not administer needs its admin to do it), then in the settings tab add
+a workspace with **clone a repository** and its clone URL. The board refuses the registration with
+the install link when the App is missing or you cannot push to the repository.
+
+Use a dedicated clone: the board treats a workspace as its own during a task, and a checkout you
+also edit by hand will end up quarantined. Nothing else changes — task branches, pull requests,
+and a merge question you answer.
