@@ -51,6 +51,14 @@ import {
   workspaceNeedsHuman,
 } from "./workspace.js";
 
+/** ADR 0015 (2026-08-21 addendum) / issue #415: the board-language rule lives
+ *  on each board-write verb's own description, not in the worker's system
+ *  prompt — a front-loaded instruction was losing to a task's own non-English
+ *  payload by the time the worker reached these verbs. */
+export const BOARD_WRITE_LANGUAGE_RULE =
+  "Write in English even when the task's payload is in another language; " +
+  "human-authored text you quote stays in its original language.";
+
 export interface McpDeps {
   db: Db;
   slot: Slot;
@@ -532,7 +540,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "and a committed work tree — commit your changes before calling this. " +
         "resume_context is what the next session needs to pick the work back up — " +
         "do not describe landing state (push / PR / merge): the board lands the " +
-        "branch after you complete, and you cannot observe that.",
+        "branch after you complete, and you cannot observe that. " +
+        BOARD_WRITE_LANGUAGE_RULE,
       // the schema stays permissive: the handoff invariant is enforced inside
       // the verb so callers get a domain error, not a protocol error
       inputSchema: {
@@ -568,7 +577,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Record an in-authority decision as one log line and keep working. " +
-        "The line lands in the human-skimmed decision log.",
+        "The line lands in the human-skimmed decision log. " +
+        BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: { line: z.string().min(1) },
     },
     async ({ line }) =>
@@ -594,7 +604,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "reason in the decision log, queues the children at the tail, blocks the " +
         "current task until they all finish, and frees the slot. Once every child " +
         "settles, the task becomes pickable again in normal queue order to " +
-        "integrate and complete for real.",
+        "integrate and complete for real. " +
+        BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         reason: z.string().min(1),
         children: z.array(
@@ -676,7 +687,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "Escalate a decision outside your authority (or an execution dead end): " +
         "registers a question task carrying 1-4 question items (each 2-4 options plus " +
         "a recommendation) sharing one context, blocks the current task on it, and " +
-        "frees the slot. A human answers every item in one atomic submission.",
+        "frees the slot. A human answers every item in one atomic submission. " +
+        BOARD_WRITE_LANGUAGE_RULE,
       // the schema stays permissive: item-count, option-count, and
       // recommendation invariants are enforced inside the verb so callers get
       // a domain error

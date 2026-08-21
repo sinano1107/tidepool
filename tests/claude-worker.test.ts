@@ -18,6 +18,7 @@ import {
 import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
+import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
@@ -635,14 +636,15 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain("get_current_task");
   });
 
-  it("ワーカープロトコルは盤面記録を英語にし、人間ペイロードの原語引用を許す(ADR 0015 / issue #298)", async () => {
+  it("英語ルールは WORKER_PROTOCOL から移設され、system prompt には複写されない(ADR 0015 2026-08-21 追補 / issue #415)", async () => {
     const { start, calls } = await makeWorker();
     start("task-canonical-text");
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(systemPrompt).toContain(
+    expect(systemPrompt).not.toContain(
       "Write everything you put on the board — decision log lines, child task fields, handoff docs, results — in English, even when the task's payload is in another language. Human-authored text you quote stays in its original language.",
     );
+    expect(systemPrompt).not.toContain(BOARD_WRITE_LANGUAGE_RULE);
   });
 
   it("許可ドメインがある session は実効 egress とリトライ禁止を英語で伝える(ADR 0072)", async () => {
