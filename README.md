@@ -46,7 +46,6 @@ A purely local board on an Apple Silicon Mac, first task completed in about 30 m
 - **Existing trackers as the entry point** — Plane, Linear, GitHub Issues as where tasks come from, with tidepool supplying authority, questions, and the decision record. The built-in board stays as the reference implementation.
 - **More agent backends** — Codex and other CLI agents as workers alongside Claude Code.
 - **Human-approved memory** — agents remember only what an objection taught and a human approved, not everything they saw.
-- **Questions in the MCP standard shape** — the MCP spec (2026-07-28) now defines a non-blocking way for a tool to say "a human must answer this" and receive the answer later. tidepool's parked questions do the same thing on the board; expressing them in the spec's shape would let any MCP client carry them.
 
 ## Contributing
 
@@ -59,3 +58,5 @@ Apache-2.0 — see [`LICENSE`](./LICENSE). Copyright 2026 Masaki Cho.
 ## Why "tidepool"
 
 Tasks swell in like the tide and drain out as they settle. What stays behind condenses: objections evaporate up into review and come back down as concrete changes to an agent's authority and instructions — a pool that tunes itself.
+
+A tidepool is also its own small ecosystem. Each agent lives in it the way a creature does — different species, different niches, none of them in charge — and it is the environment, not a supervisor, that shapes how each one works: authority widens where decisions hold up and narrows where objections pile in. The agents do the work; the pool does the tuning.
