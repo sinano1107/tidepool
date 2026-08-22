@@ -1,16 +1,16 @@
 # Landscape: boards and orchestrators for AI agents (2026-08-22)
 
-A dated snapshot taken while writing the README (issue #437, ADR 0095). Star counts are approximate as of the date above and will drift; the axis each project sits on is the part meant to last.
+A dated snapshot taken while writing the README (issue #437, ADR 0095). Star counts and feature claims were checked against each project's own README/docs on the date above and will drift; the axis each project sits on is the part meant to last.
 
 Columns: (a) decision authority declared per agent or delegation, (b) asynchronous escalation — the agent asks, keeps working, the human answers later, (c) audit of *decisions* (not just events or transcripts), (d) read-only review with fix-forward. ✓ present, ~ partial, ✗ not documented.
 
 | Project | What it is | ★ | Lock-in | a | b | c | d |
 |---|---|---|---|---|---|---|---|
 | [Paperclip](https://github.com/paperclipai/paperclip) | Control plane for a "company of agents": org chart, budgets, heartbeats, approval gates | 79k | none (Claude, Codex, Cursor, Gemini, …) | ✓ action-level approval policies | ~ approval inbox (approves actions, not Q&A) | ✓ "every decision explained" | ✓ |
-| [Ruflo](https://github.com/ruvnet/ruflo) (ex-claude-flow) | Execution harness + memory layer; `swarm_init` runs agents immediately; no board | 69k | Claude Code-centric | ✗ | ✗ | ✗ | ~ |
-| [Plane](https://github.com/makeplane/plane) | Linear/Jira alternative; agent-as-assignee, Agent Runs with `awaiting`/elicitation, REST + webhooks + MCP (runs in Beta, AGPL-3.0) | 57k | none | ~ OAuth scopes only | ✓ | ~ activity feed | ✓ |
+| [Ruflo](https://github.com/ruvnet/ruflo) (ex-claude-flow) | Execution harness + memory layer for Claude Code / Codex; swarms run inside your session; no board or queue | 69k | Claude Code / Codex | ✗ | ✗ | ✗ | ~ |
+| [Plane](https://github.com/makeplane/plane) | Linear/Jira alternative; agents invoked by @mention on a work item, Agent Runs with `awaiting`/elicitation, REST + webhooks + MCP (runs in Beta, AGPL-3.0) | 57k | none | ~ OAuth scopes only | ✓ | ~ activity feed | ✓ |
 | [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | Web kanban + worktrees + inline diff comments (community-maintained since 2026-04) | 28k | none (10+) | ✗ | ✗ | ✗ | ✓ |
-| [Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) | Desktop IDE; columns derived from git/CI/review facts | 9.7k | none (26) | ✗ | ~ "needs attention" column | ✗ | ✓ |
+| [Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) | Desktop workspace; columns derived from session/PR/CI/review facts | 9.7k | none (26) | ✗ | ~ "Needs you" column | ✗ | ✓ |
 | [ccpm](https://github.com/automazeio/ccpm) | PRD → epic → GitHub issues, parallel worktrees | 8.3k | none | ✗ | ✗ | ~ | ~ |
 | [Emdash](https://github.com/generalaction/emdash) | Desktop agentic environment with Linear/Jira intake | 5.5k | none (34) | ✗ | ✗ | ✗ | ✓ |
 | [Bernstein](https://github.com/sipyourdrink-ltd/bernstein) | Deterministic (no-LLM) scheduler; HMAC-chained audit receipts | 950 | none (49) | ✗ | ✗ | ✓ of events, not decisions | ~ |
@@ -19,7 +19,7 @@ Columns: (a) decision authority declared per agent or delegation, (b) asynchrono
 | [5dive](https://github.com/5dive-ai/5dive) | Agents as Linux users; Telegram tap-to-answer | new | none | ~ OS isolation tiers (capability, not decision) | ✓ | ✗ | ✗ |
 | Claude Code Agent Teams | Lead + teammates with a shared task list | — | Claude Code | ~ per-teammate permission mode cannot be set at spawn; lead approves plans autonomously | ✗ synchronous | ✗ | ~ |
 | [Superpowers](https://github.com/obra/superpowers) | Methodology-as-skills: brainstorm → plan → subagent implementation → two-stage review | 276k | none | ~ sign-off checkpoints | ✗ | ✗ | ✓ |
-| Linear for Agents / Jira Rovo / Copilot coding agent | Agents as assignees inside an existing tracker | — | — | scopes + free-text instructions | ✓ elicitation / approval step (Copilot: draft PR only) | ✗ | ✓ |
+| Linear for Agents (and other tracker-native agents) | Agents delegated to inside an existing tracker | — | — | OAuth scopes + free-text instructions | ✓ elicitation activity | ✗ | ✓ |
 
 ## Reading
 
