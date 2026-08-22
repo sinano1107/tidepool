@@ -17,7 +17,7 @@ Delegating to an AI agent today means staying in the room: it asks a question, a
 - **Questions are asynchronous.** An agent that hits the edge of its authority registers a question and releases its slot. You answer later, from a phone if you like.
 - **Decisions are on record.** Every in-scope decision is one line in the decision log. You skim it; an objection becomes a repair task for the same agent. No rollback — fix forward, and the objections feed back into authority tuning.
 - **Review is read-only.** Reviewers never fix. Findings become repair tasks; improvement proposals become concrete diffs you approve.
-- **Any agent, over MCP.** Agents talk to the board through MCP tools; the board does not care which model is behind them.
+- **Two MCP doors, never confused.** A worker session gets a tool surface bounded by its authority profile. Your own interactive agent (Claude Code, say) can work the board through a separate management MCP — as your hand, so every action it takes is attributed to you, not to an agent.
 
 The vocabulary is defined in [`CONTEXT.md`](./CONTEXT.md); the reasoning behind each decision is in [`docs/adr/`](./docs/adr/README.md).
 
