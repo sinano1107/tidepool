@@ -445,6 +445,10 @@ handoff は PR 昇格(盤面の push → PR 作成)より前に worker が書き
 - サーバー再起動を跨いで維持される(再起動での消滅は、再起動を伴う環境作業という主用途と矛盾する)
 - pause は盤面全体の停止としてキューの読み口が1回で答える — 行の `skipped` には現れない(ADR 0068、Status 参照)
 
+## v1 / 0.x
+
+記録(ADR・本ファイル・context-vault)の「v1」は**最初の完成形として出荷する範囲**を指す語であり、公開面のバージョンではない。公開面(README、package version)では正式リリース前の **0.x** と呼ぶ — v1 は 0.x が向かう先である(2026-08-22 の grilling、issue #437 / ADR 0095)。
+
 ## Swell / Condensation
 
 Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。ADR 0083 でループの形が定まった: 学習の入力は異議(完了エントリへの異議を含む)だけで、正の信号は Displayed(表示済み・異議なし)から機械導出する。異議ごとに fix-forward RCA が Memory の Behavior candidate を書き、周期(盤面設定、既定は週次)の meta-review が candidate 群の繰り返しを**判断で**見て approved 提案を起草し、人間承認 question で確定する — 数値閾値は使わない。人間の明示指示は1回で候補化してよいが承認 question は経由する。authority の変更は従来どおり registry への diff。
