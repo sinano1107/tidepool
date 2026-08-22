@@ -44,6 +44,7 @@ A purely local board on an Apple Silicon Mac, first task completed in about 30 m
 ## Roadmap
 
 - **Existing trackers as the entry point** — Plane, Linear, GitHub Issues as where tasks come from, with tidepool supplying authority, questions, and the decision record. The built-in board stays as the reference implementation.
+- **More agent backends** — Codex and other CLI agents as workers alongside Claude Code; the board already speaks only MCP to them.
 - **Human-approved memory** — agents remember only what an objection taught and a human approved, not everything they saw.
 - **MCP human-in-the-loop standard** — align the board's questions with the non-blocking pattern in the MCP spec.
 
