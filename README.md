@@ -26,7 +26,7 @@ The vocabulary is defined in [`CONTEXT.md`](./CONTEXT.md); the reasoning behind 
 Dated comparison table: [`docs/landscape-2026-08.md`](./docs/landscape-2026-08.md).
 
 - **Paperclip** lets agents run a company — org chart, budgets, action-level approval policies. tidepool keeps the human at the helm: authority is declared per delegation, and the record is what you steer by.
-- **Vibe Kanban, Plane, Linear, and the kanban-for-agents tools** surface an agent's permission prompt as a column; the session waits. tidepool parks the question and lets the agent keep working.
+- **Vibe Kanban, Plane, Linear, and the kanban-for-agents tools** put a card in a "waiting for you" column when an agent needs an answer — and that agent sits idle until you get to it. In tidepool the question becomes its own task, the agent that asked it is released to pick up other work, and the answer is applied when the parent resumes. Waiting costs you nothing and the agent nothing.
 - **Ruflo** and swarm orchestrators accelerate a session you are sitting in. tidepool is for work you hand over and walk away from.
 
 ## Status
