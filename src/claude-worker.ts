@@ -652,6 +652,19 @@ export function boardCallEnvWithoutThinking(): NodeJS.ProcessEnv {
  *  value ADR 0041's `work` = 90分 reasons against. */
 const STREAM_IDLE_TIMEOUT_MS = 600_000;
 
+/** The provider-routing triple one worker spawn carries (ADR 0097 決定4 /
+ *  issue #445): which provider the session speaks, the model pinned in that
+ *  provider's own notation (ADR 0005), and — moonshot only — the credential
+ *  read from the key file. Derived **once per pickup** in `start()` and
+ *  carried to `launch()` and `workerSpawnEnv` as one value: the provider
+ *  cast, the default-model fallback, and the key read each have exactly one
+ *  spelling, so the spawn path consumes them rather than re-deriving any. */
+export interface ProviderRouting {
+  provider: Provider;
+  model: string;
+  moonshotApiKey: string | undefined;
+}
+
 /** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
  *  identity vars. Two **independent** concerns, deliberately not named for the
  *  advisor as a whole — only the first is advisor-scoped:
@@ -694,9 +707,8 @@ const STREAM_IDLE_TIMEOUT_MS = 600_000;
  *  is pinned: effort mapping and context-window knobs are #447's measurements,
  *  not guesses to bake in here. */
 export function workerSpawnEnv(
-  provider: Provider,
   advisor: string | undefined,
-  routing: { model: string; moonshotApiKey?: string },
+  routing: ProviderRouting,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -705,7 +717,7 @@ export function workerSpawnEnv(
   };
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
-  if (provider === "moonshot") {
+  if (routing.provider === "moonshot") {
     if (routing.moonshotApiKey === undefined) {
       // start() resolves the key before launch and refuses the pickup without
       // one — reaching this branch keyless is an adapter bug, not an
@@ -1706,16 +1718,25 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     );
     if (!agent) return;
     assertKnownEffort(agent.definition);
-    // ADR 0097 決定4 / issue #445: the Moonshot key is read here — once per
-    // pickup, synchronously, before the async skill-enumeration branch below
-    // could strand a missing-key failure inside a promise. Its absence refuses
-    // the pickup (MoonshotApiKeyMissingError, a failed start) rather than
-    // spawning a worker that can only 401.
+    // ADR 0097 決定4 / issue #445: the provider routing is derived once, here
+    // — registry 側が resolveExecutionAgent で検証済み(ADR 0097 決定1)なので、
+    // provider の値は PROVIDER_VALUES に閉じており、値が意味するもの(URL・env
+    // 名)はアダプタの定数側(ADR 0005)。The Moonshot key read is synchronous
+    // and happens before the async skill-enumeration branch below could strand
+    // a missing-key failure inside a promise; its absence refuses the pickup
+    // (MoonshotApiKeyMissingError, a failed start) rather than spawning a
+    // worker that can only 401.
     const provider = agent.definition.provider as Provider;
-    const moonshotApiKey =
-      provider === "moonshot"
-        ? readMoonshotApiKey(resolveMoonshotApiKeyFile(this.options.moonshotApiKeyFile))
-        : undefined;
+    const routing: ProviderRouting = {
+      provider,
+      // ADR 0005's pinning rule, spelled in the provider's own model notation —
+      // "sonnet" means nothing to the Moonshot endpoint (model-not-found)
+      model: agent.definition.model ?? PROVIDER_DEFAULT_MODEL[provider],
+      moonshotApiKey:
+        provider === "moonshot"
+          ? readMoonshotApiKey(resolveMoonshotApiKeyFile(this.options.moonshotApiKeyFile))
+          : undefined,
+    };
     // ADR 0025: skill access is the agent's frontmatter allowlist, enforced
     // here as the complement deny of the CLI-enumerated full set. The two
     // ping-free shapes launch synchronously (nothing changes for the
@@ -1732,7 +1753,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // nothing is denied, so ADR 0033's sandbox may open the skill roots
         // wholesale — there is no allowlist for a `cat` to route around
         permittedSkills: "all",
-      }, moonshotApiKey);
+      }, routing);
       return;
     }
     if (skills.length === 0) {
@@ -1740,7 +1761,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         deny: [],
         disableSlashCommands: true,
         permittedSkills: [],
-      }, moonshotApiKey);
+      }, routing);
       return;
     }
     void this.enumerateSkills(workspace.path).then((enumerated) => {
@@ -1775,7 +1796,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         deny,
         disableSlashCommands: false,
         permittedSkills,
-      }, moonshotApiKey);
+      }, routing);
     });
   }
 
@@ -1786,9 +1807,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  (folded into --disallowedTools alongside the always-present Workflow ban)
    *  and whether to --disable-slash-commands (the empty-allowlist shape), plus
    *  the permitted-skill set ADR 0033's sandbox re-allows for reading.
-   *  `moonshotApiKey` is the credential start() resolved for a
-   *  `provider: moonshot` agent (undefined for anthropic) — carried, never
-   *  re-read here, so the key is read exactly once per pickup. */
+   *  `routing` is the provider routing start() derived once for this pickup —
+   *  carried, never re-derived here, so the key is read and the model fallback
+   *  is spelled exactly once per pickup. */
   private launch(
     task: Task,
     workspace: WorkspaceConfig,
@@ -1799,7 +1820,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       disableSlashCommands: boolean;
       permittedSkills: string[] | "all";
     },
-    moonshotApiKey: string | undefined,
+    routing: ProviderRouting,
   ): void {
     const { definition, profile } = agent;
     const authorityProfile = task.type === "review" ? REVIEWER_AUTHORITY_PROFILE : profile;
@@ -1867,13 +1888,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // than sitting beside it — "no advisor this session" then has a single
     // spelling in the flags, in the env, and in worker_spawned.
     const advisor = this.options.advisorDisabled === true ? undefined : definition.advisor;
-    // registry 側が resolveExecutionAgent で検証済み(ADR 0097 決定1)なので、ここに
-    // 来る値は PROVIDER_VALUES に閉じている — 値が意味するもの(URL・env 名)は
-    // アダプタの定数側(ADR 0005)。
-    const provider = definition.provider as Provider;
-    // ADR 0005's pinning rule, spelled in the provider's own model notation —
-    // "sonnet" means nothing to the Moonshot endpoint (model-not-found).
-    const model = definition.model ?? PROVIDER_DEFAULT_MODEL[provider];
     const child = this.spawn(
       "claude",
       [
@@ -1949,7 +1963,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).
         ...(enforcement.disableSlashCommands ? ["--disable-slash-commands"] : []),
-        ...pinnedModelFlags(model, definition.effort ?? "medium"),
+        ...pinnedModelFlags(routing.model, definition.effort ?? "medium"),
         // issue #33: spelled here and not inside pinnedModelFlags — that helper
         // is shared with the board's own draft/translation CLI calls, which must
         // never acquire an advisor. Absence is not spelled by omission; see
@@ -1984,7 +1998,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // overlay — a spread on top of it could not have removed a key. The git
         // identity carries no key it touches, so layering it after is safe.
         env: {
-          ...workerSpawnEnv(provider, advisor, { model, moonshotApiKey }),
+          ...workerSpawnEnv(advisor, routing),
           ...agentGitIdentityEnv(agent.name),
         },
       },
