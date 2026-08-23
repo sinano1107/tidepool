@@ -23,7 +23,7 @@ ADR 0048 が abandon カスケードのために切る集合(分解判断に乗�
 
 ## Status(ステータス)
 
-`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)— タスク自身にもキュー順序にも問題はないが、**その行に固有の資源単位の事情**(実行 workspace / agent の quarantine、fable 線の超過)が今は slot に入れさせないことを示す。盤面全体の停止(トリアージセッション・Pause・throttle の全体線・封じ込め能力・レジストリ到達性)は行の性質ではないため行には現れず、キューの読み口が停止の列挙として1回で答える(盤面全体の停止 参照、ADR 0068 — 旧・skipped に盤面側全体の事情を含める線は改訂)。`held` もステータスではなく導出される表示状態(Held 参照)。
+`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)— タスク自身にもキュー順序にも問題はないが、**その行に固有の資源単位の事情**(実行 workspace / agent の quarantine、agent の喋る provider の動力の認証の quarantine、fable 線の超過)が今は slot に入れさせないことを示す。盤面全体の停止(トリアージセッション・Pause・throttle の全体線・封じ込め能力・レジストリ到達性)は行の性質ではないため行には現れず、キューの読み口が停止の列挙として1回で答える(盤面全体の停止 参照、ADR 0068 — 旧・skipped に盤面側全体の事情を含める線は改訂)。`held` もステータスではなく導出される表示状態(Held 参照)。
 
 ## Settled(決着)
 
