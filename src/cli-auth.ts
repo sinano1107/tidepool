@@ -131,7 +131,7 @@ export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Da
 /** The open Confirmation question is the durable half of a provider-scoped
  *  authentication quarantine — same "1 resource, at most 1 open question"
  *  dedup as the board-wide one above. */
-export function openProviderAuthQuestion(db: Db, provider: Provider): { id: string } | undefined {
+function openProviderAuthQuestion(db: Db, provider: Provider): { id: string } | undefined {
   return db
     .prepare(
       `SELECT id FROM tasks

@@ -56,6 +56,7 @@ import {
   DeletionConfirmationRequiredError,
 } from "./registry-write.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { pickupExcludedAssignees } from "./scheduler.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
@@ -506,6 +507,11 @@ export interface ApiRouterDeps {
    *  a provider-auth Confirmation answer (the resource-scoped sibling of
    *  `cliAuth` above — the board's own provider stays on `cliAuth`). */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
+  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
+   *  the given providers — the pickup exclusion set the queue view's `skipped`
+   *  display shares with the scheduler's gate. Absent → no registry configured,
+   *  so no provider quarantine skips anything. */
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -615,6 +621,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     githubTokenFile,
     translationClient,
     fableAgents,
+    agentsSpeakingProviders,
     isProtectedWorkspace,
     boardState,
   } = deps;
@@ -622,11 +629,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.use(json());
   // one cache per router = per process (the API is booted once per board)
   const issueContent = new IssueContentCache();
-  /** fable 線の超過中だけ渡す除外集合(ADR 0030)。pickup の述語(`nextSlotTask`)と
+  /** 資源単位の skip(fable 線 ADR 0030・provider 認証の quarantine ADR 0097
+   *  決定2)で候補から外れる assignee の集合。pickup の述語(`nextSlotTask`)と
    *  キュービューの skipped 表示は同じ集合を見なければならない(tasks.ts の
    *  「乖離させない」の線) — 述語だけでなく、そこへ渡す引数も1つの式から出す。 */
-  const fableExcludedAssignees = () =>
-    isFablePickupBlocked(db, clock.now()) && fableAgents ? fableAgents() : undefined;
+  const excludedAssignees = () =>
+    pickupExcludedAssignees(db, isFablePickupBlocked(db, clock.now()), fableAgents, agentsSpeakingProviders);
 
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
@@ -1184,7 +1192,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       workspace?.name,
       defaultAgentName,
       auditorName,
-      fableExcludedAssignees(),
+      excludedAssignees(),
     )?.id;
     const moved = moveTask(db, task, after, clock.now());
     // "run now" is specifically a todo already at the pickable head, moved to
@@ -1815,9 +1823,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json({
       halts: boardHalts(db, throttleRevalidating),
       tasks: await presentLive(
-        // fable 線の超過中は fable モデルのタスクだけが skipped に見える
-        // (ADR 0030) — 資源単位の絞りなので行に現れる
-        listQueue(db, workspace?.name, defaultAgentName, auditorName, fableExcludedAssignees()),
+        // 資源単位の skip(fable 線 ADR 0030・provider 認証の quarantine ADR
+        // 0097 決定2)に該当するタスクだけが skipped に見える — 盤面全体の停止は
+        // 行に現れず、上の halts が一度に答える
+        listQueue(db, workspace?.name, defaultAgentName, auditorName, excludedAssignees()),
       ),
     });
   });

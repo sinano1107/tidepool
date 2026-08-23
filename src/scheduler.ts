@@ -41,6 +41,31 @@ import {
 
 export const HOURLY = 60 * 60 * 1000;
 
+/** ADR 0097 決定2 / issue #446: the one expression every reader of the pickup
+ *  candidate set shares — fable-line exclusions (ADR 0030) plus the agents
+ *  speaking an auth-quarantined provider — so the scheduler's gate, the queue
+ *  view's `skipped` display, and the move route's pickable-head check can never
+ *  drift apart (tasks.ts の「乖離させない」の線 — 述語だけでなく、そこへ渡す
+ *  引数も1つの式から出す)。`fableBlocked` stays the caller's own derivation
+ *  (the scheduler passes its just-observed decision, the views the stored
+ *  gate) — only the composition is shared. Empty normalizes to `undefined`,
+ *  nextSlotTask's "no exclusion" spelling. */
+export function pickupExcludedAssignees(
+  db: Db,
+  fableBlocked: boolean,
+  fableAgents?: () => string[],
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
+): string[] | undefined {
+  const fable = fableBlocked && fableAgents ? fableAgents() : [];
+  const quarantinedProviders = quarantinedAuthProviders(db);
+  const providerExcluded =
+    quarantinedProviders.length > 0 && agentsSpeakingProviders
+      ? agentsSpeakingProviders(quarantinedProviders)
+      : [];
+  const all = [...fable, ...providerExcluded];
+  return all.length > 0 ? all : undefined;
+}
+
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
  *  check every time there is a candidate, never a background poll. Persists
  *  the observation as a side effect so /api/queue reflects it immediately.
@@ -385,24 +410,21 @@ export function startScheduler(deps: {
         return;
       }
       // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
-      // 外す — Quarantine と同じ「資源単位の停止」。
+      // 外す — Quarantine と同じ「資源単位の停止」。認証が失効した provider を
+      // 喋る agent のタスクも同じ資源単位の skip で外れる(ADR 0097 決定2 /
+      // issue #446) — 集合の合成は読み口と共有する1つの式に集約してある。
       const fableWindow = decision.windows.fable;
-      const fableExcluded = fableWindow?.throttled && fableAgents ? fableAgents() : [];
-      // ADR 0097 決定2 / issue #446: 認証が失効した provider を喋る agent の
-      // タスクだけを候補から外す — fable 線と同じ資源単位の skip で、他の
-      // provider のタスクは流れ続ける。
-      const quarantinedProviders = quarantinedAuthProviders(db);
-      const providerExcluded =
-        quarantinedProviders.length > 0 && agentsSpeakingProviders
-          ? agentsSpeakingProviders(quarantinedProviders)
-          : [];
-      const excludedAssignees = [...fableExcluded, ...providerExcluded];
       const head = nextSlotTask(
         db,
         workspace?.name,
         worker.id,
         auditorName,
-        excludedAssignees.length > 0 ? excludedAssignees : undefined,
+        pickupExcludedAssignees(
+          db,
+          fableWindow?.throttled ?? false,
+          fableAgents,
+          agentsSpeakingProviders,
+        ),
       );
       if (!head) {
         // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃

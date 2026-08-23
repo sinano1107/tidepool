@@ -27,9 +27,9 @@ it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthrop
   const claude = await registerWork(t, "claude task still flows", undefined, undefined, "deckhand");
 
   // 即時 poll を撃つ(FakeClock の hourly tick は進まない)。move の発火条件は
-  // 「既に候補の先頭に居る行をもう一度先頭へ」(issue #299)なので、素の先頭の
-  // kimi 側を動かす — cli-auth-pickup と同じ手。
-  await api(t.baseUrl, "POST", `/api/tasks/${kimi.id}/move`, { after: null });
+  // 「既に候補の先頭に居る行をもう一度先頭へ」(issue #299) — 候補の先頭は
+  // quarantine で skip された kimi ではなく claude 側なので、こちらを動かす。
+  await api(t.baseUrl, "POST", `/api/tasks/${claude.id}/move`, { after: null });
 
   await vi.waitFor(() => expect(t.worker.started.map((started) => started.id)).toEqual([claude.id]));
 
@@ -46,6 +46,15 @@ it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthrop
     // 資源単位の停止は盤面全体の停止の列挙に入らない(ADR 0058 決定1)
     halts: [],
   });
+
+  // キュービューは pickup の述語と同じ集合を見る(tasks.ts の「乖離させない」の線):
+  // quarantine 中の provider のタスクだけが skipped 表示になる(claude 側は既に
+  // pickup されて in_progress)
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json as { tasks: any[] };
+  expect({
+    kimi: queue.tasks.find((row) => row.id === kimi.id)?.status,
+    claude: queue.tasks.find((row) => row.id === claude.id)?.status,
+  }).toEqual({ kimi: "skipped", claude: "in_progress" });
 });
 
 it("moonshot の確認回答は provider の再検証が通るまで受理されず、通れば moonshot agent の pickup が再開する", async () => {

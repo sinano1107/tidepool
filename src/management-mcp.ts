@@ -40,6 +40,7 @@ import {
   type RegistryReachabilityCheck,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
+import { pickupExcludedAssignees } from "./scheduler.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   cancelTaskDirectly,
@@ -89,6 +90,10 @@ export interface ManagementMcpDeps {
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
+  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
+   *  the given providers — the pickup exclusion set `list_queue`'s `skipped`
+   *  display shares with the scheduler's gate. */
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
   /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
    *  盤面では未注入で、その場合 throttle の再観測中は現れない。 */
   throttleRevalidating?: () => boolean;
@@ -222,7 +227,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         deps.workspace?.name,
         deps.defaultAgentName,
         deps.auditorName,
-        isFablePickupBlocked(deps.db, deps.clock.now()) && deps.fableAgents ? deps.fableAgents() : undefined,
+        pickupExcludedAssignees(
+          deps.db,
+          isFablePickupBlocked(deps.db, deps.clock.now()),
+          deps.fableAgents,
+          deps.agentsSpeakingProviders,
+        ),
       ),
     }),
   );

@@ -2418,7 +2418,8 @@ export function listBoard(
 
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
  *  frozen by **a reason of its own** — its execution workspace or agent under
- *  quarantine (issue #26 / ADR 0012), or the fable line (ADR 0030). Board-wide
+ *  quarantine (issue #26 / ADR 0012), its agent's provider under authentication
+ *  quarantine (ADR 0097 決定2), or the fable line (ADR 0030). Board-wide
  *  halts are not row properties and never reach here: the queue read's
  *  envelope answers them once with `boardHalts` (ADR 0068 決定4). `skipped` is
  *  display-only and queue-view-only (CONTEXT.md's Quarantine) — it never
@@ -2447,9 +2448,12 @@ export function listQueue(
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
   auditorName?: string,
-  /** fable 線の超過中の fable モデル agent 名 (ADR 0030) — 該当タスクだけが
-   *  skipped 表示になる(盤面全体の throttled とは独立)。 */
-  fableSkippedAssignees?: string[],
+  /** 資源単位の skip で候補から外れる assignee 名 — fable 線 (ADR 0030) と
+   *  provider 認証の quarantine (ADR 0097 決定2) の合成集合。`nextSlotTask` の
+   *  `excludedAssignees` と同じ1つの式(scheduler.ts の
+   *  `pickupExcludedAssignees`)から渡す。該当タスクだけが skipped 表示になる
+   *  (盤面全体の throttled とは独立)。 */
+  skippedAssignees?: string[],
 ): BoardTask[] {
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   const rows = boardRows(
@@ -2457,9 +2461,9 @@ export function listQueue(
     `WHEN status = 'todo' AND type <> 'question' AND (
        (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
          OR (${fallback} IS NOT NULL AND ${agentQuarantinedSql("tasks.assignee", fallback)})
-         OR (@fableSkippedAssignees IS NOT NULL
+         OR (@skippedAssignees IS NOT NULL
            AND COALESCE(tasks.assignee, ${fallback}) IN (
-             SELECT value FROM json_each(@fableSkippedAssignees)))
+             SELECT value FROM json_each(@skippedAssignees)))
      ) THEN 'skipped'`,
     [
       defaultWorkspaceName ?? null,
@@ -2467,7 +2471,7 @@ export function listQueue(
       {
         defaultAgentName: defaultAgentName ?? null,
         auditorName: auditorName ?? null,
-        fableSkippedAssignees: fableSkippedAssignees ? JSON.stringify(fableSkippedAssignees) : null,
+        skippedAssignees: skippedAssignees ? JSON.stringify(skippedAssignees) : null,
       },
     ],
   );
