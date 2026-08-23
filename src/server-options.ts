@@ -30,8 +30,9 @@ import {
   updateProfile,
 } from "./profile-create.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
-import { 
-  type AuthorityProfile,InvalidAgentProviderError, 
+import {
+  type AuthorityProfile,
+  InvalidAgentProviderError,
   loadRegistry,
   ownEntry,
   type RegistryCandidates,
@@ -39,7 +40,8 @@ import {
   type RegistryReachability,
   type RegistrySource,
   type RosterAgent,
-  refreshRegistry,} from "./registry.js";
+  refreshRegistry,
+} from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
@@ -356,7 +358,8 @@ function fableAgentsResolver(board: BoardComposition): (() => string[]) | undefi
  *  delegation-aware successor to a single board-wide fixed profile, which
  *  every task shared regardless of who it was actually assigned to. An
  *  assignee the registry no longer knows (drift since the owning task's own
- *  session spawned) falls back to unrestricted here rather than throwing —
+ *  session spawned) or whose definition no longer stands (InvalidAgentProviderError,
+ *  ADR 0097) falls back to unrestricted here rather than throwing —
  *  the spawn-time gate (ClaudeCodeWorker.start) is what quarantines that.
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
 function authorityResolver(
@@ -368,9 +371,6 @@ function authorityResolver(
     try {
       return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee).profile;
     } catch (err) {
-      // UnknownAgentError — registry drift; InvalidAgentProviderError — a
-      // definition that no longer stands (ADR 0097). Both fall back to
-      // unrestricted here: the spawn-time gate is what quarantines them.
       if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentProviderError)) {
         throw err;
       }
