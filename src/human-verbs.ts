@@ -1,6 +1,6 @@
 import { verifyAgentRepaired } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
+import { type CliAuthCheck, quarantineCliAuthFailure, quarantinedAuthProviders } from "./cli-auth.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -305,16 +305,27 @@ function resolveWorkspaceForAnswer(
   }
 }
 
-/** Shared human-surface defaults for direct cancel's quarantine-question gate. */
+/** Shared human-surface defaults for direct cancel's quarantine-question gate.
+ *  The provider-auth half (ADR 0097 決定2 / issue #446) resolves the open
+ *  provider quarantines from the db and maps them to agent names through the
+ *  caller's registry seam — computed here once so the WebUI and MCP cancel
+ *  routes can't drift apart. */
 export function humanCancelDefaults(
+  db: Db,
   workspace: WorkspaceConfig | undefined,
   defaultAgentName: string | undefined,
   auditorName: string | undefined,
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
 ): CancelDefaults {
+  const quarantinedProviders = quarantinedAuthProviders(db);
   return {
     defaultWorkspaceName: workspace?.name,
     defaultAgentName,
     auditorName,
+    providerAuthQuarantinedAgents:
+      quarantinedProviders.length > 0 && agentsSpeakingProviders
+        ? agentsSpeakingProviders(quarantinedProviders)
+        : undefined,
   };
 }
 

@@ -29,6 +29,9 @@ describe("quarantineCliAuthForProvider(issue #446 / ADR 0097 決定2)", () => {
     expect(question?.question_quarantine_provider_auth).toBe("moonshot");
     expect(question?.question_items?.[0]?.options).toEqual(["authentication restored"]);
     expect(question?.question_items?.[0]?.recommendation).toBe("authentication restored");
+    // 修理案内は provider ごとの網羅マップから来る — moonshot にはキーファイルの案内
+    expect(question?.purpose).toContain("`~/.tidepool/moonshot-api-key`");
+    expect(question?.purpose).toContain("TIDEPOOL_MOONSHOT_API_KEY_FILE");
     // 資源単位の停止は盤面全体の停止の列挙に入らない(ADR 0058 決定1)
     expect(openCliAuthQuestion(db)).toBeUndefined();
     expect(boardHalts(db)).toEqual([]);

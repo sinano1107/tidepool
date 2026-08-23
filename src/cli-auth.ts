@@ -155,7 +155,25 @@ export function quarantinedAuthProviders(db: Db): Provider[] {
   ).map((row) => row.provider);
 }
 
-function quarantineProviderAuth(db: Db, provider: Provider, now: Date): void {
+/** The restore-the-credential guidance each provider-scoped auth quarantine
+ *  question carries. Keyed by an **exhaustive** Record over the non-board
+ *  providers: a new `PROVIDER_VALUES` entry is a compile error here until its
+ *  guidance is written — a third provider can never ship a question whose
+ *  repair steps name Moonshot's key file by mistake. Anthropic has no entry
+ *  because it never reaches `quarantineProviderAuth` (its failure routes to
+ *  the board-wide halt in `quarantineCliAuthForProvider`). */
+const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Exclude<Provider, "anthropic">, string> = {
+  moonshot:
+    "Place a valid Moonshot Platform API key in the board's key file " +
+    "(`~/.tidepool/moonshot-api-key`, or the path `TIDEPOOL_MOONSHOT_API_KEY_FILE` " +
+    "points at), mode 600.",
+};
+
+function quarantineProviderAuth(
+  db: Db,
+  provider: Exclude<Provider, "anthropic">,
+  now: Date,
+): void {
   if (openProviderAuthQuestion(db, provider)) return;
   registerTask(
     db,
@@ -167,9 +185,7 @@ function quarantineProviderAuth(db: Db, provider: Provider, now: Date): void {
         `provider, so the board has stopped pickup of the agents declared with ` +
         `\`provider: ${provider}\`. Workers and board calls on other providers are unaffected. ` +
         "Restore the credential:\n\n" +
-        "1. Place a valid Moonshot Platform API key in the board's key file " +
-        "(`~/.tidepool/moonshot-api-key`, or the path `TIDEPOOL_MOONSHOT_API_KEY_FILE` " +
-        "points at), mode 600.\n" +
+        `1. ${PROVIDER_AUTH_REPAIR_GUIDANCE[provider]}\n` +
         "2. Return to this question and answer it.\n\n" +
         "The board checks authentication again before accepting the answer and resumes " +
         "pickup only after the check succeeds.",

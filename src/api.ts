@@ -1277,7 +1277,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         task,
         parsed.data.reason ?? null,
         clock.now(),
-        humanCancelDefaults(workspace, defaultAgentName, auditorName),
+        humanCancelDefaults(db, workspace, defaultAgentName, auditorName, agentsSpeakingProviders),
         "webui",
       );
       // cancelling can unblock the target's parent (its last unsettled child is

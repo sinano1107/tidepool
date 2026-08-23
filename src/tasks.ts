@@ -964,6 +964,13 @@ export interface CancelDefaults {
   defaultWorkspaceName?: string;
   defaultAgentName?: string;
   auditorName?: string;
+  /** ADR 0097 決定2 / issue #446: the names of the agents speaking a provider
+   *  whose authentication quarantine is currently open — the gate's third
+   *  resource kind. The agent→provider mapping is registry knowledge the SQL
+   *  can't see, so the caller computes the list fresh (same shape as the
+   *  pickup gate's `excludedAssignees`). Absent → no provider quarantine gates
+   *  any cancel. */
+  providerAuthQuarantinedAgents?: string[];
 }
 
 /** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
@@ -977,7 +984,10 @@ export interface CancelDefaults {
  *     strand the question. PR-promotion failures are excluded: their target
  *     is already done and they carry no cancel option.
  *   - a **quarantine Confirmation** whose resource is used by a subtree task,
- *     marked by `question_quarantine_workspace` or `_agent`. */
+ *     marked by `question_quarantine_workspace`, `_agent`, or — the
+ *     provider-scoped kind (ADR 0097 決定2 / issue #446) —
+ *     `_provider_auth`, matched through the names of the agents speaking
+ *     that provider. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
   const subtree = subtreeSql("@root");
   const failure = db
@@ -1005,7 +1015,11 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
          AND ((q.question_quarantine_workspace IS NOT NULL
                AND q.question_quarantine_workspace = COALESCE(x.workspace, @defaultWorkspaceName))
            OR (q.question_quarantine_agent IS NOT NULL
-               AND q.question_quarantine_agent = COALESCE(x.assignee, ${fallback})))
+               AND q.question_quarantine_agent = COALESCE(x.assignee, ${fallback}))
+           OR (q.question_quarantine_provider_auth IS NOT NULL
+               AND @providerAuthQuarantinedAgents IS NOT NULL
+               AND COALESCE(x.assignee, ${fallback}) IN (
+                 SELECT value FROM json_each(@providerAuthQuarantinedAgents))))
        LIMIT 1`,
     )
     .get({
@@ -1013,6 +1027,9 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
       defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
       defaultAgentName: defaults.defaultAgentName ?? null,
       auditorName: defaults.auditorName ?? null,
+      providerAuthQuarantinedAgents: defaults.providerAuthQuarantinedAgents
+        ? JSON.stringify(defaults.providerAuthQuarantinedAgents)
+        : null,
     });
   if (quarantine) {
     throw new DomainError(

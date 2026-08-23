@@ -442,7 +442,13 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           task,
           reason ?? null,
           deps.clock.now(),
-          humanCancelDefaults(deps.workspace, deps.defaultAgentName, deps.auditorName),
+          humanCancelDefaults(
+            deps.db,
+            deps.workspace,
+            deps.defaultAgentName,
+            deps.auditorName,
+            deps.agentsSpeakingProviders,
+          ),
           "mcp",
         );
         pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
