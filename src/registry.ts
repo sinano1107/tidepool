@@ -23,6 +23,16 @@ export interface AgentDefinition {
    *  label. Required — an agent registered without one has no way to be
    *  picked from a roster, same hygiene as issue #41's assignable_to. */
   description: string;
+  /** Provider (CONTEXT.md の Provider / ADR 0097 決定1): 推論の向き先・課金元の
+   *  宣言 — harness(起動する CLI)とは独立した概念で、同じ harness が複数の
+   *  provider を喋りうる。Required — 「省略 = 既定 provider」という暗黙は
+   *  書き忘れと意図の区別がつかないため作らない(skill 許可リストの
+   *  「省略=無制限の footgun は作らない」と同じ線)。値の列挙と検証は registry
+   *  側(`PROVIDER_VALUES` / `assertValidProvider`)、値が意味するもの
+   *  (エンドポイント・env 名・モデル表記)はアダプタ側の定数(ADR 0005)。
+   *  ここでは自由文字列のまま持つ — 列挙・組み合わせの違反は読み込みを倒さず、
+   *  登録と pickup の門が拒否/隔離する(ADR 0097 決定3)。 */
+  provider: string;
   /** Base-AI model for this agent (CONTEXT.md: agent = base AI + skills +
    *  instructions + authority profile). Absent → the adapter's default. */
   model?: string;
@@ -99,6 +109,75 @@ export interface AuthorityProfile {
  *  a fourth value must not need a fourth edit. */
 export const MERGE_DIAL_VALUES = ["escalate", "auto_if_ci_green", "external"] as const;
 export type MergeDial = (typeof MERGE_DIAL_VALUES)[number];
+
+/** The provider enumeration (ADR 0097 決定1 / issue #444): the closed set of
+ *  values an agent definition's `provider` may carry. What each value *means*
+ *  (endpoint URL, env names, model spellings) is the adapter's vendor knowledge
+ *  (ADR 0005) and never appears here. */
+export const PROVIDER_VALUES = ["anthropic", "moonshot"] as const;
+export type Provider = (typeof PROVIDER_VALUES)[number];
+
+/** The provider select's options (value + display label) for the settings
+ *  surface, served over GET /api/agents so the WebUI never hard-codes the
+ *  enumeration and drifts from PROVIDER_VALUES — the same server-supplied
+ *  wiring as the authority select's candidates (issue #71). The label prose
+ *  lives here, not in the client bundle: what a provider *is* is server-side
+ *  knowledge (ADR 0005's line). */
+export const PROVIDER_OPTIONS: readonly { value: Provider; label: string }[] = [
+  { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
+  { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
+];
+
+/** The providers whose server side implements the advisor capability (ADR
+ *  0097 決定3): an agent that declares an advisor on a provider absent from
+ *  this list is an invalid definition, not a masked one. Deliberately one
+ *  small constant, not a generalized capability model — vendor knowledge
+ *  belongs to the adapter (ADR 0005), and the #445 spawn adapter is the one
+ *  that consumes/extends this list as it learns each provider's shape. */
+export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = ["anthropic"];
+
+/** An agent definition's provider declaration breaks ADR 0097: the value is
+ *  outside PROVIDER_VALUES, or it names a provider that does not offer an
+ *  advisor while the definition declares one. Thrown at the gates that admit
+ *  a definition — registration (agent-create.ts) and pickup resolution
+ *  (agent.ts's resolveExecutionAgent) — never at load: a hand-committed
+ *  violation must quarantine the one agent, not brick the whole registry read. */
+export class InvalidAgentProviderError extends Error {
+  constructor(
+    public readonly agentName: string,
+    reason: string,
+  ) {
+    super(`agent ${agentName}: ${reason}`);
+    this.name = "InvalidAgentProviderError";
+  }
+}
+
+/** The provider half of a definition's validity (ADR 0097 決定1/3) — one
+ *  assertion shared by the registration verbs and the pickup resolution so
+ *  the two gates can't drift. A blank `advisor` is normalized to absent
+ *  *here*, at the assertion boundary: the registration side normalizes before
+ *  writing (agent-create.ts's normalizeAdvisor), and a hand-committed file
+ *  may carry a whitespace-only value the pickup side reads raw — judging the
+ *  normalized value in this one place keeps both gates reaching the same
+ *  verdict on the same definition. */
+export function assertValidProvider(
+  agentName: string,
+  provider: string,
+  advisor: string | undefined,
+): void {
+  if (!(PROVIDER_VALUES as readonly string[]).includes(provider)) {
+    throw new InvalidAgentProviderError(
+      agentName,
+      `unknown provider "${provider}" (expected one of ${PROVIDER_VALUES.join(" / ")})`,
+    );
+  }
+  if (advisor?.trim() && !(PROVIDERS_WITH_ADVISOR as readonly string[]).includes(provider)) {
+    throw new InvalidAgentProviderError(
+      agentName,
+      `provider "${provider}" does not offer an advisor — a definition declaring one does not stand (ADR 0097 決定3)`,
+    );
+  }
+}
 
 const workspaceEntrySchema = z.object({
   /** Absent → regulation-derived at resolution time (ADR 0018): base
@@ -386,6 +465,7 @@ const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
   description: z.string(),
+  provider: z.string(),
   model: z.string().optional(),
   effort: z.string().optional(),
   advisor: z.string().optional(),
@@ -572,6 +652,7 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     version: meta.version,
     authority: meta.authority,
     description: meta.description,
+    provider: meta.provider,
     model: meta.model,
     effort: meta.effort,
     advisor: meta.advisor,

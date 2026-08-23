@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
 import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
-import { loadRegistry } from "../src/registry.js";
+import { InvalidAgentProviderError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -27,6 +27,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       {
         name: "deckhand",
         authority: "standard",
+        provider: "anthropic",
         description: "Rewritten description",
         icon: "🦀",
         skills: ["@workspace"],
@@ -40,6 +41,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       name: "deckhand",
       version: "0.3.2",
       authority: "standard",
+      provider: "anthropic",
       description: "Rewritten description",
       icon: "🦀",
       model: undefined,
@@ -55,11 +57,11 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
   it("非 semver の単一数値でも刻める(3 → 4)", async () => {
     const registryDir = await makeMainRegistry({
-      "agents/crab.md": "---\nversion: 3\nauthority: standard\nskills:\n  - '*'\ndescription: d\n---\np\n",
+      "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\n---\np\n",
     });
 
     await updateAgent(
-      { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
+      { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
@@ -68,11 +70,11 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
 
   it("数値セグメントが一つもない version は 1 に振り直す — 刻印は常に前へ進む", async () => {
     const registryDir = await makeMainRegistry({
-      "agents/crab.md": "---\nversion: beta\nauthority: standard\nskills:\n  - '*'\ndescription: d\n---\np\n",
+      "agents/crab.md": "---\nversion: beta\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\n---\np\n",
     });
 
     await updateAgent(
-      { name: "crab", authority: "standard", description: "d2", skills: ["*"], systemPrompt: "p" },
+      { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
@@ -89,6 +91,7 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
       {
         name: "deckhand",
         authority: "standard",
+        provider: "anthropic",
         description: "Rewritten description",
         skills: ["@workspace"],
         systemPrompt: "You are Deckhand, rewritten.",
@@ -115,6 +118,7 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
         {
           name: "deckhand",
           authority: "standard",
+          provider: "anthropic",
           description: "Rewritten description",
           skills: ["@workspace"],
           systemPrompt: "You are Deckhand, rewritten.",
@@ -133,13 +137,14 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
 describe("updateAgent: no-change 編集(issue #70 — workspace-create の porcelain チェックの agent 版)", () => {
   it("空白だけの advisor を未設定へ戻すと frontmatter から消し、実効構成の変更として version を進める(issue #175)", async () => {
     const registryDir = await makeMainRegistry({
-      "agents/crab.md": "---\nversion: 3\nauthority: standard\nskills:\n  - '*'\ndescription: d\nadvisor: opus\n---\np\n",
+      "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\nadvisor: opus\n---\np\n",
     });
 
     await updateAgent(
       {
         name: "crab",
         authority: "standard",
+        provider: "anthropic",
         description: "d",
         advisor: "  \t ",
         skills: ["*"],
@@ -159,6 +164,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     const same = {
       name: "deckhand",
       authority: "standard",
+      provider: "anthropic",
       description: "General work agent for the tidepool board",
       skills: ["*"],
       systemPrompt:
@@ -180,6 +186,7 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
       {
         name: "deckhand",
         authority: "standard",
+        provider: "anthropic",
         description: "General work agent for the tidepool board",
         skills: ["*"],
         systemPrompt:
@@ -193,6 +200,58 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
   });
 });
 
+describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同じ2種の検査)", () => {
+  it("provider の付け替え(anthropic → moonshot)は実効フィールドの変更として version を進め、frontmatter に書かれる", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await updateAgent(
+      {
+        name: "deckhand",
+        authority: "standard",
+        provider: "moonshot",
+        description: "General work agent for the tidepool board",
+        skills: ["*"],
+        systemPrompt:
+          "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.",
+      },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toMatchObject({
+      version: "0.3.2",
+      provider: "moonshot",
+    });
+    expect(git(registryDir, "show", "main:agents/deckhand.md")).toContain("provider: moonshot");
+  });
+
+  it("列挙にない provider への付け替えは InvalidAgentProviderError で拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      updateAgent(
+        { name: "deckhand", authority: "standard", provider: "moonshto", description: "d", skills: ["*"], systemPrompt: "p" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toThrow(InvalidAgentProviderError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("advisor を持つ定義への moonshot 付け替えは拒否され、コミットを積まない(ADR 0097 決定3)", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      updateAgent(
+        { name: "deckhand", authority: "standard", provider: "moonshot", advisor: "opus", description: "d", skills: ["*"], systemPrompt: "p" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toThrow(InvalidAgentProviderError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.provider).toBe("anthropic");
+  });
+});
+
 describe("updateAgent: authority 検証(issue #70 — 編集でも既存プロファイルのみ)", () => {
   it("registry にないプロファイル名への付け替えは拒否され、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
@@ -200,7 +259,7 @@ describe("updateAgent: authority 検証(issue #70 — 編集でも既存プロ�
 
     await expect(
       updateAgent(
-        { name: "deckhand", authority: "no-such-profile", description: "d", skills: ["*"], systemPrompt: "p" },
+        { name: "deckhand", authority: "no-such-profile", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
@@ -215,7 +274,7 @@ describe("updateAgent: 存在しないエージェント(issue #70 — 編集は
 
     await expect(
       updateAgent(
-        { name: "ghost", authority: "standard", description: "d", skills: ["*"], systemPrompt: "p" },
+        { name: "ghost", authority: "standard", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAgentError);

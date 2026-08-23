@@ -156,7 +156,7 @@ it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0
   dirs.push(registryDir);
   publish(
     "agents/deckhand.md",
-    `---\nname: deckhand\ndescription: Definition from remote main\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nRemote definition.\n`,
+    `---\nname: deckhand\ndescription: Definition from remote main\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nRemote definition.\n`,
     "remote registry definition",
   );
 

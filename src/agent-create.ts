@@ -6,6 +6,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
   assertValidAgentName,
+  assertValidProvider,
   assertValidSkillAllowlist,
   isSingleTwemojiGrapheme,
   loadRegistry,
@@ -30,6 +31,10 @@ export interface CreateAgentInput {
   name: string;
   authority: string;
   description: string;
+  /** The provider declaration (ADR 0097 決定1) — required like the registry
+   *  field it lands in; the enum and the advisor combination are checked
+   *  against `assertValidProvider` before anything is written. */
+  provider: string;
   icon?: string;
   model?: string;
   effort?: string;
@@ -96,6 +101,7 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
+  assertValidProvider(input.name, input.provider, normalizeAdvisor(input.advisor));
   commitAgentFile(
     deps,
     { ...input, advisor: normalizeAdvisor(input.advisor), version: "1" },
@@ -123,6 +129,7 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
   // 存在せず、実効フィールドが同じ再送で刻印だけ進めない
   const normalizedInput = { ...input, advisor: normalizeAdvisor(input.advisor) };
+  assertValidProvider(input.name, normalizedInput.provider, normalizedInput.advisor);
   if (!sameEffectiveFields(existing, normalizedInput)) {
     commitAgentFile(
       deps,
@@ -143,6 +150,7 @@ function sameEffectiveFields(existing: AgentDefinition, input: UpdateAgentInput)
   return (
     existing.authority === input.authority &&
     existing.description === input.description &&
+    existing.provider === input.provider &&
     existing.icon === input.icon &&
     existing.model === input.model &&
     existing.effort === input.effort &&
@@ -267,6 +275,9 @@ function serializeAgentFile(definition: AgentDefinition): string {
     version: definition.version,
     authority: definition.authority,
     description: definition.description,
+    // required (ADR 0097 決定1), always written — a file without it fails
+    // the next loadRegistry, same as `skills` below
+    provider: definition.provider,
     // required (ADR 0025): always written, even the empty list — a file
     // without it fails the next loadRegistry
     skills: definition.skills,

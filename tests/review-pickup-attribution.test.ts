@@ -43,6 +43,7 @@ name: tako
 description: Default agent
 version: 1.0.0
 authority: standard
+provider: anthropic
 skills:
   - "*"
 ---
@@ -53,6 +54,7 @@ name: fugu
 description: Independent auditor
 version: 1.0.0
 authority: standard
+provider: anthropic
 skills:
   - "*"
 ---
