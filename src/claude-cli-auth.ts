@@ -1,5 +1,10 @@
 import { execFile } from "node:child_process";
-import { boardCallEnv, pinnedModelFlags } from "./claude-worker.js";
+import {
+  boardCallEnv,
+  MoonshotApiKeyMissingError,
+  moonshotCliAuthEnv,
+  pinnedModelFlags,
+} from "./claude-worker.js";
 import { type CliAuthCheck, type CliAuthResult, isCliAuthFailureEnvelope } from "./cli-auth.js";
 
 export interface CliAuthCommandResult {
@@ -28,14 +33,10 @@ const defaultCommand: CliAuthCommand = (command, args, options) =>
  * the token can authenticate. This is a probe Board call, so it deliberately
  * does not declare an empty tool surface. */
 export function createClaudeCliAuthCheck(command: CliAuthCommand = defaultCommand): CliAuthCheck {
-  return async (): Promise<CliAuthResult> => {
-    const observed = await command(
-      "claude",
+  return () =>
+    runProbe(
+      command,
       [
-        "-p",
-        "Reply with the single word OK.",
-        "--output-format",
-        "json",
         ...pinnedModelFlags("haiku", "low"),
         "--max-turns",
         "1",
@@ -43,20 +44,56 @@ export function createClaudeCliAuthCheck(command: CliAuthCommand = defaultComman
         "0.01",
         "--safe-mode",
       ],
-      { cwd: process.cwd(), env: boardCallEnv() },
+      boardCallEnv(),
     );
-    let envelope: Record<string, unknown>;
+}
+
+/** The moonshot-speaking twin of the probe above (issue #446 / ADR 0097 決定2):
+ *  the re-verification a provider-auth Confirmation question's answer fires
+ *  before it is accepted. Human-originated, so this is one of ADR 0077's
+ *  sanctioned active checks — never on a timer. Same 401 machine judgement;
+ *  the only difference is the provider the probe speaks. A missing key file
+ *  is already the definitive answer — no credential can authenticate — so it
+ *  classifies as unauthorized without spending a billed probe call. */
+export function createMoonshotCliAuthCheck(
+  keyFile: string | undefined,
+  command: CliAuthCommand = defaultCommand,
+): CliAuthCheck {
+  return async (): Promise<CliAuthResult> => {
+    let env: NodeJS.ProcessEnv;
     try {
-      envelope = JSON.parse(observed.stdout) as Record<string, unknown>;
-    } catch {
-      return { status: "unknown", reason: "probe did not return a JSON envelope" };
+      env = moonshotCliAuthEnv(keyFile);
+    } catch (err) {
+      if (err instanceof MoonshotApiKeyMissingError) {
+        return { status: "unauthorized", reason: err.message };
+      }
+      throw err;
     }
-    if (isCliAuthFailureEnvelope(envelope)) {
-      return { status: "unauthorized", reason: "API returned 401" };
-    }
-    if (observed.exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
-      return { status: "authenticated" };
-    }
-    return { status: "unknown", reason: "probe did not return a successful authentication result" };
+    return runProbe(command, ["--max-turns", "1", "--max-budget-usd", "0.01", "--safe-mode"], env);
   };
+}
+
+async function runProbe(
+  command: CliAuthCommand,
+  extraArgs: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<CliAuthResult> {
+  const observed = await command(
+    "claude",
+    ["-p", "Reply with the single word OK.", "--output-format", "json", ...extraArgs],
+    { cwd: process.cwd(), env },
+  );
+  let envelope: Record<string, unknown>;
+  try {
+    envelope = JSON.parse(observed.stdout) as Record<string, unknown>;
+  } catch {
+    return { status: "unknown", reason: "probe did not return a JSON envelope" };
+  }
+  if (isCliAuthFailureEnvelope(envelope)) {
+    return { status: "unauthorized", reason: "API returned 401" };
+  }
+  if (observed.exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
+    return { status: "authenticated" };
+  }
+  return { status: "unknown", reason: "probe did not return a successful authentication result" };
 }

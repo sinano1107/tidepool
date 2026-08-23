@@ -47,6 +47,7 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   PROVIDER_OPTIONS,
+  type Provider,
   type RegistryCandidates,
   type RegistryReachabilityCheck,
 } from "./registry.js";
@@ -501,6 +502,10 @@ export interface ApiRouterDeps {
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
   cliAuth?: CliAuthCheck;
+  /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
+   *  a provider-auth Confirmation answer (the resource-scoped sibling of
+   *  `cliAuth` above — the board's own provider stays on `cliAuth`). */
+  providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -600,6 +605,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     containment,
     registryReachability,
     cliAuth,
+    providerCliAuth,
     vapidPublicKey,
     auditorName,
     workspaceAdmin,
@@ -1311,6 +1317,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           containment,
           registryReachability,
           cliAuth,
+          providerCliAuth,
           boardState,
         },
         task,

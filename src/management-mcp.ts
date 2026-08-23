@@ -36,6 +36,7 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   MERGE_DIAL_VALUES,
+  type Provider,
   type RegistryReachabilityCheck,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
@@ -85,6 +86,7 @@ export interface ManagementMcpDeps {
   containment?: ContainmentCheck;
   registryReachability?: RegistryReachabilityCheck;
   cliAuth?: CliAuthCheck;
+  providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
   /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
@@ -632,6 +634,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               containment: deps.containment,
               registryReachability: deps.registryReachability,
               cliAuth: deps.cliAuth,
+              providerCliAuth: deps.providerCliAuth,
               boardState: deps.boardState,
             },
             task,

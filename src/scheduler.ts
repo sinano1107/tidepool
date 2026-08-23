@@ -1,12 +1,12 @@
 import { boardHalts } from "./board-halt.js";
-import { type CliAuthCheck, quarantineCliAuth } from "./cli-auth.js";
+import { type CliAuthCheck, quarantineCliAuth, quarantinedAuthProviders } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCheck, containmentPickupBlocked } from "./containment.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { getPaceOffsets } from "./pace-offsets.js";
-import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
+import type { Provider, RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
@@ -146,6 +146,12 @@ export function startScheduler(deps: {
    *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
+  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
+   *  the given providers, read fresh every poll — the provider-auth quarantine
+   *  skips exactly those agents' tasks (same resource-scoped skip as the fable
+   *  line and the workspace/agent quarantines). Absent → no registry
+   *  configured, so no agent's provider is knowable and nothing is skipped. */
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
   /** 封じ込め能力の fail-closed ゲート(ADR 0033 / ADR 0036): このホストで
    *  worker の封じ込めが成立しているか。pickup のたびに読み直す(依存の消滅・
    *  AppArmor の変更・認証の脱落を次の poll で拾う)。人間面の自己検査が実 HTTP を
@@ -177,6 +183,7 @@ export function startScheduler(deps: {
     auditorName = DEFAULT_AUDITOR_NAME,
     github,
     fableAgents,
+    agentsSpeakingProviders,
     containment,
     registryReachability,
     cliAuth,
@@ -380,9 +387,23 @@ export function startScheduler(deps: {
       // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
       // 外す — Quarantine と同じ「資源単位の停止」。
       const fableWindow = decision.windows.fable;
-      const excludedAssignees =
-        fableWindow?.throttled && fableAgents ? fableAgents() : undefined;
-      const head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excludedAssignees);
+      const fableExcluded = fableWindow?.throttled && fableAgents ? fableAgents() : [];
+      // ADR 0097 決定2 / issue #446: 認証が失効した provider を喋る agent の
+      // タスクだけを候補から外す — fable 線と同じ資源単位の skip で、他の
+      // provider のタスクは流れ続ける。
+      const quarantinedProviders = quarantinedAuthProviders(db);
+      const providerExcluded =
+        quarantinedProviders.length > 0 && agentsSpeakingProviders
+          ? agentsSpeakingProviders(quarantinedProviders)
+          : [];
+      const excludedAssignees = [...fableExcluded, ...providerExcluded];
+      const head = nextSlotTask(
+        db,
+        workspace?.name,
+        worker.id,
+        auditorName,
+        excludedAssignees.length > 0 ? excludedAssignees : undefined,
+      );
       if (!head) {
         // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
         // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)

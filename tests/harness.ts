@@ -21,6 +21,7 @@ import type { GitHubAuth } from "../src/github-auth.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type {
   AuthorityProfile,
+  Provider,
   RegistryCandidates,
   RegistryReachabilityCheck,
   RegistrySource,
@@ -149,6 +150,13 @@ export interface BootOptions {
    *  by the scheduler's fable line and the queue view. Absent → no fable
    *  model resolution, so the fable line never skips anything. */
   fableAgents?: () => string[];
+  /** ADR 0097 決定2 / issue #446: names of the agents declared with one of the
+   *  given providers, read fresh every poll by the scheduler's provider-auth
+   *  gate. Absent → no provider quarantine skips anything. */
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
+   *  answer-time re-verification of a provider-auth Confirmation question. */
+  providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0052: remote-backed registry reachability seam. */
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: Claude CLI authentication probe. */
@@ -228,6 +236,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
+    agentsSpeakingProviders: options.agentsSpeakingProviders,
+    providerCliAuth: options.providerCliAuth,
     registryReachability: options.registryReachability,
     cliAuth: options.cliAuth,
     cliAuthExpiresAt: options.cliAuthExpiresAt,

@@ -9,7 +9,7 @@ import {
 } from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
 import type { BoardStatePath } from "./board-state.js";
-import { createClaudeCliAuthCheck } from "./claude-cli-auth.js";
+import { createClaudeCliAuthCheck, createMoonshotCliAuthCheck } from "./claude-cli-auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
   ClaudeCodeWorker,
@@ -35,6 +35,7 @@ import {
   InvalidAgentProviderError,
   loadRegistry,
   ownEntry,
+  type Provider,
   type RegistryCandidates,
   type RegistryMode,
   type RegistryReachability,
@@ -357,6 +358,25 @@ function fableAgentsResolver(board: BoardComposition): (() => string[]) | undefi
       .map((agent) => agent.name);
 }
 
+/** 指定された provider を喋ると宣言された agent 名の集合 (ADR 0097 決定2 /
+ *  issue #446)、毎 poll registry から読み直す — 認証が失効した provider の
+ *  agent だけが scheduler の資源単位 skip に落ちる。default agent が該当
+ *  provider なら assignee 未設定のタスクもその名前へ解決される(SQL 側の
+ *  COALESCE — fable 線と同じ形)。registry なし → provider は分からず skip
+ *  なし。 */
+function agentsSpeakingProvidersResolver(
+  board: BoardComposition,
+): ((providers: readonly Provider[]) => string[]) | undefined {
+  const { registryDir } = board;
+  if (!registryDir) return undefined;
+  return (providers) =>
+    Object.values(loadBoardRegistry(board).agents)
+      // registry 側の provider は自由文字列のまま(ADR 0097 決定3 — 読み込みを
+      // 倒さない)なので、ここでは文字列として突き合わせる
+      .filter((agent) => (providers as readonly string[]).includes(agent.provider))
+      .map((agent) => agent.name);
+}
+
 /** Resolves the executing task's own agent's authority profile (ADR 0012 /
  *  issue #36), read fresh against the registry every call from the task's own
  *  `assignee` (null → the board's default agent, `TIDEPOOL_AGENT`) — the
@@ -562,8 +582,13 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
+    agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
     registryReachability: registryReachabilityCheck(board),
     cliAuth: createClaudeCliAuthCheck(),
+    // ADR 0097 決定2 / issue #446: 回答受理時の再検証が provider ごとに撃つ
+    // probe。盤面自身の provider(anthropic)は cliAuth のまま — ここには資源
+    // 単位の側(moonshot)だけが載る。
+    providerCliAuth: { moonshot: createMoonshotCliAuthCheck(board.moonshotApiKeyFile) },
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
     // `tidepool-board[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って

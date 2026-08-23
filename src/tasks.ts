@@ -127,6 +127,10 @@ export interface Task {
   question_quarantine_registry: number | null;
   /** System-internal only (ADR 0070): Claude CLI authentication quarantine. */
   question_quarantine_cli_auth: number | null;
+  /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
+   *  provider-scoped authentication quarantine stands in for — resource-scoped
+   *  (only that provider's agents stop), never board-wide. */
+  question_quarantine_provider_auth: string | null;
   /** System-internal only (ADR 0075): warned configured-expiry epoch. */
   question_cli_auth_expiry_warning: number | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -299,6 +303,11 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   quarantine_registry?: boolean;
   /** System-internal only (ADR 0070): Claude CLI authentication Confirmation. */
   quarantine_cli_auth?: boolean;
+  /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
+   *  provider-scoped authentication Confirmation question stands in for.
+   *  Never set via MCP or the JSON API — only the cli-auth classification
+   *  sets this. */
+  quarantine_provider_auth?: string;
   /** System-internal only (ADR 0075): the warned configured expiry epoch. */
   cli_auth_expiry_warning?: number;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
@@ -344,7 +353,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     input.quarantine_agent !== undefined ||
     input.quarantine_sandbox !== undefined ||
     input.quarantine_registry !== undefined ||
-    input.quarantine_cli_auth !== undefined
+    input.quarantine_cli_auth !== undefined ||
+    input.quarantine_provider_auth !== undefined
       ? 1
       : 2;
   for (const item of items) {
@@ -587,6 +597,7 @@ export function registerTask(
     question_quarantine_sandbox: input.quarantine_sandbox ? 1 : null,
     question_quarantine_registry: input.quarantine_registry ? 1 : null,
     question_quarantine_cli_auth: input.quarantine_cli_auth ? 1 : null,
+    question_quarantine_provider_auth: input.quarantine_provider_auth ?? null,
     question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ?? null,
     github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
@@ -597,12 +608,12 @@ export function registerTask(
          risk_flag, review_flag, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_cli_auth_expiry_warning, github_issue_number, created_at)
+         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_cli_auth_expiry_warning, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_cli_auth_expiry_warning, @github_issue_number, @created_at)`,
+         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_cli_auth_expiry_warning, @github_issue_number, @created_at)`,
     ).run({
       ...task,
       // the stored row keeps title/purpose/completion_criteria genuinely
@@ -1224,6 +1235,21 @@ export function answerQuestion(
         workerId: HUMAN_WORKER_ID,
         origin,
         payload: { kind: "cli_auth_reinstated" },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
+
+    if (question.question_quarantine_provider_auth !== null) {
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        origin,
+        payload: {
+          kind: "provider_auth_reinstated",
+          provider: question.question_quarantine_provider_auth,
+        },
         at: now,
       });
       pickupResumed = true;

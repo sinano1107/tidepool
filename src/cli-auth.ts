@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { Provider } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 export const CLI_AUTH_QUESTION_TITLE = "Claude authentication is unavailable — pickup is stopped";
@@ -111,6 +112,85 @@ export function quarantineCliAuth(db: Db, now: Date): void {
     BOARD_WORKER_ID,
     "board",
   );
+}
+
+/** ADR 0097 決定2 / issue #446: the machine classification of a 401 routes by
+ *  the **spawn-time fact** of which provider the session/call spoke — never
+ *  inferred from the envelope's contents. The board's own provider (anthropic:
+ *  board calls and the usage reading depend on it) keeps ADR 0070's board-wide
+ *  halt — no narrower resource exists for it. Every other provider's failure
+ *  is a resource-scoped quarantine: only that provider's agents stop. */
+export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Date): void {
+  if (provider === "anthropic") {
+    quarantineCliAuth(db, now);
+    return;
+  }
+  quarantineProviderAuth(db, provider, now);
+}
+
+/** The open Confirmation question is the durable half of a provider-scoped
+ *  authentication quarantine — same "1 resource, at most 1 open question"
+ *  dedup as the board-wide one above. */
+export function openProviderAuthQuestion(db: Db, provider: Provider): { id: string } | undefined {
+  return db
+    .prepare(
+      `SELECT id FROM tasks
+       WHERE question_quarantine_provider_auth = ? AND status = 'todo'`,
+    )
+    .get(provider) as { id: string } | undefined;
+}
+
+/** The providers whose authentication is currently quarantined resource-wide
+ *  (ADR 0097 決定2) — the scheduler's pickup gate skips exactly the agents
+ *  speaking one of these. The board-wide cliAuth halt is not in this list:
+ *  it stops everything through the boardHalts enumeration instead. */
+export function quarantinedAuthProviders(db: Db): Provider[] {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT question_quarantine_provider_auth AS provider FROM tasks
+         WHERE question_quarantine_provider_auth IS NOT NULL AND status = 'todo'`,
+      )
+      .all() as Array<{ provider: Provider }>
+  ).map((row) => row.provider);
+}
+
+function quarantineProviderAuth(db: Db, provider: Provider, now: Date): void {
+  if (openProviderAuthQuestion(db, provider)) return;
+  registerTask(
+    db,
+    {
+      type: "question",
+      title: providerAuthQuestionTitle(provider),
+      purpose:
+        `The Claude CLI returned an authentication failure while speaking the ${provider} ` +
+        `provider, so the board has stopped pickup of the agents declared with ` +
+        `\`provider: ${provider}\`. Workers and board calls on other providers are unaffected. ` +
+        "Restore the credential:\n\n" +
+        "1. Place a valid Moonshot Platform API key in the board's key file " +
+        "(`~/.tidepool/moonshot-api-key`, or the path `TIDEPOOL_MOONSHOT_API_KEY_FILE` " +
+        "points at), mode 600.\n" +
+        "2. Return to this question and answer it.\n\n" +
+        "The board checks authentication again before accepting the answer and resumes " +
+        "pickup only after the check succeeds.",
+      completion_criteria: `${provider} authentication has been restored`,
+      question: [
+        {
+          title: `Has ${provider} authentication been restored?`,
+          options: ["authentication restored"],
+          recommendation: "authentication restored",
+        },
+      ],
+      quarantine_provider_auth: provider,
+    },
+    now,
+    BOARD_WORKER_ID,
+    "board",
+  );
+}
+
+function providerAuthQuestionTitle(provider: Provider): string {
+  return `${provider} authentication is unavailable — pickup of ${provider}-speaking agents is stopped`;
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {
