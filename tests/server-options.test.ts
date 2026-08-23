@@ -47,6 +47,7 @@ function composition(): BoardComposition {
     defaultAgentName: "tako",
     auditorName: "shako",
     boardState: [],
+    moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
     githubAuth: undefined,
     githubTokenFile: undefined,
     vapid: undefined,

@@ -1,7 +1,7 @@
 import { execFile, spawn as nodeSpawn } from "node:child_process";
-import { createWriteStream, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
@@ -19,6 +19,7 @@ import {
   isPluginGlob,
   loadRegistry,
   ownEntry,
+  type Provider,
   type Registry,
   type RegistrySource,
   type RosterAgent,
@@ -538,6 +539,77 @@ const ADVISOR_DISABLE_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
  *  the same call). No CLI flag spells this; the env is the only spelling. */
 const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
 
+/** The Moonshot routing pair (ADR 0096 / issue #445): the endpoint and the
+ *  Bearer token envs a `provider: moonshot` spawn carries — and that an
+ *  anthropic spawn must never inherit (ADR 0097 決定4 の双方向 scrub)。env 名は
+ *  ベンダー知識なのでアダプタの定数(ADR 0005)。`ADVISOR_DISABLE_ENV` と同じ
+ *  理由で名付ける: delete の綴りを typo すると fail-open で静かに漏れる。 */
+const ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL";
+const ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN";
+const ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL";
+
+/** The Claude subscription credentials a `provider: moonshot` spawn must
+ *  never inherit (ADR 0097 決定4 の双方向 scrub のもう片側): the OAuth token
+ *  would bill the subscription for Kimi-routed work, and Moonshot's own docs
+ *  warn a leftover `ANTHROPIC_API_KEY` collides with `ANTHROPIC_AUTH_TOKEN`
+ *  when both are present. */
+const CLAUDE_CODE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
+const ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY";
+
+/** Moonshot Platform's Anthropic-compatible endpoint (ADR 0096) — the only
+ *  ToS-clean route for an unattended worker to speak Kimi. Vendor knowledge,
+ *  hence an adapter constant (ADR 0005): the registry only ever says
+ *  `provider: moonshot`. */
+const MOONSHOT_BASE_URL = "https://api.moonshot.ai/anthropic";
+
+/** The `--model` fallback per provider (ADR 0005's pinning rule, spelled in
+ *  the provider's own notation — a moonshot spawn handed "sonnet" dies with
+ *  model-not-found). `kimi-k3[1m]` is the default in Moonshot's official
+ *  Claude Code guide (platform.kimi.ai, 2026-08). */
+const PROVIDER_DEFAULT_MODEL: Record<Provider, string> = {
+  anthropic: "sonnet",
+  moonshot: "kimi-k3[1m]",
+};
+
+/** Where the Moonshot Platform key lives: the board's state-file home, never
+ *  the board's env (ADR 0097 決定4 — human-surface-credential の「平文は
+ *  process.env に乗せない — worker spawn が継承するから」と同じ doctrine)。
+ *  Mirrors auth.ts's `resolveTokenFile`: one resolver so a differing HOME
+ *  (sudo 越し等) can't split the board from its tooling. */
+export function resolveMoonshotApiKeyFile(configured: string | undefined): string {
+  return configured ?? join(homedir(), ".tidepool", "moonshot-api-key");
+}
+
+/** A moonshot worker was about to spawn without its credential — the key
+ *  file is absent, unreadable, or empty. Surfaced as a failed start (the
+ *  scheduler logs it and the task keeps its slot for the watchdog's failure
+ *  question), with the path and the fix in the message; the provider-scoped
+ *  quarantine ADR 0097 決定2 describes is #446's slice. */
+export class MoonshotApiKeyMissingError extends Error {
+  constructor(public readonly keyFile: string) {
+    super(
+      `provider "moonshot" has no API key at ${keyFile} — the key never rides ` +
+        "the board's env (ADR 0097), so place it there (mode 600) or point " +
+        "TIDEPOOL_MOONSHOT_API_KEY_FILE at it",
+    );
+    this.name = "MoonshotApiKeyMissingError";
+  }
+}
+
+/** Read the Moonshot key at spawn time — never cached on the worker, so a
+ *  key rotation takes effect on the next pickup without a board restart.
+ *  Unreadable and empty are the same "no credential here" to a spawn. */
+function readMoonshotApiKey(keyFile: string): string {
+  let key = "";
+  try {
+    key = readFileSync(keyFile, "utf8").trim();
+  } catch {
+    // fall through — the error below says what to do either way
+  }
+  if (key === "") throw new MoonshotApiKeyMissingError(keyFile);
+  return key;
+}
+
 /** The env every **Board call** carries (issue #174 / ADR 0044) — the board's
  *  own CLI invocations: the draft poll, display-time translation, the two
  *  `/usage` init pings, and the usage scrape. None of them is a worker session,
@@ -609,8 +681,23 @@ const STREAM_IDLE_TIMEOUT_MS = 600_000;
  *     under the advisor-off ones and leave them with no backstop short of 90
  *     minutes. They live here rather than in the host's
  *     `/etc/default/tidepool` because that was a second source of truth
- *     invisible to both the registry and the board's code. */
-export function workerSpawnEnv(advisor: string | undefined): NodeJS.ProcessEnv {
+ *     invisible to both the registry and the board's code.
+ *
+ *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
+ *  both directions: an anthropic spawn never inherits the Moonshot routing pair
+ *  (`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`) — a board env pointed at
+ *  Moonshot must not silently switch every Claude worker to metered Kimi
+ *  billing. A moonshot spawn gets the compatible-endpoint set injected (base
+ *  URL, Bearer token read from the key file, model in the provider's notation)
+ *  and the Claude subscription credentials removed — Moonshot's own docs warn
+ *  a leftover `ANTHROPIC_API_KEY` collides with the auth token. Nothing more
+ *  is pinned: effort mapping and context-window knobs are #447's measurements,
+ *  not guesses to bake in here. */
+export function workerSpawnEnv(
+  provider: Provider,
+  advisor: string | undefined,
+  spawn: { model: string; moonshotApiKey?: string },
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
@@ -618,6 +705,22 @@ export function workerSpawnEnv(advisor: string | undefined): NodeJS.ProcessEnv {
   };
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
+  if (provider === "moonshot") {
+    if (spawn.moonshotApiKey === undefined) {
+      // start() resolves the key before launch and refuses the pickup without
+      // one — reaching this branch keyless is an adapter bug, not an
+      // operational state
+      throw new Error("moonshot spawn without its API key");
+    }
+    delete env[CLAUDE_CODE_OAUTH_TOKEN_ENV];
+    delete env[ANTHROPIC_API_KEY_ENV];
+    env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
+    env[ANTHROPIC_AUTH_TOKEN_ENV] = spawn.moonshotApiKey;
+    env[ANTHROPIC_MODEL_ENV] = spawn.model;
+  } else {
+    delete env[ANTHROPIC_BASE_URL_ENV];
+    delete env[ANTHROPIC_AUTH_TOKEN_ENV];
+  }
   return env;
 }
 
@@ -941,6 +1044,14 @@ export interface ClaudeWorkerOptions {
    *  "use the real thing"), and why `buildWorkerOptions` in server-options.ts
    *  owns this literal with a test watching its keys (ADR 0043). */
   advisorDisabled?: boolean;
+  /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
+   *  a mode-600 state file, never the board's env (plaintext on process.env
+   *  rides every worker spawn). Read fresh at each spawn, only for
+   *  `provider: moonshot` agents. Same class as `advisorDisabled` above: a
+   *  functional field, not a test seam, so `buildWorkerOptions` owns the
+   *  literal. Absent → `resolveMoonshotApiKeyFile`'s default
+   *  (`~/.tidepool/moonshot-api-key`). */
+  moonshotApiKeyFile?: string;
 }
 
 /** Request/response process boundary for one-shot CLI calls (unlike the
@@ -1595,6 +1706,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     );
     if (!agent) return;
     assertKnownEffort(agent.definition);
+    // ADR 0097 決定4 / issue #445: the Moonshot key is read here — once per
+    // pickup, synchronously, before the async skill-enumeration branch below
+    // could strand a missing-key failure inside a promise. Its absence refuses
+    // the pickup (MoonshotApiKeyMissingError, a failed start) rather than
+    // spawning a worker that can only 401.
+    const provider = agent.definition.provider as Provider;
+    const moonshotApiKey =
+      provider === "moonshot"
+        ? readMoonshotApiKey(resolveMoonshotApiKeyFile(this.options.moonshotApiKeyFile))
+        : undefined;
     // ADR 0025: skill access is the agent's frontmatter allowlist, enforced
     // here as the complement deny of the CLI-enumerated full set. The two
     // ping-free shapes launch synchronously (nothing changes for the
@@ -1611,7 +1732,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // nothing is denied, so ADR 0033's sandbox may open the skill roots
         // wholesale — there is no allowlist for a `cat` to route around
         permittedSkills: "all",
-      });
+      }, moonshotApiKey);
       return;
     }
     if (skills.length === 0) {
@@ -1619,7 +1740,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         deny: [],
         disableSlashCommands: true,
         permittedSkills: [],
-      });
+      }, moonshotApiKey);
       return;
     }
     void this.enumerateSkills(workspace.path).then((enumerated) => {
@@ -1654,7 +1775,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         deny,
         disableSlashCommands: false,
         permittedSkills,
-      });
+      }, moonshotApiKey);
     });
   }
 
@@ -1664,7 +1785,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  process boundary (issue #32). `enforcement` carries the per-skill denies
    *  (folded into --disallowedTools alongside the always-present Workflow ban)
    *  and whether to --disable-slash-commands (the empty-allowlist shape), plus
-   *  the permitted-skill set ADR 0033's sandbox re-allows for reading. */
+   *  the permitted-skill set ADR 0033's sandbox re-allows for reading.
+   *  `moonshotApiKey` is the credential start() resolved for a
+   *  `provider: moonshot` agent (undefined for anthropic) — carried, never
+   *  re-read here, so the key is read exactly once per pickup. */
   private launch(
     task: Task,
     workspace: WorkspaceConfig,
@@ -1675,6 +1799,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       disableSlashCommands: boolean;
       permittedSkills: string[] | "all";
     },
+    moonshotApiKey: string | undefined,
   ): void {
     const { definition, profile } = agent;
     const authorityProfile = task.type === "review" ? REVIEWER_AUTHORITY_PROFILE : profile;
@@ -1742,6 +1867,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // than sitting beside it — "no advisor this session" then has a single
     // spelling in the flags, in the env, and in worker_spawned.
     const advisor = this.options.advisorDisabled === true ? undefined : definition.advisor;
+    // registry 側が resolveExecutionAgent で検証済み(ADR 0097 決定1)なので、ここに
+    // 来る値は PROVIDER_VALUES に閉じている — 値が意味するもの(URL・env 名)は
+    // アダプタの定数側(ADR 0005)。
+    const provider = definition.provider as Provider;
+    // ADR 0005's pinning rule, spelled in the provider's own model notation —
+    // "sonnet" means nothing to the Moonshot endpoint (model-not-found).
+    const model = definition.model ?? PROVIDER_DEFAULT_MODEL[provider];
     const child = this.spawn(
       "claude",
       [
@@ -1817,7 +1949,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).
         ...(enforcement.disableSlashCommands ? ["--disable-slash-commands"] : []),
-        ...pinnedModelFlags(definition.model ?? "sonnet", definition.effort ?? "medium"),
+        ...pinnedModelFlags(model, definition.effort ?? "medium"),
         // issue #33: spelled here and not inside pinnedModelFlags — that helper
         // is shared with the board's own draft/translation CLI calls, which must
         // never acquire an advisor. Absence is not spelled by omission; see
@@ -1851,7 +1983,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // kill var (ADR 0044 決定4), so it is the base here rather than an
         // overlay — a spread on top of it could not have removed a key. The git
         // identity carries no key it touches, so layering it after is safe.
-        env: { ...workerSpawnEnv(advisor), ...agentGitIdentityEnv(agent.name) },
+        env: {
+          ...workerSpawnEnv(provider, advisor, { model, moonshotApiKey }),
+          ...agentGitIdentityEnv(agent.name),
+        },
       },
     );
     // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
