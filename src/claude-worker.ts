@@ -585,7 +585,7 @@ export function resolveMoonshotApiKeyFile(configured: string | undefined): strin
  *  scheduler logs it and the task keeps its slot for the watchdog's failure
  *  question), with the path and the fix in the message; the provider-scoped
  *  quarantine ADR 0097 決定2 describes is #446's slice. */
-export class MoonshotApiKeyMissingError extends Error {
+class MoonshotApiKeyMissingError extends Error {
   constructor(public readonly keyFile: string) {
     super(
       `provider "moonshot" has no API key at ${keyFile} — the key never rides ` +
@@ -696,7 +696,7 @@ const STREAM_IDLE_TIMEOUT_MS = 600_000;
 export function workerSpawnEnv(
   provider: Provider,
   advisor: string | undefined,
-  spawn: { model: string; moonshotApiKey?: string },
+  routing: { model: string; moonshotApiKey?: string },
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -706,7 +706,7 @@ export function workerSpawnEnv(
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
   if (provider === "moonshot") {
-    if (spawn.moonshotApiKey === undefined) {
+    if (routing.moonshotApiKey === undefined) {
       // start() resolves the key before launch and refuses the pickup without
       // one — reaching this branch keyless is an adapter bug, not an
       // operational state
@@ -715,8 +715,8 @@ export function workerSpawnEnv(
     delete env[CLAUDE_CODE_OAUTH_TOKEN_ENV];
     delete env[ANTHROPIC_API_KEY_ENV];
     env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
-    env[ANTHROPIC_AUTH_TOKEN_ENV] = spawn.moonshotApiKey;
-    env[ANTHROPIC_MODEL_ENV] = spawn.model;
+    env[ANTHROPIC_AUTH_TOKEN_ENV] = routing.moonshotApiKey;
+    env[ANTHROPIC_MODEL_ENV] = routing.model;
   } else {
     delete env[ANTHROPIC_BASE_URL_ENV];
     delete env[ANTHROPIC_AUTH_TOKEN_ENV];

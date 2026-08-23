@@ -121,16 +121,18 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
     workerLogDir: "/srv/tidepool/worker-logs",
     apiTokenFile: "/home/pi/.tidepool/api-token",
     githubTokenFile: "/home/pi/.tidepool/github-token",
+    moonshotApiKeyFile: "/home/pi/.tidepool/moonshot-api-key",
     cwd: "/srv/tidepool",
     servedRoot: "/srv/tidepool",
   };
 
-  it("DB・worker-logs・API token・GitHub token・盤面の実行 checkout をこの順に並べる", () => {
+  it("DB・worker-logs・API token・GitHub token・Moonshot キー・盤面の実行 checkout をこの順に並べる", () => {
     expect(boardStatePaths(INPUT).map((p) => p.path)).toEqual([
       "/srv/tidepool/board.sqlite",
       "/srv/tidepool/worker-logs",
       "/home/pi/.tidepool/api-token",
       "/home/pi/.tidepool/github-token",
+      "/home/pi/.tidepool/moonshot-api-key",
       "/srv/tidepool",
     ]);
   });
@@ -141,6 +143,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
     expect(labels).toContain("worker logs (TIDEPOOL_WORKER_LOGS)");
     expect(labels).toContain("human-surface token file (TIDEPOOL_API_TOKEN_FILE)");
     expect(labels).toContain("GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)");
+    expect(labels).toContain("Moonshot API key file (TIDEPOOL_MOONSHOT_API_KEY_FILE)");
     expect(labels).toContain("the board's own working directory (process cwd)");
   });
 
@@ -159,7 +162,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
 
   it("GitHub token ファイルは env 未設定なら守る対象そのものが無いので落ちる(ADR 0024 の fail-closed な不在)", () => {
     const paths = boardStatePaths({ ...INPUT, githubTokenFile: undefined });
-    expect(paths).toHaveLength(4);
+    expect(paths).toHaveLength(5);
     expect(paths.some((p) => p.label.includes("GITHUB"))).toBe(false);
   });
 });
