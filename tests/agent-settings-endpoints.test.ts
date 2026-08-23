@@ -52,6 +52,12 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
       },
     ],
     authorityProfiles: ["standard", "restricted"],
+    // provider 選択肢(値+表示ラベル)もサーバ供給 — WebUI が PROVIDER_VALUES を
+    // 直書きして静かに drift するのを防ぐ(authorityOptions と同じ配線)
+    providers: [
+      { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
+      { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
+    ],
   });
 });
 

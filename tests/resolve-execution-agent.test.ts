@@ -107,6 +107,13 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     expect(resolved.definition.provider).toBe("moonshot");
   });
 
+  it("空白だけの advisor は未設定と同じ — moonshot との組み合わせも pickup 解決で受理される(登録 verb の normalizeAdvisor と同じ正規化で判定 — gate 間で drift しない)", () => {
+    const registry = makeRegistry({
+      deckhand: { authority: "standard", provider: "moonshot", advisor: "  \t " },
+    });
+    expect(resolveExecutionAgent(registry, "deckhand", null).definition.provider).toBe("moonshot");
+  });
+
   it("anthropic で advisor を持つ定義は従来どおり解決される", () => {
     const registry = makeRegistry({
       deckhand: { authority: "standard", provider: "anthropic", advisor: "opus" },

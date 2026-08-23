@@ -46,6 +46,7 @@ import {
   InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
+  PROVIDER_OPTIONS,
   type RegistryCandidates,
   type RegistryReachabilityCheck,
 } from "./registry.js";
@@ -880,7 +881,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
 
   // the settings surface's one-round-trip GET (issue #71): bundles the
   // edit-form list with the authority select's candidates here at the route
-  // layer — `AgentAdmin.list` itself keeps phase 1's shape (issue #70)
+  // layer — `AgentAdmin.list` itself keeps phase 1's shape (issue #70). The
+  // provider select's options ride the same response (ADR 0097): a code
+  // constant, not registry data, so no AgentAdmin seam — serving them keeps
+  // the WebUI from hard-coding the enumeration and drifting from
+  // PROVIDER_VALUES.
   router.get("/agents", (_req, res) => {
     if (!agentAdmin?.list) {
       res.status(503).json({ error: "agent settings not configured" });
@@ -889,6 +894,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json({
       agents: agentAdmin.list(),
       authorityProfiles: agentAdmin.authorityProfiles?.() ?? [],
+      providers: PROVIDER_OPTIONS,
     });
   });
 

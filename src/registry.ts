@@ -117,6 +117,17 @@ export type MergeDial = (typeof MERGE_DIAL_VALUES)[number];
 export const PROVIDER_VALUES = ["anthropic", "moonshot"] as const;
 export type Provider = (typeof PROVIDER_VALUES)[number];
 
+/** The provider select's options (value + display label) for the settings
+ *  surface, served over GET /api/agents so the WebUI never hard-codes the
+ *  enumeration and drifts from PROVIDER_VALUES — the same server-supplied
+ *  wiring as the authority select's candidates (issue #71). The label prose
+ *  lives here, not in the client bundle: what a provider *is* is server-side
+ *  knowledge (ADR 0005's line). */
+export const PROVIDER_OPTIONS: readonly { value: Provider; label: string }[] = [
+  { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
+  { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
+];
+
 /** The providers whose server side implements the advisor capability (ADR
  *  0097 決定3): an agent that declares an advisor on a provider absent from
  *  this list is an invalid definition, not a masked one. Deliberately one
@@ -143,8 +154,12 @@ export class InvalidAgentProviderError extends Error {
 
 /** The provider half of a definition's validity (ADR 0097 決定1/3) — one
  *  assertion shared by the registration verbs and the pickup resolution so
- *  the two gates can't drift. `advisor` is the normalized value (blank =
- *  absent), same as what the file would carry. */
+ *  the two gates can't drift. A blank `advisor` is normalized to absent
+ *  *here*, at the assertion boundary: the registration side normalizes before
+ *  writing (agent-create.ts's normalizeAdvisor), and a hand-committed file
+ *  may carry a whitespace-only value the pickup side reads raw — judging the
+ *  normalized value in this one place keeps both gates reaching the same
+ *  verdict on the same definition. */
 export function assertValidProvider(
   agentName: string,
   provider: string,
@@ -156,7 +171,7 @@ export function assertValidProvider(
       `unknown provider "${provider}" (expected one of ${PROVIDER_VALUES.join(" / ")})`,
     );
   }
-  if (advisor !== undefined && !(PROVIDERS_WITH_ADVISOR as readonly string[]).includes(provider)) {
+  if (advisor?.trim() && !(PROVIDERS_WITH_ADVISOR as readonly string[]).includes(provider)) {
     throw new InvalidAgentProviderError(
       agentName,
       `provider "${provider}" does not offer an advisor — a definition declaring one does not stand (ADR 0097 決定3)`,

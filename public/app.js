@@ -1503,12 +1503,8 @@ function agentBody(d) {
 function agentDraftDirty(d, base) {
   return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.model.trim() !== base.model || d.effort.trim() !== base.effort || d.advisor.trim() !== base.advisor || !sameStrings(d.skills, base.skills);
 }
-const PROVIDER_OPTIONS = [
-  { value: "", label: "choose one \u2014 provider is required" },
-  { value: "anthropic", label: "anthropic \u2014 Claude models, Anthropic billing" },
-  { value: "moonshot", label: "moonshot \u2014 Kimi models, Moonshot Platform billing" }
-];
-function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegraded }) {
+const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is required" };
+function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }) {
   const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(AgentIconPicker, { value: draft.icon, onChange: (v) => set("icon", v) }), /* @__PURE__ */ React.createElement(
     Input,
@@ -1527,9 +1523,9 @@ function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegra
       value: draft.systemPrompt,
       onChange: (e) => set("systemPrompt", e.target.value)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: PROVIDER_OPTIONS, value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Input, { label: "Model", value: draft.model, onChange: (e) => set("model", e.target.value), placeholder: "adapter default if empty" }), /* @__PURE__ */ React.createElement(Input, { label: "Effort", value: draft.effort, onChange: (e) => set("effort", e.target.value), placeholder: "adapter default if empty" })), /* @__PURE__ */ React.createElement(Input, { label: "Advisor model", value: draft.advisor, onChange: (e) => set("advisor", e.target.value), placeholder: "no advisor if empty" }), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Input, { label: "Model", value: draft.model, onChange: (e) => set("model", e.target.value), placeholder: "adapter default if empty" }), /* @__PURE__ */ React.createElement(Input, { label: "Effort", value: draft.effort, onChange: (e) => set("effort", e.target.value), placeholder: "adapter default if empty" })), /* @__PURE__ */ React.createElement(Input, { label: "Advisor model", value: draft.advisor, onChange: (e) => set("advisor", e.target.value), placeholder: "no advisor if empty" }), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
 }
-function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
@@ -1577,6 +1573,7 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
       draft,
       set,
       authorityOptions: authorityProfiles,
+      providerOptions,
       hostSkills,
       hostSkillsDegraded
     }
@@ -2096,7 +2093,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
     }
   ));
 }
-function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState("");
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
@@ -2135,6 +2132,7 @@ function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, 
       draft,
       set,
       authorityOptions: authorityCreateOptions,
+      providerOptions,
       hostSkills,
       hostSkillsDegraded
     }
@@ -2259,12 +2257,14 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   }, []);
   const [agents, setAgents] = React.useState(null);
   const [authorityProfiles, setAuthorityProfiles] = React.useState([]);
+  const [providerOptions, setProviderOptions] = React.useState([]);
   const [agentsUnavailable, setAgentsUnavailable] = React.useState(false);
   const loadAgents = async () => {
     try {
       const res = await api("/api/agents", void 0, "GET");
       setAgents(res.agents);
       setAuthorityProfiles(res.authorityProfiles);
+      setProviderOptions(res.providers ?? []);
     } catch {
       setAgentsUnavailable(true);
       setAgents([]);
@@ -2389,6 +2389,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         {
           agent: rec,
           authorityProfiles,
+          providerOptions,
           hostSkills,
           hostSkillsDegraded,
           say,
@@ -2400,6 +2401,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         NewAgentForm,
         {
           authorityProfiles,
+          providerOptions,
           hostSkills,
           hostSkillsDegraded,
           say,

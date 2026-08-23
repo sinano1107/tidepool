@@ -1064,18 +1064,16 @@ function agentDraftDirty(d, base) {
     || !sameStrings(d.skills, base.skills);
 }
 
-// The provider enumeration (registry.ts's PROVIDER_VALUES, ADR 0097): required,
-// so the leading entry is "not chosen yet", not a default — Save stays disabled
-// until one is picked (the same shape as MERGE_OPTIONS below).
-const PROVIDER_OPTIONS = [
-  { value: '', label: 'choose one — provider is required' },
-  { value: 'anthropic', label: 'anthropic — Claude models, Anthropic billing' },
-  { value: 'moonshot', label: 'moonshot — Kimi models, Moonshot Platform billing' },
-];
+// The provider select's leading entry (ADR 0097): provider is required, so
+// this is "not chosen yet", not a default — Save stays disabled until one is
+// picked (the same shape as MERGE_OPTIONS below). The value+label options
+// themselves are server-supplied over GET /api/agents (registry.ts's
+// PROVIDER_OPTIONS) so the client never duplicates the enumeration.
+const PROVIDER_PLACEHOLDER = { value: '', label: 'choose one — provider is required' };
 
 // Those fields as controls, shared by the record card and the create form so
 // the two never drift — the agent analogue of ProfileFields.
-function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegraded }) {
+function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }) {
   const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return (
     <React.Fragment>
@@ -1086,7 +1084,7 @@ function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegra
         multiline rows={4} value={draft.systemPrompt} onChange={(e) => set('systemPrompt', e.target.value)} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', e.target.value)} />
-        <Select label="Provider" options={PROVIDER_OPTIONS} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
+        <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <Input label="Model" value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="adapter default if empty" />
@@ -1102,7 +1100,7 @@ function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegra
 // WorkspaceRecord's twin: read-only until Edit, and then the draft above,
 // prefilled from the GET /api/agents list. `name` is shown via AgentChip only —
 // renaming isn't offered here at all (it's the file name, parent issue #54).
-function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
@@ -1158,6 +1156,7 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
       {open && (
         <React.Fragment>
           <AgentFields draft={draft} set={set} authorityOptions={authorityProfiles}
+            providerOptions={providerOptions}
             hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save changes — commits to the registry"
             onSave={save} onCancel={() => edit.close()} />
@@ -1844,7 +1843,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
 // The agent create form (issue #72), NewWorkspaceForm's twin. `name` is its own
 // field — it becomes agents/<name>.md and is never editable afterwards; the
 // rest is the same draft the record card edits.
-function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState('');
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
@@ -1880,6 +1879,7 @@ function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, 
       <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
       <AgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions}
+        providerOptions={providerOptions}
         hostSkills={hostSkills} hostSkillsDegraded={hostSkillsDegraded} />
       <EditActions ok={ok} busy={busy} saveLabel="Add agent — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
@@ -2003,12 +2003,16 @@ function SettingsScreen({ say, registerLeaveGuard }) {
 
   const [agents, setAgents] = React.useState(null); // null → still loading
   const [authorityProfiles, setAuthorityProfiles] = React.useState([]);
+  // the provider select's value+label options, server-supplied on the same GET
+  // (registry.ts's PROVIDER_OPTIONS) so the client never hard-codes the enum
+  const [providerOptions, setProviderOptions] = React.useState([]);
   const [agentsUnavailable, setAgentsUnavailable] = React.useState(false);
   const loadAgents = async () => {
     try {
       const res = await api('/api/agents', undefined, 'GET');
       setAgents(res.agents);
       setAuthorityProfiles(res.authorityProfiles);
+      setProviderOptions(res.providers ?? []);
     } catch {
       setAgentsUnavailable(true);
       setAgents([]);
@@ -2134,11 +2138,13 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
       rowSummary: (a) => a.authority,
       record: (rec) => (
-        <AgentRecord agent={rec} authorityProfiles={authorityProfiles} hostSkills={hostSkills}
+        <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions}
+          hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} edit={edit} />
       ),
       createForm: () => (
-        <NewAgentForm authorityProfiles={authorityProfiles} hostSkills={hostSkills}
+        <NewAgentForm authorityProfiles={authorityProfiles} providerOptions={providerOptions}
+          hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onCreated={loadAgents} edit={edit} />
       ),
       reload: loadAgents,
