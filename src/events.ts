@@ -199,6 +199,10 @@ export type EventPayload =
   // its Confirmation question was answered, so board-wide pickup resumes.
   | { kind: "registry_reinstated" }
   | { kind: "cli_auth_reinstated" }
+  // ADR 0097 決定2 / issue #446: the provider-scoped sibling of
+  // cli_auth_reinstated — the provider's authentication probe passed at
+  // answer time, so pickup resumes for that provider's agents only
+  | { kind: "provider_auth_reinstated"; provider: string }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill); the event itself is

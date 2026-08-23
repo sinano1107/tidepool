@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
+import { boardHalts } from "../src/board-halt.js";
 import {
   agentGitIdentityEnv,
   ClaudeCodeWorker,
@@ -61,6 +62,7 @@ function makeTask(
     question_quarantine_sandbox: null,
     question_quarantine_registry: null,
     question_quarantine_cli_auth: null,
+    question_quarantine_provider_auth: null,
     question_cli_auth_expiry_warning: null,
     github_issue_number: null,
     created_at: "2026-07-08T00:00:00.000Z",
@@ -2946,5 +2948,26 @@ You are Kipper, the tidepool board's Kimi work agent.
     start("task-kimi-second", null, "kipper");
     expect(calls[0]!.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-first-key");
     expect(calls[1]!.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-rotated-key");
+  });
+
+  it("moonshot session の終了が 401 envelope なら、その provider の資源単位 quarantine に落ちる — 盤面全体は止まらない(issue #446 / ADR 0097 決定2)", async () => {
+    // 401 の帰属は envelope の内容から推測しない — その session がどの provider
+    // で spawn されたかという spawn 時の事実で決まる。
+    const keyFile = await makeMoonshotKeyFile();
+    const { start, stdout, emitExit, db } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    start("task-kimi-auth-expired", null, "kipper");
+    stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
+
+    emitExit(1, null);
+
+    const questions = listBoard(db).filter((task) => task.type === "question");
+    expect(questions.map((task) => task.title)).toEqual([
+      "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
+    ]);
+    expect(questions[0]?.question_quarantine_provider_auth).toBe("moonshot");
+    expect(boardHalts(db)).toEqual([]);
   });
 });

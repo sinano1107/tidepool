@@ -91,6 +91,13 @@ const TASKS_TABLE_DDL = `
       -- question standing in for Claude CLI authentication. Board-wide;
       -- never set via MCP or JSON API.
       question_quarantine_cli_auth INTEGER,
+      -- system-internal only (ADR 0097 決定2 / issue #446): the provider
+      -- name a provider-scoped authentication quarantine Confirmation
+      -- question stands in for. Resource-scoped (only that provider's
+      -- agents stop), unlike the board-wide cli_auth flag above — the
+      -- board's own provider keeps using that one. Never set via MCP or
+      -- JSON API.
+      question_quarantine_provider_auth TEXT,
       -- system-internal only (ADR 0075): the configured expiry epoch for
       -- which this advance warning was created. It never halts pickup.
       question_cli_auth_expiry_warning INTEGER,
@@ -476,6 +483,7 @@ export function openDb(path: string): Db {
     "question_pending_pr_promotion_task_id",
     "question_quarantine_workspace",
     "question_quarantine_agent",
+    "question_quarantine_provider_auth",
     "workspace",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);

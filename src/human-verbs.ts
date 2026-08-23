@@ -1,12 +1,12 @@
 import { verifyAgentRepaired } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
+import { type CliAuthCheck, quarantineCliAuthFailure, quarantinedAuthProviders } from "./cli-auth.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
-import type { RegistryReachabilityCheck } from "./registry.js";
+import type { Provider, RegistryReachabilityCheck } from "./registry.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
   answerQuestion,
@@ -282,6 +282,10 @@ export interface SubmitAnswerDeps {
   containment?: ContainmentCheck;
   registryReachability?: RegistryReachabilityCheck;
   cliAuth?: CliAuthCheck;
+  /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
+   *  a provider-auth Confirmation answer — same "検証つきで解除" as `cliAuth`,
+   *  scoped to the provider the question stands in for. */
+  providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   boardState?: BoardStatePath[];
 }
 
@@ -301,16 +305,27 @@ function resolveWorkspaceForAnswer(
   }
 }
 
-/** Shared human-surface defaults for direct cancel's quarantine-question gate. */
+/** Shared human-surface defaults for direct cancel's quarantine-question gate.
+ *  The provider-auth half (ADR 0097 決定2 / issue #446) resolves the open
+ *  provider quarantines from the db and maps them to agent names through the
+ *  caller's registry seam — computed here once so the WebUI and MCP cancel
+ *  routes can't drift apart. */
 export function humanCancelDefaults(
+  db: Db,
   workspace: WorkspaceConfig | undefined,
   defaultAgentName: string | undefined,
   auditorName: string | undefined,
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
 ): CancelDefaults {
+  const quarantinedProviders = quarantinedAuthProviders(db);
   return {
     defaultWorkspaceName: workspace?.name,
     defaultAgentName,
     auditorName,
+    providerAuthQuarantinedAgents:
+      quarantinedProviders.length > 0 && agentsSpeakingProviders
+        ? agentsSpeakingProviders(quarantinedProviders)
+        : undefined,
   };
 }
 
@@ -509,6 +524,19 @@ export async function submitAnswer(
     const result = await deps.cliAuth();
     if (result.status !== "authenticated") {
       throw new DomainError(`Claude authentication is still unavailable: ${result.reason}`);
+    }
+  }
+
+  if (task.question_quarantine_provider_auth !== null) {
+    // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
+    // 再検証を回答受理の直前に撃つ — 盤面全体の cliAuth と同じ検証つき解除を
+    // 資源単位に写した形。
+    const provider = task.question_quarantine_provider_auth as Provider;
+    const check = deps.providerCliAuth?.[provider];
+    if (!check) throw new DomainError(`${provider} authentication cannot be verified`);
+    const result = await check();
+    if (result.status !== "authenticated") {
+      throw new DomainError(`${provider} authentication is still unavailable: ${result.reason}`);
     }
   }
 

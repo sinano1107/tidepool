@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { isCliAuthFailureEnvelope, quarantineCliAuth } from "./cli-auth.js";
+import { isCliAuthFailureEnvelope, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -594,8 +594,10 @@ export function resolveMoonshotApiKeyFile(configured: string | undefined): strin
  *  file is absent, unreadable, or empty. Surfaced as a failed start (the
  *  scheduler logs it and the task keeps its slot for the watchdog's failure
  *  question), with the path and the fix in the message; the provider-scoped
- *  quarantine ADR 0097 決定2 describes is #446's slice. */
-class MoonshotApiKeyMissingError extends Error {
+ *  quarantine ADR 0097 決定2 describes is #446's slice. Exported so the
+ *  moonshot auth probe (claude-cli-auth.ts, issue #446) classifies a missing
+ *  key as "unauthorized" without firing a probe that can only 401. */
+export class MoonshotApiKeyMissingError extends Error {
   constructor(public readonly keyFile: string) {
     super(
       `provider "moonshot" has no API key at ${keyFile} — the key never rides ` +
@@ -763,6 +765,26 @@ export function workerSpawnEnv(
     // this changes the env map, never the effective behavior.
     for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
   }
+  return env;
+}
+
+/** The env the moonshot **auth probe** carries (issue #446 / ADR 0097 決定2)
+ *  — the re-verification a provider-auth Confirmation question's answer fires.
+ *  Not a Board call (those speak anthropic only, ADR 0096), but built by the
+ *  same discipline as a moonshot worker spawn: the Claude subscription
+ *  credentials are scrubbed and the Moonshot routing set is injected, with the
+ *  key read fresh from the key file at probe time (a rotation takes effect
+ *  without a board restart). The model rides `ANTHROPIC_MODEL` — the board set
+ *  that env itself one line up, so no third party can repoint it; effort is
+ *  not pinned because its mapping on this endpoint is #447's measurement, not
+ *  a guess to bake in. Throws MoonshotApiKeyMissingError when there is no
+ *  credential to authenticate with. */
+export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
+  for (const name of CLAUDE_SUBSCRIPTION_ENV) delete env[name];
+  env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
+  env[ANTHROPIC_AUTH_TOKEN_ENV] = readMoonshotApiKey(resolveMoonshotApiKeyFile(keyFile));
+  env[ANTHROPIC_MODEL_ENV] = PROVIDER_DEFAULT_MODEL.moonshot;
   return env;
 }
 
@@ -2162,7 +2184,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)
       if (code !== 0) console.error(`[worker] claude exited with ${signal ?? code}`);
-      if (cliAuthFailed) quarantineCliAuth(this.options.db, this.options.clock.now());
+      // issue #446 / ADR 0097 決定2: the 401 is attributed to the provider this
+      // session was spawned to speak (a spawn-time fact), never inferred from
+      // the envelope — anthropic keeps the board-wide halt, any other provider
+      // quarantines only its own agents' pickup.
+      if (cliAuthFailed) {
+        quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now());
+      }
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,

@@ -30,6 +30,7 @@ import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import {
   type AuthorityProfile,
+  type Provider,
   REGISTRY_BRANCH,
   type RegistryCandidates,
   type RegistryReachabilityCheck,
@@ -217,6 +218,16 @@ export interface ServerOptions {
    *  the scheduler's fable line and the queue view. Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
+  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
+   *  the given providers, read fresh by the scheduler's provider-auth gate.
+   *  Absent → no registry configured, so no provider quarantine skips anything. */
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
+   *  re-verification a provider-auth Confirmation question's answer fires.
+   *  The board's own provider (anthropic) keeps `cliAuth` below; this record
+   *  holds only the resource-scoped ones. Absent a provider's entry → its
+   *  answer cannot be verified and is refused. */
+  providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: live Claude authentication probe. */
@@ -406,6 +417,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     auditorName,
     github: options.github,
     fableAgents: options.fableAgents,
+    agentsSpeakingProviders: options.agentsSpeakingProviders,
     containment,
     registryReachability,
     cliAuth: options.cliAuth,
@@ -512,6 +524,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       containment,
       registryReachability,
       cliAuth: options.cliAuth,
+      providerCliAuth: options.providerCliAuth,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin,
@@ -521,6 +534,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       githubTokenFile: options.githubTokenFile,
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
+      agentsSpeakingProviders: options.agentsSpeakingProviders,
       isProtectedWorkspace: options.isProtectedWorkspace,
       // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
       // 床と同じ1つの配列(3箇所で別々に組み立てない)
@@ -546,8 +560,10 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       containment,
       registryReachability,
       cliAuth: options.cliAuth,
+      providerCliAuth: options.providerCliAuth,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
+      agentsSpeakingProviders: options.agentsSpeakingProviders,
       throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspaceAdmin,
       agentAdmin,

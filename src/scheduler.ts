@@ -1,12 +1,12 @@
 import { boardHalts } from "./board-halt.js";
-import { type CliAuthCheck, quarantineCliAuth } from "./cli-auth.js";
+import { type CliAuthCheck, quarantineCliAuth, quarantinedAuthProviders } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCheck, containmentPickupBlocked } from "./containment.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { getPaceOffsets } from "./pace-offsets.js";
-import type { RegistryReachabilityCheck, RegistrySource } from "./registry.js";
+import type { Provider, RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
@@ -40,6 +40,31 @@ import {
 } from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
+
+/** ADR 0097 決定2 / issue #446: the one expression every reader of the pickup
+ *  candidate set shares — fable-line exclusions (ADR 0030) plus the agents
+ *  speaking an auth-quarantined provider — so the scheduler's gate, the queue
+ *  view's `skipped` display, and the move route's pickable-head check can never
+ *  drift apart (tasks.ts の「乖離させない」の線 — 述語だけでなく、そこへ渡す
+ *  引数も1つの式から出す)。`fableBlocked` stays the caller's own derivation
+ *  (the scheduler passes its just-observed decision, the views the stored
+ *  gate) — only the composition is shared. Empty normalizes to `undefined`,
+ *  nextSlotTask's "no exclusion" spelling. */
+export function pickupExcludedAssignees(
+  db: Db,
+  fableBlocked: boolean,
+  fableAgents?: () => string[],
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
+): string[] | undefined {
+  const fable = fableBlocked && fableAgents ? fableAgents() : [];
+  const quarantinedProviders = quarantinedAuthProviders(db);
+  const providerExcluded =
+    quarantinedProviders.length > 0 && agentsSpeakingProviders
+      ? agentsSpeakingProviders(quarantinedProviders)
+      : [];
+  const all = [...fable, ...providerExcluded];
+  return all.length > 0 ? all : undefined;
+}
 
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
  *  check every time there is a candidate, never a background poll. Persists
@@ -146,6 +171,12 @@ export function startScheduler(deps: {
    *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
+  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
+   *  the given providers, read fresh every poll — the provider-auth quarantine
+   *  skips exactly those agents' tasks (same resource-scoped skip as the fable
+   *  line and the workspace/agent quarantines). Absent → no registry
+   *  configured, so no agent's provider is knowable and nothing is skipped. */
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
   /** 封じ込め能力の fail-closed ゲート(ADR 0033 / ADR 0036): このホストで
    *  worker の封じ込めが成立しているか。pickup のたびに読み直す(依存の消滅・
    *  AppArmor の変更・認証の脱落を次の poll で拾う)。人間面の自己検査が実 HTTP を
@@ -177,6 +208,7 @@ export function startScheduler(deps: {
     auditorName = DEFAULT_AUDITOR_NAME,
     github,
     fableAgents,
+    agentsSpeakingProviders,
     containment,
     registryReachability,
     cliAuth,
@@ -378,11 +410,22 @@ export function startScheduler(deps: {
         return;
       }
       // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
-      // 外す — Quarantine と同じ「資源単位の停止」。
+      // 外す — Quarantine と同じ「資源単位の停止」。認証が失効した provider を
+      // 喋る agent のタスクも同じ資源単位の skip で外れる(ADR 0097 決定2 /
+      // issue #446) — 集合の合成は読み口と共有する1つの式に集約してある。
       const fableWindow = decision.windows.fable;
-      const excludedAssignees =
-        fableWindow?.throttled && fableAgents ? fableAgents() : undefined;
-      const head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excludedAssignees);
+      const head = nextSlotTask(
+        db,
+        workspace?.name,
+        worker.id,
+        auditorName,
+        pickupExcludedAssignees(
+          db,
+          fableWindow?.throttled ?? false,
+          fableAgents,
+          agentsSpeakingProviders,
+        ),
+      );
       if (!head) {
         // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
         // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)
