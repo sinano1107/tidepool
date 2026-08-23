@@ -728,6 +728,10 @@ export interface ProviderRouting {
  *  notation) and the Claude subscription credentials removed — Moonshot's own
  *  docs warn a leftover `ANTHROPIC_API_KEY` collides with the auth token.
  *  Injection and scrub derive from one list, so the symmetry is structural.
+ *  Scrub rather than an allowlist (ADR 0097 決定4): the set to keep out is
+ *  closed — it is exactly the injection set — while the set to pass through
+ *  (PATH, proxies, SSH, locale) is host-dependent, open, and silently fatal
+ *  when a need goes missing. Enumerate the side you can enumerate.
  *  Nothing more is pinned: effort mapping and context-window knobs are #447's
  *  measurements, not guesses to bake in here. */
 export function workerSpawnEnv(
