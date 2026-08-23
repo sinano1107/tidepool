@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { boardCallEnv, boardCallEnvWithoutThinking, initPingSpawnOptions } from "../src/claude-worker.js";
 
 /** Board call(盤面呼び出し / ADR 0044): 盤面が自分の機能のために回す CLI 呼び出しは
@@ -39,6 +39,32 @@ describe("Board call の env", () => {
     const before = process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL;
     boardCallEnv();
     expect(process.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe(before);
+  });
+
+  // Board call は anthropic 固定(ADR 0096)なので、anthropic の worker spawn と
+  // 同じ双方向 scrub がこちらにも掛かる(ADR 0097 決定4 / issue #445)—— 盤面 env
+  // に Moonshot 系があっても、下書き・翻訳・probe が静かに Moonshot へ流れない。
+  // ANTHROPIC_MODEL を含めて一式除去できるのは、モデルを伴う全 Board call が
+  // --model をフラグでピン留めしており(下書き sonnet・翻訳/probe/ping haiku)、
+  // 唯一フラグを持たない /usage スクレイプはモデルターンを一切起こさないから —
+  // env の ANTHROPIC_MODEL はどの Board call でも legitimate には効いていない。
+  it("Board call の env からは Moonshot 注入一式(向き先・トークン・モデル)が除去される(双方向 scrub — Board call は anthropic 固定)", () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
+    vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
+    try {
+      const env = boardCallEnv();
+      expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+      expect(env.ANTHROPIC_MODEL).toBeUndefined();
+      // 上に重ねる形の no-thinking 版も同じ scrub の上に載る
+      const noThinking = boardCallEnvWithoutThinking();
+      expect(noThinking.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(noThinking.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+      expect(noThinking.ANTHROPIC_MODEL).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   // ADR 0025 / 0039 の2本の `/usage` ping は、注入 seam(EnumerateSkillsFn /

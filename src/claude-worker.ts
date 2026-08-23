@@ -548,13 +548,23 @@ const ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL";
 const ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN";
 const ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL";
 
+/** The full Moonshot injection set — the env names a `provider: moonshot`
+ *  spawn is injected with, and, the same list the other way round, the names
+ *  an anthropic spawn and every Board call are scrubbed of (ADR 0097 決定4 の
+ *  双方向 scrub)。注入と除去が**同じ一覧**から導かれるので、対称性は規律では
+ *  なく構造 — 注入に1つ足せば除去も自動的に1つ増える。 */
+const MOONSHOT_ROUTING_ENV = [
+  ANTHROPIC_BASE_URL_ENV,
+  ANTHROPIC_AUTH_TOKEN_ENV,
+  ANTHROPIC_MODEL_ENV,
+] as const;
+
 /** The Claude subscription credentials a `provider: moonshot` spawn must
  *  never inherit (ADR 0097 決定4 の双方向 scrub のもう片側): the OAuth token
  *  would bill the subscription for Kimi-routed work, and Moonshot's own docs
  *  warn a leftover `ANTHROPIC_API_KEY` collides with `ANTHROPIC_AUTH_TOKEN`
  *  when both are present. */
-const CLAUDE_CODE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
-const ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY";
+const CLAUDE_SUBSCRIPTION_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
 
 /** Moonshot Platform's Anthropic-compatible endpoint (ADR 0096) — the only
  *  ToS-clean route for an unattended worker to speak Kimi. Vendor knowledge,
@@ -628,9 +638,22 @@ function readMoonshotApiKey(keyFile: string): string {
  *
  *  Returns the **whole** env, not a delta, so a call site cannot half-apply it
  *  by forgetting `...process.env` and lose PATH and auth with it. Same contract
- *  as `workerSpawnEnv` below and as `SpawnFn`'s `opts.env`. */
+ *  as `workerSpawnEnv` below and as `SpawnFn`'s `opts.env`.
+ *
+ *  Board calls speak **anthropic only** (ADR 0096), so they get the same
+ *  two-way scrub an anthropic worker spawn gets (ADR 0097 決定4): a board env
+ *  carrying the Moonshot routing set must not silently reroute a draft, a
+ *  translation, or a probe to metered Kimi billing. `ANTHROPIC_MODEL` is part
+ *  of the scrubbed set because no Board call takes its model from the env —
+ *  every model-calling one pins `--model` by flag (draft sonnet, translation
+ *  and probes haiku), and the one flag-less call, the `/usage` TUI scrape,
+ *  raises no model turn at all. The scrubbed list is the same
+ *  `MOONSHOT_ROUTING_ENV` the moonshot spawn injects, so the symmetry is
+ *  structural, not a discipline. */
 export function boardCallEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
+  const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1" };
+  for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
+  return env;
 }
 
 /** A Board call that additionally declares the absence of reasoning (ADR 0062
@@ -697,15 +720,16 @@ export interface ProviderRouting {
  *     invisible to both the registry and the board's code.
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
- *  both directions: an anthropic spawn never inherits the Moonshot routing pair
- *  (`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`) — a board env pointed at
- *  Moonshot must not silently switch every Claude worker to metered Kimi
- *  billing. A moonshot spawn gets the compatible-endpoint set injected (base
- *  URL, Bearer token read from the key file, model in the provider's notation)
- *  and the Claude subscription credentials removed — Moonshot's own docs warn
- *  a leftover `ANTHROPIC_API_KEY` collides with the auth token. Nothing more
- *  is pinned: effort mapping and context-window knobs are #447's measurements,
- *  not guesses to bake in here. */
+ *  both directions: an anthropic spawn never inherits the Moonshot injection
+ *  set (`MOONSHOT_ROUTING_ENV` — 向き先・トークン・モデルの一式) — a board env
+ *  pointed at Moonshot must not silently switch every Claude worker to metered
+ *  Kimi billing. A moonshot spawn gets the compatible-endpoint set injected
+ *  (base URL, Bearer token read from the key file, model in the provider's
+ *  notation) and the Claude subscription credentials removed — Moonshot's own
+ *  docs warn a leftover `ANTHROPIC_API_KEY` collides with the auth token.
+ *  Injection and scrub derive from one list, so the symmetry is structural.
+ *  Nothing more is pinned: effort mapping and context-window knobs are #447's
+ *  measurements, not guesses to bake in here. */
 export function workerSpawnEnv(
   advisor: string | undefined,
   routing: ProviderRouting,
@@ -724,14 +748,16 @@ export function workerSpawnEnv(
       // operational state
       throw new Error("moonshot spawn without its API key");
     }
-    delete env[CLAUDE_CODE_OAUTH_TOKEN_ENV];
-    delete env[ANTHROPIC_API_KEY_ENV];
+    for (const name of CLAUDE_SUBSCRIPTION_ENV) delete env[name];
     env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
     env[ANTHROPIC_AUTH_TOKEN_ENV] = routing.moonshotApiKey;
     env[ANTHROPIC_MODEL_ENV] = routing.model;
   } else {
-    delete env[ANTHROPIC_BASE_URL_ENV];
-    delete env[ANTHROPIC_AUTH_TOKEN_ENV];
+    // scrub the full Moonshot injection set — the same list the moonshot
+    // branch above injects, so the two directions can never drift apart.
+    // ANTHROPIC_MODEL included: --model pins the model by flag (ADR 0005), so
+    // this changes the env map, never the effective behavior.
+    for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
   }
   return env;
 }

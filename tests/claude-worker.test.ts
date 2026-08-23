@@ -2804,12 +2804,17 @@ You are Kipper, the tidepool board's Kimi work agent.
     return path;
   }
 
-  it("anthropic の spawn env/argv は導入前と一致する — Moonshot 系の env(向き先・トークン)だけが除去される(双方向 scrub)", async () => {
-    // 盤面 env が Moonshot 向きに汚染されていても Claude 担当には漏らさない。
+  it("anthropic の spawn の挙動は導入前のまま — env マップの差分は scrub の対称化のみ(Moonshot 注入一式 = 向き先・トークン・モデルをすべて除去)", async () => {
+    // これは挙動の回帰ではなく env マップの意図的な変更である: これまでの除去は
+    // 向き先・トークンの2つだったが、moonshot に注入する一式すべて(+
+    // ANTHROPIC_MODEL)を相手から除去する形に対称化した(注入一覧と除去一覧は
+    // 同じ定数から導かれる)。`--model sonnet` のピン留めがある限り、env の
+    // ANTHROPIC_MODEL は anthropic spawn では元々効いていない — 実効挙動は不変。
     // それ以外は導入前どおり: process.env の継承 + timeout ピン + advisor 閉じ +
     // GIT_* の名義注入だけが載る(回帰ゼロ — issue #443 user story 4)。
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
+    vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
     try {
       const { start, calls } = await makeWorker();
@@ -2826,9 +2831,11 @@ You are Kipper, the tidepool board's Kimi work agent.
       };
       delete expected.ANTHROPIC_BASE_URL;
       delete expected.ANTHROPIC_AUTH_TOKEN;
+      delete expected.ANTHROPIC_MODEL;
       expect(calls[0]!.env).toEqual(expected);
       // 従来通りの認証継承: Claude のサブスク資格情報は残る
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
+      // 実効挙動不変の根拠: モデルは env ではなくフラグでピン留めされる
       expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
       expect(calls[0]!.args.join(" ")).toContain("--effort medium");
     } finally {
