@@ -134,6 +134,9 @@ export interface BoardComposition {
   auditorName: string;
   /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)。 */
   boardState: BoardStatePath[];
+  /** ADR 0097 決定4 / issue #445: Moonshot Platform キーの置き場(mode 600 の
+   *  状態ファイル、平文は盤面の env に載せない)。アダプタが spawn 時にだけ読む。 */
+  moonshotApiKeyFile: string;
   /** ADR 0024 / issue #50: 盤面の GitHub 識別情報。ファイルの読み取りは合成 root
    *  側の I/O なので、ここには解決済みの値だけが来る。未設定 → GitHub 機能は
    *  すべて fail-closed で off。 */
@@ -210,6 +213,8 @@ export function buildWorkerOptions(
     // issue #33 判断8: 不在が「マスクされていない」を意味する口なので、渡し忘れは
     // 静かに fail-open する。上の網羅テストが見張っているのはまさにこれ。
     advisorDisabled: board.advisorDisabled,
+    // ADR 0097 決定4: Moonshot キーの置き場。アダプタが spawn 時にだけ読む
+    moonshotApiKeyFile: board.moonshotApiKeyFile,
   };
 }
 

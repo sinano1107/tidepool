@@ -2780,3 +2780,171 @@ describe("advisor capability (issue #33)", () => {
     });
   });
 });
+
+describe("provider 別の spawn env(issue #445 / ADR 0096・0097)", () => {
+  /** `provider: moonshot` の agent 定義(fixture)。ベンダー知識(URL・モデル)は
+   *  書かせない — registry が宣言するのは provider 名だけ(ADR 0005 / 0097)。 */
+  const MOONSHOT_AGENT_MD = `---
+name: kipper
+description: Kimi-speaking work agent for the tidepool board
+version: "1"
+authority: standard
+provider: moonshot
+skills:
+  - "*"
+---
+You are Kipper, the tidepool board's Kimi work agent.
+`;
+
+  /** Moonshot キーの fixture ファイル(mode 600 の状態ファイル置き場の形)。 */
+  async function makeMoonshotKeyFile(key = "sk-moonshot-test-key"): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "tidepool-moonshot-key-"));
+    const path = join(dir, "moonshot-api-key");
+    await writeFile(path, `${key}\n`, { mode: 0o600 });
+    return path;
+  }
+
+  it("anthropic の spawn の挙動は導入前のまま — env マップの差分は scrub の対称化のみ(Moonshot 注入一式 = 向き先・トークン・モデルをすべて除去)", async () => {
+    // これは挙動の回帰ではなく env マップの意図的な変更である: これまでの除去は
+    // 向き先・トークンの2つだったが、moonshot に注入する一式すべて(+
+    // ANTHROPIC_MODEL)を相手から除去する形に対称化した(注入一覧と除去一覧は
+    // 同じ定数から導かれる)。`--model sonnet` のピン留めがある限り、env の
+    // ANTHROPIC_MODEL は anthropic spawn では元々効いていない — 実効挙動は不変。
+    // それ以外は導入前どおり: process.env の継承 + timeout ピン + advisor 閉じ +
+    // GIT_* の名義注入だけが載る(回帰ゼロ — issue #443 user story 4)。
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
+    vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
+    try {
+      const { start, calls } = await makeWorker();
+      start();
+      const expected: NodeJS.ProcessEnv = {
+        ...process.env,
+        CLAUDE_STREAM_IDLE_TIMEOUT_MS: "600000",
+        API_TIMEOUT_MS: "600000",
+        CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+        GIT_AUTHOR_NAME: "deckhand",
+        GIT_AUTHOR_EMAIL: "deckhand@tidepool.invalid",
+        GIT_COMMITTER_NAME: "deckhand",
+        GIT_COMMITTER_EMAIL: "deckhand@tidepool.invalid",
+      };
+      delete expected.ANTHROPIC_BASE_URL;
+      delete expected.ANTHROPIC_AUTH_TOKEN;
+      delete expected.ANTHROPIC_MODEL;
+      expect(calls[0]!.env).toEqual(expected);
+      // 従来通りの認証継承: Claude のサブスク資格情報は残る
+      expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
+      // 実効挙動不変の根拠: モデルは env ではなくフラグでピン留めされる
+      expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
+      expect(calls[0]!.args.join(" ")).toContain("--effort medium");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("moonshot の spawn env は Moonshot 互換エンドポイント向きの一式(向き先・Bearer トークン・モデル)を注入する(issue #445)", async () => {
+    // 期待値は独立した literal(トートロジー防止 — 実装の定数を import しない)。
+    // 向き先と既定モデル表記は Moonshot 公式の Claude Code ガイドの値。
+    const keyFile = await makeMoonshotKeyFile();
+    const { start, calls } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    start("task-kimi", null, "kipper");
+    const env = calls[0]!.env;
+    expect(env.ANTHROPIC_BASE_URL).toBe("https://api.moonshot.ai/anthropic");
+    // キーは盤面 env ではなく spawn 時にファイルから読まれた値が載る
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-moonshot-test-key");
+    expect(env.ANTHROPIC_MODEL).toBe("kimi-k3[1m]");
+  });
+
+  it("moonshot の spawn から Claude のサブスク資格情報(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY)は除去される(双方向 scrub)", async () => {
+    // Moonshot 公式も ANTHROPIC_API_KEY 残留との衝突を警告している(ADR 0097 決定4)
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-api-key");
+    try {
+      const keyFile = await makeMoonshotKeyFile();
+      const { start, calls } = await makeWorker(
+        { "agents/kipper.md": MOONSHOT_AGENT_MD },
+        { moonshotApiKeyFile: keyFile },
+      );
+      start("task-kimi", null, "kipper");
+      const env = calls[0]!.env;
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      // それ以外の盤面 env は従来通り継承される(PATH 等で子プロセスが死なない)
+      expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("moonshot agent の --model は provider のモデル表記にピン留めされる(frontmatter 優先、省略時は Moonshot 既定)", async () => {
+    const keyFile = await makeMoonshotKeyFile();
+    const withModel = await makeWorker(
+      {
+        "agents/kipper.md": MOONSHOT_AGENT_MD.replace(
+          "provider: moonshot",
+          "provider: moonshot\nmodel: kimi-k2.7-code",
+        ),
+      },
+      { moonshotApiKeyFile: keyFile },
+    );
+    withModel.start("task-kimi-model", null, "kipper");
+    const flag = (args: string[]) => args[args.indexOf("--model") + 1];
+    expect(flag(withModel.calls[0]!.args)).toBe("kimi-k2.7-code");
+    expect(withModel.calls[0]!.env.ANTHROPIC_MODEL).toBe("kimi-k2.7-code");
+
+    const withoutModel = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    withoutModel.start("task-kimi-default", null, "kipper");
+    // ホストのモデル設定を漏らさないための既定も provider の表記で(ADR 0005)
+    expect(flag(withoutModel.calls[0]!.args)).toBe("kimi-k3[1m]");
+  });
+
+  it("キー未配置で moonshot agent を spawn しようとすると、置き場を指す失敗で pickup が止まり、spawn もイベント記録もされない(issue #445)", async () => {
+    const missing = join(await mkdtemp(join(tmpdir(), "tidepool-moonshot-key-")), "moonshot-api-key");
+    const { start, calls, db } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: missing },
+    );
+    let thrown: unknown;
+    try {
+      start("task-kimi-no-key", null, "kipper");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    // 分かりやすい失敗: どこに何を置けば直るかがメッセージから読める
+    expect((thrown as Error).message).toContain(missing);
+    expect(calls).toEqual([]);
+    expect(listEvents(db, "task-kimi-no-key")).toEqual([]);
+  });
+
+  it("空のキーファイルも未配置と同じ失敗になる(中身のない credential で spawn しない)", async () => {
+    const keyFile = await makeMoonshotKeyFile(" ");
+    const { start, calls } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    expect(() => start("task-kimi-empty-key", null, "kipper")).toThrow(/moonshot-api-key/);
+    expect(calls).toEqual([]);
+  });
+
+  it("キーは spawn のたびにファイルから読まれる — 盤面 env に乗らず、ローテーションが再起動なしで効く(ADR 0097 決定4)", async () => {
+    const keyFile = await makeMoonshotKeyFile("sk-first-key");
+    const { start, calls } = await makeWorker(
+      { "agents/kipper.md": MOONSHOT_AGENT_MD },
+      { moonshotApiKeyFile: keyFile },
+    );
+    start("task-kimi-first", null, "kipper");
+    // ローテーション: 同じパスに新しいキーを書く(盤面の再起動はない)
+    await writeFile(keyFile, "sk-rotated-key\n", { mode: 0o600 });
+    start("task-kimi-second", null, "kipper");
+    expect(calls[0]!.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-first-key");
+    expect(calls[1]!.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-rotated-key");
+  });
+});

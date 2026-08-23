@@ -15,6 +15,8 @@ export interface BoardStatePath {
  *  変わる保護対象は存在しない** — 検査は「盤面側の固定リスト × workspace パス」の
  *  総当たりである。並ぶ*パス*の数は5とは限らない: GitHub token は env 未設定なら
  *  落ち、5点目の「実行 checkout」は cwd と配信元が一致しなければ2つになる。
+ *  Moonshot キー(ADR 0097 決定4)は api-token と同じく既定パスを持つので常に
+ *  並ぶ — キー未配置の盤面でも、配置された瞬間に無防備にならないようにする。
  *  env の読み出しそのものは合成 root(main.ts)に留め、ここは解決済みの値だけを
  *  受ける。 */
 export interface BoardStatePathsInput {
@@ -33,6 +35,12 @@ export interface BoardStatePathsInput {
    *  持たない」(ADR 0024)が静かに崩れる。env 未設定 → 盤面に GitHub 識別情報が
    *  無い(ADR 0024 の fail-closed な不在)ので、守る対象そのものが存在しない。 */
   githubTokenFile?: string;
+  /** `TIDEPOOL_MOONSHOT_API_KEY_FILE`(既定 `~/.tidepool/moonshot-api-key`)—
+   *  **平文**(ADR 0097 決定4)。githubTokenFile と同じ罠: workspace 配下に入ると
+   *  work プロファイルの `allowRead` で読め、Moonshot の従量課金キーが worker の
+   *  手に渡る。apiTokenFile と同じく**キー未配置でもパスは守る** — 置かれた瞬間に
+   *  無防備にならないよう、既定パスは常に保護対象に並ぶ。 */
+  moonshotApiKeyFile: string;
   /** 盤面の実行 checkout(ADR 0040 の5点目)。盤面は `public/` の静的資産を
    *  実行中の checkout から配信するので、走っている checkout 自体が workspace に
    *  なると worker が `public/index.html` を書き換えられ、次のリロードで人間の
@@ -72,6 +80,10 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
             path: input.githubTokenFile,
           },
         ]),
+    {
+      label: "Moonshot API key file (TIDEPOOL_MOONSHOT_API_KEY_FILE)",
+      path: input.moonshotApiKeyFile,
+    },
     ...checkouts,
   ];
 }
