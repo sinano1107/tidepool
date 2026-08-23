@@ -29,6 +29,7 @@ import { toolError, toolResult } from "./mcp.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
   InvalidAgentNameError,
+  InvalidAgentProviderError,
   InvalidAllowedDomainError,
   InvalidAuthorityProfileNameError,
   InvalidReviewAllowedCommandError,
@@ -120,6 +121,7 @@ const createWorkspaceSchema = z.discriminatedUnion("mode", [
 const agentFieldsSchema = z.object({
   authority: z.string().min(1),
   description: z.string().min(1),
+  provider: z.string().min(1),
   icon: z.string().optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
@@ -153,6 +155,7 @@ function registryToolError(err: unknown) {
     err instanceof UnknownAuthorityProfileError ||
     err instanceof InvalidAgentIconError ||
     err instanceof InvalidSkillAllowlistError ||
+    err instanceof InvalidAgentProviderError ||
     err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAllowedDomainError ||
     err instanceof InvalidAuthorityProfileNameError

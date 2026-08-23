@@ -1468,6 +1468,7 @@ function agentDraftOf(agent) {
     description: agent.description ?? "",
     systemPrompt: agent.systemPrompt ?? "",
     authority: agent.authority ?? "",
+    provider: agent.provider ?? "",
     model: agent.model ?? "",
     effort: agent.effort ?? "",
     advisor: agent.advisor ?? "",
@@ -1480,6 +1481,7 @@ const NEW_AGENT_DRAFT = {
   description: "",
   systemPrompt: "",
   authority: "",
+  provider: "",
   model: "",
   effort: "",
   advisor: "",
@@ -1489,6 +1491,7 @@ function agentBody(d) {
   return {
     authority: d.authority,
     description: d.description.trim(),
+    provider: d.provider,
     icon: d.icon.trim() || void 0,
     model: d.model.trim() || void 0,
     effort: d.effort.trim() || void 0,
@@ -1498,8 +1501,13 @@ function agentBody(d) {
   };
 }
 function agentDraftDirty(d, base) {
-  return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.model.trim() !== base.model || d.effort.trim() !== base.effort || d.advisor.trim() !== base.advisor || !sameStrings(d.skills, base.skills);
+  return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.model.trim() !== base.model || d.effort.trim() !== base.effort || d.advisor.trim() !== base.advisor || !sameStrings(d.skills, base.skills);
 }
+const PROVIDER_OPTIONS = [
+  { value: "", label: "choose one \u2014 provider is required" },
+  { value: "anthropic", label: "anthropic \u2014 Claude models, Anthropic billing" },
+  { value: "moonshot", label: "moonshot \u2014 Kimi models, Moonshot Platform billing" }
+];
 function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegraded }) {
   const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(AgentIconPicker, { value: draft.icon, onChange: (v) => set("icon", v) }), /* @__PURE__ */ React.createElement(
@@ -1519,7 +1527,7 @@ function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegra
       value: draft.systemPrompt,
       onChange: (e) => set("systemPrompt", e.target.value)
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Input, { label: "Model", value: draft.model, onChange: (e) => set("model", e.target.value), placeholder: "adapter default if empty" })), /* @__PURE__ */ React.createElement(Input, { label: "Effort", value: draft.effort, onChange: (e) => set("effort", e.target.value), placeholder: "adapter default if empty" }), /* @__PURE__ */ React.createElement(Input, { label: "Advisor model", value: draft.advisor, onChange: (e) => set("advisor", e.target.value), placeholder: "no advisor if empty" }), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: PROVIDER_OPTIONS, value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Input, { label: "Model", value: draft.model, onChange: (e) => set("model", e.target.value), placeholder: "adapter default if empty" }), /* @__PURE__ */ React.createElement(Input, { label: "Effort", value: draft.effort, onChange: (e) => set("effort", e.target.value), placeholder: "adapter default if empty" })), /* @__PURE__ */ React.createElement(Input, { label: "Advisor model", value: draft.advisor, onChange: (e) => set("advisor", e.target.value), placeholder: "no advisor if empty" }), /* @__PURE__ */ React.createElement(SkillListInput, { candidates: hostSkills, degraded: hostSkillsDegraded, values: draft.skills, onChange: (v) => set("skills", v) }));
 }
 function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
@@ -1530,7 +1538,7 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
   const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
   const [busy, setBusy] = React.useState(false);
   const dirty = agentDraftDirty(draft, agentDraftOf(agent));
-  const ok = !!draft.description.trim() && !!draft.authority;
+  const ok = !!draft.description.trim() && !!draft.authority && !!draft.provider;
   useDirtySignal(edit, open, dirty);
   const startEdit = () => edit.open(id, () => setDraft(agentDraftOf(agent)));
   const save = async () => {
@@ -1553,7 +1561,7 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
       value: agent.systemPrompt ?? "",
       unsetLabel: "no specialty \u2014 worker protocol only"
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "authority", kind: agent.authority ? "mono" : "unset", value: agent.authority ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "model", kind: agent.model ? "mono" : "unset", value: agent.model ?? "", unsetLabel: "adapter default" })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "effort", kind: agent.effort ? "mono" : "unset", value: agent.effort ?? "", unsetLabel: "adapter default" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor model", kind: agent.advisor ? "mono" : "unset", value: agent.advisor ?? "", unsetLabel: "no advisor" })), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "authority", kind: agent.authority ? "mono" : "unset", value: agent.authority ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "provider", kind: agent.provider ? "mono" : "unset", value: agent.provider ?? "", unsetLabel: "\u2014" })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "model", kind: agent.model ? "mono" : "unset", value: agent.model ?? "", unsetLabel: "adapter default" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "effort", kind: agent.effort ? "mono" : "unset", value: agent.effort ?? "", unsetLabel: "adapter default" })), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor model", kind: agent.advisor ? "mono" : "unset", value: agent.advisor ?? "", unsetLabel: "no advisor" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "skills",
@@ -2094,7 +2102,7 @@ function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, 
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
   const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
   const [busy, setBusy] = React.useState(false);
-  const ok = registryNameOk(name) && !!draft.description.trim() && !!draft.authority;
+  const ok = registryNameOk(name) && !!draft.description.trim() && !!draft.authority && !!draft.provider;
   const dirty = !!name.trim() || agentDraftDirty(draft, NEW_AGENT_DRAFT);
   useDirtySignal(edit, true, dirty);
   const authorityCreateOptions = [

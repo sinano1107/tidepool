@@ -1,6 +1,13 @@
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { type AgentDefinition, type AuthorityProfile, ownEntry, type Registry } from "./registry.js";
+import {
+  type AgentDefinition,
+  type AuthorityProfile,
+  assertValidProvider,
+  InvalidAgentProviderError,
+  ownEntry,
+  type Registry,
+} from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 /** An assignee (or the board's default) resolved against the registry —
@@ -25,7 +32,16 @@ export class UnknownAgentError extends Error {
 /** CONTEXT.md's Assignee: `task.assignee` is a reference to a registry agent
  *  name, resolved fresh against the registry every time it's used (spawn,
  *  quarantine clearance) — null inherits the board's default agent, never
- *  pinned. Mirrors workspace.ts's resolveExecutionWorkspace. */
+ *  pinned. Mirrors workspace.ts's resolveExecutionWorkspace.
+ *
+ *  Resolution also re-runs the provider gates (ADR 0097 決定1/3): a
+ *  definition whose provider is outside the enumeration, or that combines an
+ *  advisor with a provider that doesn't offer one, is a broken resource,
+ *  not a spawnable agent — InvalidAgentProviderError, which the pickup path
+ *  (resolveAgentOrQuarantine) fails closed into the same agent-name
+ *  quarantine as registry drift. The loader deliberately does not reject
+ *  these (a violating file still parses) so the violation stops the one
+ *  agent instead of the whole registry read. */
 export function resolveExecutionAgent(
   registry: Registry,
   defaultAgentName: string,
@@ -34,6 +50,7 @@ export function resolveExecutionAgent(
   const name = taskAssignee ?? defaultAgentName;
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
+  assertValidProvider(name, definition.provider, definition.advisor);
   const profile = ownEntry(registry.authority, definition.authority);
   if (!profile) throw new Error(`unknown authority profile: ${definition.authority}`);
   return { name, definition, profile };
@@ -93,8 +110,10 @@ export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: 
 
 /** The agent-name generalization of workspace.ts's resolveOrQuarantine (ADR
  *  0012 / issue #36): `resolve` throwing `UnknownAgentError` (registry drift)
- *  never escapes to the caller — it quarantines the name in its place and the
- *  caller treats agent resolution as failed for this cycle. */
+ *  or `InvalidAgentProviderError` (a definition that no longer stands, ADR
+ *  0097 決定1/3) never escapes to the caller — it quarantines the name in its
+ *  place and the caller treats agent resolution as failed for this cycle.
+ *  Both ride the one existing agent-name quarantine; no new quarantine kind. */
 export function resolveAgentOrQuarantine(
   db: Db,
   resolve: (taskAssignee: string | null) => ResolvedAgent,
@@ -104,7 +123,9 @@ export function resolveAgentOrQuarantine(
   try {
     return resolve(taskAssignee);
   } catch (err) {
-    if (!(err instanceof UnknownAgentError)) throw err;
+    if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentProviderError)) {
+      throw err;
+    }
     quarantineAgent(db, err.agentName, err, now);
     return undefined;
   }

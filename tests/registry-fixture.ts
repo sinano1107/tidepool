@@ -11,6 +11,7 @@ name: deckhand
 description: General work agent for the tidepool board
 version: 0.3.1
 authority: standard
+provider: anthropic
 skills:
   - "${SKILL_WILDCARD}"
 ---
@@ -48,6 +49,7 @@ version: "1"
 authority: steward
 description: Plans work across the board and keeps handoffs clear.
 icon: "🧭"
+provider: anthropic
 model: claude-sonnet-5
 effort: high
 skills:
@@ -61,6 +63,7 @@ version: "1"
 authority: builder
 description: Builds dependable product changes with careful tests.
 icon: "🛠️"
+provider: anthropic
 model: claude-sonnet-5
 effort: medium
 skills:
@@ -74,6 +77,7 @@ version: "1"
 authority: reviewer
 description: Reviews changes for regressions, clarity, and operational risk.
 icon: "🔭"
+provider: anthropic
 model: claude-sonnet-5
 effort: high
 skills:

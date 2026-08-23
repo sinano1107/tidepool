@@ -8,6 +8,7 @@ import {
   verifyAgentRepaired,
 } from "../src/agent.js";
 import { openDb } from "../src/db.js";
+import { InvalidAgentProviderError } from "../src/registry.js";
 import { listBoard } from "../src/tasks.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
@@ -43,6 +44,7 @@ describe("resolveAgentOrQuarantine", () => {
         version: "0.0.1",
         authority: "standard",
         description: "d",
+        provider: "anthropic",
         skills: ["*"],
         systemPrompt: "x",
       },
@@ -63,6 +65,22 @@ describe("resolveAgentOrQuarantine", () => {
     expect(agentNeedsHuman(db, "ghost")).toBe(true);
     const question = listBoard(db).find((t) => t.type === "question");
     expect(question?.question_quarantine_agent).toBe("ghost");
+  });
+
+  it("resolve が InvalidAgentProviderError を投げるときも同じ agent 名 quarantine に乗る(ADR 0097 決定3 — 新しい quarantine 種別は作らない)", () => {
+    const db = openDb(":memory:");
+    const resolve = () => {
+      throw new InvalidAgentProviderError(
+        "deckhand",
+        'provider "moonshot" does not offer an advisor — a definition declaring one does not stand (ADR 0097 決定3)',
+      );
+    };
+    const result = resolveAgentOrQuarantine(db, resolve, "deckhand", new Date(0));
+    expect(result).toBeUndefined();
+    expect(agentNeedsHuman(db, "deckhand")).toBe(true);
+    const question = listBoard(db).find((t) => t.type === "question");
+    expect(question?.question_quarantine_agent).toBe("deckhand");
+    expect(question?.purpose).toContain("moonshot");
   });
 });
 

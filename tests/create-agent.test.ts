@@ -8,7 +8,7 @@ import {
   listAgentViews,
   UnknownAuthorityProfileError,
 } from "../src/agent-create.js";
-import { InvalidAgentNameError, InvalidSkillAllowlistError, loadRegistry } from "../src/registry.js";
+import { InvalidAgentNameError, InvalidAgentProviderError, InvalidSkillAllowlistError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -40,6 +40,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       {
         name: "tako",
         authority: "standard",
+        provider: "anthropic",
         description: "General work agent for the tidepool board",
         icon: "🐙",
         model: "claude-sonnet-5",
@@ -57,6 +58,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       // 作成時の version は機械刻印 — 呼び出し側は渡せない(入力型に version がない)
       version: "1",
       authority: "standard",
+      provider: "anthropic",
       description: "General work agent for the tidepool board",
       icon: "🐙",
       model: "claude-sonnet-5",
@@ -82,6 +84,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       {
         name: "hermit",
         authority: "standard",
+        provider: "anthropic",
         description: "Minimal agent",
         skills: ["*"],
         systemPrompt: "You are Hermit.",
@@ -101,6 +104,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       name: "hermit",
       version: "1",
       authority: "standard",
+      provider: "anthropic",
       description: "Minimal agent",
       icon: undefined,
       model: undefined,
@@ -115,6 +119,7 @@ describe("createAgent: 正常系(issue #70)", () => {
 describe("createAgent: name 検証(issue #70 — assertValidWorkspaceName と同型の入口ゲート)", () => {
   const base = {
     authority: "standard",
+    provider: "anthropic",
     description: "d",
     skills: ["*"],
     systemPrompt: "p",
@@ -153,7 +158,7 @@ describe("createAgent: authority 検証(issue #70 — 既存プロファイル�
 
     await expect(
       createAgent(
-        { name: "tako", authority: "no-such-profile", description: "d", skills: ["*"], systemPrompt: "p" },
+        { name: "tako", authority: "no-such-profile", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
@@ -162,7 +167,7 @@ describe("createAgent: authority 検証(issue #70 — 既存プロファイル�
 });
 
 describe("createAgent: checkout の位置に依存しない書き込み(ADR 0052 決定6 / issue #210)", () => {
-  const input = { name: "tako", authority: "standard", description: "d", skills: ["*"], systemPrompt: "p" };
+  const input = { name: "tako", authority: "standard", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" };
 
   it("registry クローンが registry-edit タスクのブランチに居ても、リモート main へコミットが着地する", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
@@ -272,7 +277,7 @@ describe("createAgent: checkout の位置に依存しない書き込み(ADR 0052
     // リモート main へ tako が着地している
     publish(
       "agents/tako.md",
-      '---\nversion: "1"\nauthority: standard\nskills:\n  - "*"\ndescription: published elsewhere\n---\nbody\n',
+      '---\nversion: "1"\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: published elsewhere\n---\nbody\n',
       "merge: add agent tako",
     );
 
@@ -291,7 +296,7 @@ describe("createAgent: checkout の位置に依存しない書き込み(ADR 0052
     const { registryDir, publish } = await makeRemoteBackedRegistry();
     const publishedSha = publish(
       "agents/hermit.md",
-      '---\nversion: "1"\nauthority: standard\nskills:\n  - "*"\ndescription: published elsewhere\n---\nbody\n',
+      '---\nversion: "1"\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: published elsewhere\n---\nbody\n',
       "merge: add agent hermit",
     );
 
@@ -338,7 +343,7 @@ describe("createAgent: icon 検証(ADR 0026 — loadRegistry を壊す書き込�
 
       await expect(
         createAgent(
-          { name: "tako", authority: "standard", description: "d", icon, skills: ["*"], systemPrompt: "p" },
+          { name: "tako", authority: "standard", provider: "anthropic", description: "d", icon, skills: ["*"], systemPrompt: "p" },
           { registry: { dir: registryDir, mode: "purely-local" } },
         ),
       ).rejects.toThrow(InvalidAgentIconError);
@@ -358,7 +363,7 @@ describe("createAgent: skills 検証(ADR 0025 — loadRegistry を壊す許可�
 
       await expect(
         createAgent(
-          { name: "tako", authority: "standard", description: "d", skills, systemPrompt: "p" },
+          { name: "tako", authority: "standard", provider: "anthropic", description: "d", skills, systemPrompt: "p" },
           { registry: { dir: registryDir, mode: "purely-local" } },
         ),
       ).rejects.toThrow(InvalidSkillAllowlistError);
@@ -369,11 +374,71 @@ describe("createAgent: skills 検証(ADR 0025 — loadRegistry を壊す許可�
   );
 });
 
+describe("createAgent: provider 検証(ADR 0097 — 必須・列挙・advisor 組み合わせを入口で拒否)", () => {
+  const base = {
+    name: "tako",
+    authority: "standard",
+    provider: "anthropic",
+    description: "d",
+    skills: ["*"],
+    systemPrompt: "p",
+  };
+
+  it("列挙(anthropic / moonshot)にない provider は InvalidAgentProviderError で拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      createAgent({ ...base, provider: "moonshto" }, { registry: { dir: registryDir, mode: "purely-local" } }),
+    ).rejects.toThrow(InvalidAgentProviderError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    // 不正 provider が書き込まれていれば loadRegistry ごと落ちる — それが起きていない
+    expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeUndefined();
+  });
+
+  it("advisor を持つ定義に advisor を提供しない provider(moonshot)の組み合わせは拒否され、コミットを積まない(ADR 0097 決定3)", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      createAgent(
+        { ...base, provider: "moonshot", advisor: "opus" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toThrow(InvalidAgentProviderError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeUndefined();
+  });
+
+  it("moonshot でも advisor を持たなければ通り、frontmatter に provider が書かれてラウンドトリップする", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await createAgent(
+      { ...base, provider: "moonshot" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").agents.tako!.provider).toBe("moonshot");
+    expect(git(registryDir, "show", "main:agents/tako.md")).toContain("provider: moonshot");
+  });
+
+  it("空白だけの advisor は未設定と同じ — moonshot との組み合わせも拒否されない(normalizeAdvisor と同じ正規化で判定)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await createAgent(
+      { ...base, provider: "moonshot", advisor: "  \t " },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    expect(loadRegistry(registryDir, "purely-local").agents.tako!.provider).toBe("moonshot");
+  });
+});
+
 describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
   it("registry の全エージェントを systemPrompt 含む全フィールドで返す", async () => {
     const registryDir = await makeMainRegistry();
     await createAgent(
-      { name: "tako", authority: "standard", description: "General agent", icon: "🐙", skills: ["*"], systemPrompt: "You are Tako." },
+      { name: "tako", authority: "standard", provider: "anthropic", description: "General agent", icon: "🐙", skills: ["*"], systemPrompt: "You are Tako." },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
@@ -384,6 +449,7 @@ describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
       name: "tako",
       version: "1",
       authority: "standard",
+      provider: "anthropic",
       description: "General agent",
       icon: "🐙",
       model: undefined,

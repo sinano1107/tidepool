@@ -19,7 +19,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
   const { registryDir, publish } = await makeRemoteBackedRegistry();
   publish(
     "agents/deckhand.md",
-    `---\nname: deckhand\ndescription: Definition merged on remote\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nRemote definition.\n`,
+    `---\nname: deckhand\ndescription: Definition merged on remote\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nRemote definition.\n`,
     "merged registry change",
   );
   const db = openDb(":memory:");

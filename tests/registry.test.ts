@@ -59,7 +59,7 @@ describe("loadRegistry", () => {
     const { registryDir, publish } = await makeRemoteBackedRegistry();
     publish(
       "agents/deckhand.md",
-      `---\nname: deckhand\ndescription: Merged registry definition\nversion: 0.4.0\nauthority: standard\nskills:\n  - "*"\n---\nYou are the merged Deckhand.\n`,
+      `---\nname: deckhand\ndescription: Merged registry definition\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are the merged Deckhand.\n`,
       "merged registry change",
     );
     await refreshRegistry(registryDir, undefined);
@@ -89,7 +89,7 @@ describe("loadRegistry", () => {
     // trailing newline for parseAgentFile's frontmatter regex to match — an
     // empty body is `---\n` with nothing after it.
     const dir = await makeRegistry({
-      "agents/tako.md": `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nskills:\n  - "*"\nicon: \u{1F419}\n---\n`,
+      "agents/tako.md": `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\nicon: \u{1F419}\n---\n`,
     });
     const registry = loadRegistry(dir, "purely-local");
     expect(registry.agents.tako!.systemPrompt).toBe("");
@@ -98,7 +98,7 @@ describe("loadRegistry", () => {
 
   it("frontmatter の model は optional: あれば読み、なければ undefined", async () => {
     const withModel = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withModel, "purely-local").agents.deckhand!.model).toBe("opus");
     const without = await makeRegistry();
@@ -107,7 +107,7 @@ describe("loadRegistry", () => {
 
   it("frontmatter の description は必須: 欠落は登録時にエラーになる(roster の1行を担う散文 — issue #43 / ADR 0014)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/description/i);
   });
@@ -122,7 +122,7 @@ describe("loadRegistry", () => {
 
   it("frontmatter の effort は optional: あれば読み、なければ undefined", async () => {
     const withEffort = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\neffort: high\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\neffort: high\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withEffort, "purely-local").agents.deckhand!.effort).toBe("high");
     const without = await makeRegistry();
@@ -133,7 +133,7 @@ describe("loadRegistry", () => {
   // 検査しない(ADR 0042)。エイリアスも具体 id も同じ自由文字列として通す。
   it("frontmatter の advisor は optional: あれば読み、なければ undefined", async () => {
     const withAdvisor = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: opus\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: opus\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withAdvisor, "purely-local").agents.deckhand!.advisor).toBe("opus");
     const without = await makeRegistry();
@@ -144,14 +144,37 @@ describe("loadRegistry", () => {
   // ホストの CLI 版でエイリアスの解決先が動く以上、具体 id を書くのは正当な選択。
   it("frontmatter の advisor は具体モデル id も同じ自由文字列として通す(ADR 0042)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: claude-opus-5\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: claude-opus-5\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(dir, "purely-local").agents.deckhand!.advisor).toBe("claude-opus-5");
   });
 
+  it("frontmatter の provider を読み込む(ADR 0097 決定1: 推論の向き先・課金元の宣言 — harness とは独立した概念)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nprovider: anthropic\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.provider).toBe("anthropic");
+  });
+
+  it("frontmatter の provider は必須: 欠落は登録時にエラーになる(ADR 0097 決定1 — 「省略 = 既定 provider」という暗黙は書き忘れと意図の区別がつかない)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\n---\nYou are Deckhand.\n`,
+    });
+    expect(() => loadRegistry(dir, "purely-local")).toThrow(/provider/i);
+  });
+
+  it("provider の値の列挙・advisor 組み合わせの検査は読み込みではなく登録と pickup の門(ADR 0097 決定3): 未知の値も読み込め、違反はその agent 名の quarantine に留まり registry 読み取り全体を倒さない", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nprovider: moonshto\nadvisor: opus\n---\nYou are Deckhand.\n`,
+    });
+    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
+    expect(agent.provider).toBe("moonshto");
+    expect(agent.advisor).toBe("opus");
+  });
+
   it("frontmatter の icon は optional: あれば読み、なければ undefined", async () => {
     const withIcon = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(withIcon, "purely-local").agents.deckhand!.icon).toBe("\u{1F419}");
     const without = await makeRegistry();
@@ -160,14 +183,14 @@ describe("loadRegistry", () => {
 
   it("frontmatter の icon が複数文字(絵文字2つ)の場合は登録時にエラーになる(ADR 0026: 単一グラフェム制約)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\u{1F980}\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1F419}\u{1F980}\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/icon/i);
   });
 
   it("frontmatter の icon が絵文字以外の文字の場合は登録時にエラーになる", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: a\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: a\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/icon/i);
   });
@@ -177,21 +200,21 @@ describe("loadRegistry", () => {
     // as of the pinned version; tracks the dependency's coverage table by
     // design (ADR 0026: validation must reject what the renderer can't show).
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1FADD}\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nicon: \u{1FADD}\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/icon/i);
   });
 
   it("frontmatter の skills 許可リストを読み込む(CONTEXT.md: エージェント = ベース AI + skills + ...・issue #56 / ADR 0025)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nskills:\n  - "@workspace"\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n  - "@workspace"\n---\nYou are Deckhand.\n`,
     });
     expect(loadRegistry(dir, "purely-local").agents.deckhand!.skills).toEqual(["@workspace"]);
   });
 
   it("frontmatter の skills は必須: 欠落は登録時にエラーになる(省略=無制限のフットガンを作らない・issue #41 の線 / ADR 0025)", async () => {
     const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\n---\nYou are Deckhand.\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/skills/i);
   });
@@ -200,7 +223,7 @@ describe("loadRegistry", () => {
    *  keeps the grammar tests to their one varying part. */
   const withSkills = (skillsYaml: string) =>
     makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`,
     });
 
   it("skills の '*' は単独時のみ有効: 他の語と併記されるとエラー(glob は '*' 単独と '名前:*' の2形だけ・ADR 0025)", async () => {
@@ -335,7 +358,7 @@ describe("loadRegistry", () => {
     git("checkout", "-b", "task/registry-edit");
     await writeFile(
       join(dir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: HIJACKED\nversion: 9.9.9\nauthority: standard\nskills:\n  - "*"\n---\nYou are compromised.\n`,
+      `---\nname: deckhand\ndescription: HIJACKED\nversion: 9.9.9\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are compromised.\n`,
     );
     git("add", "-A");
     git("commit", "-m", "unmerged edit on a task branch");

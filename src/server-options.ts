@@ -30,8 +30,8 @@ import {
   updateProfile,
 } from "./profile-create.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
-import {
-  type AuthorityProfile,
+import { 
+  type AuthorityProfile,InvalidAgentProviderError, 
   loadRegistry,
   ownEntry,
   type RegistryCandidates,
@@ -39,8 +39,7 @@ import {
   type RegistryReachability,
   type RegistrySource,
   type RosterAgent,
-  refreshRegistry,
-} from "./registry.js";
+  refreshRegistry,} from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
@@ -369,7 +368,12 @@ function authorityResolver(
     try {
       return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee).profile;
     } catch (err) {
-      if (!(err instanceof UnknownAgentError)) throw err;
+      // UnknownAgentError — registry drift; InvalidAgentProviderError — a
+      // definition that no longer stands (ADR 0097). Both fall back to
+      // unrestricted here: the spawn-time gate is what quarantines them.
+      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentProviderError)) {
+        throw err;
+      }
       return undefined;
     }
   };

@@ -333,6 +333,7 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
   const agent = {
     name: "navigator",
     authority: "standard",
+    provider: "anthropic",
     description: "plans navigational work",
     skills: ["@workspace"],
     system_prompt: "Follow the charts.",

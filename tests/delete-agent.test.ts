@@ -94,7 +94,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       // deckhand は別 profile を指す
       "authority/solo.yaml": "guidance: solo\nassignable_to: []\nallowed_workspaces: []\nmerge: escalate\n",
       "agents/deckhand.md":
-        '---\nversion: "1"\nauthority: solo\ndescription: General work agent\nskills: []\n---\nYou are Deckhand.\n',
+        '---\nversion: "1"\nauthority: solo\ndescription: General work agent\nprovider: anthropic\nskills: []\n---\nYou are Deckhand.\n',
     });
     git(registryDir, "branch", "-M", "main");
 

@@ -5,6 +5,7 @@ import {
   UnknownAuthorityProfileError,
   type UpdateAgentInput,
 } from "../src/agent-create.js";
+import { InvalidAgentProviderError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -19,6 +20,7 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
           name: "tako",
           version: "1",
           authority: "standard",
+          provider: "anthropic",
           skills: ["*"],
           description: "General agent",
           icon: "🐙",
@@ -40,6 +42,7 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
         name: "tako",
         version: "1",
         authority: "standard",
+        provider: "anthropic",
         skills: ["*"],
         description: "General agent",
         icon: "🐙",
@@ -69,6 +72,7 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    provider: "anthropic",
     skills: ["*"],
     description: "Updated description",
     advisor: "opus",
@@ -81,6 +85,7 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
     {
       name: "tako",
       authority: "standard",
+      provider: "anthropic",
       skills: ["*"],
       description: "Updated description",
       advisor: "opus",
@@ -101,6 +106,7 @@ it("systemPrompt が空文字は 200(ADR 0017: 空 specialty は正規形、issu
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    provider: "anthropic",
     skills: ["*"],
     description: "Updated description",
     systemPrompt: "",
@@ -111,6 +117,7 @@ it("systemPrompt が空文字は 200(ADR 0017: 空 specialty は正規形、issu
     {
       name: "tako",
       authority: "standard",
+      provider: "anthropic",
       skills: ["*"],
       description: "Updated description",
       systemPrompt: "",
@@ -129,6 +136,7 @@ it("編集対象の未知 name(UnknownAgentError)は 404", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/ghost", {
     authority: "standard",
+    provider: "anthropic",
     skills: ["*"],
     description: "d",
     systemPrompt: "p",
@@ -167,9 +175,51 @@ it("不正 icon(InvalidAgentIconError)は 400", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    provider: "anthropic",
     skills: ["*"],
     description: "d",
     icon: "ab",
+    systemPrompt: "p",
+  });
+
+  expect(res.status).toBe(400);
+});
+
+it("body に provider が無い PATCH は 400(必須 — ADR 0097 決定1)", async () => {
+  const calls: UpdateAgentInput[] = [];
+  t = await bootTidepool({
+    agentAdmin: {
+      update: async (input) => {
+        calls.push(input);
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
+    authority: "standard",
+    skills: ["*"],
+    description: "d",
+    systemPrompt: "p",
+  });
+
+  expect(res.status).toBe(400);
+  expect(calls).toEqual([]);
+});
+
+it("不正 provider(InvalidAgentProviderError)は 400(ADR 0097 — 列挙外・advisor 組み合わせ)", async () => {
+  t = await bootTidepool({
+    agentAdmin: {
+      update: async () => {
+        throw new InvalidAgentProviderError("tako", 'unknown provider "moonshto"');
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
+    authority: "standard",
+    provider: "moonshto",
+    skills: ["*"],
+    description: "d",
     systemPrompt: "p",
   });
 
@@ -187,6 +237,7 @@ it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    provider: "anthropic",
     skills: ["*"],
     description: "d",
     systemPrompt: "p",
@@ -206,6 +257,7 @@ it("その他の外部失敗は 502", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/agents/tako", {
     authority: "standard",
+    provider: "anthropic",
     skills: ["*"],
     description: "d",
     systemPrompt: "p",

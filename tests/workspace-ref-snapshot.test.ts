@@ -239,6 +239,7 @@ it("セッション中の registry 書き込みで、registry clone の workspac
       await api(t.baseUrl, "POST", "/api/agents", {
         name: "tako",
         authority: "standard",
+        provider: "anthropic",
         skills: ["*"],
         description: "General agent",
         systemPrompt: "You are Tako.",
@@ -305,6 +306,7 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
       await api(t.baseUrl, "POST", "/api/agents", {
         name: "tako",
         authority: "standard",
+        provider: "anthropic",
         skills: ["*"],
         description: "General agent",
         systemPrompt: "You are Tako.",

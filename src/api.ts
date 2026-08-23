@@ -40,6 +40,7 @@ import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from ".
 import {
   authorityProfileSchema,
   InvalidAgentNameError,
+  InvalidAgentProviderError,
   InvalidAllowedDomainError,
   InvalidAuthorityProfileNameError,
   InvalidReviewAllowedCommandError,
@@ -255,6 +256,10 @@ const createAgentSchema = z.object({
   name: z.string().min(1),
   authority: z.string().min(1),
   description: z.string().min(1),
+  // provider (ADR 0097 決定1): required — the string shape only; the enum
+  // and the advisor combination (assertValidProvider) live in the domain, so
+  // callers get a domain error, same as name/authority/icon/skills here.
+  provider: z.string().min(1),
   icon: z.string().optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
@@ -863,7 +868,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof InvalidAgentNameError ||
         err instanceof UnknownAuthorityProfileError ||
         err instanceof InvalidAgentIconError ||
-        err instanceof InvalidSkillAllowlistError
+        err instanceof InvalidSkillAllowlistError ||
+        err instanceof InvalidAgentProviderError
       ) {
         res.status(400).json({ error: err.message });
       } else {
@@ -920,7 +926,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (
         err instanceof UnknownAuthorityProfileError ||
         err instanceof InvalidAgentIconError ||
-        err instanceof InvalidSkillAllowlistError
+        err instanceof InvalidSkillAllowlistError ||
+        err instanceof InvalidAgentProviderError
       ) {
         res.status(400).json({ error: err.message });
       } else {

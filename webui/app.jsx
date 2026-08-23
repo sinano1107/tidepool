@@ -1018,6 +1018,7 @@ function agentDraftOf(agent) {
   return {
     icon: agent.icon ?? '', description: agent.description ?? '',
     systemPrompt: agent.systemPrompt ?? '', authority: agent.authority ?? '',
+    provider: agent.provider ?? '',
     model: agent.model ?? '', effort: agent.effort ?? '', advisor: agent.advisor ?? '',
     // GET /api/agents already returns skills (ADR 0025)
     skills: agent.skills ?? [],
@@ -1029,7 +1030,7 @@ function agentDraftOf(agent) {
 // author sees it and edits it before creating.
 const NEW_AGENT_DRAFT = {
   icon: '', description: '', systemPrompt: '', authority: '',
-  model: '', effort: '', advisor: '', skills: ['@workspace'],
+  provider: '', model: '', effort: '', advisor: '', skills: ['@workspace'],
 };
 
 // The API body those fields make. The optional ones drop out when blank, so a
@@ -1038,6 +1039,7 @@ function agentBody(d) {
   return {
     authority: d.authority,
     description: d.description.trim(),
+    provider: d.provider,
     icon: d.icon.trim() || undefined,
     model: d.model.trim() || undefined,
     effort: d.effort.trim() || undefined,
@@ -1055,11 +1057,21 @@ function agentDraftDirty(d, base) {
     || d.description.trim() !== base.description
     || d.systemPrompt !== base.systemPrompt
     || d.authority !== base.authority
+    || d.provider !== base.provider
     || d.model.trim() !== base.model
     || d.effort.trim() !== base.effort
     || d.advisor.trim() !== base.advisor
     || !sameStrings(d.skills, base.skills);
 }
+
+// The provider enumeration (registry.ts's PROVIDER_VALUES, ADR 0097): required,
+// so the leading entry is "not chosen yet", not a default — Save stays disabled
+// until one is picked (the same shape as MERGE_OPTIONS below).
+const PROVIDER_OPTIONS = [
+  { value: '', label: 'choose one — provider is required' },
+  { value: 'anthropic', label: 'anthropic — Claude models, Anthropic billing' },
+  { value: 'moonshot', label: 'moonshot — Kimi models, Moonshot Platform billing' },
+];
 
 // Those fields as controls, shared by the record card and the create form so
 // the two never drift — the agent analogue of ProfileFields.
@@ -1074,9 +1086,12 @@ function AgentFields({ draft, set, authorityOptions, hostSkills, hostSkillsDegra
         multiline rows={4} value={draft.systemPrompt} onChange={(e) => set('systemPrompt', e.target.value)} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', e.target.value)} />
-        <Input label="Model" value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="adapter default if empty" />
+        <Select label="Provider" options={PROVIDER_OPTIONS} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
-      <Input label="Effort" value={draft.effort} onChange={(e) => set('effort', e.target.value)} placeholder="adapter default if empty" />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Input label="Model" value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="adapter default if empty" />
+        <Input label="Effort" value={draft.effort} onChange={(e) => set('effort', e.target.value)} placeholder="adapter default if empty" />
+      </div>
       <Input label="Advisor model" value={draft.advisor} onChange={(e) => set('advisor', e.target.value)} placeholder="no advisor if empty" />
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={draft.skills} onChange={(v) => set('skills', v)} />
     </React.Fragment>
@@ -1097,7 +1112,7 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
   const [busy, setBusy] = React.useState(false);
 
   const dirty = agentDraftDirty(draft, agentDraftOf(agent));
-  const ok = !!draft.description.trim() && !!draft.authority;
+  const ok = !!draft.description.trim() && !!draft.authority && !!draft.provider;
   useDirtySignal(edit, open, dirty);
 
   const startEdit = () => edit.open(id, () => setDraft(agentDraftOf(agent)));
@@ -1129,12 +1144,13 @@ function AgentRecord({ agent, authorityProfiles, hostSkills, hostSkillsDegraded,
             unsetLabel="no specialty — worker protocol only" />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <FieldRow label="authority" kind={agent.authority ? 'mono' : 'unset'} value={agent.authority ?? ''} unsetLabel="—" />
-            <FieldRow label="model" kind={agent.model ? 'mono' : 'unset'} value={agent.model ?? ''} unsetLabel="adapter default" />
+            <FieldRow label="provider" kind={agent.provider ? 'mono' : 'unset'} value={agent.provider ?? ''} unsetLabel="—" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <FieldRow label="model" kind={agent.model ? 'mono' : 'unset'} value={agent.model ?? ''} unsetLabel="adapter default" />
             <FieldRow label="effort" kind={agent.effort ? 'mono' : 'unset'} value={agent.effort ?? ''} unsetLabel="adapter default" />
-            <FieldRow label="advisor model" kind={agent.advisor ? 'mono' : 'unset'} value={agent.advisor ?? ''} unsetLabel="no advisor" />
           </div>
+          <FieldRow label="advisor model" kind={agent.advisor ? 'mono' : 'unset'} value={agent.advisor ?? ''} unsetLabel="no advisor" />
           <FieldRow label="skills" kind={(agent.skills ?? []).length ? 'tags' : 'unset'} tags={agent.skills ?? []}
             scheme="skills" wildcardHint="every skill" unsetLabel="no skills allowed" />
         </React.Fragment>
@@ -1834,7 +1850,7 @@ function NewAgentForm({ authorityProfiles, hostSkills, hostSkillsDegraded, say, 
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
   const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
   const [busy, setBusy] = React.useState(false);
-  const ok = registryNameOk(name) && !!draft.description.trim() && !!draft.authority;
+  const ok = registryNameOk(name) && !!draft.description.trim() && !!draft.authority && !!draft.provider;
   const dirty = !!name.trim() || agentDraftDirty(draft, NEW_AGENT_DRAFT);
   useDirtySignal(edit, true, dirty);
   // creation offers the empty placeholder the edit form doesn't: a new agent
