@@ -426,6 +426,6 @@ it("容器機構は platform で選ばれ、実測が無いホストでは fail-
   const capability = (await buildServerOptions(composition())).containerRuntime.preflight();
 
   const unmeasured =
-    capability.available === false && capability.reason.includes("no worker container mechanism has been measured");
+    capability.available === false && capability.reason.includes("passes the worker container contract");
   expect(unmeasured).toBe(platform !== "linux");
 });

@@ -36,7 +36,7 @@ it("容器機構を実測していない platform は fail-closed — 黙って�
   const capability = containerRuntimeFor("darwin").preflight();
 
   expect(reason(capability)).toContain("darwin");
-  expect(reason(capability)).toContain("has been measured");
+  expect(reason(capability)).toContain("passes the worker container contract");
 });
 
 it("cgroup v2 が mount され自分の cgroup 配下に mkdir できれば前提は成立する", async () => {
