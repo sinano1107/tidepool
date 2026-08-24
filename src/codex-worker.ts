@@ -144,7 +144,7 @@ function taskPrompt(task: Task, systemPrompt: string, authority: string): string
     `Purpose: ${task.purpose}\nCompletion criteria: ${task.completion_criteria}`;
 }
 
-function permissionConfig(task: Task, workspace: string, domains: readonly string[]): string[] {
+function permissionConfig(task: Task, domains: readonly string[]): string[] {
   const name = task.type === "review" ? "tidepool-review" : "tidepool-work";
   const parent = task.type === "review" ? ":read-only" : ":workspace";
   const filesystem = task.type === "review"
@@ -157,7 +157,6 @@ function permissionConfig(task: Task, workspace: string, domains: readonly strin
     `default_permissions=${toml(name)}`,
     `permissions.${name}.extends=${toml(parent)}`,
     `permissions.${name}.filesystem=${filesystem}`,
-    `permissions.${name}.workspace_roots={${toml(workspace)}=true}`,
     `permissions.${name}.network={enabled=true,domains={${allowed}}}`,
   ];
 }
@@ -305,7 +304,7 @@ export class CodexWorker implements WorkerAdapter {
     writeFileSync(hookState, "[]", { mode: 0o600 });
     const config = [
       `model_reasoning_effort=${toml(agent.definition.effort ?? "medium")}`,
-      ...permissionConfig(task, workspace.path, workspace.allowed_domains ?? []),
+      ...permissionConfig(task, workspace.allowed_domains ?? []),
       "features.network_proxy=true",
       "features.plugins=false",
       "features.tool_search=false",
@@ -315,7 +314,6 @@ export class CodexWorker implements WorkerAdapter {
       "tools.web_search=false",
       "tools.view_image=false",
       "project_doc_max_bytes=0",
-      "project_doc_fallback_filenames=[]",
       'forced_login_method="chatgpt"',
       `mcp_servers.tidepool.url=${toml(this.options.mcpUrl)}`,
       `mcp_servers.tidepool.enabled_tools=${toml(BOARD_VERBS)}`,

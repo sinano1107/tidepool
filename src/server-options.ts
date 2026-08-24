@@ -51,8 +51,7 @@ import {
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
-import type { Task } from "./tasks.js";
-import { resolveTaskAgent } from "./tasks.js";
+import { resolveTaskAgent, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type KillSignal, type WorkerAdapter } from "./worker.js";
@@ -233,16 +232,10 @@ export function buildWorkerOptions(
  *  合成 root から渡されるのは env 由来のスカラだけになる。 */
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
-  if (!registryDir) return () => new LoggingWorker();
+  const resolveHarness = harnessResolver(board);
+  if (!registryDir || !resolveHarness) return () => new LoggingWorker();
   return ({ db, clock }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
-    const resolveHarness = (task: Task) => {
-      const loaded = loadRegistry(registry.dir, registry.mode);
-      const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
-      const provider = ownEntry(loaded.agents, name)?.provider;
-      if (!provider) throw new Error(`unknown agent: ${name}`);
-      return canonicalHarness(provider as Provider);
-    };
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
       resolveHarness,

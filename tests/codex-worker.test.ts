@@ -9,68 +9,21 @@ import { quarantinedAuthProviders } from "../src/cli-auth.js";
 import { type CodexSpawnFn, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import type { Task } from "../src/tasks.js";
+import { registerTask } from "../src/tasks.js";
 import { FakeClock } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
 
-function task(id = "codex-task"): Task {
-  return {
-    id,
+function task(db: ReturnType<typeof openDb>, title = "codex-task") {
+  return registerTask(db, {
     type: "work",
-    status: "in_progress",
     assignee: "codex-agent",
     workspace: "work",
-    title: "implement the fix",
+    title,
     purpose: "keep the board correct",
     completion_criteria: "the focused tests pass",
-    risk_flag: 0,
-    review_flag: 0,
-    parent_id: null,
-    based_on_decision: null,
-    sort_key: 1,
-    handoff_doc: null,
-    pr_number: null,
-    question_items: null,
-    question_answer: null,
-    question_answer_comment: null,
-    question_cancel_option: null,
-    question_pending_child: null,
-    question_pending_merge_pr: null,
-    question_pending_local_merge_task_id: null,
-    question_pending_pr_promotion_task_id: null,
-    question_quarantine_workspace: null,
-    question_quarantine_agent: null,
-    question_quarantine_sandbox: null,
-    question_quarantine_registry: null,
-    question_quarantine_cli_auth: null,
-    question_quarantine_provider_auth: null,
-    question_cli_auth_expiry_warning: null,
-    github_issue_number: null,
-    created_at: "2026-08-24T00:00:00.000Z",
-  };
-}
-
-function insertTask(db: ReturnType<typeof openDb>, value: Task): void {
-  db.prepare(
-    `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-       risk_flag, review_flag, sort_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    value.id,
-    value.type,
-    value.status,
-    value.assignee,
-    value.workspace,
-    value.title,
-    value.purpose,
-    value.completion_criteria,
-    value.risk_flag,
-    value.review_flag,
-    value.sort_key,
-    value.created_at,
-  );
+  }, new Date("2026-08-24T00:00:00.000Z"));
 }
 
 function recordingSpawn() {
@@ -149,8 +102,7 @@ You are the Codex worker.`,
 describe("CodexWorker (ADR 0098)", () => {
   it("spawns the pinned Codex route with isolated auth home and closed worker surfaces", async () => {
     const f = await fixture();
-    const value = task();
-    insertTask(f.db, value);
+    const value = task(f.db);
     process.env.OPENAI_API_KEY = "must-not-leak";
     process.env.GITHUB_TOKEN = "must-not-leak";
 
@@ -195,8 +147,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("the spawned Board-owned hook denies Tidepool MCP only from subagent turns and fails closed", async () => {
     const f = await fixture();
-    const value = task("codex-hook");
-    insertTask(f.db, value);
+    const value = task(f.db, "codex-hook");
     f.worker.start(value);
     const env = f.process.calls[0]!.env;
     const hook = join(f.codexHome, "tidepool-hooks", "main-thread-mcp.mjs");
@@ -237,8 +188,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("normalizes a successful Codex JSONL fixture into the durable session event", async () => {
     const f = await fixture();
-    const value = task("codex-success");
-    insertTask(f.db, value);
+    const value = task(f.db, "codex-success");
     f.worker.start(value);
 
     const jsonl = readFileSync(new URL("fixtures/codex-success.jsonl", import.meta.url), "utf8");
@@ -267,8 +217,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("quarantines only OpenAI pickup when Codex JSONL reports a ChatGPT auth failure", async () => {
     const f = await fixture();
-    const value = task("codex-auth");
-    insertTask(f.db, value);
+    const value = task(f.db, "codex-auth");
     f.worker.start(value);
     f.process.stdout.write(
       readFileSync(new URL("fixtures/codex-auth-failure.jsonl", import.meta.url), "utf8"),
@@ -289,8 +238,7 @@ describe("CodexWorker (ADR 0098)", () => {
       ["codex-missing-usage", 0, ""],
     ] as const) {
       const f = await fixture();
-      const value = task(id);
-      insertTask(f.db, value);
+      const value = task(f.db, id);
       f.worker.start(value);
       f.process.stderr.write(stderr);
       f.process.exit(code, null);
@@ -307,8 +255,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("delivers kill to the retained Codex root and records the signaled exit", async () => {
     const f = await fixture();
-    const value = task("codex-killed");
-    insertTask(f.db, value);
+    const value = task(f.db, "codex-killed");
     f.worker.start(value);
 
     f.worker.kill(value.id, "SIGTERM");
