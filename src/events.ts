@@ -178,8 +178,8 @@ export type EventPayload =
       definition_version: string;
       advisor: string | null;
       /** ADR 0098: the Harness/version actually selected for this session. */
-      harness?: "claude-code" | "codex";
-      cli_version?: string;
+      harness: "claude-code" | "codex";
+      cli_version: string;
     }
   // issue #21: a workspace already needs-human failed the tree rule again
   // before its open Confirmation question was answered — recorded on that
@@ -207,6 +207,7 @@ export type EventPayload =
   // cli_auth_reinstated — the provider's authentication probe passed at
   // answer time, so pickup resumes for that provider's agents only
   | { kind: "provider_auth_reinstated"; provider: string }
+  | { kind: "harness_reinstated"; harness: "claude-code" | "codex" }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
   // stream-json `result` event (e.g. watchdog kill); the event itself is

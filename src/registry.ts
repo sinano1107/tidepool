@@ -183,6 +183,7 @@ export function assertValidProvider(
   agentName: string,
   provider: string,
   advisor: string | undefined,
+  skills: readonly string[] = [],
 ): void {
   if (!(PROVIDER_VALUES as readonly string[]).includes(provider)) {
     throw new InvalidAgentProviderError(
@@ -195,6 +196,13 @@ export function assertValidProvider(
     throw new InvalidAgentProviderError(
       agentName,
       `canonical route "${provider} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand (ADR 0098)`,
+    );
+  }
+  if (route.harness === "codex" && skills.length > 0) {
+    throw new InvalidAgentProviderError(
+      agentName,
+      `canonical route "${provider} -> ${route.harness}" does not offer skills in v1 — ` +
+        "a definition declaring a non-empty allowlist does not stand (ADR 0098)",
     );
   }
 }

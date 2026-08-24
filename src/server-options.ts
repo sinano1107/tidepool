@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { platform } from "node:process";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import {
@@ -21,8 +22,9 @@ import type { Clock } from "./clock.js";
 import {
   CODEX_CLI_VERSION,
   CodexWorker,
-  checkCodexCapability,
+  createCodexCapabilityCheck,
 } from "./codex-worker.js";
+import { composeContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
@@ -37,6 +39,7 @@ import {
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
+  assertValidProvider,
   canonicalHarness,
   InvalidAgentProviderError,
   loadRegistry,
@@ -146,6 +149,8 @@ export interface BoardComposition {
   moonshotApiKeyFile: string;
   /** ADR 0098: isolated Board-owned Codex login/cache/config root. */
   codexHome: string;
+  /** ADR 0098: absolute Codex executable; the live preflight proves it exists. */
+  codexExecutable: string;
   /** ADR 0024 / issue #50: 盤面の GitHub 識別情報。ファイルの読み取りは合成 root
    *  側の I/O なので、ここには解決済みの値だけが来る。未設定 → GitHub 機能は
    *  すべて fail-closed で off。 */
@@ -217,6 +222,7 @@ export function buildWorkerOptions(
     workspacesDir: board.workspacesDir,
     mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
     logDir: board.logDir,
+    cliVersion: () => execFileSync("claude", ["--version"], { encoding: "utf8" }).trim(),
     // ADR 0040: 床そのもの — 重なっている workspace では spawn せず quarantine
     boardState: board.boardState,
     // issue #33 判断8: 不在が「マスクされていない」を意味する口なので、渡し忘れは
@@ -252,6 +258,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
           mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
           logDir: board.logDir,
           codexHome: board.codexHome,
+          executable: board.codexExecutable,
           cliVersion: CODEX_CLI_VERSION,
           boardState: board.boardState,
         }),
@@ -265,10 +272,27 @@ function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<t
   return (task) => {
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
-    const provider = ownEntry(registry.agents, name)?.provider;
-    if (!provider) throw new Error(`unknown agent: ${name}`);
-    return canonicalHarness(provider as Provider);
+    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
+    return canonicalHarness(agent.definition.provider as Provider);
   };
+}
+
+function agentsUsingHarnessesResolver(
+  board: BoardComposition,
+): ((harnesses: readonly ReturnType<typeof canonicalHarness>[]) => string[]) | undefined {
+  if (!board.registryDir) return undefined;
+  return (harnesses) =>
+    Object.values(loadBoardRegistry(board).agents)
+      .filter((agent) => {
+        try {
+          assertValidProvider(agent.name, agent.provider, agent.advisor, agent.skills);
+          return harnesses.includes(canonicalHarness(agent.provider as Provider));
+        } catch (error) {
+          if (error instanceof InvalidAgentProviderError) return false;
+          throw error;
+        }
+      })
+      .map((agent) => agent.name);
 }
 
 /** One spelling for every registry-derived composition seam: mode is resolved
@@ -594,6 +618,18 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
+  const workspace = workspaceConfig(board);
+  const codexContainment = workspace && createCodexCapabilityCheck({
+    executable: board.codexExecutable,
+    codexHome: board.codexHome,
+    workspace: workspace.path,
+    mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
+  });
+  const claudeContainment = composeContainment(
+    () => checkSandboxCapability(platform),
+    async () => ({ available: true }),
+    () => probeToolSurfaceCapability(),
+  );
   return {
     dbPath: board.dbPath,
     credential: board.credential,
@@ -601,7 +637,7 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     mcpPort: board.mcpPort,
     clock: board.clock,
     worker: buildWorkerFactory(board),
-    workspace: workspaceConfig(board),
+    workspace,
     resolveWorkspace: workspaceResolver(board),
     github,
     workspaceAdmin: workspaceAdmin(board, github),
@@ -626,9 +662,16 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
+    agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board),
-    harnessContainment: async (harness) =>
-      harness === "codex" ? await checkCodexCapability() : { available: true },
+    harnessContainment: board.registryDir
+      ? (harness) => harness === "codex"
+        ? (codexContainment?.() ?? Promise.resolve({
+            available: false as const,
+            reason: "no execution workspace is configured for the Codex preflight",
+          }))
+        : claudeContainment()
+      : undefined,
     registryReachability: registryReachabilityCheck(board),
     cliAuth: createClaudeCliAuthCheck(),
     // ADR 0097 決定2 / issue #446: 回答受理時の再検証が provider ごとに撃つ
@@ -649,18 +692,8 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
     boardState: { paths: board.boardState, listWorkspaces: () => registeredWorkspaces(board) },
-    // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
-    // #154、ADR 0039 / issue #164)。ここが唯一の実検査の配線点 — テスト盤面は
-    // 封じ込める実プロセスを持たないので、このゲート自体を持たない。人間面の
-    // 自己検査は startServer が実ポートを知った後に自分で足す。
-    //
-    // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
-    // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
-    // 再実行に依っている(ADR 0039 決定3)。
-    containment: {
-      sandboxCapability: () => checkSandboxCapability(platform),
-      toolSurface: () => probeToolSurfaceCapability(),
-    },
+    // Production containment is Harness-scoped above. `containment` remains
+    // only as the legacy injectable seam for focused host-wide tests.
     watchdog: WATCHDOG,
   };
 }

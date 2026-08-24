@@ -94,6 +94,7 @@ You are the Codex worker.`,
     logDir,
     codexHome,
     cliVersion: CLI_VERSION,
+    executable: "/opt/tidepool/bin/codex",
     spawn: process.spawn,
   });
   return { db, worker, process, codexHome, workspace, logDir };
@@ -111,7 +112,7 @@ describe("CodexWorker (ADR 0098)", () => {
     delete process.env.GITHUB_TOKEN;
 
     const call = f.process.calls[0]!;
-    expect(call.command).toBe("codex");
+    expect(call.command).toBe("/opt/tidepool/bin/codex");
     expect(call.cwd).toBe(f.workspace);
     expect(call.env.CODEX_HOME).toBe(f.codexHome);
     expect(call.env.OPENAI_API_KEY).toBeUndefined();
@@ -123,9 +124,11 @@ describe("CodexWorker (ADR 0098)", () => {
     const config = call.args.filter((_, index) => call.args[index - 1] === "-c").join("\n");
     expect(config).toContain('model_reasoning_effort="high"');
     expect(config).toContain('default_permissions="tidepool-work"');
-    expect(config).toContain("api.github.com");
+    expect(config).toContain('\":root\"=\"deny\"');
+    expect(config).toContain('\":slash_tmp\"=\"deny\"');
+    expect(config).toContain("permissions.tidepool-work.workspace_roots=");
     expect(config).toContain("features.plugins=false");
-    expect(config).toContain("features.tool_search=false");
+    expect(config).toContain("features.skill_search=false");
     expect(config).toContain("features.apps=false");
     expect(config).toContain('forced_login_method="chatgpt"');
     expect(config).toContain("project_doc_max_bytes=0");
@@ -134,8 +137,9 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("get_current_task");
     expect(config).toContain("mcp_servers.tidepool.required=true");
     expect(config).toContain("skills.config=");
-    expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs"));
-    expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill"));
+    expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
+    expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md"));
+    expect(config).toContain("?task=" + value.id);
     expect(config).toContain("hooks.SubagentStart=");
     expect(config).toContain("hooks.PreToolUse=");
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload).toMatchObject({

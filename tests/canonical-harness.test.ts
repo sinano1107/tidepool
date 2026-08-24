@@ -24,3 +24,13 @@ it("OpenAI / Codex の正準経路に無い advisor は登録時と pickup 時�
   );
   expect(() => assertValidProvider("deckhand", "openai", undefined)).not.toThrow();
 });
+
+it("OpenAI / Codex v1 に無い skill capability も共有検査で拒否される(ADR 0098)", () => {
+  expect(() => assertValidProvider("deckhand", "openai", undefined, ["tdd"])).toThrow(
+    new InvalidAgentProviderError(
+      "deckhand",
+      'canonical route "openai -> codex" does not offer skills in v1 — a definition declaring a non-empty allowlist does not stand (ADR 0098)',
+    ),
+  );
+  expect(() => assertValidProvider("deckhand", "openai", undefined, [])).not.toThrow();
+});

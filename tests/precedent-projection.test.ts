@@ -158,7 +158,7 @@ it("同じタスクの別 worker session の decision は、この Episode の�
     // 2本目の session — retry / 統合復帰 / quarantine 復帰のいずれでも同じ形
     {
       id: 12, task_id: task, worker_id: "tako", origin: "board", kind: "worker_spawned",
-      payload: { kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null, harness: "claude-code", cli_version: "test" },
       created_at: at,
     },
     {
@@ -251,7 +251,7 @@ it("worker_exited が無いまま終わった session の窓は、次の worker_
     ...fixtureEvents().filter((e) => e.kind !== "worker_exited"),
     {
       id: 12, task_id: task, worker_id: "tako", origin: "board", kind: "worker_spawned",
-      payload: { kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null, harness: "claude-code", cli_version: "test" },
       created_at: at,
     },
     {

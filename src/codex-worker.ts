@@ -1,7 +1,20 @@
-import { execFile, spawn as nodeSpawn } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync, spawn as nodeSpawn } from "node:child_process";
+import {
+  accessSync,
+  appendFileSync,
+  chmodSync,
+  constants as fsConstants,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
@@ -31,6 +44,26 @@ const BOARD_VERBS = [
 export const CODEX_CLI_VERSION = "codex-cli 0.147.0";
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
+const CLOSED_FEATURES = [
+  "apps",
+  "auth_elicitation",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "computer_use",
+  "goals",
+  "image_generation",
+  "in_app_browser",
+  "memories",
+  "plugins",
+  "recommended_plugins",
+  "remote_plugin",
+  "skill_mcp_dependency_install",
+  "skill_search",
+  "tool_suggest",
+  "view_image",
+  "workspace_dependencies",
+] as const;
 const SYSTEM_SKILLS = ["imagegen", "openai-docs", "plugin-creator", "skill-creator", "skill-installer"];
 const SECRET_ENV = [
   "OPENAI_API_KEY",
@@ -71,6 +104,8 @@ export interface CodexWorkerOptions {
   codexHome: string;
   /** Version already established by the Harness preflight; production pins 0.147.0. */
   cliVersion: string;
+  /** Absolute executable established by the same preflight; spawn never relies on PATH. */
+  executable: string;
   boardState?: BoardStatePath[];
   spawn?: CodexSpawnFn;
 }
@@ -81,31 +116,14 @@ export interface CodexCapabilityObservation {
   skills: readonly string[];
   hooks: readonly string[];
   permissions: readonly string[];
+  closedFeatures: readonly string[];
 }
 
 export type CodexCapabilityProbe = () => Promise<CodexCapabilityObservation>;
 
-function actualCodexCapability(): Promise<CodexCapabilityObservation> {
-  return new Promise((resolve, reject) => {
-    execFile("codex", ["--version"], (error, stdout) => {
-      if (error) reject(error);
-      else resolve({
-        cliVersion: stdout.trim(),
-        // The version pin makes #195's measured surface the compatibility
-        // contract; these four lists are the Board-generated config checked
-        // below, not claims inferred from a newer CLI.
-        mcpTools: BOARD_VERBS,
-        skills: [],
-        hooks: CODEX_HOOKS,
-        permissions: CODEX_PERMISSIONS,
-      });
-    });
-  });
-}
-
 /** Version pin + measured #195 surface contract. Any drift closes Codex only. */
 export async function checkCodexCapability(
-  probe: CodexCapabilityProbe = actualCodexCapability,
+  probe: CodexCapabilityProbe,
 ): Promise<ContainmentCapability> {
   let observed: CodexCapabilityObservation;
   try {
@@ -120,6 +138,7 @@ export async function checkCodexCapability(
       ["skill", [], observed.skills],
       ["hook", CODEX_HOOKS, observed.hooks],
       ["permission", CODEX_PERMISSIONS, observed.permissions],
+      ["closed feature", CLOSED_FEATURES, observed.closedFeatures],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
   return mismatch
@@ -136,6 +155,14 @@ function toml(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function tomlInline(value: Record<string, unknown>): string {
+  return `{${Object.entries(value)
+    .map(([key, entry]) =>
+      `${toml(key)}=${entry && typeof entry === "object" ? tomlInline(entry as Record<string, unknown>) : toml(entry)}`
+    )
+    .join(",")}}`;
+}
+
 function taskPrompt(task: Task, systemPrompt: string, authority: string): string {
   return `${systemPrompt}\n\n## Authority\n\n${authority}\n\n` +
     "Use only the tidepool MCP verbs to report board decisions and completion. " +
@@ -144,20 +171,50 @@ function taskPrompt(task: Task, systemPrompt: string, authority: string): string
     `Purpose: ${task.purpose}\nCompletion criteria: ${task.completion_criteria}`;
 }
 
-function permissionConfig(task: Task, domains: readonly string[]): string[] {
-  const name = task.type === "review" ? "tidepool-review" : "tidepool-work";
-  const parent = task.type === "review" ? ":read-only" : ":workspace";
-  const filesystem = task.type === "review"
-    ? '{":minimal"="read",":workspace_roots"={"."="read"}}'
-    : '{":minimal"="read",":workspace_roots"={"."="write"},":tmpdir"="write"}';
-  const allowed = [...domains, "127.0.0.1"]
-    .map((domain) => `${toml(domain)}="allow"`)
-    .join(",");
+function permissionConfig(
+  taskType: Task["type"],
+  workspace: string,
+  taskTemp: string,
+  executable: string,
+): string[] {
+  const name = taskType === "review" ? "tidepool-review" : "tidepool-work";
+  const parent = taskType === "review" ? ":read-only" : ":workspace";
+  const access = taskType === "review" ? "read" : "write";
+  const filesystem = {
+    ":root": "deny",
+    ":minimal": "read",
+    ":slash_tmp": "deny",
+    ":workspace_roots": { ".": access },
+    [workspace]: access,
+    [taskTemp]: "write",
+    [dirname(process.execPath)]: "read",
+    [dirname(executable)]: "read",
+    "/Library/Developer/CommandLineTools/usr/bin": "read",
+    "/System/Library/OpenSSL": "read",
+  };
+  const network = {
+    enabled: true,
+    domains: { "127.0.0.1": "allow" },
+    unix_sockets: { [taskTemp]: "allow" },
+    allow_local_binding: true,
+  };
   return [
     `default_permissions=${toml(name)}`,
     `permissions.${name}.extends=${toml(parent)}`,
-    `permissions.${name}.filesystem=${filesystem}`,
-    `permissions.${name}.network={enabled=true,domains={${allowed}}}`,
+    `permissions.${name}.workspace_roots=${tomlInline({ [taskTemp]: true })}`,
+    `permissions.${name}.filesystem=${tomlInline(filesystem)}`,
+    `permissions.${name}.network=${tomlInline(network)}`,
+  ];
+}
+
+function closedSurfaceConfig(): string[] {
+  return [
+    "features.network_proxy=true",
+    "features.hooks=true",
+    ...CLOSED_FEATURES.map((feature) => `features.${feature}=false`),
+    'web_search="disabled"',
+    "tools.web_search=false",
+    "project_doc_max_bytes=0",
   ];
 }
 
@@ -193,7 +250,9 @@ try {
 }
 
 function skillConfig(codexHome: string, workspace: string): string {
-  const paths = SYSTEM_SKILLS.map((name) => join(codexHome, "skills", ".system", name));
+  const paths = SYSTEM_SKILLS.map((name) =>
+    join(codexHome, "skills", ".system", name, "SKILL.md")
+  );
   for (const root of [
     join(workspace, ".agents", "skills"),
     join(workspace, ".codex", "skills"),
@@ -201,7 +260,7 @@ function skillConfig(codexHome: string, workspace: string): string {
   ]) {
     try {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) paths.push(join(root, entry.name));
+        if (entry.isDirectory()) paths.push(join(root, entry.name, "SKILL.md"));
       }
     } catch {
       // A workspace need not declare skills.
@@ -210,7 +269,239 @@ function skillConfig(codexHome: string, workspace: string): string {
   return `skills.config=[${paths.map((path) => `{path=${toml(path)},enabled=false}`).join(",")}]`;
 }
 
+function configArgs(config: readonly string[]): string[] {
+  return config.flatMap((entry) => ["-c", entry]);
+}
+
+function runFile(
+  command: string,
+  args: readonly string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${error.message}${stderr ? `: ${stderr.trim()}` : ""}`));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+/** Resolve once at composition time. Worker spawn uses the returned absolute path,
+ * so a narrower child PATH cannot turn an observed CLI into ENOENT. */
+export function resolveCodexExecutable(searchPath = process.env.PATH ?? ""): string {
+  const directories = searchPath.split(delimiter).filter(Boolean);
+  for (const directory of directories) {
+    if (!directory) continue;
+    const candidate = resolve(directory, "codex");
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching the declared PATH.
+    }
+  }
+  // Preserve the absolute-path invariant even when absent. The live preflight
+  // will persist a Codex-only quarantine after the human surface is listening.
+  return resolve(directories[0] ?? "/usr/local/bin", "codex");
+}
+
+function observedSkills(promptInput: string): string[] {
+  const messages = JSON.parse(promptInput) as Array<{
+    content?: Array<{ type?: string; text?: string }>;
+  }>;
+  const instructions = messages
+    .flatMap((message) => message.content ?? [])
+    .map((item) => item.text ?? "")
+    .find((text) => text.includes("<skills_instructions>"));
+  if (!instructions) return [];
+  const available = instructions
+    .split("### Available skills\n", 2)[1]
+    ?.split("</skills_instructions>", 1)[0];
+  return available ? [...available.matchAll(/^- ([^:\n]+):/gm)].map((match) => match[1]!) : [];
+}
+
+async function probeMcpTools(mcpUrl: string): Promise<string[]> {
+  const client = new Client({ name: "tidepool-codex-containment", version: "0.0.0" });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(mcpUrl)));
+    return (await client.listTools()).tools.map((tool) => tool.name);
+  } finally {
+    await client.close();
+  }
+}
+
+function probeHook(codexHome: string, taskTemp: string): string[] {
+  const hook = installBoardHook(codexHome);
+  const state = join(taskTemp, "hook-state.json");
+  writeFileSync(state, "[]", { mode: 0o600 });
+  const env = { ...process.env, TIDEPOOL_SUBAGENT_STATE: state };
+  execFileSync(process.execPath, [hook], {
+    env,
+    input: JSON.stringify({ hook_event_name: "SubagentStart", turn_id: "sub", agent_id: "a" }),
+  });
+  const denied = JSON.parse(execFileSync(process.execPath, [hook], {
+    env,
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse",
+      turn_id: "sub",
+      tool_name: "mcp__tidepool__complete_task",
+    }),
+    encoding: "utf8",
+  })) as { hookSpecificOutput?: { permissionDecision?: string } };
+  if (denied.hookSpecificOutput?.permissionDecision !== "deny") {
+    throw new Error("Codex Board hook did not deny a subagent Board verb");
+  }
+  return [...CODEX_HOOKS];
+}
+
+const PERMISSION_CANARY = `
+const fs = require("node:fs");
+const net = require("node:net");
+const http = require("node:http");
+const cp = require("node:child_process");
+const [workspace, taskTemp, outside, access] = process.argv.slice(2);
+const workspaceFile = workspace + "/.tidepool-codex-permission-canary";
+const taskFile = taskTemp + "/task-canary";
+try {
+  const readable = fs.readFileSync(workspace + "/package.json", "utf8");
+  if (!readable) process.exit(31);
+  try {
+    fs.readFileSync(outside, "utf8");
+    process.exit(32);
+  } catch {}
+  if (access === "write") {
+    fs.writeFileSync(workspaceFile, "ok");
+    fs.unlinkSync(workspaceFile);
+  } else {
+    try {
+      fs.writeFileSync(workspaceFile, "breach");
+      process.exit(33);
+    } catch {}
+  }
+  fs.writeFileSync(taskFile, "ok");
+  if (cp.spawnSync(process.execPath, ["-e", "process.exit(0)"]).status !== 0) process.exit(34);
+  if (cp.spawnSync("git", ["--version"]).status !== 0) process.exit(35);
+  const tcp = http.createServer((_request, response) => response.end("ok"));
+  tcp.listen(0, "127.0.0.1", () => {
+    const request = http.get("http://127.0.0.1:" + tcp.address().port, (response) => {
+      response.resume();
+      response.on("end", () => tcp.close(() => {
+        const socket = taskTemp + "/canary.sock";
+        const unix = net.createServer();
+        unix.listen(socket, () => {
+          const peer = net.connect(socket, () => {
+            peer.end();
+            unix.close(() => process.exit(0));
+          });
+          peer.on("error", () => process.exit(38));
+        });
+      }));
+    });
+    request.on("error", () => process.exit(39));
+  });
+  setTimeout(() => process.exit(36), 3000);
+} catch (error) {
+  console.error(error);
+  process.exit(37);
+}
+`;
+
+async function probePermission(
+  executable: string,
+  workspace: string,
+  taskTemp: string,
+  taskType: "work" | "review",
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const outsideDir = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-outside-")));
+  const outside = join(outsideDir, "secret");
+  const canary = join(taskTemp, `${taskType}-permission-canary.cjs`);
+  writeFileSync(outside, "must remain unreadable");
+  writeFileSync(canary, PERMISSION_CANARY);
+  try {
+    await runFile(
+      executable,
+      [
+        "sandbox",
+        "-P", `tidepool-${taskType}`,
+        "-C", workspace,
+        ...configArgs(permissionConfig(taskType, workspace, taskTemp, executable)),
+        process.execPath,
+        canary,
+        workspace,
+        taskTemp,
+        outside,
+        taskType === "review" ? "read" : "write",
+      ],
+      { cwd: workspace, env },
+    );
+  } finally {
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+}
+
+async function actualCodexCapability(options: {
+  executable: string;
+  codexHome: string;
+  workspace: string;
+  mcpUrl: string;
+}): Promise<CodexCapabilityObservation> {
+  const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-")));
+  const workspace = realpathSync(options.workspace);
+  const hookState = join(taskTemp, "subagent-turns.json");
+  writeFileSync(hookState, "[]", { mode: 0o600 });
+  const env = workerEnv(options.executable, options.codexHome, taskTemp, hookState, "tidepool");
+  const config = [
+    ...closedSurfaceConfig(),
+    skillConfig(options.codexHome, workspace),
+  ];
+  try {
+    const cliVersion = (await runFile(options.executable, ["--version"], { env })).trim();
+    const promptInput = await runFile(
+      options.executable,
+      ["debug", "prompt-input", ...configArgs(config), "containment canary"],
+      { cwd: workspace, env },
+    );
+    const features = await runFile(
+      options.executable,
+      ["features", "list", ...configArgs(config)],
+      { cwd: workspace, env },
+    );
+    const disabled = new Map(
+      features.trim().split("\n").map((line) => {
+        const fields = line.trim().split(/\s+/);
+        return [fields[0], fields.at(-1)] as const;
+      }),
+    );
+    await probePermission(options.executable, workspace, taskTemp, "work", env);
+    await probePermission(options.executable, workspace, taskTemp, "review", env);
+    return {
+      cliVersion,
+      mcpTools: await probeMcpTools(options.mcpUrl),
+      skills: observedSkills(promptInput),
+      hooks: probeHook(options.codexHome, taskTemp),
+      permissions: [...CODEX_PERMISSIONS],
+      closedFeatures: CLOSED_FEATURES.filter((feature) => disabled.get(feature) === "false"),
+    };
+  } finally {
+    rmSync(taskTemp, { recursive: true, force: true });
+  }
+}
+
+export function createCodexCapabilityCheck(options: {
+  executable: string;
+  codexHome: string;
+  workspace: string;
+  mcpUrl: string;
+}): () => Promise<ContainmentCapability> {
+  return () => checkCodexCapability(() => actualCodexCapability(options));
+}
+
 function workerEnv(
+  executable: string,
   codexHome: string,
   taskTemp: string,
   hookState: string,
@@ -219,7 +510,7 @@ function workerEnv(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CODEX_HOME: codexHome,
-    PATH: [dirname(process.execPath), "/Library/Developer/CommandLineTools/usr/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(delimiter),
+    PATH: [dirname(executable), dirname(process.execPath), "/Library/Developer/CommandLineTools/usr/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(delimiter),
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     XDG_CONFIG_HOME: join(taskTemp, "xdg"),
@@ -254,6 +545,31 @@ function isAuthFailure(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const message = String((value as { message?: unknown }).message ?? "").toLowerCase();
   return message.includes("authentication") || message.includes("unauthorized") || message.includes("401");
+}
+
+function consumeJsonl(
+  buffered: string,
+  chunk: string,
+  observe: (event: unknown) => void,
+  flush = false,
+): string {
+  const lines = (buffered + chunk).split("\n");
+  const remainder = flush ? "" : (lines.pop() ?? "");
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      observe(JSON.parse(line));
+    } catch {
+      // The verbatim transcript is the durable evidence; malformed lines
+      // carry no normalized usage or auth fact.
+    }
+  }
+  if (flush && lines.length === 0 && buffered.trim()) {
+    try {
+      observe(JSON.parse(buffered));
+    } catch {}
+  }
+  return remainder;
 }
 
 /** The OpenAI vendor adapter. The board selects it only for `provider: openai`. */
@@ -298,24 +614,23 @@ export class CodexWorker implements WorkerAdapter {
     if (agent.definition.provider !== "openai") {
       throw new Error(`CodexWorker refuses provider ${agent.definition.provider}; no Harness fallback (ADR 0098)`);
     }
-    const taskTemp = mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`));
+    // resolveExecutionAgent already enforces this at pickup; keep the adapter's
+    // vendor boundary explicit so a future direct caller cannot silently mask it.
+    if (agent.definition.skills.length > 0) {
+      throw new Error("CodexWorker v1 refuses a non-empty skill allowlist (ADR 0098)");
+    }
+    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     const hook = installBoardHook(this.options.codexHome);
     const hookState = join(dirname(hook), `${task.id}-${basename(taskTemp)}.subagent-turns.json`);
     writeFileSync(hookState, "[]", { mode: 0o600 });
+    const taskMcpUrl = new URL(this.options.mcpUrl);
+    taskMcpUrl.searchParams.set("task", task.id);
     const config = [
       `model_reasoning_effort=${toml(agent.definition.effort ?? "medium")}`,
-      ...permissionConfig(task, workspace.allowed_domains ?? []),
-      "features.network_proxy=true",
-      "features.plugins=false",
-      "features.tool_search=false",
-      "features.apps=false",
-      "features.hooks=true",
-      'web_search="disabled"',
-      "tools.web_search=false",
-      "tools.view_image=false",
-      "project_doc_max_bytes=0",
+      ...permissionConfig(task.type, workspace.path, taskTemp, this.options.executable),
+      ...closedSurfaceConfig(),
       'forced_login_method="chatgpt"',
-      `mcp_servers.tidepool.url=${toml(this.options.mcpUrl)}`,
+      `mcp_servers.tidepool.url=${toml(taskMcpUrl.toString())}`,
       `mcp_servers.tidepool.enabled_tools=${toml(BOARD_VERBS)}`,
       "mcp_servers.tidepool.required=true",
       skillConfig(this.options.codexHome, workspace.path),
@@ -323,7 +638,7 @@ export class CodexWorker implements WorkerAdapter {
       `hooks.PreToolUse=[{matcher="mcp__tidepool__.*",hooks=[{type="command",command=${toml(hook)}}]}]`,
     ];
     const child = this.spawn(
-      "codex",
+      this.options.executable,
       [
         "--ask-for-approval", "never",
         "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
@@ -335,7 +650,13 @@ export class CodexWorker implements WorkerAdapter {
       ],
       {
         cwd: workspace.path,
-        env: workerEnv(this.options.codexHome, taskTemp, hookState, agent.name),
+        env: workerEnv(
+          this.options.executable,
+          this.options.codexHome,
+          taskTemp,
+          hookState,
+          agent.name,
+        ),
       },
     );
     const spawned = appendEvent(this.options.db, {
@@ -360,21 +681,14 @@ export class CodexWorker implements WorkerAdapter {
     let stderr = "";
     let usage: CodexUsage | null = null;
     let authFailed = false;
+    const observe = (event: unknown) => {
+      usage = readUsage(event) ?? usage;
+      authFailed ||= isAuthFailure(event);
+    };
     child.stdout.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
-      stdout += text;
       appendFileSync(transcript, text);
-      const lines = stdout.split("\n");
-      stdout = lines.pop() ?? "";
-      for (const line of lines) {
-        try {
-          const event: unknown = JSON.parse(line);
-          usage = readUsage(event) ?? usage;
-          authFailed ||= isAuthFailure(event);
-        } catch {
-          // The verbatim transcript is the durable evidence; malformed lines carry no usage.
-        }
-      }
+      stdout = consumeJsonl(stdout, text, observe);
     });
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
@@ -398,15 +712,7 @@ export class CodexWorker implements WorkerAdapter {
     });
     child.on("exit", (code, signal) => {
       this.running.delete(task.id);
-      if (stdout) {
-        try {
-          const event: unknown = JSON.parse(stdout);
-          usage = readUsage(event) ?? usage;
-          authFailed ||= isAuthFailure(event);
-        } catch {
-          // Kept verbatim above.
-        }
-      }
+      consumeJsonl(stdout, "", observe, true);
       if (authFailed) quarantineCliAuthForProvider(this.options.db, "openai", this.options.clock.now());
       const tail = stderr.trim().split("\n").slice(-20).join("\n") || null;
       const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage

@@ -16,6 +16,7 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents, listLog } from "./events.js";
 import type { GitHubClient } from "./github.js";
+import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
   addIssueCommentThroughHumanDoor,
   assertAssigneeKnown,
@@ -28,6 +29,7 @@ import {
 import { toolError, toolResult } from "./mcp.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
+  type Harness,
   InvalidAgentNameError,
   InvalidAgentProviderError,
   InvalidAllowedDomainError,
@@ -85,6 +87,7 @@ export interface ManagementMcpDeps {
   agentRegistered?: (name: string) => boolean;
   isProtectedWorkspace?: (name: string) => boolean;
   containment?: ContainmentCheck;
+  harnessContainment?: HarnessContainmentCheck;
   registryReachability?: RegistryReachabilityCheck;
   cliAuth?: CliAuthCheck;
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -94,6 +97,7 @@ export interface ManagementMcpDeps {
    *  the given providers — the pickup exclusion set `list_queue`'s `skipped`
    *  display shares with the scheduler's gate. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
    *  盤面では未注入で、その場合 throttle の再観測中は現れない。 */
   throttleRevalidating?: () => boolean;
@@ -232,6 +236,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           isFablePickupBlocked(deps.db, deps.clock.now()),
           deps.fableAgents,
           deps.agentsSpeakingProviders,
+          deps.agentsUsingHarnesses,
         ),
       ),
     }),
@@ -448,6 +453,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             deps.defaultAgentName,
             deps.auditorName,
             deps.agentsSpeakingProviders,
+            deps.agentsUsingHarnesses,
           ),
           "mcp",
         );
@@ -648,6 +654,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               relandRootAncestor: deps.relandRootAncestor,
               agentRegistered: deps.agentRegistered,
               containment: deps.containment,
+              harnessContainment: deps.harnessContainment,
               registryReachability: deps.registryReachability,
               cliAuth: deps.cliAuth,
               providerCliAuth: deps.providerCliAuth,

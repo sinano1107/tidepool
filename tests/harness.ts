@@ -18,9 +18,11 @@ import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { GitHubAuth } from "../src/github-auth.js";
+import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type {
   AuthorityProfile,
+  Harness,
   Provider,
   RegistryCandidates,
   RegistryReachabilityCheck,
@@ -154,6 +156,9 @@ export interface BootOptions {
    *  given providers, read fresh every poll by the scheduler's provider-auth
    *  gate. Absent → no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  resolveHarness?: (task: Task) => Harness;
+  harnessContainment?: HarnessContainmentCheck;
+  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -237,6 +242,9 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
+    resolveHarness: options.resolveHarness,
+    harnessContainment: options.harnessContainment,
+    agentsUsingHarnesses: options.agentsUsingHarnesses,
     providerCliAuth: options.providerCliAuth,
     registryReachability: options.registryReachability,
     cliAuth: options.cliAuth,

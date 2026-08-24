@@ -131,6 +131,8 @@ export interface Task {
    *  provider-scoped authentication quarantine stands in for — resource-scoped
    *  (only that provider's agents stop), never board-wide. */
   question_quarantine_provider_auth: string | null;
+  /** System-internal only (ADR 0098): Harness-scoped containment quarantine. */
+  question_quarantine_harness: string | null;
   /** System-internal only (ADR 0075): warned configured-expiry epoch. */
   question_cli_auth_expiry_warning: number | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -308,6 +310,8 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  Never set via MCP or the JSON API — only the cli-auth classification
    *  sets this. */
   quarantine_provider_auth?: string;
+  /** System-internal only (ADR 0098): Harness-scoped containment Confirmation. */
+  quarantine_harness?: string;
   /** System-internal only (ADR 0075): the warned configured expiry epoch. */
   cli_auth_expiry_warning?: number;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
@@ -354,7 +358,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     input.quarantine_sandbox !== undefined ||
     input.quarantine_registry !== undefined ||
     input.quarantine_cli_auth !== undefined ||
-    input.quarantine_provider_auth !== undefined
+    input.quarantine_provider_auth !== undefined ||
+    input.quarantine_harness !== undefined
       ? 1
       : 2;
   for (const item of items) {
@@ -598,6 +603,7 @@ export function registerTask(
     question_quarantine_registry: input.quarantine_registry ? 1 : null,
     question_quarantine_cli_auth: input.quarantine_cli_auth ? 1 : null,
     question_quarantine_provider_auth: input.quarantine_provider_auth ?? null,
+    question_quarantine_harness: input.quarantine_harness ?? null,
     question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ?? null,
     github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
@@ -608,12 +614,12 @@ export function registerTask(
          risk_flag, review_flag, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_cli_auth_expiry_warning, github_issue_number, created_at)
+         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_cli_auth_expiry_warning, @github_issue_number, @created_at)`,
+         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @created_at)`,
     ).run({
       ...task,
       // the stored row keeps title/purpose/completion_criteria genuinely
@@ -971,6 +977,8 @@ export interface CancelDefaults {
    *  pickup gate's `excludedAssignees`). Absent → no provider quarantine gates
    *  any cancel. */
   providerAuthQuarantinedAgents?: string[];
+  /** Agents whose canonical Harness has an open containment Confirmation. */
+  harnessQuarantinedAgents?: string[];
 }
 
 /** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
@@ -1019,7 +1027,11 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
            OR (q.question_quarantine_provider_auth IS NOT NULL
                AND @providerAuthQuarantinedAgents IS NOT NULL
                AND COALESCE(x.assignee, ${fallback}) IN (
-                 SELECT value FROM json_each(@providerAuthQuarantinedAgents))))
+                 SELECT value FROM json_each(@providerAuthQuarantinedAgents)))
+           OR (q.question_quarantine_harness IS NOT NULL
+               AND @harnessQuarantinedAgents IS NOT NULL
+               AND COALESCE(x.assignee, ${fallback}) IN (
+                 SELECT value FROM json_each(@harnessQuarantinedAgents))))
        LIMIT 1`,
     )
     .get({
@@ -1029,6 +1041,9 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
       auditorName: defaults.auditorName ?? null,
       providerAuthQuarantinedAgents: defaults.providerAuthQuarantinedAgents
         ? JSON.stringify(defaults.providerAuthQuarantinedAgents)
+        : null,
+      harnessQuarantinedAgents: defaults.harnessQuarantinedAgents
+        ? JSON.stringify(defaults.harnessQuarantinedAgents)
         : null,
     });
   if (quarantine) {
@@ -1266,6 +1281,21 @@ export function answerQuestion(
         payload: {
           kind: "provider_auth_reinstated",
           provider: question.question_quarantine_provider_auth,
+        },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
+
+    if (question.question_quarantine_harness !== null) {
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        origin,
+        payload: {
+          kind: "harness_reinstated",
+          harness: question.question_quarantine_harness as "claude-code" | "codex",
         },
         at: now,
       });

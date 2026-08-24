@@ -410,6 +410,19 @@ describe("createAgent: provider 検証(ADR 0097 — 必須・列挙・advisor �
     expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeUndefined();
   });
 
+  it("OpenAI / Codex v1 に無い skill allowlist は登録時に拒否される(ADR 0098)", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      createAgent(
+        { ...base, provider: "openai", skills: ["tdd"] },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toThrow(InvalidAgentProviderError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
   it("moonshot でも advisor を持たなければ通り、frontmatter に provider が書かれてラウンドトリップする", async () => {
     const registryDir = await makeMainRegistry();
 

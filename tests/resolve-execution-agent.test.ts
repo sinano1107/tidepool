@@ -3,7 +3,12 @@ import { resolveExecutionAgent, UnknownAgentError } from "../src/agent.js";
 import { InvalidAgentProviderError, type Registry } from "../src/registry.js";
 
 function makeRegistry(
-  agents: Record<string, { authority: string; provider?: string; advisor?: string }>,
+  agents: Record<string, {
+    authority: string;
+    provider?: string;
+    advisor?: string;
+    skills?: string[];
+  }>,
 ): Registry {
   return {
     commit: "0".repeat(40),
@@ -17,7 +22,7 @@ function makeRegistry(
           description: `${name} agent`,
           provider: a.provider ?? "anthropic",
           advisor: a.advisor,
-          skills: ["*"],
+          skills: a.skills ?? ["*"],
           systemPrompt: `You are ${name}.`,
         },
       ]),
@@ -95,6 +100,15 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
   it("advisor を持つ定義に advisor を提供しない provider(moonshot)の組み合わせは InvalidAgentProviderError(ADR 0097 決定3)", () => {
     const registry = makeRegistry({
       deckhand: { authority: "standard", provider: "moonshot", advisor: "opus" },
+    });
+    expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
+      InvalidAgentProviderError,
+    );
+  });
+
+  it("OpenAI / Codex v1 に無い skill allowlist は pickup 解決でも拒否される(ADR 0098)", () => {
+    const registry = makeRegistry({
+      deckhand: { authority: "standard", provider: "openai", skills: ["tdd"] },
     });
     expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
       InvalidAgentProviderError,

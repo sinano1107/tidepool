@@ -6,7 +6,9 @@ import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
-import type { Provider, RegistryReachabilityCheck } from "./registry.js";
+import type { HarnessContainmentCheck } from "./harness-containment.js";
+import { quarantinedHarnesses } from "./harness-containment.js";
+import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
   answerQuestion,
@@ -286,6 +288,8 @@ export interface SubmitAnswerDeps {
    *  a provider-auth Confirmation answer — same "検証つきで解除" as `cliAuth`,
    *  scoped to the provider the question stands in for. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
+  /** ADR 0098: re-run the named Harness check before accepting repair. */
+  harnessContainment?: HarnessContainmentCheck;
   boardState?: BoardStatePath[];
 }
 
@@ -316,6 +320,7 @@ export function humanCancelDefaults(
   defaultAgentName: string | undefined,
   auditorName: string | undefined,
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
+  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[],
 ): CancelDefaults {
   const quarantinedProviders = quarantinedAuthProviders(db);
   return {
@@ -326,6 +331,7 @@ export function humanCancelDefaults(
       quarantinedProviders.length > 0 && agentsSpeakingProviders
         ? agentsSpeakingProviders(quarantinedProviders)
         : undefined,
+    harnessQuarantinedAgents: agentsUsingHarnesses?.(quarantinedHarnesses(db)),
   };
 }
 
@@ -537,6 +543,19 @@ export async function submitAnswer(
     const result = await check();
     if (result.status !== "authenticated") {
       throw new DomainError(`${provider} authentication is still unavailable: ${result.reason}`);
+    }
+  }
+
+  if (task.question_quarantine_harness !== null) {
+    const harness = task.question_quarantine_harness as Harness;
+    if (!deps.harnessContainment) {
+      throw new DomainError(`${harness} Harness containment cannot be verified`);
+    }
+    const capability = await deps.harnessContainment(harness);
+    if (!capability.available) {
+      throw new DomainError(
+        `${harness} Harness containment is still not established: ${capability.reason}`,
+      );
     }
   }
 

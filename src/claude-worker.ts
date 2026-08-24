@@ -83,6 +83,7 @@ export type SpawnFn = (
 // ever-growing set of aliases/full names) it's safe and worth validating
 // here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
 const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+export const CLAUDE_CLI_VERSION = "2.1.241 (Claude Code)";
 
 /** Shared by boot-time default validation and every per-task spawn — one
  *  check, not a copy at each call site. */
@@ -1079,6 +1080,8 @@ export interface ClaudeWorkerOptions {
   mcpUrl: string;
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
+  /** CLI version established by production composition and recorded on every attempt. */
+  cliVersion?: string | (() => string);
   spawn?: SpawnFn;
   /** issue #81 / ADR 0028: the PTY boundary checkUsage scrapes /usage at.
    *  Injected so the scrape orchestration runs without a real PTY in tests. */
@@ -1943,6 +1946,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // than sitting beside it — "no advisor this session" then has a single
     // spelling in the flags, in the env, and in worker_spawned.
     const advisor = this.options.advisorDisabled === true ? undefined : definition.advisor;
+    const cliVersion = typeof this.options.cliVersion === "function"
+      ? this.options.cliVersion()
+      : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
     const child = this.spawn(
       "claude",
       [
@@ -2086,6 +2092,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // — the two differ under the kill switch, and only the frontmatter is
         // recoverable from registry_commit above.
         advisor: advisor ?? null,
+        harness: "claude-code",
+        cli_version: cliVersion,
       },
       at: this.options.clock.now(),
     });

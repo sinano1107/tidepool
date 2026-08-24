@@ -49,6 +49,7 @@ function composition(): BoardComposition {
     boardState: [],
     moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
     codexHome: "/nonexistent/codex-home",
+    codexExecutable: "/nonexistent/bin/codex",
     githubAuth: undefined,
     githubTokenFile: undefined,
     vapid: undefined,
@@ -231,7 +232,9 @@ it("ServerOptions の任意フィールドは authority を除いて全て組み
   // 置換済み)。**この期待値は src ではなくここに置く** — 除外を1つ増やすことは
   // 「その口は本番で永久に立たない」という宣言であり、#172 と同じ穴を開け直す
   // 行為でもあるので、src 側の1行で自動的に緑へ戻せてはいけない。
-  expect(optional.filter((key) => !emitted.has(key))).toEqual(["authority"]);
+  // `containment` is the legacy host-wide injection seam retained for focused
+  // tests; production emits the Harness-scoped check instead (ADR 0098).
+  expect(optional.filter((key) => !emitted.has(key))).toEqual(["authority", "containment"]);
 });
 
 /** 上の網羅は `buildServerOptions` の戻り値を見ている。main.ts がその戻り値で
