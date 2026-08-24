@@ -17,9 +17,6 @@ import {
  *  cgroup の `cgroup.events` にあたる kernel からの edge signal は無いので、
  *  観測は poll になる。 */
 
-/** 空の観測を取りにいく間隔。cgroup 側は inotify なので間隔を持たない。 */
-const POLL_MS = 25;
-
 /** この run で作られた全 group。残骸の検証側読み(canary 4)がここを見る —
  *  cgroup と違って機構は file system に何も残さないので、残骸の在り処は
  *  「まだ member が居る group」しかない。 */
@@ -41,16 +38,14 @@ export function liveGroups(): number[] {
   return createdGroups.filter((pgid) => !groupIsEmpty(pgid, 0));
 }
 
-export function processGroupContainerRuntime(): ContainerRuntime {
-  return {
-    // 前提検査で見られるものが無い: process group は POSIX が常に持っている。
-    // cgroup 版が持っていた再起動境界の掃き直し(#463)にあたるものも作れない —
-    // 前回の run の pgid はどこにも残らないので、populated な残骸は原理的に
-    // 見つけられない。この不在そのものが #465 の測定結果の一部である。
-    preflight: () => ({ available: true }),
-    create: () => createProcessGroup(),
-  };
-}
+export const processGroupContainerRuntime: ContainerRuntime = {
+  // 前提検査で見られるものが無い: process group は POSIX が常に持っている。
+  // cgroup 版が持っていた再起動境界の掃き直し(#463)にあたるものも作れない —
+  // 前回の run の pgid はどこにも残らないので、populated な残骸は原理的に
+  // 見つけられない。この不在そのものが #465 の測定結果の一部である。
+  preflight: () => ({ available: true }),
+  create: createProcessGroup,
+};
 
 function createProcessGroup(): WorkerContainer {
   const groups: number[] = [];
@@ -81,7 +76,8 @@ function createProcessGroup(): WorkerContainer {
         markEmpty();
         return;
       }
-      setTimeout(tick, POLL_MS).unref();
+      // cgroup 側は inotify なので間隔を持たない。ここは poll しか無い
+      setTimeout(tick, 25).unref();
     };
     tick();
   };

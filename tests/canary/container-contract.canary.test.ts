@@ -64,13 +64,23 @@ function sessionOf(pid: number): string {
   return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[3] ?? "";
 }
 
-/** macOS の `ps` から1列を読む。該当 PID が居なければ `ps` は 1 で終わるので、
- *  空文字が「もう居ない」の答えである。 */
-function psField(pid: number, keyword: string): string {
+/** その PID の process がまだ居るか。linux 側の `/proc/<pid>` の存在と同じ意味を
+ *  signal 0 で読む — ESRCH だけが「居ない」で、EPERM(居るが撃てない)は居る側に
+ *  数える。zombie も居る側に数えるのは `/proc/<pid>` と同じ。 */
+function pidExists(pid: number): boolean {
   try {
-    return execFileSync("/bin/ps", ["-p", String(pid), "-o", `${keyword}=`], {
-      encoding: "utf8",
-    }).trim();
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/** macOS の `ps` の STAT 列。該当 PID が居なければ `ps` は 1 で終わるので、
+ *  空文字が「もう居ない」の答えである。 */
+function psStat(pid: number): string {
+  try {
+    return execFileSync("/bin/ps", ["-p", String(pid), "-o", "stat="], { encoding: "utf8" }).trim();
   } catch {
     return "";
   }
@@ -89,13 +99,13 @@ const probes: Record<string, CanaryProbe> = {
   /** macOS: process group の候補(issue #465、採用されていない)。 */
   "process-group": {
     platform: "darwin",
-    runtime: processGroupContainerRuntime(),
-    alive: (pid) => psField(pid, "pid") !== "",
+    runtime: processGroupContainerRuntime,
+    alive: pidExists,
     // macOS の `ps` には session id の列が無い(`sess` は tty 以外では 0)。代わりに
     // STAT の flag を読む: 先頭1文字が状態、以降が flag で、`s` は session leader。
     // session leader は sid = 自分の PID なので、後から生まれた孫が leader である
     // ことは runner とは別 session であることの証明になる。
-    escapedSession: (pid) => psField(pid, "stat").slice(1).includes("s"),
+    escapedSession: (pid) => psStat(pid).slice(1).includes("s"),
     // macOS に `setsid(1)` は無いので、同じ syscall を perl から呼ぶ。孫は
     // 自分の PID を記録してから `sleep 300` へ exec する(linux 側と同じ形)。
     daemonScript: `/usr/bin/perl -MPOSIX -e 'POSIX::setsid() or die "setsid: $!"; open(my $f, ">>", $ENV{CANARY_PIDS}) or die "open: $!"; print $f "$$\\n"; close $f; exec "sleep", "300"' </dev/null >/dev/null 2>&1 &`,
