@@ -57,6 +57,7 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
     providers: [
       { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
       { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
+      { value: "openai", label: "openai — Codex models, OpenAI billing" },
     ],
   });
 });

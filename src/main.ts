@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
@@ -55,6 +56,7 @@ const apiTokenFile = resolveTokenFile(process.env.TIDEPOOL_API_TOKEN_FILE);
 // ADR 0097 決定4 / issue #445: Moonshot キーは盤面の env に置かず状態ファイルに
 // 置く(human-surface credential と同じ doctrine)。アダプタが spawn 時に読む。
 const moonshotApiKeyFile = resolveMoonshotApiKeyFile(process.env.TIDEPOOL_MOONSHOT_API_KEY_FILE);
+const codexHome = process.env.TIDEPOOL_CODEX_HOME ?? join(homedir(), ".tidepool", "codex");
 // env 未設定 = 盤面に GitHub 識別情報が無い(ADR 0024)ので守る対象も無い。
 // **githubAuth の有無ではなく env の有無で見る**: mode が 600 でなくて識別情報が
 // 立たなかった場合でも、平文のファイルはそこに在る。
@@ -65,6 +67,7 @@ const boardState = boardStatePaths({
   apiTokenFile,
   githubTokenFile,
   moonshotApiKeyFile,
+  codexHome,
   // 5点目の「盤面の実行 checkout」は2つの綴りを持つ(ADR 0040): 既定の状態パスが
   // 相対で解決される先は cwd、`public/` を実際に配信するのは server.ts が
   // モジュールの位置から導く checkout(= repoRoot)。リポジトリ外から起動すれば
@@ -152,6 +155,7 @@ const server = await startServer(
     auditorName,
     boardState,
     moonshotApiKeyFile,
+    codexHome,
     // ADR 0093 / issue #50: the board's GitHub identity is the GitHub App, and
     // this mode-600 file holds the user token the board presents to the broker
     // — no file, no identity. Neither token ever enters process.env: workers

@@ -576,7 +576,7 @@ const MOONSHOT_BASE_URL = "https://api.moonshot.ai/anthropic";
  *  the provider's own notation — a moonshot spawn handed "sonnet" dies with
  *  model-not-found). `kimi-k3[1m]` is the default in Moonshot's official
  *  Claude Code guide (platform.kimi.ai, 2026-08). */
-const PROVIDER_DEFAULT_MODEL: Record<Provider, string> = {
+const PROVIDER_DEFAULT_MODEL: Record<Exclude<Provider, "openai">, string> = {
   anthropic: "sonnet",
   moonshot: "kimi-k3[1m]",
 };
@@ -1779,6 +1779,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // (MoonshotApiKeyMissingError, a failed start) rather than spawning a
     // worker that can only 401.
     const provider = agent.definition.provider as Provider;
+    if (provider === "openai") {
+      throw new Error('canonical route "openai -> codex" cannot run through Claude Code (ADR 0098)');
+    }
     const routing: ProviderRouting = {
       provider,
       // ADR 0005's pinning rule, spelled in the provider's own model notation —

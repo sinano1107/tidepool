@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"thread-453"}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"The task is complete."}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":30}}

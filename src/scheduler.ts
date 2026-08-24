@@ -1,12 +1,16 @@
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuth, quarantinedAuthProviders } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import { type ContainmentCheck, containmentPickupBlocked } from "./containment.js";
+import {
+  type ContainmentCapability,
+  type ContainmentCheck,
+  containmentPickupBlocked,
+} from "./containment.js";
 import type { Db } from "./db.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { getPaceOffsets } from "./pace-offsets.js";
-import type { Provider, RegistryReachabilityCheck, RegistrySource } from "./registry.js";
+import type { Harness, Provider, RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
@@ -177,6 +181,10 @@ export function startScheduler(deps: {
    *  line and the workspace/agent quarantines). Absent → no registry
    *  configured, so no agent's provider is knowable and nothing is skipped. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  /** ADR 0098: candidate-scoped Harness safety check. A failed Harness is
+   *  excluded for this poll while another route remains eligible. */
+  resolveHarness?: (task: Task) => Harness;
+  harnessContainment?: (harness: Harness) => Promise<ContainmentCapability>;
   /** 封じ込め能力の fail-closed ゲート(ADR 0033 / ADR 0036): このホストで
    *  worker の封じ込めが成立しているか。pickup のたびに読み直す(依存の消滅・
    *  AppArmor の変更・認証の脱落を次の poll で拾う)。人間面の自己検査が実 HTTP を
@@ -209,6 +217,8 @@ export function startScheduler(deps: {
     github,
     fableAgents,
     agentsSpeakingProviders,
+    resolveHarness,
+    harnessContainment,
     containment,
     registryReachability,
     cliAuth,
@@ -414,18 +424,21 @@ export function startScheduler(deps: {
       // 喋る agent のタスクも同じ資源単位の skip で外れる(ADR 0097 決定2 /
       // issue #446) — 集合の合成は読み口と共有する1つの式に集約してある。
       const fableWindow = decision.windows.fable;
-      const head = nextSlotTask(
+      const excluded = pickupExcludedAssignees(
         db,
-        workspace?.name,
-        worker.id,
-        auditorName,
-        pickupExcludedAssignees(
-          db,
-          fableWindow?.throttled ?? false,
-          fableAgents,
-          agentsSpeakingProviders,
-        ),
-      );
+        fableWindow?.throttled ?? false,
+        fableAgents,
+        agentsSpeakingProviders,
+      ) ?? [];
+      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+      while (head && resolveHarness && harnessContainment) {
+        const harness = resolveHarness(head);
+        const capability = await harnessContainment(harness);
+        if (capability.available) break;
+        console.error(`[scheduler] ${harness} route skipped: ${capability.reason}`);
+        excluded.push(resolveTaskAgent(head, worker.id, auditorName));
+        head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+      }
       if (!head) {
         // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
         // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)

@@ -28,6 +28,7 @@ import { createMcpRouter, handleRootWorkLanding, relandRootAncestor } from "./mc
 import { checkPendingAutoMerges, observeMergesOutsideBoard } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
+import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
   type Provider,
@@ -41,7 +42,7 @@ import {
 import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
+import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -222,6 +223,8 @@ export interface ServerOptions {
    *  the given providers, read fresh by the scheduler's provider-auth gate.
    *  Absent → no registry configured, so no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  resolveHarness?: (task: Task) => Harness;
+  harnessContainment?: (harness: Harness) => Promise<ContainmentCapability>;
   /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
    *  re-verification a provider-auth Confirmation question's answer fires.
    *  The board's own provider (anthropic) keeps `cliAuth` below; this record
@@ -418,6 +421,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     github: options.github,
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
+    resolveHarness: options.resolveHarness,
+    harnessContainment: options.harnessContainment,
     containment,
     registryReachability,
     cliAuth: options.cliAuth,

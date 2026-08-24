@@ -48,6 +48,7 @@ function composition(): BoardComposition {
     auditorName: "shako",
     boardState: [],
     moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
+    codexHome: "/nonexistent/codex-home",
     githubAuth: undefined,
     githubTokenFile: undefined,
     vapid: undefined,

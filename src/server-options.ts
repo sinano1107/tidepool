@@ -18,6 +18,11 @@ import {
   probeToolSurfaceCapability,
 } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
+import {
+  CODEX_CLI_VERSION,
+  CodexWorker,
+  checkCodexCapability,
+} from "./codex-worker.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
@@ -32,6 +37,7 @@ import {
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
+  canonicalHarness,
   InvalidAgentProviderError,
   loadRegistry,
   ownEntry,
@@ -46,9 +52,10 @@ import {
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
+import { resolveTaskAgent } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
-import type { KillSignal, WorkerAdapter } from "./worker.js";
+import { CanonicalWorkerRouter, type KillSignal, type WorkerAdapter } from "./worker.js";
 import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -138,6 +145,8 @@ export interface BoardComposition {
   /** ADR 0097 決定4 / issue #445: Moonshot Platform キーの置き場(mode 600 の
    *  状態ファイル、平文は盤面の env に載せない)。アダプタが spawn 時にだけ読む。 */
   moonshotApiKeyFile: string;
+  /** ADR 0098: isolated Board-owned Codex login/cache/config root. */
+  codexHome: string;
   /** ADR 0024 / issue #50: 盤面の GitHub 識別情報。ファイルの読み取りは合成 root
    *  側の I/O なので、ここには解決済みの値だけが来る。未設定 → GitHub 機能は
    *  すべて fail-closed で off。 */
@@ -225,7 +234,48 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock }) => new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock }));
+  return ({ db, clock }) => {
+    const registry = { dir: registryDir, mode: board.registryMode } as const;
+    const resolveHarness = (task: Task) => {
+      const loaded = loadRegistry(registry.dir, registry.mode);
+      const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
+      const provider = ownEntry(loaded.agents, name)?.provider;
+      if (!provider) throw new Error(`unknown agent: ${name}`);
+      return canonicalHarness(provider as Provider);
+    };
+    return new CanonicalWorkerRouter({
+      id: board.defaultAgentName,
+      resolveHarness,
+      adapters: {
+        "claude-code": new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock })),
+        codex: new CodexWorker({
+          db,
+          clock,
+          registry,
+          agent: board.defaultAgentName,
+          auditorName: board.auditorName,
+          workspace: board.workspaceName,
+          workspacesDir: board.workspacesDir,
+          mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
+          logDir: board.logDir,
+          codexHome: board.codexHome,
+          cliVersion: CODEX_CLI_VERSION,
+          boardState: board.boardState,
+        }),
+      },
+    });
+  };
+}
+
+function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<typeof canonicalHarness>) | undefined {
+  if (!board.registryDir) return undefined;
+  return (task) => {
+    const registry = loadBoardRegistry(board);
+    const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
+    const provider = ownEntry(registry.agents, name)?.provider;
+    if (!provider) throw new Error(`unknown agent: ${name}`);
+    return canonicalHarness(provider as Provider);
+  };
 }
 
 /** One spelling for every registry-derived composition seam: mode is resolved
@@ -583,6 +633,9 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
+    resolveHarness: harnessResolver(board),
+    harnessContainment: async (harness) =>
+      harness === "codex" ? await checkCodexCapability() : { available: true },
     registryReachability: registryReachabilityCheck(board),
     cliAuth: createClaudeCliAuthCheck(),
     // ADR 0097 決定2 / issue #446: 回答受理時の再検証が provider ごとに撃つ

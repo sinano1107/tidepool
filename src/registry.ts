@@ -114,8 +114,24 @@ export type MergeDial = (typeof MERGE_DIAL_VALUES)[number];
  *  values an agent definition's `provider` may carry. What each value *means*
  *  (endpoint URL, env names, model spellings) is the adapter's vendor knowledge
  *  (ADR 0005) and never appears here. */
-export const PROVIDER_VALUES = ["anthropic", "moonshot"] as const;
+export const PROVIDER_VALUES = ["anthropic", "moonshot", "openai"] as const;
 export type Provider = (typeof PROVIDER_VALUES)[number];
+
+/** The local execution harness selected by a canonical Provider route (ADR
+ *  0098). This is board-owned routing state, never registry frontmatter. */
+export type Harness = "claude-code" | "codex";
+
+const CANONICAL_ROUTES: Record<Provider, { harness: Harness; advisor: boolean }> = {
+  anthropic: { harness: "claude-code", advisor: true },
+  moonshot: { harness: "claude-code", advisor: false },
+  openai: { harness: "codex", advisor: false },
+};
+
+/** Provider -> Harness is a total, one-to-one-at-use mapping with no fallback
+ *  (ADR 0098). A second Harness for a Provider is a new recorded decision. */
+export function canonicalHarness(provider: Provider): Harness {
+  return CANONICAL_ROUTES[provider].harness;
+}
 
 /** The provider select's options (value + display label) for the settings
  *  surface, served over GET /api/agents so the WebUI never hard-codes the
@@ -126,6 +142,7 @@ export type Provider = (typeof PROVIDER_VALUES)[number];
 export const PROVIDER_OPTIONS: readonly { value: Provider; label: string }[] = [
   { value: "anthropic", label: "anthropic — Claude models, Anthropic billing" },
   { value: "moonshot", label: "moonshot — Kimi models, Moonshot Platform billing" },
+  { value: "openai", label: "openai — Codex models, OpenAI billing" },
 ];
 
 /** The providers whose server side implements the advisor capability (ADR
@@ -134,7 +151,9 @@ export const PROVIDER_OPTIONS: readonly { value: Provider; label: string }[] = [
  *  small constant, not a generalized capability model — vendor knowledge
  *  belongs to the adapter (ADR 0005), and the #445 spawn adapter is the one
  *  that consumes/extends this list as it learns each provider's shape. */
-export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = ["anthropic"];
+export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filter(
+  (provider) => CANONICAL_ROUTES[provider].advisor,
+);
 
 /** An agent definition's provider declaration breaks ADR 0097: the value is
  *  outside PROVIDER_VALUES, or it names a provider that does not offer an
@@ -171,10 +190,11 @@ export function assertValidProvider(
       `unknown provider "${provider}" (expected one of ${PROVIDER_VALUES.join(" / ")})`,
     );
   }
-  if (advisor?.trim() && !(PROVIDERS_WITH_ADVISOR as readonly string[]).includes(provider)) {
+  const route = CANONICAL_ROUTES[provider as Provider];
+  if (advisor?.trim() && !route.advisor) {
     throw new InvalidAgentProviderError(
       agentName,
-      `provider "${provider}" does not offer an advisor — a definition declaring one does not stand (ADR 0097 決定3)`,
+      `canonical route "${provider} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand (ADR 0098)`,
     );
   }
 }
