@@ -41,13 +41,15 @@ export function containerRuntimeFor(
 
 const unavailable = (reason: string): ContainerRuntimeCapability => ({ available: false, reason });
 
-/** 実測した容器機構が無い platform の fail-closed な機構(macOS の実測は #465)。
+/** contract suite を通る容器機構が無い platform の fail-closed な機構。darwin は
+ *  #465 で process group を測って不合格(setsid で離脱した孫が見えない)、他の
+ *  platform は未実測 — どちらも「弱い回収へ黙って落ちない」の同じ答えになる。
  *  preflight が pickup を止めるので `create` は呼ばれない — 呼ばれたなら配線が
  *  壊れている。 */
 function unmeasuredContainerRuntime(platform: NodeJS.Platform): ContainerRuntime {
   const capability = unavailable(
-    `no worker container mechanism has been measured on platform "${platform}" — ` +
-      "worker pickup stays stopped here until one is",
+    `no worker container mechanism on platform "${platform}" passes the worker container contract — ` +
+      "worker pickup stays stopped here",
   );
   return {
     preflight: () => capability,

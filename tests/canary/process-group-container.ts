@@ -18,8 +18,10 @@ import {
  *  観測は poll になる。 */
 
 /** この run で作られた全 group。残骸の検証側読み(canary 4)がここを見る —
- *  cgroup と違って機構は file system に何も残さないので、残骸の在り処は
- *  「まだ member が居る group」しかない。 */
+ *  cgroup と違って機構は file system に何も残さないので、この機構が数えられる
+ *  残骸は「まだ member が居る group」だけである。setsid で group を離脱した
+ *  子孫はここからは見えない — canary 3 が落ちた run では `sleep 300` の孫が
+ *  host に残るので、suite の後に手で始末すること(#465 の実測記録)。 */
 const createdGroups: number[] = [];
 
 /** ESRCH だけが「空」である。EPERM(居るが signal を送れない)や他の errno は
@@ -84,6 +86,8 @@ function createProcessGroup(): WorkerContainer {
 
   return {
     spawn: (command, args, opts) => {
+      // src の `defaultSpawn`(stdio の形と stderr の tee の正本)は `detached` を
+      // 受け取らないので、採用されていない候補のためにその口を広げず、ここに写す
       const child = nodeSpawn(command, args, {
         cwd: opts.cwd,
         env: opts.env,

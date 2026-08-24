@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -26,7 +26,8 @@ import { liveGroups, processGroupContainerRuntime } from "./process-group-contai
  *  issue #465 の macOS 測定は `process-group` を差す — 候補は `src` ではなく
  *  `./process-group-container.ts` に居る。**canary の assert は機構によらず同じ**で、
  *  機構ごとに差し替わるのは検証側が読む kernel の面だけである(macOS には `/proc` が
- *  無いので `ps` を読む)。
+ *  無いので `ps` を読む)。ただし canary 4 の `preflight()` の半分は、boot 時の前提検査を
+ *  持つ機構でしか意味を持たない — 持たない候補では恒真で、残骸の比較だけが効く。
  *
  *  **PID を数えるのは検証側だけである**。敵対的 process には自分の PID を
  *  `$CANARY_PIDS` へ書かせ、回収後に1つも残っていないことをここで assert する。
@@ -38,7 +39,6 @@ interface CanaryProbe {
   /** この機構を測れる platform。他の platform では `beforeAll` が fail する。 */
   platform: NodeJS.Platform;
   runtime: ContainerRuntime;
-  alive(pid: number): boolean;
   /** その process が runner とは別の session に居ること(setsid が本当に効いたこと)。 */
   escapedSession(pid: number): boolean;
   /** session を分けた孫を1つ起こす shell 断片。 */
@@ -64,10 +64,10 @@ function sessionOf(pid: number): string {
   return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[3] ?? "";
 }
 
-/** その PID の process がまだ居るか。linux 側の `/proc/<pid>` の存在と同じ意味を
- *  signal 0 で読む — ESRCH だけが「居ない」で、EPERM(居るが撃てない)は居る側に
- *  数える。zombie も居る側に数えるのは `/proc/<pid>` と同じ。 */
-function pidExists(pid: number): boolean {
+/** その PID の process がまだ居るか。signal 0 で読む — ESRCH だけが「居ない」で、
+ *  EPERM(居るが撃てない)は居る側に数える。zombie も居る側に数える(linux の
+ *  `/proc/<pid>` の存在と同じ意味で、両 platform でこれ1本)。 */
+function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -90,8 +90,7 @@ const probes: Record<string, CanaryProbe> = {
   /** Linux: cgroup v2(`src/cgroup-container.ts`、#464 で Pi 実測済み)。 */
   cgroup: {
     platform: "linux",
-    runtime: containerRuntimeFor(process.platform),
-    alive: (pid) => existsSync(`/proc/${pid}`),
+    runtime: containerRuntimeFor("linux"),
     escapedSession: (pid) => sessionOf(pid) !== sessionOf(process.pid),
     daemonScript: `setsid /bin/sh -c 'echo $$ >> "$CANARY_PIDS"; exec sleep 300' </dev/null >/dev/null 2>&1 &`,
     residue: () => readdirSync(boardCgroup()),
@@ -100,7 +99,6 @@ const probes: Record<string, CanaryProbe> = {
   "process-group": {
     platform: "darwin",
     runtime: processGroupContainerRuntime,
-    alive: pidExists,
     // macOS の `ps` には session id の列が無い(`sess` は tty 以外では 0)。代わりに
     // STAT の flag を読む: 先頭1文字が状態、以降が flag で、`s` は session leader。
     // session leader は sid = 自分の PID なので、後から生まれた孫が leader である
@@ -185,7 +183,6 @@ const recordedPids = (): number[] =>
     .filter(Boolean)
     .map(Number);
 
-const alive = (pid: number): boolean => probe.alive(pid);
 
 /** 回収済み観測が**今この瞬間に**立っているか。force の送達より先に空が
  *  観測されないこと(= 送達を回収と数えていないこと)を測るために要る。 */
