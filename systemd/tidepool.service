@@ -9,6 +9,8 @@ User=masaki
 Group=masaki
 WorkingDirectory=/opt/tidepool
 EnvironmentFile=/etc/default/tidepool
+# ADR 0099 決定5: worker 容器(per-session cgroup v2)は盤面自身の cgroup 配下に作る
+Delegate=yes
 ExecStart=/usr/bin/npm start
 Restart=on-failure
 RestartSec=5

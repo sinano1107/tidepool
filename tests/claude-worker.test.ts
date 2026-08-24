@@ -24,7 +24,7 @@ import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
 import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock, FakeContainerRuntime } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeTask(
@@ -197,7 +197,7 @@ async function makeUsageWorker(pty: PtyFn) {
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
-    spawn: recordingSpawn().spawn,
+    containers: passthroughContainers(recordingSpawn().spawn),
     pty,
   });
 }
@@ -218,7 +218,7 @@ async function makeWorker(
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
-    spawn: recorder.spawn,
+    containers: passthroughContainers(recorder.spawn),
     ...extraOptions,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */
@@ -1347,7 +1347,7 @@ describe("ClaudeCodeWorker", () => {
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:4589/mcp",
         logDir: "worker-logs",
-        spawn: recorder.spawn,
+        containers: passthroughContainers(recorder.spawn),
       });
       await mkdir(join(base, "worker-logs"), { recursive: true });
       const task = makeTask("task-rel");
@@ -1406,7 +1406,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
-          spawn: recordingSpawn().spawn,
+          containers: passthroughContainers(recordingSpawn().spawn),
         }),
     ).toThrow(/unknown effort level/);
   });
@@ -1426,7 +1426,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
-          spawn: recordingSpawn().spawn,
+          containers: passthroughContainers(recordingSpawn().spawn),
         }),
     ).toThrow(/unknown effort level/);
   });
@@ -1446,7 +1446,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "no-such-workspace",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
-          spawn: recordingSpawn().spawn,
+          containers: passthroughContainers(recordingSpawn().spawn),
         }),
     ).toThrow(/unknown workspace/);
   });
@@ -1945,7 +1945,7 @@ describe("ClaudeCodeWorker", () => {
       workspace: "tidepool",
       mcpUrl: "http://127.0.0.1:4589/mcp",
       logDir: await mkdtemp(join(tmpdir(), "tidepool-worker-logs-")),
-      spawn: recorder.spawn,
+      containers: passthroughContainers(recorder.spawn),
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
     insertTask(db, task);

@@ -9,6 +9,7 @@ import {
 } from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
 import type { BoardStatePath } from "./board-state.js";
+import { containerRuntimeFor } from "./cgroup-container.js";
 import { createClaudeCliAuthCheck, createMoonshotCliAuthCheck } from "./claude-cli-auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
@@ -49,7 +50,7 @@ import type { Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
-import { passthroughContainerRuntime, type WorkerContainers } from "./worker-container.js";
+import type { WorkerContainers } from "./worker-container.js";
 import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -622,10 +623,12 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
       sandboxCapability: () => checkSandboxCapability(platform),
       toolSurface: () => probeToolSurfaceCapability(),
     },
-    // ADR 0099 決定2/5: どの容器機構でこのホストの worker を封じるか。今日は
-    // pass-through(容器 = CLI root 1本)で、実機構の選択は #463 がここに入る —
-    // 選ぶ場所が合成 root なのは、platform の判定が env の判定と同じ層だから。
-    containerRuntime: passthroughContainerRuntime(),
+    // ADR 0099 決定2/5: どの容器機構でこのホストの worker を封じるか。選ぶ場所が
+    // 合成 root なのは、platform の判定が env の判定と同じ層だから — 上の
+    // `checkSandboxCapability(platform)` と同じ1行の並びである。実測した機構が
+    // 無い platform は fail-closed な機構を受け取り、boot 時の前提検査が pickup を
+    // 止める(macOS の実測は #465)。
+    containerRuntime: containerRuntimeFor(platform),
     watchdog: WATCHDOG,
   };
 }

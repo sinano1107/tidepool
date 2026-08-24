@@ -6,7 +6,7 @@ import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { FakeClock, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 import { git, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
 
 const dirs: string[] = [];
@@ -52,6 +52,7 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
       // 叩かないが、盤面が無認証で立つ口は塞いである)
       credential: TEST_CREDENTIAL,
       worker: () => new ScriptedWorker(bootClock),
+      containerRuntime: new FakeContainerRuntime(),
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];

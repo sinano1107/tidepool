@@ -52,9 +52,11 @@ export interface WorkerContainer {
  *  platform ごとに実装が違ってよい(cgroup v2 / process group)が、force と
  *  reclaimed の意味はここで1度だけ書かれる。 */
 export interface ContainerRuntime {
-  /** boot 時の機構前提検査(ADR 0099 決定5)。毎 boot の live kill canary は
-   *  行わない — ここで見るのは前提の存在だけである。 */
-  preflight(): ContainerRuntimeCapability;
+  /** 機構前提検査(ADR 0099 決定5)。boot 時だけでなく pickup と quarantine 回答時
+   *  にも読み直される(CONTEXT.md「Containment capability」)。毎回の live kill
+   *  canary は行わない — ここで見るのは前提の存在だけである。`live` は supervisor
+   *  が今持っている session — 稼働中の容器を前回の run の残骸と読み違えないため。 */
+  preflight(live?: ReadonlySet<string>): ContainerRuntimeCapability;
   /** worker session 1つぶんの容器を作る。 */
   create(sessionId: string): WorkerContainer;
 }
@@ -69,7 +71,7 @@ export class WorkerContainers {
   constructor(private readonly runtime: ContainerRuntime) {}
 
   preflight(): ContainerRuntimeCapability {
-    return this.runtime.preflight();
+    return this.runtime.preflight(new Set(this.live.keys()));
   }
 
   /** 盤面が worker session ごとに**先に**作る(pickup 時)。adapter はここで
@@ -96,8 +98,9 @@ export class WorkerContainers {
 
   /** その session の容器が空になった signal。知らない session は既に空である —
    *  帳簿は in-memory なので、再起動をまたいだ「空」は platform supervisor の
-   *  保証(ADR 0099 決定6、Pi では systemd の control-group kill)であり、boot 時の
-   *  復元は #463 が実機構と一緒に決める。 */
+   *  保証(ADR 0099 決定6、Pi では systemd の control-group kill)である。保証が
+   *  破れて容器が populated のまま残っていた場合は、boot 時の機構前提検査が
+   *  それを見つけて pickup を止める(#463 — 帳簿ではなく容器機構が答える)。 */
   reclaimed(sessionId: string): Promise<void> {
     return this.live.get(sessionId)?.container.reclaimed ?? Promise.resolve();
   }
@@ -109,7 +112,15 @@ export class WorkerContainers {
   }
 }
 
-const defaultSpawn: ContainerSpawn = (command, args, opts) => {
+/** 実 process を1つ起こす口。容器機構はどれもこれを包むだけなので(cgroup なら
+ *  容器へ入る wrapper を被せる)、stdio の形と stderr の tee はここ1箇所にある。 */
+/** spawn そのものが失敗した(process が生まれていない)error か。Node は
+ *  この場合 "exit" を撃たず "error" だけを撃つので、容器の側はこれを空と数える。 */
+export function isSpawnFailure(err: NodeJS.ErrnoException): boolean {
+  return err.syscall?.startsWith("spawn") ?? false;
+}
+
+export const defaultSpawn: ContainerSpawn = (command, args, opts) => {
   const child = nodeSpawn(command, args, {
     cwd: opts.cwd,
     env: opts.env,
@@ -122,39 +133,3 @@ const defaultSpawn: ContainerSpawn = (command, args, opts) => {
   return child;
 };
 
-/** 今日の既定の容器機構: 容器 = CLI root process 1本。force は root への
- *  SIGKILL、空の観測は root の exit である。
- *
- *  ponytail: 子孫 process は封じ込めない(root だけ)。これは #195 が見つけた穴
- *  そのものだが、**送達を回収と数えない**という ADR 0099 決定3 の形はここで既に
- *  成立している — 実機構(Linux: cgroup v2、macOS: process group)への差し替えは
- *  #463 で、この seam の裏だけが変わる。 */
-export function passthroughContainerRuntime(spawn: ContainerSpawn = defaultSpawn): ContainerRuntime {
-  return {
-    preflight: () => ({ available: true }),
-    create: () => {
-      let child: ContainedProcess | null = null;
-      let markEmpty!: () => void;
-      const reclaimed = new Promise<void>((resolve) => {
-        markEmpty = resolve;
-      });
-      return {
-        spawn: (command, args, opts) => {
-          child = spawn(command, args, opts);
-          child.on("exit", () => markEmpty());
-          // spawn そのものが失敗した process は生まれていない = 容器は空
-          child.on("error", (err: NodeJS.ErrnoException) => {
-            if (err.syscall?.startsWith("spawn")) markEmpty();
-          });
-          return child;
-        },
-        forceReclaim: () => {
-          // 空の容器(spawn 前 / 既に exit 済み)への force は、その場で空である
-          if (!child) markEmpty();
-          else child.kill("SIGKILL");
-        },
-        reclaimed,
-      };
-    },
-  };
-}

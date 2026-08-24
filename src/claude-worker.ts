@@ -43,11 +43,7 @@ import {
 } from "./tasks.js";
 import { composeTerminalScreen } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
-import {
-  type ContainerSpawn,
-  passthroughContainerRuntime,
-  WorkerContainers,
-} from "./worker-container.js";
+import type { WorkerContainers } from "./worker-container.js";
 import {
   guardRegistryDefaultBranch,
   quarantineWorkspace,
@@ -1057,16 +1053,11 @@ export interface ClaudeWorkerOptions {
   mcpUrl: string;
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
-  /** worker session を作る process 境界(ADR 0027 の fake 注入)。既定の
-   *  pass-through 容器がこれを使って容器の中の process を作る。 */
-  spawn?: ContainerSpawn;
   /** 盤面側 supervisor(ADR 0099 決定2): worker session の spawn はここが作る
-   *  容器の中で起きる。**渡されたときはその supervisor の容器機構が spawn を
-   *  担う**ので、`spawn` は使われない(注入する側はどちらか一方を渡す)。
-   *  Absent → `spawn`(既定は実 process)の上に組んだ pass-through の容器を
-   *  自前で持つ: 直接組み立てられた adapter でも force / reclaimed の語彙が
-   *  欠けない。 */
-  containers?: WorkerContainers;
+   *  容器の中で起き、force / reclaimed もここを通る。**省略できない** — adapter が
+   *  自前の既定容器を持つと、そこだけ回収の弱い経路が生える(ADR 0027 の fake
+   *  注入は容器機構の側でやる)。 */
+  containers: WorkerContainers;
   /** issue #81 / ADR 0028: the PTY boundary checkUsage scrapes /usage at.
    *  Injected so the scrape orchestration runs without a real PTY in tests. */
   pty?: PtyFn;
@@ -1521,8 +1512,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   constructor(options: ClaudeWorkerOptions) {
     this.id = options.agent;
     this.options = options;
-    this.containers =
-      options.containers ?? new WorkerContainers(passthroughContainerRuntime(options.spawn));
+    this.containers = options.containers;
     this.pty = options.pty ?? defaultPty;
     this.enumerateSkills = options.enumerateSkills ?? defaultEnumerateSkills;
     this.logDir = resolve(options.logDir);

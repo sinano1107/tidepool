@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, expect, it } from "vitest";
 import { startServer, type TidepoolServer } from "../src/server.js";
-import { FakeClock, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 import { AUTH_HEADERS, TEST_CREDENTIAL } from "./harness.js";
 
 let server: TidepoolServer | undefined;
@@ -27,6 +27,7 @@ it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートで
     clock: bootClock,
     credential: TEST_CREDENTIAL,
     worker: () => new ScriptedWorker(bootClock),
+    containerRuntime: new FakeContainerRuntime(),
   });
 
   // credential を提示したうえで 404 であること(issue #153): 無認証の 401 は
