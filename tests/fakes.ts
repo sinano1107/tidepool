@@ -21,7 +21,15 @@ import type {
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
-import type { KillSignal, WorkerAdapter } from "../src/worker.js";
+import type { WorkerAdapter } from "../src/worker.js";
+import {
+  type ContainedProcess,
+  type ContainerRuntime,
+  type ContainerRuntimeCapability,
+  type ContainerSpawn,
+  type WorkerContainer,
+  WorkerContainers,
+} from "../src/worker-container.js";
 
 /** A reading well under the default threshold — the harness default so tests
  *  unrelated to throttling never need to script usage themselves. Exported
@@ -123,10 +131,11 @@ export class FakeClock implements Clock {
 }
 
 /** Scripted stand-in at the WorkerAdapter seam: records what it was asked to
- *  start and killed, in call order. */
+ *  start and to fold up, in call order. 強制回収は adapter の口ではないので
+ *  ここには現れない — それは `FakeContainerRuntime` の側にある(ADR 0099 決定2)。 */
 export class ScriptedWorker implements WorkerAdapter {
   readonly started: Task[] = [];
-  readonly killed: Array<{ taskId: string; signal: KillSignal }> = [];
+  readonly gracefulStops: string[] = [];
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
@@ -141,8 +150,8 @@ export class ScriptedWorker implements WorkerAdapter {
     this.started.push(task);
   }
 
-  kill(taskId: string, signal: KillSignal): void {
-    this.killed.push({ taskId, signal });
+  gracefulStop(taskId: string): void {
+    this.gracefulStops.push(taskId);
   }
 
   async checkUsage(): Promise<string | null> {
@@ -160,6 +169,60 @@ export class ScriptedWorker implements WorkerAdapter {
   /** Holds checkUsage in flight so tests observe the real PTY-latency race. */
   scriptUsageGate(gate: Promise<void>): void {
     this.usageGate = gate;
+  }
+}
+
+/** 容器機構 seam の scripted stand-in(ADR 0099 決定2)。既定の容器は
+ *  強制回収を受けた時点で空になる(実機構がそう振る舞うのが正常)。空にならない
+ *  容器 — 回収に失敗するホスト — は `hold` で明示的にスクリプトし、`fireEmpty`
+ *  で好きな瞬間に「空になった signal」を撃つ。 */
+export class FakeContainerRuntime implements ContainerRuntime {
+  readonly forceReclaims: string[] = [];
+  private readonly held = new Set<string>();
+  private readonly markEmpty = new Map<string, () => void>();
+  private capability: ContainerRuntimeCapability = { available: true };
+
+  /** `spawn` は容器の中で走る process を作る口。ScriptedWorker の盤面は1つも
+   *  spawn しないので、実 adapter を通すテストだけが渡す。 */
+  constructor(private readonly spawn?: ContainerSpawn) {}
+
+  /** boot 時の機構前提検査を不成立にスクリプトする(boot 前に呼ぶ)。 */
+  scriptPreflight(reason: string): void {
+    this.capability = { available: false, reason };
+  }
+
+  /** この session の容器は強制回収では空にならない — 空の観測は `fireEmpty`
+   *  だけが起こす。 */
+  hold(sessionId: string): void {
+    this.held.add(sessionId);
+  }
+
+  /** 「容器が空になった」signal を撃つ。 */
+  fireEmpty(sessionId: string): void {
+    this.markEmpty.get(sessionId)?.();
+  }
+
+  preflight(): ContainerRuntimeCapability {
+    return this.capability;
+  }
+
+  create(sessionId: string): WorkerContainer {
+    let markEmpty!: () => void;
+    const reclaimed = new Promise<void>((resolve) => {
+      markEmpty = resolve;
+    });
+    this.markEmpty.set(sessionId, markEmpty);
+    return {
+      spawn: (command, args, opts): ContainedProcess => {
+        if (!this.spawn) throw new Error("fake container runtime: no spawn scripted");
+        return this.spawn(command, args, opts);
+      },
+      forceReclaim: () => {
+        this.forceReclaims.push(sessionId);
+        if (!this.held.has(sessionId)) markEmpty();
+      },
+      reclaimed,
+    };
   }
 }
 
@@ -447,4 +510,10 @@ export class FakeTranslationClient implements TranslationClient {
   scriptFailure(err: Error): void {
     this.failure = err;
   }
+}
+
+/** 盤面側 supervisor を fake の容器機構の上に1行で組む — scheduler / watchdog を
+ *  直に呼ぶテストが毎回2行書かないための口。 */
+export function fakeContainers(runtime: FakeContainerRuntime = new FakeContainerRuntime()): WorkerContainers {
+  return new WorkerContainers(runtime);
 }

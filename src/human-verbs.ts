@@ -29,6 +29,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import { landingBlock, stageFrontInsert, triageActivity } from "./triage.js";
+import type { PendingReclaim } from "./watchdog.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
@@ -280,6 +281,11 @@ export interface SubmitAnswerDeps {
   relandRootAncestor?: (task: Task) => Promise<void>;
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
+  /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
+   *  quarantine の確認回答の受理は、容器がまだ populated なら拒まれ、空を再観測
+   *  できたときだけ tree rule を走らせて slot を解放する。Absent → watchdog を
+   *  持たない盤面(回収を待っている slot が存在しない)。 */
+  reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
   cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
@@ -501,11 +507,22 @@ export async function submitAnswer(
     }
   }
 
-  if (task.question_quarantine_sandbox !== null && deps.containment) {
-    const capability = await deps.containment();
-    if (!capability.available) {
+  if (task.question_quarantine_sandbox !== null) {
+    const capability = await deps.containment?.();
+    if (capability && !capability.available) {
       throw new DomainError(
         `worker containment is still not established: ${capability.reason}`,
+      );
+    }
+    // ADR 0099 決定3: 回収失敗で立った Containment quarantine の解除は、容器の空を
+    // **回答時にもう一度観測して**から受理する。一回限りの process scan は観測に
+    // 数えないので、読むのは supervisor が持つ「空になった signal」の帳簿である。
+    const pendingReclaim = deps.reclaim?.pendingReclaim();
+    if (pendingReclaim !== undefined) {
+      throw new DomainError(
+        `the worker container for task ${pendingReclaim} has still not been observed empty — ` +
+          "processes from that session may still be running against this host and its workspaces. " +
+          "Kill them by hand, then answer again",
       );
     }
   }
@@ -579,6 +596,11 @@ export async function submitAnswer(
     const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
     if (abandoned) await deps.relandRootAncestor?.(abandoned);
   }
+  // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
+  // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
+  // 解放と対で走る。待っている回収を持たない Containment quarantine(ツール面のずれ
+  // など)では no-op。
+  if (task.question_quarantine_sandbox !== null) deps.reclaim?.acceptReclaimed();
   // An unblocked parent or reinstated quarantined resource can make the queue
   // head pickable immediately. During triage, staging keeps both flags false.
   if (parentUnblocked || pickupResumed) deps.onQueueHeadChanged();

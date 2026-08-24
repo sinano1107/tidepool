@@ -30,6 +30,7 @@ import {
 } from "./usage.js";
 import { abandonConsequence } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
+import type { WorkerContainers } from "./worker-container.js";
 import {
   BOARD_WORKER_ID,
   buildWorkspaceResolver,
@@ -150,6 +151,8 @@ export function startScheduler(deps: {
   clock: Clock;
   slot: Slot;
   worker: WorkerAdapter;
+  /** 盤面側 supervisor(ADR 0099 決定2): pickup が worker session の容器を作る。 */
+  containers: WorkerContainers;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task runs in the
@@ -203,6 +206,7 @@ export function startScheduler(deps: {
     clock,
     slot,
     worker,
+    containers,
     workspace,
     resolveWorkspace,
     auditorName = DEFAULT_AUDITOR_NAME,
@@ -280,6 +284,9 @@ export function startScheduler(deps: {
       clock.now(),
     );
     slot.occupy(picked.id);
+    // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
+    // かった pickup でも、force / reclaimed の相手はもう存在している。
+    containers.open(picked.id);
     // branch discipline is the board's own, not the worker's: by the time
     // the worker starts, the workspace already sits on the task branch
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);

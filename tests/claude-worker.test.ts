@@ -14,7 +14,6 @@ import {
   PROMPT_READY_MARKER,
   type PtyFn,
   pinnedModelFlags,
-  type SpawnFn,
 } from "../src/claude-worker.js";
 import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
@@ -23,8 +22,9 @@ import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
+import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeTask(
@@ -115,7 +115,7 @@ function recordingSpawn() {
   const killed: NodeJS.Signals[] = [];
   const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
   const errorListeners: Array<(err: Error) => void> = [];
-  const spawn: SpawnFn = (command, args, opts) => {
+  const spawn: ContainerSpawn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env });
     return {
       stdout,
@@ -1185,6 +1185,18 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(killed).toContain("SIGKILL"));
   });
 
+  it("ずれた面の回収は watchdog と同じ回収 module(worker 容器)を通る(ADR 0099 決定2)", async () => {
+    // session を終わらせる経路が2つある以上、回収の書き方が2つあってはならない。
+    // adapter が signal を直に撃たないことまで含めてここで測る。
+    const recorder = recordingSpawn();
+    const runtime = new FakeContainerRuntime(recorder.spawn);
+    const { start } = await makeWorker({}, { containers: new WorkerContainers(runtime) });
+    const task = start("task-init-container-kill", null, "deckhand", "work");
+    recorder.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    await vi.waitFor(() => expect(runtime.forceReclaims).toEqual([task.id]));
+    expect(recorder.killed).toEqual([]);
+  });
+
   it("宣言どおりのセッションは kill されない", async () => {
     const { start, stdout, killed } = await makeWorker();
     start("task-init-nokill", null, "deckhand", "review");
@@ -1868,9 +1880,9 @@ describe("ClaudeCodeWorker", () => {
       error_code: "ENOENT",
       message: "spawn claude ENOENT",
     });
-    // running から消えている: 死んだ子への kill は no-op のはずなので、
-    // watchdog 相当の kill() を呼んでも子の kill() は一切呼ばれない
-    worker.kill(task.id, "SIGKILL");
+    // running から消えている: 死んだ子への合図は no-op のはずなので、
+    // watchdog 相当の畳み込み停止を呼んでも子の kill() は一切呼ばれない
+    worker.gracefulStop(task.id);
     expect(killed).toEqual([]);
   });
 
@@ -2290,7 +2302,7 @@ describe("ClaudeCodeWorker", () => {
 
 /** issue #33: advisor capability。frontmatter の `advisor` が spawn の面まで
  *  届くか、不在・緊急マスク時に**確実に閉じる**か、そして「実際に走ったか」が
- *  worker_exited に残るか。実 CLI は使わず、既存の SpawnFn seam に fake stream を
+ *  worker_exited に残るか。実 CLI は使わず、既存の ContainerSpawn seam に fake stream を
  *  流す(ADR 0027 / ADR 0041 §4)。 */
 describe("advisor capability (issue #33)", () => {
   const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nadvisor: opus\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;

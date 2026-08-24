@@ -96,7 +96,7 @@ it("ペース線超過の間も実行中タスクには決して触れない(常
   const done: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   expect(done.isError ?? false).toBe(false);
   await client.close();
-  expect(t.worker.killed).toEqual([]);
+  expect(t.worker.gracefulStops).toEqual([]);
 
   const second = await registerWork(t, "long haul");
   await t.clock.advance(HOUR); // slot free, but usage is still over the pace line

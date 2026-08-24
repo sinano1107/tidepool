@@ -48,7 +48,8 @@ import type { ServerOptions, WorkerFactory } from "./server.js";
 import type { Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
-import type { KillSignal, WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter } from "./worker.js";
+import { passthroughContainerRuntime, type WorkerContainers } from "./worker-container.js";
 import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -89,8 +90,10 @@ import {
  *    したがってここに値を書いても死んだ設定にしかならず、しかも「watchdog が
  *    question も governs する」という誤った含意を残す。question は人間タスクと
  *    して slot の外で回答される(CONTEXT.md の Held)。
- *  - `grace` = 60秒 = 1 tick。SIGTERM から SIGKILL までの猶予で、watchdog.ts の
- *    比較は `>=` なので次の tick で SIGKILL が出る。 */
+ *  - `grace` = 60秒 = 1 tick。畳み込み停止から強制回収までの猶予で、watchdog.ts の
+ *    比較は `>=` なので次の tick で回収が出る。
+ *  - `reclaimTimeout` は既定のまま(watchdog.ts の `RECLAIM_TIMEOUT`)。ここに
+ *    書かないのは判断が1つも無いからであり、置き場所が無いからではない。 */
 export const WATCHDOG: WatchdogConfig = {
   timeLimits: { work: 90 * 60_000, review: 45 * 60_000 },
   grace: 60_000,
@@ -159,13 +162,13 @@ export interface BoardComposition {
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
-class LoggingWorker implements WorkerAdapter {
+export class LoggingWorker implements WorkerAdapter {
   readonly id = "logging-worker";
   start(task: Task): void {
     console.log(`[worker] picked up ${task.id}: ${task.title}`);
   }
-  kill(taskId: string, signal: KillSignal): void {
-    console.log(`[worker] would send ${signal} to ${taskId}`);
+  gracefulStop(taskId: string): void {
+    console.log(`[worker] would ask ${taskId} to stop and fold its work up`);
   }
   /** No registry means no real adapter behind this — report a well-under-
    *  threshold reading so pickup logging is never fail-closed by a check
@@ -193,11 +196,14 @@ class LoggingWorker implements WorkerAdapter {
  *  合成の入力とは別に取る。 */
 export function buildWorkerOptions(
   board: BoardComposition & { registryDir: string },
-  session: { db: Db; clock: Clock },
+  session: { db: Db; clock: Clock; containers: WorkerContainers },
 ): ClaudeWorkerOptions {
   return {
     db: session.db,
     clock: session.clock,
+    // ADR 0099 決定2: 盤面が1つだけ持つ worker 容器の supervisor。adapter は
+    // その中へ spawn し、watchdog は同じ帳簿へ force / reclaimed を撃つ。
+    containers: session.containers,
     // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
     // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
     // 「人間の merge を通った内容が spawn に効く」は成立しない。
@@ -225,7 +231,8 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock }) => new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock }));
+  return ({ db, clock, containers }) =>
+    new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock, containers }));
 }
 
 /** One spelling for every registry-derived composition seam: mode is resolved
@@ -615,6 +622,10 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
       sandboxCapability: () => checkSandboxCapability(platform),
       toolSurface: () => probeToolSurfaceCapability(),
     },
+    // ADR 0099 決定2/5: どの容器機構でこのホストの worker を封じるか。今日は
+    // pass-through(容器 = CLI root 1本)で、実機構の選択は #463 がここに入る —
+    // 選ぶ場所が合成 root なのは、platform の判定が env の判定と同じ層だから。
+    containerRuntime: passthroughContainerRuntime(),
     watchdog: WATCHDOG,
   };
 }

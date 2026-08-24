@@ -18,6 +18,7 @@ import {
   composeContainment,
   containmentPickupBlocked,
   HUMAN_SURFACE_PROBE_PATH,
+  quarantineContainment,
 } from "./containment.js";
 import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
@@ -46,6 +47,11 @@ import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
+import {
+  type ContainerRuntime,
+  passthroughContainerRuntime,
+  WorkerContainers,
+} from "./worker-container.js";
 import {
   buildWorkspaceResolver,
   pathIsRegistryClone,
@@ -137,8 +143,14 @@ function rebaselineAfter<A extends unknown[], R>(
 }
 
 /** The real adapter needs the board's own db and clock, which are created in
- *  here — so the worker arrives as a factory fed with them. */
-export type WorkerFactory = (deps: { db: Db; clock: Clock }) => WorkerAdapter;
+ *  here — so the worker arrives as a factory fed with them. `containers` は
+ *  盤面が1つだけ持つ worker 容器の supervisor(ADR 0099 決定2): adapter は
+ *  その中へ spawn し、watchdog は同じ帳簿へ force / reclaimed を撃つ。 */
+export type WorkerFactory = (deps: {
+  db: Db;
+  clock: Clock;
+  containers: WorkerContainers;
+}) => WorkerAdapter;
 
 export interface ServerOptions {
   dbPath: string;
@@ -307,6 +319,9 @@ export interface ServerOptions {
      *  忘れたときに検査が黙って1つ消えるのを型で止めるため。 */
     toolSurface: (() => Promise<ContainmentCapability>) | null;
   };
+  /** 容器機構(ADR 0099 決定2 の唯一の新 seam)。Absent → pass-through の既定
+   *  機構(容器 = CLI root 1本)。実機構は #463 でこの seam の裏に入る。 */
+  containerRuntime?: ContainerRuntime;
 }
 
 export interface TidepoolServer {
@@ -318,6 +333,17 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
+  const containers = new WorkerContainers(
+    options.containerRuntime ?? passthroughContainerRuntime(),
+  );
+  // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ
+  // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
+  // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
+  // platform-scoped の停止は無く、この盤面が走るホストは1つである。
+  const runtimePreflight = containers.preflight();
+  if (!runtimePreflight.available) {
+    quarantineContainment(db, runtimePreflight.reason, options.clock.now());
+  }
   // ADR 0064 決定4: registry clone の ref を動かす口を1本残らず包む。3つの admin verb
   // (入口の fetch と着地の push / update-ref)と、回答時の reachability の再 fetch ——
   // どれもセッション実行中に人間面から入りうるので、包み忘れた口は無実のセッションを
@@ -388,7 +414,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   app.use(auth.require);
   // credential の**後**に置く: 無認証リクエストは 415 ではなく 401 で落ちる
   app.use(auth.requireJsonContentType);
-  const worker = options.worker({ db, clock: options.clock });
+  const worker = options.worker({ db, clock: options.clock, containers });
   // resolved here for this board's actual wiring, same as `worker.id` below
   // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
   // directly rather than through startServer (e.g. a unit test constructing
@@ -412,6 +438,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     clock: options.clock,
     slot,
     worker,
+    containers,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     auditorName,
@@ -435,6 +462,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         clock: options.clock,
         slot,
         worker,
+        containers,
         workspace: options.workspace,
         resolveWorkspace: options.resolveWorkspace,
         config: options.watchdog,
@@ -522,6 +550,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
       containment,
+      // ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。確認回答の
+      // 受理時に容器の空を再観測し、空なら tree rule を走らせて slot を解放する。
+      reclaim: watchdog,
       registryReachability,
       cliAuth: options.cliAuth,
       providerCliAuth: options.providerCliAuth,
@@ -558,6 +589,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
       containment,
+      reclaim: watchdog,
       registryReachability,
       cliAuth: options.cliAuth,
       providerCliAuth: options.providerCliAuth,

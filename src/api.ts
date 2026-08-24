@@ -101,6 +101,7 @@ import {
   TriageError,
   triagePreview,
 } from "./triage.js";
+import type { PendingReclaim } from "./watchdog.js";
 import {
   buildWorkspaceResolver,
   UnknownWorkspaceError,
@@ -499,6 +500,11 @@ export interface ApiRouterDeps {
    *  fs 側の成立だけで解除できてしまってはならない。
    *  Absent → そのゲートを持たない盤面。 */
   containment?: ContainmentCheck;
+  /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
+   *  quarantine の確認回答の受理は、容器がまだ populated なら拒まれ、空を再観測
+   *  できたときだけ tree rule を走らせて slot を解放する。Absent → watchdog を
+   *  持たない盤面(回収を待っている slot が存在しない)。 */
+  reclaim?: PendingReclaim;
   /** ADR 0052: re-runs refresh before accepting a registry quarantine answer. */
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
@@ -609,6 +615,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     defaultAgentName,
     agentRegistered,
     containment,
+    reclaim,
     registryReachability,
     cliAuth,
     providerCliAuth,
@@ -1323,6 +1330,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           relandRootAncestor,
           agentRegistered,
           containment,
+          reclaim,
           registryReachability,
           cliAuth,
           providerCliAuth,

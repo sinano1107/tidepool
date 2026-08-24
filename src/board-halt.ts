@@ -14,7 +14,12 @@ import { activeTriageSession } from "./triage.js";
  *  throttle の答えが使用量の読み取りに由来して遅れるための鮮度であり、他の4つは
  *  「row / question が存在する」という盤面自身の事実なので偽の鮮度を持たない。
  *  `revalidating`(再観測中)は独立の kind ではなく throttle の状態、`failClosed`
- *  は「使用量そのものを読めなかった」(ADR 0028)で「線を超えた」とは別の答え。 */
+ *  は「使用量そのものを読めなかった」(ADR 0028)で「線を超えた」とは別の答え。
+ *
+ *  `containment` は**回収済み観測の不成立も含む**(ADR 0099 決定4): 残存 process の
+ *  停止範囲は盤面全体で、機構は既存の Containment quarantine を再利用する — 新しい
+ *  quarantine 族は立てないので、列挙も1行のままである。どちらで止まっているかは
+ *  question の本文が言う。 */
 export type BoardHalt =
   | { kind: "triage" | "pause" | "containment" | "registryReachability" | "cliAuth" }
   | {
