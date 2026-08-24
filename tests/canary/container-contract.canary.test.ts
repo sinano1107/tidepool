@@ -1,0 +1,202 @@
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeAll, beforeEach, expect, it } from "vitest";
+import { containerRuntimeFor } from "../../src/cgroup-container.js";
+import {
+  type ContainedProcess,
+  type WorkerContainer,
+  WorkerContainers,
+} from "../../src/worker-container.js";
+
+/** Worker 容器の contract suite(ADR 0099 決定5 / issue #464)。実カーネルの
+ *  cgroup v2 の上で、**公開 seam だけ**を通して敵対的子孫を回収する:
+ *  `WorkerContainers` の `open` / `spawn` / `forceReclaim` / `reclaimed` /
+ *  `preflight`。内部関数は import しない。
+ *
+ *  `npm test` の対象外(ADR 0027 の線 — 実 process を起こし、delegated な cgroup
+ *  を要る)。`npm run canary:container` が唯一の実行契機で、機構ごとに一度と
+ *  CLI / OS の更新時に走らせる。
+ *
+ *  **PID を数えるのは検証側だけである**。敵対的 process には自分の PID を
+ *  `$CANARY_PIDS` へ書かせ、回収後に1つも残っていないことをここで assert する。
+ *  容器機構の側は PID を1つも見ない(一回限りの process scan は回収済み観測に
+ *  数えない — ADR 0099 決定3)。 */
+
+const containers = new WorkerContainers(containerRuntimeFor(process.platform));
+
+/** 盤面自身が居る cgroup。検証側の読みであって、容器機構の内部を import して
+ *  いるわけではない(`/proc/self/cgroup` の `0::` 行という kernel の面を読む)。 */
+function boardCgroup(): string {
+  const line = readFileSync("/proc/self/cgroup", "utf8")
+    .split("\n")
+    .find((l) => l.startsWith("0::"));
+  if (line === undefined) throw new Error("this host has no cgroup v2 unified hierarchy");
+  return join("/sys/fs/cgroup", line.slice(3).trim());
+}
+
+let before: string[] = [];
+
+beforeAll(() => {
+  // 前提が無いホストでは skip ではなく fail させる: 黙って緑になれば、この suite は
+  // 「敵対的子孫を実カーネルで測った」という主張を空手形で出すことになる。
+  if (process.platform !== "linux") {
+    throw new Error(
+      `this contract suite measures the real cgroup v2 container mechanism and only runs on linux ` +
+        `(this host is "${process.platform}")`,
+    );
+  }
+  const capability = containers.preflight();
+  if (!capability.available) {
+    throw new Error(
+      `this host cannot hold worker containers, so nothing here would be measured: ${capability.reason}`,
+    );
+  }
+  before = readdirSync(boardCgroup());
+});
+
+/** 敵対的 process の作業ディレクトリと PID の書き出し先。 */
+let work: string;
+let pidsFile: string;
+
+/** afterEach で必ず force する — canary が途中で落ちても、稼働し続ける敵対的
+ *  process をホストに残さない。 */
+const opened: string[] = [];
+
+beforeEach(() => {
+  work = mkdtempSync(join(tmpdir(), "tidepool-container-canary-"));
+  pidsFile = join(work, "pids");
+  writeFileSync(pidsFile, "");
+});
+
+afterEach(async () => {
+  const ids = opened.splice(0);
+  for (const id of ids) containers.forceReclaim(id);
+  await Promise.all(ids.map((id) => containers.reclaimed(id)));
+  rmSync(work, { recursive: true, force: true });
+});
+
+function open(sessionId: string): WorkerContainer {
+  opened.push(sessionId);
+  return containers.open(sessionId);
+}
+
+/** 敵対的 process を容器の中へ1つ起こす。script は `$CANARY_PIDS` に自分の PID を
+ *  追記する(`>>` は O_APPEND なので、孫が同時に書いても行は混ざらない)。 */
+function hostile(container: WorkerContainer, script: string): ContainedProcess {
+  return container.spawn("/bin/sh", ["-c", script], {
+    cwd: work,
+    env: { ...process.env, CANARY_PIDS: pidsFile },
+  });
+}
+
+const recordedPids = (): number[] =>
+  readFileSync(pidsFile, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map(Number);
+
+const alive = (pid: number): boolean => existsSync(`/proc/${pid}`);
+
+/** `/proc/<pid>/stat` の session id(6番目のフィールド)。`comm` は括弧の中に
+ *  空白を含みうるので、最後の `)` から後ろだけを割る。 */
+function sessionOf(pid: number): string {
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[3] ?? "";
+}
+
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function until(done: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await delay(20);
+  }
+}
+
+/** 回収済み観測が**今この瞬間に**立っているか。force の送達より先に空が
+ *  観測されないこと(= 送達を回収と数えていないこと)を測るために要る。 */
+function emptyObserved(container: WorkerContainer): () => boolean {
+  let observed = false;
+  void container.reclaimed.then(() => {
+    observed = true;
+  });
+  return () => observed;
+}
+
+it("畳み込み停止を無視する子は、強制回収でだけ容器から居なくなる", async () => {
+  const container = open("graceful-deaf");
+  const child = hostile(
+    container,
+    `trap '' TERM INT
+echo $$ >> "$CANARY_PIDS"
+while :; do sleep 1; done`,
+  );
+  const empty = emptyObserved(container);
+  await until(() => recordedPids().length === 1, "the TERM-deaf child to record its pid");
+
+  // 畳み込み停止の合図は adapter が撃つもので、届いても従われる保証は無い
+  child.kill("SIGTERM");
+  await delay(500);
+  expect(recordedPids().filter(alive)).toEqual(recordedPids());
+  expect(empty()).toBe(false);
+
+  containers.forceReclaim("graceful-deaf");
+  await containers.reclaimed("graceful-deaf");
+
+  expect(recordedPids().filter(alive)).toEqual([]);
+});
+
+it("kill の最中も fork し続ける子は、その最中に生まれた子孫ごと回収される", async () => {
+  const container = open("fork-storm");
+  hostile(
+    container,
+    `echo $$ >> "$CANARY_PIDS"
+while :; do
+  /bin/sh -c 'echo $$ >> "$CANARY_PIDS"; exec sleep 300' &
+  sleep 0.05
+done`,
+  );
+  await until(() => recordedPids().length >= 5, "the fork storm to get going");
+
+  containers.forceReclaim("fork-storm");
+  await containers.reclaimed("fork-storm");
+
+  // force のあとに書かれた PID もここに含まれる — 「kill 中に生まれた子孫」が
+  // 残っていないことがこの canary の主張である
+  expect(recordedPids().length).toBeGreaterThanOrEqual(5);
+  expect(recordedPids().filter(alive)).toEqual([]);
+});
+
+it("session を分けて daemon 化した孫は、直の子が終わっても容器を空にしない", async () => {
+  const container = open("setsid-daemon");
+  const child = hostile(
+    container,
+    `echo $$ >> "$CANARY_PIDS"
+setsid /bin/sh -c 'echo $$ >> "$CANARY_PIDS"; exec sleep 300' </dev/null >/dev/null 2>&1 &
+exit 0`,
+  );
+  const empty = emptyObserved(container);
+  await new Promise<void>((resolve) => child.on("exit", () => resolve()));
+  await until(() => recordedPids().length === 2, "the daemonised grandchild to record its pid");
+
+  const [parent, daemon] = recordedPids();
+  if (parent === undefined || daemon === undefined) throw new Error("unreachable");
+  expect(sessionOf(daemon)).not.toBe(sessionOf(process.pid)); // setsid は本当に効いている
+  expect(alive(parent)).toBe(false); // 直の子はもう居ない
+  await delay(500);
+  expect(empty()).toBe(false); // それでも容器は空ではない
+
+  containers.forceReclaim("setsid-daemon");
+  await containers.reclaimed("setsid-daemon");
+
+  expect(alive(daemon)).toBe(false);
+});
+
+it("回収を終えた容器は残骸を残さない — 次の boot の前提検査が成立したままである", () => {
+  // 残骸の有無を先に見る: `preflight` は空の残骸を rmdir して available を返すので、
+  // 順序を逆にすると「空になった容器の rmdir が通らなかった」ことを隠してしまう。
+  expect(readdirSync(boardCgroup())).toEqual(before);
+  expect(containers.preflight()).toEqual({ available: true });
+});
