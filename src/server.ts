@@ -47,11 +47,7 @@ import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
-import {
-  type ContainerRuntime,
-  passthroughContainerRuntime,
-  WorkerContainers,
-} from "./worker-container.js";
+import { type ContainerRuntime, WorkerContainers } from "./worker-container.js";
 import {
   buildWorkspaceResolver,
   pathIsRegistryClone,
@@ -319,9 +315,10 @@ export interface ServerOptions {
      *  忘れたときに検査が黙って1つ消えるのを型で止めるため。 */
     toolSurface: (() => Promise<ContainmentCapability>) | null;
   };
-  /** 容器機構(ADR 0099 決定2 の唯一の新 seam)。Absent → pass-through の既定
-   *  機構(容器 = CLI root 1本)。実機構は #463 でこの seam の裏に入る。 */
-  containerRuntime?: ContainerRuntime;
+  /** 容器機構(ADR 0099 決定2 の唯一の新 seam)。**省略できない** — 既定を持つと、
+   *  配線を1本忘れた盤面が黙って弱い回収へ落ちる(ADR 0099 決定5 が禁じている
+   *  状態そのもの)。本番の選択は合成 root の `containerRuntimeFor(platform)`。 */
+  containerRuntime: ContainerRuntime;
 }
 
 export interface TidepoolServer {
@@ -333,9 +330,7 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const db = openDb(options.dbPath);
   const slot = new Slot();
-  const containers = new WorkerContainers(
-    options.containerRuntime ?? passthroughContainerRuntime(),
-  );
+  const containers = new WorkerContainers(options.containerRuntime);
   // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ
   // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
   // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に

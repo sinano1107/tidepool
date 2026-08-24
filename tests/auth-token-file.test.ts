@@ -12,7 +12,7 @@ import {
   rotateToken,
 } from "../src/auth.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
-import { FakeClock, ScriptedWorker } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 
 let server: TidepoolServer | undefined;
 const dirs: string[] = [];
@@ -123,6 +123,7 @@ async function bootWithTokenFile(tokenFile: string): Promise<TidepoolServer> {
     clock,
     credential,
     worker: () => new ScriptedWorker(clock),
+    containerRuntime: new FakeContainerRuntime(),
   });
 }
 

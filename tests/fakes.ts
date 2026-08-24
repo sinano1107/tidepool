@@ -27,6 +27,7 @@ import {
   type ContainerRuntime,
   type ContainerRuntimeCapability,
   type ContainerSpawn,
+  defaultSpawn,
   type WorkerContainer,
   WorkerContainers,
 } from "../src/worker-container.js";
@@ -516,4 +517,45 @@ export class FakeTranslationClient implements TranslationClient {
  *  直に呼ぶテストが毎回2行書かないための口。 */
 export function fakeContainers(runtime: FakeContainerRuntime = new FakeContainerRuntime()): WorkerContainers {
   return new WorkerContainers(runtime);
+}
+
+/** 容器 = CLI root process 1本 の容器機構: force は root への SIGKILL、空の観測は
+ *  root の exit。**本番経路には居ない**(#463 で実機構 — Linux: cgroup v2 — が
+ *  合成 root に入り、この形は封じ込めとしては #195 の穴そのものになった)ので、
+ *  ここに置いてある: 実 adapter を process 境界だけ差し替えて回すテストが、容器の
+ *  ふりをする最小の器として使う。 */
+function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
+  return {
+    preflight: () => ({ available: true }),
+    create: () => {
+      let child: ContainedProcess | null = null;
+      let markEmpty!: () => void;
+      const reclaimed = new Promise<void>((resolve) => {
+        markEmpty = resolve;
+      });
+      return {
+        spawn: (command, args, opts) => {
+          child = spawn(command, args, opts);
+          child.on("exit", () => markEmpty());
+          // spawn そのものが失敗した process は生まれていない = 容器は空
+          child.on("error", (err: NodeJS.ErrnoException) => {
+            if (err.syscall?.startsWith("spawn")) markEmpty();
+          });
+          return child;
+        },
+        forceReclaim: () => {
+          // 空の容器(spawn 前 / 既に exit 済み)への force は、その場で空である
+          if (!child) markEmpty();
+          else child.kill("SIGKILL");
+        },
+        reclaimed,
+      };
+    },
+  };
+}
+
+/** 実 adapter に渡す supervisor を process 境界1つから組む。`spawn` を省くと実
+ *  process を起こす(実 CLI は起こさない — ADR 0027)。 */
+export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): WorkerContainers {
+  return new WorkerContainers(passthroughContainerRuntime(spawn));
 }

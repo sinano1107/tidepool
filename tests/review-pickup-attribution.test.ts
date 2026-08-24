@@ -12,7 +12,13 @@ import { Slot } from "../src/slot.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import type { ContainerSpawn } from "../src/worker-container.js";
-import { FakeClock, fakeContainers, healthyUsageText, ScriptedWorker } from "./fakes.js";
+import {
+  FakeClock,
+  FakeContainerRuntime,
+  fakeContainers,
+  healthyUsageText,
+  ScriptedWorker,
+} from "./fakes.js";
 import { api, HOUR, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -76,7 +82,8 @@ You are Fugu.
     credential: TEST_CREDENTIAL,
     clock,
     auditorName: "fugu",
-    worker: ({ db }): WorkerAdapter => {
+    containerRuntime: new FakeContainerRuntime(spawn),
+    worker: ({ db, containers }): WorkerAdapter => {
       const worker = new ClaudeCodeWorker({
         db,
         clock,
@@ -86,7 +93,7 @@ You are Fugu.
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
-        spawn,
+        containers,
       });
       return {
         id: worker.id,
