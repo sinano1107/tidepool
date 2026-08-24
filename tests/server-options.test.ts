@@ -425,6 +425,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
 it("容器機構は platform で選ばれ、実測が無いホストでは fail-closed になる(#463)", async () => {
   const capability = (await buildServerOptions(composition())).containerRuntime.preflight();
 
-  const unmeasured = capability.available === false && capability.reason.includes("#465");
+  const unmeasured =
+    capability.available === false && capability.reason.includes("no worker container mechanism has been measured");
   expect(unmeasured).toBe(platform !== "linux");
 });

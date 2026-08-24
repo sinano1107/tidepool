@@ -333,6 +333,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const containers = new WorkerContainers(options.containerRuntime);
   // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ
   // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
+  // 同じ検査は封じ込め能力の合成(下)にも入り、pickup と quarantine 回答時に
+  // 読み直される — ここは containment ゲートを持たない盤面のための boot 時の1回。
   // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
   // platform-scoped の停止は無く、この盤面が走るホストは1つである。
   const runtimePreflight = containers.preflight();
@@ -426,7 +428,12 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const gate = options.containment;
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
   const containment = gate
-    ? composeContainment(gate.sandboxCapability, () => probeHumanSurface?.(), gate.toolSurface)
+    ? composeContainment(
+        () => containers.preflight(),
+        gate.sandboxCapability,
+        () => probeHumanSurface?.(),
+        gate.toolSurface,
+      )
     : undefined;
   const scheduler = startScheduler({
     db,

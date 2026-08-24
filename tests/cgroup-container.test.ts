@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ afterEach(async () => {
 
 /** kernel の代わりに cgroupfs の形だけを temp dir に作る: mount の
  *  `cgroup.controllers` と、盤面自身が居る cgroup(`/proc/self/cgroup` の
- *  `0::` 行が指す先)。実カーネルでの証明は #464 の Pi canary が担う。 */
+ *  `0::` 行が指す先)。実カーネルでの証明は #464 の contract suite が担う。 */
 async function fakeCgroupfs(): Promise<CgroupPaths & { own: string }> {
   const mount = await mkdtemp(join(tmpdir(), "tidepool-cgroupfs-"));
   dirs.push(mount);
@@ -36,7 +36,7 @@ it("容器機構を実測していない platform は fail-closed — 黙って�
   const capability = containerRuntimeFor("darwin").preflight();
 
   expect(reason(capability)).toContain("darwin");
-  expect(reason(capability)).toContain("#465");
+  expect(reason(capability)).toContain("has been measured");
 });
 
 it("cgroup v2 が mount され自分の cgroup 配下に mkdir できれば前提は成立する", async () => {
@@ -73,17 +73,24 @@ it("自分の cgroup 配下に容器を作れなければ不成立 — 理由は
   expect(reason(capability)).toContain("Delegate=yes");
 });
 
-/** 前回の run が残した容器。kernel の代わりに `cgroup.events` を書く。 */
-function leftover(own: string, sessionId: string, populated: 0 | 1): string {
-  const dir = join(own, `worker-${sessionId}`);
+/** kernel の代わりに `cgroup.events` を書く(容器は create 済みであること)。 */
+function events(paths: CgroupPaths & { own: string }, sessionId: string, populated: 0 | 1): string {
+  const file = join(paths.own, `worker-${sessionId}`, "cgroup.events");
+  writeFileSync(file, `populated ${populated}\nfrozen 0\n`);
+  return file;
+}
+
+/** 前回の run が残した容器。 */
+function leftover(paths: CgroupPaths & { own: string }, sessionId: string, populated: 0 | 1): string {
+  const dir = join(paths.own, `worker-${sessionId}`);
   mkdirSync(dir);
-  writeFileSync(join(dir, "cgroup.events"), `populated ${populated}\nfrozen 0\n`);
+  events(paths, sessionId, populated);
   return dir;
 }
 
 it("再起動をまたいで populated な容器が残っていたら不成立 — 回収済み観測の不成立は再起動で消えない", async () => {
   const paths = await fakeCgroupfs();
-  const dir = leftover(paths.own, "task-42", 1);
+  const dir = leftover(paths, "task-42", 1);
 
   const capability = linux(paths).preflight();
 
@@ -99,9 +106,16 @@ it("再起動をまたいで populated な容器が残っていたら不成立 �
 // もう一度掃く。
 it("空になっていた残骸は pickup を止めない", async () => {
   const paths = await fakeCgroupfs();
-  leftover(paths.own, "task-42", 0);
+  leftover(paths, "task-42", 0);
 
   expect(linux(paths).preflight()).toEqual({ available: true });
+});
+
+it("稼働中の session の容器は残骸ではない — pickup と回答時の読み直しが健全な盤面を止めない", async () => {
+  const paths = await fakeCgroupfs();
+  leftover(paths, "task-42", 1); // 今まさに走っている session
+
+  expect(linux(paths).preflight(new Set(["task-42"]))).toEqual({ available: true });
 });
 
 const collect = (stream: NodeJS.ReadableStream): Promise<string> =>
@@ -124,12 +138,20 @@ it("容器の中への spawn は exec の前に自分自身を容器へ入れる
   expect(readFileSync(procs, "utf8").trim()).toMatch(/^\d+$/);
 });
 
-/** kernel の代わりに `cgroup.events` を書く(容器は create 済みであること)。 */
-function events(paths: CgroupPaths & { own: string }, sessionId: string, populated: 0 | 1): string {
-  const file = join(paths.own, `worker-${sessionId}`, "cgroup.events");
-  writeFileSync(file, `populated ${populated}\nfrozen 0\n`);
-  return file;
-}
+it("容器へ入れなければ CLI は走らない — 入場の失敗が spawn の成功に見えない", async () => {
+  const paths = await fakeCgroupfs();
+  const container = linux(paths).create("task-12");
+  const procs = join(paths.own, "worker-task-12", "cgroup.procs");
+  writeFileSync(procs, "");
+  chmodSync(procs, 0o444); // kernel が入場を拒む形(EBUSY / EACCES)の代わり
+
+  const child = container.spawn("/bin/echo", ["hi"], { cwd: paths.mount, env: process.env });
+  const out = collect(child.stdout);
+  const code = await new Promise<number | null>((resolve) => child.on("exit", (c) => resolve(c)));
+
+  expect(code).not.toBe(0);
+  expect((await out).trim()).toBe("");
+});
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 

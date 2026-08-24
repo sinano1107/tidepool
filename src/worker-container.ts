@@ -52,9 +52,11 @@ export interface WorkerContainer {
  *  platform ごとに実装が違ってよい(cgroup v2 / process group)が、force と
  *  reclaimed の意味はここで1度だけ書かれる。 */
 export interface ContainerRuntime {
-  /** boot 時の機構前提検査(ADR 0099 決定5)。毎 boot の live kill canary は
-   *  行わない — ここで見るのは前提の存在だけである。 */
-  preflight(): ContainerRuntimeCapability;
+  /** 機構前提検査(ADR 0099 決定5)。boot 時だけでなく pickup と quarantine 回答時
+   *  にも読み直される(CONTEXT.md「Containment capability」)。毎回の live kill
+   *  canary は行わない — ここで見るのは前提の存在だけである。`live` は supervisor
+   *  が今持っている session — 稼働中の容器を前回の run の残骸と読み違えないため。 */
+  preflight(live?: ReadonlySet<string>): ContainerRuntimeCapability;
   /** worker session 1つぶんの容器を作る。 */
   create(sessionId: string): WorkerContainer;
 }
@@ -69,7 +71,7 @@ export class WorkerContainers {
   constructor(private readonly runtime: ContainerRuntime) {}
 
   preflight(): ContainerRuntimeCapability {
-    return this.runtime.preflight();
+    return this.runtime.preflight(new Set(this.live.keys()));
   }
 
   /** 盤面が worker session ごとに**先に**作る(pickup 時)。adapter はここで
@@ -112,6 +114,12 @@ export class WorkerContainers {
 
 /** 実 process を1つ起こす口。容器機構はどれもこれを包むだけなので(cgroup なら
  *  容器へ入る wrapper を被せる)、stdio の形と stderr の tee はここ1箇所にある。 */
+/** spawn そのものが失敗した(process が生まれていない)error か。Node は
+ *  この場合 "exit" を撃たず "error" だけを撃つので、容器の側はこれを空と数える。 */
+export function isSpawnFailure(err: NodeJS.ErrnoException): boolean {
+  return err.syscall?.startsWith("spawn") ?? false;
+}
+
 export const defaultSpawn: ContainerSpawn = (command, args, opts) => {
   const child = nodeSpawn(command, args, {
     cwd: opts.cwd,

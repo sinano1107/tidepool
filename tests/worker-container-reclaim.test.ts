@@ -169,3 +169,36 @@ it("容器機構の前提が boot 時に不成立なら、黙って弱い回収�
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
 });
+
+it("容器機構の前提は pickup と quarantine 回答時にも読み直される — boot 時だけの検査ではない", async () => {
+  const containers = new FakeContainerRuntime();
+  t = await bootTidepool({
+    containerRuntime: containers,
+    watchdog,
+    sandboxCapability: () => ({ available: true }),
+  });
+  containers.scriptPreflight("cgroup v2 delegation was lost after boot");
+
+  await registerWork(t, "long haul");
+  await t.clock.advance(HOUR);
+  expect(t.worker.started).toEqual([]);
+  const quarantine = await containmentQuestion();
+  expect(quarantine.purpose).toContain("delegation was lost");
+
+  // 前提が壊れたままの回答は拒否される(検査を回答時にもう一度走らせる)
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, {
+    answers: ["repaired by hand"],
+  });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("delegation was lost");
+
+  containers.scriptPreflight(); // 修理済み
+  const accepted = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, {
+    answers: ["repaired by hand"],
+  });
+  expect(accepted.status).toBe(200);
+
+  // 受理で pickup が再開する
+  await t.clock.advance(HOUR);
+  expect(t.worker.started).toHaveLength(1);
+});

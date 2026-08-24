@@ -28,6 +28,7 @@ import {
   type ContainerRuntimeCapability,
   type ContainerSpawn,
   defaultSpawn,
+  isSpawnFailure,
   type WorkerContainer,
   WorkerContainers,
 } from "../src/worker-container.js";
@@ -187,9 +188,10 @@ export class FakeContainerRuntime implements ContainerRuntime {
    *  spawn しないので、実 adapter を通すテストだけが渡す。 */
   constructor(private readonly spawn?: ContainerSpawn) {}
 
-  /** boot 時の機構前提検査を不成立にスクリプトする(boot 前に呼ぶ)。 */
-  scriptPreflight(reason: string): void {
-    this.capability = { available: false, reason };
+  /** 機構前提検査を不成立にスクリプトする。reason 無しで呼ぶと成立に戻る
+   *  (修理済みのホスト)。 */
+  scriptPreflight(reason?: string): void {
+    this.capability = reason === undefined ? { available: true } : { available: false, reason };
   }
 
   /** この session の容器は強制回収では空にならない — 空の観測は `fireEmpty`
@@ -539,7 +541,7 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
           child.on("exit", () => markEmpty());
           // spawn そのものが失敗した process は生まれていない = 容器は空
           child.on("error", (err: NodeJS.ErrnoException) => {
-            if (err.syscall?.startsWith("spawn")) markEmpty();
+            if (isSpawnFailure(err)) markEmpty();
           });
           return child;
         },
