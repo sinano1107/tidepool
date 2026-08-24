@@ -11,7 +11,7 @@
     "pretest": "node scripts/test-preflight.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "canary:container": "TIDEPOOL_CANARY=1 vitest run --testTimeout=60000 --hookTimeout=60000 tests/canary/container-contract.canary.test.ts",
+    "canary:container": "TIDEPOOL_CANARY=1 vitest run tests/canary/container-contract.canary.test.ts",
     "e2e": "playwright test",
     "e2e:scratch": "PLAYWRIGHT_SCRATCH=1 playwright test",
     "start": "tsx src/main.ts",

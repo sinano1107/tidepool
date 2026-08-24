@@ -36,7 +36,7 @@ function boardCgroup(): string {
   return join("/sys/fs/cgroup", line.slice(3).trim());
 }
 
-let before: string[] = [];
+let cgroupEntriesAtStart: string[] = [];
 
 beforeAll(() => {
   // 前提が無いホストでは skip ではなく fail させる: 黙って緑になれば、この suite は
@@ -53,7 +53,7 @@ beforeAll(() => {
       `this host cannot hold worker containers, so nothing here would be measured: ${capability.reason}`,
     );
   }
-  before = readdirSync(boardCgroup());
+  cgroupEntriesAtStart = readdirSync(boardCgroup());
 });
 
 /** 敵対的 process の作業ディレクトリと PID の書き出し先。 */
@@ -149,14 +149,18 @@ while :; do
   sleep 0.05
 done`,
   );
+  const empty = emptyObserved(container);
   await vi.waitFor(() => expect(recordedPids().length).toBeGreaterThanOrEqual(5), { timeout: 15_000 });
+  expect(empty()).toBe(false); // fork し続けている間、容器は空ではない
 
+  const recordedBeforeForce = recordedPids().length;
   containers.forceReclaim("fork-storm");
   await containers.reclaimed("fork-storm");
 
-  // force のあとに書かれた PID もここに含まれる — 「kill 中に生まれた子孫」が
-  // 残っていないことがこの canary の主張である
-  expect(recordedPids().length).toBeGreaterThanOrEqual(5);
+  // 証明しているのは「記録された全 PID(force 前に生まれたものと、force と競合して
+  // 書き込みまで辿り着いたもの)が1つも生きていない」こと。`cgroup.kill` はほぼ
+  // 原子的なので、kill の最中に生まれた PID が実際に存在したかまでは区別しない
+  expect(recordedPids().length).toBeGreaterThanOrEqual(recordedBeforeForce);
   expect(recordedPids().filter(alive)).toEqual([]);
 });
 
@@ -188,6 +192,6 @@ exit 0`,
 it("回収を終えた容器は残骸を残さない — 次の boot の前提検査が成立したままである", () => {
   // 残骸の有無を先に見る: `preflight` は空の残骸を rmdir して available を返すので、
   // 順序を逆にすると「空になった容器の rmdir が通らなかった」ことを隠してしまう。
-  expect(readdirSync(boardCgroup())).toEqual(before);
+  expect(readdirSync(boardCgroup())).toEqual(cgroupEntriesAtStart);
   expect(containers.preflight()).toEqual({ available: true });
 });
