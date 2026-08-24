@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type CgroupPaths, containerRuntimeFor } from "../src/cgroup-container.js";
+import type { ContainerRuntimeCapability } from "../src/worker-container.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -26,12 +27,16 @@ async function fakeCgroupfs(): Promise<CgroupPaths & { own: string }> {
 
 const linux = (paths: CgroupPaths) => containerRuntimeFor("linux", paths);
 
+/** 不成立の理由。成立していたら空文字なので、どの `toContain` も落ちる —
+ *  「不成立であること」と「理由が何を名指しするか」を1行で測る。 */
+const reason = (capability: ContainerRuntimeCapability): string =>
+  capability.available ? "" : capability.reason;
+
 it("容器機構を実測していない platform は fail-closed — 黙って弱い回収へ落ちない", () => {
   const capability = containerRuntimeFor("darwin").preflight();
 
-  expect(capability.available).toBe(false);
-  expect(capability.available === false && capability.reason).toContain("darwin");
-  expect(capability.available === false && capability.reason).toContain("#465");
+  expect(reason(capability)).toContain("darwin");
+  expect(reason(capability)).toContain("#465");
 });
 
 it("cgroup v2 が mount され自分の cgroup 配下に mkdir できれば前提は成立する", async () => {
@@ -46,9 +51,8 @@ it("cgroup v2 の mount が無ければ不成立 — 理由は何が足りない
 
   const capability = linux(paths).preflight();
 
-  expect(capability.available).toBe(false);
-  expect(capability.available === false && capability.reason).toContain("cgroup v2");
-  expect(capability.available === false && capability.reason).toContain(paths.mount);
+  expect(reason(capability)).toContain("cgroup v2");
+  expect(reason(capability)).toContain(paths.mount);
 });
 
 it("自分がどの cgroup に居るか読めなければ不成立", async () => {
@@ -57,8 +61,7 @@ it("自分がどの cgroup に居るか読めなければ不成立", async () =>
 
   const capability = linux(paths).preflight();
 
-  expect(capability.available).toBe(false);
-  expect(capability.available === false && capability.reason).toContain(paths.selfCgroup);
+  expect(reason(capability)).toContain(paths.selfCgroup);
 });
 
 it("自分の cgroup 配下に容器を作れなければ不成立 — 理由は Delegate=yes を名指しする", async () => {
@@ -67,8 +70,7 @@ it("自分の cgroup 配下に容器を作れなければ不成立 — 理由は
 
   const capability = linux(paths).preflight();
 
-  expect(capability.available).toBe(false);
-  expect(capability.available === false && capability.reason).toContain("Delegate=yes");
+  expect(reason(capability)).toContain("Delegate=yes");
 });
 
 /** 前回の run が残した容器。kernel の代わりに `cgroup.events` を書く。 */
@@ -85,9 +87,8 @@ it("再起動をまたいで populated な容器が残っていたら不成立 �
 
   const capability = linux(paths).preflight();
 
-  expect(capability.available).toBe(false);
-  expect(capability.available === false && capability.reason).toContain(dir);
-  expect(capability.available === false && capability.reason).toContain("populated");
+  expect(reason(capability)).toContain(dir);
+  expect(reason(capability)).toContain("populated");
   expect(existsSync(dir)).toBe(true); // 掃除はしない — 中で process が生きている
 });
 
