@@ -66,6 +66,16 @@ Registers a real `work` task, forces immediate pickup (task registration alone d
 
 The smoke-test task can't be deleted afterward (`events` table is append-only by DB trigger — intentional, not a bug). If it clutters the board, rename its title with a prefix instead of trying to delete it — see troubleshooting.md.
 
+### Worker container contract suite (re-run after a kernel / systemd / CLI update)
+
+ADR 0099 決定5: the container mechanism is proven once per mechanism and again after each kernel, systemd, or CLI update — not on every boot. The suite is opt-in (`npm test` never runs it) and must run inside a cgroup the user owns, never inside the board's own `tidepool.service` cgroup (its leftover sweep would remove the live board's empty containers):
+
+```bash
+ssh $PI 'git clone -q --depth 1 https://github.com/sinano1107/tidepool.git ~/tidepool-canary && cp -a /opt/tidepool/node_modules ~/tidepool-canary/node_modules && cd ~/tidepool-canary && systemd-run --user --scope --collect -p Delegate=yes -- npm run canary:container; rm -rf ~/tidepool-canary'
+```
+
+4/4 green is the claim; the plain ssh session scope fails preflight with the `Delegate=yes` reason (expected — that is the control). Record the run on the tracking issue (#464 holds the first table).
+
 ### Worker sandbox e2e smoke (re-run after every `claude` CLI update)
 
 Issue #60 / ADR 0033 confines every worker session's Bash to its workspace via the CLI's own sandbox, injected per task as `--settings <task>.sandbox.json`; issue #144 / ADR 0035 puts review's *write* floor in the permission layer on top of it (`--permission-mode manual`, plus the `autoAllowBashIfSandboxed: false` that stops the sandbox from waving Bash past that layer); issue #146 / ADR 0033's addendum re-opens loopback binding; issue #321 / ADR 0072 opens only the workspace's `allowed_domains` while keeping `deniedDomains` dominant. These are vendor behaviours the board cannot assert from inside: the CLI **silently ignores a settings file that fails validation under `-p`**, and a CLI update can quietly change their meaning. Re-run this by hand after any `claude` update on the Pi, and after a first-time setup.
