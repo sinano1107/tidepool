@@ -34,7 +34,13 @@ import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
-import { FakeClock, FakeGitHubClient, FakePushClient, ScriptedWorker } from "./fakes.js";
+import {
+  FakeClock,
+  FakeContainerRuntime,
+  FakeGitHubClient,
+  FakePushClient,
+  ScriptedWorker,
+} from "./fakes.js";
 
 export { HOURLY as HOUR } from "../src/scheduler.js";
 
@@ -64,6 +70,8 @@ export interface Tidepool {
   mcpBaseUrl: string;
   clock: FakeClock;
   worker: ScriptedWorker;
+  /** 容器機構の fake(ADR 0099 決定2)。強制回収の記録と、空の観測の駆動口。 */
+  containers: FakeContainerRuntime;
   github: FakeGitHubClient;
   push: FakePushClient;
   dir: string;
@@ -95,6 +103,9 @@ export interface BootOptions {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   /** Per-task-type absolute time limits (#9). */
   watchdog?: WatchdogConfig;
+  /** 容器機構(ADR 0099 決定2)。boot 前にスクリプトしたいテストだけが渡す
+   *  (機構前提検査の不成立など)。Absent → 既定の fake。 */
+  containerRuntime?: FakeContainerRuntime;
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
   /** Resolves the executing task's own agent's authority profile (ADR 0012 /
@@ -204,6 +215,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock, options.workerId);
+  const containers = options.containerRuntime ?? new FakeContainerRuntime();
   const github = new FakeGitHubClient();
   const push = new FakePushClient();
   const server = await startServer({
@@ -215,6 +227,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     // 認証なし」の口は作らない)。既定で提示するのは TEST_TOKEN。
     credential: options.credential ?? TEST_CREDENTIAL,
     worker: () => worker,
+    containerRuntime: containers,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     watchdog: options.watchdog,
@@ -261,6 +274,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     mcpBaseUrl: `http://127.0.0.1:${server.mcpPort}`,
     clock,
     worker,
+    containers,
     github,
     push,
     dir,

@@ -5,7 +5,7 @@ import { Slot } from "../src/slot.js";
 import type { Task } from "../src/tasks.js";
 import { registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, healthyUsageText } from "./fakes.js";
+import { FakeClock, fakeContainers, healthyUsageText } from "./fakes.js";
 
 it("worker.start の throw はボードを落とさない: タスクは slot を保持したまま残る(解放経路は #9)", async () => {
   const db = openDb(":memory:");
@@ -18,7 +18,7 @@ it("worker.start の throw はボードを落とさない: タスクは slot を
       started.push(task.id);
       throw new Error("registry went bad after boot");
     },
-    kill(): void {},
+    gracefulStop(): void {},
     async checkUsage() {
       return healthyUsageText(clock.now());
     },
@@ -28,7 +28,7 @@ it("worker.start の throw はボードを落とさない: タスクは slot を
     { type: "work", title: "t", purpose: "p", completion_criteria: "c" },
     clock.now(),
   );
-  const scheduler = startScheduler({ db, clock, slot, worker });
+  const scheduler = startScheduler({ db, clock, slot, worker, containers: fakeContainers() });
 
   // the tick that hits the throwing worker must not propagate the crash
   await expect(clock.advance(HOURLY)).resolves.toBeUndefined();

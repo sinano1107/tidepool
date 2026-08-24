@@ -1,4 +1,5 @@
 import type { Clock } from "./clock.js";
+import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import type { Slot } from "./slot.js";
 import {
@@ -8,7 +9,8 @@ import {
   type TaskType,
   unfinishedDecisionSiblingCount,
 } from "./tasks.js";
-import type { KillSignal, WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter } from "./worker.js";
+import type { WorkerContainers } from "./worker-container.js";
 import {
   BOARD_WORKER_ID,
   buildWorkspaceResolver,
@@ -19,15 +21,31 @@ import {
 
 export const WATCHDOG_TICK = 60 * 1000;
 
+/** 強制回収を送ってから回収済み観測を諦めるまで(ADR 0099 決定3)。tick 1本より
+ *  十分長く取る — 猶予と同じく「待つ時間」であって、機構の性質ではない。 */
+export const RECLAIM_TIMEOUT = 5 * 60 * 1000;
+
 export interface WatchdogConfig {
   /** Absolute wall-clock limit per task type, measured from pickup. A type
    *  without an entry is never watched (v1 has no inactivity detection). */
   timeLimits: Partial<Record<TaskType, number>>;
-  /** Gap between SIGTERM and SIGKILL. */
+  /** 畳み込み停止から強制回収までの猶予。 */
   grace: number;
+  /** 強制回収から回収済み観測までの上限。省略時 `RECLAIM_TIMEOUT`。 */
+  reclaimTimeout?: number;
 }
 
-export interface Watchdog {
+/** 回収済み観測を待って止まっている slot の門(ADR 0099 決定3)。Containment
+ *  quarantine の確認回答の受理側(human-verbs)だけがこれを読む。 */
+export interface ReclaimStandoff {
+  /** 空をまだ観測できていない standoff の task id、無ければ undefined。 */
+  pendingReclaim: () => string | undefined;
+  /** 空を再観測できた standoff を受理する: slot-release tree rule を走らせ、
+   *  slot を解放する。standoff が無い / まだ populated なら no-op。 */
+  acceptReclaimed: () => void;
+}
+
+export interface Watchdog extends ReclaimStandoff {
   stop: () => void;
 }
 
@@ -100,14 +118,22 @@ export function failTask(
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
  *  slot task, checked against the injected clock so overruns are
- *  deterministic in tests. SIGTERM at the limit, SIGKILL after grace — then
- *  the same tree rule + failure-question path as any other escalation, and
- *  the slot is freed so a stuck session never wedges the board. */
+ *  deterministic in tests. 畳み込み停止 at the limit, 強制回収 after grace —
+ *  そして**回収済み観測を経てから**、他のエスカレーションと同じ tree rule +
+ *  failure question の経路へ進み、slot を解放する(ADR 0099 決定3)。
+ *
+ *  slot を解放するのは force の送達ではなく容器が空になった観測である。観測
+ *  できないまま timeout したときは、失敗の記録(failure question)は残すが
+ *  slot は解放せず、Containment quarantine の確認 question が解放の唯一の門に
+ *  なる — 残存 process はどの Harness の次の worker とも同じホスト・workspace で
+ *  同居しうるので、止められるより狭い資源が存在しない(決定4)。 */
 export function startWatchdog(deps: {
   db: Db;
   clock: Clock;
   slot: Slot;
   worker: WorkerAdapter;
+  /** 盤面側 supervisor(ADR 0099 決定2)。force と reclaimed はここだけを通る。 */
+  containers: WorkerContainers;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task fails against the
@@ -115,14 +141,76 @@ export function startWatchdog(deps: {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   config: WatchdogConfig;
 }): Watchdog {
-  const { db, clock, slot, worker, workspace, resolveWorkspace, config } = deps;
+  const { db, clock, slot, worker, containers, workspace, resolveWorkspace, config } = deps;
   const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+  const reclaimTimeout = config.reclaimTimeout ?? RECLAIM_TIMEOUT;
   // keyed by task id; reset whenever a fresh pickup shows up for that id so a
-  // retried run starts its own SIGTERM/SIGKILL clock instead of inheriting
+  // retried run starts its own graceful-stop clock instead of inheriting
   // the previous run's already-tripped state
   const lastSeenPickup = new Map<string, number>();
-  const sigtermSentAt = new Map<string, number>();
-  const sigkillSent = new Set<string>();
+  const stopSentAt = new Map<string, number>();
+  const forceSentAt = new Map<string, number>();
+  // 1回の force につき「回収済み観測」と「回収 timeout」のどちらか**一方だけ**が
+  // 動く。遅れて届いた空の観測が、既に quarantine へ倒れた slot を黙って解放して
+  // しまわないための門でもある(解放の門は確認 question ただ1つ)。
+  const settled = new Set<string>();
+  let standoff: string | null = null;
+
+  /** slot を解放する側の共通処理: tree rule → 解放。 */
+  function releaseSlot(task: Task): void {
+    if (resolve) {
+      const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
+      if (resolved) releaseWorkspace(db, resolved, task, clock.now());
+    }
+    slot.release();
+  }
+
+  /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む。 */
+  function onReclaimed(taskId: string, limit: number): void {
+    if (settled.has(taskId)) return;
+    if (slot.currentTaskId !== taskId) return;
+    const task = getTask(db, taskId);
+    if (!task || task.status !== "in_progress") return;
+    settled.add(taskId);
+    failTask(
+      db,
+      task,
+      `watchdog killed task: ${task.title}`,
+      `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
+        `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
+        "No self-report is possible.",
+      resolve,
+      clock.now(),
+    );
+    slot.release();
+  }
+
+  /** 空を観測できないまま timeout。失敗の記録は残すが slot は解放しない —
+   *  tree rule も走らせない(まだ生きている process が書いている作業ツリーを
+   *  退避しても、退避そのものが競合する)。 */
+  function onReclaimTimeout(task: Task, limit: number): void {
+    settled.add(task.id);
+    standoff = task.id;
+    failTask(
+      db,
+      task,
+      `watchdog killed task: ${task.title}`,
+      `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
+        `force-reclaimed, but the board could not observe the container going empty within ` +
+        `${reclaimTimeout}ms. No self-report is possible.`,
+      // tree rule はここでは走らない: slot が解放される瞬間 — 確認 question の
+      // 受理 — まで待つ(ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)
+      undefined,
+      clock.now(),
+    );
+    quarantineContainment(
+      db,
+      `the worker container for task ${task.id} was force-reclaimed but never observed empty, ` +
+        "so processes from that session may still be running against this host and its " +
+        "workspaces (ADR 0099). The execution slot stays occupied until this is answered",
+      clock.now(),
+    );
+  }
 
   function tick(): void {
     const taskId = slot.currentTaskId;
@@ -135,36 +223,49 @@ export function startWatchdog(deps: {
     const pickup = pickedUpAt(db, taskId);
     if (lastSeenPickup.get(taskId) !== pickup) {
       lastSeenPickup.set(taskId, pickup);
-      sigtermSentAt.delete(taskId);
-      sigkillSent.delete(taskId);
+      stopSentAt.delete(taskId);
+      forceSentAt.delete(taskId);
+      settled.delete(taskId);
     }
-    if (sigkillSent.has(taskId)) return;
+    if (settled.has(taskId)) return;
 
     const now = clock.now().getTime();
-    const sentAt = sigtermSentAt.get(taskId);
-    if (sentAt === undefined) {
+    const forcedAt = forceSentAt.get(taskId);
+    if (forcedAt !== undefined) {
+      // 送達は済んでいる。ここから先を進めるのは観測だけで、tick は timeout を
+      // 数えるためだけに回る。
+      if (now - forcedAt >= reclaimTimeout) onReclaimTimeout(task, limit);
+      return;
+    }
+    const stoppedAt = stopSentAt.get(taskId);
+    if (stoppedAt === undefined) {
       if (now - pickup >= limit) {
-        worker.kill(taskId, "SIGTERM" satisfies KillSignal);
-        sigtermSentAt.set(taskId, now);
+        worker.gracefulStop(taskId);
+        stopSentAt.set(taskId, now);
       }
       return;
     }
-    if (now - sentAt >= config.grace) {
-      worker.kill(taskId, "SIGKILL" satisfies KillSignal);
-      sigkillSent.add(taskId);
-      failTask(
-        db,
-        task,
-        `watchdog killed task: ${task.title}`,
-        `the task hit its ${task.type} time limit (${limit}ms) and was terminated ` +
-          `(SIGTERM, then SIGKILL after ${config.grace}ms grace). No self-report is possible.`,
-        resolve,
-        clock.now(),
-      );
-      slot.release();
+    if (now - stoppedAt >= config.grace) {
+      forceSentAt.set(taskId, now);
+      containers.forceReclaim(taskId);
+      void containers.reclaimed(taskId).then(() => onReclaimed(taskId, limit));
     }
   }
 
   const cancel = clock.setInterval(tick, WATCHDOG_TICK);
-  return { stop: cancel };
+  return {
+    stop: cancel,
+    pendingReclaim: () =>
+      standoff !== null && containers.pendingReclaims().includes(standoff) ? standoff : undefined,
+    acceptReclaimed: () => {
+      if (standoff === null) return;
+      // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の
+      // 直前でもう一度読む(1資源1枚の quarantine と同じ posture)
+      if (containers.pendingReclaims().includes(standoff)) return;
+      const task = getTask(db, standoff);
+      standoff = null;
+      if (task) releaseSlot(task);
+      else slot.release();
+    },
+  };
 }

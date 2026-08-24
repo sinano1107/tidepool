@@ -4,8 +4,8 @@ import { loadRegistry, refreshRegistry } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
-import type { KillSignal, WorkerAdapter } from "../src/worker.js";
-import { FakeClock, healthyUsageText, ScriptedWorker } from "./fakes.js";
+import type { WorkerAdapter } from "../src/worker.js";
+import { FakeClock, fakeContainers, healthyUsageText, ScriptedWorker } from "./fakes.js";
 import { api, bootTidepool, HOUR, registerWork } from "./harness.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -30,7 +30,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     start(_task: Task) {
       spawnedVersions.push(loadRegistry(registryDir, "remote-backed").agents.deckhand!.version);
     },
-    kill(_taskId: string, _signal: KillSignal) {},
+    gracefulStop(_taskId: string) {},
     async checkUsage() {
       return healthyUsageText(clock.now());
     },
@@ -40,6 +40,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     clock,
     slot: new Slot(),
     worker,
+    containers: fakeContainers(),
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
     registryReachability: async () => refreshRegistry(registryDir, undefined),
   });
@@ -69,6 +70,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     clock,
     slot: new Slot(),
     worker,
+    containers: fakeContainers(),
     registryReachability: async () => ({
       available: false,
       reason: "origin is unreachable",

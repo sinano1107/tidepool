@@ -42,7 +42,12 @@ import {
   type Task,
 } from "./tasks.js";
 import { composeTerminalScreen } from "./usage.js";
-import type { KillSignal, WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter } from "./worker.js";
+import {
+  type ContainerSpawn,
+  passthroughContainerRuntime,
+  WorkerContainers,
+} from "./worker-container.js";
 import {
   guardRegistryDefaultBranch,
   quarantineWorkspace,
@@ -53,31 +58,10 @@ import {
 } from "./workspace.js";
 
 /** The process boundary the adapter is tested at: everything vendor-specific
- *  (the claude CLI, its flags) flows through this one call. */
-export type SpawnFn = (
-  command: string,
-  args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv },
-) => {
-  stdout: NodeJS.ReadableStream;
-  /** issue #125: the CLI's own failure channel (spawn-time errors, auth
-   *  errors, forced terminations print here, not to stream-json) — captured so
-   *  a failure always leaves evidence, alongside the stdout transcript. */
-  stderr: NodeJS.ReadableStream;
-  kill(signal: NodeJS.Signals): void;
-  /** issue #32: the adapter's own exit observation point (promoted out of
-   *  defaultSpawn's former console.error-only handler) — usage/cost recording
-   *  needs to happen here, at the process boundary, not buried in a fake. */
-  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
-  /** issue #127: the adapter's own spawn-failure observation point (promoted
-   *  out of defaultSpawn's former console.error-only handler, same move as
-   *  "exit" above / issue #32) — a spawn() that never produces a process
-   *  (ENOENT/EACCES/PATH misconfig) fires this instead of "exit", and
-   *  recording that as spawn_failed needs to happen at the process boundary,
-   *  not buried in a fake. Node's ChildProcess satisfies this structurally,
-   *  so defaultSpawn needs no implementation change to provide it. */
-  on(event: "error", listener: (err: Error) => void): void;
-};
+ *  (the claude CLI, its flags) flows through this one call. 語彙は worker 容器の
+ *  側で1度だけ定義される(ADR 0099 決定2) — worker session の spawn は容器の
+ *  中への spawn であり、この型はその同じ口である。 */
+export type SpawnFn = ContainerSpawn;
 
 // the CLI defines this as a closed 5-value set; unlike --model (an open,
 // ever-growing set of aliases/full names) it's safe and worth validating
@@ -1080,6 +1064,13 @@ export interface ClaudeWorkerOptions {
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
   spawn?: SpawnFn;
+  /** 盤面側 supervisor(ADR 0099 決定2): worker session の spawn はここが作る
+   *  容器の中で起きる。**渡されたときはその supervisor の容器機構が spawn を
+   *  担う**ので、`spawn` は使われない(注入する側はどちらか一方を渡す)。
+   *  Absent → `spawn`(既定は実 process)の上に組んだ pass-through の容器を
+   *  自前で持つ: 直接組み立てられた adapter でも force / reclaimed の語彙が
+   *  欠けない。 */
+  containers?: WorkerContainers;
   /** issue #81 / ADR 0028: the PTY boundary checkUsage scrapes /usage at.
    *  Injected so the scrape orchestration runs without a real PTY in tests. */
   pty?: PtyFn;
@@ -1474,25 +1465,6 @@ function hasUsagePanel(buffer: string): boolean {
   return PANEL_MARKERS.every((marker) => seen(buffer, marker));
 }
 
-const defaultSpawn: SpawnFn = (command, args, opts) => {
-  const child = nodeSpawn(command, args, {
-    cwd: opts.cwd,
-    env: opts.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  // stderr は捕捉のため pipe に変えた(issue #125)が、従来 "inherit" で
-  // 運用者がリアルタイムに見ていた可視性はこの tee で維持する(pipe は
-  // process.stderr を close しない — Node の readable.pipe の仕様)
-  child.stderr.pipe(process.stderr);
-  // exit observation (worker_exited event) and spawn-failure observation
-  // (spawn_failed event, issue #127) are the adapter's job now (launch()) —
-  // child already exposes .on("exit", ...) and .on("error", ...)
-  // structurally, nothing more to wire here. An unlistened "error" would
-  // crash the whole board process, but launch() always attaches a listener,
-  // so that risk never materializes.
-  return child;
-};
-
 /** "entry #3" / "entries #3, #5" — decision-log event ids, the same id space
  *  the RCA reads via get_current_task's parent decision_log (issue #87). */
 function entryLabels(ids: number[]): string {
@@ -1536,14 +1508,15 @@ const defaultPty: PtyFn = (command, args, opts) => {
 export class ClaudeCodeWorker implements WorkerAdapter {
   readonly id: string;
   private readonly options: ClaudeWorkerOptions;
-  private readonly spawn: SpawnFn;
+  private readonly containers: WorkerContainers;
   private readonly pty: PtyFn;
   private readonly enumerateSkills: EnumerateSkillsFn;
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
    *  paths against its own cwd (the workspace), not against the board. */
   private readonly logDir: string;
-  /** Live child processes by task id, for the watchdog's kill() (#9). A
-   *  finished process removes itself so a stale entry never outlives it. */
+  /** Live child processes by task id, for 畳み込み停止 の合図の送達先 (#9)。
+   *  強制回収は容器の側なので、ここに居るのは root 1本でよい。A finished
+   *  process removes itself so a stale entry never outlives it. */
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
   /** ADR 0018: resolved once at construction, same "config edge" posture as
    *  the rest of `options` — env access itself stays in main.ts. */
@@ -1552,7 +1525,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   constructor(options: ClaudeWorkerOptions) {
     this.id = options.agent;
     this.options = options;
-    this.spawn = options.spawn ?? defaultSpawn;
+    this.containers =
+      options.containers ?? new WorkerContainers(passthroughContainerRuntime(options.spawn));
     this.pty = options.pty ?? defaultPty;
     this.enumerateSkills = options.enumerateSkills ?? defaultEnumerateSkills;
     this.logDir = resolve(options.logDir);
@@ -1940,7 +1914,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // than sitting beside it — "no advisor this session" then has a single
     // spelling in the flags, in the env, and in worker_spawned.
     const advisor = this.options.advisorDisabled === true ? undefined : definition.advisor;
-    const child = this.spawn(
+    // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
+    // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
+    // reclaimed の相手が居ない session は生まれない。
+    const child = this.containers.open(task.id).spawn(
       "claude",
       [
         "-p",
@@ -2132,7 +2109,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
-          toolSurfaceObserved = this.checkSessionToolSurface(task, parsed, child);
+          toolSurfaceObserved = this.checkSessionToolSurface(task, parsed);
         }
       }
     });
@@ -2240,8 +2217,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  worker は持つべきでない能力を持ったまま走ることになり、狭い側なら能力を1つ
    *  失って詰まるだけなので、どちらの向きも走らせる理由がない。slot は既存の失敗
    *  経路 — watchdog の per-type 時限 → 失敗 question(リトライ)— が回収する。
-   *  SIGTERM ではなく SIGKILL なのは、猶予の目的が「エージェントに畳ませる」こと
-   *  であり、ここで止めたい相手がまさにその「これ以上動くこと」だから。
+   *  畳み込み停止ではなく**強制回収**なのは、猶予の目的が「エージェントに畳ませる」
+   *  ことであり、ここで止めたい相手がまさにその「これ以上動くこと」だから。回収は
+   *  watchdog と同じ盤面側 supervisor を通る(ADR 0099 決定2)— session を終わらせる
+   *  経路が2つある以上、回収の書き方が2つあってはならない。
    *
    *  戻り値は「init の `tools` を観測したか」— 呼び出し側はそれ以降の行をこの検査に
    *  通さない(1セッションに init 行は1本だけ、実測)。
@@ -2250,23 +2229,21 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  観測が無いことを不成立に化けさせるのは正本(ping)の仕事である。サブエージェント
    *  を起こしたセッションでも親の stream に init 行は1本しか出ない(実測)ので、
    *  この判定が同一セッション内で二度走ることはない。 */
-  private checkSessionToolSurface(
-    task: Task,
-    parsed: Record<string, unknown> | null,
-    child: { kill(signal: NodeJS.Signals): void },
-  ): boolean {
+  private checkSessionToolSurface(task: Task, parsed: Record<string, unknown> | null): boolean {
     const tools = readInitField(parsed, "tools");
     if (!tools) return false;
     const surface = checkToolSurface(tools, task.type);
     if (surface.available) return true;
     console.error(`[worker] tool surface drift on task ${task.id}: ${surface.reason}`);
-    child.kill("SIGKILL");
+    this.containers.forceReclaim(task.id);
     quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
     return true;
   }
 
-  kill(taskId: string, signal: KillSignal): void {
-    this.running.get(taskId)?.kill(signal);
+  /** 畳み込み停止の送達だけが adapter の仕事(ADR 0099 決定1)。Claude の合図は
+   *  SIGTERM で、その選択がこの seam の外に出ることはない。 */
+  gracefulStop(taskId: string): void {
+    this.running.get(taskId)?.kill("SIGTERM");
   }
 
   /** Scrapes the interactive /usage panel over a PTY (issue #81 / ADR 0028).

@@ -5,7 +5,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock, ScriptedWorker } from "./fakes.js";
+import { FakeClock, fakeContainers, ScriptedWorker } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 
 const dirs: string[] = [];
@@ -27,6 +27,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       clock,
       slot,
       worker,
+      containers: fakeContainers(),
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];
@@ -62,6 +63,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       clock,
       slot,
       worker,
+      containers: fakeContainers(),
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];
@@ -97,6 +99,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       clock,
       slot,
       worker,
+      containers: fakeContainers(),
       workspace: prod,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "prod"];

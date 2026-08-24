@@ -23,8 +23,9 @@ import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
+import { WorkerContainers } from "../src/worker-container.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeTask(
@@ -1185,6 +1186,18 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(killed).toContain("SIGKILL"));
   });
 
+  it("ずれた面の回収は watchdog と同じ回収 module(worker 容器)を通る(ADR 0099 決定2)", async () => {
+    // session を終わらせる経路が2つある以上、回収の書き方が2つあってはならない。
+    // adapter が signal を直に撃たないことまで含めてここで測る。
+    const recorder = recordingSpawn();
+    const runtime = new FakeContainerRuntime(recorder.spawn);
+    const { start } = await makeWorker({}, { containers: new WorkerContainers(runtime) });
+    const task = start("task-init-container-kill", null, "deckhand", "work");
+    recorder.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
+    await vi.waitFor(() => expect(runtime.forceReclaims).toEqual([task.id]));
+    expect(recorder.killed).toEqual([]);
+  });
+
   it("宣言どおりのセッションは kill されない", async () => {
     const { start, stdout, killed } = await makeWorker();
     start("task-init-nokill", null, "deckhand", "review");
@@ -1868,9 +1881,9 @@ describe("ClaudeCodeWorker", () => {
       error_code: "ENOENT",
       message: "spawn claude ENOENT",
     });
-    // running から消えている: 死んだ子への kill は no-op のはずなので、
-    // watchdog 相当の kill() を呼んでも子の kill() は一切呼ばれない
-    worker.kill(task.id, "SIGKILL");
+    // running から消えている: 死んだ子への合図は no-op のはずなので、
+    // watchdog 相当の畳み込み停止を呼んでも子の kill() は一切呼ばれない
+    worker.gracefulStop(task.id);
     expect(killed).toEqual([]);
   });
 
