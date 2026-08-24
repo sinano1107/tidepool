@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, beforeEach, expect, it } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { containerRuntimeFor } from "../../src/cgroup-container.js";
 import {
   type ContainedProcess,
@@ -105,16 +106,6 @@ function sessionOf(pid: number): string {
   return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[3] ?? "";
 }
 
-const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-async function until(done: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (!done()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await delay(20);
-  }
-}
-
 /** 回収済み観測が**今この瞬間に**立っているか。force の送達より先に空が
  *  観測されないこと(= 送達を回収と数えていないこと)を測るために要る。 */
 function emptyObserved(container: WorkerContainer): () => boolean {
@@ -134,7 +125,7 @@ echo $$ >> "$CANARY_PIDS"
 while :; do sleep 1; done`,
   );
   const empty = emptyObserved(container);
-  await until(() => recordedPids().length === 1, "the TERM-deaf child to record its pid");
+  await vi.waitFor(() => expect(recordedPids()).toHaveLength(1), { timeout: 15_000 });
 
   // 畳み込み停止の合図は adapter が撃つもので、届いても従われる保証は無い
   child.kill("SIGTERM");
@@ -158,7 +149,7 @@ while :; do
   sleep 0.05
 done`,
   );
-  await until(() => recordedPids().length >= 5, "the fork storm to get going");
+  await vi.waitFor(() => expect(recordedPids().length).toBeGreaterThanOrEqual(5), { timeout: 15_000 });
 
   containers.forceReclaim("fork-storm");
   await containers.reclaimed("fork-storm");
@@ -179,7 +170,7 @@ exit 0`,
   );
   const empty = emptyObserved(container);
   await new Promise<void>((resolve) => child.on("exit", () => resolve()));
-  await until(() => recordedPids().length === 2, "the daemonised grandchild to record its pid");
+  await vi.waitFor(() => expect(recordedPids()).toHaveLength(2), { timeout: 15_000 });
 
   const [parent, daemon] = recordedPids();
   if (parent === undefined || daemon === undefined) throw new Error("unreachable");
