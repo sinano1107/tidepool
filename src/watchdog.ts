@@ -23,7 +23,7 @@ export const WATCHDOG_TICK = 60 * 1000;
 
 /** 強制回収を送ってから回収済み観測を諦めるまで(ADR 0099 決定3)。tick 1本より
  *  十分長く取る — 猶予と同じく「待つ時間」であって、機構の性質ではない。 */
-export const RECLAIM_TIMEOUT = 5 * 60 * 1000;
+const RECLAIM_TIMEOUT = 5 * 60 * 1000;
 
 export interface WatchdogConfig {
   /** Absolute wall-clock limit per task type, measured from pickup. A type
@@ -35,17 +35,18 @@ export interface WatchdogConfig {
   reclaimTimeout?: number;
 }
 
-/** 回収済み観測を待って止まっている slot の門(ADR 0099 決定3)。Containment
- *  quarantine の確認回答の受理側(human-verbs)だけがこれを読む。 */
-export interface ReclaimStandoff {
-  /** 空をまだ観測できていない standoff の task id、無ければ undefined。 */
+/** 回収済み観測の不成立(CONTEXT.md「Worker 容器」)で止まっている slot の門
+ *  (ADR 0099 決定3)。Containment quarantine の確認回答の受理側(human-verbs)
+ *  だけがこれを読む。 */
+export interface PendingReclaim {
+  /** 空をまだ観測できていない task id、無ければ undefined。 */
   pendingReclaim: () => string | undefined;
-  /** 空を再観測できた standoff を受理する: slot-release tree rule を走らせ、
-   *  slot を解放する。standoff が無い / まだ populated なら no-op。 */
+  /** 空を再観測できた回収を受理する: slot-release tree rule を走らせ、
+   *  slot を解放する。待っている回収が無い / まだ populated なら no-op。 */
   acceptReclaimed: () => void;
 }
 
-export interface Watchdog extends ReclaimStandoff {
+export interface Watchdog extends PendingReclaim {
   stop: () => void;
 }
 
@@ -110,10 +111,20 @@ export function failTask(
     now,
     "board",
   );
-  if (resolve) {
-    const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);
-    if (resolved) releaseWorkspace(db, resolved, task, now);
-  }
+  runTreeRule(db, resolve, task, now);
+}
+
+/** slot-release tree rule の一撃(CONTEXT.md「Slot-release tree rule」)。
+ *  resolve が無い盤面(workspace 追跡なし)では no-op。 */
+function runTreeRule(
+  db: Db,
+  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
+  task: Task,
+  now: Date,
+): void {
+  if (!resolve) return;
+  const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);
+  if (resolved) releaseWorkspace(db, resolved, task, now);
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
@@ -154,7 +165,7 @@ export function startWatchdog(deps: {
   // 動く。遅れて届いた空の観測が、既に quarantine へ倒れた slot を黙って解放して
   // しまわないための門でもある(解放の門は確認 question ただ1つ)。
   const settled = new Set<string>();
-  let standoff: string | null = null;
+  let pending: string | null = null;
 
   /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む。 */
   function onReclaimed(taskId: string, limit: number): void {
@@ -181,7 +192,7 @@ export function startWatchdog(deps: {
    *  退避しても、退避そのものが競合する)。 */
   function onReclaimTimeout(task: Task, limit: number): void {
     settled.add(task.id);
-    standoff = task.id;
+    pending = task.id;
     failTask(
       db,
       task,
@@ -246,21 +257,17 @@ export function startWatchdog(deps: {
   const cancel = clock.setInterval(tick, WATCHDOG_TICK);
   return {
     stop: cancel,
-    pendingReclaim: () =>
-      standoff !== null && containers.pendingReclaims().includes(standoff) ? standoff : undefined,
+    pendingReclaim: () => (pending !== null && containers.pendingReclaim(pending) ? pending : undefined),
     acceptReclaimed: () => {
-      if (standoff === null) return;
+      if (pending === null) return;
       // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の
       // 直前でもう一度読む(1資源1枚の quarantine と同じ posture)
-      if (containers.pendingReclaims().includes(standoff)) return;
-      const task = getTask(db, standoff);
-      standoff = null;
+      if (containers.pendingReclaim(pending)) return;
+      const task = getTask(db, pending);
+      pending = null;
       // slot が解放される瞬間に tree rule が走る、の対を閉じる(CONTEXT.md
       // 「Slot-release tree rule」)— 回収 timeout の時点では走らせていない
-      if (task && resolve) {
-        const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
-        if (resolved) releaseWorkspace(db, resolved, task, clock.now());
-      }
+      if (task) runTreeRule(db, resolve, task, clock.now());
       slot.release();
     },
   };

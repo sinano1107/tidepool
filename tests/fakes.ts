@@ -172,7 +172,7 @@ export class ScriptedWorker implements WorkerAdapter {
   }
 }
 
-/** Scripted stand-in at the容器機構 seam(ADR 0099 決定2)。既定の容器は
+/** 容器機構 seam の scripted stand-in(ADR 0099 決定2)。既定の容器は
  *  強制回収を受けた時点で空になる(実機構がそう振る舞うのが正常)。空にならない
  *  容器 — 回収に失敗するホスト — は `hold` で明示的にスクリプトし、`fireEmpty`
  *  で好きな瞬間に「空になった signal」を撃つ。 */

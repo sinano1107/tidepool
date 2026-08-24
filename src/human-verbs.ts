@@ -29,7 +29,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import { landingBlock, stageFrontInsert, triageActivity } from "./triage.js";
-import type { ReclaimStandoff } from "./watchdog.js";
+import type { PendingReclaim } from "./watchdog.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
@@ -285,7 +285,7 @@ export interface SubmitAnswerDeps {
    *  quarantine の確認回答の受理は、容器がまだ populated なら拒まれ、空を再観測
    *  できたときだけ tree rule を走らせて slot を解放する。Absent → watchdog を
    *  持たない盤面(回収を待っている slot が存在しない)。 */
-  reclaim?: ReclaimStandoff;
+  reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
   cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
@@ -598,7 +598,7 @@ export async function submitAnswer(
   }
   // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
   // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
-  // 解放と対で走る。standoff を持たない Containment quarantine(ツール面のずれ
+  // 解放と対で走る。待っている回収を持たない Containment quarantine(ツール面のずれ
   // など)では no-op。
   if (task.question_quarantine_sandbox !== null) deps.reclaim?.acceptReclaimed();
   // An unblocked parent or reinstated quarantined resource can make the queue

@@ -37,7 +37,7 @@ export type ContainerRuntimeCapability = SandboxCapability;
 /** 1つの worker session ぶんの容器(CONTEXT.md「Worker 容器」)。 */
 export interface WorkerContainer {
   /** 容器の中への spawn。session に属する process は全部この中で生きる。 */
-  spawn(command: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }): ContainedProcess;
+  spawn: ContainerSpawn;
   /** 強制回収(force reclaim): 容器ごと全 process を終了させる操作。**送達で
    *  あって回収の完了ではない** — 完了は `reclaimed` だけが言う。 */
   forceReclaim(): void;
@@ -94,15 +94,18 @@ export class WorkerContainers {
     entry.container.forceReclaim();
   }
 
-  /** その session の容器が空になった signal。知らない session は既に空である。 */
+  /** その session の容器が空になった signal。知らない session は既に空である —
+   *  帳簿は in-memory なので、再起動をまたいだ「空」は platform supervisor の
+   *  保証(ADR 0099 決定6、Pi では systemd の control-group kill)であり、boot 時の
+   *  復元は #463 が実機構と一緒に決める。 */
   reclaimed(sessionId: string): Promise<void> {
     return this.live.get(sessionId)?.container.reclaimed ?? Promise.resolve();
   }
 
-  /** force を送ったのに空をまだ観測できていない容器。**回収済み観測の不成立**
+  /** force を送ったのに空をまだ観測できていない容器か。**回収済み観測の不成立**
    *  そのものであり、Containment quarantine の解除がここを読み直す。 */
-  pendingReclaims(): string[] {
-    return [...this.live].filter(([, entry]) => entry.forced).map(([sessionId]) => sessionId);
+  pendingReclaim(sessionId: string): boolean {
+    return this.live.get(sessionId)?.forced ?? false;
   }
 }
 
