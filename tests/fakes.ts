@@ -177,7 +177,6 @@ export class ScriptedWorker implements WorkerAdapter {
  *  容器 — 回収に失敗するホスト — は `hold` で明示的にスクリプトし、`fireEmpty`
  *  で好きな瞬間に「空になった signal」を撃つ。 */
 export class FakeContainerRuntime implements ContainerRuntime {
-  readonly opened: string[] = [];
   readonly forceReclaims: string[] = [];
   private readonly held = new Set<string>();
   private readonly markEmpty = new Map<string, () => void>();
@@ -208,7 +207,6 @@ export class FakeContainerRuntime implements ContainerRuntime {
   }
 
   create(sessionId: string): WorkerContainer {
-    this.opened.push(sessionId);
     let markEmpty!: () => void;
     const reclaimed = new Promise<void>((resolve) => {
       markEmpty = resolve;

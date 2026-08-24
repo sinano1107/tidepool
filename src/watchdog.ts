@@ -156,15 +156,6 @@ export function startWatchdog(deps: {
   const settled = new Set<string>();
   let standoff: string | null = null;
 
-  /** slot を解放する側の共通処理: tree rule → 解放。 */
-  function releaseSlot(task: Task): void {
-    if (resolve) {
-      const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
-      if (resolved) releaseWorkspace(db, resolved, task, clock.now());
-    }
-    slot.release();
-  }
-
   /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む。 */
   function onReclaimed(taskId: string, limit: number): void {
     if (settled.has(taskId)) return;
@@ -264,8 +255,13 @@ export function startWatchdog(deps: {
       if (containers.pendingReclaims().includes(standoff)) return;
       const task = getTask(db, standoff);
       standoff = null;
-      if (task) releaseSlot(task);
-      else slot.release();
+      // slot が解放される瞬間に tree rule が走る、の対を閉じる(CONTEXT.md
+      // 「Slot-release tree rule」)— 回収 timeout の時点では走らせていない
+      if (task && resolve) {
+        const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
+        if (resolved) releaseWorkspace(db, resolved, task, clock.now());
+      }
+      slot.release();
     },
   };
 }

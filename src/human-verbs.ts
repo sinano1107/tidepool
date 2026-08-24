@@ -507,26 +507,24 @@ export async function submitAnswer(
     }
   }
 
-  if (task.question_quarantine_sandbox !== null && deps.containment) {
-    const capability = await deps.containment();
-    if (!capability.available) {
+  if (task.question_quarantine_sandbox !== null) {
+    const capability = await deps.containment?.();
+    if (capability && !capability.available) {
       throw new DomainError(
         `worker containment is still not established: ${capability.reason}`,
       );
     }
-  }
-
-  // ADR 0099 決定3: 回収失敗で立った Containment quarantine の解除は、容器の空を
-  // **回答時にもう一度観測して**から受理する。一回限りの process scan は観測に
-  // 数えないので、読むのは supervisor が持つ「空になった signal」の帳簿である。
-  const pendingReclaim =
-    task.question_quarantine_sandbox !== null ? deps.reclaim?.pendingReclaim() : undefined;
-  if (pendingReclaim !== undefined) {
-    throw new DomainError(
-      `the worker container for task ${pendingReclaim} has still not been observed empty — ` +
-        "processes from that session may still be running against this host and its workspaces. " +
-        "Kill them by hand, then answer again",
-    );
+    // ADR 0099 決定3: 回収失敗で立った Containment quarantine の解除は、容器の空を
+    // **回答時にもう一度観測して**から受理する。一回限りの process scan は観測に
+    // 数えないので、読むのは supervisor が持つ「空になった signal」の帳簿である。
+    const pendingReclaim = deps.reclaim?.pendingReclaim();
+    if (pendingReclaim !== undefined) {
+      throw new DomainError(
+        `the worker container for task ${pendingReclaim} has still not been observed empty — ` +
+          "processes from that session may still be running against this host and its workspaces. " +
+          "Kill them by hand, then answer again",
+      );
+    }
   }
 
   if (task.question_quarantine_registry !== null && deps.registryReachability) {

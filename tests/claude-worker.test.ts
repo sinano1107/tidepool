@@ -14,7 +14,6 @@ import {
   PROMPT_READY_MARKER,
   type PtyFn,
   pinnedModelFlags,
-  type SpawnFn,
 } from "../src/claude-worker.js";
 import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
@@ -23,7 +22,7 @@ import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { listBoard, type Task } from "../src/tasks.js";
-import { WorkerContainers } from "../src/worker-container.js";
+import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
 import { workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -116,7 +115,7 @@ function recordingSpawn() {
   const killed: NodeJS.Signals[] = [];
   const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
   const errorListeners: Array<(err: Error) => void> = [];
-  const spawn: SpawnFn = (command, args, opts) => {
+  const spawn: ContainerSpawn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env });
     return {
       stdout,
@@ -2303,7 +2302,7 @@ describe("ClaudeCodeWorker", () => {
 
 /** issue #33: advisor capability。frontmatter の `advisor` が spawn の面まで
  *  届くか、不在・緊急マスク時に**確実に閉じる**か、そして「実際に走ったか」が
- *  worker_exited に残るか。実 CLI は使わず、既存の SpawnFn seam に fake stream を
+ *  worker_exited に残るか。実 CLI は使わず、既存の ContainerSpawn seam に fake stream を
  *  流す(ADR 0027 / ADR 0041 §4)。 */
 describe("advisor capability (issue #33)", () => {
   const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nadvisor: opus\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;

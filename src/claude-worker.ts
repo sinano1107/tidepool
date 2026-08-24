@@ -57,12 +57,6 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 
-/** The process boundary the adapter is tested at: everything vendor-specific
- *  (the claude CLI, its flags) flows through this one call. 語彙は worker 容器の
- *  側で1度だけ定義される(ADR 0099 決定2) — worker session の spawn は容器の
- *  中への spawn であり、この型はその同じ口である。 */
-export type SpawnFn = ContainerSpawn;
-
 // the CLI defines this as a closed 5-value set; unlike --model (an open,
 // ever-growing set of aliases/full names) it's safe and worth validating
 // here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
@@ -624,7 +618,7 @@ function readMoonshotApiKey(keyFile: string): string {
  *
  *  Returns the **whole** env, not a delta, so a call site cannot half-apply it
  *  by forgetting `...process.env` and lose PATH and auth with it. Same contract
- *  as `workerSpawnEnv` below and as `SpawnFn`'s `opts.env`.
+ *  as `workerSpawnEnv` below and as `ContainerSpawn`'s `opts.env`.
  *
  *  Board calls speak **anthropic only** (ADR 0096), so they get the same
  *  two-way scrub an anthropic worker spawn gets (ADR 0097 決定4): a board env
@@ -1063,7 +1057,9 @@ export interface ClaudeWorkerOptions {
   mcpUrl: string;
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
-  spawn?: SpawnFn;
+  /** worker session を作る process 境界(ADR 0027 の fake 注入)。既定の
+   *  pass-through 容器がこれを使って容器の中の process を作る。 */
+  spawn?: ContainerSpawn;
   /** 盤面側 supervisor(ADR 0099 決定2): worker session の spawn はここが作る
    *  容器の中で起きる。**渡されたときはその supervisor の容器機構が spawn を
    *  担う**ので、`spawn` は使われない(注入する側はどちらか一方を渡す)。
@@ -1110,7 +1106,7 @@ export interface ClaudeWorkerOptions {
 }
 
 /** Request/response process boundary for one-shot CLI calls (unlike the
- *  streaming SpawnFn above) — the claude-draft-client's JIT draft poll runs
+ *  streaming ContainerSpawn above) — the claude-draft-client's JIT draft poll runs
  *  through it (ADR 0008). checkUsage moved off this to the PTY boundary below
  *  (issue #81 / ADR 0028), since `/usage` only renders under a TTY.
  *
@@ -1125,7 +1121,7 @@ export type ExecFn = (command: string, args: string[], env: NodeJS.ProcessEnv) =
 /** The skill-enumeration boundary (issue #56 / ADR 0025 point 4): resolve the
  *  full skill set the CLI would give the session at `cwd`, or null if the probe
  *  failed. Injected so the deny-list computation runs without a real CLI in
- *  tests (same fake-injection posture as SpawnFn/PtyFn, ADR 0027). */
+ *  tests (same fake-injection posture as ContainerSpawn/PtyFn, ADR 0027). */
 export type EnumerateSkillsFn = (cwd: string) => Promise<string[] | null>;
 
 // ADR 0025 point 4: let the CLI itself report the resolved skill set instead

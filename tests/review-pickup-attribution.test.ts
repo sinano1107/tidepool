@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
-import { ClaudeCodeWorker, type SpawnFn } from "../src/claude-worker.js";
+import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
@@ -11,6 +11,7 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { Slot } from "../src/slot.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
+import type { ContainerSpawn } from "../src/worker-container.js";
 import { FakeClock, fakeContainers, healthyUsageText, ScriptedWorker } from "./fakes.js";
 import { api, HOUR, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -24,7 +25,7 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-const spawn: SpawnFn = () => {
+const spawn: ContainerSpawn = () => {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   return {

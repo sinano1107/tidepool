@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import type { SandboxCapability } from "./sandbox.js";
 
 /** 容器の中で走る1つの process の口。`ContainerSpawn` が返すもので、adapter が
  *  stream と exit を読むために要る全部である(それ以外は容器の側の話)。 */
@@ -28,9 +29,10 @@ export type ContainerSpawn = (
   opts: { cwd: string; env: NodeJS.ProcessEnv },
 ) => ContainedProcess;
 
-/** 機構前提検査の答え。`SandboxCapability` と同じ形 — 「何が足りないか」は
- *  reason の文面が担う。 */
-export type ContainerRuntimeCapability = { available: true } | { available: false; reason: string };
+/** 機構前提検査の答え。封じ込めの fs 半分と同じ形を使う(containment.ts が
+ *  `ContainmentCapability` でそうしているのと同じ理由 — 「何が足りないか」は
+ *  reason の文面が担うのであって、型ではない)。 */
+export type ContainerRuntimeCapability = SandboxCapability;
 
 /** 1つの worker session ぶんの容器(CONTEXT.md「Worker 容器」)。 */
 export interface WorkerContainer {
