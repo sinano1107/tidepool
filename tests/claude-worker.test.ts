@@ -601,6 +601,22 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).toContain("Prefer reversible actions");
   });
 
+  it("authority guidance が空文字なら、system prompt から `## Authority` 見出しごと省く(issue #488)", async () => {
+    const { start, calls } = await makeWorker({
+      "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      "agents/navigator.md": NAVIGATOR_MD,
+    });
+    start();
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt).not.toContain("## Authority");
+    expect(systemPrompt).toContain("You are Deckhand, the tidepool board's general work agent.");
+    const rosterIndex = systemPrompt.indexOf("## Roster");
+    const doctrineIndex = systemPrompt.indexOf("## Board doctrine");
+    expect(rosterIndex).toBeGreaterThan(-1);
+    expect(doctrineIndex).toBeGreaterThan(rosterIndex);
+  });
+
   it("盤面教義(subagent/workflow は説明責任を分割しない労力の分割にのみ使う)を、agent や profile によらず system prompt に注入する(ADR 0010 / issue #31)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-navigator", null, "navigator");

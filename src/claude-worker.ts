@@ -163,6 +163,14 @@ function rosterSection(roster: string | undefined): string {
   return roster === undefined ? "" : `\n\n## Roster\n\n${roster}`;
 }
 
+/** Wraps authority guidance as the `## Authority` section, or omits the
+ *  section entirely when guidance is empty (issue #488: `standard`'s
+ *  template guidance is `""`, and an empty heading would be a lie with
+ *  nothing under it). */
+function authoritySection(guidance: string): string {
+  return guidance === "" ? "" : `\n\n## Authority\n\n${guidance}`;
+}
+
 /** Does one allowlist entry permit one enumerated skill? (issue #56 / ADR
  *  0025) The five-form vocabulary, resolved against the CLI's enumerated set:
  *  `"*"` permits everything; `@workspace` permits a skill the checkout carries;
@@ -1999,7 +2007,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // stitched at spawn time. A party review (self RCA) additionally carries
         // the 当時版 definition as evidence (ADR 0020 part 4), appended last.
         "--append-system-prompt",
-        `${definition.systemPrompt}\n\n## Authority\n\n${authorityProfile.guidance}${rosterSection(buildRoster(registry, rosterAssignableTo))}\n\n${BOARD_DOCTRINE}\n\n${workerProtocol(workspace.allowed_domains)}${this.historicalDefinitionSection(task)}`,
+        `${definition.systemPrompt}${authoritySection(authorityProfile.guidance)}${rosterSection(buildRoster(registry, rosterAssignableTo))}\n\n${BOARD_DOCTRINE}\n\n${workerProtocol(workspace.allowed_domains)}${this.historicalDefinitionSection(task)}`,
       ],
       // the agent's own commits are stamped with the agent's identity (issue
       // #53), merged over the inherited env — never a token (ADR 0024). The
