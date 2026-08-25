@@ -63,6 +63,7 @@ import {
   cancelTaskDirectly,
   completeTask,
   countUnsettledTasksReferencing,
+  DEFAULT_AUDITOR_NAME,
   DomainError,
   editTask,
   getTask,
@@ -987,7 +988,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
           defaultAgentName,
-          auditorName,
+          // 解決側(mcp / scheduler)と同じ既定へ落とす —— ポインタは常に値を持つ
+          auditorName: auditorName ?? DEFAULT_AUDITOR_NAME,
         },
       );
       res.json({});

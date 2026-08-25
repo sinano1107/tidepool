@@ -197,8 +197,10 @@ export interface AgentDeletionReferences {
   /** 盤面の Auditor 名(CONTEXT.md「Auditor」、既定 `fugu` — ADR 0089)。一致すれば
    *  消せない —— 「消せない資源」は列挙ではなく盤面のポインタが指す先という規則で、
    *  Auditor は既定 agent / 既定 workspace と同型の第3のポインタである
-   *  (ADR 0087 決定3 訂正 / issue #376)。 */
-  auditorName?: string;
+   *  (ADR 0087 決定3 訂正 / issue #376)。既定 agent と違い optional ではない ——
+   *  Auditor ポインタは常に値を持ち「未設定」が無い(CONTEXT.md)ので、解決側と
+   *  同じく必ず名前が入る。 */
+  auditorName: string;
 }
 
 export async function deleteAgent(
