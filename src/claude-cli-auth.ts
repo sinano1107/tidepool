@@ -5,7 +5,12 @@ import {
   moonshotCliAuthEnv,
   pinnedModelFlags,
 } from "./claude-worker.js";
-import { type CliAuthCheck, type CliAuthResult, isCliAuthFailureEnvelope } from "./cli-auth.js";
+import {
+  type CliAuthCheck,
+  type CliAuthResult,
+  isCliAuthBudgetCapEnvelope,
+  isCliAuthFailureEnvelope,
+} from "./cli-auth.js";
 
 export interface CliAuthCommandResult {
   exitCode: number | null;
@@ -96,7 +101,7 @@ async function runProbe(
   }
   // 予算キャップで止まった probe は「認証できなかった」ではなく「試す前に止まった」。
   // 一般の unknown と区別できる文言にして解除拒否(409)の理由が追えるようにする(issue #466)
-  if (envelope.subtype === "error_max_budget_usd") {
+  if (isCliAuthBudgetCapEnvelope(envelope)) {
     return { status: "unknown", reason: "probe exceeded its budget cap before authenticating" };
   }
   if (observed.exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
