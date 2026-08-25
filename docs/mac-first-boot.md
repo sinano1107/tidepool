@@ -93,13 +93,10 @@ echo "kernel.apparmor_restrict_unprivileged_userns = 0" | sudo tee /etc/sysctl.d
 sudo ln -s /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/disable/ && sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
 ```
 
-The two fail differently. Skip the second line and the board still starts and still picks the task
-up, but every Bash command the worker runs dies with
-`apply-seccomp: … nested userns is capability-restricted …`; the worker cannot use `git`, so it
-raises a question saying so and the task stops there — nothing warns you in advance, because the
-board's sandbox probe passes on that host. Skip the first line instead and the probe itself fails
-(`bwrap: setting up uid map: Permission denied`), so the board stops pickup with a containment
-question.
+Skip either line and the board stops pickup with a containment question before a worker ever runs,
+but the two questions read differently. Skip the first and it says `bwrap` could not create a
+sandbox at all (`bwrap: setting up uid map: Permission denied`). Skip the second and it says a user
+namespace nested inside `bwrap` is capability-restricted, and points back at this section.
 
 Verify:
 
@@ -107,11 +104,12 @@ Verify:
 sysctl -n kernel.apparmor_restrict_unprivileged_userns
 sudo aa-status | grep -cE '^\s+(bwrap|unpriv_bwrap)$'
 bwrap --ro-bind / / --dev /dev -- /bin/true; echo $?
+bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-user --cap-drop ALL --new-session --die-with-parent -- unshare -Ur /bin/true; echo $?
 socat -V >/dev/null; echo $?
 ```
 
-Expect `0` from each: the restriction is off, the `bwrap` profiles are not loaded, and both
-sandbox halves run.
+Expect `0` from each: the restriction is off, the `bwrap` profiles are not loaded, and both `bwrap`
+forms and `socat` run.
 
 ## Clone Tidepool and install
 
