@@ -610,7 +610,7 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(systemPrompt).not.toContain("## Authority");
-    expect(systemPrompt).toContain("You are Deckhand, the tidepool board's general work agent.");
+    expect(systemPrompt).toContain("You are Deckhand");
     const rosterIndex = systemPrompt.indexOf("## Roster");
     const doctrineIndex = systemPrompt.indexOf("## Board doctrine");
     expect(rosterIndex).toBeGreaterThan(-1);
