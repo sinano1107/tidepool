@@ -73,14 +73,18 @@ export interface AgentDefinition {
 
 /** An authority profile: `authority/<profile>.yaml` in the registry clone.
  *  `guidance` is prose injected into the agent's system prompt at spawn, and
- *  it is read literally: a boundary lands only when the act itself is named
- *  and forbidden — offering it as one example of a category ("irreversible or
- *  outward-facing") hands the category call to the reader, and 3/3 readers
- *  made that call the other way (issue #489, 2026-08-25 の再計測;
- *  `docs/real-environment-trial.md`). However it is written, guidance is never
- *  a floor (ADR 0013 / 0035, CONTEXT.md 「床(Floor)」): a boundary that must
- *  hold goes in the machine-read fields below, in a protected workspace, or in
- *  the review flag.
+ *  it is read literally: name the act and forbid it, and readers quote the
+ *  clause back and escalate. Offer it instead as one example of a category
+ *  ("irreversible or outward-facing") and the category call becomes the
+ *  reader's — under the production `standard` wording the clause did not
+ *  surface at all, and the one reader that did weigh it called it backwards
+ *  ("gitignored, so I can just delete them"). Issue #489's 2026-08-25
+ *  re-measurement, in `docs/real-environment-trial.md`, has the conditions and
+ *  the counts. However it is written, guidance is never a floor (ADR 0013 /
+ *  0035, CONTEXT.md 「床(Floor)」): a boundary that must hold goes in the two
+ *  allowlists below, in a protected workspace, or in the risk flag — the
+ *  review flag is an opt-in to observation and widens nothing (CONTEXT.md
+ *  「Review flag」).
  *  `assignable_to` (issue #11) is a machine-enforced delegation allowlist —
  *  confused-deputy prevention: a decompose child assigned outside this list
  *  converts to an approval question rather than registering (ADR 0002).

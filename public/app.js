@@ -1701,7 +1701,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
       rows: 4,
       value: guidance,
       onChange: (e) => setGuidance(e.target.value),
-      hint: 'name the act you want stopped \u2014 offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, a protected workspace, or the review flag',
+      hint: 'name the act you want stopped \u2014 offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, or in the gates outside this form \u2014 a protected workspace, the risk flag',
       placeholder: "how an agent carrying this authority should act"
     }
   ), /* @__PURE__ */ React.createElement(
