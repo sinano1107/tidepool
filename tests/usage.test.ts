@@ -68,10 +68,9 @@ Resets Aug 27, 1pm (Asia/Tokyo)
 
 Per-model breakdown unavailable (rate limited — try again in a moment)`;
 
-// 盤面の観測記録は 09:41:49 (Asia/Tokyo) だが、この画面の `Resets 8pm` は 5h 窓の
-// 開始が 15:00 (Asia/Tokyo) だったことを意味する — 画面を捕ったのは記録より後で、
-// now は画面と整合する 18:00 (Asia/Tokyo) を使う。
-const PER_MODEL_RATE_LIMITED_NOW = new Date("2026-08-25T09:00:00.000Z");
+// 盤面に残った throttle_state.observed_at そのもの(18:41:49 Asia/Tokyo)。
+// 画面の `Resets 8pm` が意味する 5h 窓(15:00〜20:00 Asia/Tokyo)の中にある。
+const PER_MODEL_RATE_LIMITED_NOW = new Date("2026-08-25T09:41:49.623Z");
 
 it("per-model の内訳だけが rate limited な実機画面は、session / week を観測値として読む(issue #492)", () => {
   expect(parseUsage(PER_MODEL_RATE_LIMITED_SCREEN, PER_MODEL_RATE_LIMITED_NOW)).toEqual({
