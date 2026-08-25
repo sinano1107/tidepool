@@ -356,12 +356,14 @@ function parseWeekWindow(block: string, now: Date): ObservedUsageWindow | null {
  *  missing all-models reset cannot be read from the following per-model row. */
 export function parseUsage(resultText: string, now: Date): UsageSnapshot {
   const stripped = resultText.replace(ANSI_PATTERN, "").replace(/\r/g, "\n");
+  // 全体ゲートの述語は「端末ローカルの persisted seed がそのまま画面に出ている」こと
+  // (ADR 0078)。rate limit はこのどれかを伴ってしか全体 stale にならず、`(rate limited`
+  // 単体は per-model 内訳だけが取れない局所の一行にも一致するので見ない(issue #492)。
   if (
     stripped.includes("Refreshing…") ||
     stripped.includes("Showing last-known usage") ||
     stripped.includes("could not refresh") ||
-    stripped.includes("Failed to load usage data") ||
-    stripped.includes("(rate limited")
+    stripped.includes("Failed to load usage data")
   ) {
     return { session: null, week: null, fable: null };
   }

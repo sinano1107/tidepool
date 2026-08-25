@@ -42,11 +42,33 @@ it.each([
   "Showing last-known usage",
   "could not refresh",
   "Failed to load usage data",
-  "(rate limited — try again in a moment)",
+  "Showing last-known usage (rate limited — try again in a moment)",
 ])("%s 付き画面は全ウィンドウを観測不能にする(issue #334)", (marker) => {
   expect(parseUsage(`${SYNTHETIC_USAGE_SCREEN}\n${marker}`, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
     session: null,
     week: null,
+    fable: null,
+  });
+});
+
+// 本番 Pi で永続 fail-closed を踏んだときの実機画面(2026-08-25 09:41:49 Asia/Tokyo、
+// issue #492)。per-model の内訳だけが取れず、session / week はサーバー由来の新鮮な
+// 値で描かれている。`Per-model breakdown unavailable` は fable ラベルの代わりに出るので
+// week ブロックの末尾に落ちるが、%used も Resets も持たないので week の読みを汚さない。
+const PER_MODEL_RATE_LIMITED_SCREEN = `Current session
+██████████████████████████████████████████████████ 100% used
+Resets 8pm (Asia/Tokyo)
+
+Current week (all models)
+███████████████████████████████████████████████▌   95% used
+Resets Aug 27, 1pm (Asia/Tokyo)
+
+Per-model breakdown unavailable (rate limited — try again in a moment)`;
+
+it("per-model の内訳だけが rate limited な実機画面は、session / week を観測値として読む(issue #492)", () => {
+  expect(parseUsage(PER_MODEL_RATE_LIMITED_SCREEN, new Date("2026-08-25T00:41:49.000Z"))).toEqual({
+    session: { percent: 100, resetsAt: new Date("2026-08-25T11:00:00.000Z") },
+    week: { percent: 95, resetsAt: new Date("2026-08-27T04:00:00.000Z") },
     fable: null,
   });
 });
