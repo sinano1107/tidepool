@@ -37,6 +37,9 @@ it("容器機構を実測していない platform は fail-closed — 黙って�
 
   expect(reason(capability)).toContain("darwin");
   expect(reason(capability)).toContain("passes the worker container contract");
+  // Mac の盤面は Linux VM の中で動く(ADR 0100)。理由文がその道を名指ししなければ、
+  // 止まった盤面の前で人間は「Tidepool が壊れている」と読む
+  expect(reason(capability)).toContain("docs/mac-first-boot.md");
 });
 
 it("cgroup v2 が mount され自分の cgroup 配下に mkdir できれば前提は成立する", async () => {

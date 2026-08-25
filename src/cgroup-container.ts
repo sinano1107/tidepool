@@ -44,12 +44,17 @@ const unavailable = (reason: string): ContainerRuntimeCapability => ({ available
 /** contract suite を通る容器機構が無い platform の fail-closed な機構。darwin は
  *  #465 で process group を測って不合格(setsid で離脱した孫が見えない)、他の
  *  platform は未実測 — どちらも「弱い回収へ黙って落ちない」の同じ答えになる。
+ *  darwin にだけ道の続きがある(ADR 0100: Mac の盤面は Linux VM の中で動く)ので、
+ *  止まった理由を読んだ人間が「Tidepool が壊れている」と読まないよう手順書を名指す。
  *  preflight が pickup を止めるので `create` は呼ばれない — 呼ばれたなら配線が
  *  壊れている。 */
 function unmeasuredContainerRuntime(platform: NodeJS.Platform): ContainerRuntime {
   const capability = unavailable(
     `no worker container mechanism on platform "${platform}" passes the worker container contract — ` +
-      "worker pickup stays stopped here",
+      "worker pickup stays stopped here" +
+      (platform === "darwin"
+        ? ". On a Mac the board runs inside a Linux VM instead — see docs/mac-first-boot.md"
+        : ""),
   );
   return {
     preflight: () => capability,
