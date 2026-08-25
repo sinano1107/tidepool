@@ -14,14 +14,18 @@ afterEach(() => {
   home = undefined;
 });
 
-function runSeed(cwdArg: string | undefined, options: { cwd?: string } = {}) {
-  home = mkdtempSync(join(tmpdir(), "tidepool-seed-claude-trust-"));
+function execSeed(homeDir: string, cwdArg: string | undefined, options: { cwd?: string } = {}) {
   const args = ["scripts/seed-claude-trust.mjs", ...(cwdArg === undefined ? [] : [cwdArg])];
-  const result = spawnSync("node", args, {
+  return spawnSync("node", args, {
     cwd: options.cwd ?? ROOT,
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: homeDir },
     encoding: "utf8",
   });
+}
+
+function runSeed(cwdArg: string | undefined, options: { cwd?: string } = {}) {
+  home = mkdtempSync(join(tmpdir(), "tidepool-seed-claude-trust-"));
+  const result = execSeed(home, cwdArg, options);
   return { result, home, claudeJsonPath: join(home, ".claude.json") };
 }
 
@@ -59,11 +63,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     };
     writeFileSync(claudeJsonPath, JSON.stringify(existing, null, 2));
 
-    const result = spawnSync(
-      "node",
-      ["scripts/seed-claude-trust.mjs", projectCwd],
-      { cwd: ROOT, env: { ...process.env, HOME: home }, encoding: "utf8" },
-    );
+    const result = execSeed(home, projectCwd);
 
     expect(result.status, result.stderr).toBe(0);
     const written = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
@@ -83,11 +83,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     expect(first.status, first.stderr).toBe(0);
     const afterFirst = readFileSync(claudeJsonPath, "utf8");
 
-    const second = spawnSync("node", ["scripts/seed-claude-trust.mjs", projectCwd], {
-      cwd: ROOT,
-      env: { ...process.env, HOME: seededHome },
-      encoding: "utf8",
-    });
+    const second = execSeed(seededHome, projectCwd);
 
     expect(second.status, second.stderr).toBe(0);
     expect(readFileSync(claudeJsonPath, "utf8")).toBe(afterFirst);
@@ -108,11 +104,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     const claudeJsonPath = join(home, ".claude.json");
     writeFileSync(claudeJsonPath, "not json");
 
-    const result = spawnSync("node", ["scripts/seed-claude-trust.mjs", "/home/masaki/tidepool"], {
-      cwd: ROOT,
-      env: { ...process.env, HOME: home },
-      encoding: "utf8",
-    });
+    const result = execSeed(home, "/home/masaki/tidepool");
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/^Error: /);
