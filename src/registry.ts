@@ -82,9 +82,10 @@ export interface AgentDefinition {
  *  re-measurement, in `docs/real-environment-trial.md`, has the conditions and
  *  the counts. However it is written, guidance is never a floor (ADR 0013 /
  *  0035, CONTEXT.md 「床(Floor)」): a boundary that must hold goes in the two
- *  allowlists below, in a protected workspace, or in the risk flag — the
- *  review flag is an opt-in to observation and widens nothing (CONTEXT.md
- *  「Review flag」).
+ *  allowlists below or in a protected workspace, where the act converts to an
+ *  approval question with no model in the path (ADR 0002 / 0013). Not in a
+ *  flag — `risk` is a declaration the registrant makes, and `review` an opt-in
+ *  to observation that widens nothing (CONTEXT.md 「Risk flag」/「Review flag」).
  *  `assignable_to` (issue #11) is a machine-enforced delegation allowlist —
  *  confused-deputy prevention: a decompose child assigned outside this list
  *  converts to an approval question rather than registering (ADR 0002).
