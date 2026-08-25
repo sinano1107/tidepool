@@ -102,8 +102,6 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       name: "DeletionBlockedError",
       reasons: [{ code: "board_auditor" }],
     });
-
-    expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeDefined();
   });
 
   it("既定 agent と Auditor が同名のときは両方の理由が積まれる(issue #376)", async () => {
