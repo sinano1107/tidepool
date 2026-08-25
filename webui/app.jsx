@@ -1349,7 +1349,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
     <React.Fragment>
       <Input label="Guidance — prose injected into the agent's system prompt at spawn"
         multiline rows={4} value={guidance} onChange={(e) => setGuidance(e.target.value)}
-        hint={'name the act you want stopped — listing it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader, and readers make that call the other way. Guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, a protected workspace, or the review flag'}
+        hint={'name the act you want stopped — offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, a protected workspace, or the review flag'}
         placeholder="how an agent carrying this authority should act" />
       <ProfileListInput label="Assignable to"
         hint={'who this authority may delegate to — a registered agent or the human, or "*" for any (confirmed on save)'}

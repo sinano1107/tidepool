@@ -72,15 +72,15 @@ export interface AgentDefinition {
 }
 
 /** An authority profile: `authority/<profile>.yaml` in the registry clone.
- *  `guidance` is prose injected into the agent's system prompt at spawn. Two
- *  things govern how it is written, both measured in issue #489 (2026-08-25,
- *  `docs/real-environment-trial.md`). First, guidance is read literally: a
- *  boundary lands only when the act itself is named and forbidden — naming it
- *  as one example of a category ("irreversible or outward-facing") hands the
- *  category call to the reader, and 3/3 readers made that call the other way.
- *  Second, whatever it says, guidance is not a floor (ADR 0013 / 0035,
- *  CONTEXT.md 「床(Floor)」): a boundary that must hold goes in the
- *  machine-read fields below, in a protected workspace, or in the review flag.
+ *  `guidance` is prose injected into the agent's system prompt at spawn, and
+ *  it is read literally: a boundary lands only when the act itself is named
+ *  and forbidden — offering it as one example of a category ("irreversible or
+ *  outward-facing") hands the category call to the reader, and 3/3 readers
+ *  made that call the other way (issue #489, 2026-08-25 の再計測;
+ *  `docs/real-environment-trial.md`). However it is written, guidance is never
+ *  a floor (ADR 0013 / 0035, CONTEXT.md 「床(Floor)」): a boundary that must
+ *  hold goes in the machine-read fields below, in a protected workspace, or in
+ *  the review flag.
  *  `assignable_to` (issue #11) is a machine-enforced delegation allowlist —
  *  confused-deputy prevention: a decompose child assigned outside this list
  *  converts to an approval question rather than registering (ADR 0002).
