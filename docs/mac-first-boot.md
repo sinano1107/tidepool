@@ -126,17 +126,25 @@ npm install
 **Inside the VM**, from the checkout you just made:
 
 ```bash
-cd ~/tidepool && pwd && claude
+cd ~/tidepool && pwd && node scripts/seed-claude-trust.mjs ~/tidepool
 ```
 
-Check that `pwd` printed the `/home/…` path, not `/Users/…`. Then, in `claude`: accept
-"Yes, I trust this folder", run `/login` and finish the browser login, dismiss any what's-new
-screen so the prompt is visible, and quit.
+Check that `pwd` printed the `/home/…` path, not `/Users/…`. The seed script writes
+`hasTrustDialogAccepted: true` into `~/.claude.json` for this cwd (issue #442), so the board's
+`claude --safe-mode` usage scrape never hits the interactive folder-trust dialog. Then log the VM's
+own CLI in:
+
+```bash
+claude
+```
+
+In `claude`: run `/login` and finish the browser login, dismiss any what's-new screen so the
+prompt is visible, and quit.
 
 The `/login` here is the VM's own — the login on your Mac is not copied into the VM, and the
 board's worker sessions and the board's own calls all run on this one.
 
-Trust the checkout on the Mac instead of in the VM, or skip this step, and the board starts but
+Run the seed script on the Mac instead of in the VM, or skip this step, and the board starts but
 never picks anything up: its usage check stops at the trust dialog, which the board reads as a
 fail-closed throttle. The WebUI shows "usage check unavailable" and cannot tell you that trust is
 the cause.

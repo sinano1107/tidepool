@@ -42,7 +42,15 @@ Both need an **interactive browser login** — cannot be done non-interactively 
 
 Note the split since issue #50 / ADR 0024: this human `gh auth` only serves the **deploy tooling** (the `git pull` on `/mnt/ssd/tidepool` and `/mnt/ssd/tidepool-registry`). The **board's own** GitHub operations (push / PR / merge / issue / registry push) run as the machine user via `TIDEPOOL_GITHUB_TOKEN_FILE` (step 5) and work with the human logged out.
 
-**Also trust the board's own cwd once, interactively** (issue #81 / ADR-0028): the hourly usage throttle scrapes `/usage` from an *interactive* `claude --safe-mode` session run in `/opt/tidepool`, and the interactive TUI shows a folder-trust gate ("Is this a project you trust?") plus one-time onboarding modals that block the input prompt until dismissed. Once, as masaki: `ssh $PI`, then `cd /opt/tidepool && claude`, accept "Yes, I trust this folder", dismiss any what's-new/onboarding modal, and quit. This persists in `~/.claude.json` (`projects["/opt/tidepool"].hasTrustDialogAccepted: true`, home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`). Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry. (A dismissed what's-new can re-appear after a `claude` update; same one-time fix.)
+**Also seed the board's own cwd trust** (issue #81 / ADR-0028, issue #442): the hourly usage throttle scrapes `/usage` from an *interactive* `claude --safe-mode` session run in `/opt/tidepool`, and the interactive TUI shows a folder-trust gate ("Is this a project you trust?") that blocks the input prompt until accepted. After the `gh auth login` step above, run the seed script over ssh — it arrives with the deploy, so no separate copy step is needed:
+
+```bash
+ssh $PI 'node /opt/tidepool/scripts/seed-claude-trust.mjs /opt/tidepool'
+```
+
+This merges `projects["/opt/tidepool"].hasTrustDialogAccepted: true` into `~/.claude.json` (home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`) without touching anything else in the file. Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry.
+
+The what's-new/onboarding modal is a **separate** gate the seed does not touch — it still needs a one-time interactive dismissal: `ssh $PI`, then `cd /opt/tidepool && claude`, dismiss the modal, and quit. (It can re-appear after a `claude` update; same one-time fix.)
 
 ## 4b. Worker sandbox dependencies (bubblewrap + socat)
 

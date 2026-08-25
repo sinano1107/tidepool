@@ -397,6 +397,10 @@ describe("npm run init-registry", () => {
     expect(guide).not.toContain("Publish the sandbox");
     expect(guide.indexOf("## Stage two")).toBeLessThan(guide.indexOf("npm run github-login"));
 
+    // #442: trust is seeded, not accepted interactively
+    expect(guide).not.toContain("I trust this folder");
+    expect(guide).toContain("node scripts/seed-claude-trust.mjs");
+
     const orderedSteps = [
       "## Prepare the registry",
       "gh repo create",
