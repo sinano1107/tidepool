@@ -3,6 +3,13 @@
 This covers a purely-local board on your own Apple Silicon Mac, ending with your first task
 completed against a local `trial` workspace. Budget about 30 minutes.
 
+> **Status (2026-08-25):** on the current `main`, a board started this way does **not** pick up
+> worker tasks. macOS has no worker container mechanism that passes the container contract
+> (issue #465), so pickup stays stopped and the WebUI says so; triage and the board's own AI
+> calls still work. The route being measured is running the board inside a Linux VM on the Mac
+> (ADR 0100, issue #476). This document is rewritten once that lands — until then, "First task"
+> below cannot be reached.
+
 ## Prerequisites
 
 - An Apple Silicon Mac.
