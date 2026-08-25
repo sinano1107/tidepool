@@ -32,9 +32,13 @@ ssh masaki@100.78.52.97 'cat > /opt/tidepool/_cu.mjs <<"EOF"
 import { mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
 import { ClaudeCodeWorker } from "./src/claude-worker.ts"; import { openDb } from "./src/db.ts";
 import { SystemClock } from "./src/clock.ts"; import { parseUsage } from "./src/usage.ts";
+import { WorkerContainers } from "./src/worker-container.ts";
+import { containerRuntimeFor } from "./src/cgroup-container.ts";
 const w = new ClaudeCodeWorker({ db: openDb(":memory:"), clock: new SystemClock(),
-  registryDir: "/mnt/ssd/tidepool-registry", agent: "tako", workspace: "sandbox",
-  mcpUrl: "http://127.0.0.1:4589/mcp", logDir: mkdtempSync(join(tmpdir(),"cu-")) });
+  containers: new WorkerContainers(containerRuntimeFor(process.platform)),
+  registry: { dir: "/mnt/ssd/tidepool-registry", mode: "remote" },
+  agent: "tako", workspace: "sandbox", workspacesDir: "/mnt/workspaces",
+  mcpUrl: "http://127.0.0.1:4590/mcp", logDir: mkdtempSync(join(tmpdir(),"cu-")) });
 const raw = await w.checkUsage();
 console.log("raw null?", raw === null);
 if (raw) { console.log(JSON.stringify(parseUsage(raw, new Date()))); console.log(raw); }
@@ -42,6 +46,29 @@ process.exit(0);
 EOF
 cd /opt/tidepool && node --import tsx _cu.mjs; rm -f /opt/tidepool/_cu.mjs'
 ```
+
+`ClaudeWorkerOptions` は増えるので、`TypeError: Cannot read properties of undefined` が出たら
+`buildWorkerOptions`(`src/server-options.ts`)が今どの組を渡しているかを見て揃える —— 上は
+2026-08-25 時点の形。`registry` は `{dir, mode}` の組(ADR 0052)、`containers` は ADR 0099 の
+worker 容器 supervisor で、どちらも欠けるとコンストラクタが即死する。
+
+**永続 fail-closed かどうかは、盤面に残っている行と突き合わせて決める。** 上の直接実行が
+きれいにパースできても、`throttle_state` には落ちた時の行が残ったままになる —— この状態が
+更新されるのは次の pickup 試行だけなので、**盤面が pause 中だと表示だけ fail-closed のまま
+張り付く**(一過性の失敗と書式ドリフトの見分けがつかなくなる箇所)。Pi に `sqlite3` は無いので:
+
+```bash
+ssh masaki@100.78.52.97 'cat > /opt/tidepool/_ts.mjs <<"EOF"
+import { openDb } from "./src/db.ts";
+const db = openDb("/opt/tidepool/data/board.sqlite");
+console.log(JSON.stringify(db.prepare("select * from throttle_state where id = 1").all()));
+process.exit(0);
+EOF
+cd /opt/tidepool && node --import tsx _ts.mjs; rm -f /opt/tidepool/_ts.mjs'
+```
+
+`observed_at` が落ちた瞬間を指し、直接実行は通る → **一過性**。両方落ちる → 書式ドリフトなり
+モーダルなりが今も居る。前者の復旧は unpause して pickup を1回走らせるだけでよい。
 
 `raw null? true` → the scrape itself failed (modal / marker / timeout — one of the first three causes); inspect the printed raw to see which. `raw` non-null but `parseUsage` returns nulls → a renderer or format-drift problem (last two causes). It must run in `/opt/tidepool` (the trusted, service cwd) — the `cd` above handles that.
 
