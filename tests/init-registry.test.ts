@@ -397,16 +397,15 @@ describe("npm run init-registry", () => {
     expect(guide).not.toContain("Publish the sandbox");
     expect(guide.indexOf("## Stage two")).toBeLessThan(guide.indexOf("npm run github-login"));
 
-    // #442: trust is seeded, not accepted interactively
+    // #442: trust is seeded, not accepted interactively — and #484 moved the
+    // seeding into the installer, so it is no longer a step the reader takes.
     expect(guide).not.toContain("I trust this folder");
-    expect(guide).toContain("node scripts/seed-claude-trust.mjs");
 
     const orderedSteps = [
-      "## Prepare the registry",
-      "gh repo create",
-      "git clone https://github.com/YOUR_GITHUB_LOGIN",
-      "npm run init-registry",
-      "npm start",
+      "scripts/mac-install.sh | bash",
+      "gh auth login",
+      "claude auth login",
+      "caffeinate -i -s limactl shell tidepool",
       "## Create a trial workspace",
       "## First task",
     ];

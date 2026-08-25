@@ -39,7 +39,7 @@ The goal is any organisation's work, not only software. Today's constraint is "t
 
 ## Getting started
 
-A purely local board on an Apple Silicon Mac, first task completed in about 30 minutes: [`docs/mac-first-boot.md`](./docs/mac-first-boot.md). You need Node 22, the `claude` CLI logged in, `gh` logged in with SSH access to GitHub, and a git identity configured.
+A purely local board on an Apple Silicon Mac, first task completed in about 30 minutes with one command: [`docs/mac-first-boot.md`](./docs/mac-first-boot.md). You need an Apple Silicon Mac, Homebrew, a GitHub account and a Claude subscription. The board runs in a Linux VM the installer creates, so Node, the `claude` CLI and `gh` go inside the VM — nothing but Lima is installed on the Mac.
 
 ## Roadmap
 
