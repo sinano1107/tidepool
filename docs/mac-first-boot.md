@@ -66,8 +66,8 @@ The `claude` CLI:
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-It installs into `~/.local/bin`, so open a new shell — or `export PATH="$HOME/.local/bin:$PATH"` —
-before the next step, and make that permanent in your shell's startup file.
+It installs into `~/.local/bin`: put `export PATH="$HOME/.local/bin:$PATH"` in your shell's
+startup file and reopen the shell before the next step.
 
 Then log `gh` in and set the git identity the VM will commit with:
 
@@ -107,7 +107,7 @@ Expect `0` from each.
 
 ## Clone Tidepool and install
 
-In the VM, in the VM's own home:
+In the VM's own home:
 
 ```bash
 git clone https://github.com/sinano1107/tidepool.git ~/tidepool
