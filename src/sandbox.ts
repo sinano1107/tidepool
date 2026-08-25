@@ -490,8 +490,8 @@ const BWRAP_PROBE = "--ro-bind / / --dev /dev -- /bin/true".split(" ");
  *  reproduces that write sequence. 実測 2026-08-25(Ubuntu 26.04 / bwrap
  *  0.11.1): `bwrap-userns-restrict` profile が載っていると rung 1 は 0 で通る
  *  のに(偽陽性)この段は `write failed /proc/self/uid_map` で落ちる。
- *  文字列で持つのは、手順書(docs/mac-first-boot.md)の verify 行と目で突き合わ
- *  せられる形を保つため。 */
+ *  文字列で持つのは、テンプレート(lima/tidepool.yaml)の system provision と目で
+ *  突き合わせられる形を保つため。 */
 const BWRAP_NESTED_USERNS_PROBE =
   "--ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-user --cap-drop ALL --new-session --die-with-parent -- unshare -Ur /bin/true".split(
     " ",
@@ -540,8 +540,7 @@ export function checkSandboxCapability(
           "confines bwrap's children on this host (the Ubuntu >= 24.04 default), and the CLI's " +
           "sandbox needs that nested namespace. Turn off both the " +
           "kernel.apparmor_restrict_unprivileged_userns sysctl and the bwrap-userns-restrict " +
-          'AppArmor profile — see "Let the worker sandbox nest a user namespace" in ' +
-          "docs/mac-first-boot.md",
+          "AppArmor profile — the two commands are the system provision in lima/tidepool.yaml",
       };
     }
     if (!runOk("socat", SOCAT_PROBE)) {

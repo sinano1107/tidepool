@@ -32,8 +32,8 @@ Worker-facing dev/test (worker containers, reclaim, Containment) — the contrac
 the board for real — happens on the Mac in the Lima VM, not on the Pi. Creating the VM and installing
 its tools is [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't repeat it here.
 
-- Keep the checkout on the VM's own disk (`~/tidepool`) and `cd` right after `limactl shell` —
-  see mac-first-boot's "Every VM shell starts with `cd`" for why.
+- Keep the checkout on the VM's own disk (`~/tidepool`) and `cd` right after `limactl shell`:
+  the shell opens in the Mac's current directory, mounted read-only inside the VM.
 - Run `npm run canary:container` under a `Delegate=yes` user scope
   (`systemd-run --user --scope -p Delegate=yes -- npm run canary:container`); a bare `limactl shell`
   session stops at the preflight check.
