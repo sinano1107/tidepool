@@ -23,13 +23,14 @@ export const HeadVsReorder = () => (
   </div>
 );
 
-// Skipped rows render dashed — the reason always names why, never a bare
-// "skipped": pause, fail-closed throttle, and a known resume time.
+// Skipped rows render dashed — skipReason names which kind of resource is
+// holding this row, never that resource's name; omit it and the row says just
+// "skipped".
 export const Skipped = () => (
   <div style={column}>
-    <QueueItem position={1} task={{ id: 'tp-0147', title: 'Pause pickup handoff', assignee: 'reef-crab' }} skipped skipReason="pickup paused" />
-    <QueueItem position={2} task={{ id: 'tp-0148', title: 'Add usage-limit gate', assignee: 'anemone' }} skipped skipReason="usage check unavailable" />
-    <QueueItem position={3} task={{ id: 'tp-0149', title: 'Docs sweep for the settings drilldown', assignee: 'shako' }} skipped skipReason="resumes 06:12" />
+    <QueueItem position={1} task={{ id: 'tp-0147', title: 'Backfill the registry index', assignee: 'reef-crab' }} skipped skipReason="workspace" />
+    <QueueItem position={2} task={{ id: 'tp-0148', title: 'Add usage-limit gate', assignee: 'anemone' }} skipped skipReason="fable line" />
+    <QueueItem position={3} task={{ id: 'tp-0149', title: 'Docs sweep for the settings drilldown', assignee: 'shako' }} skipped />
   </div>
 );
 
