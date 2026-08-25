@@ -18,7 +18,7 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 /** 参照ゼロ・既定でもない盤面の事実 —— 拒否の門を跨がない既定の refs。 */
-const NO_REFERENCES = { unsettledTaskCount: 0 };
+const NO_REFERENCES = { unsettledTaskCount: 0, auditorName: "fugu" };
 
 describe("deleteAgent: 正常系(issue #205 / ADR 0087 決定1)", () => {
   it("agents/<name>.md を committed main から除去するコミットが着地し、loadRegistry から消える", async () => {
@@ -58,7 +58,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     await expect(
       deleteAgent(
         { name: "deckhand", confirm: true },
-        { registry: { dir: registryDir, mode: "purely-local" }, unsettledTaskCount: 2 },
+        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, unsettledTaskCount: 2 },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -83,6 +83,43 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
       reasons: [{ code: "board_default" }],
+    });
+  });
+
+  it("盤面の Auditor は confirm があっても消せない(ADR 0087 決定3 訂正 / issue #376)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      deleteAgent(
+        { name: "deckhand", confirm: true },
+        {
+          registry: { dir: registryDir, mode: "purely-local" },
+          ...NO_REFERENCES,
+          auditorName: "deckhand",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "board_auditor" }],
+    });
+  });
+
+  it("既定 agent と Auditor が同名のときは両方の理由が積まれる(issue #376)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      deleteAgent(
+        { name: "deckhand", confirm: true },
+        {
+          registry: { dir: registryDir, mode: "purely-local" },
+          ...NO_REFERENCES,
+          defaultAgentName: "deckhand",
+          auditorName: "deckhand",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "board_default" }, { code: "board_auditor" }],
     });
   });
 

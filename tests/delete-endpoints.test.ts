@@ -31,7 +31,7 @@ it("DELETE /api/agents/:name は名前と confirm を verb へ渡し、200 を�
   expect(calls).toEqual([{ name: "tako", confirm: true }]);
 });
 
-it("DELETE /api/agents/:name は未決着タスクの件数と既定 agent 名を参照検査の事実として渡す", async () => {
+it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名・Auditor 名を参照検査の事実として渡す(issue #376)", async () => {
   const refs: AgentDeletionReferences[] = [];
   t = await bootTidepool({
     workerId: "tako",
@@ -46,7 +46,7 @@ it("DELETE /api/agents/:name は未決着タスクの件数と既定 agent 名�
 
   await api(t.baseUrl, "DELETE", "/api/agents/fugu", { confirm: true });
 
-  expect(refs).toEqual([{ unsettledTaskCount: 2, defaultAgentName: "tako" }]);
+  expect(refs).toEqual([{ unsettledTaskCount: 2, defaultAgentName: "tako", auditorName: "fugu" }]);
 });
 
 it("DELETE /api/agents/:name は確認なしの拒否を 409 confirm_required に写す", async () => {
