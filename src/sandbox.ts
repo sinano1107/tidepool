@@ -482,7 +482,7 @@ const SEATBELT_PROBE = ["-p", "(version 1)(allow default)", "/usr/bin/true"];
  *  an unprivileged user namespace and a bind mount. bwrap being *installed* is
  *  not the question (ADR 0033 調査時の既知問題: AppArmor / userns 無効化で入って
  *  いても動かない), so the probe runs it. */
-const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true"];
+const BWRAP_PROBE = "--ro-bind / / --dev /dev -- /bin/true".split(" ");
 /** Linux, rung 2: the same probe *nested* — the CLI's sandbox runs
  *  `bwrap … --unshare-pid --unshare-user --cap-drop ALL --proc /proc -- bash -c
  *  "<apply-seccomp> …"`, and apply-seccomp does `unshare(CLONE_NEWUSER)` then

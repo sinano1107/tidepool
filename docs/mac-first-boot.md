@@ -95,8 +95,8 @@ sudo ln -s /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/disable/ && sud
 
 Skip either line and the board stops pickup with a containment question before a worker ever runs,
 but the two questions read differently. Skip the first and it says `bwrap` could not create a
-sandbox at all (`bwrap: setting up uid map: Permission denied`). Skip the second and it says a user
-namespace nested inside `bwrap` is capability-restricted, and points back at this section.
+sandbox at all. Skip the second and it says a user namespace nested inside `bwrap` is
+capability-restricted, and points back at this section.
 
 Verify:
 
