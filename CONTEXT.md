@@ -360,7 +360,7 @@ Throttle の fail-closed(「使用量が読めない」)とは**別の答え**�
 
 ## ホストの形(Host form)
 
-盤面が走るホストが**本人のマシン**か**無人常駐ホスト**か、の区別。動力の認証の出どころ(動力の認証 参照、ADR 0090)を決めるのはこの軸であり、platform(kernel — Worker 容器の機構前提を決める軸、ADR 0099 決定5)とは**直交する**(2026-08-25 の grilling、issue #473 / ADR 0100)。本人の Mac の上に Linux VM を置いてその中で盤面を動かすなら、ホストの形は本人のマシン、platform は linux — 認証は VM 内で本人が `/login` した CLI(失効の検知は出どころを見ない 401 の機械判定なので、日常使いでない CLI でも盤面の question で本人に届く)、容器は Linux の機構をそのまま使う。「Mac 上の盤面」は物理マシンの話であって platform の話ではない。
+盤面が走るホストが**本人のマシン**か**無人常駐ホスト**か、の区別。動力の認証の出どころ(動力の認証 参照、ADR 0090)を決めるのはこの軸であり、platform(kernel — Worker 容器の機構前提を決める軸、ADR 0099 決定5)とは**直交する**(2026-08-25 の grilling、issue #473 / ADR 0100)。本人の Mac の上に Linux VM を置いてその中で盤面を動かすなら、ホストの形は本人のマシン、platform は linux — 認証は VM 内で本人が `/login` した CLI(失効の検知は出どころを見ない 401 の機械判定なので、日常使いでない CLI でも盤面の question で本人に届く)、容器は Linux の機構をそのまま使う。「Mac 上の盤面」は物理マシンの話であって platform の話ではない。開発機での Linux 側の dev/test もこの VM で行う(issue #475、`docs/agents/machine-setup.md`)。
 
 _Avoid_: Mac の盤面 = macOS の盤面(2つの軸を1語に潰す)
 
