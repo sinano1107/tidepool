@@ -109,7 +109,7 @@ describe("npm run init-registry", () => {
     });
     expect(registry.authority.standard).toEqual({
       name: "standard",
-      guidance: "Prefer reversible work and escalate decisions outside the stated authority.",
+      guidance: "",
       assignable_to: ["*"],
       allowed_workspaces: ["*"],
       merge: "escalate",
