@@ -69,7 +69,9 @@ export function createMoonshotCliAuthCheck(
       }
       throw err;
     }
-    return runProbe(command, ["--max-turns", "1", "--max-budget-usd", "0.01", "--safe-mode"], env);
+    // 予算は kimi-k3[1m] 最小1ターンの実測 $0.057〜$0.122(2026-08-24 ライブ実測、issue #447)
+    // の約2倍。$0.01 では probe が必ず error_max_budget_usd で止まり quarantine 解除不能になる(issue #466)
+    return runProbe(command, ["--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"], env);
   };
 }
 
@@ -91,6 +93,11 @@ async function runProbe(
   }
   if (isCliAuthFailureEnvelope(envelope)) {
     return { status: "unauthorized", reason: "API returned 401" };
+  }
+  // 予算キャップで止まった probe は「認証できなかった」ではなく「試す前に止まった」。
+  // 一般の unknown と区別できる文言にして解除拒否(409)の理由が追えるようにする(issue #466)
+  if (envelope.subtype === "error_max_budget_usd") {
+    return { status: "unknown", reason: "probe exceeded its budget cap before authenticating" };
   }
   if (observed.exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
     return { status: "authenticated" };
