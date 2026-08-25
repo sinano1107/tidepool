@@ -32,8 +32,8 @@ Worker-facing dev/test — the contract suite and running the board for real —
 in the Lima VM, not on the Pi. Creating the VM and installing its tools is
 [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't repeat it here.
 
-- Keep the checkout on the VM's own disk (`~/tidepool`), never under the Mac home's read-only
-  mount — `cd` right after `limactl shell` (see mac-first-boot's "Every VM shell starts with `cd`").
+- Keep the checkout on the VM's own disk (`~/tidepool`) and `cd` right after `limactl shell` —
+  see mac-first-boot's "Every VM shell starts with `cd`" for why.
 - Run `npm run canary:container` under a `Delegate=yes` user scope
   (`systemd-run --user --scope -p Delegate=yes -- npm run canary:container`); a bare `limactl shell`
   session stops at the preflight check.
