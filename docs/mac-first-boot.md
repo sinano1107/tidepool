@@ -35,9 +35,10 @@ It is also safe to run on a finished setup as a "check my setup" command.
 
 ### The two logins
 
-The installer pauses twice and opens a browser:
+The installer pauses twice, each time giving you a URL to open in your Mac's browser:
 
-1. `gh auth login` — authorizes the VM's `gh` against your GitHub account.
+1. `gh auth login` — authorizes the VM's `gh` against your GitHub account (it also shows a
+   one-time code to enter on that page).
 2. `claude auth login` — logs the VM's `claude` in with your Claude subscription.
 
 Both are the **VM's own** logins. Whatever you are logged into on the Mac is not copied into the
@@ -51,7 +52,7 @@ taken from your GitHub account, and a private `tidepool-registry` repository is 
 The installer prints this line when it finishes. Run it from the **Mac**:
 
 ```bash
-caffeinate -i -s limactl shell tidepool -- ~/tidepool/scripts/vm-board.sh
+caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board.sh'
 ```
 
 Run it in the foreground. `caffeinate` keeps the Mac from idle-sleeping while the board runs
@@ -78,7 +79,7 @@ Updating is your decision, never a side effect of starting the VM. When you want
 `main`, stop the board and run:
 
 ```bash
-limactl shell tidepool --workdir ~/tidepool -- bash -lc 'git pull && npm install'
+limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'
 ```
 
 ## Checklist

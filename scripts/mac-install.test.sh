@@ -126,7 +126,7 @@ case "$sub" in
         echo "Existing Name"
         echo "existing@example.com" ;;
       "gh api user"*)
-        printf 'testlogin\t4242\tTest User\n' ;;
+        printf 'testlogin\t4242\tTest $User\n' ;;
       "gh repo view "*)
         [ "$REGISTRY_REPO_EXISTS" = "1" ] || exit 1 ;;
       *"test -d"*)
@@ -256,8 +256,8 @@ vm(tidepool) claude auth login
 vm(tidepool) cd ~/tidepool && node scripts/seed-claude-trust.mjs ~/tidepool
 vm(tidepool) gh api user --jq '[.login, .id, (.name // \"\")] | @tsv'
 vm(tidepool) git config --global user.name && git config --global user.email
-vm(tidepool) git config --global user.name \"Test User\"
-vm(tidepool) git config --global user.email \"4242+testlogin@users.noreply.github.com\"
+vm(tidepool) git config --global user.name Test\\ \\\$User
+vm(tidepool) git config --global user.email 4242+testlogin@users.noreply.github.com
 vm(tidepool) gh repo view testlogin/tidepool-registry
 vm(tidepool) gh repo create testlogin/tidepool-registry --private
 vm(tidepool) source ~/.tidepool/env && test -d \"\$TIDEPOOL_REGISTRY/.git\"
@@ -265,9 +265,9 @@ vm(tidepool) source ~/.tidepool/env && git clone https://github.com/testlogin/ti
 vm(tidepool) source ~/.tidepool/env && git -C \"\$TIDEPOOL_REGISTRY\" ls-remote --heads origin
 vm(tidepool) source ~/.tidepool/env && cd ~/tidepool && npm run init-registry" "$log"
 assert_contains "fresh: prints the start line" \
-  "caffeinate -i -s limactl shell tidepool -- ~/tidepool/scripts/vm-board.sh" "$output"
+  "caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board.sh'" "$output"
 assert_contains "fresh: prints the update line" \
-  "limactl shell tidepool --workdir ~/tidepool -- bash -lc 'git pull && npm install'" "$output"
+  "limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'" "$output"
 assert_contains "fresh: prints the stop line" \
   "limactl shell tidepool -- systemctl --user stop tidepool-board.scope" "$output"
 assert_contains "fresh: points at the first-boot bootstrap URL" "bootstrap" "$output"
@@ -290,7 +290,8 @@ assert_not_contains "resume: skips the gh login" "gh auth login" "$log"
 assert_not_contains "resume: skips the claude login" "claude auth login" "$log"
 assert_not_contains "resume: skips creating the registry repository" "gh repo create" "$log"
 assert_not_contains "resume: skips cloning the registry" "git clone" "$log"
-assert_not_contains "resume: leaves the existing git identity alone" 'user.name "' "$log"
+assert_contains "resume: still sets up git credentials (a run may have stopped between login and setup-git)" "gh auth setup-git" "$log"
+assert_not_contains "resume: leaves the existing git identity alone" "user.name Test" "$log"
 assert_contains "resume: still seeds trust" "node scripts/seed-claude-trust.mjs" "$log"
 assert_contains "resume: still seeds the unseeded registry" "npm run init-registry" "$log"
 
@@ -324,11 +325,11 @@ REGISTRY_SEEDED=1
 run_install
 assert_eq "re-run: exits 0" "0" "$rc"
 for mutating in "brew install" "limactl start" "gh auth login" "claude auth login" \
-  'user.name "' "gh repo create" "git clone" "npm run init-registry"; do
+  "user.name Test" "gh repo create" "git clone" "npm run init-registry"; do
   assert_not_contains "re-run: does not run [$mutating]" "$mutating" "$log"
 done
 assert_contains "re-run: still prints the start line" \
-  "caffeinate -i -s limactl shell tidepool -- ~/tidepool/scripts/vm-board.sh" "$output"
+  "caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board.sh'" "$output"
 
 # --- instance name and template overrides -----------------------------------
 
@@ -341,7 +342,7 @@ assert_not_contains "override: never names the default instance in limactl args"
 assert_contains "override: starts the named instance from the given template" \
   "limactl start --tty=false --progress --name other file:///tmp/branch.yaml" "$log"
 assert_contains "override: prints the start line for the named instance" \
-  "caffeinate -i -s limactl shell other -- ~/tidepool/scripts/vm-board.sh" "$output"
+  "caffeinate -i -s limactl shell other -- bash -lc '~/tidepool/scripts/vm-board.sh'" "$output"
 
 # --- curl | bash ------------------------------------------------------------
 # stdin is a pipe, so the installer reattaches to /dev/tty for the two

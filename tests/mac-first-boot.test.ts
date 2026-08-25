@@ -39,10 +39,10 @@ describe("Mac の初回起動手順書", () => {
       "Mac で打つ 1 コマンド",
       "curl -fsSL https://raw.githubusercontent.com/sinano1107/tidepool/main/scripts/mac-install.sh | bash",
     ],
-    ["起動の一行", "caffeinate -i -s limactl shell tidepool -- ~/tidepool/scripts/vm-board.sh"],
+    ["起動の一行", "caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board.sh'"],
     [
       "更新の一行",
-      "limactl shell tidepool --workdir ~/tidepool -- bash -lc 'git pull && npm install'",
+      "limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'",
     ],
   ])("%s を書いている", (_name, line) => {
     expect(guide).toContain(line);

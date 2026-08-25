@@ -67,10 +67,13 @@ ensure_vm() {
 ensure_gh_login() {
   if vm 'gh auth status' > /dev/null 2>&1; then
     log "gh is already logged in inside the VM."
-    return
+  else
+    log "Logging the VM's gh in — it gives you a URL and a one-time code to use in your Mac's browser. This is the VM's own login, not your Mac's."
+    vm 'gh auth login --git-protocol https --web'
   fi
-  log "Logging the VM's gh in — this opens a browser. It is the VM's own login, not your Mac's."
-  vm 'gh auth login --git-protocol https --web'
+  # Always: a run interrupted between the login and this step would otherwise
+  # skip both on resume, and the HTTPS clone of the private registry then
+  # fails. setup-git is idempotent.
   vm 'gh auth setup-git'
 }
 
@@ -79,7 +82,7 @@ ensure_claude_login() {
     log "claude is already logged in inside the VM."
     return
   fi
-  log "Logging the VM's claude in — this opens a browser too, and needs your Claude subscription."
+  log "Logging the VM's claude in — it gives you a URL to open in your Mac's browser, and needs your Claude subscription."
   vm 'claude auth login'
 }
 
@@ -103,8 +106,11 @@ ensure_git_identity() {
     log "The VM already has a git identity."
     return
   fi
-  vm "git config --global user.name \"$USER_NAME\""
-  vm "git config --global user.email \"$USER_ID+$LOGIN@users.noreply.github.com\""
+  # %q: the display name is whatever the GitHub profile says, and it lands
+  # inside a `bash -lc` string in the VM — quotes, `$` and backticks in it must
+  # stay text.
+  vm "git config --global user.name $(printf %q "$USER_NAME")"
+  vm "git config --global user.email $USER_ID+$LOGIN@users.noreply.github.com"
 }
 
 ensure_registry() {
@@ -132,7 +138,7 @@ ensure_registry() {
 print_next_steps() {
   log "Done. Start the board from this Mac with:"
   echo
-  echo "  caffeinate -i -s limactl shell $VM -- ~/tidepool/scripts/vm-board.sh"
+  echo "  caffeinate -i -s limactl shell $VM -- bash -lc '~/tidepool/scripts/vm-board.sh'"
   echo
   log "Leave it running in the foreground. The first boot prints a one-time bootstrap URL —"
   log "open that in your browser first, then the WebUI at http://127.0.0.1:4589."
@@ -142,7 +148,7 @@ print_next_steps() {
   echo
   log "To update Tidepool later (your decision, never automatic):"
   echo
-  echo "  limactl shell $VM --workdir ~/tidepool -- bash -lc 'git pull && npm install'"
+  echo "  limactl shell $VM -- bash -lc 'cd ~/tidepool && git pull && npm install'"
   echo
 }
 
