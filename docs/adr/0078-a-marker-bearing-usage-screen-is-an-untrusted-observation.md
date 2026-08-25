@@ -24,4 +24,4 @@ Consequences:
 
 残りの4つが揃って言っているのは**「端末ローカルの persisted seed がそのまま画面に出ている」**の一点で、`(rate limited` だけがそこから外れた唯一の項目だった。ゲートの粒度(画面全体)も置き場所(パーサ)も変えない — ADR 0030 の「per-model 行の不在は fail-closed の入力ではない」と同じ扱いに戻すだけである。
 
-あわせて、受け入れた残余(2)「マーカー文字列の変更はゲートが黙って外れる」の実例が観測された: CLI の非 rate-limit 版は大文字の `Could not refresh usage data` で、小文字始まりの `could not refresh` には**今日すでに一致していない**。これも headers seed(サーバー由来の数字)側なので読む側に倒すのが正しく、直さない。
+あわせて、受け入れた残余(2)「マーカー文字列の変更はゲートが黙って外れる」の実例が観測された: headers seed の非 rate-limit 版 `Could not refresh usage data` は大文字始まりで、**どの述語にも一致しない**。これも headers seed(サーバー由来の数字)側なので読む側に倒すのが正しく、直さない。小文字の `could not refresh` のほうは死んでいない —— persisted seed の接尾辞 `Showing last-known usage … (could not refresh)` に一致する。ただし同じ文字列が `Showing last-known usage` にも一致するので、この述語が単独で判定を決めることはない(冗長であって不一致ではない)。
