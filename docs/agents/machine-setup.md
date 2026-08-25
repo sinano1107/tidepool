@@ -28,8 +28,8 @@ Grill and spec in a design session; ticket and build in a build one.
 
 ## Linux dev/test in the Lima VM
 
-Worker-facing dev/test — the contract suite and running the board for real — happens on the Mac
-in the Lima VM, not on the Pi. Creating the VM and installing its tools is
+Worker-facing dev/test — the contract suite and running the board for real, for worker containers,
+reclaim and Containment — happens on the Mac in the Lima VM, not on the Pi. Creating the VM and installing its tools is
 [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't repeat it here.
 
 - Keep the checkout on the VM's own disk (`~/tidepool`) and `cd` right after `limactl shell` —
@@ -39,8 +39,9 @@ in the Lima VM, not on the Pi. Creating the VM and installing its tools is
   session stops at the preflight check.
 - `npm test` already runs on Linux in CI, so there's no need to run it in the VM too — the VM is
   for what CI doesn't cover: the contract suite, a real worker run, real CLI login.
-- The Pi stays production-only (real deploy, `tidepool.service`, `docs/real-environment-trial.md`);
-  don't make disposable checkouts there for dev/test anymore.
+- The Pi stays production-only: the real deploy (`docs/real-environment-trial.md`) and the contract
+  suite re-run the deploy-pi skill does after a kernel / systemd / CLI update on the Pi (ADR 0099
+  決定5 — that is production validation, not dev/test). Don't make checkouts there to test a change.
 
 ## If you skip this
 
