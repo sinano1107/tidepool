@@ -23,11 +23,12 @@ export const HeadVsReorder = () => (
   </div>
 );
 
-// Skipped rows render dashed — skipReason names the resource that can't take
-// this row (a bare tag, no resource name); omit it and the row says just "skipped".
+// Skipped rows render dashed — skipReason names which kind of resource is
+// holding this row, never that resource's name; omit it and the row says just
+// "skipped".
 export const Skipped = () => (
   <div style={column}>
-    <QueueItem position={1} task={{ id: 'tp-0147', title: 'Write board schema DDL', assignee: 'reef-crab' }} skipped skipReason="workspace" />
+    <QueueItem position={1} task={{ id: 'tp-0147', title: 'Backfill the registry index', assignee: 'reef-crab' }} skipped skipReason="workspace" />
     <QueueItem position={2} task={{ id: 'tp-0148', title: 'Add usage-limit gate', assignee: 'anemone' }} skipped skipReason="fable line" />
     <QueueItem position={3} task={{ id: 'tp-0149', title: 'Docs sweep for the settings drilldown', assignee: 'shako' }} skipped />
   </div>
