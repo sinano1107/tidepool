@@ -34,21 +34,17 @@ describe("Lima テンプレート", () => {
 });
 
 describe("Mac の初回起動手順書", () => {
-  it("Mac で打つ 1 コマンドを書いている", () => {
-    expect(guide).toContain(
+  it.each([
+    [
+      "Mac で打つ 1 コマンド",
       "curl -fsSL https://raw.githubusercontent.com/sinano1107/tidepool/main/scripts/mac-install.sh | bash",
-    );
-  });
-
-  it("起動の一行を書いている", () => {
-    expect(guide).toContain(
-      "caffeinate -i -s limactl shell tidepool -- ~/tidepool/scripts/vm-board.sh",
-    );
-  });
-
-  it("更新の一行を書いている", () => {
-    expect(guide).toContain(
+    ],
+    ["起動の一行", "caffeinate -i -s limactl shell tidepool -- ~/tidepool/scripts/vm-board.sh"],
+    [
+      "更新の一行",
       "limactl shell tidepool --workdir ~/tidepool -- bash -lc 'git pull && npm install'",
-    );
+    ],
+  ])("%s を書いている", (_name, line) => {
+    expect(guide).toContain(line);
   });
 });

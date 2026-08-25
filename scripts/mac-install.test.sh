@@ -99,7 +99,8 @@ sub="$1"; shift
 case "$sub" in
   list)
     echo "limactl list $*" >> "$CMD_LOG"
-    if [ "$INSTANCE_EXISTS" = "1" ]; then echo "$VM_NAME $INSTANCE_STATUS"; fi
+    [ "$INSTANCE_EXISTS" = "1" ] || exit 1
+    echo "$INSTANCE_STATUS"
     ;;
   start)
     echo "limactl start $*" >> "$CMD_LOG"
@@ -166,7 +167,6 @@ reset_case() {
   REGISTRY_REPO_EXISTS=0
   REGISTRY_CLONED=0
   REGISTRY_SEEDED=0
-  VM_NAME="tidepool"
   EXTRA_ENV=""
   STDIN_PIPE=0
 }
@@ -209,7 +209,6 @@ run_main() {
     REGISTRY_REPO_EXISTS="$REGISTRY_REPO_EXISTS" \
     REGISTRY_CLONED="$REGISTRY_CLONED" \
     REGISTRY_SEEDED="$REGISTRY_SEEDED" \
-    VM_NAME="$VM_NAME" \
     SCRIPT_DIR="$SCRIPT_DIR" \
     ${EXTRA_ENV} \
     bash -c 'set -euo pipefail; source "$SCRIPT_DIR/mac-install.sh"; main'
@@ -247,7 +246,7 @@ run_install
 assert_eq "fresh: exits 0" "0" "$rc"
 assert_eq "fresh: runs the whole sequence in order" "uname -m
 brew install lima
-limactl list --format {{.Name}} {{.Status}}
+limactl list --format {{.Status}} tidepool
 limactl start --tty=false --progress --name tidepool $DEFAULT_TEMPLATE_URL
 vm(tidepool) gh auth status
 vm(tidepool) gh auth login --git-protocol https --web
@@ -334,7 +333,6 @@ assert_contains "re-run: still prints the start line" \
 # --- instance name and template overrides -----------------------------------
 
 reset_case
-VM_NAME="other"
 EXTRA_ENV="TIDEPOOL_VM=other TIDEPOOL_TEMPLATE_URL=file:///tmp/branch.yaml"
 run_install
 assert_eq "override: exits 0" "0" "$rc"

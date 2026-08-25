@@ -54,7 +54,7 @@ ensure_lima() {
 
 ensure_vm() {
   local status
-  status="$(limactl list --format '{{.Name}} {{.Status}}' | awk -v n="$VM" '$1 == n { print $2 }')"
+  status="$(limactl list --format '{{.Status}}' "$VM" 2> /dev/null || true)"
   if [[ -z "$status" ]]; then
     log "Creating the VM '$VM' — this is the long part; provisioning progress follows."
     limactl start --tty=false --progress --name "$VM" "$TEMPLATE_URL"
