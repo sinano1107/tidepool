@@ -86,6 +86,45 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     });
   });
 
+  it("盤面の Auditor は confirm があっても消せない(ADR 0087 決定3 訂正 / issue #376)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      deleteAgent(
+        { name: "deckhand", confirm: true },
+        {
+          registry: { dir: registryDir, mode: "purely-local" },
+          ...NO_REFERENCES,
+          auditorName: "deckhand",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "board_auditor" }],
+    });
+
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeDefined();
+  });
+
+  it("既定 agent と Auditor が同名のときは両方の理由が積まれる(issue #376)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      deleteAgent(
+        { name: "deckhand", confirm: true },
+        {
+          registry: { dir: registryDir, mode: "purely-local" },
+          ...NO_REFERENCES,
+          defaultAgentName: "deckhand",
+          auditorName: "deckhand",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "board_default" }, { code: "board_auditor" }],
+    });
+  });
+
   it("profile の assignable_to に列挙されているだけの agent は消せる(ADR 0087 決定2)", async () => {
     const registryDir = await makeRegistry({
       "authority/standard.yaml":

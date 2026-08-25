@@ -186,14 +186,19 @@ export interface DeleteAgentInput {
 }
 
 /** 参照検査に要る**盤面側**の事実(ADR 0087 決定2/3)。registry からは読めない
- *  ので deps に同乗させる —— 束ねるのは API 層(db と既定 agent 名を既に持つ
- *  唯一の場所)で、判定と執行はこの verb の中に1箇所だけ置く。 */
+ *  ので deps に同乗させる —— 束ねるのは API 層(db・既定 agent 名・Auditor 名を
+ *  既に持つ唯一の場所)で、判定と執行はこの verb の中に1箇所だけ置く。 */
 export interface AgentDeletionReferences {
   /** この agent を assignee に持つ未決着タスクの件数。 */
   unsettledTaskCount: number;
   /** 盤面の既定 agent 名(ADR 0012)。一致すれば消せない —— 既定はポインタなので、
    *  指し先を消せば assignee 未指定のタスクが全部止まる。 */
   defaultAgentName?: string;
+  /** 盤面の Auditor 名(CONTEXT.md「Auditor」、既定 `fugu` — ADR 0089)。一致すれば
+   *  消せない —— 「消せない資源」は列挙ではなく盤面のポインタが指す先という規則で、
+   *  Auditor は既定 agent / 既定 workspace と同型の第3のポインタである
+   *  (ADR 0087 決定3 訂正 / issue #376)。 */
+  auditorName?: string;
 }
 
 export async function deleteAgent(
@@ -210,6 +215,7 @@ export async function deleteAgent(
     reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
   }
   if (deps.defaultAgentName === input.name) reasons.push({ code: "board_default" });
+  if (deps.auditorName === input.name) reasons.push({ code: "board_auditor" });
   if (reasons.length > 0) throw new DeletionBlockedError("agent", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("agent", input.name);
   commitToRegistry(
@@ -225,8 +231,8 @@ export async function deleteAgent(
 export type CreateAgentFn = (input: CreateAgentInput) => Promise<void>;
 /** 削除だけが2引数なのは、参照検査の事実が registry ではなく**盤面**の側にある
  *  ためである(ADR 0087 決定2/3)。合成 root は registry 由来の deps を束ね、
- *  API 層が db と既定 agent 名から `refs` を足す —— 判定はどちらでもなく verb の
- *  中で1回だけ起きる。 */
+ *  API 層が db・既定 agent 名・Auditor 名から `refs` を足す —— 判定はどちらでも
+ *  なく verb の中で1回だけ起きる。 */
 export type DeleteAgentFn = (
   input: DeleteAgentInput,
   refs: AgentDeletionReferences,

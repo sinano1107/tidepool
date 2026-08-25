@@ -980,13 +980,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      // 参照検査の事実はここで足す(ADR 0087 決定2/3): db と既定 agent 名を
-      // 両方持つのはこの層だけで、判定と執行は verb の中に1箇所ある
+      // 参照検査の事実はここで足す(ADR 0087 決定2/3): db・既定 agent 名・
+      // Auditor 名を持つのはこの層だけで、判定と執行は verb の中に1箇所ある
       await agentAdmin.delete(
         { name: req.params.name, ...parsed.data },
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
           defaultAgentName,
+          auditorName,
         },
       );
       res.json({});

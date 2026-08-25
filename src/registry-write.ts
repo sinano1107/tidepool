@@ -60,6 +60,7 @@ export class DeletionConfirmationRequiredError extends Error {
 export type DeletionBlockedReason =
   | { code: "unsettled_tasks"; count: number }
   | { code: "board_default" }
+  | { code: "board_auditor" }
   | { code: "referenced_by_agents"; agents: string[] };
 
 export class DeletionBlockedError extends Error {
@@ -78,6 +79,7 @@ function describeReason(reason: DeletionBlockedReason): string {
     return `${reason.count} unsettled task(s) still reference it`;
   }
   if (reason.code === "board_default") return "it is the board's default";
+  if (reason.code === "board_auditor") return "it is the board's Auditor";
   return `authority of agent(s): ${reason.agents.join(", ")}`;
 }
 
