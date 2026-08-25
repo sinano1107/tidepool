@@ -20,7 +20,7 @@ Consequences:
 
 ## 追記: `(rate limited` はマーカーではなかった(2026-08-25、issue #492)
 
-**全体ゲートのマーカー一覧から `(rate limited` を落とす。** 本文が実装時に課した「バンドルを grep で確認し、違えばリストを両版対応に広げる」を実行した結果、答えは広げるのではなく**狭める**ことだった。CLI バンドル(Pi の 2.1.221 と手元の 2.1.239 / 2.1.241 / 2.1.243 / 2.1.245 で同一)の実読で `(rate limited` の出現は2箇所しかなく、seed 全体が stale な変種は**必ず `Showing last-known usage` を伴う**。伴わないほうは `Per-model breakdown unavailable (rate limited — try again in a moment)` — per-model の内訳だけが取れなかった局所の一行で、同じ画面の session / week はサーバー由来の新鮮な値で描かれている。それを全体 null 化するのは、本文が退けた fail-open の逆側の誤りであり、本番 Pi を永続 fail-closed に落とした(issue #492 に実機画面と再現)。
+**全体ゲートのマーカー一覧から `(rate limited` を落とす。** 本文が実装時に課した「バンドルを grep で確認し、違えばリストを両版対応に広げる」を実行した結果、答えは広げるのではなく**狭める**ことだった。CLI バンドル(Pi の 2.1.221 と手元の 2.1.239 / 2.1.241 / 2.1.243 / 2.1.245 で同一)の実読で `(rate limited` の出現は2箇所しかなく、seed 全体が stale な変種は**必ず `Showing last-known usage` を伴う**。伴わないほうは `Per-model breakdown unavailable (rate limited — try again in a moment)` — per-model の内訳だけが取れなかった局所の一行で、同じ画面の session / week は端末ローカルの最終既知値ではなく**サーバー由来(直前レスポンスのヘッダ)の値**で描かれている。鮮度そのものは保証されない — headers seed が古い可能性は本文の被害上限(1サイクル + ペース線 + 100% キャップ)が受ける、受け入れた残余である。それを全体 null 化するのは、本文が退けた fail-open の逆側の誤りであり、本番 Pi を永続 fail-closed に落とした(issue #492 に実機画面と再現)。
 
 残りの4つが揃って言っているのは**「端末ローカルの persisted seed がそのまま画面に出ている」**の一点で、`(rate limited` だけがそこから外れた唯一の項目だった。ゲートの粒度(画面全体)も置き場所(パーサ)も変えない — ADR 0030 の「per-model 行の不在は fail-closed の入力ではない」と同じ扱いに戻すだけである。
 
