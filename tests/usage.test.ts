@@ -53,8 +53,7 @@ it.each([
 
 // 本番 Pi で永続 fail-closed を踏んだときの実機画面(2026-08-25 09:41:49 Asia/Tokyo、
 // issue #492)。per-model の内訳だけが取れず、session / week はサーバー由来の新鮮な
-// 値で描かれている。`Per-model breakdown unavailable` は fable ラベルの代わりに出るので
-// week ブロックの末尾に落ちるが、%used も Resets も持たないので week の読みを汚さない。
+// 値で描かれている。fable ラベルは出ないので fable は null。
 const PER_MODEL_RATE_LIMITED_SCREEN = `Current session
 ██████████████████████████████████████████████████ 100% used
 Resets 8pm (Asia/Tokyo)
