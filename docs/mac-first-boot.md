@@ -23,7 +23,9 @@ further down, not on the Mac.
 limactl start --name tidepool template:default
 ```
 
-The default template is Ubuntu 26.04 LTS with 4 CPUs, 4 GiB of memory and a 100 GiB disk, running
+This document was measured with Lima 2.2.0, `claude` 2.1.243 and Node 22.23 — a newer Lima,
+Ubuntu image or CLI is a reason to walk it again. The default template is Ubuntu 26.04 LTS with
+4 CPUs, 4 GiB of memory and a 100 GiB disk, running
 on Apple's Virtualization framework (`vmType: vz`). The first start downloads the image (941 MB);
 later starts do not.
 
@@ -37,7 +39,7 @@ limactl shell tidepool
 
 `limactl shell` opens in the same path as the Mac's current directory, and your Mac home is
 mounted inside the VM at `/Users/<your-mac-username>` **read-only**. A shell that starts there
-cannot write, and that mount is not where board state belongs anyway.
+cannot write.
 
 So begin every VM shell by moving to the VM's own home and checking where you landed:
 
@@ -83,27 +85,33 @@ does the same afterwards) — the clones below use HTTPS, and the VM has no SSH 
 ## Let the worker sandbox nest a user namespace
 
 Ubuntu 24.04 and later restrict unprivileged user namespaces by default, and the worker's file
-sandbox creates one inside another. Both halves of that restriction have to come off (measured on
-26.04) — run these in the VM once; they survive reboots:
+sandbox needs them. Both halves of that restriction have to come off (measured on 26.04) — run
+these in the VM once; they survive reboots:
 
 ```bash
 echo "kernel.apparmor_restrict_unprivileged_userns = 0" | sudo tee /etc/sysctl.d/60-tidepool.conf && sudo sysctl --system
 sudo ln -s /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/disable/ && sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
 ```
 
-Skip either one and the board still starts and still picks the task up, but every Bash command the
-worker runs dies with `apply-seccomp: … nested userns is capability-restricted …`; the worker
-cannot use `git`, so it raises a question saying so and the task stops there. Nothing warns you in
-advance — the board's sandbox probe passes on a restricted host.
+The two fail differently. Skip the second line and the board still starts and still picks the task
+up, but every Bash command the worker runs dies with
+`apply-seccomp: … nested userns is capability-restricted …`; the worker cannot use `git`, so it
+raises a question saying so and the task stops there — nothing warns you in advance, because the
+board's sandbox probe passes on that host. Skip the first line instead and the probe itself fails
+(`bwrap: setting up uid map: Permission denied`), so the board stops pickup with a containment
+question.
 
 Verify:
 
 ```bash
+sysctl -n kernel.apparmor_restrict_unprivileged_userns
+sudo aa-status | grep -cE '^\s+(bwrap|unpriv_bwrap)$'
 bwrap --ro-bind / / --dev /dev -- /bin/true; echo $?
-socat -V; echo $?
+socat -V >/dev/null; echo $?
 ```
 
-Expect `0` from each.
+Expect `0` from each: the restriction is off, the `bwrap` profiles are not loaded, and both
+sandbox halves run.
 
 ## Clone Tidepool and install
 
@@ -128,7 +136,7 @@ Check that `pwd` printed the `/home/…` path, not `/Users/…`. Then, in `claud
 screen so the prompt is visible, and quit.
 
 The `/login` here is the VM's own — the login on your Mac is not copied into the VM, and the
-board's worker sessions and its own AI calls all run on this one.
+board's worker sessions and the board's own calls all run on this one.
 
 Trust the checkout on the Mac instead of in the VM, or skip this step, and the board starts but
 never picks anything up: its usage check stops at the trust dialog, which the board reads as a
@@ -183,12 +191,10 @@ From the **Mac**, not from a VM shell:
 caffeinate -i -s limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && cd ~/tidepool && exec systemd-run --user --scope --unit tidepool-board -p Delegate=yes -- npm start'
 ```
 
-Run this in the foreground. Two wrappers earn their place: `systemd-run --user --scope` with
-`-p Delegate=yes` hands the board a cgroup subtree of its own, which is what lets it build a
-container around each worker session — without it the board refuses to pick anything up and names
-`Delegate=yes` in the reason. `caffeinate` keeps the Mac from idle-sleeping while the board runs,
-on behalf of `limactl` (`-s` only holds while on AC power); closing the lid still sleeps the
-machine.
+Run this in the foreground. `systemd-run --user --scope` with `-p Delegate=yes` hands the board a
+cgroup subtree of its own for its worker containers — without it the board refuses to pick
+anything up and names `Delegate=yes` in the reason. `caffeinate` keeps the Mac from idle-sleeping
+while the board runs (`-s` only holds while on AC power); closing the lid still sleeps the machine.
 
 The WebUI is at `http://127.0.0.1:4589` in the Mac's browser — Lima forwards the VM's loopback
 ports to the Mac's loopback. First boot prints a one-time bootstrap URL that sets the WebUI
@@ -222,7 +228,7 @@ Expect `limactl` holding both ports, on `127.0.0.1` only — that is Lima's forw
 ```bash
 limactl shell tidepool -- ss -ltnp | grep -E ':4589|:4590'
 ```
-Expect the board itself listening on `127.0.0.1` only inside the VM.
+Expect `node` on `127.0.0.1:4589` and `127.0.0.1:4590`, and nothing on `0.0.0.0` or `*`.
 
 ```bash
 limactl shell tidepool -- systemctl --user is-active tidepool-board.scope
@@ -269,8 +275,8 @@ same screen takes a description in your own words and **Draft fields** turns it 
 
 What you should see: the task is picked up, the worker finishes, and a merge question titled
 `land completed task: Create the trial README` appears for you to answer. The worker runs in a
-bubblewrap sandbox inside a per-task container the board builds in the VM — both already installed
-above, nothing more to do. If nothing is picked up, the WebUI shows why; "usage check unavailable"
+bubblewrap sandbox inside a container the board makes per worker session in the VM — both already
+installed above, nothing more to do. If nothing is picked up, the WebUI shows why; "usage check unavailable"
 means the trust step above was skipped or was done on the Mac instead of in the VM — redo it in
 the VM and restart the board.
 
@@ -278,8 +284,8 @@ the VM and restart the board.
 
 The VM's `claude` login refreshes itself while the board keeps calling out, so a board you leave
 running stays logged in. Its refresh token expires after 30 days unused, so a board stopped for
-that long comes back to a dead login — the board notices at its next call and raises a question
-about the Claude login rather than stopping silently. Run `/login` again inside the VM
+that long comes back to a dead login. The board is built to surface that as a question about the
+Claude login rather than to stop silently (ADR 0100): run `/login` again inside the VM
 (`cd ~/tidepool && claude`) and answer that question.
 
 ## Stage two: a repository of your own
