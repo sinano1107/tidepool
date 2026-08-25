@@ -400,7 +400,7 @@ describe("npm run init-registry", () => {
     const orderedSteps = [
       "## Prepare the registry",
       "gh repo create",
-      "git clone git@github.com:YOUR_GITHUB_LOGIN",
+      "git clone https://github.com/YOUR_GITHUB_LOGIN",
       "npm run init-registry",
       "npm start",
       "## Create a trial workspace",
