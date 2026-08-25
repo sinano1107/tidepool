@@ -1,5 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,19 +25,29 @@ afterEach(() => {
   home = undefined;
 });
 
-function execSeed(homeDir: string, cwdArg: string | undefined, options: { cwd?: string } = {}) {
+function fakeHome() {
+  home = mkdtempSync(join(tmpdir(), "tidepool-seed-claude-trust-"));
+  return home;
+}
+
+function execSeed(
+  homeDir: string | undefined,
+  cwdArg: string | undefined,
+  options: { cwd?: string } = {},
+) {
   const args = ["scripts/seed-claude-trust.mjs", ...(cwdArg === undefined ? [] : [cwdArg])];
+  const { HOME: _ignored, ...envWithoutHome } = process.env;
   return spawnSync("node", args, {
     cwd: options.cwd ?? ROOT,
-    env: { ...process.env, HOME: homeDir },
+    env: homeDir === undefined ? envWithoutHome : { ...envWithoutHome, HOME: homeDir },
     encoding: "utf8",
   });
 }
 
 function runSeed(cwdArg: string | undefined, options: { cwd?: string } = {}) {
-  home = mkdtempSync(join(tmpdir(), "tidepool-seed-claude-trust-"));
-  const result = execSeed(home, cwdArg, options);
-  return { result, home, claudeJsonPath: join(home, ".claude.json") };
+  const homeDir = fakeHome();
+  const result = execSeed(homeDir, cwdArg, options);
+  return { result, home: homeDir, claudeJsonPath: join(homeDir, ".claude.json") };
 }
 
 describe("node scripts/seed-claude-trust.mjs", () => {
@@ -51,8 +72,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
 
   it("preserves other top-level keys, other project entries, and other keys under the same project", () => {
     const projectCwd = "/home/masaki/tidepool";
-    home = mkdtempSync(join(tmpdir(), "tidepool-seed-claude-trust-"));
-    const claudeJsonPath = join(home, ".claude.json");
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
     const existing = {
       mcpServers: { example: { command: "example" } },
       hasCompletedOnboarding: true,
@@ -100,8 +120,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
   });
 
   it("fails and leaves the file untouched when ~/.claude.json is not valid JSON", () => {
-    home = mkdtempSync(join(tmpdir(), "tidepool-seed-claude-trust-"));
-    const claudeJsonPath = join(home, ".claude.json");
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
     writeFileSync(claudeJsonPath, "not json");
 
     const result = execSeed(home, "/home/masaki/tidepool");
@@ -109,5 +128,65 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/^Error: /);
     expect(readFileSync(claudeJsonPath, "utf8")).toBe("not json");
+  });
+
+  it("keeps the file's mode when rewriting it", () => {
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
+    writeFileSync(claudeJsonPath, "{}");
+    chmodSync(claudeJsonPath, 0o600);
+
+    const result = execSeed(home, "/home/masaki/tidepool");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(statSync(claudeJsonPath).mode & 0o777).toBe(0o600);
+    expect(readdirSync(home as string)).toEqual([".claude.json"]);
+  });
+
+  it("writes through a symlinked ~/.claude.json instead of replacing the link", () => {
+    const homeDir = fakeHome();
+    const realPath = join(homeDir, "real.json");
+    writeFileSync(realPath, "{}");
+    symlinkSync(realPath, join(homeDir, ".claude.json"));
+
+    const result = execSeed(homeDir, "/home/masaki/tidepool");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(realPath, "utf8")).projects["/home/masaki/tidepool"]).toEqual({
+      hasTrustDialogAccepted: true,
+    });
+    expect(lstatSync(join(homeDir, ".claude.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it.each([
+    ["a non-object root", "[1, 2, 3]"],
+    ["a non-object projects value", '{"projects": "oops"}'],
+  ])("fails and leaves the file untouched when ~/.claude.json has %s", (_label, content) => {
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
+    writeFileSync(claudeJsonPath, content);
+
+    const result = execSeed(home, "/home/masaki/tidepool");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/^Error: /);
+    expect(readFileSync(claudeJsonPath, "utf8")).toBe(content);
+  });
+
+  it("fails with an English stderr message when HOME is not set", () => {
+    const result = execSeed(undefined, "/home/masaki/tidepool");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/^Error: /);
+  });
+
+  it("fails with an English stderr message and no leftover temp file when the write fails", () => {
+    const homeDir = fakeHome();
+    chmodSync(homeDir, 0o500);
+
+    const result = execSeed(homeDir, "/home/masaki/tidepool");
+
+    chmodSync(homeDir, 0o700);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/^Error: /);
+    expect(readdirSync(homeDir)).toEqual([]);
   });
 });
