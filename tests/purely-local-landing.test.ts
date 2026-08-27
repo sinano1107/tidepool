@@ -182,6 +182,7 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   expect(answered.status).toBe(200);
   expect(git(workspace.path, "rev-list", "--count", `main..task/${second.id}`)).toBe("0");
   expect(git(workspace.path, "rev-list", "--parents", "-1", "main").split(" ")).toHaveLength(3);
+  expect(git(workspace.path, "log", "-1", "--format=%an", "main")).toBe("tidepool");
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
   expect(git(workspace.path, "status", "--porcelain")).toBe(status);
@@ -189,6 +190,42 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
     "the running session's work in progress\n",
   );
   expect(await quarantineQuestion(t)).toBeUndefined();
+  // ADR 0064 決定4: 盤面が進めた行は撮り直されているので、走っていたセッションの解放は
+  // 盤面自身のこの2度の書き込みを違反として読まない
+  commitWork(workspace.path, "wip.txt", "the running session's work in progress\n");
+  await completeViaMcp(t, third.id);
+  expect(await quarantineQuestion(t)).toBeUndefined();
+});
+
+// 走行中の綴りでも、コンフリクトは回答の拒否であって隔離ではない(ADR 0103 決定4)——
+// `merge-tree` は盤面の作業ツリーを使わないので、拒んだ跡も残らない。
+it("走行中の slot を占めたまま来た着地がコンフリクトしても、隔離せず作業ツリーも汚さない", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const first = await registerWork(t, "writes the shared line first");
+  const second = await registerWork(t, "writes the same line differently");
+  const third = await registerWork(t, "occupies the slot while the landing arrives");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "shared.txt", "from the first task\n");
+  await completeViaMcp(t, first.id);
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "shared.txt", "from the second task\n");
+  await completeViaMcp(t, second.id);
+  await t.clock.advance(HOUR);
+  await answerMerge(t, (await landingQuestionFor(t, first.id)).id);
+  const question = await landingQuestionFor(t, second.id);
+  const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
+  const head = git(workspace.path, "rev-parse", "HEAD");
+
+  const answered = await answerMerge(t, question.id);
+
+  expect(answered.status).toBe(409);
+  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
 });
 
 // ADR 0103 決定4: 記録と一致していれば、merge の失敗は回答の拒否であって隔離ではない ——

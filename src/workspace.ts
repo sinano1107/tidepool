@@ -934,8 +934,11 @@ export function releaseWorkspace(
 export class OutOfBandProtectedBranchError extends Error {
   constructor(workspaceName: string, branch: string, recorded: string | undefined, actual: string) {
     super(
-      `workspace ${workspaceName}: protected branch '${branch}' moved out of band — the board ` +
-        `recorded ${recorded ?? "no position for it"}, it now sits at ${actual}`,
+      `workspace ${workspaceName}: protected branch '${branch}' moved out of band — ` +
+        (recorded === undefined
+          ? "the board has no recorded position for it"
+          : `the board recorded it at ${recorded}`) +
+        ` and it now sits at ${actual}`,
     );
   }
 }
@@ -1002,6 +1005,7 @@ function mergeIntoProtectedByPlumbing(
     if (gitExitStatus(err) !== 1) throw err;
     throw landingConflict(workspace, branch, task);
   }
+  const taskSha = git(workspace.path, "rev-parse", `refs/heads/${task}`);
   const merged = git(
     workspace.path,
     "commit-tree",
@@ -1009,7 +1013,7 @@ function mergeIntoProtectedByPlumbing(
     "-p",
     protectedSha,
     "-p",
-    git(workspace.path, "rev-parse", `refs/heads/${task}`),
+    taskSha,
     "-m",
     landingMergeMessage(branch, task),
   );
