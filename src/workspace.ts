@@ -990,14 +990,16 @@ function landingConflict(workspace: WorkspaceConfig, branch: string, task: strin
  *  進める —— 「盤面は走っているセッションの checkout を動かさない」(ADR 0064)は無傷。
  *  コンフリクトは `merge-tree` の非零終了で返る。`update-ref` に旧 sha を添えるのは
  *  安価な CAS で、記録との突き合わせから書き込みまでの隙に保護ブランチが動いていれば
- *  ここで落ちる。 */
+ *  ここで落ちる。落ち方が隔離ではなく回答の拒否なのは、この隙の移動が帯域外とは
+ *  限らないため —— 同じ workspace への2枚の着地回答が競えば、負けた側がここで落ちる。
+ *  再回答が決定1 の判定を、撮り直された記録に対してもう一度走らせる。 */
 function mergeIntoProtectedByPlumbing(
   workspace: WorkspaceConfig,
   branch: string,
-  ref: string,
   protectedSha: string,
   task: string,
 ): void {
+  const ref = `refs/heads/${branch}`;
   let tree: string;
   try {
     tree = git(workspace.path, "merge-tree", "--write-tree", branch, task);
@@ -1050,7 +1052,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   // —— 休止中(HEAD が保護ブランチ)でなければ ref だけを進める。
   if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
     if (fastForward) git(workspace.path, "fetch", ".", `${task}:${branch}`);
-    else mergeIntoProtectedByPlumbing(workspace, branch, ref, protectedSha, task);
+    else mergeIntoProtectedByPlumbing(workspace, branch, protectedSha, task);
     return;
   }
   git(workspace.path, "checkout", branch);

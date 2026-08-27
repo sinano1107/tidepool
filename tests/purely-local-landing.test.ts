@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import {
   api,
   bootTidepool,
@@ -43,6 +44,33 @@ async function quarantineQuestion(board: Tidepool): Promise<any> {
 
 function answerMerge(board: Tidepool, questionId: string): Promise<{ status: number; json: any }> {
   return api(board.baseUrl, "POST", `/api/tasks/${questionId}/answer`, { answers: ["merge"] });
+}
+
+/** ADR 0103 決定2 の直列ペア(#468 のライブ実測の形): 独立に登録された2件を続けて
+ *  完了させ、1件目を着地させて保護ブランチを進めたうえで、非 ff になった2件目の
+ *  着地 question を返す。`sharedFile` は両タスクに同じファイルを書かせてコンフリクトを
+ *  仕込み、`occupySlot` は3件目に slot を占めさせる(HEAD がそのタスクブランチへ移る)。 */
+async function serialPairLanding(
+  board: Tidepool,
+  workspacePath: string,
+  { sharedFile = false, occupySlot = false } = {},
+): Promise<{ first: any; second: any; third: any; question: any }> {
+  const first = await registerWork(board, "first of the serial pair");
+  const second = await registerWork(board, "second of the serial pair");
+  const third = occupySlot
+    ? await registerWork(board, "occupies the slot while the landing arrives")
+    : undefined;
+  await board.clock.advance(HOUR);
+  commitWork(workspacePath, sharedFile ? "shared.txt" : "one.txt", "from the first task\n");
+  await completeViaMcp(board, first.id);
+  await board.clock.advance(HOUR);
+  commitWork(workspacePath, sharedFile ? "shared.txt" : "two.txt", "from the second task\n");
+  await completeViaMcp(board, second.id);
+  if (third) await board.clock.advance(HOUR); // 3件目が slot を取り、HEAD は自分のタスクブランチへ移る
+  expect((await answerMerge(board, (await landingQuestionFor(board, first.id)).id)).status).toBe(
+    200,
+  );
+  return { first, second, third, question: await landingQuestionFor(board, second.id) };
 }
 
 it("purely-local の root work 完了は PR を試みず、代わりに着地 question を1本立てる", async () => {
@@ -131,16 +159,7 @@ it("着地 question に merge と答えると保護ブランチを task branch �
 it("直列に登録された2件目の着地は、1件目が進めた保護ブランチへ merge commit で追いつく", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace });
-  const first = await registerWork(t, "first of the serial pair");
-  const second = await registerWork(t, "second of the serial pair");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "one.txt", "from the first task\n");
-  await completeViaMcp(t, first.id);
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "two.txt", "from the second task\n");
-  await completeViaMcp(t, second.id);
-  expect((await answerMerge(t, (await landingQuestionFor(t, first.id)).id)).status).toBe(200);
-  const question = await landingQuestionFor(t, second.id);
+  const { first, second, question } = await serialPairLanding(t, workspace.path);
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
 
   const answered = await answerMerge(t, question.id);
@@ -150,7 +169,7 @@ it("直列に登録された2件目の着地は、1件目が進めた保護ブ�
   // 1件目の成果を道連れに消していない = 追いついた形は真の merge(親2つ)である
   expect(git(workspace.path, "rev-list", "--count", `main..task/${first.id}`)).toBe("0");
   expect(git(workspace.path, "rev-list", "--parents", "-1", "main").split(" ")).toHaveLength(3);
-  expect(git(workspace.path, "log", "-1", "--format=%an", "main")).toBe("tidepool");
+  expect(git(workspace.path, "log", "-1", "--format=%an %cn", "main")).toBe("tidepool tidepool");
   // ADR 0053 根拠1: タスクブランチは差分の恒久記録であって、着地で書き換えられない
   expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);
   expect(await quarantineQuestion(t)).toBeUndefined();
@@ -160,20 +179,11 @@ it("直列に登録された2件目の着地は、1件目が進めた保護ブ�
 it("走行中の slot を占めたまま来た非 ff の着地は、ref だけを進め HEAD と作業ツリーに触れない", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace });
-  const first = await registerWork(t, "first of the serial pair");
-  const second = await registerWork(t, "second of the serial pair");
-  const third = await registerWork(t, "occupies the slot while the landing arrives");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "one.txt", "from the first task\n");
-  await completeViaMcp(t, first.id);
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "two.txt", "from the second task\n");
-  await completeViaMcp(t, second.id);
-  await t.clock.advance(HOUR); // 3件目が slot を取り、HEAD は自分のタスクブランチへ移る
+  const { second, third, question } = await serialPairLanding(t, workspace.path, {
+    occupySlot: true,
+  });
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
   writeFileSync(join(workspace.path, "wip.txt"), "the running session's work in progress\n");
-  await answerMerge(t, (await landingQuestionFor(t, first.id)).id);
-  const question = await landingQuestionFor(t, second.id);
   const head = git(workspace.path, "rev-parse", "HEAD");
   const status = git(workspace.path, "status", "--porcelain");
 
@@ -182,7 +192,7 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   expect(answered.status).toBe(200);
   expect(git(workspace.path, "rev-list", "--count", `main..task/${second.id}`)).toBe("0");
   expect(git(workspace.path, "rev-list", "--parents", "-1", "main").split(" ")).toHaveLength(3);
-  expect(git(workspace.path, "log", "-1", "--format=%an", "main")).toBe("tidepool");
+  expect(git(workspace.path, "log", "-1", "--format=%an %cn", "main")).toBe("tidepool tidepool");
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
   expect(git(workspace.path, "status", "--porcelain")).toBe(status);
@@ -202,18 +212,10 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
 it("走行中の slot を占めたまま来た着地がコンフリクトしても、隔離せず作業ツリーも汚さない", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace });
-  const first = await registerWork(t, "writes the shared line first");
-  const second = await registerWork(t, "writes the same line differently");
-  const third = await registerWork(t, "occupies the slot while the landing arrives");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "shared.txt", "from the first task\n");
-  await completeViaMcp(t, first.id);
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "shared.txt", "from the second task\n");
-  await completeViaMcp(t, second.id);
-  await t.clock.advance(HOUR);
-  await answerMerge(t, (await landingQuestionFor(t, first.id)).id);
-  const question = await landingQuestionFor(t, second.id);
+  const { third, question } = await serialPairLanding(t, workspace.path, {
+    sharedFile: true,
+    occupySlot: true,
+  });
   const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
   const head = git(workspace.path, "rev-parse", "HEAD");
 
@@ -233,16 +235,7 @@ it("走行中の slot を占めたまま来た着地がコンフリクトして�
 it("snapshot が一致していれば着地のコンフリクトは回答を拒むだけで、workspace を quarantine しない", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace });
-  const first = await registerWork(t, "writes the shared line first");
-  const second = await registerWork(t, "writes the same line differently");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "shared.txt", "from the first task\n");
-  await completeViaMcp(t, first.id);
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "shared.txt", "from the second task\n");
-  await completeViaMcp(t, second.id);
-  await answerMerge(t, (await landingQuestionFor(t, first.id)).id);
-  const question = await landingQuestionFor(t, second.id);
+  const { second, question } = await serialPairLanding(t, workspace.path, { sharedFile: true });
   const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
 
@@ -314,6 +307,43 @@ it("保護ブランチが帯域外で巻き戻されると、ff できる位置�
 
   expect(answered.status).toBe(409);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+  expect((await quarantineQuestion(t))?.question_quarantine_workspace).toBe("sandbox");
+});
+
+// ADR 0103 決定1 の fail-closed(ADR 0064 決定6 と同じ姿勢): 記録の欠落に「検査を飛ばす」
+// 分岐を書かない —— 行が無いことは一致の証明にならないので、位置が動いていなくても
+// 帯域外側に落とす。
+it("記録に保護ブランチの行が無ければ、位置が動いていなくても着地を拒み workspace を quarantine する", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "land with the protected branch unrecorded");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const question = await landingQuestionFor(t, task.id);
+  // 第2接続で盤面の記録から保護ブランチの行だけを抜く(WAL 下で安全 — harness の
+  // registerQuestion と同じ seam)
+  const db = openDb(join(t.dir, "board.sqlite"));
+  try {
+    const row = db
+      .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
+      .get("sandbox") as { ref_snapshot: string };
+    db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(
+      row.ref_snapshot
+        .split("\n")
+        .filter((line) => !line.endsWith(" refs/heads/main"))
+        .join("\n"),
+      "sandbox",
+    );
+  } finally {
+    db.close();
+  }
+
+  const answered = await answerMerge(t, question.id);
+
+  expect(answered.status).toBe(409);
+  expect(answered.json.error).toContain("no recorded position");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
   expect((await quarantineQuestion(t))?.question_quarantine_workspace).toBe("sandbox");
 });
