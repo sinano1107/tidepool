@@ -477,10 +477,25 @@ function refName(line: string): string {
   return line.slice(line.indexOf(" ") + 1);
 }
 
+/** 同じ行の値側。 */
+function refValue(line: string): string {
+  return line.slice(0, line.indexOf(" "));
+}
+
 function refLines(snapshot: string, exceptRef: string): string[] {
   return snapshot
     .split("\n")
     .filter((line) => line !== "" && !line.endsWith(` ${exceptRef}`));
+}
+
+/** 盤面自身の記録が持つ `ref` の位置、記録に行が無ければ undefined。行の**有無**を
+ *  呼び出し側に返すのは、着地の帯域外判定(ADR 0103 決定1)が「記録に無い」を不一致
+ *  として扱いつつ、人間へ返す理由をそこで書き分けるためである。 */
+function recordedRef(db: Db, workspaceName: string, ref: string): string | undefined {
+  const line = storedRefs(db, workspaceName)
+    .split("\n")
+    .find((candidate) => candidate !== "" && refName(candidate) === ref);
+  return line === undefined ? undefined : refValue(line);
 }
 
 /** ADR 0064 の不変条件そのもの: **タスクブランチは worker の唯一の可変 ref である**。
@@ -913,23 +928,141 @@ export function releaseWorkspace(
   }
 }
 
-/** ADR 0053 decision 3: apply an approved landing decision for a purely-local
- *  task. The protected branch may only move by fast-forward; divergence means
- *  an out-of-band write changed the base while the decision was pending. */
-export function mergeTaskToProtected(workspace: WorkspaceConfig, taskId: string): void {
+/** ADR 0103 決定1: 着地の時点で保護ブランチが**盤面自身の記録から外れて**動いていた
+ *  ことの証拠。着地経路で quarantine を引き起こす失敗はこれ**だけ**であり(決定4)、
+ *  呼び出し元はこの型で「資源の封じ込め」と「回答の拒否」を見分ける。 */
+export class OutOfBandProtectedBranchError extends Error {
+  constructor(workspaceName: string, branch: string, recorded: string | undefined, actual: string) {
+    super(
+      `workspace ${workspaceName}: protected branch '${branch}' moved out of band — the board ` +
+        `recorded ${recorded ?? "no position for it"}, it now sits at ${actual}`,
+    );
+  }
+}
+
+/** `git()` が投げた失敗の終了コード。git の述語系コマンドは「答えが no」も非零で返す
+ *  ので、答えと**道具の失敗**(128 等)はこれで分ける —— 後者を no と読み替えると、
+ *  壊れた checkout が「コンフリクト」という嘘の理由で人間に届く。 */
+function gitExitStatus(err: unknown): number | undefined {
+  return (err as { status?: number } | null)?.status;
+}
+
+/** `ancestor` が `descendant` に含まれているか = ff で運べるか。 */
+function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: string): boolean {
+  try {
+    git(workspace.path, "merge-base", "--is-ancestor", ancestor, descendant);
+    return true;
+  } catch (err) {
+    if (gitExitStatus(err) !== 1) throw err;
+    return false;
+  }
+}
+
+/** merge が中断状態で残っているか(コンフリクトの跡)。 */
+function mergeInProgress(workspace: WorkspaceConfig): boolean {
+  try {
+    git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 両方の綴りが同じ subject を書く(下の2経路で共有する)。 */
+function landingMergeMessage(branch: string, task: string): string {
+  return `Merge ${task} into ${branch}`;
+}
+
+/** ADR 0103 決定4: 自動では合わない、と分かっただけの状態。タスクブランチも保護
+ *  ブランチも無傷なので、これは回答の拒否であって隔離ではない。 */
+function landingConflict(workspace: WorkspaceConfig, branch: string, task: string): Error {
+  return new Error(
+    `workspace ${workspace.name}: ${task} does not merge cleanly into '${branch}' — ` +
+      "resolve it by hand, then answer the landing question again",
+  );
+}
+
+/** ADR 0103 決定3 の走行中の綴り: index も worktree も HEAD も使わずに merge の結果
+ *  ツリーだけを作り(`merge-tree --write-tree`、git ≥ 2.38)、保護ブランチの ref だけを
+ *  進める —— 「盤面は走っているセッションの checkout を動かさない」(ADR 0064)は無傷。
+ *  コンフリクトは `merge-tree` の非零終了で返る。`update-ref` に旧 sha を添えるのは
+ *  安価な CAS で、記録との突き合わせから書き込みまでの隙に保護ブランチが動いていれば
+ *  ここで落ちる。 */
+function mergeIntoProtectedByPlumbing(
+  workspace: WorkspaceConfig,
+  branch: string,
+  ref: string,
+  protectedSha: string,
+  task: string,
+): void {
+  let tree: string;
+  try {
+    tree = git(workspace.path, "merge-tree", "--write-tree", branch, task);
+  } catch (err) {
+    if (gitExitStatus(err) !== 1) throw err;
+    throw landingConflict(workspace, branch, task);
+  }
+  const merged = git(
+    workspace.path,
+    "commit-tree",
+    tree,
+    "-p",
+    protectedSha,
+    "-p",
+    git(workspace.path, "rev-parse", `refs/heads/${task}`),
+    "-m",
+    landingMergeMessage(branch, task),
+  );
+  git(workspace.path, "update-ref", ref, merged, protectedSha);
+}
+
+/** ADR 0053 決定3 / ADR 0103: 承認された purely-local の着地を実行する。
+ *
+ *  帯域外の判定は ff の成否ではなく**盤面自身の記録との突き合わせ**で下す(決定1)。
+ *  盤面が自分で進めた保護ブランチは rebaseline 済みなので記録と一致し、一致しない
+ *  位置は帯域外の書き込みだけが作る —— ff が黙って飲み込んでいた巻き戻しもこれで
+ *  捕まる。記録に行が無い場合も不一致として扱う(ADR 0064 決定6 と同じ fail-closed)。
+ *
+ *  記録と一致していれば、非 ff は同一 workspace の正当な直列進行である(決定2):
+ *  盤面が Tidepool 名義の真の merge commit で追いつかせる。タスクブランチは**決して
+ *  書き換えない** —— 差分の恒久記録であり系譜判定の土台である(ADR 0053 根拠1)。 */
+export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string): void {
   if (isRemoteBacked(workspace)) {
     throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
   }
   const branch = protectedBranch(workspace);
+  const ref = `refs/heads/${branch}`;
+  const protectedSha = git(workspace.path, "rev-parse", ref);
+  const recorded = recordedRef(db, workspace.name, ref);
+  if (recorded !== protectedSha) {
+    throw new OutOfBandProtectedBranchError(workspace.name, branch, recorded, protectedSha);
+  }
+
+  const task = taskBranch(taskId);
+  const fastForward = isAncestor(workspace, ref, task);
   // 着地は人間面から入るので、同じ workspace で**別のタスクが走っている最中**に来る
   // (ADR 0064 決定4 が挙げる並行そのもの)。checkout はその worker の作業ツリーを
   // 奪い、走っているセッションは自分のタスクブランチの外で終わって tree rule に撃たれる
-  // —— 休止中(HEAD が保護ブランチ)でなければ ref だけを進める。`fetch . src:dst` は
-  // ff できない更新を自分で拒むので、ff-only という条件はどちらの綴りでも同じである。
+  // —— 休止中(HEAD が保護ブランチ)でなければ ref だけを進める。
   if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
-    git(workspace.path, "fetch", ".", `${taskBranch(taskId)}:${branch}`);
+    if (fastForward) git(workspace.path, "fetch", ".", `${task}:${branch}`);
+    else mergeIntoProtectedByPlumbing(workspace, branch, ref, protectedSha, task);
     return;
   }
   git(workspace.path, "checkout", branch);
-  git(workspace.path, "merge", "--ff-only", taskBranch(taskId));
+  if (fastForward) {
+    git(workspace.path, "merge", "--ff-only", task);
+    return;
+  }
+  try {
+    // `--no-edit` は環境の `merge.edit` に負けないため —— 盤面の git は誰の端末も持たない
+    git(workspace.path, "merge", "--no-edit", "-m", landingMergeMessage(branch, task), task);
+  } catch (err) {
+    // コンフリクトなら merge が中断状態で残る。ツリーを元へ戻してから「自動では合わない」を
+    // 返す。始まる前に落ちた失敗(汚れたツリー等)は中断状態を作らないので、その git の
+    // 理由をそのまま人間へ返す —— どちらも quarantine ではない(ADR 0103 決定4)
+    if (!mergeInProgress(workspace)) throw err;
+    git(workspace.path, "merge", "--abort");
+    throw landingConflict(workspace, branch, task);
+  }
 }
