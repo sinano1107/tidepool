@@ -298,7 +298,11 @@ WebUI・/api・そこに mount される管理MCP からなる、**操作の帰�
 
 ## Watchdog(ウォッチドッグ)
 
-タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で畳み込み停止 → 猶予 → 強制回収の順に worker 容器(Worker 容器 参照)を畳み、**回収済み観測を経てから** slot-release tree rule と tidepool 名義の failure question(retry / abandon の2択、推奨は retry)の生成へ進む — slot を解放するのは force の送達ではなく容器が空になった観測である。観測できないまま timeout したときも失敗の記録(failure question)は残るが、slot は解放されず Containment quarantine の確認 question が解放の唯一の門になる(ADR 0099)。retry は失敗タスクを先頭復帰させ、abandon は判断ごと破棄する(Cancel 参照)。自動リトライは存在しない — リトライ判断は常に人間の30秒の回答(throttle は実行中タスクに触れないため、この原則に例外はない — Throttle 参照)。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
+タスク種別ごとの絶対時間リミットを持つプロセス内の監視機構(v1 に無活動検知はない — pickup からの経過時間のみを見る)。リミット超過で畳み込み停止 → 猶予 → 強制回収の順に worker 容器(Worker 容器 参照)を畳み、**回収済み観測を経てから** slot-release tree rule と tidepool 名義の failure question(retry / abandon の2択、推奨は retry)の生成へ進む — slot を解放するのは force の送達ではなく容器が空になった観測である。観測できないまま timeout したときも失敗の記録(failure question)は残るが、slot は解放されず Containment quarantine の確認 question が解放の唯一の門になる(ADR 0099)。retry は失敗タスクを先頭復帰させ、abandon は判断ごと破棄する(Cancel 参照)。自動リトライは存在しない — リトライ判断は常に人間の30秒の回答。唯一の例外は上限到達による中断(Cap interruption 参照)で、これは失敗ではなく環境事象なのでリトライ判断そのものが存在しない(ADR 0007 / ADR 0104。throttle 自体は実行中タスクに触れない — Throttle 参照)。サーバー再起動による中断も同じ経路に落ちる(ADR 0001: graceful drain は作らない)。
+
+## 上限到達による中断(Cap interruption)
+
+走行中の worker session が Provider の使用量上限(100% キャップ)に当たり、Provider の側から断られて終わること(2026-08-28 の grilling、issue #467 / ADR 0104。前身は #23、ADR 0007 の復活)。Throttle(盤面側の予防的な絞り、pickup にしか作用しない)とは別物で、観測から完走までの間に窓が満杯になったときに起きる — Spend-down 中や上限近傍の spawn がその典型。Provider から返る**確定的な上限到達の証拠**(Claude Code では result envelope の 429)を機械判定で認め、部分文字列から推測しない(動力の認証 と同じ確度の線)。失敗ではなく環境事象なので failure question は立たず失敗統計も汚さない: 回収済み観測 → slot-release tree rule → タスクは `todo` の先頭へ戻り → slot 解放。再開の門は既存の Throttle で(次の pickup の使用量観測が skip し、catch-up 時刻に再開する)、中断側は throttle の状態に書き込まない。中断の事実は Tidepool 名義の event として timeline に残る(次のセッションが理由を推測しなくて済む)。Claude Code adapter で起き、Claude CLI を喋る他 Provider は spawn 時の provider に帰属する。Codex の上限到達の形は未観測で、観測されるまで建てない。
 
 ## Branch discipline(ブランチ規律)
 
@@ -450,7 +454,7 @@ Provider ごとのアカウント単位(エージェント単位ではない)の
 - 解除は人間を介さない自動再開で、待ち先はウィンドウのリセット時刻ではなく **catch-up 時刻**(経過割合がペース線に追いつく瞬間)。これはタスクのリトライではないため、Watchdog の「自動リトライは存在しない」原則の例外にはならない
 - 使用率100%は全ウィンドウ常時のハードキャップ(Spend-down 中に残る唯一の線)
 - 閾値判断は Tidepool 自前のもの — Provider 側の警告イベントには依存しない。ペース線到達は「失敗」ではなく環境事象であり、エスカレーションや失敗統計を汚さない
-- 実行中のタスクには決して触れない — throttled が観測されても走っているタスクは完走する
+- 実行中のタスクには決して触れない — throttled が観測されても走っているタスクは完走する。走行中に Provider 側で窓が満杯になって断られるのは throttle ではなく上限到達による中断(Cap interruption 参照)が受ける
 - 使用率が観測不能な間も、その Provider だけを throttled として扱う(fail-closed — 守るのは不可逆な予算、失うのは回復可能なアイドル時間)。別 Provider の観測と pickup には波及させない
 - **未開始(Idle)** — ウィンドウの**不在を観測できた**状態(使用率 0% かつリセット時刻の描画なし)。観測不能(fail-closed)とは別物で、絞らない — 窓が無い以上、遅れるべきペース線も存在しない。pickup が窓を開けた後は次の観測から予約(オフセット)込みのペース線が従来どおり効く。逆に使用率が付いているのにリセット時刻が無い描画は破損の疑いとして fail-closed 側 — この判別は書式変更時の誤読の被害を 0% 近傍に閉じる。各ウィンドウに一様に適用(2026-08-14 の grilling、issue #287 / ADR 0076)
 - 各 Harness の使用量面が seed → server refresh の2段描画を持つ場合、アカウント全体の真値はリフレッシュ後の画面だけが持つ。リフレッシュ未完了/失敗を示すマーカーの付いた画面は**観測不能**(fail-closed)— 数字が読めても最終観測として読まない(2026-08-14 の grilling、issue #334 / ADR 0078)。Codex の観測面も同じ意味の鮮度を機械判定できなければ対応済みとはしない。Codex では TUI をスクレイプせず、`codex app-server` の stdio `account/rateLimits/read` が返す used percent・reset 時刻・primary / secondary 窓を読む。この method は `experimentalApi` opt-in 対象ではないが App Server 全体は OpenAI が production workload をサポートしない experimental な境界なので、互換性は推測しない。worker session 自体は `codex exec --json` のまま、production host は #195 で検証済みの CLI version を固定し、起動時に必要 method と応答 schema の適合を検査する。version または schema が検証済み契約から外れれば OpenAI Provider だけを観測不能として fail-closed にし、CLI の更新は同じ適合試験を通した意図的な変更として行う(2026-08-24 の grilling、issue #195)。

@@ -55,6 +55,23 @@ async function makeAuth(answer: BrokerAnswer = issuedToken("installation-token")
   return new GitHubAuth(file, broker.url);
 }
 
+/** `origin`(bare)を持つ checkout をタスクブランチの上に1つ作る —— 盤面の push を
+ *  実 git で測る2つのテストの共通の出発点。 */
+function repoOnTaskBranch(repo: string, remote: string, file: string, message: string): void {
+  git(remote, "init", "--bare", "-b", "main");
+  git(repo, "init", "-b", "main");
+  writeFileSync(join(repo, "README.md"), "hello\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", "initial");
+  git(repo, "remote", "add", "origin", remote);
+  git(repo, "push", "origin", "main");
+
+  git(repo, "checkout", "-b", "task/abc");
+  writeFileSync(join(repo, file), "done\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", message);
+}
+
 /** Stands in for the real `gh` binary on PATH: git itself stays real (the
  *  PRD test policy), but the GitHub API side of `gh` would need real network
  *  + auth, so it's faked at the process boundary instead. */
@@ -73,19 +90,7 @@ async function fakeGh(logPath: string): Promise<string> {
 it("gh pr create の前にタスクブランチを origin へ push する", async () => {
   repoPath = await mkdtemp(join(tmpdir(), "tidepool-repo-"));
   remotePath = await mkdtemp(join(tmpdir(), "tidepool-remote-"));
-  git(remotePath, "init", "--bare", "-b", "main");
-
-  git(repoPath, "init", "-b", "main");
-  writeFileSync(join(repoPath, "README.md"), "hello\n");
-  git(repoPath, "add", "-A");
-  git(repoPath, "commit", "-m", "initial");
-  git(repoPath, "remote", "add", "origin", remotePath);
-  git(repoPath, "push", "origin", "main");
-
-  git(repoPath, "checkout", "-b", "task/abc");
-  writeFileSync(join(repoPath, "notes.txt"), "done\n");
-  git(repoPath, "add", "-A");
-  git(repoPath, "commit", "-m", "WIP: task abc");
+  repoOnTaskBranch(repoPath, remotePath, "notes.txt", "WIP: task abc");
 
   const logPath = join(repoPath, "gh-invocations.log");
   const fakeBinDir = await fakeGh(logPath);
@@ -441,4 +446,14 @@ it("tokenRefusal は持っている token を答えにせず、扉のたびに�
   installed = false; // 1 時間有効な token をキャッシュに持ったまま、App が外された
 
   expect(await client.tokenRefusal(ref)).toContain("repo_unreachable");
+});
+
+it("pushBranch はタスクブランチを origin へ push する(PR 作成と切り離した1操作)", async () => {
+  repoPath = await mkdtemp(join(tmpdir(), "tidepool-repo-"));
+  remotePath = await mkdtemp(join(tmpdir(), "tidepool-remote-"));
+  repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
+
+  await new GhCliClient(await makeAuth()).pushBranch({ path: repoPath, branch: "task/abc" });
+
+  expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });

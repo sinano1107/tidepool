@@ -53,7 +53,7 @@ import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
 import type { ProviderUsageResource } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
-import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
+import { capInterruptionHandler, failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import { type ContainerRuntime, WorkerContainers } from "./worker-container.js";
 import {
@@ -154,6 +154,9 @@ export type WorkerFactory = (deps: {
   db: Db;
   clock: Clock;
   containers: WorkerContainers;
+  /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
+   *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
+  onCapInterrupted: (taskId: string) => void;
 }) => WorkerAdapter;
 
 export interface ServerOptions {
@@ -425,7 +428,17 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   app.use(auth.require);
   // credential の**後**に置く: 無認証リクエストは 415 ではなく 401 で落ちる
   app.use(auth.requireJsonContentType);
-  const worker = options.worker({ db, clock: options.clock, containers });
+  // ADR 0104: 上限到達による中断の盤面側の一撃。**worker より先に**組む ——
+  // adapter が観測するのは 429 と回収済み観測だけで、slot も tree rule もこちら側に
+  // ある(ADR 0099 決定1)。watchdog とは独立(slot と resolver しか要らない)なので、
+  // 時限を持たない盤面でも中断は回収される。
+  const onCapInterrupted = capInterruptionHandler({
+    db,
+    clock: options.clock,
+    slot,
+    resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
+  });
+  const worker = options.worker({ db, clock: options.clock, containers, onCapInterrupted });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
     ...(options.cliAuth && { anthropic: options.cliAuth }),
     ...options.providerCliAuth,

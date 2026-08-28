@@ -85,6 +85,11 @@ export type EventPayload =
   // through task_id
   | { kind: "task_completed"; handoff_present: boolean; result: string | null }
   | { kind: "task_escalated"; question_id: string }
+  // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
+  // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
+  // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
+  // (CONTEXT.md「上限到達による中断」)。
+  | { kind: "cap_interrupted" }
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
