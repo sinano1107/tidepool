@@ -126,7 +126,7 @@ it("祖先の PR が既に merge 済みなら push しない", async () => {
 it("push の失敗は PR 昇格失敗 question として人間に見える", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "push-failure");
   const work = await landedWork(workspace);
-  t.github.scriptPushFailure(new Error("token expired"));
+  t.github.scriptPushFailure(new Error("remote hung up after upload"));
 
   const before = await completeRepair(work, workspace);
 

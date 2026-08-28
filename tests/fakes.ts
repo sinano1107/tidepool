@@ -268,11 +268,13 @@ export class FakeGitHubClient implements GitHubClient {
    *  origin を持たない checkout(purely-local)には呼ばれない。 */
   async pushBranch(input: PushBranchInput): Promise<void> {
     this.pushes.push(input);
-    if (this.pushFailure) throw this.pushFailure;
     execFileSync("git", ["push", "-u", "origin", input.branch], {
       cwd: input.path,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形に
+    // しないと、「失敗後に撮り直さない」(ADR 0064 決定4)を測る断言が旧コードでも通る
+    if (this.pushFailure) throw this.pushFailure;
   }
 
   /** push だけを失敗させる —— token を失ったリモート、非 ff の拒否。 */
