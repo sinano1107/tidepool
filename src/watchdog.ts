@@ -5,6 +5,7 @@ import type { Slot } from "./slot.js";
 import {
   escalateTask,
   getTask,
+  returnForCapInterruption,
   type Task,
   type TaskType,
   unfinishedDecisionSiblingCount,
@@ -125,6 +126,37 @@ function runTreeRule(
   if (!resolve) return;
   const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);
   if (resolved) releaseWorkspace(db, resolved, task, now);
+}
+
+/** 上限到達による中断(CONTEXT.md / ADR 0104)の盤面側の一撃。adapter は
+ *  「Provider が 429 で断った」ことと「容器が空になった」ことだけを観測し、
+ *  ここへ task id を渡す —— slot も tree rule も盤面の側にある(ADR 0099 決定1)。
+ *
+ *  順序と門は watchdog の回収受理(`acceptReclaimed` / `onReclaimed`)と同型で、
+ *  違いは failure question を立てないことだけである: リトライ判断が存在しない
+ *  以上、問いに判断価値が無い(ADR 0007 の理路)。同じ理由で `failTask` を通さず、
+ *  失敗統計も汚さない。
+ *
+ *  slot と status の門も同じ: 回収済み観測は非同期に届くので、その間に
+ *  session が自己申告して次のタスクが slot に入っていることがありうる —— 他人の
+ *  slot を解放しないために、ここで観測しなおす。 */
+export function capInterruptionHandler(deps: {
+  db: Db;
+  clock: Clock;
+  slot: Slot;
+  /** watchdog と同じ resolver(`buildWorkspaceResolver` 製)。無ければ workspace
+   *  追跡の無い盤面なので tree rule は走らない。 */
+  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined;
+}): (taskId: string) => void {
+  return (taskId) => {
+    if (deps.slot.currentTaskId !== taskId) return;
+    const task = getTask(deps.db, taskId);
+    if (!task || task.status !== "in_progress") return;
+    const now = deps.clock.now();
+    runTreeRule(deps.db, deps.resolve, task, now);
+    returnForCapInterruption(deps.db, task, now);
+    deps.slot.release();
+  };
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -21,9 +21,15 @@ import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
-import { listBoard, type Task } from "../src/tasks.js";
+import { Slot } from "../src/slot.js";
+import { getTask, listBoard, type Task } from "../src/tasks.js";
+import { capInterruptionHandler } from "../src/watchdog.js";
 import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
-import { workspaceNeedsHuman } from "../src/workspace.js";
+import {
+  prepareWorkspaceAtPickup,
+  type WorkspaceConfig,
+  workspaceNeedsHuman,
+} from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -97,6 +103,25 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
     task.sort_key,
     task.created_at,
   );
+}
+
+/** 盤面が打つのと同じ形の git。identity flags はインラインで、fixture のコミットに
+ *  グローバル設定が要らないようにする。 */
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd })
+    .toString()
+    .trim();
+}
+
+/** 上限到達による中断の tree rule が実際に退避する先。`main` に初期コミットが
+ *  1本ある使い捨ての checkout。 */
+function makeGitWorkspace(): WorkspaceConfig {
+  const path = mkdtempSync(join(tmpdir(), "tidepool-cap-ws-"));
+  git(path, "init", "-b", "main");
+  writeFileSync(join(path, "README.md"), "workspace\n");
+  git(path, "add", "-A");
+  git(path, "commit", "-m", "initial");
+  return { name: "tidepool", path };
 }
 
 /** A git runner pinned to the registry fixture clone, identity flags inlined
@@ -206,20 +231,26 @@ async function makeUsageWorker(pty: PtyFn) {
 async function makeWorker(
   registryFiles: Record<string, string> = {},
   extraOptions: Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]> = {},
+  /** 上限到達による中断(ADR 0104)の tree rule が引く resolver。既定は workspace
+   *  追跡の無い盤面 = tree rule は no-op。 */
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig,
 ) {
   const registryDir = await makeRegistry(registryFiles);
   const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
   const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const slot = new Slot();
   const recorder = recordingSpawn();
   const worker = new ClaudeCodeWorker({
     db,
-    clock: new FakeClock(),
+    clock,
     registry: { dir: registryDir, mode: "purely-local" },
     agent: "deckhand",
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
     containers: passthroughContainers(recorder.spawn),
+    capInterrupted: capInterruptionHandler({ db, clock, slot, resolve: resolveWorkspace }),
     ...extraOptions,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */
@@ -231,10 +262,14 @@ async function makeWorker(
   ): Task => {
     const task = makeTask(id, workspace, assignee, type);
     insertTask(db, task);
+    // scheduler と同じ順序: slot を取ってから spawn する。この unit 盤面では
+    // 1つずつ順に走らせるので、前の session の slot は次の pickup で明け渡す。
+    slot.release();
+    slot.occupy(task.id);
     worker.start(task);
     return task;
   };
-  return { worker, start, logDir, db, registryDir, ...recorder };
+  return { worker, start, logDir, db, slot, registryDir, ...recorder };
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -3002,5 +3037,143 @@ You are Kipper, the tidepool board's Kimi work agent.
     ]);
     expect(questions[0]?.question_quarantine_provider_auth).toBe("moonshot");
     expect(boardHalts(db)).toEqual([]);
+  });
+});
+
+describe("上限到達による中断(issue #467 / ADR 0104)", () => {
+  /** #447 のライブ検証(2026-08-24、Claude Code 2.1.241)の逐語。判定の根拠は
+   *  最終行 `result` の `api_error_status: 429` 一点で、その手前の
+   *  `rate_limit_event` や本文の「session limit」は見ない。 */
+  const CAP_STREAM = readFileSync(
+    join(import.meta.dirname, "fixtures", "worker-session-cap-429.stream.jsonl"),
+    "utf8",
+  );
+
+  const kinds = (db: ReturnType<typeof openDb>, taskId: string) =>
+    listEvents(db, taskId).map((e) => e.kind);
+
+  /** 中断で戻った行が queue の先頭に居るか — sort_key が盤面の最小値である。 */
+  function atQueueHead(db: ReturnType<typeof openDb>, taskId: string): boolean {
+    const { head } = db
+      .prepare("SELECT id AS head FROM tasks ORDER BY sort_key LIMIT 1")
+      .get() as { head: string };
+    return head === taskId;
+  }
+
+  it("429 で exit した session の task は todo の先頭へ戻り slot が解放される — failure question は立たない", async () => {
+    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const task = start("task-capped");
+    stdout.write(CAP_STREAM);
+
+    emitExit(1, null);
+    await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
+
+    expect(getTask(db, task.id)!.status).toBe("todo");
+    expect(atQueueHead(db, task.id)).toBe(true);
+    // 失敗ではなく環境事象なので、リトライ判断を問う question は生まれない
+    expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
+  });
+
+  it("中断の事実を盤面名義の event として worker_exited と並べて刻む(ADR 0104 決定4)", async () => {
+    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const task = start("task-capped-event");
+    stdout.write(CAP_STREAM);
+
+    emitExit(1, null);
+    await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
+
+    const events = listEvents(db, task.id);
+    const exited = events.find((e) => e.kind === "worker_exited")!;
+    expect(exited.payload).toMatchObject({ kind: "worker_exited", exit_code: 1 });
+    const interrupted = events.find((e) => e.kind === "cap_interrupted")!;
+    expect(interrupted.origin).toBe("board");
+    expect(interrupted.worker_id).toBe("tidepool");
+    // 刻むのは1件だけ
+    expect(events.filter((e) => e.kind === "cap_interrupted")).toHaveLength(1);
+  });
+
+  it("throttle の状態には書かない — 再開の門は次の pickup の使用量観測である(ADR 0104 決定3)", async () => {
+    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    start("task-capped-throttle");
+    const before = db.prepare("SELECT * FROM throttle_state").all();
+    stdout.write(CAP_STREAM);
+
+    emitExit(1, null);
+    await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
+
+    expect(db.prepare("SELECT * FROM throttle_state").all()).toEqual(before);
+  });
+
+  it("401 の envelope は従来どおり認証 quarantine に落ち、上限到達とは混ざらない", async () => {
+    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const task = start("task-capped-401");
+    stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
+
+    emitExit(1, null);
+
+    expect(kinds(db, task.id)).not.toContain("cap_interrupted");
+    expect(getTask(db, task.id)!.status).toBe("in_progress");
+    expect(slot.currentTaskId).toBe(task.id);
+    expect(
+      listBoard(db)
+        .filter((t) => t.type === "question")
+        .map((t) => t.title),
+    ).toEqual([CLI_AUTH_QUESTION_TITLE]);
+  });
+
+  it("rate_limit_event を含むだけの正常な session では何も起きない(既存 fixture の回帰)", async () => {
+    const { start, stdout, emitExit, db, slot } = await makeWorker();
+    const task = start("task-not-capped");
+    stdout.write(
+      readFileSync(
+        join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"),
+        "utf8",
+      ),
+    );
+
+    emitExit(0, null);
+
+    expect(kinds(db, task.id)).not.toContain("cap_interrupted");
+    expect(getTask(db, task.id)!.status).toBe("in_progress");
+    expect(slot.currentTaskId).toBe(task.id);
+  });
+
+  it("slot 解放は容器の回収済み観測の後に起きる — 送達も exit も観測ではない(ADR 0099 決定3)", async () => {
+    // 容器が空になる瞬間をテストが握る器。process 境界は makeWorker の既定と
+    // 同じ recordingSpawn だが、容器はこちらが差し替えるので stdout / exit も
+    // この recorder から撃つ。
+    const session = recordingSpawn();
+    const runtime = new FakeContainerRuntime(session.spawn);
+    const ws = makeGitWorkspace();
+    const { start, db, slot } = await makeWorker(
+      {},
+      { containers: new WorkerContainers(runtime) },
+      () => ws,
+    );
+    const { stdout, emitExit } = session;
+    const task = start("task-capped-ordering");
+    // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット)を
+    // 実物で通す —— tree rule はその基準に対して退避する
+    await prepareWorkspaceAtPickup(db, ws, task, {});
+    // 途中ターンの WIP: session はタスクブランチの上で作業していた
+    writeFileSync(join(ws.path, "wip.txt"), "half-done work\n");
+    stdout.write(CAP_STREAM);
+
+    emitExit(1, null);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // 容器はまだ空になっていない — exit を観測に数えない
+    expect(slot.currentTaskId).toBe(task.id);
+    expect(getTask(db, task.id)!.status).toBe("in_progress");
+
+    runtime.fireEmpty(task.id);
+    await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
+
+    expect(getTask(db, task.id)!.status).toBe("todo");
+    // tree rule が走った: WIP はタスクブランチへ退避され、checkout は保護ブランチへ戻る
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+    expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("half-done work");
+    expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
   });
 });

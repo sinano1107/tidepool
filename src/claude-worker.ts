@@ -6,7 +6,11 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { isCliAuthFailureEnvelope, quarantineCliAuthForProvider } from "./cli-auth.js";
+import {
+  isCapInterruptionEnvelope,
+  isCliAuthFailureEnvelope,
+  quarantineCliAuthForProvider,
+} from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -930,6 +934,13 @@ function isCliAuthFailure(parsed: Record<string, unknown> | null): boolean {
   return parsed?.type === "result" && isCliAuthFailureEnvelope(parsed);
 }
 
+/** 上限到達による中断(ADR 0104 決定2)。`isCliAuthFailure` と同じ形 — 判定は
+ *  `result` envelope の構造化フィールド一点であり、stream 中の `rate_limit_event`
+ *  も本文の「session limit」も根拠にしない。 */
+function isCapInterruption(parsed: Record<string, unknown> | null): boolean {
+  return parsed?.type === "result" && isCapInterruptionEnvelope(parsed);
+}
+
 /** What the stdout scan collected about this session's advisor while the
  *  stream ran (issue #33). Both are needed at exit and neither survives on the
  *  result line: the consultations happen in assistant lines, and the main
@@ -1097,6 +1108,13 @@ export interface ClaudeWorkerOptions {
    *  "use the real thing"), and why `buildWorkerOptions` in server-options.ts
    *  owns this literal with a test watching its keys (ADR 0043). */
   advisorDisabled?: boolean;
+  /** 上限到達による中断(ADR 0104)の盤面側の一撃 —— `capInterruptionHandler` 製。
+   *  adapter が持つのは「429 で断られた」と「容器が空になった」の観測だけで、
+   *  slot も tree rule も先頭復帰も向こう側にある(ADR 0099 決定1)。`advisorDisabled`
+   *  と同じ機能フィールドなので、`buildWorkerOptions` が literal を所有し
+   *  網羅テストが見張る。不在 → 中断を観測しても盤面は動かない(workspaceless な
+   *  unit 盤面のための姿)。 */
+  capInterrupted?: (taskId: string) => void;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
@@ -2094,6 +2112,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // exit without re-reading the file back off disk
     let lastResult: StreamResultEvent | null = null;
     let cliAuthFailed = false;
+    let capInterrupted = false;
     let buffered = "";
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
@@ -2111,6 +2130,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         const parsed = parseStreamLine(line);
         lastResult = readResultEvent(parsed) ?? lastResult;
         cliAuthFailed ||= isCliAuthFailure(parsed);
+        capInterrupted ||= isCapInterruption(parsed);
         advisorObserved.consultations += countAdvisorConsultations(parsed);
         advisorObserved.mainModel = readInitModel(parsed) ?? advisorObserved.mainModel;
         if (!toolSurfaceObserved) {
@@ -2159,6 +2179,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const finalParsed = parseStreamLine(buffered);
       lastResult = readResultEvent(finalParsed) ?? lastResult;
       cliAuthFailed ||= isCliAuthFailure(finalParsed);
+      capInterrupted ||= isCapInterruption(finalParsed);
       // 文字の途中で stream が閉じた場合の未完バイト列を flush(この場合の
       // 置換文字は捏造ではなく「途中で切れた」事実そのもの)
       stderrBuffered = trimStderrTail(stderrBuffered + stderrDecoder.end());
@@ -2187,6 +2208,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         },
         at: this.options.clock.now(),
       });
+      // ADR 0104 決定1: 上限到達による中断は失敗ではない —— failure question を
+      // 立てず、タスクを `todo` の先頭へ戻して slot を解放する。**解放は容器が
+      // 空になった観測のあと**(ADR 0099 決定3): exit は root process の話で
+      // あって容器が空になった証拠ではない。観測が届かないまま止まった session は
+      // 既存の watchdog(時限 → 強制回収 → 回収 timeout → Containment quarantine)が
+      // 受ける。帰属は 401 と同じく spawn 時の provider —— Claude CLI を喋る他
+      // Provider も envelope が同じなのでこの1本を通る(決定5)。
+      const capInterruption = this.options.capInterrupted;
+      if (capInterrupted && capInterruption) {
+        void this.containers.reclaimed(task.id).then(() => capInterruption(task.id));
+      }
       // issue #356: この session の Precedent を投影する。**worker_exited を
       // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み
       // ストリームが閉じたあと**でなければ transcript の末尾が届いていない —

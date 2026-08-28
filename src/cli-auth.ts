@@ -41,6 +41,14 @@ export function isCliAuthFailureEnvelope(value: unknown): boolean {
   return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 401;
 }
 
+/** 上限到達による中断(CONTEXT.md / ADR 0104 決定2): Provider の側から返る
+ *  確定的な上限到達の証拠は `result` envelope の `api_error_status: 429` 一点で
+ *  ある。認証の述語と同じ posture で、"session limit" のような文言や stream 中の
+ *  `rate_limit_event` からは推測しない。 */
+export function isCapInterruptionEnvelope(value: unknown): boolean {
+  return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 429;
+}
+
 /** The probe died on its own spend cap, not on an authentication verdict
  * (issue #466) — the envelope's structured marker, so callers never match an
  * error-message substring. */

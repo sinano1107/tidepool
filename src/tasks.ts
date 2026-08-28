@@ -838,6 +838,24 @@ export function moveTask(
   return getTask(db, task.id)!;
 }
 
+/** 上限到達による中断(CONTEXT.md / ADR 0104 決定1・決定4): 走っていたタスクを
+ *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
+ *  `failTask` は通らず、question も失敗統計も生まれない —— 再開の門は次の pickup の
+ *  Throttle である。先頭復帰そのものは retry 回答と同じ `moveTask` の一撃。 */
+export function returnForCapInterruption(db: Db, task: Task, now: Date): void {
+  db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
+    appendEvent(db, {
+      taskId: task.id,
+      workerId: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "cap_interrupted" },
+      at: now,
+    });
+    moveTask(db, task, null, now, BOARD_WORKER_ID, "board");
+  })();
+}
+
 function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
   if (after === null) {
     const { minKey } = db
