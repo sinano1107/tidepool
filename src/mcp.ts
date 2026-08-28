@@ -233,6 +233,24 @@ export async function handleRootWorkLanding(
     if (strict) throw new Error("GitHub is not configured for PR promotion");
     return;
   }
+  // ADR 0053: 既に PR を開いているタスクの着地は、PR を増やさず**その PR を更新
+  // する** —— merge back された付帯子の修理を載せるのは、開いたままの PR に向けた
+  // この1本の push である(issue #400)。再発火も strict retry も同じここを通る:
+  // 分けて書くと retry が既に開いている PR へ2本目を撃つ。merge 済みの PR には
+  // 押し直す先が無い(#504)。
+  if (task.pr_number !== null) {
+    if (await deps.github.isPullRequestMerged({ path: workspace.path, number: task.pr_number })) {
+      if (strict) throw new Error(`PR #${task.pr_number} is already merged`);
+      return;
+    }
+    await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
+    // ADR 0064 決定4: 昇格と同じく `refs/remotes/origin/task/<id>` を1本動かす —— ただし
+    // 撮り直すのは push が**成功した後**だけ。失敗後に撮ると、その窓で偽造された ref を
+    // 基準へ迎え入れる(昇格側の `finally` は push 済みの後の `gh pr create` 失敗を守る型で、
+    // ここでは push そのものが落ちうる)
+    rebaselineRef(deps.db, workspace, `refs/remotes/origin/${taskBranch(task.id)}`);
+    return;
+  }
   // an issue-backed task's stored title is only the "#N" placeholder
   // (rowToTask) — the PR title is another of ADR 0016's real use-moments,
   // so it resolves the live issue instead when there is one.
@@ -292,7 +310,8 @@ async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
  *  そのまま発火点になる。着地の根は系譜で決まり木の頂点とは限らない(着地済みの根の
  *  下で切られた修理は自分が根になる — ADR 0053)ので、完了済みの work 祖先すべてに
  *  撃つ: 根でない祖先は `handleRootWorkLanding` が系譜で飛ばし、着地済みの祖先は
- *  `taskHasLanded` が飛ばす。門はその中で読み直されるので、待っている間に新しい付帯子が
+ *  `taskHasLanded` が飛ばす —— ただし PR を開いたままの祖先だけは通し、開いている PR を
+ *  push で更新させる(issue #400)。門はその中で読み直されるので、待っている間に新しい付帯子が
  *  付いていればもう一度待つ。 */
 export async function relandRootAncestor(deps: McpDeps, settled: Task): Promise<void> {
   for (
@@ -301,7 +320,10 @@ export async function relandRootAncestor(deps: McpDeps, settled: Task): Promise<
     ancestor = ancestor.parent_id ? getTask(deps.db, ancestor.parent_id) : undefined
   ) {
     if (ancestor.type !== "work" || ancestor.status !== "done") continue;
-    if (taskHasLanded(deps.db, ancestor.id)) continue;
+    // 着地済みでも、開いたままの PR を持つ祖先だけは撃ち直す —— merge back された
+    // 修理をその PR に載せるため(ADR 0053 / issue #400)。他の着地面(着地対象なし /
+    // purely-local の着地 question)は痕跡どおり二度と起こさない。
+    if (taskHasLanded(deps.db, ancestor.id) && ancestor.pr_number === null) continue;
     await openHandoffPr(deps, ancestor);
   }
 }
