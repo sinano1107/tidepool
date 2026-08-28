@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { platform } from "node:process";
 import { resolveExecutionAgent, UnknownAgentError } from "./agent.js";
 import {
@@ -19,6 +20,12 @@ import {
   probeToolSurfaceCapability,
 } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
+import {
+  CODEX_CLI_VERSION,
+  CodexWorker,
+  createCodexCapabilityCheck,
+} from "./codex-worker.js";
+import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
@@ -33,6 +40,8 @@ import {
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
+  assertValidProvider,
+  canonicalHarness,
   InvalidAgentProviderError,
   loadRegistry,
   ownEntry,
@@ -46,10 +55,11 @@ import {
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
-import type { Task } from "./tasks.js";
+import { resolveTaskAgent, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
-import type { WorkerAdapter } from "./worker.js";
+
+import { CanonicalWorkerRouter, type WorkerAdapter } from "./worker.js";
 import type { WorkerContainers } from "./worker-container.js";
 import {
   listRegisteredWorkspaces,
@@ -142,6 +152,10 @@ export interface BoardComposition {
   /** ADR 0097 決定4 / issue #445: Moonshot Platform キーの置き場(mode 600 の
    *  状態ファイル、平文は盤面の env に載せない)。アダプタが spawn 時にだけ読む。 */
   moonshotApiKeyFile: string;
+  /** ADR 0098: isolated Board-owned Codex login/cache/config root. */
+  codexHome: string;
+  /** ADR 0098: absolute Codex executable; the live preflight proves it exists. */
+  codexExecutable: string;
   /** ADR 0024 / issue #50: 盤面の GitHub 識別情報。ファイルの読み取りは合成 root
    *  側の I/O なので、ここには解決済みの値だけが来る。未設定 → GitHub 機能は
    *  すべて fail-closed で off。 */
@@ -216,6 +230,7 @@ export function buildWorkerOptions(
     workspacesDir: board.workspacesDir,
     mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
     logDir: board.logDir,
+    cliVersion: () => execFileSync("claude", ["--version"], { encoding: "utf8" }).trim(),
     // ADR 0040: 床そのもの — 重なっている workspace では spawn せず quarantine
     boardState: board.boardState,
     // issue #33 判断8: 不在が「マスクされていない」を意味する口なので、渡し忘れは
@@ -231,9 +246,64 @@ export function buildWorkerOptions(
  *  合成 root から渡されるのは env 由来のスカラだけになる。 */
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
-  if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, containers }) =>
-    new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock, containers }));
+  const resolveHarness = harnessResolver(board);
+  if (!registryDir || !resolveHarness) return () => new LoggingWorker();
+  return ({ db, clock, containers }) => {
+    const registry = { dir: registryDir, mode: board.registryMode } as const;
+    return new CanonicalWorkerRouter({
+      id: board.defaultAgentName,
+      resolveHarness,
+      adapters: {
+        "claude-code": new ClaudeCodeWorker(
+          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers }),
+        ),
+        codex: new CodexWorker({
+          db,
+          clock,
+          containers,
+          registry,
+          agent: board.defaultAgentName,
+          auditorName: board.auditorName,
+          workspace: board.workspaceName,
+          workspacesDir: board.workspacesDir,
+          mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
+          logDir: board.logDir,
+          codexHome: board.codexHome,
+          executable: board.codexExecutable,
+          cliVersion: CODEX_CLI_VERSION,
+          boardState: board.boardState,
+        }),
+      },
+    });
+  };
+}
+
+function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<typeof canonicalHarness>) | undefined {
+  if (!board.registryDir) return undefined;
+  return (task) => {
+    const registry = loadBoardRegistry(board);
+    const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
+    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
+    return canonicalHarness(agent.definition.provider as Provider);
+  };
+}
+
+function agentsUsingHarnessesResolver(
+  board: BoardComposition,
+): ((harnesses: readonly ReturnType<typeof canonicalHarness>[]) => string[]) | undefined {
+  if (!board.registryDir) return undefined;
+  return (harnesses) =>
+    Object.values(loadBoardRegistry(board).agents)
+      .filter((agent) => {
+        try {
+          assertValidProvider(agent.name, agent.provider, agent.advisor, agent.skills);
+          return harnesses.includes(canonicalHarness(agent.provider as Provider));
+        } catch (error) {
+          if (error instanceof InvalidAgentProviderError) return false;
+          throw error;
+        }
+      })
+      .map((agent) => agent.name);
 }
 
 /** One spelling for every registry-derived composition seam: mode is resolved
@@ -559,6 +629,17 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
+  const workspace = workspaceConfig(board);
+  const codexContainment = workspace && createCodexCapabilityCheck({
+    executable: board.codexExecutable,
+    codexHome: board.codexHome,
+    workspace: workspace.path,
+    mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
+  });
+  const claudeContainment = async (): Promise<ContainmentCapability> => {
+    const sandbox = checkSandboxCapability(platform);
+    return sandbox.available ? probeToolSurfaceCapability() : sandbox;
+  };
   return {
     dbPath: board.dbPath,
     credential: board.credential,
@@ -566,7 +647,7 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     mcpPort: board.mcpPort,
     clock: board.clock,
     worker: buildWorkerFactory(board),
-    workspace: workspaceConfig(board),
+    workspace,
     resolveWorkspace: workspaceResolver(board),
     github,
     workspaceAdmin: workspaceAdmin(board, github),
@@ -591,6 +672,16 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
+    agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
+    resolveHarness: harnessResolver(board),
+    harnessContainment: board.registryDir
+      ? (harness) => harness === "codex"
+        ? (codexContainment?.() ?? Promise.resolve({
+            available: false as const,
+            reason: "no execution workspace is configured for the Codex preflight",
+          }))
+        : claudeContainment()
+      : undefined,
     registryReachability: registryReachabilityCheck(board),
     cliAuth: createClaudeCliAuthCheck(),
     // ADR 0097 決定2 / issue #446: 回答受理時の再検証が provider ごとに撃つ

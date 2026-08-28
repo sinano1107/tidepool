@@ -21,6 +21,7 @@ import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
+import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
   addIssueCommentThroughHumanDoor,
   assertAssigneeKnown,
@@ -39,6 +40,7 @@ import { removePushSubscription, savePushSubscription } from "./push.js";
 import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from "./quiet-hours.js";
 import {
   authorityProfileSchema,
+  type Harness,
   InvalidAgentNameError,
   InvalidAgentProviderError,
   InvalidAllowedDomainError,
@@ -501,6 +503,7 @@ export interface ApiRouterDeps {
    *  fs 側の成立だけで解除できてしまってはならない。
    *  Absent → そのゲートを持たない盤面。 */
   containment?: ContainmentCheck;
+  harnessContainment?: HarnessContainmentCheck;
   /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
    *  quarantine の確認回答の受理は、容器がまだ populated なら拒まれ、空を再観測
    *  できたときだけ tree rule を走らせて slot を解放する。Absent → watchdog を
@@ -519,6 +522,7 @@ export interface ApiRouterDeps {
    *  display shares with the scheduler's gate. Absent → no registry configured,
    *  so no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -616,6 +620,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     defaultAgentName,
     agentRegistered,
     containment,
+    harnessContainment,
     reclaim,
     registryReachability,
     cliAuth,
@@ -630,6 +635,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     translationClient,
     fableAgents,
     agentsSpeakingProviders,
+    agentsUsingHarnesses,
     isProtectedWorkspace,
     boardState,
   } = deps;
@@ -642,7 +648,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
    *  キュービューの skipped 表示は同じ集合を見なければならない(tasks.ts の
    *  「乖離させない」の線) — 述語だけでなく、そこへ渡す引数も1つの式から出す。 */
   const excludedAssignees = () =>
-    pickupExcludedAssignees(db, isFablePickupBlocked(db, clock.now()), fableAgents, agentsSpeakingProviders);
+    pickupExcludedAssignees(
+      db,
+      isFablePickupBlocked(db, clock.now()),
+      fableAgents,
+      agentsSpeakingProviders,
+      agentsUsingHarnesses,
+    );
 
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
@@ -1287,7 +1299,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         task,
         parsed.data.reason ?? null,
         clock.now(),
-        humanCancelDefaults(db, workspace, defaultAgentName, auditorName, agentsSpeakingProviders),
+        humanCancelDefaults(
+          db,
+          workspace,
+          defaultAgentName,
+          auditorName,
+          agentsSpeakingProviders,
+          agentsUsingHarnesses,
+        ),
         "webui",
       );
       // cancelling can unblock the target's parent (its last unsettled child is
@@ -1333,6 +1352,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           relandRootAncestor,
           agentRegistered,
           containment,
+          harnessContainment,
           reclaim,
           registryReachability,
           cliAuth,

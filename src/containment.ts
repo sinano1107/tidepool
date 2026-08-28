@@ -54,6 +54,20 @@ const UNPROBED: ContainmentCapability = {
     "containment check ran, so whether an unauthenticated request is refused is unknown",
 };
 
+/** Harnesses share the container runtime and the Board's human surface, while
+ * each adapter proves its own sandbox and tool surface. A failure here is
+ * genuinely host-wide, so it keeps ADR 0099's single Containment quarantine. */
+export function composeCommonContainment(
+  containerRuntime: () => SandboxCapability,
+  humanSurface: () => Promise<ContainmentCapability> | undefined,
+): ContainmentCheck {
+  return async () => {
+    const container = containerRuntime();
+    if (!container.available) return container;
+    return (await humanSurface()) ?? UNPROBED;
+  };
+}
+
 /** 人間面の自己検査: 自分の人間ポートへ**無認証で1回**撃ち、401 が返ることを
  *  確かめる(ADR 0036)。
  *

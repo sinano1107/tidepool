@@ -49,6 +49,8 @@ function composition(): BoardComposition {
     auditorName: "shako",
     boardState: [],
     moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
+    codexHome: "/nonexistent/codex-home",
+    codexExecutable: "/nonexistent/bin/codex",
     githubAuth: undefined,
     githubTokenFile: undefined,
     vapid: undefined,
@@ -293,7 +295,7 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
 it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", () => {
   expect(source("main.ts")).not.toMatch(/new ClaudeCodeWorker\(/);
   // 本番の合成が実際にその一覧を使っていること(呼び出しの**形**は主張しない)
-  expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(buildWorkerOptions\(/);
+  expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(\s*buildWorkerOptions\(/);
 });
 
 /** キーが揃っていることと、**どのキーに何が刺さっているか**は別の主張である

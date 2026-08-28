@@ -63,6 +63,7 @@ function makeTask(
     question_quarantine_registry: null,
     question_quarantine_cli_auth: null,
     question_quarantine_provider_auth: null,
+    question_quarantine_harness: null,
     question_cli_auth_expiry_warning: null,
     github_issue_number: null,
     created_at: "2026-07-08T00:00:00.000Z",
@@ -2015,6 +2016,8 @@ describe("ClaudeCodeWorker", () => {
         registry_commit: oldHash,
         definition_version: "0.3.1",
         advisor: null,
+        harness: "claude-code",
+        cli_version: "test",
       },
       at: new FakeClock().now(),
     });
@@ -2059,7 +2062,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
@@ -2089,7 +2092,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
 
@@ -2116,7 +2119,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
@@ -2138,7 +2141,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2207,6 +2210,8 @@ describe("ClaudeCodeWorker", () => {
         registry_commit: "0000000000000000000000000000000000000000",
         definition_version: "0.2.0",
         advisor: null,
+        harness: "claude-code",
+        cli_version: "test",
       },
       at: new FakeClock().now(),
     });
@@ -2222,7 +2227,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2276,7 +2281,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null },
+      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     // independent review: unset assignee → resolves to the Auditor pointer

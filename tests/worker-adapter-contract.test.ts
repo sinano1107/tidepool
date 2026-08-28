@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker, type PtyFn } from "../src/claude-worker.js";
+import { CODEX_CLI_VERSION, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { LoggingWorker } from "../src/server-options.js";
 import type { WorkerAdapter } from "../src/worker.js";
@@ -61,6 +62,26 @@ workerAdapterContract("ClaudeCodeWorker", async () => {
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
     pty: deadPty,
+    containers: passthroughContainers(),
+  });
+});
+
+workerAdapterContract("CodexWorker", async () => {
+  const registryDir = await makeRegistry();
+  const codexHome = await mkdtemp(join(tmpdir(), "tidepool-contract-codex-home-"));
+  const logDir = await mkdtemp(join(tmpdir(), "tidepool-contract-codex-logs-"));
+  dirs.push(registryDir, codexHome, logDir);
+  return new CodexWorker({
+    db: openDb(":memory:"),
+    clock: new FakeClock(),
+    registry: { dir: registryDir, mode: "purely-local" },
+    agent: "deckhand",
+    workspace: "tidepool",
+    mcpUrl: "http://127.0.0.1:4589/mcp",
+    logDir,
+    codexHome,
+    cliVersion: CODEX_CLI_VERSION,
+    executable: "/opt/tidepool/bin/codex",
     containers: passthroughContainers(),
   });
 });

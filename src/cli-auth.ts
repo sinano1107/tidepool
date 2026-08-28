@@ -174,6 +174,9 @@ const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Exclude<Provider, "anthropic">, stri
     "Place a valid Moonshot Platform API key in the board's key file " +
     "(`~/.tidepool/moonshot-api-key`, or the path `TIDEPOOL_MOONSHOT_API_KEY_FILE` " +
     "points at), mode 600.",
+  openai:
+    "Sign in to ChatGPT with `codex login` using the board worker's isolated " +
+    "`CODEX_HOME`; API keys are not accepted for the canonical Codex route (ADR 0098).",
 };
 
 function quarantineProviderAuth(
@@ -188,7 +191,7 @@ function quarantineProviderAuth(
       type: "question",
       title: providerAuthQuestionTitle(provider),
       purpose:
-        `The Claude CLI returned an authentication failure while speaking the ${provider} ` +
+        `The canonical worker Harness returned an authentication failure while speaking the ${provider} ` +
         `provider, so the board has stopped pickup of the agents declared with ` +
         `\`provider: ${provider}\`. Workers and board calls on other providers are unaffected. ` +
         "Restore the credential:\n\n" +

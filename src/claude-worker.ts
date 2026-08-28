@@ -57,6 +57,7 @@ import {
 // ever-growing set of aliases/full names) it's safe and worth validating
 // here — the adapter is where vendor-specific knowledge belongs (ADR 0005)
 const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+export const CLAUDE_CLI_VERSION = "2.1.241 (Claude Code)";
 
 /** Shared by boot-time default validation and every per-task spawn — one
  *  check, not a copy at each call site. */
@@ -558,7 +559,7 @@ const MOONSHOT_BASE_URL = "https://api.moonshot.ai/anthropic";
  *  the provider's own notation — a moonshot spawn handed "sonnet" dies with
  *  model-not-found). `kimi-k3[1m]` is the default in Moonshot's official
  *  Claude Code guide (platform.kimi.ai, 2026-08). */
-const PROVIDER_DEFAULT_MODEL: Record<Provider, string> = {
+const PROVIDER_DEFAULT_MODEL: Record<Exclude<Provider, "openai">, string> = {
   anthropic: "sonnet",
   moonshot: "kimi-k3[1m]",
 };
@@ -1061,6 +1062,8 @@ export interface ClaudeWorkerOptions {
   mcpUrl: string;
   /** Where stream-json transcripts and spawn-time MCP configs land. */
   logDir: string;
+  /** CLI version established by production composition and recorded on every attempt. */
+  cliVersion?: string | (() => string);
   /** 盤面側 supervisor(ADR 0099 決定2): worker session の spawn はここが作る
    *  容器の中で起き、force / reclaimed もここを通る。**省略できない** — adapter が
    *  自前の既定容器を持つと、そこだけ回収の弱い経路が生える(ADR 0027 の fake
@@ -1747,6 +1750,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // (MoonshotApiKeyMissingError, a failed start) rather than spawning a
     // worker that can only 401.
     const provider = agent.definition.provider as Provider;
+    if (provider === "openai") {
+      throw new Error('canonical route "openai -> codex" cannot run through Claude Code (ADR 0098)');
+    }
     const routing: ProviderRouting = {
       provider,
       // ADR 0005's pinning rule, spelled in the provider's own model notation —
@@ -1908,6 +1914,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // than sitting beside it — "no advisor this session" then has a single
     // spelling in the flags, in the env, and in worker_spawned.
     const advisor = this.options.advisorDisabled === true ? undefined : definition.advisor;
+    const cliVersion = typeof this.options.cliVersion === "function"
+      ? this.options.cliVersion()
+      : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
     // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
     // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
     // reclaimed の相手が居ない session は生まれない。
@@ -2054,6 +2063,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // — the two differ under the kill switch, and only the frontmatter is
         // recoverable from registry_commit above.
         advisor: advisor ?? null,
+        harness: "claude-code",
+        cli_version: cliVersion,
       },
       at: this.options.clock.now(),
     });

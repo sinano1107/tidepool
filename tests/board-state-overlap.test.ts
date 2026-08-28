@@ -122,6 +122,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
     apiTokenFile: "/home/pi/.tidepool/api-token",
     githubTokenFile: "/home/pi/.tidepool/github-token",
     moonshotApiKeyFile: "/home/pi/.tidepool/moonshot-api-key",
+    codexHome: "/home/pi/.tidepool/codex",
     cwd: "/srv/tidepool",
     servedRoot: "/srv/tidepool",
   };
@@ -133,6 +134,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
       "/home/pi/.tidepool/api-token",
       "/home/pi/.tidepool/github-token",
       "/home/pi/.tidepool/moonshot-api-key",
+      "/home/pi/.tidepool/codex",
       "/srv/tidepool",
     ]);
   });
@@ -144,6 +146,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
     expect(labels).toContain("human-surface token file (TIDEPOOL_API_TOKEN_FILE)");
     expect(labels).toContain("GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)");
     expect(labels).toContain("Moonshot API key file (TIDEPOOL_MOONSHOT_API_KEY_FILE)");
+    expect(labels).toContain("Codex worker home (TIDEPOOL_CODEX_HOME)");
     expect(labels).toContain("the board's own working directory (process cwd)");
   });
 
@@ -162,7 +165,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
 
   it("GitHub token ファイルは env 未設定なら守る対象そのものが無いので落ちる(ADR 0024 の fail-closed な不在)", () => {
     const paths = boardStatePaths({ ...INPUT, githubTokenFile: undefined });
-    expect(paths).toHaveLength(5);
+    expect(paths).toHaveLength(6);
     expect(paths.some((p) => p.label.includes("GITHUB"))).toBe(false);
   });
 });

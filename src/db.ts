@@ -98,6 +98,10 @@ const TASKS_TABLE_DDL = `
       -- board's own provider keeps using that one. Never set via MCP or
       -- JSON API.
       question_quarantine_provider_auth TEXT,
+      -- system-internal only (ADR 0098): the canonical Harness whose
+      -- containment capability is unavailable. Resource-scoped, never a
+      -- board-wide halt; set only by harness-containment.ts.
+      question_quarantine_harness TEXT,
       -- system-internal only (ADR 0075): the configured expiry epoch for
       -- which this advance warning was created. It never halts pickup.
       question_cli_auth_expiry_warning INTEGER,
@@ -484,6 +488,7 @@ export function openDb(path: string): Db {
     "question_quarantine_workspace",
     "question_quarantine_agent",
     "question_quarantine_provider_auth",
+    "question_quarantine_harness",
     "workspace",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);

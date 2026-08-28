@@ -41,6 +41,8 @@ export interface BoardStatePathsInput {
    *  手に渡る。apiTokenFile と同じく**キー未配置でもパスは守る** — 置かれた瞬間に
    *  無防備にならないよう、既定パスは常に保護対象に並ぶ。 */
   moonshotApiKeyFile: string;
+  /** ADR 0098: Codex ChatGPT login/cache and Board-owned hook files. */
+  codexHome: string;
   /** 盤面の実行 checkout(ADR 0040 の5点目)。盤面は `public/` の静的資産を
    *  実行中の checkout から配信するので、走っている checkout 自体が workspace に
    *  なると worker が `public/index.html` を書き換えられ、次のリロードで人間の
@@ -84,6 +86,7 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
       label: "Moonshot API key file (TIDEPOOL_MOONSHOT_API_KEY_FILE)",
       path: input.moonshotApiKeyFile,
     },
+    { label: "Codex worker home (TIDEPOOL_CODEX_HOME)", path: input.codexHome },
     ...checkouts,
   ];
 }

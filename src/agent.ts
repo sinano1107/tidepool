@@ -50,7 +50,7 @@ export function resolveExecutionAgent(
   const name = taskAssignee ?? defaultAgentName;
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
-  assertValidProvider(name, definition.provider, definition.advisor);
+  assertValidProvider(name, definition.provider, definition.advisor, definition.skills);
   const profile = ownEntry(registry.authority, definition.authority);
   if (!profile) throw new Error(`unknown authority profile: ${definition.authority}`);
   return { name, definition, profile };

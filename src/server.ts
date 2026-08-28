@@ -15,6 +15,7 @@ import type { Clock } from "./clock.js";
 import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
+  composeCommonContainment,
   composeContainment,
   containmentPickupBlocked,
   HUMAN_SURFACE_PROBE_PATH,
@@ -24,11 +25,16 @@ import { type Db, openDb } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
+import {
+  type HarnessContainmentCheck,
+  harnessContainmentPickupBlocked,
+} from "./harness-containment.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter, handleRootWorkLanding, relandRootAncestor } from "./mcp.js";
 import { checkPendingAutoMerges, observeMergesOutsideBoard } from "./merge.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
+import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
   type Provider,
@@ -42,7 +48,7 @@ import {
 import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import { DEFAULT_AUDITOR_NAME, getTask } from "./tasks.js";
+import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -230,6 +236,9 @@ export interface ServerOptions {
    *  the given providers, read fresh by the scheduler's provider-auth gate.
    *  Absent → no registry configured, so no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  resolveHarness?: (task: Task) => Harness;
+  harnessContainment?: HarnessContainmentCheck;
   /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
    *  re-verification a provider-auth Confirmation question's answer fires.
    *  The board's own provider (anthropic) keeps `cliAuth` below; this record
@@ -428,13 +437,16 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const gate = options.containment;
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
   const containment = gate
-    ? composeContainment(
-        () => containers.preflight(),
-        gate.sandboxCapability,
-        () => probeHumanSurface?.(),
-        gate.toolSurface,
-      )
+    ? options.harnessContainment
+      ? composeCommonContainment(() => containers.preflight(), () => probeHumanSurface?.())
+      : composeContainment(
+          () => containers.preflight(),
+          gate.sandboxCapability,
+          () => probeHumanSurface?.(),
+          gate.toolSurface,
+        )
     : undefined;
+  const harnessContainment = options.harnessContainment;
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -447,6 +459,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     github: options.github,
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
+    agentsUsingHarnesses: options.agentsUsingHarnesses,
+    resolveHarness: options.resolveHarness,
+    harnessContainment,
     containment,
     registryReachability,
     cliAuth: options.cliAuth,
@@ -552,6 +567,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       defaultAgentName: worker.id,
       agentRegistered: options.agentRegistered,
       containment,
+      harnessContainment,
       // ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。確認回答の
       // 受理時に容器の空を再観測し、空なら tree rule を走らせて slot を解放する。
       reclaim: watchdog,
@@ -568,6 +584,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
+      agentsUsingHarnesses: options.agentsUsingHarnesses,
       isProtectedWorkspace: options.isProtectedWorkspace,
       // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
       // 床と同じ1つの配列(3箇所で別々に組み立てない)
@@ -591,6 +608,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       agentRegistered: options.agentRegistered,
       isProtectedWorkspace: options.isProtectedWorkspace,
       containment,
+      harnessContainment,
       reclaim: watchdog,
       registryReachability,
       cliAuth: options.cliAuth,
@@ -598,6 +616,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
+      agentsUsingHarnesses: options.agentsUsingHarnesses,
       throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspaceAdmin,
       agentAdmin,
@@ -646,6 +665,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // **await する**: 起動が返った時点で盤面の封じ込め状態が確定していてほしい
   // (実 HTTP を1往復するので、投げっぱなしだと「起動直後は無検査」の窓ができる)。
   if (containment) await containmentPickupBlocked(db, containment, options.clock.now());
+  if (harnessContainment) {
+    for (const harness of ["claude-code", "codex"] as const) {
+      await harnessContainmentPickupBlocked(db, harness, harnessContainment, options.clock.now());
+    }
+  }
   const cliAuthExpiresAt = options.cliAuthExpiresAt;
   warnCliAuthExpiry(db, cliAuthExpiresAt, options.clock.now());
   const stopCliAuthExpiryWarning = cliAuthExpiresAt

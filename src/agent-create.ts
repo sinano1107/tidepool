@@ -101,7 +101,7 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
-  assertValidProvider(input.name, input.provider, normalizeAdvisor(input.advisor));
+  assertValidProvider(input.name, input.provider, normalizeAdvisor(input.advisor), input.skills);
   commitAgentFile(
     deps,
     { ...input, advisor: normalizeAdvisor(input.advisor), version: "1" },
@@ -129,7 +129,12 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
   // 存在せず、実効フィールドが同じ再送で刻印だけ進めない
   const normalizedInput = { ...input, advisor: normalizeAdvisor(input.advisor) };
-  assertValidProvider(input.name, normalizedInput.provider, normalizedInput.advisor);
+  assertValidProvider(
+    input.name,
+    normalizedInput.provider,
+    normalizedInput.advisor,
+    normalizedInput.skills,
+  );
   if (!sameEffectiveFields(existing, normalizedInput)) {
     commitAgentFile(
       deps,
