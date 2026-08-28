@@ -37,6 +37,7 @@
     "NavRow": "../components/navigation/NavRow.jsx",
     "ScreenHeader": "../components/navigation/ScreenHeader.jsx",
     "Card": "../components/surfaces/Card.jsx",
+    "FadeScroll": "../components/surfaces/FadeScroll.jsx",
     "Dialog": "../components/surfaces/Dialog.jsx",
     "Tag": "../components/surfaces/Tag.jsx",
     "Toast": "../components/surfaces/Toast.jsx"
@@ -60,6 +61,7 @@
     "NavRow": "/** Row label. Ignored when `agentName` is set. */\n  label?: string;\n  /** Right-aligned state summary. Truncates from the left, keeping the tail. */\n  summary?: string;\n  /** `alert` colours the summary as a warning (e.g. an unreachable section). */\n  summaryTone?: 'muted' | 'alert';\n  /** Renders an AgentChip instead of a plain label. */\n  agentName?: string;\n  agentIcon?: string;\n  /** Hairline above the row — set on every row but the first in a stack. */\n  divider?: boolean;\n  /** Carries the enclosing Card's top / bottom corner. */\n  first?: boolean;\n  last?: boolean;\n  onClick?: () => void;\n  style?: React.CSSProperties;",
     "ScreenHeader": "title?: string;\n  /** Where back goes, by name — \"Settings\", \"Agents\". */\n  backLabel?: string;\n  /** Mono caption under the title — \"agent · 1 of 3\". */\n  meta?: string;\n  onBack?: () => void;\n  /** Action slot on the title line, right-aligned. */\n  children?: React.ReactNode;\n  style?: React.CSSProperties;",
     "Card": "children?: React.ReactNode;\n  /** CSS padding; default 16px. */\n  padding?: string;\n  /** Hover fill + pointer cursor. */\n  interactive?: boolean;\n  /** Teal ring — selection state. */\n  selected?: boolean;\n  onClick?: () => void;\n  style?: React.CSSProperties;",
+    "FadeScroll": "children?: React.ReactNode;\n  style?: React.CSSProperties;",
     "Dialog": "open?: boolean;\n  title?: string;\n  children?: React.ReactNode;\n  /** Right-aligned action row. */\n  footer?: React.ReactNode;\n  /** Scrim click / close. */\n  onClose?: () => void;\n  /** Max width px; default 420. */\n  width?: number;",
     "Tag": "color?: 'neutral' | 'tide' | 'sun' | 'coral' | 'grass';\n  /** Mono font for ids/branches. */\n  mono?: boolean;\n  children?: React.ReactNode;\n  style?: React.CSSProperties;",
     "Toast": "kind?: 'info' | 'success' | 'warn' | 'danger';\n  children?: React.ReactNode;\n  /** Mono second line — task id, timestamp. */\n  detail?: string;\n  onDismiss?: () => void;\n  style?: React.CSSProperties;"

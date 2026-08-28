@@ -27,6 +27,7 @@ const COMPONENTS = [
   ['NavRow', 'components/navigation/NavRow.d.ts'],
   ['ScreenHeader', 'components/navigation/ScreenHeader.d.ts'],
   ['Card', 'components/surfaces/Card.d.ts'],
+  ['FadeScroll', 'components/surfaces/FadeScroll.d.ts'],
   ['Dialog', 'components/surfaces/Dialog.d.ts'],
   ['Tag', 'components/surfaces/Tag.d.ts'],
   ['Toast', 'components/surfaces/Toast.d.ts'],
