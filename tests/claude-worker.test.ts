@@ -23,6 +23,7 @@ import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, type Task } from "../src/tasks.js";
+import { reportThrottle } from "../src/throttle.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
 import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
 import {
@@ -3072,7 +3073,19 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("throttle の状態には書かない — 再開の門は次の pickup の使用量観測である(ADR 0104 決定3)", async () => {
     const { start, stdout, emitExit, db, slot } = await makeWorker();
     start("task-capped-throttle");
+    // 空の表と比べても「書かなかった」は測れない。直前の pickup が残した観測を
+    // 1行置き、それが 429 の後も1文字も動かないことを見る
+    reportThrottle(
+      db,
+      {
+        throttled: false,
+        resetsAt: null,
+        windows: { session: { throttled: false, resumeAt: null }, week: null, fable: null },
+      },
+      new Date("2026-08-24T13:00:00.000Z"),
+    );
     const before = db.prepare("SELECT * FROM throttle_state").all();
+    expect(before).toHaveLength(1);
     stdout.write(CAP_STREAM);
 
     emitExit(1, null);
