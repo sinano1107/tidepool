@@ -82,9 +82,7 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
   expect(t.github.pushes).toEqual([{ path: workspace.path, branch: `task/${work.id}` }]);
   const head = git(workspace.path, "rev-parse", `task/${work.id}`);
   // ADR 0064 決定4: 盤面自身の push を、盤面が自分の記録に撮り直している
-  const remoteRef = `refs/remotes/origin/task/${work.id}`;
-  expect(before.some((line) => line.endsWith(` ${remoteRef}`))).toBe(false);
-  expect(refSnapshot(t, workspace.name)).toContain(`${head} ${remoteRef}`);
+  expect(refSnapshot(t, workspace.name)).toContain(`${head} refs/remotes/origin/task/${work.id}`);
 });
 
 it("push のあとに別タスクの slot 解放が走っても、盤面自身の push は帯域外違反にならない", async () => {
@@ -130,10 +128,12 @@ it("push の失敗は PR 昇格失敗 question として人間に見える", asy
   const work = await landedWork(workspace);
   t.github.scriptPushFailure(new Error("token expired"));
 
-  await completeRepair(work, workspace);
+  const before = await completeRepair(work, workspace);
 
   expect(t.github.pushes).toHaveLength(1);
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toMatchObject([
     { question_pending_pr_promotion_task_id: work.id },
   ]);
+  // ADR 0064 決定4: 失敗した push の後に撮り直してはならない
+  expect(refSnapshot(t, workspace.name)).toEqual(before);
 });

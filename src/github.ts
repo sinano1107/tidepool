@@ -1,12 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { authedGit, type GitHubAuth, originRepo } from "./github-auth.js";
 
-/** Everything a PR needs to exist, independent of how it's actually opened
- *  (issue #19): which task branch, onto which base, with what title/body. */
-export interface CreatePrInput {
-  /** The workspace path — the real git checkout `gh` runs from. */
+/** どの checkout のどのブランチを `origin` へ push するか。 */
+export interface PushBranchInput {
+  /** The workspace path — the real git checkout `gh`/`git` run from. */
   path: string;
   branch: string;
+}
+
+/** Everything a PR needs to exist, independent of how it's actually opened
+ *  (issue #19): which task branch, onto which base, with what title/body. */
+export interface CreatePrInput extends PushBranchInput {
   base: string;
   title: string;
   body: string;
@@ -15,12 +19,6 @@ export interface CreatePrInput {
 export interface PrResult {
   url: string;
   number: number;
-}
-
-/** どの checkout のどのブランチを `origin` へ push するか。 */
-export interface PushBranchInput {
-  path: string;
-  branch: string;
 }
 
 /** Which workspace checkout to run `gh` from, and which PR (issue #11) — the
@@ -100,7 +98,7 @@ export class IssueGoneError extends Error {
  *  beforehand. */
 export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
-  /** タスクブランチを `origin` へ push する —— 盤面がリモートへ書く唯一の操作。
+  /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
    *  PR 作成の前段であると同時に、**既に開いている PR の更新**でもある: 付帯子の
    *  修理が merge back されたタスクブランチを押し直すと、その PR が黙って更新される
    *  (ADR 0053 / issue #400)。 */

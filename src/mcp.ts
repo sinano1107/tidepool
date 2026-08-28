@@ -243,12 +243,12 @@ export async function handleRootWorkLanding(
       if (strict) throw new Error(`PR #${task.pr_number} is already merged`);
       return;
     }
-    try {
-      await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
-    } finally {
-      // ADR 0064 決定4: 昇格と同じく `refs/remotes/origin/task/<id>` を1本動かす
-      rebaselineRef(deps.db, workspace, `refs/remotes/origin/${taskBranch(task.id)}`);
-    }
+    await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
+    // ADR 0064 決定4: 昇格と同じく `refs/remotes/origin/task/<id>` を1本動かす —— ただし
+    // 撮り直すのは push が**成功した後**だけ。失敗後に撮ると、その窓で偽造された ref を
+    // 基準へ迎え入れる(昇格側の `finally` は push 済みの後の `gh pr create` 失敗を守る型で、
+    // ここでは push そのものが落ちうる)
+    rebaselineRef(deps.db, workspace, `refs/remotes/origin/${taskBranch(task.id)}`);
     return;
   }
   // an issue-backed task's stored title is only the "#N" placeholder
