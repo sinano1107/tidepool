@@ -20,6 +20,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
 import { quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
+import { CODEX_APP_SERVER_VERSION } from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
@@ -42,7 +43,7 @@ const BOARD_VERBS = [
   "decompose",
   "escalate",
 ] as const;
-export const CODEX_CLI_VERSION = "codex-cli 0.147.0";
+export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
 const CLOSED_FEATURES = [

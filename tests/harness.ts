@@ -14,6 +14,7 @@ import {
 } from "../src/auth.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import type { CliAuthCheck } from "../src/cli-auth.js";
+import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
@@ -32,6 +33,7 @@ import type {
 import type { SandboxCapability } from "../src/sandbox.js";
 import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
+import type { ProviderUsageResource } from "../src/throttle.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
@@ -167,6 +169,9 @@ export interface BootOptions {
    *  given providers, read fresh every poll by the scheduler's provider-auth
    *  gate. Absent → no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
+  openaiUsage?: CodexAppServerProbe;
+  resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
   resolveHarness?: (task: Task) => Harness;
   harnessContainment?: HarnessContainmentCheck;
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
@@ -255,6 +260,9 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
+    agentsUsingUsageResources: options.agentsUsingUsageResources,
+    openaiUsage: options.openaiUsage,
+    resolveUsageResource: options.resolveUsageResource,
     resolveHarness: options.resolveHarness,
     harnessContainment: options.harnessContainment,
     agentsUsingHarnesses: options.agentsUsingHarnesses,

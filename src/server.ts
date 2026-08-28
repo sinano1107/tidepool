@@ -12,6 +12,7 @@ import {
   warnCliAuthExpiry,
 } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
+import type { CodexAppServerProbe } from "./codex-app-server.js";
 import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
@@ -49,6 +50,7 @@ import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
+import type { ProviderUsageResource } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -236,6 +238,9 @@ export interface ServerOptions {
    *  the given providers, read fresh by the scheduler's provider-auth gate.
    *  Absent → no registry configured, so no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
+  openaiUsage?: CodexAppServerProbe;
+  resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   resolveHarness?: (task: Task) => Harness;
   harnessContainment?: HarnessContainmentCheck;
@@ -421,6 +426,20 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // credential の**後**に置く: 無認証リクエストは 415 ではなく 401 で落ちる
   app.use(auth.requireJsonContentType);
   const worker = options.worker({ db, clock: options.clock, containers });
+  const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
+    ...(options.cliAuth && { anthropic: options.cliAuth }),
+    ...options.providerCliAuth,
+    ...(options.openaiUsage && {
+      openai: async () => {
+        const result = await options.openaiUsage!(options.clock.now());
+        if (result.status === "observed") return { status: "authenticated" as const };
+        return {
+          status: result.status === "unauthorized" ? ("unauthorized" as const) : ("unknown" as const),
+          reason: result.reason,
+        };
+      },
+    }),
+  };
   // resolved here for this board's actual wiring, same as `worker.id` below
   // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
   // directly rather than through startServer (e.g. a unit test constructing
@@ -459,6 +478,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     github: options.github,
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
+    agentsUsingUsageResources: options.agentsUsingUsageResources,
+    openaiUsage: options.openaiUsage,
+    resolveUsageResource: options.resolveUsageResource,
     agentsUsingHarnesses: options.agentsUsingHarnesses,
     resolveHarness: options.resolveHarness,
     harnessContainment,
@@ -573,7 +595,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       reclaim: watchdog,
       registryReachability,
       cliAuth: options.cliAuth,
-      providerCliAuth: options.providerCliAuth,
+      providerCliAuth,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
       workspaceAdmin,
@@ -584,6 +606,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
+      agentsUsingUsageResources: options.agentsUsingUsageResources,
       agentsUsingHarnesses: options.agentsUsingHarnesses,
       isProtectedWorkspace: options.isProtectedWorkspace,
       // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
@@ -612,10 +635,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       reclaim: watchdog,
       registryReachability,
       cliAuth: options.cliAuth,
-      providerCliAuth: options.providerCliAuth,
+      providerCliAuth,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
+      agentsUsingUsageResources: options.agentsUsingUsageResources,
       agentsUsingHarnesses: options.agentsUsingHarnesses,
       throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspaceAdmin,

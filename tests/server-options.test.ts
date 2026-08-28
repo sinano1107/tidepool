@@ -395,6 +395,11 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.resolveAuthority?.(null)).toBeDefined();
   expect(options.resolveAuthority?.("nobody")).toBeUndefined();
   expect(options.fableAgents?.()).toEqual([]); // fixture の agent に model 指定は無い
+  expect(options.resolveUsageResource?.({ assignee: "deckhand" } as any)).toEqual({
+    provider: "anthropic",
+    model: null,
+  });
+  expect(options.openaiUsage).toBeTypeOf("function");
   expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);
   // registry ゲートで初めて立つ口
   expect(options.draftClient).toBeDefined();

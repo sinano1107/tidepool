@@ -77,6 +77,7 @@ const ROUTE_URL: Record<string, (fx: { taskId: string }) => string> = {
   "/push/vapid-public-key": () => "/push/vapid-public-key",
   "/settings/quiet-hours": () => "/settings/quiet-hours",
   "/settings/pace-offsets": () => "/settings/pace-offsets",
+  "/settings/provider-pace-offsets": () => "/settings/provider-pace-offsets",
   "/settings/timezone": () => "/settings/timezone",
   "/settings/display-language": () => "/settings/display-language",
   "/settings/github": () => "/settings/github",

@@ -2,8 +2,10 @@ import { afterEach, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { defaultExec } from "../src/claude-worker.js";
-import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
+
+const ANTHROPIC_AUTH_QUESTION_TITLE =
+  "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -41,7 +43,7 @@ it("AI draft が api_error_status: 401 を返したら、その場でcliAuth que
 
   expect({ status: response.status, questionTitles: questions.map((task) => task.title) }).toEqual({
     status: 503,
-    questionTitles: [CLI_AUTH_QUESTION_TITLE],
+    questionTitles: [ANTHROPIC_AUTH_QUESTION_TITLE],
   });
 });
 
@@ -72,11 +74,11 @@ it("表示時翻訳が api_error_status: 401 を返したら、その場でcliAu
     task_id: source.id,
   });
   const questions = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter(
-    (task) => task.title === CLI_AUTH_QUESTION_TITLE,
+    (task) => task.title === ANTHROPIC_AUTH_QUESTION_TITLE,
   );
 
   expect({ status: response.status, questionTitles: questions.map((task) => task.title) }).toEqual({
     status: 503,
-    questionTitles: [CLI_AUTH_QUESTION_TITLE],
+    questionTitles: [ANTHROPIC_AUTH_QUESTION_TITLE],
   });
 });

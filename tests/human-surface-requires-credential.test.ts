@@ -42,7 +42,7 @@ it("/api の全ルートは credential なしでは 401(issue #153 / ADR 0036)",
   // 番犬。総数は下限ではなく実数で固定する — ルートが増減したときに人間がこの
   // 数字を意図して更新することに意味がある
   expect(routes).toContainEqual({ method: "GET", path: "/tasks/:id" });
-  expect(routes.length).toBe(57);
+  expect(routes.length).toBe(59);
 
   for (const { method, path } of routes) {
     // パラメータは何でもよい: credential 検査はハンドラより手前で落ちる

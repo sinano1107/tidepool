@@ -20,6 +20,7 @@ import {
   probeToolSurfaceCapability,
 } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
+import { createCodexAppServerProbe } from "./codex-app-server.js";
 import {
   CODEX_CLI_VERSION,
   CodexWorker,
@@ -56,6 +57,7 @@ import {
 import { checkSandboxCapability } from "./sandbox.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
+import type { ProviderUsageResource } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
 
@@ -288,6 +290,21 @@ function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<t
   };
 }
 
+function usageResourceResolver(
+  board: BoardComposition,
+): ((task: Task) => { provider: Provider; model: string | null }) | undefined {
+  if (!board.registryDir) return undefined;
+  return (task) => {
+    const registry = loadBoardRegistry(board);
+    const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
+    const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
+    return {
+      provider: agent.definition.provider as Provider,
+      model: agent.definition.model ?? null,
+    };
+  };
+}
+
 function agentsUsingHarnessesResolver(
   board: BoardComposition,
 ): ((harnesses: readonly ReturnType<typeof canonicalHarness>[]) => string[]) | undefined {
@@ -452,6 +469,21 @@ function agentsSpeakingProvidersResolver(
       // registry 側の provider は自由文字列のまま(ADR 0097 決定3 — 読み込みを
       // 倒さない)なので、ここでは文字列として突き合わせる
       .filter((agent) => (providers as readonly string[]).includes(agent.provider))
+      .map((agent) => agent.name);
+}
+
+function agentsUsingUsageResourcesResolver(
+  board: BoardComposition,
+): ((resources: readonly ProviderUsageResource[]) => string[]) | undefined {
+  if (!board.registryDir) return undefined;
+  return (resources) =>
+    Object.values(loadBoardRegistry(board).agents)
+      .filter((agent) =>
+        resources.some(
+          (resource) =>
+            resource.provider === agent.provider && resource.model === (agent.model ?? null),
+        ),
+      )
       .map((agent) => agent.name);
 }
 
@@ -630,6 +662,10 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
   const workspace = workspaceConfig(board);
+  const openaiUsage = createCodexAppServerProbe({
+    executable: board.codexExecutable,
+    codexHome: board.codexHome,
+  });
   const codexContainment = workspace && createCodexCapabilityCheck({
     executable: board.codexExecutable,
     codexHome: board.codexHome,
@@ -672,6 +708,9 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
+    agentsUsingUsageResources: agentsUsingUsageResourcesResolver(board),
+    openaiUsage,
+    resolveUsageResource: usageResourceResolver(board),
     agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board),
     harnessContainment: board.registryDir
@@ -684,9 +723,8 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
       : undefined,
     registryReachability: registryReachabilityCheck(board),
     cliAuth: createClaudeCliAuthCheck(),
-    // ADR 0097 決定2 / issue #446: 回答受理時の再検証が provider ごとに撃つ
-    // probe。盤面自身の provider(anthropic)は cliAuth のまま — ここには資源
-    // 単位の側(moonshot)だけが載る。
+    // OpenAI is derived from the same App Server probe in server.ts; this
+    // record supplies the Claude-harness Provider probes.
     providerCliAuth: { moonshot: createMoonshotCliAuthCheck(board.moonshotApiKeyFile) },
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は

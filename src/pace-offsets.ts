@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { Provider } from "./registry.js";
 import type { PaceOffsets } from "./usage.js";
 
 /** ADR 0030 の既定: 人間の取り分の予約(pt)。session は対話利用と取り合いに
@@ -39,4 +40,46 @@ export function setPaceOffsets(db: Db, offsets: PaceOffsets): void {
      ON CONFLICT(id) DO UPDATE SET
        session = excluded.session, week = excluded.week, fable = excluded.fable`,
   ).run(offsets.session, offsets.week, offsets.fable);
+}
+
+export interface ProviderPaceOffset {
+  provider: Provider;
+  window: string;
+  offset: number;
+}
+
+export function defaultProviderPaceOffset(window: string): number {
+  return window === "primary" || window === "session"
+    ? DEFAULT_PACE_OFFSETS.session
+    : DEFAULT_PACE_OFFSETS.week;
+}
+
+export function setProviderPaceOffset(db: Db, value: ProviderPaceOffset): void {
+  db.prepare(
+    `INSERT INTO provider_pace_offsets (provider, window, offset) VALUES (?, ?, ?)
+     ON CONFLICT(provider, window) DO UPDATE SET offset = excluded.offset`,
+  ).run(value.provider, value.window, value.offset);
+}
+
+export function listProviderPaceOffsets(db: Db): ProviderPaceOffset[] {
+  return db
+    .prepare(
+      `SELECT provider, window, offset FROM provider_pace_offsets
+       ORDER BY provider, window`,
+    )
+    .all() as ProviderPaceOffset[];
+}
+
+export function getProviderPaceOffset(
+  db: Db,
+  provider: Provider,
+  window: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT offset FROM provider_pace_offsets
+       WHERE provider = ? AND window = ?`,
+    )
+    .get(provider, window) as { offset: number } | undefined;
+  return row && isValidOffset(row.offset) ? row.offset : defaultProviderPaceOffset(window);
 }

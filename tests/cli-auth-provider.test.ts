@@ -2,10 +2,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { boardHalts } from "../src/board-halt.js";
 import { createMoonshotCliAuthCheck } from "../src/claude-cli-auth.js";
 import {
-  CLI_AUTH_QUESTION_TITLE,
   openCliAuthQuestion,
   quarantineCliAuthForProvider,
   quarantinedAuthProviders,
@@ -13,11 +11,9 @@ import {
 import { openDb } from "../src/db.js";
 import { listBoard } from "../src/tasks.js";
 
-/** issue #446 / ADR 0097 決定2: 401 の provider 帰属は spawn 時の事実で決まり、
- *  失効した provider を喋る agent の pickup だけが止まる資源単位の quarantine
- *  に落ちる。盤面自身が依存する provider(anthropic)だけが従来通り盤面全体の
- *  停止に抜ける。 */
-describe("quarantineCliAuthForProvider(issue #446 / ADR 0097 決定2)", () => {
+/** ADR 0098 / issue #454: 401 の Provider 帰属は spawn/call 時の事実で決まり、
+ *  失効した Provider を喋る agent の pickup だけが止まる。 */
+describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
   it("moonshot の 401 は、その provider 名を背負った1択の Confirmation question を Tidepool 名義で立て、盤面全体は止まらない", () => {
     const db = openDb(":memory:");
     quarantineCliAuthForProvider(db, "moonshot", new Date(0));
@@ -34,7 +30,6 @@ describe("quarantineCliAuthForProvider(issue #446 / ADR 0097 決定2)", () => {
     expect(question?.purpose).toContain("TIDEPOOL_MOONSHOT_API_KEY_FILE");
     // 資源単位の停止は盤面全体の停止の列挙に入らない(ADR 0058 決定1)
     expect(openCliAuthQuestion(db)).toBeUndefined();
-    expect(boardHalts(db)).toEqual([]);
   });
 
   it("同一 provider への2度目の quarantine は question を増やさない(1資源につき確認は最大1枚)", () => {
@@ -45,24 +40,26 @@ describe("quarantineCliAuthForProvider(issue #446 / ADR 0097 決定2)", () => {
     expect(listBoard(db).filter((t) => t.type === "question")).toHaveLength(1);
   });
 
-  it("anthropic の 401 は従来通り盤面全体の停止(cliAuth)に抜ける", () => {
+  it("anthropic の 401 も Provider-scoped Confirmation に落ち、盤面全体は止めない", () => {
     const db = openDb(":memory:");
     quarantineCliAuthForProvider(db, "anthropic", new Date(0));
 
     const question = listBoard(db).find((t) => t.type === "question");
-    expect(question?.title).toBe(CLI_AUTH_QUESTION_TITLE);
-    expect(question?.question_quarantine_provider_auth).toBeNull();
-    expect(boardHalts(db).map((halt) => halt.kind)).toEqual(["cliAuth"]);
+    expect(question?.title).toBe(
+      "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
+    );
+    expect(question?.question_quarantine_provider_auth).toBe("anthropic");
+    expect(question?.purpose).toContain("claude setup-token");
+    expect(openCliAuthQuestion(db)).toBeUndefined();
   });
 
   it("quarantinedAuthProviders は資源単位の quarantine 中の provider だけを返す", () => {
     const db = openDb(":memory:");
     expect(quarantinedAuthProviders(db)).toEqual([]);
     quarantineCliAuthForProvider(db, "anthropic", new Date(0));
-    // 盤面全体の停止(anthropic)は資源単位の一覧に混ぜない
-    expect(quarantinedAuthProviders(db)).toEqual([]);
+    expect(quarantinedAuthProviders(db)).toEqual(["anthropic"]);
     quarantineCliAuthForProvider(db, "moonshot", new Date(1));
-    expect(quarantinedAuthProviders(db)).toEqual(["moonshot"]);
+    expect(quarantinedAuthProviders(db)).toEqual(["anthropic", "moonshot"]);
   });
 });
 
