@@ -1114,7 +1114,7 @@ export interface ClaudeWorkerOptions {
    *  と同じ機能フィールドなので、`buildWorkerOptions` が literal を所有し
    *  網羅テストが見張る。不在 → 中断を観測しても盤面は動かない(workspaceless な
    *  unit 盤面のための姿)。 */
-  capInterrupted?: (taskId: string) => void;
+  onCapInterrupted?: (taskId: string) => void;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
@@ -2216,7 +2216,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 受ける。帰属は 401 と同じく spawn 時の provider —— Claude CLI を喋る他
       // Provider も envelope が同じなのでこの1本を通る(決定5)。
       if (capInterrupted) {
-        void this.containers.reclaimed(task.id).then(() => this.options.capInterrupted?.(task.id));
+        void this.containers.reclaimed(task.id).then(() => this.options.onCapInterrupted?.(task.id));
       }
       // issue #356: この session の Precedent を投影する。**worker_exited を
       // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み

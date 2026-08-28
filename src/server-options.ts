@@ -215,7 +215,7 @@ export function buildWorkerOptions(
     db: Db;
     clock: Clock;
     containers: WorkerContainers;
-    capInterrupted: (taskId: string) => void;
+    onCapInterrupted: (taskId: string) => void;
   },
 ): ClaudeWorkerOptions {
   return {
@@ -246,7 +246,7 @@ export function buildWorkerOptions(
     // ADR 0104: 429 で断られた session の後始末。渡し忘れは「上限で落ちたタスクが
     // in_progress のまま watchdog 待ちになる」形で静かに fail する — advisorDisabled と
     // 同じ類なので、上の網羅テストが見張る面に載せる
-    capInterrupted: session.capInterrupted,
+    onCapInterrupted: session.onCapInterrupted,
   };
 }
 
@@ -257,14 +257,14 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   const resolveHarness = harnessResolver(board);
   if (!registryDir || !resolveHarness) return () => new LoggingWorker();
-  return ({ db, clock, containers, capInterrupted }) => {
+  return ({ db, clock, containers, onCapInterrupted }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
       resolveHarness,
       adapters: {
         "claude-code": new ClaudeCodeWorker(
-          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers, capInterrupted }),
+          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers, onCapInterrupted }),
         ),
         codex: new CodexWorker({
           db,

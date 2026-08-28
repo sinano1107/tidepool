@@ -154,7 +154,7 @@ export type WorkerFactory = (deps: {
   containers: WorkerContainers;
   /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
    *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
-  capInterrupted: (taskId: string) => void;
+  onCapInterrupted: (taskId: string) => void;
 }) => WorkerAdapter;
 
 export interface ServerOptions {
@@ -427,13 +427,13 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // adapter が観測するのは 429 と回収済み観測だけで、slot も tree rule もこちら側に
   // ある(ADR 0099 決定1)。watchdog とは独立(slot と resolver しか要らない)なので、
   // 時限を持たない盤面でも中断は回収される。
-  const capInterrupted = capInterruptionHandler({
+  const onCapInterrupted = capInterruptionHandler({
     db,
     clock: options.clock,
     slot,
     resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
   });
-  const worker = options.worker({ db, clock: options.clock, containers, capInterrupted });
+  const worker = options.worker({ db, clock: options.clock, containers, onCapInterrupted });
   // resolved here for this board's actual wiring, same as `worker.id` below
   // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
   // directly rather than through startServer (e.g. a unit test constructing
