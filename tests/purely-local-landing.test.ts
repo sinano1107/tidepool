@@ -1,16 +1,19 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import {
   api,
   bootTidepool,
   commitWork,
+  completeViaMcp,
   FULL_HANDOFF,
   git,
   HOUR,
   makeWorkspace,
   mcpClient,
+  questions,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -22,6 +25,54 @@ afterEach(async () => {
   await t?.stop();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+/** その work の着地 question の行。 */
+async function landingQuestionFor(board: Tidepool, taskId: string): Promise<any> {
+  const found = (await questions(board)).find(
+    (candidate) => candidate.question_pending_local_merge_task_id === taskId,
+  );
+  expect(found).toBeDefined();
+  return found;
+}
+
+/** 隔離の確認 question(CONTEXT.md の Quarantine)の行、無ければ undefined。 */
+async function quarantineQuestion(board: Tidepool): Promise<any> {
+  return (await questions(board)).find(
+    (candidate) => candidate.question_quarantine_workspace !== null,
+  );
+}
+
+/** ADR 0103 決定2 の直列ペア(#468 のライブ実測の形): 独立に登録された2件を続けて
+ *  完了させ、1件目を着地させて保護ブランチを進めたうえで、非 ff になった2件目の
+ *  着地 question を返す。`sharedFile` は両タスクに同じファイルを書かせてコンフリクトを
+ *  仕込み、`occupySlot` は3件目に slot を占めさせる(HEAD がそのタスクブランチへ移る)。 */
+async function serialPairLanding(
+  board: Tidepool,
+  workspacePath: string,
+  { sharedFile = false, occupySlot = false } = {},
+): Promise<{ first: any; second: any; third: any; question: any }> {
+  const first = await registerWork(board, "first of the serial pair");
+  const second = await registerWork(board, "second of the serial pair");
+  const third = occupySlot
+    ? await registerWork(board, "occupies the slot while the landing arrives")
+    : undefined;
+  await board.clock.advance(HOUR);
+  commitWork(workspacePath, sharedFile ? "shared.txt" : "one.txt", "from the first task\n");
+  await completeViaMcp(board, first.id);
+  await board.clock.advance(HOUR);
+  commitWork(workspacePath, sharedFile ? "shared.txt" : "two.txt", "from the second task\n");
+  await completeViaMcp(board, second.id);
+  if (third) await board.clock.advance(HOUR); // 3件目が slot を取り、HEAD は自分のタスクブランチへ移る
+  const firstQuestion = await landingQuestionFor(board, first.id);
+  expect(
+    (
+      await api(board.baseUrl, "POST", `/api/tasks/${firstQuestion.id}/answer`, {
+        answers: ["merge"],
+      })
+    ).status,
+  ).toBe(200);
+  return { first, second, third, question: await landingQuestionFor(board, second.id) };
+}
 
 it("purely-local の root work 完了は PR を試みず、代わりに着地 question を1本立てる", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");
@@ -102,6 +153,116 @@ it("着地 question に merge と答えると保護ブランチを task branch �
   });
 });
 
+// ADR 0103 決定2(#468 のライブ実測): 同じ workspace に**独立に**登録された連続タスクの
+// 2件目は、1件目が着地させる**前**の保護ブランチから fork するので、1件目の着地のあとは
+// 必ず非 ff になる。これは帯域外の書き込みではなく盤面自身が作った正当な直列進行であり、
+// 隔離ではなく merge commit で追いつかせる。
+it("直列に登録された2件目の着地は、1件目が進めた保護ブランチへ merge commit で追いつく", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const { first, second, question } = await serialPairLanding(t, workspace.path);
+  const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered.status).toBe(200);
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${second.id}`)).toBe("0");
+  // 1件目の成果を道連れに消していない = 追いついた形は真の merge(親2つ)である
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${first.id}`)).toBe("0");
+  expect(git(workspace.path, "rev-list", "--parents", "-1", "main").split(" ")).toHaveLength(3);
+  expect(git(workspace.path, "log", "-1", "--format=%an %cn", "main")).toBe("tidepool tidepool");
+  // ADR 0053 根拠1: タスクブランチは差分の恒久記録であって、着地で書き換えられない
+  expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);
+  expect(await quarantineQuestion(t)).toBeUndefined();
+});
+
+// ADR 0103 決定3 / ADR 0064: 盤面は走っているセッションの checkout を動かさない。
+it("走行中の slot を占めたまま来た非 ff の着地は、ref だけを進め HEAD と作業ツリーに触れない", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const { second, third, question } = await serialPairLanding(t, workspace.path, {
+    occupySlot: true,
+  });
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
+  writeFileSync(join(workspace.path, "wip.txt"), "the running session's work in progress\n");
+  const head = git(workspace.path, "rev-parse", "HEAD");
+  const status = git(workspace.path, "status", "--porcelain");
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered.status).toBe(200);
+  expect(git(workspace.path, "rev-list", "--count", `main..task/${second.id}`)).toBe("0");
+  expect(git(workspace.path, "rev-list", "--parents", "-1", "main").split(" ")).toHaveLength(3);
+  expect(git(workspace.path, "log", "-1", "--format=%an %cn", "main")).toBe("tidepool tidepool");
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
+  expect(git(workspace.path, "status", "--porcelain")).toBe(status);
+  expect(readFileSync(join(workspace.path, "wip.txt"), "utf8")).toBe(
+    "the running session's work in progress\n",
+  );
+  expect(await quarantineQuestion(t)).toBeUndefined();
+  // ADR 0064 決定4: 盤面が進めた行は撮り直されているので、走っていたセッションの解放は
+  // 盤面自身のこの2度の書き込みを違反として読まない
+  commitWork(workspace.path, "wip.txt", "the running session's work in progress\n");
+  await completeViaMcp(t, third.id);
+  expect(await quarantineQuestion(t)).toBeUndefined();
+});
+
+// 走行中の綴りでも、コンフリクトは回答の拒否であって隔離ではない(ADR 0103 決定4)——
+// `merge-tree` は盤面の作業ツリーを使わないので、拒んだ跡も残らない。
+it("走行中の slot を占めたまま来た着地がコンフリクトしても、隔離せず作業ツリーも汚さない", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const { third, question } = await serialPairLanding(t, workspace.path, {
+    sharedFile: true,
+    occupySlot: true,
+  });
+  const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
+  const head = git(workspace.path, "rev-parse", "HEAD");
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered.status).toBe(409);
+  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${third.id}`);
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+});
+
+// ADR 0103 決定4: 記録と一致していれば、merge の失敗は回答の拒否であって隔離ではない ——
+// 失敗の時点で何も壊れていない(「自動では合わない」と分かっただけ)。
+it("snapshot が一致していれば着地のコンフリクトは回答を拒むだけで、workspace を quarantine しない", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const { second, question } = await serialPairLanding(t, workspace.path, { sharedFile: true });
+  const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
+  const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered.status).toBe(409);
+  expect(await quarantineQuestion(t)).toBeUndefined();
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(protectedSha);
+  expect(git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`)).toBe(taskSha);
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
+  // question は開いたまま = 人間は手で直してもう一度答えられる
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+  const held = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["hold"],
+  });
+  expect(held.status).toBe(200);
+});
+
 it("保護ブランチが帯域外で進んで fast-forward できないと workspace を quarantine し、着地 question を開いたままにする", async () => {
   const workspace = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace });
@@ -132,6 +293,72 @@ it("保護ブランチが帯域外で進んで fast-forward できないと work
         candidate.type === "question" && candidate.question_quarantine_workspace === "sandbox",
     ),
   ).toBeDefined();
+});
+
+// ADR 0103 決定1: 帯域外の判定は ff の成否ではなく盤面自身の記録(ref snapshot)との
+// 突き合わせで下すので、ff が黙って飲み込んでいた**巻き戻し**まで捕まる —— 検知は
+// 弱まるのではなく強くなる。
+it("保護ブランチが帯域外で巻き戻されると、ff できる位置であっても着地を拒み workspace を quarantine する", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  // タスクブランチの fork 元を2つ目のコミットにして、巻き戻し先を祖先として残す
+  commitWork(workspace.path, "base.txt", "the base the task forks from\n");
+  const rolledBackTo = git(workspace.path, "rev-parse", "HEAD~1");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "land onto a rolled-back protected branch");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const question = await landingQuestionFor(t, task.id);
+  // 巻き戻し先はタスクブランチの祖先なので、ff-only の検査だけなら素通りしてしまう位置
+  git(workspace.path, "reset", "--hard", rolledBackTo);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered.status).toBe(409);
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+  expect((await quarantineQuestion(t))?.question_quarantine_workspace).toBe("sandbox");
+});
+
+// ADR 0103 決定1 の fail-closed(ADR 0064 決定6 と同じ姿勢): 記録の欠落に「検査を飛ばす」
+// 分岐を書かない —— 行が無いことは一致の証明にならないので、位置が動いていなくても
+// 帯域外側に落とす。
+it("記録に保護ブランチの行が無ければ、位置が動いていなくても着地を拒み workspace を quarantine する", async () => {
+  const workspace = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "land with the protected branch unrecorded");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const question = await landingQuestionFor(t, task.id);
+  // 第2接続で盤面の記録から保護ブランチの行だけを抜く(WAL 下で安全 — harness の
+  // registerQuestion と同じ seam)
+  const db = openDb(join(t.dir, "board.sqlite"));
+  try {
+    const row = db
+      .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
+      .get("sandbox") as { ref_snapshot: string };
+    db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(
+      row.ref_snapshot
+        .split("\n")
+        .filter((line) => !line.endsWith(" refs/heads/main"))
+        .join("\n"),
+      "sandbox",
+    );
+  } finally {
+    db.close();
+  }
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
+
+  expect(answered.status).toBe(409);
+  expect(answered.json.error).toContain("no recorded position");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+  expect((await quarantineQuestion(t))?.question_quarantine_workspace).toBe("sandbox");
 });
 
 it("着地 question に hold と答えると保護ブランチを動かさず決着し、再提示しない", async () => {

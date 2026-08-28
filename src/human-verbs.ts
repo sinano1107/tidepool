@@ -33,6 +33,7 @@ import type { PendingReclaim } from "./watchdog.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
+  OutOfBandProtectedBranchError,
   protectedBranch,
   quarantineWorkspace,
   rebaselineRef,
@@ -405,7 +406,7 @@ export async function submitAnswer(
       "cannot land the task branch",
     );
     try {
-      mergeTaskToProtected(mergeWorkspace, localMergeTaskId);
+      mergeTaskToProtected(deps.db, mergeWorkspace, localMergeTaskId);
       // ADR 0064 決定4: 盤面が書いた ref の**行だけ**を撮り直す。走っているセッションの
       // 解放が、盤面自身のこの書き込みを違反として読まないために要る
       rebaselineRef(
@@ -414,7 +415,12 @@ export async function submitAnswer(
         `refs/heads/${protectedBranch(mergeWorkspace)}`,
       );
     } catch (err) {
-      quarantineWorkspace(deps.db, mergeWorkspace.name, err, now());
+      // ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも
+      // 汚れたツリーも git の不調も、着地が失敗しただけでは資源が実行不能だと証明
+      // しない —— question は開いたまま残り、人間は直してもう一度答えられる
+      if (err instanceof OutOfBandProtectedBranchError) {
+        quarantineWorkspace(deps.db, mergeWorkspace.name, err, now());
+      }
       throw new DomainError(err instanceof Error ? err.message : String(err));
     }
   }
