@@ -2215,9 +2215,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 既存の watchdog(時限 → 強制回収 → 回収 timeout → Containment quarantine)が
       // 受ける。帰属は 401 と同じく spawn 時の provider —— Claude CLI を喋る他
       // Provider も envelope が同じなのでこの1本を通る(決定5)。
-      const capInterruption = this.options.capInterrupted;
-      if (capInterrupted && capInterruption) {
-        void this.containers.reclaimed(task.id).then(() => capInterruption(task.id));
+      if (capInterrupted) {
+        void this.containers.reclaimed(task.id).then(() => this.options.capInterrupted?.(task.id));
       }
       // issue #356: この session の Precedent を投影する。**worker_exited を
       // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み

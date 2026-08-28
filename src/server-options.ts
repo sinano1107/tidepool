@@ -264,10 +264,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
       resolveHarness,
       adapters: {
         "claude-code": new ClaudeCodeWorker(
-          buildWorkerOptions(
-            { ...board, registryDir },
-            { db, clock, containers, capInterrupted },
-          ),
+          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers, capInterrupted }),
         ),
         codex: new CodexWorker({
           db,

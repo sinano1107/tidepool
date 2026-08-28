@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -31,6 +31,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
+import { git, makeWorkspace } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 function makeTask(
@@ -103,25 +104,6 @@ function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
     task.sort_key,
     task.created_at,
   );
-}
-
-/** 盤面が打つのと同じ形の git。identity flags はインラインで、fixture のコミットに
- *  グローバル設定が要らないようにする。 */
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd })
-    .toString()
-    .trim();
-}
-
-/** 上限到達による中断の tree rule が実際に退避する先。`main` に初期コミットが
- *  1本ある使い捨ての checkout。 */
-function makeGitWorkspace(): WorkspaceConfig {
-  const path = mkdtempSync(join(tmpdir(), "tidepool-cap-ws-"));
-  git(path, "init", "-b", "main");
-  writeFileSync(join(path, "README.md"), "workspace\n");
-  git(path, "add", "-A");
-  git(path, "commit", "-m", "initial");
-  return { name: "tidepool", path };
 }
 
 /** A git runner pinned to the registry fixture clone, identity flags inlined
@@ -3052,14 +3034,6 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   const kinds = (db: ReturnType<typeof openDb>, taskId: string) =>
     listEvents(db, taskId).map((e) => e.kind);
 
-  /** 中断で戻った行が queue の先頭に居るか — sort_key が盤面の最小値である。 */
-  function atQueueHead(db: ReturnType<typeof openDb>, taskId: string): boolean {
-    const { head } = db
-      .prepare("SELECT id AS head FROM tasks ORDER BY sort_key LIMIT 1")
-      .get() as { head: string };
-    return head === taskId;
-  }
-
   it("429 で exit した session の task は todo の先頭へ戻り slot が解放される — failure question は立たない", async () => {
     const { start, stdout, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped");
@@ -3069,7 +3043,10 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
     expect(getTask(db, task.id)!.status).toBe("todo");
-    expect(atQueueHead(db, task.id)).toBe(true);
+    // 戻る先は queue の**先頭** = sort_key が盤面の最小値である
+    expect(db.prepare("SELECT id FROM tasks ORDER BY sort_key LIMIT 1").get()).toEqual({
+      id: task.id,
+    });
     // 失敗ではなく環境事象なので、リトライ判断を問う question は生まれない
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
   });
@@ -3142,15 +3119,14 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     // 容器が空になる瞬間をテストが握る器。process 境界は makeWorker の既定と
     // 同じ recordingSpawn だが、容器はこちらが差し替えるので stdout / exit も
     // この recorder から撃つ。
-    const session = recordingSpawn();
-    const runtime = new FakeContainerRuntime(session.spawn);
-    const ws = makeGitWorkspace();
+    const { spawn, stdout, emitExit } = recordingSpawn();
+    const runtime = new FakeContainerRuntime(spawn);
+    const ws = await makeWorkspace([], "cap-ws");
     const { start, db, slot } = await makeWorker(
       {},
       { containers: new WorkerContainers(runtime) },
       () => ws,
     );
-    const { stdout, emitExit } = session;
     const task = start("task-capped-ordering");
     // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット)を
     // 実物で通す —— tree rule はその基準に対して退避する
