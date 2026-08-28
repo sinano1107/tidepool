@@ -653,18 +653,17 @@ it("再発火が飛んでいる最中に retry が着地させたら、再発火
   // 同じ "already exists" で落ちる
   const createPullRequest = t.github.createPullRequest.bind(t.github);
   const order: string[] = [];
-  let releaseGate = (): void => {};
+  let releaseGate!: () => void;
   const gate = new Promise<void>((resolve) => {
     releaseGate = resolve;
   });
-  let relandEntered = (): void => {};
+  let relandEntered!: () => void;
   const relandStarted = new Promise<void>((resolve) => {
     relandEntered = resolve;
   });
   let calls = 0;
   t.github.createPullRequest = async (input) => {
-    calls += 1;
-    if (calls === 1) {
+    if (++calls === 1) {
       order.push("reland:enter");
       relandEntered();
       await gate;
