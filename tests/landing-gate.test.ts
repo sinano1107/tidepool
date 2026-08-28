@@ -699,3 +699,46 @@ it("再発火が飛んでいる最中に retry が着地させたら、再発火
     ),
   ).toEqual([]);
 });
+
+it("strict retry で着地したら、積み上がった他の PR 昇格失敗 question も観測で引退する", async () => {
+  const { workspace, task, failure } = await failedPromotion();
+
+  // 再発火が同じ原因でもう一度落ちて、同じタスクを指す失敗 question が2件になる
+  const repair = attachChild(t, task.id, "repair: ship the feature");
+  await pickUp(t, repair.id);
+  commitWork(workspace.path, "repair.txt", "repaired\n");
+  await completeViaMcp(t, repair.id);
+  const stacked = (await questions(t)).filter(
+    (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
+  );
+  expect(stacked).toHaveLength(2);
+  const second = stacked.find((q: any) => q.id !== failure.id);
+  t.github.scriptFailure(null);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
+    answers: ["retry"],
+  });
+
+  expect(answered.status).toBe(200);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: ["retry"],
+  });
+  const answeredEvents = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
+  expect(answeredEvents.filter((event: any) => event.kind === "question_answered")).toHaveLength(1);
+  // 引退は観測であって人間の決定ではない —— 誰も答えていない question に回答を書かない
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${second.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: null,
+  });
+  const secondEvents = (await api(t.baseUrl, "GET", `/api/tasks/${second.id}/events`)).json;
+  expect(secondEvents.filter((event: any) => event.kind === "pr_promotion_observed")).toHaveLength(1);
+  expect(secondEvents.filter((event: any) => event.kind === "question_answered")).toEqual([]);
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "pr_opened")).toHaveLength(1);
+  expect(
+    (await questions(t)).filter(
+      (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
+    ),
+  ).toEqual([]);
+});
