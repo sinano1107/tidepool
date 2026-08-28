@@ -27,7 +27,9 @@ import {
   type RegisterTaskInput,
   registerTask,
   settleMergeQuestionAsObserved,
+  settlePrPromotionQuestionsAsObserved,
   type Task,
+  taskHasLanded,
   taskIdForPr,
 } from "./tasks.js";
 import { landingBlock, stageFrontInsert, triageActivity } from "./triage.js";
@@ -614,6 +616,14 @@ export async function submitAnswer(
       now(),
       origin,
     );
+  }
+  // 同じタスクを指して積み上がった他の PR 昇格失敗 question(再発火が二度目に失敗して
+  // 立った分)は、この retry で着地が成立した時点で誰にも訊くことがない —— 人間に無効な
+  // 意思決定を見せない(issue #412 / ADR 0079 決定3)。判定は retry が throw しなかった
+  // ことではなく盤面の痕跡で読む(#406 と同じ規則)。`answerQuestion` の後に置くので、
+  // いま答えられた question 自身は `done` で todo の対象から自然に外れる。
+  if (wantsPromotionRetry && taskHasLanded(deps.db, promotionTaskId)) {
+    settlePrPromotionQuestionsAsObserved(deps.db, promotionTaskId, now());
   }
   // abandon は失敗タスクの木を丸ごと cancel する — そこに付帯子が居たなら、待って
   // いた祖先の着地はここで起きる(ADR 0092 決定3: cancel も決着)

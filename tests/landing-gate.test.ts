@@ -642,3 +642,103 @@ it("再発火が着地対象なしを記録した場合も、PR 昇格失敗 que
     question_answer: null,
   });
 });
+
+it("再発火が飛んでいる最中に retry が着地させたら、再発火の失敗は question にならない", async () => {
+  const { workspace, task, failure } = await failedPromotion();
+
+  const repair = attachChild(t, task.id, "repair: ship the feature");
+  t.github.scriptFailure(null);
+  // 再発火の `gh pr create` を撃った状態で止め、その窓に人間の retry を差し込む。
+  // 2本目(retry 側・同一ブランチ)は素通りで成功し、解放した1本目は実 GitHub と
+  // 同じ "already exists" で落ちる
+  const createPullRequest = t.github.createPullRequest.bind(t.github);
+  const order: string[] = [];
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  let relandEntered!: () => void;
+  const relandStarted = new Promise<void>((resolve) => {
+    relandEntered = resolve;
+  });
+  let calls = 0;
+  t.github.createPullRequest = async (input) => {
+    if (++calls === 1) {
+      order.push("reland:enter");
+      relandEntered();
+      await gate;
+      order.push("reland:already-exists");
+      throw new Error(`a pull request for branch ${input.branch} already exists`);
+    }
+    order.push("retry:create");
+    return createPullRequest(input);
+  };
+
+  await pickUp(t, repair.id);
+  commitWork(workspace.path, "repair.txt", "repaired\n");
+  const completing = completeViaMcp(t, repair.id);
+  await relandStarted;
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
+    answers: ["retry"],
+  });
+  releaseGate();
+  await completing;
+
+  expect(answered.status).toBe(200);
+  expect(order).toEqual(["reland:enter", "retry:create", "reland:already-exists"]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: ["retry"],
+  });
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "pr_opened")).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).not.toBeNull();
+  expect(
+    (await questions(t)).filter(
+      (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
+    ),
+  ).toEqual([]);
+});
+
+it("strict retry で着地したら、積み上がった他の PR 昇格失敗 question も観測で引退する", async () => {
+  const { workspace, task, failure } = await failedPromotion();
+
+  // 再発火が同じ原因でもう一度落ちて、同じタスクを指す失敗 question が2件になる
+  const repair = attachChild(t, task.id, "repair: ship the feature");
+  await pickUp(t, repair.id);
+  commitWork(workspace.path, "repair.txt", "repaired\n");
+  await completeViaMcp(t, repair.id);
+  const stacked = (await questions(t)).filter(
+    (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
+  );
+  expect(stacked).toHaveLength(2);
+  const second = stacked.find((q: any) => q.id !== failure.id);
+  t.github.scriptFailure(null);
+
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
+    answers: ["retry"],
+  });
+
+  expect(answered.status).toBe(200);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: ["retry"],
+  });
+  const answeredEvents = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
+  expect(answeredEvents.filter((event: any) => event.kind === "question_answered")).toHaveLength(1);
+  // 引退は観測であって人間の決定ではない —— 誰も答えていない question に回答を書かない
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${second.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: null,
+  });
+  const secondEvents = (await api(t.baseUrl, "GET", `/api/tasks/${second.id}/events`)).json;
+  expect(secondEvents.filter((event: any) => event.kind === "pr_promotion_observed")).toHaveLength(1);
+  expect(secondEvents.filter((event: any) => event.kind === "question_answered")).toEqual([]);
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "pr_opened")).toHaveLength(1);
+  expect(
+    (await questions(t)).filter(
+      (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
+    ),
+  ).toEqual([]);
+});
