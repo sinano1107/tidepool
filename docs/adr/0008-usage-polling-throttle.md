@@ -4,6 +4,8 @@
 
 **Status 追記: 閾値判定と再開タイマーは ADR-0030 で置き換え済み** — 一律閾値(80% / `TIDEPOOL_USAGE_THRESHOLD`)は経過ペースとの差(オフセット = 人間の取り分の予約)による判定へ、再開タイマーはリセット時刻から catch-up 時刻へ転換した。just-in-time ポーリング・実行中タスクには触れない・fail-closed は引き続き維持される。
 
+**Status 追記: 末尾の「別スライスで扱う」は ADR-0104 で回収済み** — 実 429 の exit 形は #447 で採取され(`result` envelope の `api_error_status: 429`)、mid-run 中断の扱いは ADR 0007 の復活として ADR 0104 が定める。本 ADR の骨格(pickup 時の just-in-time 観測・実行中タスクには触れない・fail-closed)は不変。
+
 #10 は「真実の源は各実行の stream-json 中の rate limit イベント」という前提で throttle を実装したが、実際に検証した結果この前提は成立しなかった: Anthropic が statusline 機構に渡している `rate_limits` オブジェクト(`five_hour` / `seven_day` の使用率と reset 時刻)は、headless `-p` 実行の stream-json にも `--debug api` の出力にも一切現れない。そこで検知を、scheduler の pickup 判断時に `claude -p "/usage" --output-format json` を叩く just-in-time ポーリングへ転換した(実測: 663ms・$0・モデル呼び出しなし)。session / week(全モデル)のどちらかの使用率が閾値(デフォルト 80%、`TIDEPOOL_USAGE_THRESHOLD` で上書き可)以上なら pickup を skip し、reset 時刻に一発タイマーで再ポーリングする。
 
 このとき2つの前提も同時に覆した。第一に、#10 の「閾値判断は Anthropic 側に乗り、自前推定はしない」を放棄し、自前の閾値を採用した — ポーリングで観測できるのは使用率という連続量だけであり、Anthropic 側の分類イベント(rejected / allowed_warning)はもう届かないため、状態も2つから1つ(throttled)に畳んだ。第二に、throttle は実行中タスクに決して触れない — 閾値は 100% 未満の予防線であり、到達時点で走っているタスクを切る理由がない。これにより mid-run 中断(WIP 退避 → キュー先頭復帰 → 自動再開)という事象自体が消滅し、ADR 0007 が定めた「自動リトライ原則の唯一の例外」も不要になった(pickup の再開はタスクのリトライではない)。

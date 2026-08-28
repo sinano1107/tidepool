@@ -44,14 +44,14 @@ describe("ADR 索引の生成内容", () => {
 
   it.each([
     [
-      "単一の Status 行は逐語転記される(0007)",
+      "Status 行と追記は / で連結される(0007)",
       "0007",
-      "- [0007](0007-swell-throttle-bypasses-failure-retry.md) — Swell throttle は watchdog の失敗リトライ経路を経由しない — 使用量リミットのみ自動再開の例外とする **(superseded by ADR-0008)**",
+      "- [0007](0007-swell-throttle-bypasses-failure-retry.md) — Swell throttle は watchdog の失敗リトライ経路を経由しない — 使用量リミットのみ自動再開の例外とする **(superseded by ADR-0008 / ADR-0104 で復活)**",
     ],
     [
       "複数の Status 行は / で連結される(0008)",
       "0008",
-      "- [0008](0008-usage-polling-throttle.md) — Throttle 検知は pickup 時の /usage ポーリングと自前閾値による — 実行中タスクは常に完走する **(取得機構は ADR-0028 で差し替え済み / 閾値判定と再開タイマーは ADR-0030 で置き換え済み)**",
+      "- [0008](0008-usage-polling-throttle.md) — Throttle 検知は pickup 時の /usage ポーリングと自前閾値による — 実行中タスクは常に完走する **(取得機構は ADR-0028 で差し替え済み / 閾値判定と再開タイマーは ADR-0030 で置き換え済み / 末尾の「別スライスで扱う」は ADR-0104 で回収済み)**",
     ],
     [
       "Status 内の Markdown リンクは逐語のまま転記される(0034)",
