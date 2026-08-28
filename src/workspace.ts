@@ -477,11 +477,6 @@ function refName(line: string): string {
   return line.slice(line.indexOf(" ") + 1);
 }
 
-/** 同じ行の値側。 */
-function refValue(line: string): string {
-  return line.slice(0, line.indexOf(" "));
-}
-
 function refLines(snapshot: string, exceptRef: string): string[] {
   return snapshot
     .split("\n")
@@ -495,7 +490,7 @@ function recordedRef(db: Db, workspaceName: string, ref: string): string | undef
   const line = storedRefs(db, workspaceName)
     .split("\n")
     .find((candidate) => candidate !== "" && refName(candidate) === ref);
-  return line === undefined ? undefined : refValue(line);
+  return line?.slice(0, line.indexOf(" "));
 }
 
 /** ADR 0064 の不変条件そのもの: **タスクブランチは worker の唯一の可変 ref である**。
@@ -943,37 +938,17 @@ export class OutOfBandProtectedBranchError extends Error {
   }
 }
 
-/** `git()` が投げた失敗の終了コード。git の述語系コマンドは「答えが no」も非零で返す
- *  ので、答えと**道具の失敗**(128 等)はこれで分ける —— 後者を no と読み替えると、
- *  壊れた checkout が「コンフリクト」という嘘の理由で人間に届く。 */
-function gitExitStatus(err: unknown): number | undefined {
-  return (err as { status?: number } | null)?.status;
-}
-
-/** `ancestor` が `descendant` に含まれているか = ff で運べるか。 */
+/** `ancestor` が `descendant` に含まれているか = ff で運べるか。git の述語系コマンドは
+ *  「答えが no」も非零で返すので、答え(1)と**道具の失敗**(128 等)を終了コードで分ける ——
+ *  後者を no と読み替えると、壊れた checkout が「コンフリクト」という嘘の理由で人間に届く。 */
 function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: string): boolean {
   try {
     git(workspace.path, "merge-base", "--is-ancestor", ancestor, descendant);
     return true;
   } catch (err) {
-    if (gitExitStatus(err) !== 1) throw err;
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
     return false;
   }
-}
-
-/** merge が中断状態で残っているか(コンフリクトの跡)。 */
-function mergeInProgress(workspace: WorkspaceConfig): boolean {
-  try {
-    git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** 両方の綴りが同じ subject を書く(下の2経路で共有する)。 */
-function landingMergeMessage(branch: string, task: string): string {
-  return `Merge ${task} into ${branch}`;
 }
 
 /** ADR 0103 決定4: 自動では合わない、と分かっただけの状態。タスクブランチも保護
@@ -1004,7 +979,7 @@ function mergeIntoProtectedByPlumbing(
   try {
     tree = git(workspace.path, "merge-tree", "--write-tree", branch, task);
   } catch (err) {
-    if (gitExitStatus(err) !== 1) throw err;
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
     throw landingConflict(workspace, branch, task);
   }
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/${task}`);
@@ -1017,7 +992,7 @@ function mergeIntoProtectedByPlumbing(
     "-p",
     taskSha,
     "-m",
-    landingMergeMessage(branch, task),
+    `Merge ${task} into ${branch}`,
   );
   git(workspace.path, "update-ref", ref, merged, protectedSha);
 }
@@ -1062,13 +1037,16 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   }
   try {
     // `--no-edit` は環境の `merge.edit` に負けないため —— 盤面の git は誰の端末も持たない
-    git(workspace.path, "merge", "--no-edit", "-m", landingMergeMessage(branch, task), task);
+    git(workspace.path, "merge", "--no-edit", "-m", `Merge ${task} into ${branch}`, task);
   } catch (err) {
-    // コンフリクトなら merge が中断状態で残る。ツリーを元へ戻してから「自動では合わない」を
-    // 返す。始まる前に落ちた失敗(汚れたツリー等)は中断状態を作らないので、その git の
+    // コンフリクトなら merge が中断状態で残り、`--abort` がツリーを元へ戻す。始まる前に
+    // 落ちた失敗(汚れたツリー等)は中断状態を作らないので `--abort` 自体が拒み、その git の
     // 理由をそのまま人間へ返す —— どちらも quarantine ではない(ADR 0103 決定4)
-    if (!mergeInProgress(workspace)) throw err;
-    git(workspace.path, "merge", "--abort");
+    try {
+      git(workspace.path, "merge", "--abort");
+    } catch {
+      throw err;
+    }
     throw landingConflict(workspace, branch, task);
   }
 }

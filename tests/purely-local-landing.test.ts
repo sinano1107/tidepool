@@ -42,10 +42,6 @@ async function quarantineQuestion(board: Tidepool): Promise<any> {
   );
 }
 
-function answerMerge(board: Tidepool, questionId: string): Promise<{ status: number; json: any }> {
-  return api(board.baseUrl, "POST", `/api/tasks/${questionId}/answer`, { answers: ["merge"] });
-}
-
 /** ADR 0103 決定2 の直列ペア(#468 のライブ実測の形): 独立に登録された2件を続けて
  *  完了させ、1件目を着地させて保護ブランチを進めたうえで、非 ff になった2件目の
  *  着地 question を返す。`sharedFile` は両タスクに同じファイルを書かせてコンフリクトを
@@ -67,9 +63,14 @@ async function serialPairLanding(
   commitWork(workspacePath, sharedFile ? "shared.txt" : "two.txt", "from the second task\n");
   await completeViaMcp(board, second.id);
   if (third) await board.clock.advance(HOUR); // 3件目が slot を取り、HEAD は自分のタスクブランチへ移る
-  expect((await answerMerge(board, (await landingQuestionFor(board, first.id)).id)).status).toBe(
-    200,
-  );
+  const firstQuestion = await landingQuestionFor(board, first.id);
+  expect(
+    (
+      await api(board.baseUrl, "POST", `/api/tasks/${firstQuestion.id}/answer`, {
+        answers: ["merge"],
+      })
+    ).status,
+  ).toBe(200);
   return { first, second, third, question: await landingQuestionFor(board, second.id) };
 }
 
@@ -162,7 +163,9 @@ it("直列に登録された2件目の着地は、1件目が進めた保護ブ�
   const { first, second, question } = await serialPairLanding(t, workspace.path);
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
 
-  const answered = await answerMerge(t, question.id);
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
 
   expect(answered.status).toBe(200);
   expect(git(workspace.path, "rev-list", "--count", `main..task/${second.id}`)).toBe("0");
@@ -187,7 +190,9 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   const head = git(workspace.path, "rev-parse", "HEAD");
   const status = git(workspace.path, "status", "--porcelain");
 
-  const answered = await answerMerge(t, question.id);
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
 
   expect(answered.status).toBe(200);
   expect(git(workspace.path, "rev-list", "--count", `main..task/${second.id}`)).toBe("0");
@@ -219,7 +224,9 @@ it("走行中の slot を占めたまま来た着地がコンフリクトして�
   const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
   const head = git(workspace.path, "rev-parse", "HEAD");
 
-  const answered = await answerMerge(t, question.id);
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
 
   expect(answered.status).toBe(409);
   expect(await quarantineQuestion(t)).toBeUndefined();
@@ -239,7 +246,9 @@ it("snapshot が一致していれば着地のコンフリクトは回答を拒�
   const protectedSha = git(workspace.path, "rev-parse", "refs/heads/main");
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/task/${second.id}`);
 
-  const answered = await answerMerge(t, question.id);
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
 
   expect(answered.status).toBe(409);
   expect(await quarantineQuestion(t)).toBeUndefined();
@@ -303,7 +312,9 @@ it("保護ブランチが帯域外で巻き戻されると、ff できる位置�
   // 巻き戻し先はタスクブランチの祖先なので、ff-only の検査だけなら素通りしてしまう位置
   git(workspace.path, "reset", "--hard", rolledBackTo);
 
-  const answered = await answerMerge(t, question.id);
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
 
   expect(answered.status).toBe(409);
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(rolledBackTo);
@@ -340,7 +351,9 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
     db.close();
   }
 
-  const answered = await answerMerge(t, question.id);
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["merge"],
+  });
 
   expect(answered.status).toBe(409);
   expect(answered.json.error).toContain("no recorded position");
