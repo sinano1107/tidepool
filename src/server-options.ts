@@ -211,7 +211,12 @@ export class LoggingWorker implements WorkerAdapter {
  *  合成の入力とは別に取る。 */
 export function buildWorkerOptions(
   board: BoardComposition & { registryDir: string },
-  session: { db: Db; clock: Clock; containers: WorkerContainers },
+  session: {
+    db: Db;
+    clock: Clock;
+    containers: WorkerContainers;
+    onCapInterrupted: (taskId: string) => void;
+  },
 ): ClaudeWorkerOptions {
   return {
     db: session.db,
@@ -238,6 +243,10 @@ export function buildWorkerOptions(
     advisorDisabled: board.advisorDisabled,
     // ADR 0097 決定4: Moonshot キーの置き場。アダプタが spawn 時にだけ読む
     moonshotApiKeyFile: board.moonshotApiKeyFile,
+    // ADR 0104: 429 で断られた session の後始末。渡し忘れは「上限で落ちたタスクが
+    // in_progress のまま watchdog 待ちになる」形で静かに fail する — advisorDisabled と
+    // 同じ類なので、上の網羅テストが見張る面に載せる
+    onCapInterrupted: session.onCapInterrupted,
   };
 }
 
@@ -248,14 +257,14 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   const resolveHarness = harnessResolver(board);
   if (!registryDir || !resolveHarness) return () => new LoggingWorker();
-  return ({ db, clock, containers }) => {
+  return ({ db, clock, containers, onCapInterrupted }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
       resolveHarness,
       adapters: {
         "claude-code": new ClaudeCodeWorker(
-          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers }),
+          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers, onCapInterrupted }),
         ),
         codex: new CodexWorker({
           db,
