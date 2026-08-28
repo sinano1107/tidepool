@@ -491,7 +491,7 @@ export function startScheduler(deps: {
       );
     }
     if (provider === "moonshot") {
-      const observation: ProviderUsageObservation = {
+      return {
         provider,
         status: "observed",
         plan: null,
@@ -499,8 +499,6 @@ export function startScheduler(deps: {
         observedAt: now,
         windows: [],
       };
-      reportProviderUsage(db, observation);
-      return observation;
     }
 
     const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth);

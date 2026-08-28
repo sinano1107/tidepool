@@ -374,7 +374,7 @@ const paceOffsetsSchema = z.object({
 const providerPaceOffsetSchema = z.object({
   provider: z.enum(PROVIDER_VALUES),
   window: z.enum(["session", "week", "fable", "primary", "secondary"]),
-  offset: z.number().int().min(0).max(100),
+  offset: paceOffsetValue,
 });
 
 // the board timezone (issue #63 / ADR 0022) — a separate sender from
