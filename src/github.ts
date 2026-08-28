@@ -17,6 +17,12 @@ export interface PrResult {
   number: number;
 }
 
+/** どの checkout のどのブランチを `origin` へ push するか。 */
+export interface PushBranchInput {
+  path: string;
+  branch: string;
+}
+
 /** Which workspace checkout to run `gh` from, and which PR (issue #11) — the
  *  merge dial's CI-check and merge calls both key off just these two. */
 export interface PrRef {
@@ -94,13 +100,19 @@ export class IssueGoneError extends Error {
  *  beforehand. */
 export interface GitHubClient {
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
+  /** タスクブランチを `origin` へ push する —— 盤面がリモートへ書く唯一の操作。
+   *  PR 作成の前段であると同時に、**既に開いている PR の更新**でもある: 付帯子の
+   *  修理が merge back されたタスクブランチを押し直すと、その PR が黙って更新される
+   *  (ADR 0053 / issue #400)。 */
+  pushBranch(input: PushBranchInput): Promise<void>;
   getCiStatus(ref: PrRef): Promise<CiStatus>;
   mergePullRequest(ref: PrRef): Promise<void>;
   /** Whether this PR is already merged (ADR 0079 決定3) — the read the board
    *  needs to tell "the merge is still mine to make" from "someone merged it
    *  outside the board". Only asked on the two surfaces the board holds a
-   *  decision on (an open merge question, the auto-merge queue), never as a
-   *  standing watch over every open PR. */
+   *  decision on (an open merge question, the auto-merge queue) and before
+   *  pushing a repair onto a still-open PR (issue #400), never as a standing
+   *  watch over every open PR. */
   isPullRequestMerged(ref: PrRef): Promise<boolean>;
   getIssue(ref: IssueRef): Promise<Issue>;
   /** Lists the repository's open issues (issue #67) — the issue-number
@@ -172,13 +184,17 @@ export class GhCliClient implements GitHubClient {
     return this.auth.env(repo);
   }
 
+  async pushBranch(input: PushBranchInput): Promise<void> {
+    const repo = originRepo(input.path);
+    await this.auth.ensureToken(repo);
+    authedGit(this.auth, input.path, repo, "push", "-u", "origin", input.branch);
+  }
+
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     // `gh pr create --head <branch>` needs the branch to already exist on the
     // remote — run non-interactively, it cannot fall back to its "push now?"
     // prompt.
-    const repo = originRepo(input.path);
-    await this.auth.ensureToken(repo);
-    authedGit(this.auth, input.path, repo, "push", "-u", "origin", input.branch);
+    await this.pushBranch(input);
     const url = execFileSync(
       "gh",
       [
@@ -193,7 +209,7 @@ export class GhCliClient implements GitHubClient {
         "--body",
         input.body,
       ],
-      { cwd: input.path, env: this.auth.env(repo), stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
     )
       .toString()
       .trim();

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import type { Clock } from "../src/clock.js";
 import type {
   ChildDraftContext,
@@ -15,6 +16,7 @@ import type {
   OpenIssue,
   PrRef,
   PrResult,
+  PushBranchInput,
   RepoRef,
   RepoSlug,
 } from "../src/github.js";
@@ -234,6 +236,7 @@ export class FakeContainerRuntime implements ContainerRuntime {
  *  without touching a real GitHub API. */
 export class FakeGitHubClient implements GitHubClient {
   readonly requests: CreatePrInput[] = [];
+  readonly pushes: PushBranchInput[] = [];
   readonly issueFetches: IssueRef[] = [];
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
   readonly ciChecks: PrRef[] = [];
@@ -242,6 +245,7 @@ export class FakeGitHubClient implements GitHubClient {
   private mergedOutside = new Set<number>();
   private mergeCheckFailures = new Map<number, Error>();
   private failure: Error | null = null;
+  private pushFailure: Error | null = null;
   private issueFailure: Error | null = null;
   private issueFailures = new Map<number, Error>();
   private issueGate: Promise<void> | null = null;
@@ -257,6 +261,23 @@ export class FakeGitHubClient implements GitHubClient {
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     return { url: `https://github.com/example/repo/pull/${number}`, number };
+  }
+
+  /** 記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
+   *  なければ、盤面が自分の書き込みを撮り直したか(ADR 0064 決定4)を測れない。
+   *  origin を持たない checkout(purely-local)には呼ばれない。 */
+  async pushBranch(input: PushBranchInput): Promise<void> {
+    this.pushes.push(input);
+    if (this.pushFailure) throw this.pushFailure;
+    execFileSync("git", ["push", "-u", "origin", input.branch], {
+      cwd: input.path,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+
+  /** push だけを失敗させる —— token を失ったリモート、非 ff の拒否。 */
+  scriptPushFailure(err: Error | null): void {
+    this.pushFailure = err;
   }
 
   async getCiStatus(ref: PrRef): Promise<CiStatus> {

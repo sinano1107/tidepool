@@ -442,3 +442,25 @@ it("tokenRefusal は持っている token を答えにせず、扉のたびに�
 
   expect(await client.tokenRefusal(ref)).toContain("repo_unreachable");
 });
+
+it("pushBranch はタスクブランチを origin へ push する(PR 作成と切り離した1操作)", async () => {
+  repoPath = await mkdtemp(join(tmpdir(), "tidepool-repo-"));
+  remotePath = await mkdtemp(join(tmpdir(), "tidepool-remote-"));
+  git(remotePath, "init", "--bare", "-b", "main");
+
+  git(repoPath, "init", "-b", "main");
+  writeFileSync(join(repoPath, "README.md"), "hello\n");
+  git(repoPath, "add", "-A");
+  git(repoPath, "commit", "-m", "initial");
+  git(repoPath, "remote", "add", "origin", remotePath);
+  git(repoPath, "push", "origin", "main");
+
+  git(repoPath, "checkout", "-b", "task/abc");
+  writeFileSync(join(repoPath, "repair.txt"), "fixed\n");
+  git(repoPath, "add", "-A");
+  git(repoPath, "commit", "-m", "repair merged back into task/abc");
+
+  await new GhCliClient(await makeAuth()).pushBranch({ path: repoPath, branch: "task/abc" });
+
+  expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
+});
