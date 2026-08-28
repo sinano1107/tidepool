@@ -1,25 +1,25 @@
 import { expect, it } from "vitest";
 import type { Task } from "../src/tasks.js";
-import type { KillSignal, WorkerAdapter } from "../src/worker.js";
+import type { WorkerAdapter } from "../src/worker.js";
 import { CanonicalWorkerRouter } from "../src/worker.js";
 
 function fakeWorker(id: string, usage: string): WorkerAdapter & {
   started: string[];
-  killed: Array<[string, KillSignal]>;
+  stopped: string[];
 } {
   const running = new Set<string>();
   const started: string[] = [];
-  const killed: Array<[string, KillSignal]> = [];
+  const stopped: string[] = [];
   return {
     id,
     started,
-    killed,
+    stopped,
     start(task) {
       started.push(task.id);
       running.add(task.id);
     },
-    kill(taskId, signal) {
-      if (running.has(taskId)) killed.push([taskId, signal]);
+    gracefulStop(taskId) {
+      if (running.has(taskId)) stopped.push(taskId);
     },
     async checkUsage() {
       return usage;
@@ -57,7 +57,7 @@ it("scheduler の WorkerAdapter は Provider の正準 Harness だけへ dispatc
   });
 });
 
-it("watchdog の kill は実際に spawn した Harness の root process へ届く(#453; subtree は #459)", () => {
+it("watchdog の畳み込み停止は実際に spawn した Harness の root process へ届く", () => {
   const claude = fakeWorker("claude", "claude usage");
   const codex = fakeWorker("codex", "codex usage");
   const worker = new CanonicalWorkerRouter({
@@ -67,8 +67,8 @@ it("watchdog の kill は実際に spawn した Harness の root process へ届�
   });
 
   worker.start(task("openai-task", "openai-agent"));
-  worker.kill("openai-task", "SIGTERM");
+  worker.gracefulStop("openai-task");
 
-  expect(codex.killed).toEqual([["openai-task", "SIGTERM"]]);
-  expect(claude.killed).toEqual([]);
+  expect(codex.stopped).toEqual(["openai-task"]);
+  expect(claude.stopped).toEqual([]);
 });

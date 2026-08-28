@@ -65,6 +65,7 @@ import {
   cancelTaskDirectly,
   completeTask,
   countUnsettledTasksReferencing,
+  DEFAULT_AUDITOR_NAME,
   DomainError,
   editTask,
   getTask,
@@ -103,6 +104,7 @@ import {
   TriageError,
   triagePreview,
 } from "./triage.js";
+import type { PendingReclaim } from "./watchdog.js";
 import {
   buildWorkspaceResolver,
   UnknownWorkspaceError,
@@ -502,6 +504,11 @@ export interface ApiRouterDeps {
    *  Absent → そのゲートを持たない盤面。 */
   containment?: ContainmentCheck;
   harnessContainment?: HarnessContainmentCheck;
+  /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
+   *  quarantine の確認回答の受理は、容器がまだ populated なら拒まれ、空を再観測
+   *  できたときだけ tree rule を走らせて slot を解放する。Absent → watchdog を
+   *  持たない盤面(回収を待っている slot が存在しない)。 */
+  reclaim?: PendingReclaim;
   /** ADR 0052: re-runs refresh before accepting a registry quarantine answer. */
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
@@ -614,6 +621,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     agentRegistered,
     containment,
     harnessContainment,
+    reclaim,
     registryReachability,
     cliAuth,
     providerCliAuth,
@@ -985,13 +993,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      // 参照検査の事実はここで足す(ADR 0087 決定2/3): db と既定 agent 名を
-      // 両方持つのはこの層だけで、判定と執行は verb の中に1箇所ある
+      // 参照検査の事実はここで足す(ADR 0087 決定2/3): db・既定 agent 名・
+      // Auditor 名を持つのはこの層だけで、判定と執行は verb の中に1箇所ある
       await agentAdmin.delete(
         { name: req.params.name, ...parsed.data },
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
           defaultAgentName,
+          // 解決側(mcp / scheduler)と同じ既定へ落とす —— ポインタは常に値を持つ
+          auditorName: auditorName ?? DEFAULT_AUDITOR_NAME,
         },
       );
       res.json({});
@@ -1343,6 +1353,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           agentRegistered,
           containment,
           harnessContainment,
+          reclaim,
           registryReachability,
           cliAuth,
           providerCliAuth,

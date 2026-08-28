@@ -23,47 +23,44 @@ afterEach(async () => {
 const MIN = 60 * 1000;
 const WORK_LIMIT = 90 * MIN;
 
-it("タスク種別の絶対リミットを超えると SIGTERM が一度だけ送られる、超えるまでは送られない", async () => {
+it("タスク種別の絶対リミットを超えると畳み込み停止が一度だけ送られる、超えるまでは送られない", async () => {
   t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace: 1000 * MIN } });
   const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
   await t.clock.advance(89 * MIN); // t = 149min, elapsed since pickup = 89min: still under 90min
-  expect(t.worker.killed).toEqual([]);
+  expect(t.worker.gracefulStops).toEqual([]);
 
   await t.clock.advance(1 * MIN); // t = 150min, elapsed = 90min: past the limit
-  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+  expect(t.worker.gracefulStops).toEqual([task.id]);
 
   await t.clock.advance(1 * MIN); // no repeat signalling on later ticks
-  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+  expect(t.worker.gracefulStops).toEqual([task.id]);
 });
 
-it("SIGTERM 後、猶予を過ぎると SIGKILL が一度だけ追加で送られる", async () => {
+it("畳み込み停止後、猶予を過ぎると容器の強制回収が一度だけ送られる", async () => {
   const grace = 30 * MIN;
   t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
   const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
-  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM fires (elapsed = 90min)
-  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+  await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止 (elapsed = 90min)
+  expect(t.worker.gracefulStops).toEqual([task.id]);
+  expect(t.containers.forceReclaims).toEqual([]);
 
   await t.clock.advance(29 * MIN); // t = 179min: grace (30min from 150min) not yet elapsed
-  expect(t.worker.killed).toEqual([{ taskId: task.id, signal: "SIGTERM" }]);
+  expect(t.containers.forceReclaims).toEqual([]);
 
-  await t.clock.advance(1 * MIN); // t = 180min: grace elapsed, SIGKILL fires
-  expect(t.worker.killed).toEqual([
-    { taskId: task.id, signal: "SIGTERM" },
-    { taskId: task.id, signal: "SIGKILL" },
-  ]);
+  await t.clock.advance(1 * MIN); // t = 180min: grace elapsed, 強制回収 fires
+  expect(t.containers.forceReclaims).toEqual([task.id]);
 
-  await t.clock.advance(10 * MIN); // no repeat SIGKILL
-  expect(t.worker.killed).toEqual([
-    { taskId: task.id, signal: "SIGTERM" },
-    { taskId: task.id, signal: "SIGKILL" },
-  ]);
+  await t.clock.advance(10 * MIN); // no repeat force reclaim
+  expect(t.containers.forceReclaims).toEqual([task.id]);
+  // 合図は adapter が選ぶので、seam に raw signal 名は一度も現れない
+  expect(t.worker.gracefulStops).toEqual([task.id]);
 });
 
-it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付きの question が生まれ、slot が解放される", async () => {
+it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実行選択肢付きの question が生まれ、slot が解放される", async () => {
   const grace = 30 * MIN;
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
@@ -76,8 +73,8 @@ it("SIGKILL 後、tree rule が走り、tidepool 名義で再実行選択肢付�
   // the killed session left work mid-flight, uncommitted
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
 
-  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
-  await t.clock.advance(grace); // t = 180min: SIGKILL — the failure path runs
+  await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
+  await t.clock.advance(grace); // t = 180min: 強制回収 → 容器が空になり失敗経路が走る
 
   // tree rule stashed the WIP and the tree is clean
   expect(git(ws.path, "status", "--porcelain")).toBe("");
@@ -120,8 +117,8 @@ it("failure question の「再実行」を選ぶと元タスクが先頭復帰�
   const task = await registerWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
-  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
-  await t.clock.advance(grace); // t = 180min: SIGKILL, failure question registered
+  await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
+  await t.clock.advance(grace); // t = 180min: 強制回収 → 回収済み観測 → failure question
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
@@ -145,12 +142,10 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
 
   // first run: hits the limit, gets killed
   await t.clock.advance(HOUR); // picked up at t = 60min
-  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
-  await t.clock.advance(grace); // t = 180min: SIGKILL
-  expect(t.worker.killed).toEqual([
-    { taskId: task.id, signal: "SIGTERM" },
-    { taskId: task.id, signal: "SIGKILL" },
-  ]);
+  await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
+  await t.clock.advance(grace); // t = 180min: 強制回収
+  expect(t.worker.gracefulStops).toEqual([task.id]);
+  expect(t.containers.forceReclaims).toEqual([task.id]);
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
@@ -162,12 +157,8 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
   // watchdog for this task id
   await t.clock.advance(90 * MIN);
   await t.clock.advance(grace);
-  expect(t.worker.killed).toEqual([
-    { taskId: task.id, signal: "SIGTERM" },
-    { taskId: task.id, signal: "SIGKILL" },
-    { taskId: task.id, signal: "SIGTERM" },
-    { taskId: task.id, signal: "SIGKILL" },
-  ]);
+  expect(t.worker.gracefulStops).toEqual([task.id, task.id]);
+  expect(t.containers.forceReclaims).toEqual([task.id, task.id]);
 });
 
 it("failure question が開いている間、失敗タスクと同判断の兄弟も held になり slot に入らない", async () => {
@@ -205,8 +196,8 @@ it("failure question が開いている間、失敗タスクと同判断の兄�
 
   await t.clock.advance(HOUR); // "will fail" picked up (lower sort_key)
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
-  await t.clock.advance(90 * MIN); // t: SIGTERM
-  await t.clock.advance(grace); // SIGKILL — failure question registered
+  await t.clock.advance(90 * MIN); // t: 畳み込み停止
+  await t.clock.advance(grace); // 強制回収 → 回収済み観測 → failure question
 
   const board1 = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   // This sibling has no unfinished child, so it would be a pickable todo
@@ -225,7 +216,7 @@ it("failure question が開いている間、失敗タスクと同判断の兄�
   expect(board2.find((x: any) => x.id === sibling.id).status).toBe("todo");
 });
 
-it("SIGKILL 後に tree rule 自体が失敗すると、failure question ではなく workspace の quarantine に落ちる", async () => {
+it("回収済み観測のあと tree rule 自体が失敗すると、failure question に加えて workspace の quarantine に落ちる", async () => {
   const grace = 30 * MIN;
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({
@@ -240,8 +231,8 @@ it("SIGKILL 後に tree rule 自体が失敗すると、failure question では�
   writeFileSync(join(ws.path, "junk.txt"), "uncommittable\n");
   await rm(join(ws.path, ".git"), { recursive: true, force: true });
 
-  await t.clock.advance(90 * MIN); // t = 150min: SIGTERM
-  await t.clock.advance(grace); // t = 180min: SIGKILL, tree rule fails → quarantine
+  await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
+  await t.clock.advance(grace); // t = 180min: 強制回収 → 回収済み観測、tree rule が失敗 → quarantine
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   // failure question に加えて、quarantine 用の question も盤面自身の名義で立つ

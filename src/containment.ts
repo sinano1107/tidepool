@@ -54,6 +54,20 @@ const UNPROBED: ContainmentCapability = {
     "containment check ran, so whether an unauthenticated request is refused is unknown",
 };
 
+/** Harnesses share the container runtime and the Board's human surface, while
+ * each adapter proves its own sandbox and tool surface. A failure here is
+ * genuinely host-wide, so it keeps ADR 0099's single Containment quarantine. */
+export function composeCommonContainment(
+  containerRuntime: () => SandboxCapability,
+  humanSurface: () => Promise<ContainmentCapability> | undefined,
+): ContainmentCheck {
+  return async () => {
+    const container = containerRuntime();
+    if (!container.available) return container;
+    return (await humanSurface()) ?? UNPROBED;
+  };
+}
+
 /** 人間面の自己検査: 自分の人間ポートへ**無認証で1回**撃ち、401 が返ることを
  *  確かめる(ADR 0036)。
  *
@@ -97,9 +111,11 @@ export async function checkHumanSurfaceRefusesAnonymous(
   };
 }
 
-/** 3つの半分…ではなく**3つの問い**を1つの答えに束ねる。安い順に引く: fs 側は
- *  spawnSync 1回で listen にも依存しない、人間面は loopback を1往復、ツール面は
- *  実 CLI を1本起こす(~2s)。手前で答えが出ているなら後ろは撃たない。
+/** **4つの問い**を1つの答えに束ねる。安い順に引く: worker 容器の機構前提は
+ *  cgroupfs の読み書き数回(ADR 0099 決定5 — boot 時だけでなく pickup と回答時にも
+ *  ここで読み直される)、fs 側は spawnSync 1回で listen にも依存しない、人間面は
+ *  loopback を1往復、ツール面は実 CLI を1本起こす(~2s)。手前で答えが出ているなら
+ *  後ろは撃たない。
  *  `humanSurface` が undefined を返すのは listen 前だけ(server.ts が listen 後に
  *  armed する)。
  *
@@ -111,11 +127,14 @@ export async function checkHumanSurfaceRefusesAnonymous(
  *  不正にしているのと同じ線)。人間面の `undefined` はこれとは別物で、listen 前
  *  という**一過性**の状態なので fail-closed(`UNPROBED`)に倒れる。 */
 export function composeContainment(
+  containerRuntime: () => SandboxCapability,
   sandbox: () => SandboxCapability,
   humanSurface: () => Promise<ContainmentCapability> | undefined,
   toolSurface: (() => Promise<ContainmentCapability>) | null,
 ): ContainmentCheck {
   return async () => {
+    const container = containerRuntime();
+    if (!container.available) return container;
     const filesystem = sandbox();
     if (!filesystem.available) return filesystem;
     const human = (await humanSurface()) ?? UNPROBED;

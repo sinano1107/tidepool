@@ -114,6 +114,38 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
     expect(observed?.env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
+  it("probe の予算は $0.25 — kimi-k3[1m] の最小1ターン実測($0.057〜$0.122、issue #447)を $0.01 では必ず踏む(issue #466)", async () => {
+    const keyFile = keyFileWith("sk-moonshot-test-key");
+    let observedArgs: string[] | undefined;
+    const check = createMoonshotCliAuthCheck(keyFile, async (_command, args) => {
+      observedArgs = args;
+      return { exitCode: 0, stdout: JSON.stringify({ is_error: false, result: "OK" }) };
+    });
+
+    await check();
+
+    const flagIndex = observedArgs?.indexOf("--max-budget-usd") ?? -1;
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(observedArgs?.[flagIndex + 1]).toBe("0.25");
+  });
+
+  it("error_max_budget_usd エンベロープは unknown のまま、予算超過と判る reason を返す(issue #466)", async () => {
+    const keyFile = keyFileWith("sk-moonshot-test-key");
+    const check = createMoonshotCliAuthCheck(keyFile, async () => ({
+      exitCode: 1,
+      stdout: JSON.stringify({
+        is_error: true,
+        subtype: "error_max_budget_usd",
+        result: "Reached max budget ($0.25)",
+      }),
+    }));
+
+    await expect(check()).resolves.toEqual({
+      status: "unknown",
+      reason: "probe exceeded its budget cap before authenticating",
+    });
+  });
+
   it("キーファイルが無ければ probe を撃たずに unauthorized と分類する(資格情報が無い = 認証できない)", async () => {
     const missing = join(mkdtempSync(join(tmpdir(), "tidepool-moonshot-key-")), "moonshot-api-key");
     let calls = 0;

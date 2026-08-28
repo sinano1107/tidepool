@@ -38,16 +38,58 @@ const SYNTHETIC_USAGE_SCREEN =
   "Current week (all models)\n20% used\nResets Aug 20 at 1pm (Asia/Tokyo)\n" +
   "Current week (Fable)\n30% used\nResets Aug 20 at 1pm (Asia/Tokyo)";
 
+// CLI が実際に出す文字列(2.1.221 / 2.1.245 実読)。persisted seed は必ず
+// `Showing last-known usage` を伴い、rate limit / refresh 失敗はその接尾辞として出る。
 it.each([
-  "Showing last-known usage",
-  "could not refresh",
+  "Refreshing…",
+  "Showing last-known usage (could not refresh)",
+  "Showing last-known usage (rate limited — try again in a moment)",
   "Failed to load usage data",
-  "(rate limited — try again in a moment)",
 ])("%s 付き画面は全ウィンドウを観測不能にする(issue #334)", (marker) => {
   expect(parseUsage(`${SYNTHETIC_USAGE_SCREEN}\n${marker}`, new Date("2026-08-14T00:00:00.000Z"))).toEqual({
     session: null,
     week: null,
     fable: null,
+  });
+});
+
+// 本番 Pi が永続 fail-closed を踏んだ回の /usage 画面(issue #492)。生バイトは
+// 残っておらず issue 本文の画面テキストからの転記 — ADR 0078 が失敗マーカーに
+// 認めた synthetic と同じ扱いで、検査対象はパーサのテキスト述語そのもの。
+// per-model の内訳だけが取れず、session / week は描かれている。fable ラベルは
+// 出ないので fable は null(issue #492 の再現出力もそう報告している)。
+const PER_MODEL_RATE_LIMITED_SCREEN = `Current session
+██████████████████████████████████████████████████ 100% used
+Resets 8pm (Asia/Tokyo)
+
+Current week (all models)
+███████████████████████████████████████████████▌   95% used
+Resets Aug 27, 1pm (Asia/Tokyo)
+
+Per-model breakdown unavailable (rate limited — try again in a moment)`;
+
+// 盤面に残った throttle_state.observed_at そのもの(18:41:49 Asia/Tokyo)。
+// 画面の `Resets 8pm` が意味する 5h 窓(15:00〜20:00 Asia/Tokyo)の中にある。
+const PER_MODEL_RATE_LIMITED_NOW = new Date("2026-08-25T09:41:49.623Z");
+
+it("per-model の内訳だけが rate limited な実機画面は、session / week を観測値として読む(issue #492)", () => {
+  expect(parseUsage(PER_MODEL_RATE_LIMITED_SCREEN, PER_MODEL_RATE_LIMITED_NOW)).toEqual({
+    session: { percent: 100, resetsAt: new Date("2026-08-25T11:00:00.000Z") },
+    week: { percent: 95, resetsAt: new Date("2026-08-27T04:00:00.000Z") },
+    fable: null,
+  });
+});
+
+it("その画面の throttle 判定は catch-up 時刻つきで返る — 症状だった resets_at:null ではない(issue #492)", () => {
+  const snapshot = parseUsage(PER_MODEL_RATE_LIMITED_SCREEN, PER_MODEL_RATE_LIMITED_NOW);
+  expect(evaluateThrottle(snapshot, { session: 0, week: 0, fable: 0 }, PER_MODEL_RATE_LIMITED_NOW)).toEqual({
+    throttled: true,
+    resetsAt: new Date("2026-08-26T19:36:00.000Z"),
+    windows: {
+      session: { throttled: true, resumeAt: new Date("2026-08-25T11:00:00.000Z") },
+      week: { throttled: true, resumeAt: new Date("2026-08-26T19:36:00.000Z") },
+      fable: null,
+    },
   });
 });
 

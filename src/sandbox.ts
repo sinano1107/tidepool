@@ -482,7 +482,20 @@ const SEATBELT_PROBE = ["-p", "(version 1)(allow default)", "/usr/bin/true"];
  *  an unprivileged user namespace and a bind mount. bwrap being *installed* is
  *  not the question (ADR 0033 調査時の既知問題: AppArmor / userns 無効化で入って
  *  いても動かない), so the probe runs it. */
-const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--", "/bin/true"];
+const BWRAP_PROBE = "--ro-bind / / --dev /dev -- /bin/true".split(" ");
+/** Linux, rung 2: the same probe *nested* — the CLI's sandbox runs
+ *  `bwrap … --unshare-pid --unshare-user --cap-drop ALL --proc /proc -- bash -c
+ *  "<apply-seccomp> …"`, and apply-seccomp does `unshare(CLONE_NEWUSER)` then
+ *  writes `/proc/self/setgroups` / `uid_map` before exec; `unshare -Ur`
+ *  reproduces that write sequence. 実測 2026-08-25(Ubuntu 26.04 / bwrap
+ *  0.11.1): `bwrap-userns-restrict` profile が載っていると rung 1 は 0 で通る
+ *  のに(偽陽性)この段は `write failed /proc/self/uid_map` で落ちる。
+ *  文字列で持つのは、テンプレート(lima/tidepool.yaml)の system provision と目で
+ *  突き合わせられる形を保つため。 */
+const BWRAP_NESTED_USERNS_PROBE =
+  "--ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-user --cap-drop ALL --new-session --die-with-parent -- unshare -Ur /bin/true".split(
+    " ",
+  );
 /** socat has no no-op subcommand; `-V` prints its version and exits 0. The
  *  sandbox's network proxy is spawned through it, so its absence is fatal. */
 const SOCAT_PROBE = ["-V"];
@@ -517,6 +530,17 @@ export function checkSandboxCapability(
         reason:
           "bubblewrap (bwrap) could not create a sandbox — install it (apt install bubblewrap), " +
           "or check that unprivileged user namespaces and AppArmor allow it on this host",
+      };
+    }
+    if (!runOk("bwrap", BWRAP_NESTED_USERNS_PROBE)) {
+      return {
+        available: false,
+        reason:
+          "bwrap runs, but a user namespace nested inside it is capability-restricted — AppArmor " +
+          "confines bwrap's children on this host (the Ubuntu >= 24.04 default), and the CLI's " +
+          "sandbox needs that nested namespace. Turn off both the " +
+          "kernel.apparmor_restrict_unprivileged_userns sysctl and the bwrap-userns-restrict " +
+          "AppArmor profile — the two commands are the system provision in lima/tidepool.yaml",
       };
     }
     if (!runOk("socat", SOCAT_PROBE)) {

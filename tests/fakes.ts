@@ -21,7 +21,17 @@ import type {
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
-import type { KillSignal, WorkerAdapter } from "../src/worker.js";
+import type { WorkerAdapter } from "../src/worker.js";
+import {
+  type ContainedProcess,
+  type ContainerRuntime,
+  type ContainerRuntimeCapability,
+  type ContainerSpawn,
+  defaultSpawn,
+  isSpawnFailure,
+  type WorkerContainer,
+  WorkerContainers,
+} from "../src/worker-container.js";
 
 /** A reading well under the default threshold — the harness default so tests
  *  unrelated to throttling never need to script usage themselves. Exported
@@ -123,10 +133,11 @@ export class FakeClock implements Clock {
 }
 
 /** Scripted stand-in at the WorkerAdapter seam: records what it was asked to
- *  start and killed, in call order. */
+ *  start and to fold up, in call order. 強制回収は adapter の口ではないので
+ *  ここには現れない — それは `FakeContainerRuntime` の側にある(ADR 0099 決定2)。 */
 export class ScriptedWorker implements WorkerAdapter {
   readonly started: Task[] = [];
-  readonly killed: Array<{ taskId: string; signal: KillSignal }> = [];
+  readonly gracefulStops: string[] = [];
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
@@ -141,8 +152,8 @@ export class ScriptedWorker implements WorkerAdapter {
     this.started.push(task);
   }
 
-  kill(taskId: string, signal: KillSignal): void {
-    this.killed.push({ taskId, signal });
+  gracefulStop(taskId: string): void {
+    this.gracefulStops.push(taskId);
   }
 
   async checkUsage(): Promise<string | null> {
@@ -160,6 +171,61 @@ export class ScriptedWorker implements WorkerAdapter {
   /** Holds checkUsage in flight so tests observe the real PTY-latency race. */
   scriptUsageGate(gate: Promise<void>): void {
     this.usageGate = gate;
+  }
+}
+
+/** 容器機構 seam の scripted stand-in(ADR 0099 決定2)。既定の容器は
+ *  強制回収を受けた時点で空になる(実機構がそう振る舞うのが正常)。空にならない
+ *  容器 — 回収に失敗するホスト — は `hold` で明示的にスクリプトし、`fireEmpty`
+ *  で好きな瞬間に「空になった signal」を撃つ。 */
+export class FakeContainerRuntime implements ContainerRuntime {
+  readonly forceReclaims: string[] = [];
+  private readonly held = new Set<string>();
+  private readonly markEmpty = new Map<string, () => void>();
+  private capability: ContainerRuntimeCapability = { available: true };
+
+  /** `spawn` は容器の中で走る process を作る口。ScriptedWorker の盤面は1つも
+   *  spawn しないので、実 adapter を通すテストだけが渡す。 */
+  constructor(private readonly spawn?: ContainerSpawn) {}
+
+  /** 機構前提検査を不成立にスクリプトする。reason 無しで呼ぶと成立に戻る
+   *  (修理済みのホスト)。 */
+  scriptPreflight(reason?: string): void {
+    this.capability = reason === undefined ? { available: true } : { available: false, reason };
+  }
+
+  /** この session の容器は強制回収では空にならない — 空の観測は `fireEmpty`
+   *  だけが起こす。 */
+  hold(sessionId: string): void {
+    this.held.add(sessionId);
+  }
+
+  /** 「容器が空になった」signal を撃つ。 */
+  fireEmpty(sessionId: string): void {
+    this.markEmpty.get(sessionId)?.();
+  }
+
+  preflight(): ContainerRuntimeCapability {
+    return this.capability;
+  }
+
+  create(sessionId: string): WorkerContainer {
+    let markEmpty!: () => void;
+    const reclaimed = new Promise<void>((resolve) => {
+      markEmpty = resolve;
+    });
+    this.markEmpty.set(sessionId, markEmpty);
+    return {
+      spawn: (command, args, opts): ContainedProcess => {
+        if (!this.spawn) throw new Error("fake container runtime: no spawn scripted");
+        return this.spawn(command, args, opts);
+      },
+      forceReclaim: () => {
+        this.forceReclaims.push(sessionId);
+        if (!this.held.has(sessionId)) markEmpty();
+      },
+      reclaimed,
+    };
   }
 }
 
@@ -447,4 +513,51 @@ export class FakeTranslationClient implements TranslationClient {
   scriptFailure(err: Error): void {
     this.failure = err;
   }
+}
+
+/** 盤面側 supervisor を fake の容器機構の上に1行で組む — scheduler / watchdog を
+ *  直に呼ぶテストが毎回2行書かないための口。 */
+export function fakeContainers(runtime: FakeContainerRuntime = new FakeContainerRuntime()): WorkerContainers {
+  return new WorkerContainers(runtime);
+}
+
+/** 容器 = CLI root process 1本 の容器機構: force は root への SIGKILL、空の観測は
+ *  root の exit。**本番経路には居ない**(#463 で実機構 — Linux: cgroup v2 — が
+ *  合成 root に入り、この形は封じ込めとしては #195 の穴そのものになった)ので、
+ *  ここに置いてある: 実 adapter を process 境界だけ差し替えて回すテストが、容器の
+ *  ふりをする最小の器として使う。 */
+function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
+  return {
+    preflight: () => ({ available: true }),
+    create: () => {
+      let child: ContainedProcess | null = null;
+      let markEmpty!: () => void;
+      const reclaimed = new Promise<void>((resolve) => {
+        markEmpty = resolve;
+      });
+      return {
+        spawn: (command, args, opts) => {
+          child = spawn(command, args, opts);
+          child.on("exit", () => markEmpty());
+          // spawn そのものが失敗した process は生まれていない = 容器は空
+          child.on("error", (err: NodeJS.ErrnoException) => {
+            if (isSpawnFailure(err)) markEmpty();
+          });
+          return child;
+        },
+        forceReclaim: () => {
+          // 空の容器(spawn 前 / 既に exit 済み)への force は、その場で空である
+          if (!child) markEmpty();
+          else child.kill("SIGKILL");
+        },
+        reclaimed,
+      };
+    },
+  };
+}
+
+/** 実 adapter に渡す supervisor を process 境界1つから組む。`spawn` を省くと実
+ *  process を起こす(実 CLI は起こさない — ADR 0027)。 */
+export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): WorkerContainers {
+  return new WorkerContainers(passthroughContainerRuntime(spawn));
 }

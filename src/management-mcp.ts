@@ -58,6 +58,7 @@ import {
   listYourTasks,
 } from "./tasks.js";
 import { isFablePickupBlocked } from "./throttle.js";
+import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
@@ -88,6 +89,8 @@ export interface ManagementMcpDeps {
   isProtectedWorkspace?: (name: string) => boolean;
   containment?: ContainmentCheck;
   harnessContainment?: HarnessContainmentCheck;
+  /** ADR 0099 決定3: 回収済み観測を待つ slot の門(WebUI 側と同じ配線)。 */
+  reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
   cliAuth?: CliAuthCheck;
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -655,6 +658,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               agentRegistered: deps.agentRegistered,
               containment: deps.containment,
               harnessContainment: deps.harnessContainment,
+              reclaim: deps.reclaim,
               registryReachability: deps.registryReachability,
               cliAuth: deps.cliAuth,
               providerCliAuth: deps.providerCliAuth,

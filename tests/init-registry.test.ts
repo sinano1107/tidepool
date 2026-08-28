@@ -109,7 +109,7 @@ describe("npm run init-registry", () => {
     });
     expect(registry.authority.standard).toEqual({
       name: "standard",
-      guidance: "Prefer reversible work and escalate decisions outside the stated authority.",
+      guidance: "",
       assignable_to: ["*"],
       allowed_workspaces: ["*"],
       merge: "escalate",
@@ -397,12 +397,15 @@ describe("npm run init-registry", () => {
     expect(guide).not.toContain("Publish the sandbox");
     expect(guide.indexOf("## Stage two")).toBeLessThan(guide.indexOf("npm run github-login"));
 
+    // #442: trust is seeded, not accepted interactively — and #484 moved the
+    // seeding into the installer, so it is no longer a step the reader takes.
+    expect(guide).not.toContain("I trust this folder");
+
     const orderedSteps = [
-      "## Prepare the registry",
-      "gh repo create",
-      "git clone git@github.com:YOUR_GITHUB_LOGIN",
-      "npm run init-registry",
-      "npm start",
+      "scripts/mac-install.sh | bash",
+      "gh auth login",
+      "claude auth login",
+      "caffeinate -i -s limactl shell tidepool",
       "## Create a trial workspace",
       "## First task",
     ];

@@ -1,4 +1,4 @@
-import { execFile, execFileSync, spawn as nodeSpawn } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import {
   accessSync,
   appendFileSync,
@@ -25,7 +25,8 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
-import type { KillSignal, WorkerAdapter } from "./worker.js";
+import type { WorkerAdapter } from "./worker.js";
+import type { ContainerSpawn, WorkerContainers } from "./worker-container.js";
 import {
   quarantineWorkspace,
   resolveExecutionWorkspace,
@@ -75,20 +76,7 @@ const SECRET_ENV = [
   "ANTHROPIC_AUTH_TOKEN",
 ] as const;
 
-export type CodexSpawnFn = (
-  command: string,
-  args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv },
-) => {
-  stdout: NodeJS.ReadableStream;
-  stderr: NodeJS.ReadableStream;
-  kill(signal: NodeJS.Signals): void;
-  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
-  on(event: "error", listener: (error: Error) => void): void;
-};
-
-const defaultSpawn: CodexSpawnFn = (command, args, options) =>
-  nodeSpawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+export type CodexSpawnFn = ContainerSpawn;
 
 export interface CodexWorkerOptions {
   db: Db;
@@ -106,8 +94,9 @@ export interface CodexWorkerOptions {
   cliVersion: string;
   /** Absolute executable established by the same preflight; spawn never relies on PATH. */
   executable: string;
+  /** Board-owned worker-session container supervisor (ADR 0099). */
+  containers: WorkerContainers;
   boardState?: BoardStatePath[];
-  spawn?: CodexSpawnFn;
 }
 
 export interface CodexCapabilityObservation {
@@ -575,14 +564,14 @@ function consumeJsonl(
 /** The OpenAI vendor adapter. The board selects it only for `provider: openai`. */
 export class CodexWorker implements WorkerAdapter {
   readonly id: string;
-  private readonly spawn: CodexSpawnFn;
+  private readonly containers: WorkerContainers;
   private readonly logDir: string;
   private readonly workspacesDir: string;
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
 
   constructor(private readonly options: CodexWorkerOptions) {
     this.id = options.agent;
-    this.spawn = options.spawn ?? defaultSpawn;
+    this.containers = options.containers;
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     mkdirSync(this.logDir, { recursive: true });
@@ -637,7 +626,7 @@ export class CodexWorker implements WorkerAdapter {
       `hooks.SubagentStart=[{hooks=[{type="command",command=${toml(hook)}}]}]`,
       `hooks.PreToolUse=[{matcher="mcp__tidepool__.*",hooks=[{type="command",command=${toml(hook)}}]}]`,
     ];
-    const child = this.spawn(
+    const child = this.containers.open(task.id).spawn(
       this.options.executable,
       [
         "--ask-for-approval", "never",
@@ -742,8 +731,9 @@ export class CodexWorker implements WorkerAdapter {
     });
   }
 
-  kill(taskId: string, signal: KillSignal): void {
-    this.running.get(taskId)?.kill(signal);
+  /** Codex folds up on SIGINT; force/reclaimed belong to WorkerContainers. */
+  gracefulStop(taskId: string): void {
+    this.running.get(taskId)?.kill("SIGINT");
   }
 
   async checkUsage(): Promise<string | null> {

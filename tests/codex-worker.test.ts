@@ -10,7 +10,7 @@ import { type CodexSpawnFn, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { registerTask } from "../src/tasks.js";
-import { FakeClock } from "./fakes.js";
+import { FakeClock, passthroughContainers } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
@@ -95,7 +95,7 @@ You are the Codex worker.`,
     codexHome,
     cliVersion: CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
-    spawn: process.spawn,
+    containers: passthroughContainers(process.spawn),
   });
   return { db, worker, process, codexHome, workspace, logDir };
 }
@@ -257,19 +257,19 @@ describe("CodexWorker (ADR 0098)", () => {
     }
   });
 
-  it("delivers kill to the retained Codex root and records the signaled exit", async () => {
+  it("delivers graceful stop to the retained Codex root and records the signaled exit", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-killed");
     f.worker.start(value);
 
-    f.worker.kill(value.id, "SIGTERM");
-    f.process.exit(null, "SIGTERM");
+    f.worker.gracefulStop(value.id);
+    f.process.exit(null, "SIGINT");
 
-    expect(f.process.killed).toEqual(["SIGTERM"]);
+    expect(f.process.killed).toEqual(["SIGINT"]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
       kind: "worker_exited",
       exit_code: null,
-      signal: "SIGTERM",
+      signal: "SIGINT",
       usage: null,
     });
   });

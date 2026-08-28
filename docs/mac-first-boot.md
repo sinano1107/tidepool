@@ -1,94 +1,90 @@
 # Tidepool first boot on a Mac
 
 This covers a purely-local board on your own Apple Silicon Mac, ending with your first task
-completed against a local `trial` workspace. Budget about 30 minutes.
+completed against a local `trial` workspace. The board itself runs inside a Linux VM on the Mac
+(Lima, with its default Ubuntu template): macOS has no worker container mechanism that passes the
+worker container contract, so the board uses the Linux one unchanged (ADR 0100). Budget about
+30 minutes, most of it the VM image download (941 MB).
 
-## Prerequisites
+## What you need
 
 - An Apple Silicon Mac.
-- Node 22.x.
-- The `claude` CLI installed and logged in (`/login`).
-- The `gh` CLI logged in (`gh auth login`).
-- `git config user.name` and `git config user.email` set.
-- SSH access to GitHub — the registry repo below is cloned over SSH.
+- [Homebrew](https://brew.sh).
+- A GitHub account.
+- A Claude subscription.
 
-## Clone Tidepool and install
+Node, the `claude` CLI, `gh` and your git identity all live **inside the VM**. Nothing but Lima
+is installed on the Mac, and nothing below asks you to open a shell in the VM until stage two.
 
-```bash
-git clone git@github.com:sinano1107/tidepool.git
-cd tidepool
-npm install
-```
+This document was measured with Lima 2.2.0, Lima's default Ubuntu 26.04 image and `claude` 2.1.243
+— a newer Lima, Ubuntu image or CLI is a reason to walk it again.
 
-If `npm install` fails while compiling native modules, install the Xcode Command Line Tools
-(`xcode-select --install`) and rerun it.
+## Run the installer
 
-## Trust the checkout in Claude Code
-
-Run `claude` once from inside the checkout, accept "Yes, I trust this folder", dismiss any
-what's-new screen so the prompt is visible, then quit:
+On the Mac:
 
 ```bash
-claude
+curl -fsSL https://raw.githubusercontent.com/sinano1107/tidepool/main/scripts/mac-install.sh | bash
 ```
 
-Skip this and the board starts but never picks anything up: the WebUI shows "usage check
-unavailable" and cannot tell you that trust is the cause.
+It installs Lima if you do not have it, creates the VM and shows the provisioning progress, then
+walks you through the two logins and prepares your registry. It stops early with a message if
+your Mac cannot run the board. If it is interrupted — a closed terminal, a login you did not
+finish — run the same command again: every step checks its own state and continues from there.
+It is also safe to run on a finished setup as a "check my setup" command.
 
-## Environment file: `~/.tidepool/env`
+### The two logins
 
-```bash
-mkdir -p ~/.tidepool
-cat > ~/.tidepool/env <<'EOF'
-export TIDEPOOL_REGISTRY="$HOME/tidepool-registry"
-export TIDEPOOL_DB="$HOME/.tidepool/board.sqlite"
-export TIDEPOOL_WORKER_LOGS="$HOME/.tidepool/worker-logs"
-EOF
-```
+The installer pauses twice, each time giving you a URL to open in your Mac's browser:
 
-Run `source ~/.tidepool/env` in every shell that runs `init-registry` or starts the board.
+1. `gh auth login` — authorizes the VM's `gh` against your GitHub account (it also shows a
+   one-time code to enter on that page).
+2. `claude auth login` — logs the VM's `claude` in with your Claude subscription.
 
-## Prepare the registry
+Both are the **VM's own** logins. Whatever you are logged into on the Mac is not copied into the
+VM, and these are what the board's worker sessions and the board's own calls run on.
 
-With `~/.tidepool/env` sourced, create an empty private repository with your own GitHub
-credentials, then clone it to `$TIDEPOOL_REGISTRY`:
-
-```bash
-gh repo create YOUR_GITHUB_LOGIN/tidepool-registry --private
-git clone git@github.com:YOUR_GITHUB_LOGIN/tidepool-registry.git "$TIDEPOOL_REGISTRY"
-```
-
-From the Tidepool checkout, seed the empty remote and create the initial local workspace:
-
-```bash
-npm run init-registry
-```
-
-With the defaults, the command confirms:
-
-```text
-Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".
-```
+Everything after them is automatic: the checkout is trusted in Claude Code, your git identity is
+taken from your GitHub account, and a private `tidepool-registry` repository is created and seeded.
 
 ## Start the board
 
-From the Tidepool checkout, with the same environment sourced:
+The installer prints this line when it finishes. Run it from the **Mac**:
 
 ```bash
-caffeinate -i -s npm start
+caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board.sh'
 ```
 
-Run this in the foreground. `caffeinate` keeps the Mac from idle-sleeping while the board runs
+Run it in the foreground. `caffeinate` keeps the Mac from idle-sleeping while the board runs
 (`-s` only holds while on AC power); closing the lid still sleeps the machine.
 
-The WebUI is at `http://127.0.0.1:4589`. First boot prints a one-time bootstrap URL that sets the
-WebUI credential in your browser — open that URL first. See
+The WebUI is at `http://127.0.0.1:4589` in the Mac's browser — Lima forwards the VM's loopback
+ports to the Mac's loopback. First boot prints a one-time bootstrap URL that sets the WebUI
+credential in your browser — open that URL first. See
 [docs/human-surface-credential.md](human-surface-credential.md) for how to rotate it if you lose
 it.
 
+To stop the board, from the Mac:
+
+```bash
+limactl shell tidepool -- systemctl --user stop tidepool-board.scope
+```
+
+That ends everything the board was running — the board itself and anything still inside a worker
+container — and the `limactl shell` and `caffeinate` on the Mac end with it.
+
+## Update Tidepool
+
+Updating is your decision, never a side effect of starting the VM. When you want the current
+`main`, stop the board and run:
+
+```bash
+limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'
+```
+
 ## Checklist
 
-In a second terminal, with the board still running:
+In a second terminal on the Mac, with the board still running:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4589/api/tasks
@@ -98,13 +94,24 @@ Expect `401` — the API rejects unauthenticated requests.
 ```bash
 lsof -nP -iTCP:4589 -iTCP:4590 -sTCP:LISTEN
 ```
-Expect both ports listening only on `127.0.0.1`.
+Expect `limactl` holding both ports, on `127.0.0.1` only — that is Lima's forward, not the board.
 
 ```bash
-test -n "$TIDEPOOL_REGISTRY" && \
+limactl shell tidepool -- ss -ltnp | grep -E ':4589|:4590'
+```
+Expect `node` on `127.0.0.1:4589` and `127.0.0.1:4590`, and nothing on `0.0.0.0` or `*`.
+
+```bash
+limactl shell tidepool -- systemctl --user is-active tidepool-board.scope
+```
+Expect `active`.
+
+```bash
+limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && \
+  test -n "$TIDEPOOL_REGISTRY" && \
   test -n "$TIDEPOOL_DB" && \
   test -n "$TIDEPOOL_WORKER_LOGS" && \
-  echo "required Tidepool environment is set"
+  echo "required Tidepool environment is set"'
 ```
 Expect `required Tidepool environment is set`.
 
@@ -137,10 +144,23 @@ Completion criteria are what the worker checks itself, so keep them to things it
 workspace — not to what happens on the board afterwards. For your next tasks, the text box on the
 same screen takes a description in your own words and **Draft fields** turns it into these fields.
 
-What you should see: the task is picked up, the worker finishes, and a merge question appears for
-you to answer. The worker sandbox uses macOS's built-in `sandbox-exec` — nothing to install. If
-nothing is picked up, the WebUI shows why; "usage check unavailable" means the trust step above
-was skipped — redo it and restart the board.
+What you should see: the task is picked up, the worker finishes, and a merge question titled
+`land completed task: Create the trial README` appears for you to answer. The worker runs in a
+bubblewrap sandbox inside a container the board makes per worker session in the VM — the installer
+put both there, nothing more to do. If nothing is picked up, the WebUI shows why.
+
+## Keeping the VM's login alive
+
+The VM's `claude` login refreshes itself while the board keeps calling out, so a board you leave
+running stays logged in. Its refresh token expires after 30 days unused, so a board stopped for
+that long comes back to a dead login. The board is built to surface that as a question about the
+Claude login rather than to stop silently (ADR 0100): log in again from the Mac with
+
+```bash
+limactl shell tidepool -- bash -lc 'claude auth login'
+```
+
+and answer that question.
 
 ## Stage two: a repository of your own
 
@@ -152,10 +172,15 @@ directly, and it merges only when you answer a merge question. Installing the Ap
 repository and you can remove it at any time from https://github.com/settings/installations —
 the board then stops on that workspace instead of carrying on silently.
 
+This stage is the only one that needs a shell in the VM. Open one from the Mac with
+`limactl shell tidepool` and start it with `cd ~/tidepool`: the shell opens in the Mac's current
+directory, which is mounted read-only inside the VM, so nothing works until you move to the VM's
+own home.
+
 ### Log the board in to GitHub
 
-Add the token path to `~/.tidepool/env` — the **path** goes in the file, never the token itself —
-and source it in every shell that starts the board:
+In the VM, from the checkout: add the token path to `~/.tidepool/env` — the **path** goes in the
+file, never the token itself — and source it in every shell that starts the board:
 
 ```bash
 echo 'export TIDEPOOL_GITHUB_TOKEN_FILE="$HOME/.tidepool/github-token"' >> ~/.tidepool/env
@@ -167,6 +192,8 @@ A code and a URL are printed; open the URL, enter the code, and approve. The tok
 `$TIDEPOOL_GITHUB_TOKEN_FILE` (mode 600). Re-run the same command if you ever revoke it.
 
 ### Create the trial repository and install the App on it
+
+In the VM:
 
 ```bash
 gh repo create YOUR_GITHUB_LOGIN/tidepool-trial --private
@@ -193,8 +220,8 @@ registry without the App shows up at the next start as
 — the board starts, then stops picking up until you install the App and answer the question it
 raises.
 
-Restart the board (`caffeinate -i -s npm start`) so it picks up the new environment file. The
-settings tab now shows "GitHub: logged in".
+Stop the board and start it again with the command in "Start the board" so it picks up the new
+environment file. The settings tab now shows "GitHub: logged in".
 
 ### Publish the trial
 
@@ -220,6 +247,8 @@ authored by `tidepool-board[bot]`, the board asks you a merge question, and answ
 the pull request. The commit's author is `tidepool` with the App's noreply address.
 
 ### Checklist
+
+In the VM:
 
 ```bash
 gh pr list --repo YOUR_GITHUB_LOGIN/tidepool-trial --state all --json author --jq '.[].author.login'

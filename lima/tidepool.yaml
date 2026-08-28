@@ -1,0 +1,50 @@
+# Lima template for a Tidepool board VM (ADR 0100 / 0101).
+#
+# Inherits Lima's default template — Ubuntu image, vmType, CPUs, memory, disk
+# and mounts follow Lima's defaults instead of a copy that goes stale — and
+# adds only what the board needs.
+#
+# Provision scripts run on EVERY boot, so every step below is idempotent. There
+# is deliberately no `git pull` here: updating the checkout is a command the
+# owner runs when they decide to, not a side effect of starting the VM
+# (ADR 0101 決定4).
+base: template:default
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      apt-get update
+      apt-get install -y bubblewrap socat git curl build-essential python3 gh
+      if ! node --version 2> /dev/null | grep -q '^v22\.'; then
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        apt-get install -y nodejs
+      fi
+      # The worker's file sandbox nests a user namespace inside bubblewrap, and
+      # Ubuntu restricts that by default. Both halves have to come off (#476).
+      echo "kernel.apparmor_restrict_unprivileged_userns = 0" > /etc/sysctl.d/60-tidepool.conf
+      sysctl --system
+      ln -sf /etc/apparmor.d/bwrap-userns-restrict /etc/apparmor.d/disable/
+      # -R fails once the profile is already unloaded — a second boot must not
+      # fail on it.
+      apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict 2> /dev/null || true
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      if [ ! -x "$HOME/.local/bin/claude" ]; then
+        curl -fsSL https://claude.ai/install.sh | bash
+      fi
+      grep -q '.local/bin' "$HOME/.bashrc" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+      if [ ! -d "$HOME/tidepool" ]; then
+        git clone https://github.com/sinano1107/tidepool.git "$HOME/tidepool"
+        (cd "$HOME/tidepool" && npm install)
+      fi
+      # The board's state belongs on the VM's own disk, never on the read-only
+      # mount of the Mac home (ADR 0090 決定3). Written once; the owner may edit
+      # it afterwards, so a later boot leaves it alone.
+      mkdir -p "$HOME/.tidepool"
+      if [ ! -f "$HOME/.tidepool/env" ]; then
+        printf 'export TIDEPOOL_REGISTRY="$HOME/tidepool-registry"\nexport TIDEPOOL_DB="$HOME/.tidepool/board.sqlite"\nexport TIDEPOOL_WORKER_LOGS="$HOME/.tidepool/worker-logs"\n' > "$HOME/.tidepool/env"
+      fi

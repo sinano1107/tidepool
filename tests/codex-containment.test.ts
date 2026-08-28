@@ -13,7 +13,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { getTask, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, healthyUsageText } from "./fakes.js";
+import { FakeClock, healthyUsageText, passthroughContainers } from "./fakes.js";
 import { api, bootTidepool, registerWork } from "./harness.js";
 
 const VALID: CodexCapabilityObservation = {
@@ -64,7 +64,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
   const worker: WorkerAdapter = {
     id: "claude-agent",
     start: (task) => started.push(task.id),
-    kill() {},
+    gracefulStop() {},
     checkUsage: async () => healthyUsageText(clock.now()),
   };
   const codex = registerTask(db, {
@@ -90,6 +90,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     clock,
     slot: new Slot(),
     worker,
+    containers: passthroughContainers(),
     resolveHarness: (task: Task) => canonicalHarness(providers.get(task.assignee!)!),
     harnessContainment: async (harness) =>
       harness === "codex"

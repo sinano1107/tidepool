@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import { platform } from "node:process";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
@@ -12,7 +13,7 @@ import {
   declaredRegistryMode,
   WATCHDOG,
 } from "../src/server-options.js";
-import { FakeClock, FakeTranslationClient } from "./fakes.js";
+import { FakeClock, FakeTranslationClient, fakeContainers } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -78,7 +79,7 @@ it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043
 
   const options = buildWorkerOptions(
     { ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "tidepool" },
-    { db: openDb(":memory:"), clock },
+    { db: openDb(":memory:"), clock, containers: fakeContainers() },
   );
 
   expect(options.registry.mode).toBe("remote-backed");
@@ -232,9 +233,7 @@ it("ServerOptions の任意フィールドは authority を除いて全て組み
   // 置換済み)。**この期待値は src ではなくここに置く** — 除外を1つ増やすことは
   // 「その口は本番で永久に立たない」という宣言であり、#172 と同じ穴を開け直す
   // 行為でもあるので、src 側の1行で自動的に緑へ戻せてはいけない。
-  // `containment` is the legacy host-wide injection seam retained for focused
-  // tests; production emits the Harness-scoped check instead (ADR 0098).
-  expect(optional.filter((key) => !emitted.has(key))).toEqual(["authority", "containment"]);
+  expect(optional.filter((key) => !emitted.has(key))).toEqual(["authority"]);
 });
 
 /** 上の網羅は `buildServerOptions` の戻り値を見ている。main.ts がその戻り値で
@@ -269,16 +268,18 @@ afterEach(async () => {
 it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam を除いて全て組み立てられる(ADR 0043)", async () => {
   const optional = optionalFields("claude-worker.ts", "ClaudeWorkerOptions");
   // 走査が壊れていないことの control(server 側の網羅テストと同じ形)
-  expect(optional).toEqual(expect.arrayContaining(["advisorDisabled", "spawn", "boardState"]));
+  expect(optional).toEqual(expect.arrayContaining(["advisorDisabled", "pty", "boardState"]));
 
   const registryDir = await makeRegistry();
   dirs.push(registryDir);
   const emitted = new Set(
-    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock() })),
+    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), containers: fakeContainers() })),
   );
-  // 不在が正当なのは注入 seam の3つだけ —— そこでの不在は「機能が静かに切れる」
-  // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。
-  expect(optional.filter((key) => !emitted.has(key))).toEqual(["spawn", "pty", "enumerateSkills"]);
+  // 不在が正当なのは注入 seam の2つだけ —— そこでの不在は「機能が静かに切れる」
+  // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。#463 で
+  // `spawn` はここから消えた: worker session の process 境界は容器機構(必須の
+  // `containers`)の側にあり、adapter がそれを迂回して spawn する口はもう無い。
+  expect(optional.filter((key) => !emitted.has(key))).toEqual(["pty", "enumerateSkills"]);
 });
 
 /** 上の網羅は `buildWorkerOptions` の戻り値を見ている。本番の worker がその
@@ -294,7 +295,7 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
 it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", () => {
   expect(source("main.ts")).not.toMatch(/new ClaudeCodeWorker\(/);
   // 本番の合成が実際にその一覧を使っていること(呼び出しの**形**は主張しない)
-  expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(buildWorkerOptions\(/);
+  expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(\s*buildWorkerOptions\(/);
 });
 
 /** キーが揃っていることと、**どのキーに何が刺さっているか**は別の主張である
@@ -306,7 +307,7 @@ it("kill switch は盤面の合成からそのまま worker options へ届く(�
   const options = (advisorDisabled: boolean) =>
     buildWorkerOptions(
       { ...composition(), registryDir, advisorDisabled },
-      { db: openDb(":memory:"), clock: new FakeClock() },
+      { db: openDb(":memory:"), clock: new FakeClock(), containers: fakeContainers() },
     );
 
   expect(options(true).advisorDisabled).toBe(true);
@@ -329,7 +330,7 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
     logDir,
     boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
   };
-  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock() });
+  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), containers: fakeContainers() });
 
   expect(options.logDir).toBe(logDir);
   expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);
@@ -416,4 +417,17 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ADR 0024: workspace の pickup 時 fetch がこの名義で撃つ。落とすと private remote の
   // workspace が「認証が無い」理由で黙って quarantine に落ち続ける
   expect(options.githubAuth).toBe(githubAuth);
+});
+
+// ADR 0099 決定2/5 / issue #463: このホストの worker をどの容器機構で封じるかは
+// 合成 root が platform で選ぶ(`checkSandboxCapability` と同じ層)。実測した機構が
+// 無い platform は黙って弱い回収へ落ちず、前提検査が不成立を返して pickup を止める
+// —— この suite が macOS(未実測)でも Pi(cgroup v2)でも同じ主張になるよう、
+// 「未実測の理由で止まるのは linux 以外のときだけ」という形で測る。
+it("容器機構は platform で選ばれ、実測が無いホストでは fail-closed になる(#463)", async () => {
+  const capability = (await buildServerOptions(composition())).containerRuntime.preflight();
+
+  const unmeasured =
+    capability.available === false && capability.reason.includes("passes the worker container contract");
+  expect(unmeasured).toBe(platform !== "linux");
 });

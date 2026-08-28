@@ -10,6 +10,7 @@ import {
 } from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
 import type { BoardStatePath } from "./board-state.js";
+import { containerRuntimeFor } from "./cgroup-container.js";
 import { createClaudeCliAuthCheck, createMoonshotCliAuthCheck } from "./claude-cli-auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
@@ -24,7 +25,7 @@ import {
   CodexWorker,
   createCodexCapabilityCheck,
 } from "./codex-worker.js";
-import { composeContainment } from "./containment.js";
+import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { GhCliClient } from "./github.js";
@@ -57,7 +58,9 @@ import type { ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
-import { CanonicalWorkerRouter, type KillSignal, type WorkerAdapter } from "./worker.js";
+
+import { CanonicalWorkerRouter, type WorkerAdapter } from "./worker.js";
+import type { WorkerContainers } from "./worker-container.js";
 import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -98,8 +101,10 @@ import {
  *    したがってここに値を書いても死んだ設定にしかならず、しかも「watchdog が
  *    question も governs する」という誤った含意を残す。question は人間タスクと
  *    して slot の外で回答される(CONTEXT.md の Held)。
- *  - `grace` = 60秒 = 1 tick。SIGTERM から SIGKILL までの猶予で、watchdog.ts の
- *    比較は `>=` なので次の tick で SIGKILL が出る。 */
+ *  - `grace` = 60秒 = 1 tick。畳み込み停止から強制回収までの猶予で、watchdog.ts の
+ *    比較は `>=` なので次の tick で回収が出る。
+ *  - `reclaimTimeout` は既定のまま(watchdog.ts の `RECLAIM_TIMEOUT`)。ここに
+ *    書かないのは判断が1つも無いからであり、置き場所が無いからではない。 */
 export const WATCHDOG: WatchdogConfig = {
   timeLimits: { work: 90 * 60_000, review: 45 * 60_000 },
   grace: 60_000,
@@ -172,13 +177,13 @@ export interface BoardComposition {
 
 /** Fallback when no registry clone is configured: logs the pickup so a human
  *  can drive the MCP verbs by hand. */
-class LoggingWorker implements WorkerAdapter {
+export class LoggingWorker implements WorkerAdapter {
   readonly id = "logging-worker";
   start(task: Task): void {
     console.log(`[worker] picked up ${task.id}: ${task.title}`);
   }
-  kill(taskId: string, signal: KillSignal): void {
-    console.log(`[worker] would send ${signal} to ${taskId}`);
+  gracefulStop(taskId: string): void {
+    console.log(`[worker] would ask ${taskId} to stop and fold its work up`);
   }
   /** No registry means no real adapter behind this — report a well-under-
    *  threshold reading so pickup logging is never fail-closed by a check
@@ -206,11 +211,14 @@ class LoggingWorker implements WorkerAdapter {
  *  合成の入力とは別に取る。 */
 export function buildWorkerOptions(
   board: BoardComposition & { registryDir: string },
-  session: { db: Db; clock: Clock },
+  session: { db: Db; clock: Clock; containers: WorkerContainers },
 ): ClaudeWorkerOptions {
   return {
     db: session.db,
     clock: session.clock,
+    // ADR 0099 決定2: 盤面が1つだけ持つ worker 容器の supervisor。adapter は
+    // その中へ spawn し、watchdog は同じ帳簿へ force / reclaimed を撃つ。
+    containers: session.containers,
     // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
     // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
     // 「人間の merge を通った内容が spawn に効く」は成立しない。
@@ -240,16 +248,19 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   const resolveHarness = harnessResolver(board);
   if (!registryDir || !resolveHarness) return () => new LoggingWorker();
-  return ({ db, clock }) => {
+  return ({ db, clock, containers }) => {
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
       resolveHarness,
       adapters: {
-        "claude-code": new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, { db, clock })),
+        "claude-code": new ClaudeCodeWorker(
+          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers }),
+        ),
         codex: new CodexWorker({
           db,
           clock,
+          containers,
           registry,
           agent: board.defaultAgentName,
           auditorName: board.auditorName,
@@ -625,11 +636,10 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     workspace: workspace.path,
     mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
   });
-  const claudeContainment = composeContainment(
-    () => checkSandboxCapability(platform),
-    async () => ({ available: true }),
-    () => probeToolSurfaceCapability(),
-  );
+  const claudeContainment = async (): Promise<ContainmentCapability> => {
+    const sandbox = checkSandboxCapability(platform);
+    return sandbox.available ? probeToolSurfaceCapability() : sandbox;
+  };
   return {
     dbPath: board.dbPath,
     credential: board.credential,
@@ -692,8 +702,24 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
     boardState: { paths: board.boardState, listWorkspaces: () => registeredWorkspaces(board) },
-    // Production containment is Harness-scoped above. `containment` remains
-    // only as the legacy injectable seam for focused host-wide tests.
+    // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
+    // #154、ADR 0039 / issue #164)。ここが唯一の実検査の配線点 — テスト盤面は
+    // 封じ込める実プロセスを持たないので、このゲート自体を持たない。人間面の
+    // 自己検査は startServer が実ポートを知った後に自分で足す。
+    //
+    // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
+    // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
+    // 再実行に依っている(ADR 0039 決定3)。
+    containment: {
+      sandboxCapability: () => checkSandboxCapability(platform),
+      toolSurface: () => probeToolSurfaceCapability(),
+    },
+    // ADR 0099 決定2/5: どの容器機構でこのホストの worker を封じるか。選ぶ場所が
+    // 合成 root なのは、platform の判定が env の判定と同じ層だから — 上の
+    // `checkSandboxCapability(platform)` と同じ1行の並びである。実測した機構が
+    // 無い platform は fail-closed な機構を受け取り、boot 時の前提検査が pickup を
+    // 止める(macOS の実測は #465)。
+    containerRuntime: containerRuntimeFor(platform),
     watchdog: WATCHDOG,
   };
 }

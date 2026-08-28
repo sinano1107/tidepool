@@ -42,7 +42,15 @@ Both need an **interactive browser login** — cannot be done non-interactively 
 
 Note the split since issue #50 / ADR 0024: this human `gh auth` only serves the **deploy tooling** (the `git pull` on `/mnt/ssd/tidepool` and `/mnt/ssd/tidepool-registry`). The **board's own** GitHub operations (push / PR / merge / issue / registry push) run as the machine user via `TIDEPOOL_GITHUB_TOKEN_FILE` (step 5) and work with the human logged out.
 
-**Also trust the board's own cwd once, interactively** (issue #81 / ADR-0028): the hourly usage throttle scrapes `/usage` from an *interactive* `claude --safe-mode` session run in `/opt/tidepool`, and the interactive TUI shows a folder-trust gate ("Is this a project you trust?") plus one-time onboarding modals that block the input prompt until dismissed. Once, as masaki: `ssh $PI`, then `cd /opt/tidepool && claude`, accept "Yes, I trust this folder", dismiss any what's-new/onboarding modal, and quit. This persists in `~/.claude.json` (`projects["/opt/tidepool"].hasTrustDialogAccepted: true`, home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`). Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry. (A dismissed what's-new can re-appear after a `claude` update; same one-time fix.)
+**Also seed the board's own cwd trust** (issue #81 / ADR-0028, issue #442): the hourly usage throttle scrapes `/usage` from an *interactive* `claude --safe-mode` session run in `/opt/tidepool`, and the interactive TUI shows a folder-trust gate ("Is this a project you trust?") that blocks the input prompt until accepted. After the `gh auth login` step above, run the seed script over ssh — it arrives with the deploy, so no separate copy step is needed:
+
+```bash
+ssh $PI 'node /opt/tidepool/scripts/seed-claude-trust.mjs /opt/tidepool'
+```
+
+This merges `projects["/opt/tidepool"].hasTrustDialogAccepted: true` into `~/.claude.json` (home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`) without touching anything else in the file. Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry.
+
+The what's-new/onboarding modal is a **separate** gate the seed does not touch — it still needs a one-time interactive dismissal: `ssh $PI`, then `cd /opt/tidepool && claude`, dismiss the modal, and quit. (It can re-appear after a `claude` update; same one-time fix.)
 
 ## 4b. Worker sandbox dependencies (bubblewrap + socat)
 
@@ -55,10 +63,10 @@ ssh $PI "sudo apt-get install -y bubblewrap socat"
 `bwrap` being installed is not sufficient — it must actually run. Unprivileged user namespaces (or an AppArmor profile restricting them) can block it on a host where the package is present. Verify with the real thing:
 
 ```bash
-ssh $PI "bwrap --ro-bind / / --dev /dev -- /bin/true; echo bwrap=\$?; socat -V >/dev/null; echo socat=\$?"
+ssh $PI "bwrap --ro-bind / / --dev /dev -- /bin/true; echo bwrap=\$?; bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-user --cap-drop ALL --new-session --die-with-parent -- unshare -Ur /bin/true; echo bwrap_userns=\$?; socat -V >/dev/null; echo socat=\$?"
 ```
 
-Both must print `0`. This is one half of the check the board runs at boot and before every pickup (`checkSandboxCapability`); the other half is the board probing its own human surface for a 401 (issue #154 — see §5b). A `0/0` here means the fs half will not halt the board; the credential half needs §5b done too. On the production Pi (aarch64, kernel 6.6.51+rpt) both pass out of the box: `max_user_namespaces` is non-zero and there is no `apparmor_restrict_unprivileged_userns` knob. If `bwrap` fails on a future host, that is the known problem from ADR 0033's investigation — an AppArmor profile is needed; **ask the user before applying one.**
+All three must print `0`. The second `bwrap` form is the one the worker's own Bash takes — a nested user namespace inside the sandbox — and an AppArmor profile can block it on a host where the first form still passes. This is one half of the check the board runs at boot and before every pickup (`checkSandboxCapability`); the other half is the board probing its own human surface for a 401 (issue #154 — see §5b). A clean run here means the fs half will not halt the board; the credential half needs §5b done too. On the production Pi (aarch64, kernel 6.6.51+rpt, bubblewrap 0.8.0) all three pass out of the box (measured 2026-08-25): `max_user_namespaces` is non-zero and there is no `apparmor_restrict_unprivileged_userns` knob. If `bwrap` fails on a future host, that is the known problem from ADR 0033's investigation — an AppArmor profile is needed; **ask the user before applying one.**
 
 ## 5. systemd unit + secrets
 

@@ -41,6 +41,13 @@ export function isCliAuthFailureEnvelope(value: unknown): boolean {
   return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 401;
 }
 
+/** The probe died on its own spend cap, not on an authentication verdict
+ * (issue #466) — the envelope's structured marker, so callers never match an
+ * error-message substring. */
+export function isCliAuthBudgetCapEnvelope(value: unknown): boolean {
+  return typeof value === "object" && value !== null && "subtype" in value && value.subtype === "error_max_budget_usd";
+}
+
 /** `execFile` rejects on the same non-zero exit that carries Claude's JSON
  * error envelope. Preserve that structured stdout instead of falling back to
  * an error-message substring. */
