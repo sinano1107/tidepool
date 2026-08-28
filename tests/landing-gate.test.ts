@@ -642,3 +642,61 @@ it("再発火が着地対象なしを記録した場合も、PR 昇格失敗 que
     question_answer: null,
   });
 });
+
+it("再発火が飛んでいる最中に retry が着地させたら、再発火の失敗は question にならない", async () => {
+  const { workspace, task, failure } = await failedPromotion();
+
+  const repair = attachChild(t, task.id, "repair: ship the feature");
+  t.github.scriptFailure(null);
+  // 再発火の `gh pr create` を撃った状態で止め、その窓に人間の retry を差し込む。
+  // 2本目(retry 側・同一ブランチ)は素通りで成功し、解放した1本目は実 GitHub と
+  // 同じ "already exists" で落ちる
+  const createPullRequest = t.github.createPullRequest.bind(t.github);
+  const order: string[] = [];
+  let releaseGate = (): void => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  let relandEntered = (): void => {};
+  const relandStarted = new Promise<void>((resolve) => {
+    relandEntered = resolve;
+  });
+  let calls = 0;
+  t.github.createPullRequest = async (input) => {
+    calls += 1;
+    if (calls === 1) {
+      order.push("reland:enter");
+      relandEntered();
+      await gate;
+      order.push("reland:already-exists");
+      throw new Error(`a pull request for branch ${input.branch} already exists`);
+    }
+    order.push("retry:create");
+    return createPullRequest(input);
+  };
+
+  await pickUp(t, repair.id);
+  commitWork(workspace.path, "repair.txt", "repaired\n");
+  const completing = completeViaMcp(t, repair.id);
+  await relandStarted;
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
+    answers: ["retry"],
+  });
+  releaseGate();
+  await completing;
+
+  expect(answered.status).toBe(200);
+  expect(order).toEqual(["reland:enter", "retry:create", "reland:already-exists"]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: ["retry"],
+  });
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "pr_opened")).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).not.toBeNull();
+  expect(
+    (await questions(t)).filter(
+      (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
+    ),
+  ).toEqual([]);
+});

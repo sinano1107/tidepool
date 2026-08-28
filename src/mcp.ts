@@ -284,9 +284,15 @@ export async function handleRootWorkLanding(
 
 async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
   if (task.type !== "work") return;
+  const landedBefore = taskHasLanded(deps.db, task.id);
   try {
     await handleRootWorkLanding(deps, task, false);
   } catch (err) {
+    // 撮った時に偽で今は真 = この呼び出しが飛んでいる最中に別経路(strict retry)が
+    // 着地を成立させた。着地済みのタスクに PR 昇格失敗 question を立てるのは人間に
+    // 無効な意思決定を見せること(issue #412 / ADR 0079 決定3)。撮った時から真だった
+    // 開いている PR への push 失敗(issue #400)は従来どおり登録する。
+    if (!landedBefore && taskHasLanded(deps.db, task.id)) return;
     registerPrPromotionFailureQuestion(
       deps.db,
       task,
