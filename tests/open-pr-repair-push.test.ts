@@ -17,6 +17,7 @@ import {
   makeWorkspace,
   questions,
   registerWork,
+  squashTaskIntoOrigin,
   type Tidepool,
 } from "./harness.js";
 
@@ -69,16 +70,6 @@ async function completeRepair(work: any, workspace: WorkspaceConfig): Promise<st
   const res: any = await completeViaMcp(t, repair.id);
   expect(res.isError ?? false).toBe(false);
   return before;
-}
-
-async function squashTaskIntoOrigin(workspace: WorkspaceConfig, taskId: string): Promise<void> {
-  const merger = await mkdtemp(join(tmpdir(), "tidepool-open-pr-squash-"));
-  dirs.push(merger);
-  git(merger, "clone", workspace.repo!, ".");
-  git(merger, "fetch", workspace.path, `task/${taskId}:landed`);
-  git(merger, "merge", "--squash", "landed");
-  git(merger, "commit", "-m", "squash landed work");
-  git(merger, "push", "origin", "main");
 }
 
 async function changeProtectedFile(
@@ -158,7 +149,7 @@ it("squash merge 後に review 子が決着しただけの再発火は、push �
   await completeViaMcp(t, work.id);
   const landed = (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
   const review = attachChild(t, work.id, "review already-landed work", undefined, "review");
-  await squashTaskIntoOrigin(workspace, work.id);
+  await squashTaskIntoOrigin(dirs, workspace, work.id);
   t.github.scriptMergedOutside(landed.pr_number);
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR);
@@ -184,7 +175,7 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
     git(workspace.path, "rev-parse", `task/${work.id}`),
   );
 
-  await squashTaskIntoOrigin(workspace, work.id);
+  await squashTaskIntoOrigin(dirs, workspace, work.id);
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "repair.txt", "fixed after squash\n");
   const completed: any = await completeViaMcp(t, repair.id);
@@ -223,7 +214,7 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
 
-  await squashTaskIntoOrigin(workspace, work.id);
+  await squashTaskIntoOrigin(dirs, workspace, work.id);
   await changeProtectedFile(workspace, "repair.txt", "protected version\n");
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "repair.txt", "task version\n");
@@ -275,7 +266,7 @@ it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
 
-  await squashTaskIntoOrigin(workspace, work.id);
+  await squashTaskIntoOrigin(dirs, workspace, work.id);
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "repair.txt", "repair survives tool failure\n");
   writeFileSync(
@@ -303,7 +294,7 @@ it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、mer
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
   await t.clock.advance(HOUR);
 
-  await squashTaskIntoOrigin(workspace, work.id);
+  await squashTaskIntoOrigin(dirs, workspace, work.id);
   await changeProtectedFile(workspace, "feature.txt", "protected follow-up\n");
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "feature.txt", "repair result\n");

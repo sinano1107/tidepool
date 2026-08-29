@@ -1,6 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import {
   api,
@@ -13,6 +11,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  squashTaskIntoOrigin,
   type Tidepool,
 } from "./harness.js";
 
@@ -23,16 +22,6 @@ afterEach(async () => {
   await t?.stop();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
-
-async function squashTaskIntoOrigin(path: string, origin: string, taskId: string): Promise<void> {
-  const merger = await mkdtemp(join(tmpdir(), "tidepool-nothing-to-land-squash-"));
-  dirs.push(merger);
-  git(merger, "clone", origin, ".");
-  git(merger, "fetch", path, `task/${taskId}:landed`);
-  git(merger, "merge", "--squash", "landed");
-  git(merger, "commit", "-m", "squash task outside the board");
-  git(merger, "push", "origin", "main");
-}
 
 it("promotion retry の時点で差分ゼロなら、人間にエラーを返して failure question を開いたままにする", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
@@ -132,7 +121,7 @@ it("同じ内容が squash で保護ブランチへ着地済みなら、履歴�
   const task = await registerWork(t, "finish work already landed by content");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "same result\n");
-  await squashTaskIntoOrigin(workspace.path, workspace.repo!, task.id);
+  await squashTaskIntoOrigin(dirs, workspace, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const completed: any = await client.callTool({

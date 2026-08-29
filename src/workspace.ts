@@ -220,6 +220,21 @@ export function taskBranch(taskId: string): string {
   return `task/${taskId}`;
 }
 
+/** `merge-tree`'s one answer-shaped failure: undefined means conflict; every
+ *  other nonzero exit remains an honest tool failure. */
+function writeMergeTree(
+  workspace: WorkspaceConfig,
+  left: string,
+  right: string,
+): string | undefined {
+  try {
+    return git(workspace.path, "merge-tree", "--write-tree", left, right);
+  } catch (err) {
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
+    return undefined;
+  }
+}
+
 /** ADR 0105: whether merging `source` into `candidate` changes the candidate's
  *  content. History convergence stays as the cheap first answer; divergent
  *  history needs merge-tree so squash/rebase landing reads the same as a merge
@@ -233,17 +248,11 @@ function branchLandingState(
   const historyConverged =
     Number(git(workspace.path, "rev-list", "--count", `${candidate}..${source}`)) === 0;
   if (historyConverged) return { hasContent: false, historyConverged };
-  let mergedTree: string;
-  try {
-    mergedTree = git(workspace.path, "merge-tree", "--write-tree", candidate, source);
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status === 1) {
-      return { hasContent: true, historyConverged };
-    }
-    throw err;
-  }
+  const mergedTree = writeMergeTree(workspace, candidate, source);
   return {
-    hasContent: mergedTree !== git(workspace.path, "rev-parse", `${candidate}^{tree}`),
+    hasContent:
+      mergedTree === undefined ||
+      mergedTree !== git(workspace.path, "rev-parse", `${candidate}^{tree}`),
     historyConverged,
   };
 }
@@ -999,11 +1008,8 @@ export function catchUpTaskBranch(workspace: WorkspaceConfig, taskId: string): b
   const ref = `refs/heads/${branch}`;
   const protectedRef = protectedBranchRef(workspace);
   if (isAncestor(workspace, protectedRef, ref)) return false;
-  let tree: string;
-  try {
-    tree = git(workspace.path, "merge-tree", "--write-tree", ref, protectedRef);
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
+  const tree = writeMergeTree(workspace, ref, protectedRef);
+  if (tree === undefined) {
     throw new Error(
       `workspace ${workspace.name}: ${protectedRef} does not merge cleanly into '${branch}' — ` +
         "resolve it by hand, then retry PR promotion",
@@ -1050,13 +1056,8 @@ function mergeIntoProtectedByPlumbing(
   task: string,
 ): void {
   const ref = `refs/heads/${branch}`;
-  let tree: string;
-  try {
-    tree = git(workspace.path, "merge-tree", "--write-tree", branch, task);
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
-    throw landingConflict(workspace, branch, task);
-  }
+  const tree = writeMergeTree(workspace, branch, task);
+  if (tree === undefined) throw landingConflict(workspace, branch, task);
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/${task}`);
   const merged = git(
     workspace.path,

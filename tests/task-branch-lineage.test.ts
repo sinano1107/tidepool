@@ -14,6 +14,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  squashTaskIntoOrigin,
   type Tidepool,
 } from "./harness.js";
 
@@ -42,17 +43,6 @@ async function decompose(taskId: string, title: string): Promise<void> {
     },
   });
   await client.close();
-}
-
-async function squashLandOutside(workspacePath: string, taskId: string): Promise<void> {
-  const merger = await mkdtemp(join(tmpdir(), "tidepool-lineage-squash-"));
-  dirs.push(merger);
-  const origin = git(workspacePath, "remote", "get-url", "origin");
-  git(merger, "clone", origin, ".");
-  git(merger, "fetch", workspacePath, `task/${taskId}:landed`);
-  git(merger, "merge", "--squash", "landed");
-  git(merger, "commit", "-m", "squash reviewed work");
-  git(merger, "push", "origin", "main");
 }
 
 async function rebaseLandOutside(workspacePath: string, taskId: string): Promise<void> {
@@ -224,73 +214,47 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
   expect(t.github.requests[0]?.branch).toBe(`task/${repair.id}`);
 });
 
-it("review の修理は元 PR が squash merge 済みなら保護ブランチから切られ、自分の PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "squash-merged-pr-repair");
-  t = await bootTidepool({ workspace });
-  const reviewed = await registerWork(t, "ship squash-merged work", undefined, true);
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "reviewed.txt", "merged work\n");
-  await complete(reviewed.id);
-  await squashLandOutside(workspace.path, reviewed.id);
+it.each(["squash", "rebase"] as const)(
+  "review の修理は元 PR が %s merge 済みでも保護ブランチから切られ、自分の PR を開く",
+  async (method) => {
+    const { workspace } = await makeRemoteBackedWorkspace(
+      dirs,
+      `${method}-merged-pr-repair`,
+    );
+    t = await bootTidepool({ workspace });
+    const reviewed = await registerWork(t, `ship ${method}-merged work`, undefined, true);
+    await t.clock.advance(HOUR);
+    commitWork(workspace.path, "reviewed.txt", "merged work\n");
+    await complete(reviewed.id);
+    if (method === "squash") await squashTaskIntoOrigin(dirs, workspace, reviewed.id);
+    else await rebaseLandOutside(workspace.path, reviewed.id);
 
-  const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (task: any) => task.type === "review" && task.parent_id === reviewed.id,
-  );
-  await t.clock.advance(HOUR);
-  await decompose(review.id, "repair squash-merged work");
-  const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (task: any) => task.parent_id === review.id,
-  );
-  await t.clock.advance(HOUR);
+    const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+      (task: any) => task.type === "review" && task.parent_id === reviewed.id,
+    );
+    await t.clock.advance(HOUR);
+    await decompose(review.id, `repair ${method}-merged work`);
+    const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+      (task: any) => task.parent_id === review.id,
+    );
+    await t.clock.advance(HOUR);
 
-  expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).toBe(
-    git(workspace.path, "rev-parse", "refs/remotes/origin/main"),
-  );
-  expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).not.toBe(
-    git(workspace.path, "rev-parse", `task/${reviewed.id}`),
-  );
+    expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).toBe(
+      git(workspace.path, "rev-parse", "refs/remotes/origin/main"),
+    );
+    expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).not.toBe(
+      git(workspace.path, "rev-parse", `task/${reviewed.id}`),
+    );
+    commitWork(workspace.path, "repair.txt", `fixed after ${method} merge\n`);
+    await complete(repair.id);
 
-  commitWork(workspace.path, "repair.txt", "fixed after squash merge\n");
-  await complete(repair.id);
-
-  expect(t.github.requests).toHaveLength(1);
-  expect(t.github.requests[0]).toMatchObject({
-    branch: `task/${repair.id}`,
-    base: "main",
-  });
-});
-
-it("review の修理は元 PR が rebase merge 済みでも保護ブランチから切られ、自分の PR を開く", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "rebase-merged-pr-repair");
-  t = await bootTidepool({ workspace });
-  const reviewed = await registerWork(t, "ship rebase-merged work", undefined, true);
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "reviewed.txt", "merged work\n");
-  await complete(reviewed.id);
-  await rebaseLandOutside(workspace.path, reviewed.id);
-
-  const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (task: any) => task.type === "review" && task.parent_id === reviewed.id,
-  );
-  await t.clock.advance(HOUR);
-  await decompose(review.id, "repair rebase-merged work");
-  const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (task: any) => task.parent_id === review.id,
-  );
-  await t.clock.advance(HOUR);
-
-  expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).toBe(
-    git(workspace.path, "rev-parse", "refs/remotes/origin/main"),
-  );
-  commitWork(workspace.path, "repair.txt", "fixed after rebase merge\n");
-  await complete(repair.id);
-
-  expect(t.github.requests).toHaveLength(1);
-  expect(t.github.requests[0]).toMatchObject({
-    branch: `task/${repair.id}`,
-    base: "main",
-  });
-});
+    expect(t.github.requests).toHaveLength(1);
+    expect(t.github.requests[0]).toMatchObject({
+      branch: `task/${repair.id}`,
+      base: "main",
+    });
+  },
+);
 
 it("ルート review の修理子は work の祖先がないため保護ブランチから切られる", async () => {
   const workspace = await makeWorkspace(dirs, "root-review-repair");
