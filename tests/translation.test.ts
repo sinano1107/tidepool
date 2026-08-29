@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { reportThrottle } from "../src/throttle.js";
+import { reportProviderUsage, reportThrottle } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
 import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
 import { FakeTranslationClient } from "./fakes.js";
@@ -63,6 +63,76 @@ it("throttled 中はクライアントを呼ばず、区別可能な throttled �
 
   expect(outcome).toEqual({ status: "throttled" });
   expect(client.calls).toEqual([]);
+});
+
+it("Provider 化後は Anthropic account window だけが Anthropic translation Board call を止める", async () => {
+  const db = await freshDb();
+  reportProviderUsage(db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: NOW,
+    windows: [
+      {
+        window: "session",
+        model: null,
+        usedPercent: 50,
+        durationMs: 5 * 60 * 60 * 1000,
+        resetsAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+        throttled: false,
+        resumesAt: null,
+      },
+    ],
+  });
+  reportProviderUsage(db, {
+    provider: "openai",
+    status: "observed",
+    plan: "plus",
+    cliVersion: "codex-cli 0.147.0",
+    observedAt: NOW,
+    windows: [
+      {
+        window: "primary",
+        model: null,
+        usedPercent: 50,
+        durationMs: 5 * 60 * 60 * 1000,
+        resetsAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+        throttled: true,
+        resumesAt: new Date(NOW.getTime() + 30 * 60 * 1000),
+      },
+    ],
+  });
+  const client = new FakeTranslationClient();
+  client.scriptTranslation("別予算なので翻訳できる");
+
+  expect(await translateSource(db, client, "OpenAI is separate", "Japanese", NOW)).toMatchObject({
+    status: "translated",
+  });
+
+  reportProviderUsage(db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: NOW,
+    windows: [
+      {
+        window: "session",
+        model: null,
+        usedPercent: 50,
+        durationMs: 5 * 60 * 60 * 1000,
+        resetsAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+        throttled: true,
+        resumesAt: new Date(NOW.getTime() + 30 * 60 * 1000),
+      },
+    ],
+  });
+
+  expect(await translateSource(db, client, "never called", "Japanese", NOW)).toEqual({
+    status: "throttled",
+  });
+  expect(client.calls).toHaveLength(1);
 });
 
 it("キャッシュミス時、クライアントが返したトークン使用量をそのままキャッシュへ記録する(claude-worker.ts と同じ粒度 — 完了基準)", async () => {

@@ -19,7 +19,7 @@ import {
   harnessContainmentPickupBlocked,
   quarantinedHarnesses,
 } from "./harness-containment.js";
-import { getPaceOffsets } from "./pace-offsets.js";
+import { getProviderPaceOffset } from "./pace-offsets.js";
 import {
   type Harness,
   InvalidAgentProviderError,
@@ -121,6 +121,7 @@ async function checkThrottle(
   clock: Clock,
   worker: WorkerAdapter,
   cliAuth?: CliAuthCheck,
+  persistLegacy = true,
 ): Promise<{ decision: ThrottleDecision; snapshot: UsageSnapshot }> {
   const resultText = await worker.checkUsage();
   // `null` is deliberately ambiguous (modal, renderer, marker, auth, …).
@@ -150,8 +151,17 @@ async function checkThrottle(
       spendDown[window] = null;
     }
   }
-  const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now(), spendDown);
-  reportThrottle(db, decision, clock.now());
+  const decision = evaluateThrottle(
+    snapshot,
+    {
+      session: getProviderPaceOffset(db, "anthropic", "session"),
+      week: getProviderPaceOffset(db, "anthropic", "week"),
+      fable: getProviderPaceOffset(db, "anthropic", "fable"),
+    },
+    clock.now(),
+    spendDown,
+  );
+  if (persistLegacy) reportThrottle(db, decision, clock.now());
   return { decision, snapshot };
 }
 
@@ -282,6 +292,7 @@ export function startScheduler(deps: {
   let inFlight = false;
   let throttleRevalidating = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
+  if (resolveUsageResource) db.prepare("DELETE FROM throttle_state").run();
 
   async function pickupBlocked(): Promise<boolean> {
     if (slot.currentTaskId !== null) return true;
@@ -501,7 +512,7 @@ export function startScheduler(deps: {
       };
     }
 
-    const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth);
+    const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth, false);
     const definitions = [
       ["session", null, snapshot.session, decision.windows.session, 5 * HOURLY],
       ["week", null, snapshot.week, decision.windows.week, 7 * 24 * HOURLY],
@@ -679,6 +690,6 @@ export function startScheduler(deps: {
       resumeTimer.cancel();
     },
     pollNow,
-    isThrottleRevalidating: () => throttleRevalidating,
+    isThrottleRevalidating: () => resolveUsageResource ? false : throttleRevalidating,
   };
 }

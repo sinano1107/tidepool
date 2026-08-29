@@ -136,6 +136,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   // 資源単位の表示に要る完全な throttle(windows / fable 詳細)は /pause から —
   // halts の throttle entry と一部重複するが、把握して受け入れた重複である
   const throttle = pause.throttle;
+  const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
   const fmtTime = (iso) => {
     const d = new Date(iso);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -336,6 +337,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
     spendDown: pause.spendDown ?? { session: null, week: null },
+    providerUsage,
     throttled,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled, fableResumesAt,
@@ -1701,25 +1703,35 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
 // pace.
 function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
-  const id = 'board:pace-offsets';
+  const id = 'board:provider-pace-offsets';
   const open = edit.isOpen(id);
-  const [draft, setDraft] = React.useState(offsets);
+  const asDraft = (values) => Object.fromEntries(
+    values.map((value) => [`${value.provider}:${value.window}`, value.offset]),
+  );
+  const [draft, setDraft] = React.useState(() => asDraft(offsets));
   const [busy, setBusy] = React.useState(false);
-  const keys = ['session', 'week', 'fable'];
-  const dirty = keys.some((k) => String(draft[k]) !== String(offsets[k]));
+  const keys = offsets.map((value) => `${value.provider}:${value.window}`);
+  const current = asDraft(offsets);
+  const dirty = keys.some((key) => String(draft[key]) !== String(current[key]));
   // the API rejects non-integers / out-of-range at the entry (ADR 0030) — the
   // form mirrors that check so the button only enables on a sendable value
   const validOffset = (v) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
-  const ok = keys.every((k) => validOffset(draft[k]));
+  const ok = keys.every((key) => validOffset(draft[key]));
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api('/api/settings/pace-offsets', {
-        session: Number(draft.session), week: Number(draft.week), fable: Number(draft.fable),
+      const changed = offsets.filter((value) => {
+        const key = `${value.provider}:${value.window}`;
+        return String(draft[key]) !== String(value.offset);
       });
-      say('success', 'pace offsets saved', `session ${saved.session}pt · week ${saved.week}pt · fable ${saved.fable}pt`);
+      await Promise.all(changed.map((value) => api('/api/settings/provider-pace-offsets', {
+        provider: value.provider,
+        window: value.window,
+        offset: Number(draft[`${value.provider}:${value.window}`]),
+      })));
+      say('success', 'provider pace offsets saved', `${changed.length} window${changed.length === 1 ? '' : 's'} updated`);
       edit.close();
       await onSaved();
     } catch (err) {
@@ -1730,28 +1742,30 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(offsets))}>
-        <span style={settingsCardLabel}>pace offsets</span>
+      <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(asDraft(offsets)))}>
+        <span style={settingsCardLabel}>provider pace offsets</span>
       </RecordCardHead>
       {!open && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-          {keys.map((k) => (
-            <FieldRow key={k} label={k} kind="mono" value={`${offsets[k]} pt`} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12 }}>
+          {offsets.map((value) => (
+            <FieldRow key={`${value.provider}:${value.window}`} label={`${value.provider} · ${value.window}`} kind="mono" value={`${value.offset} pt`} />
           ))}
         </div>
       )}
       {open && (
         <React.Fragment>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Input label="Session" mono value={String(draft.session)} onChange={(e) => setDraft({ ...draft, session: e.target.value })} placeholder="20" />
-            <Input label="Week" mono value={String(draft.week)} onChange={(e) => setDraft({ ...draft, week: e.target.value })} placeholder="10" />
-            <Input label="Fable" mono value={String(draft.fable)} onChange={(e) => setDraft({ ...draft, fable: e.target.value })} placeholder="10" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+            {offsets.map((value) => {
+              const key = `${value.provider}:${value.window}`;
+              return <Input key={key} label={`${value.provider} · ${value.window}`} mono value={String(draft[key])}
+                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} placeholder={String(value.offset)} />;
+            })}
           </div>
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             your reserved share of each usage window, in points (0–100). the board stays this far
             behind the elapsed-time pace, leaving that slice of the budget for your own sessions.
           </p>
-          <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save pace offsets"
+          <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save provider offsets"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
@@ -1969,7 +1983,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
 
   const [paceOffsets, setPaceOffsets] = React.useState(null); // null → still loading
   const loadPaceOffsets = async () => {
-    setPaceOffsets(await api('/api/settings/pace-offsets', undefined, 'GET'));
+    const result = await api('/api/settings/provider-pace-offsets', undefined, 'GET');
+    setPaceOffsets(result.offsets);
   };
   React.useEffect(() => { loadPaceOffsets(); }, []);
 

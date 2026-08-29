@@ -62,6 +62,8 @@ function writeCompatibleSchemas(out: string): void {
       definitions: {
         RateLimitSnapshot: {
           properties: {
+            limitId: { type: ["string", "null"] },
+            planType: { $ref: "#/definitions/PlanType" },
             primary: { anyOf: [{ $ref: "#/definitions/RateLimitWindow" }, { type: "null" }] },
             secondary: { anyOf: [{ $ref: "#/definitions/RateLimitWindow" }, { type: "null" }] },
           },
@@ -110,6 +112,7 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
           id: 3,
           result: {
             rateLimits: {
+              limitId: "codex",
               planType: "plus",
               primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 18_001 },
               secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 604_801 },
@@ -274,6 +277,7 @@ it.each([
           id: 3,
           result: {
             rateLimits: {
+              limitId: "codex",
               planType: ratePlan,
               ...(primary && { primary: window }),
               ...(secondary && { secondary: window }),
@@ -292,7 +296,7 @@ it.each([
   expect(result.status).toBe("unobservable");
 });
 
-it("normalizes model-specific rate-limit buckets without duplicating the all-model bucket", async () => {
+it("accepts the validated codex indexed view but does not guess that unknown limit ids are models", async () => {
   const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
   const command: CodexCliCommand = async (_executable, args) => {
     if (args[0] === "--version") {
@@ -324,13 +328,6 @@ it("normalizes model-specific rate-limit buckets without duplicating the all-mod
                 primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 18_001 },
                 secondary: { usedPercent: 20, windowDurationMins: 10_080, resetsAt: 604_801 },
               },
-              "gpt-5.4-mini": {
-                limitId: "gpt-5.4-mini",
-                limitName: "GPT-5.4 mini",
-                planType: "plus",
-                primary: { usedPercent: 30, windowDurationMins: 300, resetsAt: 18_001 },
-                secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 604_801 },
-              },
             },
           },
         },
@@ -351,9 +348,27 @@ it("normalizes model-specific rate-limit buckets without duplicating the all-mod
   }))).toEqual([
     { name: "primary", model: null, usedPercent: 10 },
     { name: "secondary", model: null, usedPercent: 20 },
-    { name: "primary", model: "gpt-5.4-mini", usedPercent: 30 },
-    { name: "secondary", model: "gpt-5.4-mini", usedPercent: 40 },
   ]);
+
+  const unknownLimit: CodexCliCommand = async (executable, args, options) => {
+    const base = await command(executable, args, options);
+    if (args[0] !== "app-server" || args[1] === "generate-json-schema") return base;
+    const messages = base.stdout.split("\n").map((line) => JSON.parse(line));
+    messages[2].result.rateLimitsByLimitId["gpt-5.4-mini"] = {
+      limitId: "gpt-5.4-mini",
+      planType: "plus",
+      primary: { usedPercent: 30, windowDurationMins: 300, resetsAt: 18_001 },
+      secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 604_801 },
+    };
+    return { ...base, stdout: messages.map((message) => JSON.stringify(message)).join("\n") };
+  };
+  await expect(
+    createCodexAppServerProbe({
+      executable: "/opt/tidepool/bin/codex",
+      codexHome: root,
+      command: unknownLimit,
+    })(new Date(1_000)),
+  ).resolves.toMatchObject({ status: "unobservable", provider: "openai" });
 });
 
 it("contradictory structured account state fails closed instead of guessing an auth verdict", async () => {

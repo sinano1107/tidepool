@@ -705,7 +705,19 @@ export function openDb(path: string): Db {
     db.exec(`
       INSERT INTO provider_usage_observations
         (provider, status, plan, cli_version, reason, observed_at)
-      SELECT 'anthropic', 'observed', NULL, NULL, NULL, observed_at
+      SELECT 'anthropic',
+             CASE
+               WHEN session_throttled IS NULL OR week_throttled IS NULL
+                 THEN 'unobservable'
+               ELSE 'observed'
+             END,
+             NULL, NULL,
+             CASE
+               WHEN session_throttled IS NULL OR week_throttled IS NULL
+                 THEN 'legacy usage observation was incomplete'
+               ELSE NULL
+             END,
+             observed_at
       FROM throttle_state WHERE id = 1;
       INSERT INTO provider_usage_windows
         (provider, window, model, used_percent, duration_ms, resets_at, throttled, resumes_at)
@@ -728,6 +740,10 @@ export function openDb(path: string): Db {
       SELECT 'anthropic', 'week', week FROM pace_offsets WHERE id = 1;
     INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
       SELECT 'anthropic', 'fable', fable FROM pace_offsets WHERE id = 1;
+    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
+      SELECT 'openai', 'primary', session FROM pace_offsets WHERE id = 1;
+    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
+      SELECT 'openai', 'secondary', week FROM pace_offsets WHERE id = 1;
   `);
   return db;
 }

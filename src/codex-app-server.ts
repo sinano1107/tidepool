@@ -68,38 +68,38 @@ const accountResponse = z.object({
     z.object({ type: z.literal("amazonBedrock"), usesCodexManagedCredentials: z.boolean().optional() }).strict(),
   ]).nullable().optional(),
   requiresOpenaiAuth: z.boolean(),
-}).strict();
+});
 
 const rateWindow = z.object({
   usedPercent: z.number().int().min(0).max(100),
   windowDurationMins: z.number().int().positive().nullable(),
   resetsAt: z.number().int().positive().nullable(),
-}).strict();
+});
 
 const rateLimitSnapshot = z.object({
   credits: z.unknown().nullable().optional(),
   individualLimit: z.unknown().nullable().optional(),
-  limitId: z.string().nullable().optional(),
+  limitId: z.string(),
   limitName: z.string().nullable().optional(),
-  planType: z.enum(PLAN_VALUES).nullable().optional(),
+  planType: z.enum(PLAN_VALUES),
   primary: rateWindow.nullable().optional(),
   rateLimitReachedType: z.unknown().nullable().optional(),
   secondary: rateWindow.nullable().optional(),
   spendControlReached: z.boolean().nullable().optional(),
-}).strict();
+});
 
 const rateLimitsResponse = z.object({
   rateLimitResetCredits: z.unknown().nullable().optional(),
   rateLimits: rateLimitSnapshot,
   rateLimitsByLimitId: z.record(z.string(), rateLimitSnapshot).nullable().optional(),
-}).strict();
+});
 
 const initializeResponse = z.object({
   userAgent: z.string(),
   platformFamily: z.string(),
   platformOs: z.string(),
   codexHome: z.string(),
-}).strict();
+});
 
 const defaultCommand: CodexCliCommand = (executable, args, options) =>
   new Promise((resolve) => {
@@ -165,6 +165,8 @@ function schemasConform(requests: any, account: any, rateLimits: any): boolean {
     rateLimits.title === "GetAccountRateLimitsResponse" &&
     rateLimits.required?.includes("rateLimits") &&
     references(rateLimits.properties?.rateLimits, "RateLimitSnapshot") &&
+    snapshot?.properties?.limitId?.type?.includes("string") &&
+    snapshot?.properties?.planType !== undefined &&
     references(snapshot?.properties?.primary, "RateLimitWindow") &&
     references(snapshot?.properties?.secondary, "RateLimitWindow") &&
     window?.required?.includes("usedPercent") &&
@@ -329,28 +331,24 @@ export function createCodexAppServerProbe(options: {
       if (limits.rateLimits.planType !== account.account.planType) {
         throw new Error("account and rate-limit plans contradict each other");
       }
-      const modelWindows: ProviderUsageWindow[] = [];
       const buckets = Object.entries(limits.rateLimitsByLimitId ?? {});
-      if (buckets.length > 0 && !limits.rateLimits.limitId) {
-        throw new Error("multi-bucket rate limits are missing the canonical limit id");
+      if (limits.rateLimits.limitId !== "codex") {
+        throw new Error(`unexpected canonical rate-limit id ${limits.rateLimits.limitId}`);
       }
-      for (const [model, bucket] of buckets) {
-        if (bucket.limitId !== model || bucket.planType !== account.account.planType) {
-          throw new Error(`model rate-limit bucket ${model} contradicts its id or plan`);
-        }
-        if (model === limits.rateLimits.limitId) {
-          if (
-            JSON.stringify(bucket.primary) !== JSON.stringify(limits.rateLimits.primary) ||
-            JSON.stringify(bucket.secondary) !== JSON.stringify(limits.rateLimits.secondary)
-          ) {
-            throw new Error("canonical multi-bucket and backward-compatible rate limits contradict");
-          }
-          continue;
-        }
-        modelWindows.push(
-          normalizeWindow("primary", model, bucket.primary, now),
-          normalizeWindow("secondary", model, bucket.secondary, now),
-        );
+      if (buckets.some(([limitId]) => limitId !== "codex")) {
+        throw new Error("unknown rate-limit id cannot be interpreted as a model");
+      }
+      const indexed = limits.rateLimitsByLimitId?.codex;
+      if (
+        indexed &&
+        (
+          indexed.limitId !== "codex" ||
+          indexed.planType !== account.account.planType ||
+          JSON.stringify(indexed.primary) !== JSON.stringify(limits.rateLimits.primary) ||
+          JSON.stringify(indexed.secondary) !== JSON.stringify(limits.rateLimits.secondary)
+        )
+      ) {
+        throw new Error("canonical indexed and backward-compatible rate limits contradict");
       }
       return {
         status: "observed",
@@ -360,7 +358,6 @@ export function createCodexAppServerProbe(options: {
         windows: [
           normalizeWindow("primary", null, limits.rateLimits.primary, now),
           normalizeWindow("secondary", null, limits.rateLimits.secondary, now),
-          ...modelWindows,
         ],
       };
     } catch (error) {

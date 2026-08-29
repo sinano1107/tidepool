@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import { usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -197,4 +198,54 @@ it("Provider/window ごとの catch-up timer は別 window の遅い reset に�
   await t.clock.advance(0.1 * HOUR);
 
   expect(t.worker.started.map((started) => started.id)).toEqual([task.id]);
+});
+
+it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll の OpenAI を流す", async () => {
+  t = await bootTidepool({
+    openaiUsage: async (now) => ({
+      status: "observed",
+      provider: "openai",
+      cliVersion: "codex-cli 0.147.0",
+      plan: "plus",
+      windows: [
+        {
+          name: "primary",
+          model: null,
+          usedPercent: 0,
+          durationMs: 5 * HOUR,
+          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+        },
+        {
+          name: "secondary",
+          model: null,
+          usedPercent: 0,
+          durationMs: 7 * 24 * HOUR,
+          resetsAt: new Date(now.getTime() + 6 * 24 * HOUR).toISOString(),
+        },
+      ],
+    }),
+    resolveUsageResource: (task) =>
+      task.assignee === "claude-agent"
+        ? { provider: "anthropic", model: "claude-opus-4-1" }
+        : { provider: "openai", model: "gpt-5.6-sol" },
+    agentsSpeakingProviders: (providers) =>
+      providers.includes("anthropic") ? ["claude-agent"] : ["codex-agent"],
+  });
+  t.worker.scriptUsage(usagePanelText({
+    session: { percent: 50, resetsAt: new Date(5 * HOUR) },
+    week: { percent: 0, resetsAt: new Date(7 * 24 * HOUR) },
+  }));
+  await registerWork(t, "Anthropic waits", undefined, undefined, "claude-agent");
+  const firstOpenai = await registerWork(t, "OpenAI flows", undefined, undefined, "codex-agent");
+
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((task) => task.id)).toEqual([firstOpenai.id]);
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([]);
+
+  const client = await mcpClient(t.mcpBaseUrl, firstOpenai.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  const secondOpenai = await registerWork(t, "OpenAI still flows next poll", undefined, undefined, "codex-agent");
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((task) => task.id)).toEqual([firstOpenai.id, secondOpenai.id]);
 });

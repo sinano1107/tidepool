@@ -35,11 +35,20 @@ export function getPaceOffsets(db: Db): PaceOffsets {
 }
 
 export function setPaceOffsets(db: Db, offsets: PaceOffsets): void {
-  db.prepare(
-    `INSERT INTO pace_offsets (id, session, week, fable) VALUES (1, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       session = excluded.session, week = excluded.week, fable = excluded.fable`,
-  ).run(offsets.session, offsets.week, offsets.fable);
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO pace_offsets (id, session, week, fable) VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         session = excluded.session, week = excluded.week, fable = excluded.fable`,
+    ).run(offsets.session, offsets.week, offsets.fable);
+    const writeProvider = db.prepare(
+      `INSERT INTO provider_pace_offsets (provider, window, offset) VALUES ('anthropic', ?, ?)
+       ON CONFLICT(provider, window) DO UPDATE SET offset = excluded.offset`,
+    );
+    writeProvider.run("session", offsets.session);
+    writeProvider.run("week", offsets.week);
+    writeProvider.run("fable", offsets.fable);
+  })();
 }
 
 export interface ProviderPaceOffset {
@@ -55,10 +64,19 @@ export function defaultProviderPaceOffset(window: string): number {
 }
 
 export function setProviderPaceOffset(db: Db, value: ProviderPaceOffset): void {
-  db.prepare(
-    `INSERT INTO provider_pace_offsets (provider, window, offset) VALUES (?, ?, ?)
-     ON CONFLICT(provider, window) DO UPDATE SET offset = excluded.offset`,
-  ).run(value.provider, value.window, value.offset);
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO provider_pace_offsets (provider, window, offset) VALUES (?, ?, ?)
+       ON CONFLICT(provider, window) DO UPDATE SET offset = excluded.offset`,
+    ).run(value.provider, value.window, value.offset);
+    if (
+      value.provider === "anthropic" &&
+      (value.window === "session" || value.window === "week" || value.window === "fable")
+    ) {
+      const current = getPaceOffsets(db);
+      setPaceOffsets(db, { ...current, [value.window]: value.offset });
+    }
+  })();
 }
 
 export function listProviderPaceOffsets(db: Db): ProviderPaceOffset[] {

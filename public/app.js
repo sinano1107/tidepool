@@ -136,6 +136,7 @@ function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false
   const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const alert = wsAlert ? data.workspaceAlert : null;
   const activeSpendDown = ["session", "week"].filter((window2) => spendDown?.[window2]);
+  const providerUsage = data.providerUsage ?? [];
   const headId = data.queue[0]?.id ?? null;
   React.useEffect(() => {
     lucide.createIcons();
@@ -170,7 +171,7 @@ function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false
     borderRadius: 1,
     marginBottom: 14,
     background: paused ? "repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)" : slot.color
-  } }), onSpendDown && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", marginBottom: 14, background: activeSpendDown.length ? "var(--sun-1)" : "transparent", border: activeSpendDown.length ? "1px solid var(--sun-2)" : "1px solid transparent", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, activeSpendDown.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: activeSpendDown.length ? "var(--text-body)" : "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down", activeSpendDown.length ? ` \xB7 ${activeSpendDown.join(" + ")}` : "")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, ["session", "week"].map((window2) => /* @__PURE__ */ React.createElement("div", { key: window2, style: { display: "flex", alignItems: "center", gap: 8, minHeight: 30 } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: spendDown?.[window2] ? "var(--text-body)" : "var(--text-muted)" } }, spendDown?.[window2] ? `${window2} \xB7 100% cap \xB7 expires at reset` : `${window2} \xB7 pace line on`), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(window2, !spendDown?.[window2]) }, spendDown?.[window2] ? `cancel ${window2}` : `arm ${window2}`))))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: data.queue, onReorder, onFront, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
+  } }), providerUsage.length > 0 && /* @__PURE__ */ React.createElement(Card, { "data-testid": "provider-usage", style: { padding: "10px 12px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 } }, "provider usage"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } }, providerUsage.map((usage) => /* @__PURE__ */ React.createElement("div", { key: usage.provider, "data-testid": `provider-usage-${usage.provider}` }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-body)" } }, usage.provider), /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-xs)", color: usage.status === "observed" ? "var(--tide-5)" : "var(--coral-4)" } }, usage.status), usage.plan && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, usage.plan), usage.observedAt && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, "observed ", new Date(usage.observedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))), usage.reason && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 3, fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, usage.reason), usage.windows.map((window2) => /* @__PURE__ */ React.createElement("div", { key: `${window2.window}:${window2.model ?? ""}`, style: { marginTop: 3, fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: window2.throttled ? "var(--coral-4)" : "var(--text-muted)" } }, window2.window, window2.model ? ` \xB7 ${window2.model}` : "", " \xB7 ", window2.usedPercent ?? "?", "% \xB7 offset ", window2.offset, "pt \xB7 ", window2.throttled ? `paced${window2.resumesAt ? ` until ${new Date(window2.resumesAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}` : "on pace")))))), onSpendDown && /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", marginBottom: 14, background: activeSpendDown.length ? "var(--sun-1)" : "transparent", border: activeSpendDown.length ? "1px solid var(--sun-2)" : "1px solid transparent", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, activeSpendDown.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: activeSpendDown.length ? "var(--text-body)" : "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down", activeSpendDown.length ? ` \xB7 ${activeSpendDown.join(" + ")}` : "")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, ["session", "week"].map((window2) => /* @__PURE__ */ React.createElement("div", { key: window2, style: { display: "flex", alignItems: "center", gap: 8, minHeight: 30 } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: spendDown?.[window2] ? "var(--text-body)" : "var(--text-muted)" } }, spendDown?.[window2] ? `${window2} \xB7 100% cap \xB7 expires at reset` : `${window2} \xB7 pace line on`), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(window2, !spendDown?.[window2]) }, spendDown?.[window2] ? `cancel ${window2}` : `arm ${window2}`))))), alert && /* @__PURE__ */ React.createElement(Card, { style: { background: "var(--coral-1)", border: "1px solid var(--coral-2)", padding: "12px 14px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "workspace needs human"), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", marginLeft: "auto" } }, alert.workspace)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-body)", marginBottom: 4 } }, alert.reason), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)" } }, "pickup paused for ", alert.held.join(", "), " \xB7 see question ", alert.question)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: data.queue, onReorder, onFront, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
 }
 Object.assign(window, { QueueScreen, TpQueueList });
 
@@ -798,6 +799,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === "pause");
   const throttle = pause.throttle;
+  const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
   const fmtTime = (iso) => {
     const d = new Date(iso);
     return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -999,6 +1001,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     triageActive: halts.some((h) => h.kind === "triage"),
     // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
     spendDown: pause.spendDown ?? { session: null, week: null },
+    providerUsage,
     throttled,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled,
@@ -1973,24 +1976,32 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
 }
 function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
-  const id = "board:pace-offsets";
+  const id = "board:provider-pace-offsets";
   const open = edit.isOpen(id);
-  const [draft, setDraft] = React.useState(offsets);
+  const asDraft = (values) => Object.fromEntries(
+    values.map((value) => [`${value.provider}:${value.window}`, value.offset])
+  );
+  const [draft, setDraft] = React.useState(() => asDraft(offsets));
   const [busy, setBusy] = React.useState(false);
-  const keys = ["session", "week", "fable"];
-  const dirty = keys.some((k) => String(draft[k]) !== String(offsets[k]));
+  const keys = offsets.map((value) => `${value.provider}:${value.window}`);
+  const current = asDraft(offsets);
+  const dirty = keys.some((key) => String(draft[key]) !== String(current[key]));
   const validOffset = (v) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
-  const ok = keys.every((k) => validOffset(draft[k]));
+  const ok = keys.every((key) => validOffset(draft[key]));
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api("/api/settings/pace-offsets", {
-        session: Number(draft.session),
-        week: Number(draft.week),
-        fable: Number(draft.fable)
+      const changed = offsets.filter((value) => {
+        const key = `${value.provider}:${value.window}`;
+        return String(draft[key]) !== String(value.offset);
       });
-      say("success", "pace offsets saved", `session ${saved.session}pt \xB7 week ${saved.week}pt \xB7 fable ${saved.fable}pt`);
+      await Promise.all(changed.map((value) => api("/api/settings/provider-pace-offsets", {
+        provider: value.provider,
+        window: value.window,
+        offset: Number(draft[`${value.provider}:${value.window}`])
+      })));
+      say("success", "provider pace offsets saved", `${changed.length} window${changed.length === 1 ? "" : "s"} updated`);
       edit.close();
       await onSaved();
     } catch (err) {
@@ -1998,13 +2009,26 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(offsets)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "pace offsets")), !open && /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 } }, keys.map((k) => /* @__PURE__ */ React.createElement(FieldRow, { key: k, label: k, kind: "mono", value: `${offsets[k]} pt` }))), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Input, { label: "Session", mono: true, value: String(draft.session), onChange: (e) => setDraft({ ...draft, session: e.target.value }), placeholder: "20" }), /* @__PURE__ */ React.createElement(Input, { label: "Week", mono: true, value: String(draft.week), onChange: (e) => setDraft({ ...draft, week: e.target.value }), placeholder: "10" }), /* @__PURE__ */ React.createElement(Input, { label: "Fable", mono: true, value: String(draft.fable), onChange: (e) => setDraft({ ...draft, fable: e.target.value }), placeholder: "10" })), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "your reserved share of each usage window, in points (0\u2013100). the board stays this far behind the elapsed-time pace, leaving that slice of the budget for your own sessions."), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(asDraft(offsets))) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "provider pace offsets")), !open && /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 12 } }, offsets.map((value) => /* @__PURE__ */ React.createElement(FieldRow, { key: `${value.provider}:${value.window}`, label: `${value.provider} \xB7 ${value.window}`, kind: "mono", value: `${value.offset} pt` }))), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, offsets.map((value) => {
+    const key = `${value.provider}:${value.window}`;
+    return /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        key,
+        label: `${value.provider} \xB7 ${value.window}`,
+        mono: true,
+        value: String(draft[key]),
+        onChange: (e) => setDraft({ ...draft, [key]: e.target.value }),
+        placeholder: String(value.offset)
+      }
+    );
+  })), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "your reserved share of each usage window, in points (0\u2013100). the board stays this far behind the elapsed-time pace, leaving that slice of the budget for your own sessions."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
       ok,
       busy,
-      saveLabel: "Save pace offsets",
+      saveLabel: "Save provider offsets",
       onSave: save,
       onCancel: () => edit.close()
     }
@@ -2231,7 +2255,8 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   }, []);
   const [paceOffsets, setPaceOffsets] = React.useState(null);
   const loadPaceOffsets = async () => {
-    setPaceOffsets(await api("/api/settings/pace-offsets", void 0, "GET"));
+    const result = await api("/api/settings/provider-pace-offsets", void 0, "GET");
+    setPaceOffsets(result.offsets);
   };
   React.useEffect(() => {
     loadPaceOffsets();

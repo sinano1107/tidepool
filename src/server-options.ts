@@ -23,6 +23,7 @@ import type { Clock } from "./clock.js";
 import { createCodexAppServerProbe } from "./codex-app-server.js";
 import {
   CODEX_CLI_VERSION,
+  CODEX_DEFAULT_MODEL,
   CodexWorker,
   createCodexCapabilityCheck,
 } from "./codex-worker.js";
@@ -309,7 +310,7 @@ function usageResourceResolver(
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
     return {
       provider: agent.definition.provider as Provider,
-      model: agent.definition.model ?? null,
+      model: agent.definition.model ?? (agent.definition.provider === "openai" ? CODEX_DEFAULT_MODEL : null),
     };
   };
 }
@@ -490,7 +491,8 @@ function agentsUsingUsageResourcesResolver(
       .filter((agent) =>
         resources.some(
           (resource) =>
-            resource.provider === agent.provider && resource.model === (agent.model ?? null),
+            resource.provider === agent.provider &&
+            resource.model === (agent.model ?? (agent.provider === "openai" ? CODEX_DEFAULT_MODEL : null)),
         ),
       )
       .map((agent) => agent.name);

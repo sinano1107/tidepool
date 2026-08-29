@@ -1,6 +1,7 @@
 import type { Db } from "./db.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./registry.js";
+import { getSpendDown } from "./spend-down.js";
 import type { ThrottleDecision, WindowDecision } from "./usage.js";
 
 /** Persists the scheduler's last just-in-time /usage decision (ADR 0008),
@@ -308,6 +309,7 @@ export function evaluateAndReportProviderUsage(
   },
   now: Date,
 ): ProviderUsageObservation {
+  const spendDown = getSpendDown(db);
   const windows = observation.windows.map((window): ProviderUsageWindowState => {
     const offset = getProviderPaceOffset(
       db,
@@ -316,13 +318,22 @@ export function evaluateAndReportProviderUsage(
     );
     const startsAt = window.resetsAt.getTime() - window.durationMs;
     const elapsed = (now.getTime() - startsAt) / window.durationMs;
-    const throttled = window.usedPercent >= 100 || window.usedPercent > elapsed * 100 - offset;
+    const spendDownWindow = window.window === "primary" || window.window === "session"
+      ? spendDown.session
+      : spendDown.week;
+    const spendDownActive =
+      spendDownWindow !== null && spendDownWindow.activatedAt.getTime() >= startsAt;
+    const throttled = spendDownActive
+      ? window.usedPercent >= 100
+      : window.usedPercent >= 100 || window.usedPercent > elapsed * 100 - offset;
     const catchesUpAt = startsAt + ((window.usedPercent + offset) / 100) * window.durationMs;
     return {
       ...window,
       throttled,
       resumesAt: throttled
-        ? new Date(Math.min(window.resetsAt.getTime(), Math.max(now.getTime(), catchesUpAt)))
+        ? spendDownActive
+          ? window.resetsAt
+          : new Date(Math.min(window.resetsAt.getTime(), Math.max(now.getTime(), catchesUpAt)))
         : null,
     };
   });
