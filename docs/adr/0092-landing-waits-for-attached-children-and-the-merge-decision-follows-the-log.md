@@ -1,5 +1,7 @@
 # 着地は付帯子の決着を待ち、merge 判断はログ流し読みの後に置く
 
+**Status: 決定3 の「条件は起動の瞬間に読み直す」は ADR 0105 で `auto_if_ci_green` の merge 実行時にも適用されるよう拡張済み** — 門はキュー投入時だけでなく merge の直前にも読まれる。
+
 issue #399 の grilling(2026-08-21)で決着。ADR 0049 は「付帯子は親の完了を塞がない」と決め、昇格を
 止めるべき判断は「merge の門が持つ」と先送りした。その門は今日まで存在せず、work の完了は review 子の
 有無を見ずに着地へ進む — purely-local の merge question、`escalate` の PR open 時 question、
