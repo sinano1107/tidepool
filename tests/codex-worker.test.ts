@@ -219,7 +219,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ).toBe(jsonl);
   });
 
-  it("quarantines only OpenAI pickup when Codex JSONL reports a ChatGPT auth failure", async () => {
+  it("does not infer OpenAI auth quarantine from Codex JSONL prose", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-auth");
     f.worker.start(value);
@@ -228,7 +228,7 @@ describe("CodexWorker (ADR 0098)", () => {
     );
     f.process.exit(1, null);
 
-    expect(quarantinedAuthProviders(f.db)).toEqual(["openai"]);
+    expect(quarantinedAuthProviders(f.db)).toEqual([]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
       kind: "worker_exited",
       exit_code: 1,

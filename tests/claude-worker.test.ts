@@ -15,7 +15,6 @@ import {
   type PtyFn,
   pinnedModelFlags,
 } from "../src/claude-worker.js";
-import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
@@ -1825,7 +1824,7 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
-  it("実行中セッションの result が API 401 を返したら CLI 認証停止を盤面へ昇格する(issue #320)", async () => {
+  it("実行中セッションの result が API 401 を返したら anthropic Provider 認証停止へ昇格する(issue #454)", async () => {
     const { start, stdout, emitExit, db } = await makeWorker();
     start("task-cli-auth-expired");
     stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
@@ -1836,7 +1835,9 @@ describe("ClaudeCodeWorker", () => {
       listBoard(db)
         .filter((task) => task.type === "question")
         .map((task) => task.title),
-    ).toEqual([CLI_AUTH_QUESTION_TITLE]);
+    ).toEqual([
+      "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
+    ]);
   });
 
   it("worker_exited イベントに stderr の末尾20行を stderr_tail として載せる(issue #125)", async () => {
@@ -3108,7 +3109,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
       listBoard(db)
         .filter((t) => t.type === "question")
         .map((t) => t.title),
-    ).toEqual([CLI_AUTH_QUESTION_TITLE]);
+    ).toEqual([
+      "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped",
+    ]);
   });
 
   it("rate_limit_event を含むだけの正常な session では何も起きない(既存 fixture の回帰)", async () => {

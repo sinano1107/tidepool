@@ -265,6 +265,35 @@ export function openDb(path: string): Db {
       fable   INTEGER NOT NULL
     );
 
+    -- ADR 0098: a Provider probe is one observation with zero or more
+    -- account/model windows.  model is stored as the empty string so the
+    -- compound key stays unique for the account-wide window in SQLite.
+    CREATE TABLE IF NOT EXISTS provider_usage_observations (
+      provider     TEXT PRIMARY KEY CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
+      status       TEXT NOT NULL CHECK (status IN ('observed', 'unauthorized', 'unobservable')),
+      plan         TEXT,
+      cli_version  TEXT,
+      reason       TEXT,
+      observed_at  TEXT
+    );
+    CREATE TABLE IF NOT EXISTS provider_usage_windows (
+      provider       TEXT NOT NULL REFERENCES provider_usage_observations(provider) ON DELETE CASCADE,
+      window         TEXT NOT NULL,
+      model          TEXT NOT NULL DEFAULT '',
+      used_percent   INTEGER,
+      duration_ms    INTEGER,
+      resets_at      TEXT,
+      throttled      INTEGER NOT NULL,
+      resumes_at     TEXT,
+      PRIMARY KEY (provider, window, model)
+    );
+    CREATE TABLE IF NOT EXISTS provider_pace_offsets (
+      provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
+      window   TEXT NOT NULL,
+      offset   INTEGER NOT NULL,
+      PRIMARY KEY (provider, window)
+    );
+
     -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
     -- pickup — same one-row shape as throttle_state, but with no auto-resume
     -- (CONTEXT.md's Pause: clearing it is purely manual). No row means never
@@ -664,5 +693,57 @@ export function openDb(path: string): Db {
     // timestamp. NULL keeps that distinction until the next JIT poll.
     db.exec(`ALTER TABLE throttle_state ADD COLUMN observed_at TEXT`);
   }
+  // ADR 0098: the pre-Provider board stored one Anthropic account reading and
+  // one set of offsets. Preserve those values under their now-explicit
+  // Provider/window keys. Raw percentages/durations were never stored, so
+  // their NULLs remain honest until the next live probe replaces the row.
+  const hasAnthropicUsage = db
+    .prepare("SELECT 1 FROM provider_usage_observations WHERE provider = 'anthropic'")
+    .get();
+  const legacyThrottle = db.prepare("SELECT 1 FROM throttle_state WHERE id = 1").get();
+  if (!hasAnthropicUsage && legacyThrottle) {
+    db.exec(`
+      INSERT INTO provider_usage_observations
+        (provider, status, plan, cli_version, reason, observed_at)
+      SELECT 'anthropic',
+             CASE
+               WHEN session_throttled IS NULL OR week_throttled IS NULL
+                 THEN 'unobservable'
+               ELSE 'observed'
+             END,
+             NULL, NULL,
+             CASE
+               WHEN session_throttled IS NULL OR week_throttled IS NULL
+                 THEN 'legacy usage observation was incomplete'
+               ELSE NULL
+             END,
+             observed_at
+      FROM throttle_state WHERE id = 1;
+      INSERT INTO provider_usage_windows
+        (provider, window, model, used_percent, duration_ms, resets_at, throttled, resumes_at)
+      SELECT 'anthropic', 'session', '', NULL, NULL, NULL, session_throttled, session_resume_at
+      FROM throttle_state WHERE id = 1 AND session_throttled IS NOT NULL;
+      INSERT INTO provider_usage_windows
+        (provider, window, model, used_percent, duration_ms, resets_at, throttled, resumes_at)
+      SELECT 'anthropic', 'week', '', NULL, NULL, NULL, week_throttled, week_resume_at
+      FROM throttle_state WHERE id = 1 AND week_throttled IS NOT NULL;
+      INSERT INTO provider_usage_windows
+        (provider, window, model, used_percent, duration_ms, resets_at, throttled, resumes_at)
+      SELECT 'anthropic', 'fable', 'fable', NULL, NULL, NULL, fable_throttled, fable_resume_at
+      FROM throttle_state WHERE id = 1 AND fable_throttled IS NOT NULL;
+    `);
+  }
+  db.exec(`
+    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
+      SELECT 'anthropic', 'session', session FROM pace_offsets WHERE id = 1;
+    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
+      SELECT 'anthropic', 'week', week FROM pace_offsets WHERE id = 1;
+    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
+      SELECT 'anthropic', 'fable', fable FROM pace_offsets WHERE id = 1;
+    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
+      SELECT 'openai', 'primary', session FROM pace_offsets WHERE id = 1;
+    INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)
+      SELECT 'openai', 'secondary', week FROM pace_offsets WHERE id = 1;
+  `);
   return db;
 }

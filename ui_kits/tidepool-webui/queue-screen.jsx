@@ -150,6 +150,7 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
   const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
   const alert = wsAlert ? data.workspaceAlert : null;
   const activeSpendDown = ['session', 'week'].filter((window) => spendDown?.[window]);
+  const providerUsage = data.providerUsage ?? [];
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
   const headId = data.queue[0]?.id ?? null;
@@ -199,6 +200,32 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
           ? 'repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)'
           : slot.color,
       }}></div>
+
+      {providerUsage.length > 0 && (
+        <Card data-testid="provider-usage" style={{ padding: '10px 12px', marginBottom: 14 }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+            provider usage
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {providerUsage.map((usage) => (
+              <div key={usage.provider} data-testid={`provider-usage-${usage.provider}`}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--text-body)' }}>{usage.provider}</span>
+                  <span style={{ fontSize: 'var(--text-xs)', color: usage.status === 'observed' ? 'var(--tide-5)' : 'var(--coral-4)' }}>{usage.status}</span>
+                  {usage.plan && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{usage.plan}</span>}
+                  {usage.observedAt && <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>observed {new Date(usage.observedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+                </div>
+                {usage.reason && <div style={{ marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{usage.reason}</div>}
+                {usage.windows.map((window) => (
+                  <div key={`${window.window}:${window.model ?? ''}`} style={{ marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: window.throttled ? 'var(--coral-4)' : 'var(--text-muted)' }}>
+                    {window.window}{window.model ? ` · ${window.model}` : ''} · {window.usedPercent ?? '?'}% · offset {window.offset}pt · {window.throttled ? `paced${window.resumesAt ? ` until ${new Date(window.resumesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : 'on pace'}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Spend-down (ADR 0091): each window is an independent target and
          expires at its own reset. week also carries fable on the server. */}

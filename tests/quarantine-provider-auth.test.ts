@@ -1,7 +1,16 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
+import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { openDb } from "../src/db.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF,
+  HOUR,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 /** issue #446 / ADR 0097 決定2: provider 単位の資源への細分化のゲート面。
  *  moonshot の失効は moonshot を喋る agent の pickup だけを止め(確認型
@@ -88,4 +97,78 @@ it("moonshot の確認回答は provider の再検証が通るまで受理され
   });
   expect(accepted.status).toBe(200);
   await vi.waitFor(() => expect(t.worker.started.map((started) => started.id)).toEqual([kimi.id]));
+});
+
+it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時に App Server を再probeし、他 Provider は流し続ける", async () => {
+  let authenticated = false;
+  const openaiUsage = async (now: Date): Promise<CodexAppServerProbeResult> =>
+    authenticated
+      ? {
+          status: "observed",
+          provider: "openai",
+          cliVersion: "codex-cli 0.147.0",
+          plan: "plus",
+          windows: [
+            {
+              name: "primary",
+              model: null,
+              usedPercent: 0,
+              durationMs: 5 * HOUR,
+              resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+            },
+            {
+              name: "secondary",
+              model: null,
+              usedPercent: 0,
+              durationMs: 7 * 24 * HOUR,
+              resetsAt: new Date(now.getTime() + 6 * 24 * HOUR).toISOString(),
+            },
+          ],
+        }
+      : {
+          status: "unauthorized",
+          provider: "openai",
+          cliVersion: "codex-cli 0.147.0",
+          reason: "Codex reports that OpenAI authentication is required",
+        };
+  t = await bootTidepool({
+    openaiUsage,
+    resolveUsageResource: (task) =>
+      task.assignee === "codex-agent"
+        ? { provider: "openai", model: "gpt-5.6-sol" }
+        : { provider: "anthropic", model: "claude-opus-4-1" },
+    agentsSpeakingProviders: (providers) =>
+      providers.includes("openai") ? ["codex-agent"] : ["claude-agent"],
+  });
+  const codex = await registerWork(t, "waits for Codex login", undefined, undefined, "codex-agent");
+  const claude = await registerWork(t, "keeps flowing", undefined, undefined, "claude-agent");
+
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((task) => task.id)).toEqual([claude.id]);
+  const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
+  const question = tasks.find((task) => task.question_quarantine_provider_auth === "openai");
+  expect(question?.title).toBe(
+    "openai authentication is unavailable — pickup of openai-speaking agents is stopped",
+  );
+  expect(tasks.filter((task) => task.question_quarantine_provider_auth !== null)).toHaveLength(1);
+
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+    answers: ["authentication restored"],
+  });
+  expect(refused).toMatchObject({
+    status: 409,
+    json: { error: "openai authentication is still unavailable: Codex reports that OpenAI authentication is required" },
+  });
+
+  authenticated = true;
+  expect(
+    (await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+      answers: ["authentication restored"],
+    })).status,
+  ).toBe(200);
+  const client = await mcpClient(t.mcpBaseUrl, claude.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((task) => task.id)).toEqual([claude.id, codex.id]);
 });

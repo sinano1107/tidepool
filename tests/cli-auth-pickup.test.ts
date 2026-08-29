@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { CLI_AUTH_QUESTION_TITLE } from "../src/cli-auth.js";
 import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+
+const ANTHROPIC_AUTH_QUESTION_TITLE =
+  "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
 
 let t: Tidepool;
 afterEach(() => {
@@ -29,7 +31,7 @@ it("checkUsage がnullでも追加probeで401が確定したときだけcliAuth 
   }).toEqual({
     checks: 1,
     started: [],
-    questionTitles: [CLI_AUTH_QUESTION_TITLE],
+    questionTitles: [ANTHROPIC_AUTH_QUESTION_TITLE],
   });
 });
 

@@ -1,7 +1,12 @@
 import { quarantineAgent, UnknownAgentError } from "./agent.js";
 import { boardHalts } from "./board-halt.js";
-import { type CliAuthCheck, quarantineCliAuth, quarantinedAuthProviders } from "./cli-auth.js";
+import {
+  type CliAuthCheck,
+  quarantineCliAuthForProvider,
+  quarantinedAuthProviders,
+} from "./cli-auth.js";
 import type { Clock } from "./clock.js";
+import type { CodexAppServerProbe, CodexAppServerProbeResult } from "./codex-app-server.js";
 import {
   type ContainmentCheck,
   containmentPickupBlocked,
@@ -14,7 +19,7 @@ import {
   harnessContainmentPickupBlocked,
   quarantinedHarnesses,
 } from "./harness-containment.js";
-import { getPaceOffsets } from "./pace-offsets.js";
+import { getProviderPaceOffset } from "./pace-offsets.js";
 import {
   type Harness,
   InvalidAgentProviderError,
@@ -35,7 +40,14 @@ import {
   resolveTaskAgent,
   type Task,
 } from "./tasks.js";
-import { reportThrottle } from "./throttle.js";
+import {
+  blockedProviderUsageResources,
+  evaluateAndReportProviderUsage,
+  type ProviderUsageObservation,
+  type ProviderUsageResource,
+  reportProviderUsage,
+  reportThrottle,
+} from "./throttle.js";
 import {
   evaluateThrottle,
   isSpendDownExpired,
@@ -72,9 +84,17 @@ export function pickupExcludedAssignees(
   fableAgents?: () => string[],
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[],
+  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[],
+  includeStoredUsage = true,
 ): string[] | undefined {
   const fable = fableBlocked && fableAgents ? fableAgents() : [];
-  const quarantinedProviders = quarantinedAuthProviders(db);
+  const usageResources = includeStoredUsage ? blockedProviderUsageResources(db) : [];
+  const quarantinedProviders = [
+    ...new Set([
+      ...quarantinedAuthProviders(db),
+      ...usageResources.filter((resource) => resource.model === null).map((resource) => resource.provider),
+    ]),
+  ];
   const providerExcluded =
     quarantinedProviders.length > 0 && agentsSpeakingProviders
       ? agentsSpeakingProviders(quarantinedProviders)
@@ -82,7 +102,12 @@ export function pickupExcludedAssignees(
   const harnesses = quarantinedHarnesses(db);
   const harnessExcluded =
     harnesses.length > 0 && agentsUsingHarnesses ? agentsUsingHarnesses(harnesses) : [];
-  const all = [...new Set([...fable, ...providerExcluded, ...harnessExcluded])];
+  const modelResources = usageResources.filter((resource) => resource.model !== null);
+  const modelExcluded =
+    modelResources.length > 0 && agentsUsingUsageResources
+      ? agentsUsingUsageResources(modelResources)
+      : [];
+  const all = [...new Set([...fable, ...providerExcluded, ...harnessExcluded, ...modelExcluded])];
   return all.length > 0 ? all : undefined;
 }
 
@@ -96,7 +121,8 @@ async function checkThrottle(
   clock: Clock,
   worker: WorkerAdapter,
   cliAuth?: CliAuthCheck,
-): Promise<ThrottleDecision> {
+  persistLegacy = true,
+): Promise<{ decision: ThrottleDecision; snapshot: UsageSnapshot }> {
   const resultText = await worker.checkUsage();
   // `null` is deliberately ambiguous (modal, renderer, marker, auth, …).
   // Preserve fail-closed throttle, and raise cliAuth only if a second probe
@@ -104,7 +130,7 @@ async function checkThrottle(
   if (resultText === null && cliAuth) {
     try {
       const auth = await cliAuth();
-      if (auth.status === "unauthorized") quarantineCliAuth(db, clock.now());
+      if (auth.status === "unauthorized") quarantineCliAuthForProvider(db, "anthropic", clock.now());
       else if (auth.status === "unknown") {
         console.warn("[cli-auth] usage failure could not be classified", auth.reason);
       }
@@ -125,31 +151,39 @@ async function checkThrottle(
       spendDown[window] = null;
     }
   }
-  const decision = evaluateThrottle(snapshot, getPaceOffsets(db), clock.now(), spendDown);
-  reportThrottle(db, decision, clock.now());
-  return decision;
+  const decision = evaluateThrottle(
+    snapshot,
+    {
+      session: getProviderPaceOffset(db, "anthropic", "session"),
+      week: getProviderPaceOffset(db, "anthropic", "week"),
+      fable: getProviderPaceOffset(db, "anthropic", "fable"),
+    },
+    clock.now(),
+    spendDown,
+  );
+  if (persistLegacy) reportThrottle(db, decision, clock.now());
+  return { decision, snapshot };
 }
 
-/** A single, replace-style one-shot timer (ADR 0008): scheduling while
- *  already armed cancels the stale handle first, so a fresh skip re-arming
- *  every poll never stacks duplicates. ADR 0030 arms it at the catch-up
- *  instant (再開見込み時刻), not the window reset — waiting for the reset
- *  plus the hourly tick would leak up to ~1h of idle pace every cycle. */
-function createResumeTimer(clock: Clock, onFire: () => void) {
-  let cancelCurrent: (() => void) | null = null;
+/** One replace-style timer per Provider/window/model resource. A fresh probe
+ * replaces only that window's stale timer, so a second Provider/window cannot
+ * erase an earlier catch-up wakeup. */
+function createResumeTimers(clock: Clock, onFire: () => void) {
+  const timers = new Map<string, () => void>();
   return {
-    schedule(resumeAt: Date): void {
-      cancelCurrent?.();
+    schedule(resource: string, resumeAt: Date): void {
+      timers.get(resource)?.();
       const delay = Math.max(0, resumeAt.getTime() - clock.now().getTime());
       const cancel = clock.setInterval(() => {
         cancel();
-        cancelCurrent = null;
+        timers.delete(resource);
         onFire();
       }, delay);
-      cancelCurrent = cancel;
+      timers.set(resource, cancel);
     },
     cancel(): void {
-      cancelCurrent?.();
+      for (const cancel of timers.values()) cancel();
+      timers.clear();
     },
   };
 }
@@ -199,6 +233,11 @@ export function startScheduler(deps: {
    *  line and the workspace/agent quarantines). Absent → no registry
    *  configured, so no agent's provider is knowable and nothing is skipped. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
+  /** ADR 0098 / issue #454: structured OpenAI subscription observation. */
+  openaiUsage?: CodexAppServerProbe;
+  /** Resolves the candidate's actual billed Provider/model from the registry. */
+  resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
   /** Agent names whose canonical route uses one of the named Harnesses. */
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** ADR 0098: candidate-scoped Harness safety check. A failed Harness is
@@ -238,6 +277,9 @@ export function startScheduler(deps: {
     github,
     fableAgents,
     agentsSpeakingProviders,
+    agentsUsingUsageResources,
+    openaiUsage,
+    resolveUsageResource,
     agentsUsingHarnesses,
     resolveHarness,
     harnessContainment,
@@ -249,7 +291,8 @@ export function startScheduler(deps: {
   } = deps;
   let inFlight = false;
   let throttleRevalidating = false;
-  const resumeTimer = createResumeTimer(clock, pollNow);
+  const resumeTimer = createResumeTimers(clock, pollNow);
+  if (resolveUsageResource) db.prepare("DELETE FROM throttle_state").run();
 
   async function pickupBlocked(): Promise<boolean> {
     if (slot.currentTaskId !== null) return true;
@@ -415,6 +458,94 @@ export function startScheduler(deps: {
     }
   }
 
+  async function observeProviderUsage(provider: Provider): Promise<ProviderUsageObservation> {
+    const now = clock.now();
+    if (provider === "openai") {
+      const result: CodexAppServerProbeResult = openaiUsage
+        ? await openaiUsage(now)
+        : {
+            status: "unobservable",
+            provider: "openai",
+            cliVersion: null,
+            reason: "no OpenAI App Server probe is configured",
+          };
+      if (result.status !== "observed") {
+        const observation: ProviderUsageObservation = {
+          provider,
+          status: result.status,
+          plan: null,
+          cliVersion: result.cliVersion,
+          reason: result.reason,
+          observedAt: now,
+          windows: [],
+        };
+        reportProviderUsage(db, observation);
+        if (result.status === "unauthorized") quarantineCliAuthForProvider(db, provider, now);
+        return observation;
+      }
+      return evaluateAndReportProviderUsage(
+        db,
+        {
+          provider,
+          status: "observed",
+          plan: result.plan,
+          cliVersion: result.cliVersion,
+          windows: result.windows.map((window) => ({
+            window: window.name,
+            model: window.model,
+            usedPercent: window.usedPercent,
+            durationMs: window.durationMs,
+            resetsAt: new Date(window.resetsAt),
+          })),
+        },
+        now,
+      );
+    }
+    if (provider === "moonshot") {
+      return {
+        provider,
+        status: "observed",
+        plan: null,
+        cliVersion: null,
+        observedAt: now,
+        windows: [],
+      };
+    }
+
+    const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth, false);
+    const definitions = [
+      ["session", null, snapshot.session, decision.windows.session, 5 * HOURLY],
+      ["week", null, snapshot.week, decision.windows.week, 7 * 24 * HOURLY],
+      ["fable", "fable", snapshot.fable, decision.windows.fable, 7 * 24 * HOURLY],
+    ] as const;
+    const observable = snapshot.session !== null && snapshot.week !== null;
+    const observation: ProviderUsageObservation = {
+      provider,
+      status: observable ? "observed" : "unobservable",
+      plan: null,
+      cliVersion: null,
+      ...(!observable && { reason: "Claude usage windows are unobservable" }),
+      observedAt: now,
+      windows: definitions.flatMap(([window, model, value, verdict, durationMs]) =>
+        value && value !== "idle" && verdict
+          ? [
+              {
+                window,
+                model,
+                usedPercent: value.percent,
+                durationMs,
+                resetsAt: value.resetsAt,
+                throttled: verdict.throttled,
+                resumesAt: verdict.resumeAt,
+              },
+            ]
+          : [],
+      ),
+    };
+    reportProviderUsage(db, observation);
+    return observation;
+  }
+
   async function poll(): Promise<void> {
     if (inFlight) return;
     // **`inFlight` は `pickupBlocked` より手前で立てる。** 封じ込め能力の検査が
@@ -434,53 +565,105 @@ export function startScheduler(deps: {
         throttleRevalidating = false;
         return;
       }
-      let decision: ThrottleDecision;
-      try {
-        decision = await checkThrottle(db, clock, worker, cliAuth);
-      } finally {
-        throttleRevalidating = false;
-      }
-      if (decision.throttled) {
-        if (decision.resetsAt) resumeTimer.schedule(decision.resetsAt);
-        return;
+      let decision: ThrottleDecision | undefined;
+      if (!resolveUsageResource) {
+        decision = (await checkThrottle(db, clock, worker, cliAuth)).decision;
+        if (decision.throttled) {
+          if (decision.resetsAt) resumeTimer.schedule("legacy", decision.resetsAt);
+          throttleRevalidating = false;
+          return;
+        }
       }
       // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
       // 外す — Quarantine と同じ「資源単位の停止」。認証が失効した provider を
       // 喋る agent のタスクも同じ資源単位の skip で外れる(ADR 0097 決定2 /
       // issue #446) — 集合の合成は読み口と共有する1つの式に集約してある。
-      const fableWindow = decision.windows.fable;
+      const fableWindow = decision?.windows.fable;
       const excluded = pickupExcludedAssignees(
         db,
         fableWindow?.throttled ?? false,
         fableAgents,
         agentsSpeakingProviders,
         agentsUsingHarnesses,
+        agentsUsingUsageResources,
+        false,
       ) ?? [];
       let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
-      while (head && resolveHarness && harnessContainment) {
-        let harness: Harness;
-        try {
-          harness = resolveHarness(head);
-        } catch (error) {
-          if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentProviderError)) {
-            throw error;
+      const observedProviders = new Map<Provider, ProviderUsageObservation>();
+      while (head) {
+        const assignee = resolveTaskAgent(head, worker.id, auditorName);
+        if (resolveHarness && harnessContainment) {
+          let harness: Harness;
+          try {
+            harness = resolveHarness(head);
+          } catch (error) {
+            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentProviderError)) {
+              throw error;
+            }
+            quarantineAgent(db, assignee, error, clock.now());
+            excluded.push(assignee);
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            continue;
           }
-          const assignee = resolveTaskAgent(head, worker.id, auditorName);
-          quarantineAgent(db, assignee, error, clock.now());
-          excluded.push(assignee);
-          head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
-          continue;
+          if (await harnessContainmentPickupBlocked(db, harness, harnessContainment, clock.now())) {
+            excluded.push(assignee);
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            continue;
+          }
         }
-        if (!(await harnessContainmentPickupBlocked(db, harness, harnessContainment, clock.now()))) {
-          break;
+        if (resolveUsageResource) {
+          let resource: ReturnType<typeof resolveUsageResource>;
+          try {
+            resource = resolveUsageResource(head);
+          } catch (error) {
+            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentProviderError)) {
+              throw error;
+            }
+            quarantineAgent(db, assignee, error, clock.now());
+            excluded.push(assignee);
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            continue;
+          }
+          const observation =
+            observedProviders.get(resource.provider) ??
+            (await observeProviderUsage(resource.provider));
+          observedProviders.set(resource.provider, observation);
+          const relevant = observation.windows.filter(
+            (window) =>
+              window.model === null ||
+              window.model === resource.model ||
+              (window.model === "fable" && resource.model?.toLowerCase().includes("fable")),
+          );
+          const blocked = observation.status !== "observed" || relevant.some((window) => window.throttled);
+          if (blocked) {
+            for (const window of relevant) {
+              if (window.throttled && window.resumesAt) {
+                resumeTimer.schedule(
+                  `${resource.provider}:${window.window}:${window.model ?? ""}`,
+                  window.resumesAt,
+                );
+              }
+            }
+            const providerWide =
+              observation.status !== "observed" ||
+              relevant.some((window) => window.model === null && window.throttled);
+            const blockedAgents = providerWide
+              ? (agentsSpeakingProviders?.([resource.provider]) ?? [assignee])
+              : [assignee];
+            excluded.push(...blockedAgents);
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            continue;
+          }
         }
-        excluded.push(resolveTaskAgent(head, worker.id, auditorName));
-        head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+        break;
       }
+      throttleRevalidating = false;
       if (!head) {
         // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
         // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)
-        if (fableWindow?.throttled && fableWindow.resumeAt) resumeTimer.schedule(fableWindow.resumeAt);
+        if (fableWindow?.throttled && fableWindow.resumeAt) {
+          resumeTimer.schedule("legacy:fable", fableWindow.resumeAt);
+        }
         return;
       }
       if (
@@ -491,6 +674,7 @@ export function startScheduler(deps: {
       if (!(await issuePickupGate(head))) return;
       await pickup(head);
     } finally {
+      throttleRevalidating = false;
       inFlight = false;
     }
   }
@@ -506,6 +690,6 @@ export function startScheduler(deps: {
       resumeTimer.cancel();
     },
     pollNow,
-    isThrottleRevalidating: () => throttleRevalidating,
+    isThrottleRevalidating: () => resolveUsageResource ? false : throttleRevalidating,
   };
 }

@@ -13,6 +13,7 @@ import {
   declaredRegistryMode,
   WATCHDOG,
 } from "../src/server-options.js";
+import type { Task } from "../src/tasks.js";
 import { FakeClock, FakeTranslationClient, fakeContainers } from "./fakes.js";
 import { TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
@@ -67,6 +68,33 @@ it("registryDir を設定した盤面は remote-backed を宣言する。clone �
     configured: declaredRegistryMode("/some/registry/clone"),
     absent: declaredRegistryMode(undefined),
   }).toEqual({ configured: "remote-backed", absent: "purely-local" });
+});
+
+it("usage resource は model 省略時にも Codex worker の実効既定 model を使う", async () => {
+  const registryDir = await makeRegistry({
+    "agents/codex-agent.md": `---
+name: codex-agent
+description: Codex default model
+version: 1.0.0
+authority: standard
+provider: openai
+skills: []
+---
+Codex agent.
+`,
+  });
+  dirs.push(registryDir);
+  const options = await buildServerOptions({
+    ...composition(),
+    registryDir,
+    workspaceName: "tidepool",
+    defaultAgentName: "codex-agent",
+  });
+
+  expect(options.resolveUsageResource?.({ assignee: null } as Task)).toEqual({
+    provider: "openai",
+    model: "gpt-5.6-sol",
+  });
 });
 
 // spawn がどの ref を読むかは worker options の口に載っていなければ決まらない
@@ -395,6 +423,11 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.resolveAuthority?.(null)).toBeDefined();
   expect(options.resolveAuthority?.("nobody")).toBeUndefined();
   expect(options.fableAgents?.()).toEqual([]); // fixture の agent に model 指定は無い
+  expect(options.resolveUsageResource?.({ assignee: "deckhand" } as any)).toEqual({
+    provider: "anthropic",
+    model: null,
+  });
+  expect(options.openaiUsage).toBeTypeOf("function");
   expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);
   // registry ゲートで初めて立つ口
   expect(options.draftClient).toBeDefined();

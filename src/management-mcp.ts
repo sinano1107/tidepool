@@ -57,6 +57,7 @@ import {
   listQueue,
   listYourTasks,
 } from "./tasks.js";
+import type { ProviderUsageResource } from "./throttle.js";
 import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -100,6 +101,7 @@ export interface ManagementMcpDeps {
    *  the given providers — the pickup exclusion set `list_queue`'s `skipped`
    *  display shares with the scheduler's gate. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
    *  盤面では未注入で、その場合 throttle の再観測中は現れない。 */
@@ -240,6 +242,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           deps.fableAgents,
           deps.agentsSpeakingProviders,
           deps.agentsUsingHarnesses,
+          deps.agentsUsingUsageResources,
         ),
       ),
     }),

@@ -80,8 +80,13 @@ export function rethrowCliAuthExecFailure(err: unknown): never {
   throw err;
 }
 
-export function quarantineCliAuthFailure(db: Db, err: unknown, now: Date): void {
-  if (err instanceof CliAuthError) quarantineCliAuth(db, now);
+export function quarantineCliAuthFailure(
+  db: Db,
+  err: unknown,
+  now: Date,
+  provider: Provider = "anthropic",
+): void {
+  if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, provider, now);
 }
 
 /** The open Confirmation question is the durable half of the board-wide
@@ -129,17 +134,10 @@ export function quarantineCliAuth(db: Db, now: Date): void {
   );
 }
 
-/** ADR 0097 決定2 / issue #446: the machine classification of a 401 routes by
- *  the **spawn-time fact** of which provider the session/call spoke — never
- *  inferred from the envelope's contents. The board's own provider (anthropic:
- *  board calls and the usage reading depend on it) keeps ADR 0070's board-wide
- *  halt — no narrower resource exists for it. Every other provider's failure
- *  is a resource-scoped quarantine: only that provider's agents stop. */
+/** ADR 0098: the machine classification of a 401 routes by the spawn/call-time
+ * Provider fact, never by parsing prose from an error. Every Provider is a
+ * resource-scoped quarantine; unrelated Provider workers continue. */
 export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Date): void {
-  if (provider === "anthropic") {
-    quarantineCliAuth(db, now);
-    return;
-  }
   quarantineProviderAuth(db, provider, now);
 }
 
@@ -170,14 +168,12 @@ export function quarantinedAuthProviders(db: Db): Provider[] {
   ).map((row) => row.provider);
 }
 
-/** The restore-the-credential guidance each provider-scoped auth quarantine
- *  question carries. Keyed by an **exhaustive** Record over the non-board
- *  providers: a new `PROVIDER_VALUES` entry is a compile error here until its
- *  guidance is written — a third provider can never ship a question whose
- *  repair steps name Moonshot's key file by mistake. Anthropic has no entry
- *  because it never reaches `quarantineProviderAuth` (its failure routes to
- *  the board-wide halt in `quarantineCliAuthForProvider`). */
-const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Exclude<Provider, "anthropic">, string> = {
+/** Exhaustive repair guidance: adding a Provider is a compile error until its
+ * own credential recovery path is written. */
+const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Provider, string> = {
+  anthropic:
+    "Run `claude setup-token`, update `CLAUDE_CODE_OAUTH_TOKEN` in " +
+    "`/etc/default/tidepool`, and restart the service.",
   moonshot:
     "Place a valid Moonshot Platform API key in the board's key file " +
     "(`~/.tidepool/moonshot-api-key`, or the path `TIDEPOOL_MOONSHOT_API_KEY_FILE` " +
@@ -189,7 +185,7 @@ const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Exclude<Provider, "anthropic">, stri
 
 function quarantineProviderAuth(
   db: Db,
-  provider: Exclude<Provider, "anthropic">,
+  provider: Provider,
   now: Date,
 ): void {
   if (openProviderAuthQuestion(db, provider)) return;
@@ -199,7 +195,7 @@ function quarantineProviderAuth(
       type: "question",
       title: providerAuthQuestionTitle(provider),
       purpose:
-        `The canonical worker Harness returned an authentication failure while speaking the ${provider} ` +
+        `A worker session or Board call returned an authentication failure while speaking the ${provider} ` +
         `provider, so the board has stopped pickup of the agents declared with ` +
         `\`provider: ${provider}\`. Workers and board calls on other providers are unaffected. ` +
         "Restore the credential:\n\n" +

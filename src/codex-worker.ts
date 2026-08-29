@@ -18,8 +18,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
-import { quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
+import { CODEX_APP_SERVER_VERSION } from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
@@ -42,7 +42,8 @@ const BOARD_VERBS = [
   "decompose",
   "escalate",
 ] as const;
-export const CODEX_CLI_VERSION = "codex-cli 0.147.0";
+export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
+export const CODEX_DEFAULT_MODEL = "gpt-5.6-sol";
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
 const CLOSED_FEATURES = [
@@ -530,12 +531,6 @@ function readUsage(value: unknown): CodexUsage | null {
     : null;
 }
 
-function isAuthFailure(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const message = String((value as { message?: unknown }).message ?? "").toLowerCase();
-  return message.includes("authentication") || message.includes("unauthorized") || message.includes("401");
-}
-
 function consumeJsonl(
   buffered: string,
   chunk: string,
@@ -633,7 +628,7 @@ export class CodexWorker implements WorkerAdapter {
         "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
         "--strict-config", "--dangerously-bypass-hook-trust",
         "-C", workspace.path,
-        "-m", agent.definition.model ?? "gpt-5.6-sol",
+        "-m", agent.definition.model ?? CODEX_DEFAULT_MODEL,
         ...config.flatMap((entry) => ["-c", entry]),
         taskPrompt(task, agent.definition.systemPrompt, agent.profile.guidance),
       ],
@@ -669,10 +664,8 @@ export class CodexWorker implements WorkerAdapter {
     let stdout = "";
     let stderr = "";
     let usage: CodexUsage | null = null;
-    let authFailed = false;
     const observe = (event: unknown) => {
       usage = readUsage(event) ?? usage;
-      authFailed ||= isAuthFailure(event);
     };
     child.stdout.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString();
@@ -702,7 +695,6 @@ export class CodexWorker implements WorkerAdapter {
     child.on("exit", (code, signal) => {
       this.running.delete(task.id);
       consumeJsonl(stdout, "", observe, true);
-      if (authFailed) quarantineCliAuthForProvider(this.options.db, "openai", this.options.clock.now());
       const tail = stderr.trim().split("\n").slice(-20).join("\n") || null;
       const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
         ? {

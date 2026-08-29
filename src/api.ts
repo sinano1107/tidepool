@@ -33,7 +33,13 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { getPaceOffsets, isValidOffset, setPaceOffsets } from "./pace-offsets.js";
+import {
+  getPaceOffsets,
+  isValidOffset,
+  listProviderPaceOffsets,
+  setPaceOffsets,
+  setProviderPaceOffset,
+} from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { removePushSubscription, savePushSubscription } from "./push.js";
@@ -49,6 +55,7 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   PROVIDER_OPTIONS,
+  PROVIDER_VALUES,
   type Provider,
   type RegistryCandidates,
   type RegistryReachabilityCheck,
@@ -80,7 +87,12 @@ import {
   presentTask,
   type Task,
 } from "./tasks.js";
-import { getThrottleState, isFablePickupBlocked } from "./throttle.js";
+import {
+  getProviderUsage,
+  getThrottleState,
+  isFablePickupBlocked,
+  type ProviderUsageResource,
+} from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import {
   TranslationTargetError,
@@ -359,6 +371,11 @@ const paceOffsetsSchema = z.object({
   week: paceOffsetValue,
   fable: paceOffsetValue,
 });
+const providerPaceOffsetSchema = z.object({
+  provider: z.enum(PROVIDER_VALUES),
+  window: z.enum(["session", "week", "fable", "primary", "secondary"]),
+  offset: paceOffsetValue,
+});
 
 // the board timezone (issue #63 / ADR 0022) — a separate sender from
 // quiet-hours' start/end: this one is auto-reported by the browser at PWA
@@ -522,6 +539,7 @@ export interface ApiRouterDeps {
    *  display shares with the scheduler's gate. Absent → no registry configured,
    *  so no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
@@ -635,6 +653,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     translationClient,
     fableAgents,
     agentsSpeakingProviders,
+    agentsUsingUsageResources,
     agentsUsingHarnesses,
     isProtectedWorkspace,
     boardState,
@@ -654,6 +673,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       fableAgents,
       agentsSpeakingProviders,
       agentsUsingHarnesses,
+      agentsUsingUsageResources,
     );
 
   router.post("/tasks", async (req, res) => {
@@ -1598,6 +1618,21 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(getPaceOffsets(db));
   });
 
+  router.get("/settings/provider-pace-offsets", (_req, res) => {
+    res.json({ offsets: listProviderPaceOffsets(db) });
+  });
+
+  router.post("/settings/provider-pace-offsets", (req, res) => {
+    const parsed = providerPaceOffsetSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    setProviderPaceOffset(db, parsed.data);
+    onQueueHeadChanged();
+    res.json(parsed.data);
+  });
+
   router.get("/settings/timezone", (_req, res) => {
     res.json({ tz: getQuietHours(db).tz });
   });
@@ -1647,6 +1682,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     };
   }
 
+  function providerUsageJson() {
+    const providerUsage = getProviderUsage(db);
+    return providerUsage.length === 0 ? {} : { providerUsage };
+  }
+
   // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。`throttle` は資源単位の
   // 表示(windows / fable 詳細)に要る完全な形のまま残る — halts の throttle
   // entry と一部重複するが、把握して受け入れた重複である
@@ -1656,6 +1696,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       halts: boardHalts(db, throttleRevalidating),
       throttle: { ...throttle, resumesAt, revalidating: throttleRevalidating() },
       spendDown: spendDownJson(),
+      ...providerUsageJson(),
     });
   });
 
@@ -1853,6 +1894,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/queue", async (_req, res) => {
     res.json({
       halts: boardHalts(db, throttleRevalidating),
+      ...providerUsageJson(),
       tasks: await presentLive(
         // 資源単位の skip(fable 線 ADR 0030・provider 認証の quarantine ADR
         // 0097 決定2)に該当するタスクだけが skipped に見える — 盤面全体の停止は

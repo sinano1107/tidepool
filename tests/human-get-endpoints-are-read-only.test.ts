@@ -79,7 +79,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   // 弾く番犬。総数は下限ではなく実数で固定する — 下限だと1本消えても気づけず、
   // ルートが増減したときに人間がこの数字を意図して更新することに意味がある
   expect(routes).toContain("/tasks/:id");
-  expect(routes.length).toBe(22);
+  expect(routes.length).toBe(23);
 
   const paths = [
     ...STATIC_GET_PATHS,
