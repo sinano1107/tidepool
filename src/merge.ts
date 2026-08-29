@@ -11,6 +11,7 @@ import {
   registerMergeQuestion,
   settleMergeQuestionAsObserved,
 } from "./tasks.js";
+import { landingBlock } from "./triage.js";
 import { resolveOrQuarantine, type WorkspaceConfig } from "./workspace.js";
 
 /** The auto_if_ci_green poll (issue #11): for every low-risk task awaiting an
@@ -35,6 +36,7 @@ export async function checkPendingAutoMerges(
     if (!task) continue;
     const workspace = resolveOrQuarantine(db, resolve, task.workspace, now);
     if (!workspace) continue;
+    if (landingBlock(db, task_id)) continue;
     const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
     if (status === "pending") continue;
     if (status === "success") {
