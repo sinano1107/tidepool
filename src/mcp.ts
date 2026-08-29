@@ -36,16 +36,17 @@ import {
 } from "./tasks.js";
 import {
   buildWorkspaceResolver,
+  catchUpTaskBranch,
   ensureWorkspaceToken,
   isRemoteBacked,
-  lineageTaskBranch,
   protectedBranch,
   protectedBranchRef,
   rebaselineRef,
   releaseWorkspace,
   resolveOrQuarantine,
+  resolveTaskBranchLineage,
   taskBranch,
-  taskHasCommitsToLand,
+  taskHasContentToLand,
   treeIsDirty,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -181,7 +182,8 @@ export async function handleRootWorkLanding(
     if (strict) throw new Error("workspace is unavailable for PR promotion");
     return;
   }
-  if (lineageTaskBranch(deps.db, workspace, task)) {
+  const lineage = resolveTaskBranchLineage(deps.db, workspace, task);
+  if (lineage.branch) {
     if (strict) throw new Error("task completion lands on an ancestor task branch, not a PR");
     return;
   }
@@ -192,8 +194,12 @@ export async function handleRootWorkLanding(
     return;
   }
   const base = protectedBranchRef(workspace);
-  if (!taskHasCommitsToLand(workspace, task.id)) {
+  if (!taskHasContentToLand(workspace, task.id)) {
     if (strict) throw new Error(`task branch has nothing to land on "${base}"`);
+    // A previously opened PR whose branch is already present by content has
+    // no new board observation to record. This is the review-settlement
+    // re-fire after an out-of-band squash/rebase merge (ADR 0105 決定3).
+    if (task.pr_number !== null) return;
     appendEvent(deps.db, {
       taskId: task.id,
       workerId: BOARD_WORKER_ID,
@@ -233,6 +239,9 @@ export async function handleRootWorkLanding(
     if (strict) throw new Error("GitHub is not configured for PR promotion");
     return;
   }
+  if (lineage.outlivedForkSource && catchUpTaskBranch(workspace, task.id)) {
+    rebaselineRef(deps.db, workspace, `refs/heads/${taskBranch(task.id)}`);
+  }
   // ADR 0053: 既に PR を開いているタスクの着地は、PR を増やさず**その PR を更新
   // する** —— merge back された付帯子の修理を載せるのは、開いたままの PR に向けた
   // この1本の push である(issue #400)。再発火も strict retry も同じここを通る:
@@ -241,7 +250,10 @@ export async function handleRootWorkLanding(
   if (task.pr_number !== null) {
     if (await deps.github.isPullRequestMerged({ path: workspace.path, number: task.pr_number })) {
       if (strict) throw new Error(`PR #${task.pr_number} is already merged`);
-      return;
+      throw new Error(
+        `PR #${task.pr_number} is already merged, but merge-backed repair work on ` +
+          `${taskBranch(task.id)} still has content to land`,
+      );
     }
     await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
     // ADR 0064 決定4: 昇格と同じく `refs/remotes/origin/task/<id>` を1本動かす —— ただし

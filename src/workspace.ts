@@ -220,19 +220,51 @@ export function taskBranch(taskId: string): string {
   return `task/${taskId}`;
 }
 
-/** ADR 0073: whether this completed root work has anything not yet carried
- *  to the same protected-branch ref its landing path uses. */
-export function taskHasCommitsToLand(workspace: WorkspaceConfig, taskId: string): boolean {
-  return (
-    Number(
-      git(
-        workspace.path,
-        "rev-list",
-        "--count",
-        `${protectedBranchRef(workspace)}..${taskBranch(taskId)}`,
-      ),
-    ) > 0
-  );
+/** `merge-tree`'s one answer-shaped failure: undefined means conflict; every
+ *  other nonzero exit remains an honest tool failure. */
+function writeMergeTree(
+  workspace: WorkspaceConfig,
+  left: string,
+  right: string,
+): string | undefined {
+  try {
+    return git(workspace.path, "merge-tree", "--write-tree", left, right);
+  } catch (err) {
+    if ((err as { status?: number } | null)?.status !== 1) throw err;
+    return undefined;
+  }
+}
+
+/** ADR 0105: whether merging `source` into `candidate` changes the candidate's
+ *  content. History convergence stays as the cheap first answer; divergent
+ *  history needs merge-tree so squash/rebase landing reads the same as a merge
+ *  commit. Exit 1 is Git's conflict answer (there is content to carry), while
+ *  every other failure remains a tool failure. */
+function branchLandingState(
+  workspace: WorkspaceConfig,
+  candidate: string,
+  source: string,
+): { hasContent: boolean; historyConverged: boolean } {
+  const historyConverged =
+    Number(git(workspace.path, "rev-list", "--count", `${candidate}..${source}`)) === 0;
+  if (historyConverged) return { hasContent: false, historyConverged };
+  const mergedTree = writeMergeTree(workspace, candidate, source);
+  return {
+    hasContent:
+      mergedTree === undefined ||
+      mergedTree !== git(workspace.path, "rev-parse", `${candidate}^{tree}`),
+    historyConverged,
+  };
+}
+
+/** ADR 0073 / ADR 0105: whether this completed root work has content not yet
+ *  carried to the same protected-branch ref its landing path uses. */
+export function taskHasContentToLand(workspace: WorkspaceConfig, taskId: string): boolean {
+  return branchLandingState(
+    workspace,
+    protectedBranchRef(workspace),
+    taskBranch(taskId),
+  ).hasContent;
 }
 
 function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
@@ -244,17 +276,21 @@ function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
   }
 }
 
-/** ADR 0053: the nearest work branch in the task's live lineage, or undefined
- *  when the protected branch is the bottom of that lineage. */
-export function lineageTaskBranch(
+/** ADR 0053 / ADR 0105: the live integration branch plus the lineage fact a
+ *  root needs when a squash/rebase-landed fork source left history divergent. */
+export function resolveTaskBranchLineage(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-): string | undefined {
+): { branch: string | undefined; outlivedForkSource: boolean } {
   if (task.type === "review") {
-    return task.parent_id && taskBranchExists(workspace, task.parent_id)
-      ? taskBranch(task.parent_id)
-      : undefined;
+    return {
+      branch:
+        task.parent_id && taskBranchExists(workspace, task.parent_id)
+          ? taskBranch(task.parent_id)
+          : undefined,
+      outlivedForkSource: false,
+    };
   }
 
   const ancestors: Task[] = [];
@@ -264,18 +300,30 @@ export function lineageTaskBranch(
   }
 
   let candidate: string | undefined;
+  let outlivedForkSource = false;
   for (const ancestor of ancestors) {
     if (ancestor.type !== "work") continue;
     const branch = taskBranch(ancestor.id);
     const base = candidate ?? protectedBranchRef(workspace);
-    if (
-      (ancestor.status !== "done" && ancestor.status !== "cancelled") ||
-      Number(git(workspace.path, "rev-list", "--count", `${base}..${branch}`)) > 0
-    ) {
+    if (ancestor.status !== "done" && ancestor.status !== "cancelled") {
       candidate = branch;
+      continue;
     }
+    const landing = branchLandingState(workspace, base, branch);
+    if (landing.hasContent) candidate = branch;
+    else if (!landing.historyConverged) outlivedForkSource = true;
   }
-  return candidate;
+  return { branch: candidate, outlivedForkSource };
+}
+
+/** ADR 0053: the nearest work branch in the task's live lineage, or undefined
+ *  when the protected branch is the bottom of that lineage. */
+export function lineageTaskBranch(
+  db: Db,
+  workspace: WorkspaceConfig,
+  task: Task,
+): string | undefined {
+  return resolveTaskBranchLineage(db, workspace, task).branch;
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
@@ -951,6 +999,39 @@ function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: st
   }
 }
 
+/** ADR 0105 決定2: a root that outlived a squash/rebase-landed fork source
+ *  catches its task branch up to the protected ref without touching HEAD,
+ *  the index, or the worktree. Parent order preserves the task branch as the
+ *  first-parent history and records the protected ref as the second parent. */
+export function catchUpTaskBranch(workspace: WorkspaceConfig, taskId: string): boolean {
+  const branch = taskBranch(taskId);
+  const ref = `refs/heads/${branch}`;
+  const protectedRef = protectedBranchRef(workspace);
+  if (isAncestor(workspace, protectedRef, ref)) return false;
+  const tree = writeMergeTree(workspace, ref, protectedRef);
+  if (tree === undefined) {
+    throw new Error(
+      `workspace ${workspace.name}: ${protectedRef} does not merge cleanly into '${branch}' — ` +
+        "resolve it by hand, then retry PR promotion",
+    );
+  }
+  const taskSha = git(workspace.path, "rev-parse", ref);
+  const protectedSha = git(workspace.path, "rev-parse", protectedRef);
+  const merged = git(
+    workspace.path,
+    "commit-tree",
+    tree,
+    "-p",
+    taskSha,
+    "-p",
+    protectedSha,
+    "-m",
+    `Merge ${protectedRef} into ${branch}`,
+  );
+  git(workspace.path, "update-ref", ref, merged, taskSha);
+  return true;
+}
+
 /** ADR 0103 決定4: 自動では合わない、と分かっただけの状態。タスクブランチも保護
  *  ブランチも無傷なので、これは回答の拒否であって隔離ではない。 */
 function landingConflict(workspace: WorkspaceConfig, branch: string, task: string): Error {
@@ -975,13 +1056,8 @@ function mergeIntoProtectedByPlumbing(
   task: string,
 ): void {
   const ref = `refs/heads/${branch}`;
-  let tree: string;
-  try {
-    tree = git(workspace.path, "merge-tree", "--write-tree", branch, task);
-  } catch (err) {
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
-    throw landingConflict(workspace, branch, task);
-  }
+  const tree = writeMergeTree(workspace, branch, task);
+  if (tree === undefined) throw landingConflict(workspace, branch, task);
   const taskSha = git(workspace.path, "rev-parse", `refs/heads/${task}`);
   const merged = git(
     workspace.path,

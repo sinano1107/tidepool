@@ -445,6 +445,22 @@ export async function makeRemoteBackedWorkspace(
   };
 }
 
+/** Land a task branch on a bare origin by content but not ancestry, mirroring
+ *  an out-of-band squash merge. */
+export async function squashTaskIntoOrigin(
+  dirs: string[],
+  workspace: WorkspaceConfig,
+  taskId: string,
+): Promise<void> {
+  const merger = await mkdtemp(join(tmpdir(), "tidepool-squash-"));
+  dirs.push(merger);
+  git(merger, "clone", workspace.repo!, ".");
+  git(merger, "fetch", workspace.path, `task/${taskId}:landed`);
+  git(merger, "merge", "--squash", "landed");
+  git(merger, "commit", "-m", "squash task outside the board");
+  git(merger, "push", "origin", "main");
+}
+
 export async function registerWork(
   t: Tidepool,
   title: string,
@@ -515,13 +531,14 @@ export function attachChild(
   parentId: string,
   title: string,
   assignee?: string,
+  type: "work" | "review" = "work",
 ): Task {
   const db = openDb(join(t.dir, "board.sqlite"));
   try {
     return registerTask(
       db,
       {
-        type: "work",
+        type,
         title,
         purpose: `purpose of ${title}`,
         completion_criteria: `criteria of ${title}`,
