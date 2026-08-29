@@ -515,13 +515,14 @@ export function attachChild(
   parentId: string,
   title: string,
   assignee?: string,
+  type: "work" | "review" = "work",
 ): Task {
   const db = openDb(join(t.dir, "board.sqlite"));
   try {
     return registerTask(
       db,
       {
-        type: "work",
+        type,
         title,
         purpose: `purpose of ${title}`,
         completion_criteria: `criteria of ${title}`,

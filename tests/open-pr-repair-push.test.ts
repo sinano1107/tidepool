@@ -1,4 +1,6 @@
-import { rm } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
@@ -69,6 +71,30 @@ async function completeRepair(work: any, workspace: WorkspaceConfig): Promise<st
   return before;
 }
 
+async function squashTaskIntoOrigin(workspace: WorkspaceConfig, taskId: string): Promise<void> {
+  const merger = await mkdtemp(join(tmpdir(), "tidepool-open-pr-squash-"));
+  dirs.push(merger);
+  git(merger, "clone", workspace.repo!, ".");
+  git(merger, "fetch", workspace.path, `task/${taskId}:landed`);
+  git(merger, "merge", "--squash", "landed");
+  git(merger, "commit", "-m", "squash landed work");
+  git(merger, "push", "origin", "main");
+}
+
+async function changeProtectedFile(
+  workspace: WorkspaceConfig,
+  file: string,
+  body: string,
+): Promise<void> {
+  const publisher = await mkdtemp(join(tmpdir(), "tidepool-protected-change-"));
+  dirs.push(publisher);
+  git(publisher, "clone", workspace.repo!, ".");
+  writeFileSync(join(publisher, file), body);
+  git(publisher, "add", file);
+  git(publisher, "commit", "-m", `change ${file} after landing`);
+  git(publisher, "push", "origin", "main");
+}
+
 it("PR が開いたままの祖先へ merge back された修理を、盤面が push して PR を更新する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "open-pr-push");
   const work = await landedWork(workspace);
@@ -121,6 +147,177 @@ it("祖先の PR が既に merge 済みなら push しない", async () => {
 
   expect(t.github.pushes).toEqual([]);
   expect(t.github.mergeChecks).toContainEqual({ path: workspace.path, number: work.pr_number });
+});
+
+it("squash merge 後に review 子が決着しただけの再発火は、push も question も event も増やさない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "merged-pr-review-settlement");
+  t = await bootTidepool({ workspace });
+  const work = await registerWork(t, "ship work reviewed after PR open");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "v1\n");
+  await completeViaMcp(t, work.id);
+  const landed = (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
+  const review = attachChild(t, work.id, "review already-landed work", undefined, "review");
+  await squashTaskIntoOrigin(workspace, work.id);
+  t.github.scriptMergedOutside(landed.pr_number);
+  await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
+  await t.clock.advance(HOUR);
+  await completeViaMcp(t, review.id, false);
+
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.pushes).toEqual([]);
+  expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
+  expect(
+    (await api(t.baseUrl, "GET", `/api/tasks/${work.id}/events`)).json.filter(
+      (event: any) => event.kind === "nothing_to_land",
+    ),
+  ).toEqual([]);
+});
+
+it("走行中に fork 元が squash merge された修理は、保護ブランチへ追いついて自分の差分だけの PR を開く", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "squash-catch-up");
+  const work = await landedWork(workspace);
+  const repair = attachChild(t, work.id, "repair after squash landing");
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
+  await t.clock.advance(HOUR);
+  expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).toBe(
+    git(workspace.path, "rev-parse", `task/${work.id}`),
+  );
+
+  await squashTaskIntoOrigin(workspace, work.id);
+  t.github.scriptMergedOutside(work.pr_number);
+  commitWork(workspace.path, "repair.txt", "fixed after squash\n");
+  const completed: any = await completeViaMcp(t, repair.id);
+  expect(completed.isError ?? false).toBe(false);
+
+  expect(t.github.requests.at(-1)).toMatchObject({
+    branch: `task/${repair.id}`,
+    base: "main",
+  });
+  expect(
+    git(
+      workspace.path,
+      "diff",
+      "--name-only",
+      `refs/remotes/origin/main...task/${repair.id}`,
+    ),
+  ).toBe("repair.txt");
+  const [head, firstParent, secondParent] = git(
+    workspace.path,
+    "rev-list",
+    "--parents",
+    "-n",
+    "1",
+    `task/${repair.id}`,
+  ).split(" ");
+  expect(secondParent).toBe(git(workspace.path, "rev-parse", "refs/remotes/origin/main"));
+  expect(firstParent).not.toBe(secondParent);
+  expect(refSnapshot(t, workspace.name)).toContain(`${head} refs/heads/task/${repair.id}`);
+  expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
+});
+
+it("追いつき merge が合わなければ PR 昇格失敗 question を立て、手動解決後の retry で PR を開く", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "squash-catch-up-conflict");
+  const work = await landedWork(workspace);
+  const repair = attachChild(t, work.id, "repair conflicting after squash");
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
+  await t.clock.advance(HOUR);
+
+  await squashTaskIntoOrigin(workspace, work.id);
+  await changeProtectedFile(workspace, "repair.txt", "protected version\n");
+  t.github.scriptMergedOutside(work.pr_number);
+  commitWork(workspace.path, "repair.txt", "task version\n");
+  const completed: any = await completeViaMcp(t, repair.id);
+  expect(completed.isError ?? false).toBe(false);
+
+  expect(t.github.requests).toHaveLength(1);
+  const failure = (await questions(t)).find(
+    (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === repair.id,
+  );
+  expect(failure).toMatchObject({
+    title: expect.stringContaining("PR promotion failed"),
+    purpose: expect.stringContaining("does not merge cleanly"),
+  });
+  expect(
+    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+  ).toEqual([]);
+
+  git(workspace.path, "checkout", `task/${repair.id}`);
+  expect(() => git(workspace.path, "merge", "refs/remotes/origin/main")).toThrow();
+  writeFileSync(join(workspace.path, "repair.txt"), "resolved task version\n");
+  git(workspace.path, "add", "repair.txt");
+  git(workspace.path, "commit", "-m", "resolve protected catch-up");
+  git(workspace.path, "checkout", "main");
+
+  const retried = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
+    answers: ["retry"],
+  });
+  expect(retried.status).toBe(200);
+  expect(t.github.requests.at(-1)).toMatchObject({
+    branch: `task/${repair.id}`,
+    base: "main",
+  });
+  expect(
+    git(
+      workspace.path,
+      "diff",
+      "--name-only",
+      `refs/remotes/origin/main...task/${repair.id}`,
+    ),
+  ).toBe("repair.txt");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json.status).toBe("done");
+});
+
+it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇格失敗 question に残す", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "squash-catch-up-tool-error");
+  const work = await landedWork(workspace);
+  const repair = attachChild(t, work.id, "repair before a git tool error");
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
+  await t.clock.advance(HOUR);
+
+  await squashTaskIntoOrigin(workspace, work.id);
+  t.github.scriptMergedOutside(work.pr_number);
+  commitWork(workspace.path, "repair.txt", "repair survives tool failure\n");
+  writeFileSync(
+    join(workspace.path, ".git", "refs", "heads", "task", `${repair.id}.lock`),
+    "locked\n",
+  );
+  const completed: any = await completeViaMcp(t, repair.id);
+  expect(completed.isError ?? false).toBe(false);
+
+  const failure = (await questions(t)).find(
+    (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === repair.id,
+  );
+  expect(failure.purpose).toContain("cannot lock ref");
+  expect(failure.purpose).not.toContain("does not merge cleanly");
+  expect(failure.purpose).not.toContain("conflict");
+  expect(
+    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+  ).toEqual([]);
+});
+
+it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、merge 済み PR の前で無言にしない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "merged-pr-with-repair");
+  const work = await landedWork(workspace);
+  const repair = attachChild(t, work.id, "repair a line changed after squash");
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
+  await t.clock.advance(HOUR);
+
+  await squashTaskIntoOrigin(workspace, work.id);
+  await changeProtectedFile(workspace, "feature.txt", "protected follow-up\n");
+  t.github.scriptMergedOutside(work.pr_number);
+  commitWork(workspace.path, "feature.txt", "repair result\n");
+  const completed: any = await completeViaMcp(t, repair.id);
+  expect(completed.isError ?? false).toBe(false);
+
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.pushes).toEqual([]);
+  expect((await questions(t)).filter((q: any) => q.status === "todo")).toMatchObject([
+    { question_pending_pr_promotion_task_id: work.id },
+  ]);
+  expect(
+    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+  ).toEqual([]);
 });
 
 it("push の失敗は PR 昇格失敗 question として人間に見える", async () => {
