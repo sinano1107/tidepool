@@ -259,7 +259,7 @@ function branchLandingState(
 
 /** ADR 0073 / ADR 0105: whether this completed root work has content not yet
  *  carried to the same protected-branch ref its landing path uses. */
-export function taskHasCommitsToLand(workspace: WorkspaceConfig, taskId: string): boolean {
+export function taskHasContentToLand(workspace: WorkspaceConfig, taskId: string): boolean {
   return branchLandingState(
     workspace,
     protectedBranchRef(workspace),

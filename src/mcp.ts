@@ -46,7 +46,7 @@ import {
   resolveOrQuarantine,
   resolveTaskBranchLineage,
   taskBranch,
-  taskHasCommitsToLand,
+  taskHasContentToLand,
   treeIsDirty,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -194,7 +194,7 @@ export async function handleRootWorkLanding(
     return;
   }
   const base = protectedBranchRef(workspace);
-  if (!taskHasCommitsToLand(workspace, task.id)) {
+  if (!taskHasContentToLand(workspace, task.id)) {
     if (strict) throw new Error(`task branch has nothing to land on "${base}"`);
     // A previously opened PR whose branch is already present by content has
     // no new board observation to record. This is the review-settlement

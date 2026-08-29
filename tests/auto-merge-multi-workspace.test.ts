@@ -99,6 +99,37 @@ it("PR open 後に付いた未決着の付帯子があれば CI を読まず行�
   expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
+it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止まり、次の tick へ残す", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "attached-during-ci");
+  t = await bootTidepool({
+    workspace,
+    authority: { name: "standard", guidance: "", merge: "auto_if_ci_green" },
+  });
+  const task = await registerWork(t, "recheck the gate after reading CI");
+  await t.clock.advance(HOUR);
+  addTaskChange(workspace.path, task.id);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+
+  const getCiStatus = t.github.getCiStatus.bind(t.github);
+  let attachedId: string | undefined;
+  t.github.getCiStatus = async (ref) => {
+    const status = await getCiStatus(ref);
+    attachedId = attachChild(t, task.id, "repair raised while CI was being read", "human").id;
+    return status;
+  };
+
+  expect(await runAutoMergeTick(workspace)).toEqual([{ task_id: task.id, pr_number: 1 }]);
+  expect(t.github.ciChecks).toEqual([{ path: workspace.path, number: 1 }]);
+  expect(t.github.merged).toEqual([]);
+
+  t.github.getCiStatus = getCiStatus;
+  await api(t.baseUrl, "POST", `/api/tasks/${attachedId!}/complete`, {});
+  expect(await runAutoMergeTick(workspace)).toEqual([]);
+  expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);
+});
+
 it("PR open 後の未束ね異議は CI を読まず行を残し、commit された修理の決着後に merge する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "objection-gate");
   t = await bootTidepool({

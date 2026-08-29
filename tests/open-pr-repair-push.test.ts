@@ -178,6 +178,7 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
   await squashTaskIntoOrigin(dirs, workspace, work.id);
   t.github.scriptMergedOutside(work.pr_number);
   commitWork(workspace.path, "repair.txt", "fixed after squash\n");
+  const taskHeadBeforeCatchUp = git(workspace.path, "rev-parse", `task/${repair.id}`);
   const completed: any = await completeViaMcp(t, repair.id);
   expect(completed.isError ?? false).toBe(false);
 
@@ -200,9 +201,13 @@ it("走行中に fork 元が squash merge された修理は、保護ブラン�
     "-n",
     "1",
     `task/${repair.id}`,
-  ).split(" ");
+  ).split(" ") as [string, string, string];
+  expect(firstParent).toBe(taskHeadBeforeCatchUp);
   expect(secondParent).toBe(git(workspace.path, "rev-parse", "refs/remotes/origin/main"));
-  expect(firstParent).not.toBe(secondParent);
+  expect(git(workspace.path, "show", "-s", "--format=%an%n%cn", head)).toBe(
+    "tidepool\ntidepool",
+  );
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(refSnapshot(t, workspace.name)).toContain(`${head} refs/heads/task/${repair.id}`);
   expect((await questions(t)).filter((q: any) => q.status === "todo")).toEqual([]);
 });
@@ -233,12 +238,19 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
     (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
   ).toEqual([]);
 
+  // 人間が衝突する行を保護ブランチと同じ内容に直す。履歴はまだ未収束なので、retry は
+  // 走行中の別タスクの checkout を触らず plumbing の追いつき merge を再走する。
   git(workspace.path, "checkout", `task/${repair.id}`);
-  expect(() => git(workspace.path, "merge", "refs/remotes/origin/main")).toThrow();
-  writeFileSync(join(workspace.path, "repair.txt"), "resolved task version\n");
-  git(workspace.path, "add", "repair.txt");
-  git(workspace.path, "commit", "-m", "resolve protected catch-up");
+  writeFileSync(join(workspace.path, "repair.txt"), "protected version\n");
+  writeFileSync(join(workspace.path, "repair-only.txt"), "resolved repair\n");
+  git(workspace.path, "add", "repair.txt", "repair-only.txt");
+  git(workspace.path, "commit", "-m", "make protected catch-up merge cleanly");
   git(workspace.path, "checkout", "main");
+
+  const occupant = await registerWork(t, "keep another checkout occupied");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "occupant.txt", "unrelated running work\n");
+  const occupiedHead = git(workspace.path, "rev-parse", "HEAD");
 
   const retried = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
     answers: ["retry"],
@@ -255,8 +267,19 @@ it("追いつき merge が合わなければ PR 昇格失敗 question を立て�
       "--name-only",
       `refs/remotes/origin/main...task/${repair.id}`,
     ),
-  ).toBe("repair.txt");
+  ).toBe("repair-only.txt");
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
+    `task/${occupant.id}`,
+  );
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(occupiedHead);
+  expect(git(workspace.path, "show", "HEAD:occupant.txt")).toBe("unrelated running work");
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json.status).toBe("done");
+
+  await completeViaMcp(t, occupant.id);
+  expect(
+    (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
+  ).toEqual([]);
 });
 
 it("追いつきの git 道具が壊れた失敗を conflict と偽らず PR 昇格失敗 question に残す", async () => {
@@ -303,9 +326,13 @@ it("squash merge 後に同じ行が進んだ祖先へ修理が戻っても、mer
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.pushes).toEqual([]);
-  expect((await questions(t)).filter((q: any) => q.status === "todo")).toMatchObject([
-    { question_pending_pr_promotion_task_id: work.id },
-  ]);
+  const [failure] = (await questions(t)).filter((q: any) => q.status === "todo");
+  expect(failure).toMatchObject({
+    question_pending_pr_promotion_task_id: work.id,
+    purpose: expect.stringContaining(`PR #${work.pr_number}`),
+  });
+  expect(failure.purpose).toContain("merge-backed repair work");
+  expect(failure.purpose).toContain("still has content to land");
   expect(
     (await questions(t)).filter((q: any) => q.question_quarantine_workspace !== null),
   ).toEqual([]);
