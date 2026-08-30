@@ -1,8 +1,15 @@
+import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { loadRegistry } from "../src/registry.js";
+import {
+  quarantineWorkspace,
+  resolveExecutionWorkspace,
+  UnknownWorkspaceError,
+  type WorkspaceConfig,
+} from "../src/workspace.js";
 import {
   api,
   attachChild,
@@ -18,6 +25,7 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
@@ -605,6 +613,63 @@ it("再発火で PR が開いたら、PR 昇格失敗 question は観測で引�
     json: { error: "a done question cannot be answered" },
   });
   expect(t.github.requests).toHaveLength(2);
+});
+
+it("purely-local の着地 question は、再発火時に不要になった PR 昇格失敗 question を引退させる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  const registryDir = await makeRegistry({
+    "workspaces.yaml": `sandbox:\n  path: ${workspace.path}\n  repo: ${workspace.repo}\n`,
+  });
+  dirs.push(registryDir);
+  t = await bootTidepool({
+    workspace,
+    resolveWorkspace: (taskWorkspace) =>
+      resolveExecutionWorkspace(
+        loadRegistry(registryDir, "purely-local"),
+        "sandbox",
+        taskWorkspace,
+        "/unused",
+      ),
+  });
+  t.github.scriptFailure(new Error("token expired"));
+  const task = await registerWork(t, "ship the feature");
+  await t.clock.advance(HOUR);
+  commitWork(workspace.path, "feature.txt", "finished\n");
+  await completeViaMcp(t, task.id);
+  const failure = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
+  );
+  expect(t.github.requests).toHaveLength(1);
+
+  const child = attachChild(t, task.id, "check the feature");
+  writeFileSync(join(registryDir, "workspaces.yaml"), `sandbox:\n  path: ${workspace.path}\n`);
+  git(registryDir, "add", "workspaces.yaml");
+  git(registryDir, "commit", "-m", "make sandbox purely local");
+  git(workspace.path, "remote", "remove", "origin");
+
+  await pickUp(t, child.id);
+  await completeViaMcp(t, child.id);
+
+  expect(
+    (await questions(t)).filter(
+      (candidate: any) => candidate.question_pending_local_merge_task_id === task.id,
+    ),
+  ).toEqual([
+    expect.objectContaining({
+      status: "todo",
+      question_pending_local_merge_task_id: task.id,
+    }),
+  ]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: null,
+  });
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "question_answered")).toEqual([]);
+  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toEqual([
+    expect.objectContaining({ worker_id: "tidepool", origin: "board" }),
+  ]);
+  expect(t.github.requests).toHaveLength(1);
 });
 
 it("再発火が門で止まったら、PR 昇格失敗 question は開いたまま残る", async () => {
