@@ -1,5 +1,8 @@
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
+import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   attachChild,
@@ -34,9 +37,11 @@ async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
 
 /** 「PR 昇格が失敗して失敗 question が立っている根 work」—— 失敗のあとに何が起きるかを
  *  測るテストの共通の出発点。 */
-async function failedPromotion() {
+async function failedPromotion(
+  resolveWorkspace?: (workspace: WorkspaceConfig) => (taskWorkspace: string | null) => WorkspaceConfig,
+) {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace });
+  t = await bootTidepool({ workspace, resolveWorkspace: resolveWorkspace?.(workspace) });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
@@ -622,6 +627,53 @@ it("再発火が門で止まったら、PR 昇格失敗 question は開いたま
     status: "todo",
     question_answer: null,
   });
+});
+
+it("再発火で registry drift が workspace を再 quarantine しても、PR 昇格失敗 question は開いたまま残る", async () => {
+  let drifted = false;
+  const { workspace, task, failure } = await failedPromotion((configuredWorkspace) => (name) => {
+    if (drifted) throw new UnknownWorkspaceError(name ?? configuredWorkspace.name);
+    return configuredWorkspace;
+  });
+
+  const repair = attachChild(t, task.id, "repair: ship the feature", "human");
+  drifted = true;
+  t.github.scriptFailure(null);
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
+
+  const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(tasks).toContainEqual(
+    expect.objectContaining({
+      status: "todo",
+      question_quarantine_workspace: workspace.name,
+    }),
+  );
+  expect(t.github.requests).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toEqual([]);
+});
+
+it("再発火で workspace が needs-human でも、PR 昇格失敗 question は開いたまま残る", async () => {
+  const { workspace, task, failure } = await failedPromotion();
+  const db = openDb(join(t.dir, "board.sqlite"));
+  quarantineWorkspace(db, workspace.name, new Error("manual quarantine before reland"), t.clock.now());
+  db.close();
+
+  const repair = attachChild(t, task.id, "repair: ship the feature", "human");
+  t.github.scriptFailure(null);
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
+
+  expect(t.github.requests).toHaveLength(1);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
+  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toEqual([]);
 });
 
 it("再発火が着地対象なしを記録した場合も、PR 昇格失敗 question は引退する", async () => {
