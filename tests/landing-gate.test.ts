@@ -38,10 +38,10 @@ async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
 /** 「PR 昇格が失敗して失敗 question が立っている根 work」—— 失敗のあとに何が起きるかを
  *  測るテストの共通の出発点。 */
 async function failedPromotion(
-  resolveWorkspace?: (workspace: WorkspaceConfig) => (taskWorkspace: string | null) => WorkspaceConfig,
+  makeWorkspaceResolver?: (workspace: WorkspaceConfig) => (taskWorkspace: string | null) => WorkspaceConfig,
 ) {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace, resolveWorkspace: resolveWorkspace?.(workspace) });
+  t = await bootTidepool({ workspace, resolveWorkspace: makeWorkspaceResolver?.(workspace) });
   t.github.scriptFailure(new Error("token expired"));
   const task = await registerWork(t, "ship the feature");
   await t.clock.advance(HOUR);
