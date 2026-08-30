@@ -642,12 +642,16 @@ it("purely-local の着地 question は、再発火時に不要になった PR �
   await pickUp(t, child.id);
   await completeViaMcp(t, child.id);
 
-  expect(await questions(t)).toContainEqual(
+  expect(
+    (await questions(t)).filter(
+      (candidate: any) => candidate.question_pending_local_merge_task_id === task.id,
+    ),
+  ).toEqual([
     expect.objectContaining({
       status: "todo",
       question_pending_local_merge_task_id: task.id,
     }),
-  );
+  ]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
     status: "done",
     question_answer: null,
