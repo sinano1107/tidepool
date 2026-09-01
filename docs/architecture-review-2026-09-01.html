@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — tidepool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { curve: "basis" } });
+    </script>
+    <style>
+      body { font-feature-settings: "palt"; }
+      .seam { stroke-dasharray: 5 4; }
+      .label { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+      .mermaid { display: flex; justify-content: center; }
+      .mermaid svg { max-width: 100%; height: auto; }
+      .hatch {
+        background-image: repeating-linear-gradient(45deg, #e7e5e4 0 6px, #f5f5f4 6px 12px);
+      }
+      .deepbox { background: linear-gradient(135deg, #0f172a, #1e293b); }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 antialiased">
+    <main class="max-w-5xl mx-auto px-6 py-14 space-y-14">
+
+      <!-- ============ HEADER ============ -->
+      <header class="space-y-6">
+        <div class="flex items-baseline justify-between border-b border-slate-300 pb-4">
+          <h1 class="font-serif text-4xl tracking-tight">tidepool — architecture review</h1>
+          <span class="font-mono text-xs text-slate-500">2026-09-01 &middot; main @ 98d60c6</span>
+        </div>
+        <div class="flex flex-wrap gap-x-8 gap-y-2 text-xs text-slate-600">
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 border-2 border-slate-700 bg-white"></span> module</span>
+          <span class="flex items-center gap-2"><svg width="26" height="10"><line class="seam" x1="0" y1="5" x2="26" y2="5" stroke="#475569" stroke-width="2"/></svg> seam</span>
+          <span class="flex items-center gap-2"><svg width="26" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#dc2626" stroke-width="2"/><path d="M20 1 L26 5 L20 9 Z" fill="#dc2626"/></svg> leakage</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 deepbox"></span> deep module</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 hatch border border-slate-300"></span> dead / unreachable</span>
+        </div>
+        <p class="text-sm text-slate-600 max-w-3xl leading-relaxed">
+          探索の起点は commit history の hot spot(<span class="font-mono text-xs">src/api.ts 129 / src/tasks.ts 101 / src/claude-worker.ts 93 / src/mcp.ts 66</span> touches, 直近3ヶ月)。
+          3クラスタを並行に walk し、当初の仮説2件は反証、5件が候補として残った。
+        </p>
+      </header>
+
+      <!-- ============ CANDIDATES ============ -->
+      <section id="candidates" class="space-y-16">
+
+        <!-- ---------- 1 ---------- -->
+        <article id="c1" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">1. 着地の決定を1つの deep module にする</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process + local-substitutable + mock</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              src/mcp.ts:161-346 &middot; src/merge.ts &middot; src/human-verbs.ts:344-362,600-633 &middot; src/triage.ts:127-183 &middot;
+              src/tasks.ts:1493,1597,2240-2281 &middot; src/server.ts:534-551,572-666 &middot; src/api.ts:491,1338 &middot; src/management-mcp.ts:86,468
+            </p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-5">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <div class="label text-slate-400 mb-3">Before — 決定が transport 側に散る</div>
+              <pre class="mermaid">
+flowchart TD
+  W["complete_task<br/>(worker MCP)"] --> H["handleRootWorkLanding<br/>strict=false"]
+  A["/tasks/:id/complete<br/>(WebUI)"] -.->|"relandRootAncestor?"| H
+  M["complete_task<br/>(管理MCP)"] -.->|"relandRootAncestor?"| H
+  S["submitAnswer<br/>(human-verbs)"] -->|"strict=true"| H
+  H --> R1["silent return &times;5"]
+  R1 --> DB[("痕跡を読み直す<br/>taskHasLanded")]
+  DB -.->|"verdict を再導出"| W
+  H --> F1["merge question"]
+  H --> F2["PR 昇格"]
+  H --> F3["open PR へ push"]
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#7f1d1d;
+  classDef opt stroke-dasharray: 5 4;
+  class R1,DB leak
+  class A,M opt
+              </pre>
+            </div>
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4">
+              <div class="label text-slate-400 mb-3">After — 1つの interface, 1つの verdict</div>
+              <pre class="mermaid">
+flowchart TD
+  W["worker MCP"] --> L
+  A["WebUI"] --> L
+  M["管理MCP"] --> L
+  S["human-verbs"] --> L
+  L["着地 module<br/><b>verdict を返す</b>"]
+  L --> V["landed / nothing-to-land<br/>/ blocked / failed"]
+  L --- I["merge question &middot; PR 昇格<br/>&middot; open PR push &middot; 祖先再発火<br/>&middot; 失敗 question の引退"]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a,stroke-width:2px;
+  classDef inner fill:#f1f5f9,color:#64748b,stroke:#cbd5e1,stroke-dasharray: 4 4;
+  class L deep
+  class I inner
+              </pre>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6 text-sm">
+            <div class="space-y-4">
+              <div>
+                <div class="label text-slate-400 mb-1">Problem</div>
+                <p class="leading-relaxed">「この完了は着地したか、次に何をするか」の決定が5ファイルに散り、interface が verdict を返さないので呼び出し側が DB から結果を再導出している。</p>
+              </div>
+              <div>
+                <div class="label text-slate-400 mb-1">Solution</div>
+                <p class="leading-relaxed">着地の3面(merge question / PR 昇格 / open PR への push)と祖先再発火、失敗 question の引退を1つの module に収め、verdict を返す interface にする。</p>
+              </div>
+            </div>
+            <div>
+              <div class="label text-slate-400 mb-1">Wins</div>
+              <ul class="space-y-1.5 text-slate-700">
+                <li>&middot; locality: 着地のバグが1箇所に集まる</li>
+                <li>&middot; 呼び出し側の DB 再読み込みが消える</li>
+                <li>&middot; <span class="font-mono text-xs">strict</span> boolean の2方言が1つに</li>
+                <li>&middot; 4 transport が同じ decision を1度だけ叩く</li>
+                <li>&middot; race を pin していたテスト群が不要に</li>
+                <li>&middot; leverage: 1 interface, 4 call sites</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rounded-md bg-white border border-slate-200 p-4 text-sm space-y-2">
+            <div class="label text-slate-400">Friction evidence</div>
+            <p class="leading-relaxed"><span class="font-mono text-xs">src/mcp.ts:316</span> のコメントがこの shallow さを自ら書いている —
+              <span class="italic">「着地が成立したかは『throw しなかったこと』では測れない —— 非 strict の <span class="font-mono">handleRootWorkLanding</span> は workspace 不在・needs-human・門の不成立で黙って return する」</span>。
+              呼び出し側は <span class="font-mono text-xs">taskHasLanded</span> を呼び出しの前後で撮り、差分から verdict を再構成する(<span class="font-mono text-xs">src/mcp.ts:299-322</span>)。</p>
+            <p class="leading-relaxed">「今この着地は走れるか」も3つの綴りがある — <span class="font-mono text-xs">mcp.ts:216</span>(付帯子のみ、登録時)、
+              <span class="font-mono text-xs">triage.ts:149 landingBlock</span>(未束ねの異議を追加、回答時)、<span class="font-mono text-xs">merge.ts:39,43</span>(merge 時)。同じ概念、3つの家。</p>
+            <p class="leading-relaxed">co-change: <span class="font-mono text-xs">mcp.ts / merge.ts / github.ts / tasks.ts</span> のうち2つ以上を同時に触った commit が全史で <b>47件</b>。
+              8月の着地系だけで #402 #403 #406 #412 #413 #414 #468 #400 #504 #508。同じ種類のバグが何度も別ファイルで直っている。</p>
+            <p class="leading-relaxed"><b>Deletion test — concentrates.</b> 昇格失敗 question の引退は既に2度書かれ(<span class="font-mono text-xs">mcp.ts:321</span> と <span class="font-mono text-xs">human-verbs.ts:625</span>)、2度直っている(#406 → #412)。</p>
+          </div>
+
+          <div class="rounded-md bg-amber-50 border border-amber-300 px-4 py-3 text-sm">
+            <span class="font-semibold text-amber-900">現状が ADR 0041 に反している — この候補がそれを解消する。</span>
+            <span class="text-amber-900"><span class="font-mono text-xs">relandRootAncestor?</span> / <span class="font-mono text-xs">retryPrPromotion?</span> は optional callback として3つの transport に注入されており、配線を落とした盤面は黙って着地しない。ADR 0041「合成 root の option は観測可能で、不在は宣言される」に対する未宣言の不在。ADR 0092 / 0079 / 0073 / 0053 / 0064 の意味論はすべて保存される。再開の必要な ADR は無い。</span>
+          </div>
+          <p class="text-xs text-slate-500">関連: 「観測が決裁を引退させる」の4サイト(<span class="font-mono">mcp.ts:299-322</span> / <span class="font-mono">human-verbs.ts:625</span> / <span class="font-mono">merge.ts:94-113</span> / <span class="font-mono">merge.ts:50-58</span>)は独立候補として立てられるが、この module の interface に畳んだ方が良い。</p>
+        </article>
+
+        <!-- ---------- 2 ---------- -->
+        <article id="c2" class="space-y-6 border-t border-slate-200 pt-14">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">2. 人間面の扉を4つの動詞へ延ばす</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600">src/human-verbs.ts &middot; src/api.ts:1273-1436 &middot; src/management-mcp.ts:443-573</p>
+          </div>
+
+          <!-- hand-built cross-section -->
+          <div class="grid md:grid-cols-2 gap-5">
+            <div class="rounded-lg border border-slate-200 bg-white p-5">
+              <div class="label text-slate-400 mb-4">Before — 6動詞のうち4つが扉を迂回</div>
+              <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3 text-center text-[11px] text-slate-500">
+                  <div>WebUI (/api)</div><div>管理MCP</div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="border-2 border-slate-700 bg-white h-10 flex items-center justify-center text-xs">register / answer</div>
+                  <div class="border-2 border-slate-700 bg-white h-10 flex items-center justify-center text-xs">register / answer</div>
+                </div>
+                <svg viewBox="0 0 300 26" class="w-full h-6">
+                  <path d="M75 0 L150 22" stroke="#334155" stroke-width="1.5" fill="none"/>
+                  <path d="M225 0 L150 22" stroke="#334155" stroke-width="1.5" fill="none"/>
+                </svg>
+                <div class="border-2 border-slate-800 bg-slate-800 text-white h-10 flex items-center justify-center text-xs tracking-wide">人間面の扉 &nbsp;human-verbs</div>
+                <div class="pt-4 border-t border-dashed border-slate-300">
+                  <div class="text-[11px] text-slate-400 mb-2 text-center">扉を通らない4動詞</div>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div class="space-y-1.5">
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">cancel</div>
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">edit</div>
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">complete</div>
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">人間 decompose</div>
+                    </div>
+                    <div class="space-y-1.5">
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">cancel</div>
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">edit</div>
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">complete</div>
+                      <div class="border border-red-400 bg-red-50 h-7 flex items-center justify-center text-[11px]">人間 decompose</div>
+                    </div>
+                  </div>
+                  <div class="text-center text-[11px] text-red-700 mt-2">同一ロジックが2重 &mdash; コメントまで byte 一致</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-5">
+              <div class="label text-slate-400 mb-4">After — 扉が1枚、transport は status mapping だけ</div>
+              <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3 text-center text-[11px] text-slate-500">
+                  <div>WebUI (/api)</div><div>管理MCP</div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="border border-slate-300 bg-stone-100 h-9 flex items-center justify-center text-[11px] text-slate-500">res.status().json</div>
+                  <div class="border border-slate-300 bg-stone-100 h-9 flex items-center justify-center text-[11px] text-slate-500">toolError / toolResult</div>
+                </div>
+                <svg viewBox="0 0 300 26" class="w-full h-6">
+                  <path d="M75 0 L150 22" stroke="#334155" stroke-width="1.5" fill="none"/>
+                  <path d="M225 0 L150 22" stroke="#334155" stroke-width="1.5" fill="none"/>
+                  <line class="seam" x1="0" y1="11" x2="300" y2="11" stroke="#94a3b8" stroke-width="1"/>
+                </svg>
+                <div class="deepbox text-white rounded-sm p-4 space-y-2">
+                  <div class="text-xs tracking-widest uppercase text-slate-400">人間面の扉 &mdash; human-verbs</div>
+                  <div class="grid grid-cols-3 gap-1.5 text-[10px] text-slate-300">
+                    <div class="border border-slate-600 rounded-sm py-1 text-center">register</div>
+                    <div class="border border-slate-600 rounded-sm py-1 text-center">answer</div>
+                    <div class="border border-slate-600 rounded-sm py-1 text-center">cancel</div>
+                    <div class="border border-slate-600 rounded-sm py-1 text-center">edit</div>
+                    <div class="border border-slate-600 rounded-sm py-1 text-center">complete</div>
+                    <div class="border border-slate-600 rounded-sm py-1 text-center">decompose</div>
+                  </div>
+                  <div class="text-[10px] text-slate-500 pt-1">assertAssigneeKnown &middot; assertWorkspaceKnown &middot; pollIfParentUnblocked &middot; relandRootAncestor &middot; 経路 tag</div>
+                </div>
+                <div class="text-center text-[11px] text-emerald-700">2 adapters = real seam &mdash; しかも半分は既に建っている</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6 text-sm">
+            <div class="space-y-4">
+              <div>
+                <div class="label text-slate-400 mb-1">Problem</div>
+                <p class="leading-relaxed">cancel / edit / complete / 人間 decompose が WebUI と管理MCP でほぼ逐語的に2重化している。register と answer だけが扉を通っている。</p>
+              </div>
+              <div>
+                <div class="label text-slate-400 mb-1">Solution</div>
+                <p class="leading-relaxed">既存の <span class="font-mono text-xs">human-verbs</span> の扉を残り4動詞へ延ばし、transport 側には経路 tag と status mapping だけを残す。</p>
+              </div>
+            </div>
+            <div>
+              <div class="label text-slate-400 mb-1">Wins</div>
+              <ul class="space-y-1.5 text-slate-700">
+                <li>&middot; locality: 検証・ADR 0092 の再発火が1箇所</li>
+                <li>&middot; 4動詞 &times; 2 transport の drift が消える</li>
+                <li>&middot; leverage: 1 interface, 2 adapters</li>
+                <li>&middot; テストが扉 + 薄い mapping に分かれる</li>
+                <li>&middot; <span class="font-mono text-xs">api.ts</span> は 2 exports のまま(深さは不変)</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rounded-md bg-white border border-slate-200 p-4 text-sm space-y-2">
+            <div class="label text-slate-400">Friction evidence</div>
+            <p class="leading-relaxed"><span class="font-mono text-xs">src/api.ts:685</span> が扉の存在を明言している —
+              <span class="italic">“human-verbs is the canonical registration door shared by the WebUI and the future management MCP; this route owns only HTTP status mapping.”</span>
+              後から来た4動詞がその線を越えなかった。</p>
+            <p class="leading-relaxed">cancel: <span class="font-mono text-xs">api.ts:1305-1345</span> と <span class="font-mono text-xs">management-mcp.ts:443-473</span> が
+              <span class="font-mono text-xs">getTask → 404 → cancelTaskDirectly(humanCancelDefaults(...6 args)) → pollIfParentUnblocked → await relandRootAncestor?.</span> まで同型で、
+              コメント <span class="font-mono text-xs">// 付帯子の決着は、待っていた祖先の着地を起こす(ADR 0092 決定3)</span> まで一致する。
+              complete のガード文言も byte 一致(<span class="font-mono text-xs">api.ts:1424</span> / <span class="font-mono text-xs">management-mcp.ts:562</span>)。</p>
+            <p class="leading-relaxed"><b>Deletion test — concentrates.</b> 反実仮想が既に走っている: 扉のある2動詞は1コピー、扉のない4動詞は2コピー。</p>
+          </div>
+          <div class="rounded-md bg-slate-100 border border-slate-300 px-4 py-3 text-sm">
+            <span class="font-semibold">ADR 0032 は追い風。</span>
+            義手モデルは管理MCP を「WebUI と同格のもう一つの人間向け UI」と定めており、記録された差は経路 tag(<span class="font-mono text-xs">webui</span> / <span class="font-mono text-xs">mcp</span>)だけ — 1枚の扉が transport ごとに残す残余そのもの。ADR 0036 の credential 線も同じ信頼域内なので跨がない。
+          </div>
+        </article>
+
+        <!-- ---------- 3 ---------- -->
+        <article id="c3" class="space-y-6 border-t border-slate-200 pt-14">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">3. containment の合成を1つの綴りに畳む</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">ports &amp; adapters</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600">src/server-options.ts:686-689,727-736,762-765 &middot; src/server.ts:470-479,705-709 &middot; src/containment.ts:60,129 &middot; tests/tool-surface-containment.test.ts</p>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-5">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <div class="label text-slate-400 mb-3">Before — production が通らない枝をテストが守る</div>
+              <pre class="mermaid">
+flowchart TD
+  SO["server-options<br/>合成 root"] --> HC["harnessContainment<br/><i>registryDir があれば必ず立つ</i>"]
+  SO --> G["containment:<br/>sandboxCapability + toolSurface"]
+  HC --> CC["composeCommonContainment<br/><b>gate を読まない</b>"]
+  G -.-> CO["composeContainment<br/>(4引数)"]
+  CO -.-> DEAD["実盤面では<br/>到達しない"]
+  T["tests/tool-surface-<br/>containment.test.ts<br/>167行"] --> CO
+  classDef dead fill:#f5f5f4,stroke:#a8a29e,stroke-dasharray: 4 4,color:#78716c;
+  classDef leak stroke:#dc2626,stroke-width:2px,color:#7f1d1d;
+  class CO,DEAD dead
+  class T leak
+              </pre>
+            </div>
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4">
+              <div class="label text-slate-400 mb-3">After — 1つの問い、1つの配線</div>
+              <pre class="mermaid">
+flowchart TD
+  SO["server-options<br/>合成 root"] --> HC["harnessContainment"]
+  HC --> CC["composeCommonContainment"]
+  CC --> CL["Claude adapter<br/>自分の面を証明"]
+  CC --> CX["Codex adapter<br/>自分の面を証明"]
+  T["同じテストが<br/>production の枝を走る"] --> HC
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a,stroke-width:2px;
+  classDef ok stroke:#059669,stroke-width:2px;
+  class CC deep
+  class T ok
+              </pre>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6 text-sm">
+            <div class="space-y-4">
+              <div>
+                <div class="label text-slate-400 mb-1">Problem</div>
+                <p class="leading-relaxed">封じ込め能力の問いが合成 root に2重に綴られ、実盤面が実行しない方の枝をテストが守っている。</p>
+              </div>
+              <div>
+                <div class="label text-slate-400 mb-1">Solution</div>
+                <p class="leading-relaxed"><span class="font-mono text-xs">containment: {sandboxCapability, toolSurface}</span> の綴りを畳み、各 adapter が自分の面を証明する <span class="font-mono text-xs">harnessContainment</span> 1本にする。</p>
+              </div>
+            </div>
+            <div>
+              <div class="label text-slate-400 mb-1">Wins</div>
+              <ul class="space-y-1.5 text-slate-700">
+                <li>&middot; テストが production の枝を実測する</li>
+                <li>&middot; ADR 0039 の門が1箇所になる</li>
+                <li>&middot; 合成 root の option がより observable に</li>
+                <li>&middot; ADR 0099 の移行が完了する</li>
+                <li>&middot; 分岐 <span class="font-mono text-xs">server.ts:471</span> が消える</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rounded-md bg-white border border-slate-200 p-4 text-sm space-y-2">
+            <div class="label text-slate-400">Friction evidence(自分でも実地確認済み)</div>
+            <p class="leading-relaxed"><span class="font-mono text-xs">server-options.ts:727</span> — <span class="font-mono text-xs">harnessContainment: board.registryDir ? ... : undefined</span>。実盤面は registry を持つので必ず立つ。</p>
+            <p class="leading-relaxed"><span class="font-mono text-xs">server.ts:471-473</span> — <span class="font-mono text-xs">options.harnessContainment</span> があれば <span class="font-mono text-xs">composeCommonContainment</span> が選ばれ、これは <span class="font-mono text-xs">containment.ts:60-69</span> のとおり <span class="font-mono text-xs">gate.sandboxCapability</span> も <span class="font-mono text-xs">gate.toolSurface</span> も読まない。</p>
+            <p class="leading-relaxed"><span class="font-mono text-xs">probeToolSurfaceCapability</span> / <span class="font-mono text-xs">checkSandboxCapability</span> は同じ合成 root に2度配線されている(<span class="font-mono text-xs">:687-688</span> と <span class="font-mono text-xs">:763-764</span>)。<span class="font-mono text-xs">harnessContainment</span> を渡すテストは <span class="font-mono text-xs">tests/codex-containment.test.ts</span> のみ。</p>
+            <p class="leading-relaxed"><b>Deletion test — concentrates.</b> option を消しても複雑さは N 箇所へ散らない — 同じ問いの2つ目の綴りが消えるだけ。<span class="font-mono text-xs">containment.ts</span> のコメント自身が着地点を書いている(「each adapter proves its own sandbox and tool surface」)。</p>
+          </div>
+          <div class="rounded-md bg-slate-100 border border-slate-300 px-4 py-3 text-sm">
+            <span class="font-semibold">ADR 0033 / 0036 / 0039 の3つの問いは不変。</span> ADR 0099 の移行残余であって、ADR 0041/0043 とも整合(綴りが1つになるほど option は observable になる)。
+          </div>
+        </article>
+
+        <!-- ---------- 4 ---------- -->
+        <article id="c4" class="space-y-6 border-t border-slate-200 pt-14">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">4. 「着地済み」の4つの述語に名前を与える</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-amber-500 text-white text-xs font-semibold tracking-wide">Worth exploring</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">local-substitutable</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600">src/workspace.ts:262,281-316,1006 &middot; src/tasks.ts:2272 &middot; src/mcp.ts:197,242,253,299,344</p>
+          </div>
+
+          <!-- mass diagram -->
+          <div class="grid md:grid-cols-2 gap-5">
+            <div class="rounded-lg border border-slate-200 bg-white p-5">
+              <div class="label text-slate-400 mb-4">Before — 4つの別の問いが1つの名前に見える</div>
+              <div class="grid grid-cols-4 gap-2 items-end h-56">
+                <div class="flex flex-col items-center gap-1">
+                  <div class="w-full border-2 border-red-400 bg-red-50" style="height:120px"></div>
+                  <div class="w-full h-4 bg-slate-700"></div>
+                  <div class="text-[9px] text-center text-slate-600 leading-tight">taskHasLanded<br/><span class="text-slate-400">痕跡</span></div>
+                </div>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="w-full border-2 border-red-400 bg-red-50" style="height:110px"></div>
+                  <div class="w-full h-6 bg-slate-700"></div>
+                  <div class="text-[9px] text-center text-slate-600 leading-tight">taskHasContentToLand<br/><span class="text-slate-400">内容</span></div>
+                </div>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="w-full border-2 border-red-400 bg-red-50" style="height:105px"></div>
+                  <div class="w-full h-2 bg-slate-700"></div>
+                  <div class="text-[9px] text-center text-slate-600 leading-tight">pr_number === null<br/><span class="text-slate-400">代理</span></div>
+                </div>
+                <div class="flex flex-col items-center gap-1">
+                  <div class="w-full border-2 border-red-400 bg-red-50" style="height:100px"></div>
+                  <div class="w-full h-3 bg-slate-700"></div>
+                  <div class="text-[9px] text-center text-slate-600 leading-tight">isPullRequestMerged<br/><span class="text-slate-400">遠隔</span></div>
+                </div>
+              </div>
+              <div class="text-[11px] text-slate-500 mt-3 text-center">赤 = interface(呼び手が知るべき事実) &nbsp;/&nbsp; 黒 = implementation</div>
+            </div>
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-5">
+              <div class="label text-slate-400 mb-4">After — 1つの interface が4つの区別を運ぶ</div>
+              <div class="flex flex-col items-center h-56 justify-end gap-1">
+                <div class="w-3/4 border-2 border-emerald-600 bg-emerald-50 flex items-center justify-center text-xs" style="height:36px">branchLandingState</div>
+                <div class="w-3/4 deepbox text-slate-300 p-3 space-y-1 text-[10px]" style="height:150px">
+                  <div class="text-[9px] uppercase tracking-widest text-slate-500">implementation</div>
+                  <div>&middot; 痕跡: event trace</div>
+                  <div>&middot; 内容: merge-tree 比較(ADR 0105)</div>
+                  <div>&middot; 履歴収束: rev-list</div>
+                  <div>&middot; 遠隔真実: PR merged 観測</div>
+                  <div>&middot; 系譜: resolveTaskBranchLineage</div>
+                </div>
+                <div class="text-[9px] text-center text-slate-600">interface が縮み implementation が吸収する</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6 text-sm">
+            <div class="space-y-4">
+              <div>
+                <div class="label text-slate-400 mb-1">Problem</div>
+                <p class="leading-relaxed">痕跡・内容・代理・遠隔真実という4つの別の問いが「着地済み」という1つの語で呼ばれ、呼び手がどれを使うか毎回判断している。</p>
+              </div>
+              <div>
+                <div class="label text-slate-400 mb-1">Solution</div>
+                <p class="leading-relaxed">既に <span class="font-mono text-xs">hasContent</span> と <span class="font-mono text-xs">historyConverged</span> を一緒に計算している <span class="font-mono text-xs">resolveTaskBranchLineage</span> を軸に、区別を名前として1つの interface に出す。</p>
+              </div>
+            </div>
+            <div>
+              <div class="label text-slate-400 mb-1">Wins</div>
+              <ul class="space-y-1.5 text-slate-700">
+                <li>&middot; 痕跡と内容の取り違えが型で止まる</li>
+                <li>&middot; fork 時と着地時が同じ述語を読む</li>
+                <li>&middot; <span class="font-mono text-xs">mcp.ts:242</span> の2重 content read が消える</li>
+                <li>&middot; ADR 0105 の線が1箇所に住む</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rounded-md bg-white border border-slate-200 p-4 text-sm space-y-2">
+            <div class="label text-slate-400">Friction evidence</div>
+            <p class="leading-relaxed">#406 → #504 → #508 のバグ族はすべて「痕跡 vs 内容」の取り違えである。ADR 0105 決定1 が内容を尺度に定めた一方、痕跡は「既に記録済みか」に答えており、両者を区別する名前が無い。</p>
+            <p class="leading-relaxed"><span class="font-mono text-xs">workspace.ts:303-316</span> は <span class="font-mono text-xs">hasContent</span> と <span class="font-mono text-xs">historyConverged</span> を一緒に計算しながら boolean 1つ(<span class="font-mono text-xs">outlivedForkSource</span>)だけを返し、<span class="font-mono text-xs">mcp.ts:242</span> がその隣で content をもう一度読む。</p>
+            <p class="leading-relaxed"><b>Deletion test — concentrates(弱く)。</b> 消すと <span class="font-mono text-xs">branchLandingState</span> の解釈が fork 時と着地時の呼び手に複製される — ADR 0105 が1つの述語として保ちたい形そのもの。</p>
+          </div>
+          <p class="text-xs text-slate-500">候補1に含めても、先に単独で切り出しても成立する。単独なら候補1の下地になる。</p>
+        </article>
+
+        <!-- ---------- 5 ---------- -->
+        <article id="c5" class="space-y-6 border-t border-slate-200 pt-14">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">5. <span class="font-mono text-2xl">src/tasks.ts</span> の輸出面を実利用へ絞る</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-amber-500 text-white text-xs font-semibold tracking-wide">Worth exploring</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600">src/tasks.ts(2809行, 94 exports)</p>
+          </div>
+
+          <!-- bucket bar chart -->
+          <div class="rounded-lg border border-slate-200 bg-white p-6">
+            <div class="label text-slate-400 mb-5">94 exports を非テスト importer 数で分けた</div>
+            <div class="space-y-3 text-xs">
+              <div class="flex items-center gap-3">
+                <div class="w-40 text-right text-slate-600">&ge;3 callers &mdash; leverage</div>
+                <div class="h-7 bg-emerald-600 flex items-center justify-end px-2 text-white font-mono" style="width:21%">20</div>
+                <div class="text-slate-400 font-mono text-[10px]">Task(16) registerTask(11) getTask(10)</div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-40 text-right text-slate-600">2 callers</div>
+                <div class="h-7 bg-emerald-400 flex items-center justify-end px-2 text-white font-mono" style="width:17%">16</div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-40 text-right text-slate-600">1 caller</div>
+                <div class="h-7 bg-amber-400 flex items-center justify-end px-2 text-white font-mono" style="width:32%">30</div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div class="w-40 text-right text-slate-600">0 &mdash; うち24は完全な死</div>
+                <div class="h-7 bg-red-400 flex items-center justify-end px-2 text-white font-mono" style="width:29%">27</div>
+                <div class="text-slate-400 font-mono text-[10px]">heldSql awaitedChildSql settledTreeSql …</div>
+              </div>
+            </div>
+            <div class="mt-5 pt-4 border-t border-slate-200 text-xs text-slate-600">
+              テスト専用の輸出は <b>3件</b>のみ(<span class="font-mono">cancelTask</span> / <span class="font-mono">deriveTaskContentFromIssue</span> / <span class="font-mono">renderHandoffMarkdown</span>)。
+              「テストのためだけに抽出された」という当初の仮説はここでも成り立たない。
+            </div>
+          </div>
+
+          <div class="grid md:grid-cols-2 gap-6 text-sm">
+            <div class="space-y-4">
+              <div>
+                <div class="label text-slate-400 mb-1">Problem</div>
+                <p class="leading-relaxed">shallow ではないが over-exported。24 の輸出はファイル外に参照が1つも無く、SQL 断片ビルダーが interface に出ている。</p>
+              </div>
+              <div>
+                <div class="label text-slate-400 mb-1">Solution</div>
+                <p class="leading-relaxed">死んだ輸出を implementation へ戻す。<span class="font-mono text-xs">cancelTask</span> は <span class="font-mono text-xs">answerQuestion</span> の abandon 経路の内部段なので、テストをそちら経由へ寄せる。</p>
+              </div>
+            </div>
+            <div>
+              <div class="label text-slate-400 mb-1">Wins</div>
+              <ul class="space-y-1.5 text-slate-700">
+                <li>&middot; interface が縮み implementation が吸収</li>
+                <li>&middot; AI が読むべき面が 94 &rarr; 約70</li>
+                <li>&middot; SQL 断片が外から見えなくなる</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="rounded-md bg-amber-50 border border-amber-300 px-4 py-3 text-sm">
+            <span class="font-semibold text-amber-900">ADR 0027 との順序に注意。</span>
+            <span class="text-amber-900">232 テストのうち <b>54</b> が <span class="font-mono text-xs">../src/tasks</span> と <span class="font-mono text-xs">../src/db</span> を両方 import し、自前の db を建てて domain 関数を直接叩いている — ADR 0027 が主経路と定める server boundary の下である。輸出面を先に絞るとこの54件が壊れるので、この候補はテスト移行の判断の<b>下流</b>にあり、単独では実行できない。</span>
+          </div>
+          <p class="text-xs text-slate-500">
+            <span class="font-semibold">tasks テーブルへの直接 SQL を repository へ移す案は候補に含めていない</span> — 依存の向きが悪化するため既に却下済みの線。
+          </p>
+        </article>
+
+      </section>
+
+      <!-- ============ TOP RECOMMENDATION ============ -->
+      <section id="top-recommendation" class="border-t-2 border-slate-800 pt-10">
+        <div class="deepbox text-white rounded-lg p-8 space-y-4">
+          <div class="label text-slate-400">Top recommendation</div>
+          <h2 class="font-serif text-3xl"><a href="#c1" class="underline decoration-slate-600 underline-offset-4 hover:decoration-white">1. 着地の決定を1つの deep module にする</a></h2>
+          <p class="text-slate-300 leading-relaxed max-w-3xl">
+            友人テスト前の直近8週で、同じ種類のバグ — 着地の判定と昇格失敗 question の race — が別々のファイルで <b>10回以上</b>直っている。
+            interface が verdict を返さないので呼び出し側が DB から結果を再導出しており、それを <span class="font-mono text-xs">src/mcp.ts:316</span> のコメント自身が認めている。
+            これは locality の欠如が実測された唯一の候補で、他の4件はまだ「観測された痛み」の手前にある。
+          </p>
+          <div class="flex flex-wrap gap-3 pt-2 text-xs">
+            <span class="px-3 py-1.5 rounded-full border border-slate-600 text-slate-300">次点: <a href="#c2" class="underline">2. 人間面の扉</a> &mdash; 2重化が逐語で、扉は半分建っている</span>
+            <span class="px-3 py-1.5 rounded-full border border-slate-600 text-slate-300"><a href="#c4" class="underline">4. 着地済み述語</a> は候補1の下地としても切れる</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ REFUTED ============ -->
+      <section class="text-sm text-slate-600 space-y-2 border-t border-slate-200 pt-8">
+        <div class="label text-slate-400">探索で反証された仮説(記録として)</div>
+        <p>&middot; <b><span class="font-mono text-xs">src/claude-worker.ts</span> の29 exports = テストのためだけの抽出</b> — 反証。16/29 が非テストの importer を持ち、合成後の argv/env は <span class="font-mono text-xs">tests/claude-worker.test.ts</span> の40箇所以上で実測されている。むしろ合成に最も絡む2つ(<span class="font-mono text-xs">workerSpawnEnv</span> / <span class="font-mono text-xs">advisorSpawnFlags</span>)には個別テストファイルが無い。<span class="font-mono text-xs">WorkerAdapter</span> の seam は4実装 + contract suite で既に real。</p>
+        <p>&middot; <b><span class="font-mono text-xs">src/tasks.ts</span> の94 exports = shallow</b> — 反証。20 exports が3以上の caller を持つ leveraged core。問題は shallowness ではなく over-export(候補5)。</p>
+        <p>&middot; <b><span class="font-mono text-xs">src/api.ts</span> が1921行だから分割すべき</b> — 探索対象外とした。2 exports の背後に1921行は <b>deep</b> であり、分割は shallow module を製造する。</p>
+      </section>
+
+    </main>
+  </body>
+</html>
