@@ -71,6 +71,6 @@ One issue per session, cleared between them. Two implementation sessions in one 
 
 ## Where a human is required
 
-- **Agreeing the seams**, before the first test. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask.
+- **Agreeing the seams**, before the first test. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask. The seams on offer are the three in ADR 0107 — server boundary (`bootTidepool`), domain layer (exported functions, asserted through exports), schema layer (SQL, migrations only) — and a behaviour is stated once, at the lowest seam it shows at.
 - **Merging the pull request.** The skill stops at an open PR and never merges, closes, or ticks acceptance criteria.
 - **Closing the originating issue.** It stays open until the change has been confirmed on the real deployment — an implementation issue closing on merge is not evidence the symptom is gone.

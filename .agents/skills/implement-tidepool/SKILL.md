@@ -31,7 +31,7 @@ Stay in this thread for all three:
 
 1. Read the issue, its resolving comments, and every ADR it references. `CONTEXT.md` supplies the vocabulary for test names and interfaces.
 2. Create the branch: `issue-<n>-<slug>`. Upstream `/implement` does not create one and commits wherever `HEAD` happens to be.
-3. Name the seams the work will be tested at and confirm them with the user. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask — so the agreement has to exist before the dispatch, and the agreed seams travel in the prompt.
+3. Name the seams the work will be tested at and confirm them with the user. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask — so the agreement has to exist before the dispatch, and the agreed seams travel in the prompt.
 
 ## The implementation sub-agent
 
