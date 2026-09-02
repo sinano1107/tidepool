@@ -109,10 +109,10 @@ export function decomposeThroughHumanDoor(
 ): HumanVerbResult<Task[]> {
   try {
     for (const child of input.children) {
-      if (child.workspace) {
+      if (child.workspace !== undefined) {
         assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
       }
-      if (child.assignee) assertAssigneeKnown(deps.agentRegistered, child.assignee);
+      assertAssigneeKnown(deps.agentRegistered, child.assignee);
     }
     if (input.reason.length === 0) throw new DomainError("a decomposition requires a reason");
     const task = getTask(deps.db, taskId);

@@ -122,16 +122,33 @@ async function decomposeFrom(
   }
 }
 
-async function exerciseCancel(surface: HumanSurface) {
+type SettlementVerb = "cancel" | "complete";
+
+const settlementSpecs = {
+  cancel: {
+    terminalStatus: "cancelled",
+    rejectedError: "an in-progress task cannot be cancelled",
+    eventKind: "task_cancelled_directly",
+  },
+  complete: {
+    terminalStatus: "done",
+    rejectedError:
+      "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
+    eventKind: "task_completed",
+  },
+} as const;
+
+async function exerciseSettlement(surface: HumanSurface, verb: SettlementVerb) {
+  const spec = settlementSpecs[verb];
   const queuePool = await bootTidepool();
   pools.push(queuePool);
-  const parent = await registerWork(queuePool, `${surface} parent`);
+  const parent = await registerWork(queuePool, `${surface} ${verb} parent`);
   const child = (
     await api(queuePool.baseUrl, "POST", "/api/tasks", {
       type: "work",
-      title: `${surface} human child`,
+      title: `${surface} human ${verb}`,
       purpose: "finish the human-only step",
-      completion_criteria: "the step is either completed or abandoned",
+      completion_criteria: "the step is settled",
       assignee: "human",
       parent_id: parent.id,
       decompose_reason: "split the human-only step",
@@ -139,32 +156,32 @@ async function exerciseCancel(surface: HumanSurface) {
   ).json;
   await queuePool.clock.advance(HOUR);
 
-  const cancelled = await settleFrom(surface, queuePool, child.id, "cancel");
+  const settled = await settleFrom(surface, queuePool, child.id, verb);
   const runningParent = (await api(queuePool.baseUrl, "GET", `/api/tasks/${parent.id}`)).json;
-  const rejected = await settleFrom(surface, queuePool, parent.id, "cancel");
+  const rejected = await settleFrom(surface, queuePool, parent.id, verb);
   const childEvents = (
     await api(queuePool.baseUrl, "GET", `/api/tasks/${child.id}/events`)
   ).json;
 
-  const workspace = await makeWorkspace(dirs, `${surface}-cancel-landing`);
+  const workspace = await makeWorkspace(dirs, `${surface}-${verb}-landing`);
   const landingPool = await bootTidepool({ workspace });
   pools.push(landingPool);
-  const root = await registerWork(landingPool, `${surface} landing root`);
+  const root = await registerWork(landingPool, `${surface} ${verb} landing root`);
   await landingPool.clock.advance(HOUR);
-  commitWork(workspace.path, `${surface}.txt`, "finished\n");
-  const attached = attachChild(landingPool, root.id, `${surface} attached repair`, "human");
+  commitWork(workspace.path, `${surface}-${verb}.txt`, "finished\n");
+  const attached = attachChild(landingPool, root.id, `${surface} attached child`, "human");
   await completeViaMcp(landingPool, root.id);
   expect(await questions(landingPool)).toEqual([]);
 
-  await settleFrom(surface, landingPool, attached.id, "cancel");
+  await settleFrom(surface, landingPool, attached.id, verb);
   const landing = await questions(landingPool);
 
   return {
-    cancelled: cancelled.ok && cancelled.task.status,
+    settled: settled.ok && settled.task.status,
     parent_status: runningParent.status,
     picked_up_parent: queuePool.worker.started.map((task: any) => task.id).includes(parent.id),
     domain_error: rejected.ok ? null : rejected.error,
-    origin: childEvents.find((event: any) => event.kind === "task_cancelled_directly")?.origin,
+    origin: childEvents.find((event: any) => event.kind === spec.eventKind)?.origin,
     landing_refired: landing.some(
       (question: any) => question.question_pending_local_merge_task_id === root.id,
     ),
@@ -173,11 +190,11 @@ async function exerciseCancel(surface: HumanSurface) {
 
 it("cancel は WebUI と管理MCPで同じ検証・親queue・祖先着地の再発火を通り、経路を記録する", async () => {
   for (const surface of ["webui", "mcp"] as const) {
-    expect(await exerciseCancel(surface)).toEqual({
-      cancelled: "cancelled",
+    expect(await exerciseSettlement(surface, "cancel")).toEqual({
+      settled: settlementSpecs.cancel.terminalStatus,
       parent_status: "in_progress",
       picked_up_parent: true,
-      domain_error: "an in-progress task cannot be cancelled",
+      domain_error: settlementSpecs.cancel.rejectedError,
       origin: surface,
       landing_refired: true,
     });
@@ -226,64 +243,13 @@ it("edit は WebUI と管理MCPで同じ assignee・workspace・domain 検証を
   }
 });
 
-async function exerciseComplete(surface: HumanSurface) {
-  const queuePool = await bootTidepool();
-  pools.push(queuePool);
-  const parent = await registerWork(queuePool, `${surface} complete parent`);
-  const child = (
-    await api(queuePool.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: `${surface} human completion`,
-      purpose: "finish the human-only step",
-      completion_criteria: "the step is complete",
-      assignee: "human",
-      parent_id: parent.id,
-      decompose_reason: "split the human-only step",
-    })
-  ).json;
-  await queuePool.clock.advance(HOUR);
-
-  const completed = await settleFrom(surface, queuePool, child.id, "complete");
-  const runningParent = (await api(queuePool.baseUrl, "GET", `/api/tasks/${parent.id}`)).json;
-  const rejected = await settleFrom(surface, queuePool, parent.id, "complete");
-  const childEvents = (
-    await api(queuePool.baseUrl, "GET", `/api/tasks/${child.id}/events`)
-  ).json;
-
-  const workspace = await makeWorkspace(dirs, `${surface}-complete-landing`);
-  const landingPool = await bootTidepool({ workspace });
-  pools.push(landingPool);
-  const root = await registerWork(landingPool, `${surface} complete landing root`);
-  await landingPool.clock.advance(HOUR);
-  commitWork(workspace.path, `${surface}.txt`, "finished\n");
-  const attached = attachChild(landingPool, root.id, `${surface} attached review`, "human");
-  await completeViaMcp(landingPool, root.id);
-  expect(await questions(landingPool)).toEqual([]);
-
-  await settleFrom(surface, landingPool, attached.id, "complete");
-  const landing = await questions(landingPool);
-
-  return {
-    completed: completed.ok && completed.task.status,
-    parent_status: runningParent.status,
-    picked_up_parent: queuePool.worker.started.map((task: any) => task.id).includes(parent.id),
-    domain_error: rejected.ok ? null : rejected.error,
-    origin: childEvents.find((event: any) => event.kind === "task_completed")?.origin,
-    landing_refired: landing.some(
-      (question: any) => question.question_pending_local_merge_task_id === root.id,
-    ),
-  };
-}
-
 it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先着地の再発火を通り、経路を記録する", async () => {
-  const domainError =
-    "only a human-assignee task can be completed here — agents complete via MCP's complete_task";
   for (const surface of ["webui", "mcp"] as const) {
-    expect(await exerciseComplete(surface)).toEqual({
-      completed: "done",
+    expect(await exerciseSettlement(surface, "complete")).toEqual({
+      settled: settlementSpecs.complete.terminalStatus,
       parent_status: "in_progress",
       picked_up_parent: true,
-      domain_error: domainError,
+      domain_error: settlementSpecs.complete.rejectedError,
       origin: surface,
       landing_refired: true,
     });
@@ -315,6 +281,14 @@ async function exerciseDecompose(surface: HumanSurface) {
     ...child,
     workspace: "unknown-workspace",
   });
+  const emptyAssignee = await decomposeFrom(surface, pool, parent.id, "split the work", {
+    ...child,
+    assignee: "",
+  });
+  const emptyWorkspace = await decomposeFrom(surface, pool, parent.id, "split the work", {
+    ...child,
+    workspace: "",
+  });
   const missingReason = await decomposeFrom(surface, pool, parent.id, "", child);
   const registered = await decomposeFrom(surface, pool, parent.id, "split the work", {
     ...child,
@@ -329,6 +303,8 @@ async function exerciseDecompose(surface: HumanSurface) {
     child_registered: registered.ok && registered.task.parent_id === parent.id,
     unknown_assignee: unknownAssignee.ok ? null : unknownAssignee.error,
     unknown_workspace: unknownWorkspace.ok ? null : unknownWorkspace.error,
+    empty_assignee: emptyAssignee.ok ? null : emptyAssignee.error,
+    empty_workspace: emptyWorkspace.ok ? null : emptyWorkspace.error,
     domain_error: missingReason.ok ? null : missingReason.error,
     origin: events.find((event: any) => event.kind === "task_registered")?.origin,
   };
@@ -340,6 +316,8 @@ it("人間 decompose は WebUI と管理MCPで同じ assignee・workspace・分�
       child_registered: true,
       unknown_assignee: "unknown agent: unknown-agent",
       unknown_workspace: "unknown workspace: unknown-workspace",
+      empty_assignee: "unknown agent: ",
+      empty_workspace: "unknown workspace: ",
       domain_error: "a decomposition requires a reason",
       origin: surface,
     });
