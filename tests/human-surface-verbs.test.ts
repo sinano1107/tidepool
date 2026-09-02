@@ -29,9 +29,14 @@ function toolPayload(result: any): any {
   return JSON.parse(result.content[0].text);
 }
 
-async function cancelFrom(surface: HumanSurface, pool: Tidepool, taskId: string) {
+async function settleFrom(
+  surface: HumanSurface,
+  pool: Tidepool,
+  taskId: string,
+  verb: "cancel" | "complete",
+) {
   if (surface === "webui") {
-    const result = await api(pool.baseUrl, "POST", `/api/tasks/${taskId}/cancel`, {});
+    const result = await api(pool.baseUrl, "POST", `/api/tasks/${taskId}/${verb}`, {});
     return result.status === 200
       ? { ok: true as const, task: result.json }
       : { ok: false as const, error: result.json.error };
@@ -39,7 +44,7 @@ async function cancelFrom(surface: HumanSurface, pool: Tidepool, taskId: string)
   const client = await managementMcpClient(pool.baseUrl);
   try {
     const result: any = await client.callTool({
-      name: "cancel_task",
+      name: `${verb}_task`,
       arguments: { task_id: taskId },
     });
     return result.isError
@@ -67,27 +72,6 @@ async function editFrom(
     const result: any = await client.callTool({
       name: "edit_task",
       arguments: { task_id: taskId, ...input },
-    });
-    return result.isError
-      ? { ok: false as const, error: result.content[0].text }
-      : { ok: true as const, task: toolPayload(result) };
-  } finally {
-    await client.close();
-  }
-}
-
-async function completeFrom(surface: HumanSurface, pool: Tidepool, taskId: string) {
-  if (surface === "webui") {
-    const result = await api(pool.baseUrl, "POST", `/api/tasks/${taskId}/complete`, {});
-    return result.status === 200
-      ? { ok: true as const, task: result.json }
-      : { ok: false as const, error: result.json.error };
-  }
-  const client = await managementMcpClient(pool.baseUrl);
-  try {
-    const result: any = await client.callTool({
-      name: "complete_task",
-      arguments: { task_id: taskId },
     });
     return result.isError
       ? { ok: false as const, error: result.content[0].text }
@@ -155,9 +139,9 @@ async function exerciseCancel(surface: HumanSurface) {
   ).json;
   await queuePool.clock.advance(HOUR);
 
-  const cancelled = await cancelFrom(surface, queuePool, child.id);
+  const cancelled = await settleFrom(surface, queuePool, child.id, "cancel");
   const runningParent = (await api(queuePool.baseUrl, "GET", `/api/tasks/${parent.id}`)).json;
-  const rejected = await cancelFrom(surface, queuePool, parent.id);
+  const rejected = await settleFrom(surface, queuePool, parent.id, "cancel");
   const childEvents = (
     await api(queuePool.baseUrl, "GET", `/api/tasks/${child.id}/events`)
   ).json;
@@ -172,7 +156,7 @@ async function exerciseCancel(surface: HumanSurface) {
   await completeViaMcp(landingPool, root.id);
   expect(await questions(landingPool)).toEqual([]);
 
-  await cancelFrom(surface, landingPool, attached.id);
+  await settleFrom(surface, landingPool, attached.id, "cancel");
   const landing = await questions(landingPool);
 
   return {
@@ -188,22 +172,16 @@ async function exerciseCancel(surface: HumanSurface) {
 }
 
 it("cancel は WebUI と管理MCPで同じ検証・親queue・祖先着地の再発火を通り、経路を記録する", async () => {
-  expect(await exerciseCancel("webui")).toEqual({
-    cancelled: "cancelled",
-    parent_status: "in_progress",
-    picked_up_parent: true,
-    domain_error: "an in-progress task cannot be cancelled",
-    origin: "webui",
-    landing_refired: true,
-  });
-  expect(await exerciseCancel("mcp")).toEqual({
-    cancelled: "cancelled",
-    parent_status: "in_progress",
-    picked_up_parent: true,
-    domain_error: "an in-progress task cannot be cancelled",
-    origin: "mcp",
-    landing_refired: true,
-  });
+  for (const surface of ["webui", "mcp"] as const) {
+    expect(await exerciseCancel(surface)).toEqual({
+      cancelled: "cancelled",
+      parent_status: "in_progress",
+      picked_up_parent: true,
+      domain_error: "an in-progress task cannot be cancelled",
+      origin: surface,
+      landing_refired: true,
+    });
+  }
 });
 
 async function exerciseEdit(surface: HumanSurface) {
@@ -237,20 +215,15 @@ async function exerciseEdit(surface: HumanSurface) {
 }
 
 it("edit は WebUI と管理MCPで同じ assignee・workspace・domain 検証を通り、経路を記録する", async () => {
-  expect(await exerciseEdit("webui")).toEqual({
-    edited: "webui edited task",
-    unknown_assignee: "unknown agent: unknown-agent",
-    unknown_workspace: "unknown workspace: unknown-workspace",
-    domain_error: "a settled task cannot be edited",
-    origin: "webui",
-  });
-  expect(await exerciseEdit("mcp")).toEqual({
-    edited: "mcp edited task",
-    unknown_assignee: "unknown agent: unknown-agent",
-    unknown_workspace: "unknown workspace: unknown-workspace",
-    domain_error: "a settled task cannot be edited",
-    origin: "mcp",
-  });
+  for (const surface of ["webui", "mcp"] as const) {
+    expect(await exerciseEdit(surface)).toEqual({
+      edited: `${surface} edited task`,
+      unknown_assignee: "unknown agent: unknown-agent",
+      unknown_workspace: "unknown workspace: unknown-workspace",
+      domain_error: "a settled task cannot be edited",
+      origin: surface,
+    });
+  }
 });
 
 async function exerciseComplete(surface: HumanSurface) {
@@ -270,9 +243,9 @@ async function exerciseComplete(surface: HumanSurface) {
   ).json;
   await queuePool.clock.advance(HOUR);
 
-  const completed = await completeFrom(surface, queuePool, child.id);
+  const completed = await settleFrom(surface, queuePool, child.id, "complete");
   const runningParent = (await api(queuePool.baseUrl, "GET", `/api/tasks/${parent.id}`)).json;
-  const rejected = await completeFrom(surface, queuePool, parent.id);
+  const rejected = await settleFrom(surface, queuePool, parent.id, "complete");
   const childEvents = (
     await api(queuePool.baseUrl, "GET", `/api/tasks/${child.id}/events`)
   ).json;
@@ -287,7 +260,7 @@ async function exerciseComplete(surface: HumanSurface) {
   await completeViaMcp(landingPool, root.id);
   expect(await questions(landingPool)).toEqual([]);
 
-  await completeFrom(surface, landingPool, attached.id);
+  await settleFrom(surface, landingPool, attached.id, "complete");
   const landing = await questions(landingPool);
 
   return {
@@ -305,22 +278,16 @@ async function exerciseComplete(surface: HumanSurface) {
 it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先着地の再発火を通り、経路を記録する", async () => {
   const domainError =
     "only a human-assignee task can be completed here — agents complete via MCP's complete_task";
-  expect(await exerciseComplete("webui")).toEqual({
-    completed: "done",
-    parent_status: "in_progress",
-    picked_up_parent: true,
-    domain_error: domainError,
-    origin: "webui",
-    landing_refired: true,
-  });
-  expect(await exerciseComplete("mcp")).toEqual({
-    completed: "done",
-    parent_status: "in_progress",
-    picked_up_parent: true,
-    domain_error: domainError,
-    origin: "mcp",
-    landing_refired: true,
-  });
+  for (const surface of ["webui", "mcp"] as const) {
+    expect(await exerciseComplete(surface)).toEqual({
+      completed: "done",
+      parent_status: "in_progress",
+      picked_up_parent: true,
+      domain_error: domainError,
+      origin: surface,
+      landing_refired: true,
+    });
+  }
 });
 
 async function exerciseDecompose(surface: HumanSurface) {
@@ -368,18 +335,13 @@ async function exerciseDecompose(surface: HumanSurface) {
 }
 
 it("人間 decompose は WebUI と管理MCPで同じ assignee・workspace・分解制約を通り、経路を記録する", async () => {
-  expect(await exerciseDecompose("webui")).toEqual({
-    child_registered: true,
-    unknown_assignee: "unknown agent: unknown-agent",
-    unknown_workspace: "unknown workspace: unknown-workspace",
-    domain_error: "a decomposition requires a reason",
-    origin: "webui",
-  });
-  expect(await exerciseDecompose("mcp")).toEqual({
-    child_registered: true,
-    unknown_assignee: "unknown agent: unknown-agent",
-    unknown_workspace: "unknown workspace: unknown-workspace",
-    domain_error: "a decomposition requires a reason",
-    origin: "mcp",
-  });
+  for (const surface of ["webui", "mcp"] as const) {
+    expect(await exerciseDecompose(surface)).toEqual({
+      child_registered: true,
+      unknown_assignee: "unknown agent: unknown-agent",
+      unknown_workspace: "unknown workspace: unknown-workspace",
+      domain_error: "a decomposition requires a reason",
+      origin: surface,
+    });
+  }
 });
