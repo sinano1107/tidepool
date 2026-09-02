@@ -24,11 +24,10 @@ import { githubLoggedIn } from "./github-auth.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
   addIssueCommentThroughHumanDoor,
-  assertAssigneeKnown,
-  assertWorkspaceKnown,
+  cancelThroughHumanDoor,
+  completeThroughHumanDoor,
+  editThroughHumanDoor,
   type GateFailure,
-  humanCancelDefaults,
-  pollIfParentUnblocked,
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -69,12 +68,9 @@ import { pickupExcludedAssignees } from "./scheduler.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
-  cancelTaskDirectly,
-  completeTask,
   countUnsettledTasksReferencing,
   DEFAULT_AUDITOR_NAME,
   DomainError,
-  editTask,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_WORKER_ID,
@@ -1251,99 +1247,60 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(moved);
   });
 
-  // edit a registered task's unconsumed fields (issue #130). The scope line
-  // (human-registered, unsettled, not in_progress), the issue-backed
-  // immutability, and the risk invariant all live in editTask — this route
-  // adds only the assignee/workspace registry rechecks, the same ones
-  // registration runs (CONTEXT.md's Edit: "登録時と同じ検査を再実行"), since
-  // they need the injected registry seams. An immutable field in the body was
-  // already rejected by the strict schema above.
+  // The shared human door owns lookup, registry checks, and domain rules;
+  // this route keeps only schema and HTTP response mapping.
   router.patch("/tasks/:id", async (req, res) => {
     const parsed = editTaskSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    const task = getTask(db, req.params.id);
-    if (!task) {
-      res.status(404).json({ error: "task not found" });
+    const result = editThroughHumanDoor(
+      { db, agentRegistered, workspace, resolveWorkspace },
+      req.params.id,
+      parsed.data,
+      () => clock.now(),
+      "webui",
+    );
+    if (!result.ok) {
+      res
+        .status(result.failure.kind === "not_found" ? 404 : 400)
+        .json({ error: result.failure.error });
       return;
     }
-    try {
-      // assignee registry recheck (ADR 0012 / issue #36), same as registration:
-      // an explicitly named assignee must resolve in the registry. `human` is
-      // exempt (never a registry agent); an empty string means "unset — resolve
-      // to the board default" (editTask normalizes it to null), so it's exempt
-      // too; and absent a real registry every name is accepted.
-      if (parsed.data.assignee) {
-        assertAssigneeKnown(agentRegistered, parsed.data.assignee);
-      }
-      // workspace recheck (issue #26 / ADR 0009), same as registration: an
-      // explicitly named workspace must exist in the registry (empty = unset,
-      // exempt, same as assignee above).
-      if (parsed.data.workspace) {
-        assertWorkspaceKnown(parsed.data.workspace, resolveWorkspace, workspace);
-      }
-      const edited = editTask(db, task, parsed.data, clock.now(), "webui");
-      res.json((await presentLive([presentTask(db, edited)]))[0]);
-    } catch (err) {
-      if (err instanceof DomainError) {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      throw err;
-    }
+    res.json((await presentLive([presentTask(db, result.value)]))[0]);
   });
 
-  // the human's direct cancel (issue #130, CONTEXT.md's Cancel): the second
-  // cancel path beside abandon. Same scope line as edit, the target and its
-  // unfinished descendants go cancelled together (道連れ), reason optional. An
-  // open Tidepool-registered question that has the subtree as its subject
-  // gates it — the domain (cancelTaskDirectly) enforces all of this; the route
-  // passes the default workspace/agent pointers the quarantine half of the
-  // gate resolves against.
+  // Human direct cancel: schema and HTTP response mapping around the shared door.
   router.post("/tasks/:id/cancel", async (req, res) => {
     const parsed = cancelTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    const task = getTask(db, req.params.id);
-    if (!task) {
-      res.status(404).json({ error: "task not found" });
+    const result = await cancelThroughHumanDoor(
+      {
+        db,
+        onQueueHeadChanged,
+        workspace,
+        defaultAgentName,
+        auditorName,
+        agentsSpeakingProviders,
+        agentsUsingHarnesses,
+        relandRootAncestor,
+      },
+      req.params.id,
+      parsed.data.reason,
+      () => clock.now(),
+      "webui",
+    );
+    if (!result.ok) {
+      res
+        .status(result.failure.kind === "not_found" ? 404 : 400)
+        .json({ error: result.failure.error });
       return;
     }
-    try {
-      cancelTaskDirectly(
-        db,
-        task,
-        parsed.data.reason ?? null,
-        clock.now(),
-        humanCancelDefaults(
-          db,
-          workspace,
-          defaultAgentName,
-          auditorName,
-          agentsSpeakingProviders,
-          agentsUsingHarnesses,
-        ),
-        "webui",
-      );
-      // cancelling can unblock the target's parent (its last unsettled child is
-      // now cancelled — settled), so give the queue head a chance to advance,
-      // same trigger the /complete route uses (CONTEXT.md: cancelled の親を
-      // 塞がない導出は既存機構をそのまま使う).
-      pollIfParentUnblocked(db, task, onQueueHeadChanged);
-      // 付帯子の決着は、待っていた祖先の着地を起こす(ADR 0092 決定3)
-      await relandRootAncestor?.(task);
-      res.json(presentTask(db, getTask(db, task.id)!));
-    } catch (err) {
-      if (err instanceof DomainError) {
-        res.status(400).json({ error: err.message });
-        return;
-      }
-      throw err;
-    }
+    res.json(presentTask(db, result.value));
   });
 
   // human-verbs is the canonical implementation shared by the WebUI and the
@@ -1396,55 +1353,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
-  // the human-facing completion route (issue #13): agents complete via MCP's
-  // complete_task, but a human's own task has no worker session to call it
-  // from. A `human`-assignee task carries no handoff requirement
-  // (completeTask's own exemption) — an orphan task closes with an empty
-  // body, one tap. When completion unblocks a parent still sitting at its
-  // own queue position (no head jump, unlike answerQuestion's escalation
-  // re-prioritization — this is plain parent/child derivation), the
-  // immediate poll fires the same way a freed slot does elsewhere. Gated to
-  // `assignee === human` only (code review, issue #13): an agent-assigned
-  // task must keep completing through complete_task's slot-scoped path (PR
-  // opening, tree-rule release) — this route is never a shortcut around it.
-  // Not gated on "blocks a parent" too: AC4's orphan human task must stay
-  // completable through this same route.
+  // Human completion: schema and HTTP response mapping around the shared door.
   router.post("/tasks/:id/complete", async (req, res) => {
     const parsed = completeTaskSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
-    const task = getTask(db, req.params.id);
-    if (!task) {
-      res.status(404).json({ error: "task not found" });
+    const result = await completeThroughHumanDoor(
+      { db, onQueueHeadChanged, relandRootAncestor },
+      req.params.id,
+      parsed.data.handoff,
+      () => clock.now(),
+      "webui",
+    );
+    if (!result.ok) {
+      res
+        .status(result.failure.kind === "not_found" ? 404 : 409)
+        .json({ error: result.failure.error });
       return;
     }
-    if (task.assignee !== HUMAN_WORKER_ID) {
-      res.status(409).json({
-        error: "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
-      });
-      return;
-    }
-    try {
-      const done = completeTask(
-        db,
-        task,
-        parsed.data.handoff,
-        HUMAN_WORKER_ID,
-        clock.now(),
-        "webui",
-      );
-      pollIfParentUnblocked(db, done, onQueueHeadChanged);
-      await relandRootAncestor?.(done);
-      res.json(presentTask(db, done));
-    } catch (err) {
-      if (err instanceof DomainError) {
-        res.status(409).json({ error: err.message });
-        return;
-      }
-      throw err;
-    }
+    res.json(presentTask(db, result.value));
   });
 
   // the handoff-draft route (issue #13): same propose-don't-commit shape as

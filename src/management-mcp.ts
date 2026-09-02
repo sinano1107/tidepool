@@ -19,10 +19,10 @@ import type { GitHubClient } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
   addIssueCommentThroughHumanDoor,
-  assertAssigneeKnown,
-  assertWorkspaceKnown,
-  humanCancelDefaults,
-  pollIfParentUnblocked,
+  cancelThroughHumanDoor,
+  completeThroughHumanDoor,
+  decomposeThroughHumanDoor,
+  editThroughHumanDoor,
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
@@ -45,14 +45,8 @@ import { RepoAccessMissingError } from "./repo-access.js";
 import { pickupExcludedAssignees } from "./scheduler.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
-  cancelTaskDirectly,
-  completeTask,
-  DomainError,
-  editTask,
   getTask,
   HANDOFF_FIELDS,
-  HUMAN_WORKER_ID,
-  humanDecomposeTask,
   listBoard,
   listQueue,
   listYourTasks,
@@ -445,32 +439,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       inputSchema: { task_id: z.string(), reason: z.string().optional() },
     },
     async ({ task_id, reason }) => {
-      const task = getTask(deps.db, task_id);
-      if (!task) return toolError("task not found");
-      try {
-        cancelTaskDirectly(
-          deps.db,
-          task,
-          reason ?? null,
-          deps.clock.now(),
-          humanCancelDefaults(
-            deps.db,
-            deps.workspace,
-            deps.defaultAgentName,
-            deps.auditorName,
-            deps.agentsSpeakingProviders,
-            deps.agentsUsingHarnesses,
-          ),
-          "mcp",
-        );
-        pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
-        // 付帯子の決着は、待っていた祖先の着地を起こす(ADR 0092 決定3)
-        await deps.relandRootAncestor?.(task);
-        return toolResult(getTask(deps.db, task.id)!);
-      } catch (err) {
-        if (err instanceof DomainError) return toolError(err.message);
-        throw err;
-      }
+      const result = await cancelThroughHumanDoor(
+        deps,
+        task_id,
+        reason,
+        () => deps.clock.now(),
+        "mcp",
+      );
+      return result.ok ? toolResult(result.value) : toolError(result.failure.error);
     },
   );
   server.registerTool(
@@ -489,18 +465,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       },
     },
     async ({ task_id, ...input }) => {
-      const task = getTask(deps.db, task_id);
-      if (!task) return toolError("task not found");
-      try {
-        if (input.assignee) assertAssigneeKnown(deps.agentRegistered, input.assignee);
-        if (input.workspace) {
-          assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
-        }
-        return toolResult(editTask(deps.db, task, input, deps.clock.now(), "mcp"));
-      } catch (err) {
-        if (err instanceof DomainError) return toolError(err.message);
-        throw err;
-      }
+      const result = editThroughHumanDoor(
+        deps,
+        task_id,
+        input,
+        () => deps.clock.now(),
+        "mcp",
+      );
+      return result.ok ? toolResult(result.value) : toolError(result.failure.error);
     },
   );
   server.registerTool(
@@ -524,28 +496,16 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       },
     },
     async ({ task_id, reason, children: childSpecs }) => {
-      const task = getTask(deps.db, task_id);
-      if (!task) return toolError("task not found");
-      try {
-        for (const child of childSpecs) {
-          if (child.assignee) assertAssigneeKnown(deps.agentRegistered, child.assignee);
-          if (child.workspace) {
-            assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
-          }
-        }
-        const children = humanDecomposeTask(
-          deps.db,
-          task,
-          { reason, children: childSpecs },
-          deps.clock.now(),
-          deps.isProtectedWorkspace,
-          "mcp",
-        );
-        return toolResult({ child_ids: children.map((child) => child.id), parent_status: "blocked" });
-      } catch (err) {
-        if (err instanceof DomainError) return toolError(err.message);
-        throw err;
-      }
+      const result = decomposeThroughHumanDoor(
+        deps,
+        task_id,
+        { reason, children: childSpecs },
+        () => deps.clock.now(),
+        "mcp",
+      );
+      return result.ok
+        ? toolResult({ child_ids: result.value.map((child) => child.id), parent_status: "blocked" })
+        : toolError(result.failure.error);
     },
   );
   server.registerTool(
@@ -558,22 +518,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       },
     },
     async ({ task_id, handoff }) => {
-      const task = getTask(deps.db, task_id);
-      if (!task) return toolError("task not found");
-      if (task.assignee !== HUMAN_WORKER_ID) {
-        return toolError(
-          "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
-        );
-      }
-      try {
-        const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, deps.clock.now(), "mcp");
-        pollIfParentUnblocked(deps.db, done, deps.onQueueHeadChanged);
-        await deps.relandRootAncestor?.(done);
-        return toolResult(done);
-      } catch (err) {
-        if (err instanceof DomainError) return toolError(err.message);
-        throw err;
-      }
+      const result = await completeThroughHumanDoor(
+        deps,
+        task_id,
+        handoff,
+        () => deps.clock.now(),
+        "mcp",
+      );
+      return result.ok ? toolResult(result.value) : toolError(result.failure.error);
     },
   );
   server.registerTool(
