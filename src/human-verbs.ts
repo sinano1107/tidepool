@@ -15,8 +15,14 @@ import {
   assertAnswerable,
   assertNoUnsettledIssueRef,
   type CancelDefaults,
+  type ChildSpec,
+  cancelTaskDirectly,
+  completeTask,
   DomainError,
+  type EditTaskInput,
+  editTask,
   getTask,
+  type HandoffDoc,
   HUMAN_WORKER_ID,
   hasUnfinishedChildren,
   humanDecomposeTask,
@@ -75,6 +81,60 @@ export type GateFailure =
 export type RegisterThroughHumanDoorResult =
   | { ok: true; task: Task }
   | { ok: false; failure: GateFailure };
+
+export type HumanVerbResult<T> =
+  | { ok: true; value: T }
+  | {
+      ok: false;
+      failure:
+        | { kind: "not_found"; error: string }
+        | { kind: "domain_error"; error: string };
+    };
+
+export interface DecomposeThroughHumanDoorDeps {
+  db: Db;
+  agentRegistered?: (name: string) => boolean;
+  workspace?: WorkspaceConfig;
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  isProtectedWorkspace?: (name: string) => boolean;
+}
+
+/** Shared human-surface decomposition. */
+export function decomposeThroughHumanDoor(
+  deps: DecomposeThroughHumanDoorDeps,
+  taskId: string,
+  input: { reason: string; children: ChildSpec[] },
+  now: () => Date,
+  origin: EventOrigin,
+): HumanVerbResult<Task[]> {
+  try {
+    for (const child of input.children) {
+      if (child.workspace !== undefined) {
+        assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
+      }
+      assertAssigneeKnown(deps.agentRegistered, child.assignee);
+    }
+    if (input.reason.length === 0) throw new DomainError("a decomposition requires a reason");
+    const task = getTask(deps.db, taskId);
+    if (!task) return { ok: false, failure: { kind: "not_found", error: "parent task not found" } };
+    return {
+      ok: true,
+      value: humanDecomposeTask(
+        deps.db,
+        task,
+        input,
+        now(),
+        deps.isProtectedWorkspace,
+        origin,
+      ),
+    };
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return { ok: false, failure: { kind: "domain_error", error: err.message } };
+    }
+    throw err;
+  }
+}
 
 export type IssueCommentFailure =
   | { kind: "invalid"; error: string }
@@ -176,6 +236,40 @@ export async function registerThroughHumanDoor(
     if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
       throw new DomainError("a child task cannot be issue-backed");
     }
+    if (isHumanDecomposeChild) {
+      const result = decomposeThroughHumanDoor(
+        deps,
+        input.parent_id!,
+        {
+          reason: input.decompose_reason ?? "",
+          children: [
+            {
+              title: input.title ?? "",
+              purpose: input.purpose ?? "",
+              completion_criteria: input.completion_criteria ?? "",
+              assignee: input.assignee,
+              workspace: input.workspace,
+              risk_flag: input.risk_flag,
+              review_flag: input.review_flag,
+            },
+          ],
+        },
+        now,
+        origin,
+      );
+      if (!result.ok) {
+        return {
+          ok: false,
+          failure:
+            result.failure.kind === "not_found"
+              ? result.failure
+              : { kind: "invalid", error: result.failure.error },
+        };
+      }
+      const task = result.value[0] ?? latestChild(deps.db, input.parent_id!);
+      if (!task) throw new Error("human decompose did not register a child or approval question");
+      return { ok: true, task };
+    }
     if (input.workspace !== undefined) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
@@ -230,42 +324,6 @@ export async function registerThroughHumanDoor(
           }
         }
       }
-    }
-    if (isHumanDecomposeChild) {
-      if (input.decompose_reason === undefined || input.decompose_reason.length === 0) {
-        throw new DomainError("a decomposition requires a reason");
-      }
-      const parent = getTask(deps.db, input.parent_id!);
-      if (!parent) {
-        return {
-          ok: false,
-          failure: { kind: "not_found", error: "parent task not found" },
-        };
-      }
-      const children = humanDecomposeTask(
-        deps.db,
-        parent,
-        {
-          reason: input.decompose_reason,
-          children: [
-            {
-              title: input.title ?? "",
-              purpose: input.purpose ?? "",
-              completion_criteria: input.completion_criteria ?? "",
-              assignee: input.assignee,
-              workspace: input.workspace,
-              risk_flag: input.risk_flag,
-              review_flag: input.review_flag,
-            },
-          ],
-        },
-        now(),
-        deps.isProtectedWorkspace,
-        origin,
-      );
-      const task = children[0] ?? latestChild(deps.db, parent.id);
-      if (!task) throw new Error("human decompose did not register a child or approval question");
-      return { ok: true, task };
     }
     return { ok: true, task: registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin) };
   } catch (err) {
@@ -365,6 +423,119 @@ export function pollIfParentUnblocked(db: Db, task: Task, onQueueHeadChanged: ()
   const parent = getTask(db, task.parent_id);
   if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
     onQueueHeadChanged();
+  }
+}
+
+export interface CancelThroughHumanDoorDeps {
+  db: Db;
+  onQueueHeadChanged: () => void;
+  workspace?: WorkspaceConfig;
+  defaultAgentName?: string;
+  auditorName?: string;
+  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  relandRootAncestor?: (task: Task) => Promise<void>;
+}
+
+export interface EditThroughHumanDoorDeps {
+  db: Db;
+  agentRegistered?: (name: string) => boolean;
+  workspace?: WorkspaceConfig;
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+}
+
+export interface CompleteThroughHumanDoorDeps {
+  db: Db;
+  onQueueHeadChanged: () => void;
+  relandRootAncestor?: (task: Task) => Promise<void>;
+}
+
+/** Shared human-surface completion for human-assignee tasks. */
+export async function completeThroughHumanDoor(
+  deps: CompleteThroughHumanDoorDeps,
+  taskId: string,
+  handoff: Partial<HandoffDoc> | undefined,
+  now: () => Date,
+  origin: EventOrigin,
+): Promise<HumanVerbResult<Task>> {
+  const task = getTask(deps.db, taskId);
+  if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
+  try {
+    if (task.assignee !== HUMAN_WORKER_ID) {
+      throw new DomainError(
+        "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
+      );
+    }
+    const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
+    pollIfParentUnblocked(deps.db, done, deps.onQueueHeadChanged);
+    await deps.relandRootAncestor?.(done);
+    return { ok: true, value: done };
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return { ok: false, failure: { kind: "domain_error", error: err.message } };
+    }
+    throw err;
+  }
+}
+
+/** Shared human-surface edit. */
+export function editThroughHumanDoor(
+  deps: EditThroughHumanDoorDeps,
+  taskId: string,
+  input: EditTaskInput,
+  now: () => Date,
+  origin: EventOrigin,
+): HumanVerbResult<Task> {
+  const task = getTask(deps.db, taskId);
+  if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
+  try {
+    if (input.assignee) assertAssigneeKnown(deps.agentRegistered, input.assignee);
+    if (input.workspace) {
+      assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
+    }
+    return { ok: true, value: editTask(deps.db, task, input, now(), origin) };
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return { ok: false, failure: { kind: "domain_error", error: err.message } };
+    }
+    throw err;
+  }
+}
+
+/** Shared human-surface direct cancel. */
+export async function cancelThroughHumanDoor(
+  deps: CancelThroughHumanDoorDeps,
+  taskId: string,
+  reason: string | undefined,
+  now: () => Date,
+  origin: EventOrigin,
+): Promise<HumanVerbResult<Task>> {
+  const task = getTask(deps.db, taskId);
+  if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
+  try {
+    cancelTaskDirectly(
+      deps.db,
+      task,
+      reason ?? null,
+      now(),
+      humanCancelDefaults(
+        deps.db,
+        deps.workspace,
+        deps.defaultAgentName,
+        deps.auditorName,
+        deps.agentsSpeakingProviders,
+        deps.agentsUsingHarnesses,
+      ),
+      origin,
+    );
+    pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
+    await deps.relandRootAncestor?.(task);
+    return { ok: true, value: getTask(deps.db, task.id)! };
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return { ok: false, failure: { kind: "domain_error", error: err.message } };
+    }
+    throw err;
   }
 }
 
