@@ -8,6 +8,7 @@ import { appendEvent, type EventOrigin } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { quarantinedHarnesses } from "./harness-containment.js";
+import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
@@ -32,13 +33,10 @@ import {
   PR_PROMOTION_FAILURE_OPTIONS,
   type RegisterTaskInput,
   registerTask,
-  settleMergeQuestionAsObserved,
-  settlePrPromotionQuestionsAsObserved,
   type Task,
-  taskHasLanded,
   taskIdForPr,
 } from "./tasks.js";
-import { landingBlock, stageFrontInsert, triageActivity } from "./triage.js";
+import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import {
   buildWorkspaceResolver,
@@ -340,8 +338,7 @@ export interface SubmitAnswerDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
-  retryPrPromotion?: (task: Task) => Promise<void>;
-  relandRootAncestor?: (task: Task) => Promise<void>;
+  landing: Landing;
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
   /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
@@ -426,15 +423,34 @@ export function pollIfParentUnblocked(db: Db, task: Task, onQueueHeadChanged: ()
   }
 }
 
+function promotionRetryError(verdict: LandingVerdict): string | undefined {
+  switch (verdict.kind) {
+    case "landed":
+      return undefined;
+    case "failed":
+      return verdict.error;
+    case "deferred":
+      return verdict.reason === "attached_children"
+        ? `review still running: ${verdict.count} attached child task(s) unsettled`
+        : `cannot land yet: ${verdict.count} objection(s) raised in this triage await commit`;
+    case "nothing_to_land":
+      return `task branch has nothing to land on "${verdict.base}"`;
+    case "not_applicable":
+      return verdict.reason === "not_work"
+        ? "only work tasks can be promoted"
+        : "task completion lands on an ancestor task branch, not a PR";
+  }
+}
+
 export interface CancelThroughHumanDoorDeps {
   db: Db;
   onQueueHeadChanged: () => void;
+  landing: Landing;
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
-  relandRootAncestor?: (task: Task) => Promise<void>;
 }
 
 export interface EditThroughHumanDoorDeps {
@@ -447,7 +463,7 @@ export interface EditThroughHumanDoorDeps {
 export interface CompleteThroughHumanDoorDeps {
   db: Db;
   onQueueHeadChanged: () => void;
-  relandRootAncestor?: (task: Task) => Promise<void>;
+  landing: Landing;
 }
 
 /** Shared human-surface completion for human-assignee tasks. */
@@ -468,7 +484,7 @@ export async function completeThroughHumanDoor(
     }
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
     pollIfParentUnblocked(deps.db, done, deps.onQueueHeadChanged);
-    await deps.relandRootAncestor?.(done);
+    await deps.landing.relandAncestors(done);
     return { ok: true, value: done };
   } catch (err) {
     if (err instanceof DomainError) {
@@ -529,7 +545,7 @@ export async function cancelThroughHumanDoor(
       origin,
     );
     pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
-    await deps.relandRootAncestor?.(task);
+    await deps.landing.relandAncestors(task);
     return { ok: true, value: getTask(deps.db, task.id)! };
   } catch (err) {
     if (err instanceof DomainError) {
@@ -564,14 +580,11 @@ export async function submitAnswer(
     promotionTaskId !== null && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
   if (wantsPromotionRetry) {
     const promotionTask = getTask(deps.db, promotionTaskId);
-    if (!promotionTask || !deps.retryPrPromotion) {
+    if (!promotionTask) {
       throw new DomainError("PR promotion can no longer be retried");
     }
-    try {
-      await deps.retryPrPromotion(promotionTask);
-    } catch (err) {
-      throw new DomainError(err instanceof Error ? err.message : String(err));
-    }
+    const error = promotionRetryError(await deps.landing.land(promotionTask, task.id));
+    if (error) throw new DomainError(error);
   }
 
   const localMergeTaskId = task.question_pending_local_merge_task_id;
@@ -610,16 +623,8 @@ export async function submitAnswer(
   // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
   // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
   // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
-  if (mergePr !== null && deps.github) {
-    let alreadyMerged = false;
-    try {
-      const ws = resolveWorkspaceForAnswer(deps, task.workspace, "cannot read the merge state");
-      alreadyMerged = await deps.github.isPullRequestMerged({ path: ws.path, number: mergePr });
-    } catch {}
-    if (alreadyMerged) {
-      settleMergeQuestionAsObserved(deps.db, task.id, mergePr, now());
-      return getTask(deps.db, task.id)!;
-    }
+  if (await deps.landing.observeMergedPullRequest(task)) {
+    return getTask(deps.db, task.id)!;
   }
   const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   if (wantsMerge) {
@@ -788,19 +793,11 @@ export async function submitAnswer(
       origin,
     );
   }
-  // 同じタスクを指して積み上がった他の PR 昇格失敗 question(再発火が二度目に失敗して
-  // 立った分)は、この retry で着地が成立した時点で誰にも訊くことがない —— 人間に無効な
-  // 意思決定を見せない(issue #412 / ADR 0079 決定3)。判定は retry が throw しなかった
-  // ことではなく盤面の痕跡で読む(#406 と同じ規則)。`answerQuestion` の後に置くので、
-  // いま答えられた question 自身は `done` で todo の対象から自然に外れる。
-  if (wantsPromotionRetry && taskHasLanded(deps.db, promotionTaskId)) {
-    settlePrPromotionQuestionsAsObserved(deps.db, promotionTaskId, now());
-  }
   // abandon は失敗タスクの木を丸ごと cancel する — そこに付帯子が居たなら、待って
   // いた祖先の着地はここで起きる(ADR 0092 決定3: cancel も決着)
   if (task.question_cancel_option !== null && answers[0] === task.question_cancel_option) {
     const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
-    if (abandoned) await deps.relandRootAncestor?.(abandoned);
+    if (abandoned) await deps.landing.relandAncestors(abandoned);
   }
   // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
   // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの

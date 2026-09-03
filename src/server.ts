@@ -30,9 +30,9 @@ import {
   type HarnessContainmentCheck,
   harnessContainmentPickupBlocked,
 } from "./harness-containment.js";
+import { createLanding } from "./landing.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
-import { createMcpRouter, handleRootWorkLanding, relandRootAncestor } from "./mcp.js";
-import { checkPendingAutoMerges, observeMergesOutsideBoard } from "./merge.js";
+import { createMcpRouter } from "./mcp.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import type { Harness } from "./registry.js";
@@ -460,6 +460,18 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // (mcp.ts's attributedWorkerId, claude-worker.ts's start()) — same
   // defense-in-depth `defaultAgentName ?? HUMAN_WORKER_ID` already relies on.
   const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
+  const landing = createLanding({
+    db,
+    clock: options.clock,
+    workspace: options.workspace,
+    resolveWorkspace: options.resolveWorkspace,
+    github: options.github ?? null,
+    authority: options.authority,
+    resolveAuthority: options.resolveAuthority,
+    defaultAgentName: worker.id,
+    auditorName,
+    isProtectedWorkspace: options.isProtectedWorkspace,
+  });
   // 封じ込め能力(CONTEXT.md)の合成。fs 半分は呼び出し側から、人間面の自己検査は
   // ここで足す — 撃つ先の実ポートは listen するまで確定しない(port: 0 のテスト
   // 盤面では特に)ので、armed になるのは listen の直後。それまでは合成側が
@@ -524,19 +536,10 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // pickup poll, since it watches external CI state rather than the queue.
   // A no-op tick while pending_auto_merges is empty, same shape as the
   // triage watchdog above.
-  const autoMergeWorkspaceResolver = buildWorkspaceResolver(
-    options.resolveWorkspace,
-    options.workspace,
-  );
   const stopAutoMergePoll =
-    autoMergeWorkspaceResolver && options.github
+    buildWorkspaceResolver(options.resolveWorkspace, options.workspace) && options.github
       ? options.clock.setInterval(() => {
-          void checkPendingAutoMerges(
-            db,
-            options.github!,
-            autoMergeWorkspaceResolver,
-            options.clock.now(),
-          );
+          void landing.tick("auto_merge", options.clock.now());
         }, 60 * 1000)
       : undefined;
   // the outside-merge scan (ADR 0079 決定3): its own, slower interval — the
@@ -546,14 +549,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // The scan buys comfort only (correctness is the answer-time backstop's
   // job), so the 10 minutes is not a thing to "fix" down to 60 seconds.
   const stopOutsideMergeScan =
-    autoMergeWorkspaceResolver && options.github
+    buildWorkspaceResolver(options.resolveWorkspace, options.workspace) && options.github
       ? options.clock.setInterval(() => {
-          void observeMergesOutsideBoard(
-            db,
-            options.github!,
-            autoMergeWorkspaceResolver,
-            options.clock.now(),
-          );
+          void landing.tick("outside_merge", options.clock.now());
         }, 10 * 60 * 1000)
       : undefined;
   // question push notifications (issue #14): a poll rather than a hook at
@@ -573,6 +571,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     db,
     slot,
     clock: options.clock,
+    landing,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github,
@@ -595,8 +594,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
-      retryPrPromotion: (task) => handleRootWorkLanding(mcpDeps, task),
-      relandRootAncestor: (task) => relandRootAncestor(mcpDeps, task),
+      landing,
       registryCandidates: options.registryCandidates,
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
@@ -636,8 +634,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
-      retryPrPromotion: (task) => handleRootWorkLanding(mcpDeps, task),
-      relandRootAncestor: (task) => relandRootAncestor(mcpDeps, task),
+      landing,
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       auditorName,

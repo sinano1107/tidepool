@@ -13,7 +13,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { getTask, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, healthyUsageText, passthroughContainers } from "./fakes.js";
+import { FakeClock, healthyUsageText, passthroughContainers, unusedLanding } from "./fakes.js";
 import { api, bootTidepool, registerWork } from "./harness.js";
 
 const VALID: CodexCapabilityObservation = {
@@ -123,7 +123,12 @@ it("a Harness quarantine answer is accepted only after the same live check recov
   ).get() as { id: string };
   const question = getTask(db, row.id)!;
   await expect(submitAnswer(
-    { db, onQueueHeadChanged() {}, harnessContainment: async () => check() },
+    {
+      db,
+      onQueueHeadChanged() {},
+      harnessContainment: async () => check(),
+      landing: unusedLanding,
+    },
     question,
     ["repaired by hand"],
     undefined,
@@ -133,7 +138,12 @@ it("a Harness quarantine answer is accepted only after the same live check recov
 
   repaired = true;
   await submitAnswer(
-    { db, onQueueHeadChanged() {}, harnessContainment: async () => check() },
+    {
+      db,
+      onQueueHeadChanged() {},
+      harnessContainment: async () => check(),
+      landing: unusedLanding,
+    },
     question,
     ["repaired by hand"],
     "updated the pinned CLI",

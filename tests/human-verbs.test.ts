@@ -16,7 +16,7 @@ import {
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
 import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
-import { FakeDraftClient, FakeGitHubClient } from "./fakes.js";
+import { FakeDraftClient, FakeGitHubClient, unusedLanding } from "./fakes.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
@@ -437,8 +437,11 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
       {
         db,
         onQueueHeadChanged: () => {},
-        retryPrPromotion: async () => {
-          throw new Error("retry failed");
+        landing: {
+          ...unusedLanding,
+          async land() {
+            return { kind: "failed", reason: "promotion_failed", error: "retry failed" };
+          },
         },
       },
       question,
@@ -474,7 +477,7 @@ it("PR promotion の abandon を decision log に残す", async () => {
   const question = onlyQuestion(db);
 
   const answered = await submitAnswer(
-    { db, onQueueHeadChanged: () => {} },
+    { db, onQueueHeadChanged: () => {}, landing: unusedLanding },
     question,
     ["abandon promotion"],
     undefined,
@@ -530,6 +533,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
       onQueueHeadChanged: () => {},
       github,
       resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
+      landing: unusedLanding,
     },
     question,
     ["merge"],
@@ -567,6 +571,7 @@ it("workspace quarantine の回答は tree が clean と確認できるまで拒
         db,
         onQueueHeadChanged: () => {},
         resolveWorkspace: (name) => ({ name: name!, path: "/workspace/does-not-exist" }),
+        landing: unusedLanding,
       },
       question,
       ["repaired by hand"],
@@ -606,6 +611,7 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
         db,
         onQueueHeadChanged: () => {},
         agentRegistered: () => false,
+        landing: unusedLanding,
       },
       question,
       ["repaired by hand"],
@@ -634,6 +640,7 @@ it("containment quarantine の回答は host 能力の再検査が通るまで�
         db,
         onQueueHeadChanged: () => {},
         containment: async () => ({ available: false, reason: "sandbox remains unavailable" }),
+        landing: unusedLanding,
       },
       question,
       ["repaired by hand"],
@@ -689,7 +696,7 @@ it("triage 中の回答は親の先頭復帰を staging し immediate poll を�
   let polls = 0;
 
   const answered = await submitAnswer(
-    { db, onQueueHeadChanged: () => polls++ },
+    { db, onQueueHeadChanged: () => polls++, landing: unusedLanding },
     question,
     ["left"],
     undefined,
@@ -735,7 +742,7 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
   let polls = 0;
 
   const answered = await submitAnswer(
-    { db, onQueueHeadChanged: () => polls++ },
+    { db, onQueueHeadChanged: () => polls++, landing: unusedLanding },
     question,
     ["left"],
     undefined,

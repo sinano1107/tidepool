@@ -20,6 +20,7 @@ import type {
   RepoRef,
   RepoSlug,
 } from "../src/github.js";
+import type { Landing } from "../src/landing.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
 import type { Task } from "../src/tasks.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
@@ -34,6 +35,22 @@ import {
   type WorkerContainer,
   WorkerContainers,
 } from "../src/worker-container.js";
+
+/** Required landing dependency for tests whose exercised door cannot reach a
+ * landing path. A mistaken land call fails loudly; ancestor re-fire is a
+ * legitimate no-op when the fixture has no completed work ancestor. */
+export const unusedLanding: Landing = {
+  async land() {
+    throw new Error("unexpected landing call");
+  },
+  async relandAncestors() {
+    return [];
+  },
+  async observeMergedPullRequest() {
+    return false;
+  },
+  async tick() {},
+};
 
 /** A reading well under the default threshold — the harness default so tests
  *  unrelated to throttling never need to script usage themselves. Exported

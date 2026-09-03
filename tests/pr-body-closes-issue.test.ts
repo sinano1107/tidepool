@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { prBody } from "../src/mcp.js";
+import { prBody } from "../src/landing.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import {
   bootTidepool,

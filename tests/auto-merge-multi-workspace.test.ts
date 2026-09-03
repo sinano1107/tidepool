@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { checkPendingAutoMerges } from "../src/merge.js";
+import { createLanding } from "../src/landing.js";
 import {
   cancelTask,
   getTask,
@@ -36,7 +36,12 @@ const MINUTE = 60 * 1000;
 async function runAutoMergeTick(workspace: WorkspaceConfig) {
   const db = openDb(join(t.dir, "board.sqlite"));
   try {
-    await checkPendingAutoMerges(db, t.github, () => workspace, t.clock.now());
+    await createLanding({
+      db,
+      clock: t.clock,
+      resolveWorkspace: () => workspace,
+      github: t.github,
+    }).tick("auto_merge", t.clock.now());
     return listPendingAutoMerges(db);
   } finally {
     db.close();

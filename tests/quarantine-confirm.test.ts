@@ -57,7 +57,7 @@ it("tree rule 失敗時の question は1択の確認型(repaired by hand)であ�
 // directly against the running board's own sqlite file, same as
 // worker-failure.test.ts drops to the scheduler/tasks seam when the full
 // stack can't reach the scenario. Git itself is still real, never faked.
-it("同一 workspace への2度目の quarantine は question を増やさず、既存 question に再発火の cause イベントを追記する(needs_human は1のまま)", async () => {
+it("同一 workspace への2度目の quarantine は quarantine question を増やさず、既存 question に再発火の cause イベントを追記する(needs_human は1のまま)", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
@@ -70,7 +70,7 @@ it("同一 workspace への2度目の quarantine は question を増やさず、
   db.close();
 
   const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(after.filter((x: any) => x.type === "question")).toHaveLength(1);
+  expect(after.filter((x: any) => x.question_quarantine_workspace === ws.name)).toHaveLength(1);
   expect(after.find((x: any) => x.id === question.id).status).toBe("todo");
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;

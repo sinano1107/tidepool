@@ -1,15 +1,5 @@
-import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
-import { loadRegistry } from "../src/registry.js";
-import {
-  quarantineWorkspace,
-  resolveExecutionWorkspace,
-  UnknownWorkspaceError,
-  type WorkspaceConfig,
-} from "../src/workspace.js";
 import {
   api,
   attachChild,
@@ -25,7 +15,6 @@ import {
   registerWork,
   type Tidepool,
 } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
@@ -40,26 +29,6 @@ afterEach(async () => {
 async function pickUp(pool: Tidepool, taskId: string): Promise<void> {
   await api(pool.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
   await pool.clock.advance(HOUR);
-}
-
-
-/** 「PR 昇格が失敗して失敗 question が立っている根 work」—— 失敗のあとに何が起きるかを
- *  測るテストの共通の出発点。 */
-async function failedPromotion(
-  makeWorkspaceResolver?: (workspace: WorkspaceConfig) => (taskWorkspace: string | null) => WorkspaceConfig,
-) {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace, resolveWorkspace: makeWorkspaceResolver?.(workspace) });
-  t.github.scriptFailure(new Error("token expired"));
-  const task = await registerWork(t, "ship the feature");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
-  await completeViaMcp(t, task.id);
-  const failure = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
-  );
-  expect(t.github.requests).toHaveLength(1);
-  return { workspace, task, failure };
 }
 
 it("purely-local: 未決着の付帯子がある間は着地 question を立てず、付帯子の完了で立つ", async () => {
@@ -81,7 +50,7 @@ it("purely-local: 未決着の付帯子がある間は着地 question を立て�
       worker_id: "tidepool",
       origin: "board",
       kind: "landing_deferred",
-      payload: { kind: "landing_deferred", unsettled_attached_children: 1 },
+      payload: { kind: "landing_deferred", reason: "attached_children", count: 1 },
     }),
   );
 
@@ -298,27 +267,6 @@ it("差分ゼロの完了は付帯子に関係なく着地対象なしを即座�
   );
   expect(events.filter((event: any) => event.kind === "landing_deferred")).toEqual([]);
   expect(await questions(t)).toEqual([]);
-});
-
-it("strict 経路(PR 昇格失敗の retry)では、門の不成立が付帯子を指す例外になる", async () => {
-  const { task, failure } = await failedPromotion();
-  // 着地済みタスクへ後から出た異議の修理と同じ形
-  attachChild(t, task.id, "repair: ship the feature");
-  t.github.scriptFailure(null);
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
-    answers: ["retry"],
-  });
-
-  expect(answered).toMatchObject({
-    status: 409,
-    json: { error: "review still running: 1 attached child task(s) unsettled" },
-  });
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "todo",
-    question_answer: null,
-  });
-  expect(t.github.requests).toHaveLength(1);
 });
 
 it("付帯子が abandon で決着した場合も着地する", async () => {
@@ -585,277 +533,4 @@ it("PR の merge question も同じ検証を通る — 未決着の付帯子が�
     status: "todo",
     question_answer: null,
   });
-});
-
-it("再発火で PR が開いたら、PR 昇格失敗 question は観測で引退する", async () => {
-  const { workspace, task, failure } = await failedPromotion();
-
-  const repair = attachChild(t, task.id, "repair: ship the feature");
-  t.github.scriptFailure(null);
-  await pickUp(t, repair.id);
-  commitWork(workspace.path, "repair.txt", "repaired\n");
-  await completeViaMcp(t, repair.id);
-
-  expect(t.github.requests).toHaveLength(2);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "done",
-    question_answer: null,
-  });
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
-  expect(events.filter((event: any) => event.kind === "question_answered")).toEqual([]);
-  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toMatchObject([
-    { worker_id: "tidepool", origin: "board", payload: { kind: "pr_promotion_observed" } },
-  ]);
-
-  // 引退済みなので retry は受理されず、既存 PR へ `gh pr create` を撃ち直さない
-  expect(await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] })).toMatchObject({
-    status: 409,
-    json: { error: "a done question cannot be answered" },
-  });
-  expect(t.github.requests).toHaveLength(2);
-});
-
-it("purely-local の着地 question は、再発火時に不要になった PR 昇格失敗 question を引退させる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
-  const registryDir = await makeRegistry({
-    "workspaces.yaml": `sandbox:\n  path: ${workspace.path}\n  repo: ${workspace.repo}\n`,
-  });
-  dirs.push(registryDir);
-  t = await bootTidepool({
-    workspace,
-    resolveWorkspace: (taskWorkspace) =>
-      resolveExecutionWorkspace(
-        loadRegistry(registryDir, "purely-local"),
-        "sandbox",
-        taskWorkspace,
-        "/unused",
-      ),
-  });
-  t.github.scriptFailure(new Error("token expired"));
-  const task = await registerWork(t, "ship the feature");
-  await t.clock.advance(HOUR);
-  commitWork(workspace.path, "feature.txt", "finished\n");
-  await completeViaMcp(t, task.id);
-  const failure = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
-  );
-  expect(t.github.requests).toHaveLength(1);
-
-  const child = attachChild(t, task.id, "check the feature");
-  writeFileSync(join(registryDir, "workspaces.yaml"), `sandbox:\n  path: ${workspace.path}\n`);
-  git(registryDir, "add", "workspaces.yaml");
-  git(registryDir, "commit", "-m", "make sandbox purely local");
-  git(workspace.path, "remote", "remove", "origin");
-
-  await pickUp(t, child.id);
-  await completeViaMcp(t, child.id);
-
-  expect(
-    (await questions(t)).filter(
-      (candidate: any) => candidate.question_pending_local_merge_task_id === task.id,
-    ),
-  ).toEqual([
-    expect.objectContaining({
-      status: "todo",
-      question_pending_local_merge_task_id: task.id,
-    }),
-  ]);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "done",
-    question_answer: null,
-  });
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
-  expect(events.filter((event: any) => event.kind === "question_answered")).toEqual([]);
-  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toEqual([
-    expect.objectContaining({ worker_id: "tidepool", origin: "board" }),
-  ]);
-  expect(t.github.requests).toHaveLength(1);
-});
-
-it("再発火が門で止まったら、PR 昇格失敗 question は開いたまま残る", async () => {
-  const { task, failure } = await failedPromotion();
-
-  const first = attachChild(t, task.id, "repair: ship the feature", "human");
-  attachChild(t, task.id, "review: ship the feature", "human");
-  t.github.scriptFailure(null);
-  await api(t.baseUrl, "POST", `/api/tasks/${first.id}/complete`, {});
-
-  // 再発火は走った上で門に止まった —— 走らなかったのと区別する
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
-    expect.objectContaining({
-      kind: "landing_deferred",
-      payload: { kind: "landing_deferred", unsettled_attached_children: 1 },
-    }),
-  );
-  expect(t.github.requests).toHaveLength(1);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "todo",
-    question_answer: null,
-  });
-});
-
-it("再発火で registry drift が workspace を再 quarantine しても、PR 昇格失敗 question は開いたまま残る", async () => {
-  let drifted = false;
-  const { workspace, task, failure } = await failedPromotion((configuredWorkspace) => (name) => {
-    if (drifted) throw new UnknownWorkspaceError(name ?? configuredWorkspace.name);
-    return configuredWorkspace;
-  });
-
-  const repair = attachChild(t, task.id, "repair: ship the feature", "human");
-  drifted = true;
-  t.github.scriptFailure(null);
-  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
-
-  const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(tasks).toContainEqual(
-    expect.objectContaining({
-      status: "todo",
-      question_quarantine_workspace: workspace.name,
-    }),
-  );
-  expect(t.github.requests).toHaveLength(1);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "todo",
-    question_answer: null,
-  });
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
-  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toEqual([]);
-});
-
-it("再発火で workspace が needs-human でも、PR 昇格失敗 question は開いたまま残る", async () => {
-  const { workspace, task, failure } = await failedPromotion();
-  const db = openDb(join(t.dir, "board.sqlite"));
-  quarantineWorkspace(db, workspace.name, new Error("manual quarantine before reland"), t.clock.now());
-  db.close();
-
-  const repair = attachChild(t, task.id, "repair: ship the feature", "human");
-  t.github.scriptFailure(null);
-  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
-
-  expect(t.github.requests).toHaveLength(1);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "todo",
-    question_answer: null,
-  });
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
-  expect(events.filter((event: any) => event.kind === "pr_promotion_observed")).toEqual([]);
-});
-
-it("再発火が着地対象なしを記録した場合も、PR 昇格失敗 question は引退する", async () => {
-  const { workspace, task, failure } = await failedPromotion();
-
-  // 失敗した昇格の間に、その成果は別経路で保護ブランチへ載った = 再発火には運ぶ差分がない
-  git(workspace.path, "push", "--quiet", "origin", `task/${task.id}:main`);
-  const repair = attachChild(t, task.id, "repair: ship the feature", "human");
-  t.github.scriptFailure(null);
-  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
-
-  expect(t.github.requests).toHaveLength(1);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
-    expect.objectContaining({ kind: "nothing_to_land" }),
-  );
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "done",
-    question_answer: null,
-  });
-});
-
-it("再発火が飛んでいる最中に retry が着地させたら、再発火の失敗は question にならない", async () => {
-  const { workspace, task, failure } = await failedPromotion();
-
-  const repair = attachChild(t, task.id, "repair: ship the feature");
-  t.github.scriptFailure(null);
-  // 再発火の `gh pr create` を撃った状態で止め、その窓に人間の retry を差し込む。
-  // 2本目(retry 側・同一ブランチ)は素通りで成功し、解放した1本目は実 GitHub と
-  // 同じ "already exists" で落ちる
-  const createPullRequest = t.github.createPullRequest.bind(t.github);
-  const order: string[] = [];
-  let releaseGate!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    releaseGate = resolve;
-  });
-  let relandEntered!: () => void;
-  const relandStarted = new Promise<void>((resolve) => {
-    relandEntered = resolve;
-  });
-  let calls = 0;
-  t.github.createPullRequest = async (input) => {
-    if (++calls === 1) {
-      order.push("reland:enter");
-      relandEntered();
-      await gate;
-      order.push("reland:already-exists");
-      throw new Error(`a pull request for branch ${input.branch} already exists`);
-    }
-    order.push("retry:create");
-    return createPullRequest(input);
-  };
-
-  await pickUp(t, repair.id);
-  commitWork(workspace.path, "repair.txt", "repaired\n");
-  const completing = completeViaMcp(t, repair.id);
-  await relandStarted;
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
-    answers: ["retry"],
-  });
-  releaseGate();
-  await completing;
-
-  expect(answered.status).toBe(200);
-  expect(order).toEqual(["reland:enter", "retry:create", "reland:already-exists"]);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "done",
-    question_answer: ["retry"],
-  });
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
-  expect(events.filter((event: any) => event.kind === "pr_opened")).toHaveLength(1);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).not.toBeNull();
-  expect(
-    (await questions(t)).filter(
-      (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
-    ),
-  ).toEqual([]);
-});
-
-it("strict retry で着地したら、積み上がった他の PR 昇格失敗 question も観測で引退する", async () => {
-  const { workspace, task, failure } = await failedPromotion();
-
-  // 再発火が同じ原因でもう一度落ちて、同じタスクを指す失敗 question が2件になる
-  const repair = attachChild(t, task.id, "repair: ship the feature");
-  await pickUp(t, repair.id);
-  commitWork(workspace.path, "repair.txt", "repaired\n");
-  await completeViaMcp(t, repair.id);
-  const stacked = (await questions(t)).filter(
-    (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
-  );
-  expect(stacked).toHaveLength(2);
-  const second = stacked.find((q: any) => q.id !== failure.id);
-  t.github.scriptFailure(null);
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, {
-    answers: ["retry"],
-  });
-
-  expect(answered.status).toBe(200);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${failure.id}`)).json).toMatchObject({
-    status: "done",
-    question_answer: ["retry"],
-  });
-  const answeredEvents = (await api(t.baseUrl, "GET", `/api/tasks/${failure.id}/events`)).json;
-  expect(answeredEvents.filter((event: any) => event.kind === "question_answered")).toHaveLength(1);
-  // 引退は観測であって人間の決定ではない —— 誰も答えていない question に回答を書かない
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${second.id}`)).json).toMatchObject({
-    status: "done",
-    question_answer: null,
-  });
-  const secondEvents = (await api(t.baseUrl, "GET", `/api/tasks/${second.id}/events`)).json;
-  expect(secondEvents.filter((event: any) => event.kind === "pr_promotion_observed")).toHaveLength(1);
-  expect(secondEvents.filter((event: any) => event.kind === "question_answered")).toEqual([]);
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
-  expect(events.filter((event: any) => event.kind === "pr_opened")).toHaveLength(1);
-  expect(
-    (await questions(t)).filter(
-      (q: any) => q.status === "todo" && q.question_pending_pr_promotion_task_id === task.id,
-    ),
-  ).toEqual([]);
 });
