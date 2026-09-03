@@ -2,7 +2,6 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { prBody } from "../src/landing.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import {
   bootTidepool,
@@ -131,11 +130,4 @@ it("通常タスク(github_issue_number なし)の complete_task 成立後、PR 
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]?.body).not.toContain("Closes");
-});
-
-it("prBody: handoff doc が無くても盤面の定型フッタは出る(issue #303)", () => {
-  const withoutIssue = prBody(null, null);
-  expect(withoutIssue).toMatch(/board/i);
-  expect(withoutIssue).not.toMatch(/#\d/);
-  expect(prBody(null, 49)).toBe(`${withoutIssue}\n\nCloses #49`);
 });

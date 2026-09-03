@@ -536,8 +536,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // pickup poll, since it watches external CI state rather than the queue.
   // A no-op tick while pending_auto_merges is empty, same shape as the
   // triage watchdog above.
+  const landingPollingEnabled = Boolean(
+    buildWorkspaceResolver(options.resolveWorkspace, options.workspace) && options.github,
+  );
   const stopAutoMergePoll =
-    buildWorkspaceResolver(options.resolveWorkspace, options.workspace) && options.github
+    landingPollingEnabled
       ? options.clock.setInterval(() => {
           void landing.tick("auto_merge", options.clock.now());
         }, 60 * 1000)
@@ -549,7 +552,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // The scan buys comfort only (correctness is the answer-time backstop's
   // job), so the 10 minutes is not a thing to "fix" down to 60 seconds.
   const stopOutsideMergeScan =
-    buildWorkspaceResolver(options.resolveWorkspace, options.workspace) && options.github
+    landingPollingEnabled
       ? options.clock.setInterval(() => {
           void landing.tick("outside_merge", options.clock.now());
         }, 10 * 60 * 1000)

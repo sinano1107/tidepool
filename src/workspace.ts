@@ -235,36 +235,26 @@ function writeMergeTree(
   }
 }
 
-/** ADR 0105: whether merging `source` into `candidate` changes the candidate's
- *  content. History convergence stays as the cheap first answer; divergent
- *  history needs merge-tree so squash/rebase landing reads the same as a merge
- *  commit. Exit 1 is Git's conflict answer (there is content to carry), while
- *  every other failure remains a tool failure. */
-function branchLandingState(
+/** ADR 0105: the content effect of merging `source` into `candidate`.
+ *  History convergence stays as the cheap first answer; divergent history
+ *  needs merge-tree so squash/rebase landing reads the same as a merge commit.
+ *  Exit 1 is Git's conflict answer (the candidate would change), while every
+ *  other failure remains a tool failure. */
+export function branchMergeEffect(
   workspace: WorkspaceConfig,
   candidate: string,
   source: string,
-): { hasContent: boolean; historyConverged: boolean } {
+): { changesCandidate: boolean; historyConverged: boolean } {
   const historyConverged =
     Number(git(workspace.path, "rev-list", "--count", `${candidate}..${source}`)) === 0;
-  if (historyConverged) return { hasContent: false, historyConverged };
+  if (historyConverged) return { changesCandidate: false, historyConverged };
   const mergedTree = writeMergeTree(workspace, candidate, source);
   return {
-    hasContent:
+    changesCandidate:
       mergedTree === undefined ||
       mergedTree !== git(workspace.path, "rev-parse", `${candidate}^{tree}`),
     historyConverged,
   };
-}
-
-/** ADR 0073 / ADR 0105: whether this completed root work has content not yet
- *  carried to the same protected-branch ref its landing path uses. */
-export function taskHasContentToLand(workspace: WorkspaceConfig, taskId: string): boolean {
-  return branchLandingState(
-    workspace,
-    protectedBranchRef(workspace),
-    taskBranch(taskId),
-  ).hasContent;
 }
 
 function taskBranchExists(workspace: WorkspaceConfig, taskId: string): boolean {
@@ -309,9 +299,9 @@ export function resolveTaskBranchLineage(
       candidate = branch;
       continue;
     }
-    const landing = branchLandingState(workspace, base, branch);
-    if (landing.hasContent) candidate = branch;
-    else if (!landing.historyConverged) outlivedForkSource = true;
+    const effect = branchMergeEffect(workspace, base, branch);
+    if (effect.changesCandidate) candidate = branch;
+    else if (!effect.historyConverged) outlivedForkSource = true;
   }
   return { branch: candidate, outlivedForkSource };
 }

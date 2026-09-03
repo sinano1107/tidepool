@@ -11,6 +11,7 @@ import {
   listBoard,
   recordPrOpened,
   registerLocalMergeQuestion,
+  registerPrPromotionFailureQuestion,
   registerTask,
 } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
@@ -18,6 +19,8 @@ import {
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   releaseWorkspace,
+  UnknownWorkspaceError,
+  type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
 import {
@@ -44,6 +47,12 @@ async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
   const database = openDb(join(boardDir, "board.sqlite"));
   db = database;
   return { db: database, clock: new FakeClock() };
+}
+
+function promotionFailures(board: Db, taskId: string) {
+  return listBoard(board).filter(
+    (candidate) => candidate.question_pending_pr_promotion_task_id === taskId,
+  );
 }
 
 it("work でないタスクは着地対象ではない", async () => {
@@ -115,8 +124,11 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
     clock.now(),
   );
   git(workspace.path, "branch", `task/${task.id}`);
+  registerPrPromotionFailureQuestion(db, task, "first failed attempt", clock.now());
+  registerPrPromotionFailureQuestion(db, task, "second failed attempt", clock.now());
+  const failures = promotionFailures(db, task.id);
 
-  await expect(landing.land(task)).resolves.toEqual({
+  await expect(landing.land(task, failures[0]!.id)).resolves.toEqual({
     kind: "nothing_to_land",
     base: "main",
   });
@@ -126,6 +138,11 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
       origin: "board",
       payload: { kind: "nothing_to_land", base: "main" },
     }),
+  );
+  expect(getTask(db, failures[0]!.id)).toMatchObject({ status: "todo", question_answer: null });
+  expect(getTask(db, failures[1]!.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(listEvents(db, failures[1]!.id)).toContainEqual(
+    expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
   );
 });
 
@@ -156,10 +173,12 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
   expect(github.requests).toEqual([]);
 });
 
-it("未決着の付帯子がある work は理由と数を返して着地を待つ", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-deferred");
+it("再発火が門で止まったら failure question を開いたままにして GitHub を再試行しない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-deferred");
   const { db, clock } = await openBoard();
-  const landing = createLanding({ db, clock, workspace, github: null });
+  const github = new FakeGitHubClient();
+  github.scriptFailure(new Error("first promotion failed"));
+  const landing = createLanding({ db, clock, workspace, github });
   const task = registerTask(
     db,
     {
@@ -172,6 +191,8 @@ it("未決着の付帯子がある work は理由と数を返して着地を待�
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
+  await landing.land(task);
+  const [failure] = promotionFailures(db, task.id);
   registerTask(
     db,
     {
@@ -183,6 +204,7 @@ it("未決着の付帯子がある work は理由と数を返して着地を待�
     },
     clock.now(),
   );
+  github.scriptFailure(null);
 
   await expect(landing.land(task)).resolves.toEqual({
     kind: "deferred",
@@ -194,6 +216,11 @@ it("未決着の付帯子がある work は理由と数を返して着地を待�
       payload: { kind: "landing_deferred", reason: "attached_children", count: 1 },
     }),
   );
+  expect(getTask(db, failure!.id)).toMatchObject({ status: "todo", question_answer: null });
+  expect(listEvents(db, failure!.id)).not.toContainEqual(
+    expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
+  );
+  expect(github.requests).toHaveLength(1);
 });
 
 it("GitHub の無い purely-local work は merge question 面へ着地する", async () => {
@@ -223,6 +250,45 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
       question_pending_local_merge_task_id: task.id,
     }),
   );
+});
+
+it("remote-backed から purely-local へ変わった再発火は local question を立てて failure question を引退する", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-became-local");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  github.scriptFailure(new Error("token expired"));
+  let currentWorkspace: WorkspaceConfig = workspace;
+  const landing = createLanding({
+    db,
+    clock,
+    resolveWorkspace: () => currentWorkspace,
+    github,
+  });
+  const task = registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship after publication mode changes",
+      purpose: "land using the current workspace declaration",
+      completion_criteria: "a current landing surface exists",
+    },
+    clock.now(),
+  );
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  await landing.land(task);
+  const [failure] = promotionFailures(db, task.id);
+  currentWorkspace = { ...workspace, repo: undefined };
+
+  await expect(landing.land(task)).resolves.toEqual({
+    kind: "landed",
+    surface: "local_merge_question",
+  });
+  expect(getTask(db, failure!.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(listBoard(db)).toContainEqual(
+    expect.objectContaining({ question_pending_local_merge_task_id: task.id }),
+  );
+  expect(github.requests).toHaveLength(1);
 });
 
 it("GitHub の無い remote-backed work は閉じた理由で失敗し failure question を立てる", async () => {
@@ -279,6 +345,8 @@ it("remote-backed work は PR を開いた面を返す", async () => {
     prNumber: 1,
   });
   expect(github.requests).toMatchObject([{ branch: `task/${task.id}`, base: "main" }]);
+  expect(github.requests[0]?.body).toMatch(/board/i);
+  expect(github.requests[0]?.body).not.toMatch(/#\d/);
   expect(getTask(db, task.id)?.pr_number).toBe(1);
 });
 
@@ -462,6 +530,55 @@ it("workspace 不在は閉じた理由で返す", async () => {
   });
 });
 
+it("再発火時の registry drift は閉じた失敗を返し、既存の failure question を引退させない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-registry-drift");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  let drifted = false;
+  const landing = createLanding({
+    db,
+    clock,
+    resolveWorkspace: (name) => {
+      if (drifted) throw new UnknownWorkspaceError(name ?? workspace.name);
+      return workspace;
+    },
+    github,
+  });
+  const task = registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship",
+      purpose: "ship despite a transient registry repair",
+      completion_criteria: "the failure remains actionable",
+    },
+    clock.now(),
+  );
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  github.scriptFailure(new Error("first promotion failed"));
+  await landing.land(task);
+  const [failure] = promotionFailures(db, task.id);
+  drifted = true;
+  github.scriptFailure(null);
+
+  await expect(landing.land(task)).resolves.toMatchObject({
+    kind: "failed",
+    reason: "workspace_unavailable",
+  });
+  expect(getTask(db, failure!.id)).toMatchObject({ status: "todo", question_answer: null });
+  expect(listEvents(db, failure!.id)).not.toContainEqual(
+    expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
+  );
+  expect(listBoard(db)).toContainEqual(
+    expect.objectContaining({
+      status: "todo",
+      question_quarantine_workspace: workspace.name,
+    }),
+  );
+  expect(github.requests).toHaveLength(1);
+});
+
 it("needs-human workspace は閉じた理由で返す", async () => {
   const workspace = await makeWorkspace(dirs, "landing-needs-human");
   const { db, clock } = await openBoard();
@@ -478,6 +595,8 @@ it("needs-human workspace は閉じた理由で返す", async () => {
   );
   git(workspace.path, "checkout", "-b", `task/${task.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
+  registerPrPromotionFailureQuestion(db, task, "first failed attempt", clock.now());
+  const [failure] = promotionFailures(db, task.id);
   quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
 
   await expect(landing.land(task)).resolves.toEqual({
@@ -485,6 +604,38 @@ it("needs-human workspace は閉じた理由で返す", async () => {
     reason: "workspace_needs_human",
     error: `workspace "${workspace.name}" needs human attention before landing`,
   });
+  expect(getTask(db, failure!.id)).toMatchObject({ status: "todo", question_answer: null });
+  expect(listEvents(db, failure!.id)).not.toContainEqual(
+    expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }),
+  );
+});
+
+it("着地判定の Git failure も throw せず閉じた失敗 verdict と question にする", async () => {
+  const workspace = await makeWorkspace(dirs, "landing-git-failure");
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ db, clock, workspace, github: null });
+  const task = registerTask(
+    db,
+    {
+      type: "work",
+      title: "ship",
+      purpose: "surface a broken landing checkout",
+      completion_criteria: "the failure is actionable",
+    },
+    clock.now(),
+  );
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  git(workspace.path, "update-ref", "-d", "refs/heads/main");
+
+  await expect(landing.land(task)).resolves.toMatchObject({
+    kind: "failed",
+    reason: "promotion_failed",
+    error: expect.any(String),
+  });
+  expect(promotionFailures(db, task.id)).toContainEqual(
+    expect.objectContaining({ status: "todo" }),
+  );
 });
 
 it("着地成立は積み上がった failure question を引退させ、回答中の1件だけ除外する", async () => {
@@ -507,9 +658,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
   commitWork(workspace.path, "feature.txt", "ready\n");
   await landing.land(task);
   await landing.land(task);
-  const failures = listBoard(db).filter(
-    (candidate) => candidate.question_pending_pr_promotion_task_id === task.id,
-  );
+  const failures = promotionFailures(db, task.id);
   expect(failures).toHaveLength(2);
   github.scriptFailure(null);
 

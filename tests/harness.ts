@@ -78,6 +78,8 @@ export interface Tidepool {
   containers: FakeContainerRuntime;
   github: FakeGitHubClient;
   push: FakePushClient;
+  /** Shared setup connection; assertions still go through public read surfaces. */
+  db: Db;
   dir: string;
   /** Shut down the process only, keeping the SQLite file — for restart tests. */
   stopServer: () => Promise<void>;
@@ -223,13 +225,14 @@ function normalizeCandidates(
  *  WorkerAdapter and GitHubClient seams. */
 export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
+  const dbPath = join(dir, "board.sqlite");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock, options.workerId);
   const containers = options.containerRuntime ?? new FakeContainerRuntime();
   const github = new FakeGitHubClient();
   const push = new FakePushClient();
   const server = await startServer({
-    dbPath: join(dir, "board.sqlite"),
+    dbPath,
     port: 0,
     mcpPort: 0,
     clock,
@@ -280,9 +283,13 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
       toolSurface: options.toolSurface ?? null,
     },
   });
+  const db = openDb(dbPath);
   let stopped = false;
   const stopServer = async () => {
-    if (!stopped) await server.stop();
+    if (!stopped) {
+      await server.stop();
+      db.close();
+    }
     stopped = true;
   };
   return {
@@ -293,6 +300,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     containers,
     github,
     push,
+    db,
     dir,
     stopServer,
     stop: async () => {

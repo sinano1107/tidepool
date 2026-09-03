@@ -28,6 +28,7 @@ import {
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
 import {
+  branchMergeEffect,
   buildWorkspaceResolver,
   catchUpTaskBranch,
   isRemoteBacked,
@@ -37,7 +38,6 @@ import {
   resolveOrQuarantine,
   resolveTaskBranchLineage,
   taskBranch,
-  taskHasContentToLand,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "./workspace.js";
@@ -147,18 +147,28 @@ const LANDING_NOTICE =
   "above was written by the worker before PR promotion, so it does not reflect landing " +
   "state (push / PR / merge).";
 
-export function prBody(handoffDoc: string | null, githubIssueNumber: number | null): string {
+function prBody(handoffDoc: string | null, githubIssueNumber: number | null): string {
   const doc = handoffDoc ?? "";
   const withNotice = doc ? `${doc}\n\n${LANDING_NOTICE}` : LANDING_NOTICE;
   return githubIssueNumber == null ? withNotice : `${withNotice}\n\nCloses #${githubIssueNumber}`;
 }
 
-export function createLanding(_deps: LandingDeps): Landing {
+/** ADR 0073 / ADR 0105: the landing module owns the completed-root decision;
+ *  workspace only supplies the generic content comparison shared with pickup. */
+function taskHasContentToLand(workspace: WorkspaceConfig, taskId: string): boolean {
+  return branchMergeEffect(
+    workspace,
+    protectedBranchRef(workspace),
+    taskBranch(taskId),
+  ).changesCandidate;
+}
+
+export function createLanding(deps: LandingDeps): Landing {
   const retireFailures = (taskId: string, excludeQuestionId?: string) =>
     settlePrPromotionQuestionsAsObserved(
-      _deps.db,
+      deps.db,
       taskId,
-      _deps.clock.now(),
+      deps.clock.now(),
       excludeQuestionId,
     );
   const failed = (
@@ -169,91 +179,97 @@ export function createLanding(_deps: LandingDeps): Landing {
   ): Extract<LandingVerdict, { kind: "failed" }> => {
     const message = error instanceof Error ? error.message : String(error);
     if (excludePrPromotionQuestionId === undefined) {
-      registerPrPromotionFailureQuestion(_deps.db, task, message, _deps.clock.now());
+      registerPrPromotionFailureQuestion(deps.db, task, message, deps.clock.now());
     }
     return { kind: "failed", reason, error: message };
   };
   const landing: Landing = {
     async land(task, excludePrPromotionQuestionId) {
       if (task.type !== "work") return { kind: "not_applicable", reason: "not_work" };
-      const resolve = buildWorkspaceResolver(_deps.resolveWorkspace, _deps.workspace);
-      if (!resolve) {
-        return failed(
-          task,
-          "workspace_unavailable",
-          "no workspace is configured for landing",
-          excludePrPromotionQuestionId,
-        );
-      }
-      const workspace = resolveOrQuarantine(_deps.db, resolve, task.workspace, _deps.clock.now());
-      if (!workspace) {
-        return failed(
-          task,
-          "workspace_unavailable",
-          "workspace is unavailable for landing",
-          excludePrPromotionQuestionId,
-        );
-      }
-      const lineage = resolveTaskBranchLineage(_deps.db, workspace, task);
-      if (lineage.branch) {
-        return { kind: "not_applicable", reason: "ancestor_branch" };
-      }
-      if (workspaceNeedsHuman(_deps.db, workspace.name)) {
-        return failed(
-          task,
-          "workspace_needs_human",
-          `workspace "${workspace.name}" needs human attention before landing`,
-          excludePrPromotionQuestionId,
-        );
-      }
-      if (!taskHasContentToLand(workspace, task.id)) {
-        const base = protectedBranchRef(workspace);
-        if (task.pr_number === null) {
-          appendEvent(_deps.db, {
-            taskId: task.id,
-            workerId: BOARD_WORKER_ID,
-            origin: "board",
-            payload: { kind: "nothing_to_land", base },
-            at: _deps.clock.now(),
-          });
-        }
-        if (excludePrPromotionQuestionId === undefined) retireFailures(task.id);
-        return { kind: "nothing_to_land", base };
-      }
-      const block = landingBlock(_deps.db, task.id);
-      if (block) {
-        recordLandingDeferred(_deps.db, task.id, block, _deps.clock.now());
-        return { kind: "deferred", reason: block.kind, count: block.count };
-      }
-      if (!isRemoteBacked(workspace)) {
-        const purpose =
-          (_deps.resolveAuthority?.(task.assignee) ?? _deps.authority)?.merge ===
-          "auto_if_ci_green"
-            ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
-              `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
-              `protected branch now?`
-            : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
-              `for "${task.title}". Land its task branch on the protected branch now?`;
-        registerLocalMergeQuestion(_deps.db, task, purpose, _deps.clock.now());
-        retireFailures(task.id, excludePrPromotionQuestionId);
-        return { kind: "landed", surface: "local_merge_question" };
-      }
-      if (!_deps.github) {
-        return failed(
-          task,
-          "github_not_configured",
-          "GitHub is not configured for PR promotion",
-          excludePrPromotionQuestionId,
-        );
-      }
-      const landedBefore = taskHasLanded(_deps.db, task.id);
+      let landedBefore = false;
       try {
+        landedBefore = taskHasLanded(deps.db, task.id);
+        const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+        if (!resolve) {
+          return failed(
+            task,
+            "workspace_unavailable",
+            "no workspace is configured for landing",
+            excludePrPromotionQuestionId,
+          );
+        }
+        const workspace = resolveOrQuarantine(
+          deps.db,
+          resolve,
+          task.workspace,
+          deps.clock.now(),
+        );
+        if (!workspace) {
+          return failed(
+            task,
+            "workspace_unavailable",
+            "workspace is unavailable for landing",
+            excludePrPromotionQuestionId,
+          );
+        }
+        const lineage = resolveTaskBranchLineage(deps.db, workspace, task);
+        if (lineage.branch) {
+          return { kind: "not_applicable", reason: "ancestor_branch" };
+        }
+        if (workspaceNeedsHuman(deps.db, workspace.name)) {
+          return failed(
+            task,
+            "workspace_needs_human",
+            `workspace "${workspace.name}" needs human attention before landing`,
+            excludePrPromotionQuestionId,
+          );
+        }
+        if (!taskHasContentToLand(workspace, task.id)) {
+          const base = protectedBranchRef(workspace);
+          if (task.pr_number === null) {
+            appendEvent(deps.db, {
+              taskId: task.id,
+              workerId: BOARD_WORKER_ID,
+              origin: "board",
+              payload: { kind: "nothing_to_land", base },
+              at: deps.clock.now(),
+            });
+          }
+          retireFailures(task.id, excludePrPromotionQuestionId);
+          return { kind: "nothing_to_land", base };
+        }
+        const block = landingBlock(deps.db, task.id);
+        if (block) {
+          recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
+          return { kind: "deferred", reason: block.kind, count: block.count };
+        }
+        if (!isRemoteBacked(workspace)) {
+          const purpose =
+            (deps.resolveAuthority?.(task.assignee) ?? deps.authority)?.merge ===
+            "auto_if_ci_green"
+              ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
+                `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
+                `protected branch now?`
+              : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
+                `for "${task.title}". Land its task branch on the protected branch now?`;
+          registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now());
+          retireFailures(task.id, excludePrPromotionQuestionId);
+          return { kind: "landed", surface: "local_merge_question" };
+        }
+        if (!deps.github) {
+          return failed(
+            task,
+            "github_not_configured",
+            "GitHub is not configured for PR promotion",
+            excludePrPromotionQuestionId,
+          );
+        }
         if (lineage.outlivedForkSource && catchUpTaskBranch(workspace, task.id)) {
-          rebaselineRef(_deps.db, workspace, `refs/heads/${taskBranch(task.id)}`);
+          rebaselineRef(deps.db, workspace, `refs/heads/${taskBranch(task.id)}`);
         }
         if (task.pr_number !== null) {
           if (
-            await _deps.github.isPullRequestMerged({
+            await deps.github.isPullRequestMerged({
               path: workspace.path,
               number: task.pr_number,
             })
@@ -266,9 +282,9 @@ export function createLanding(_deps: LandingDeps): Landing {
               excludePrPromotionQuestionId,
             );
           }
-          await _deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
+          await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
           rebaselineRef(
-            _deps.db,
+            deps.db,
             workspace,
             `refs/remotes/origin/${taskBranch(task.id)}`,
           );
@@ -279,10 +295,10 @@ export function createLanding(_deps: LandingDeps): Landing {
             prNumber: task.pr_number,
           };
         }
-        const { title } = await contentSourceFor(task, _deps.github, () => workspace?.path).expand();
+        const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
         let pr: Awaited<ReturnType<GitHubClient["createPullRequest"]>>;
         try {
-          pr = await _deps.github.createPullRequest({
+          pr = await deps.github.createPullRequest({
             path: workspace.path,
             branch: taskBranch(task.id),
             base: protectedBranch(workspace),
@@ -291,31 +307,31 @@ export function createLanding(_deps: LandingDeps): Landing {
           });
         } finally {
           rebaselineRef(
-            _deps.db,
+            deps.db,
             workspace,
             `refs/remotes/origin/${taskBranch(task.id)}`,
           );
         }
-        const authority = _deps.resolveAuthority?.(task.assignee) ?? _deps.authority;
+        const authority = deps.resolveAuthority?.(task.assignee) ?? deps.authority;
         recordPrOpened(
-          _deps.db,
+          deps.db,
           task,
           pr.number,
           resolveTaskAgent(
             task,
-            _deps.defaultAgentName ?? HUMAN_WORKER_ID,
-            _deps.auditorName ?? DEFAULT_AUDITOR_NAME,
+            deps.defaultAgentName ?? HUMAN_WORKER_ID,
+            deps.auditorName ?? DEFAULT_AUDITOR_NAME,
           ),
-          _deps.clock.now(),
+          deps.clock.now(),
           authority,
-          _deps.isProtectedWorkspace?.(workspace.name),
+          deps.isProtectedWorkspace?.(workspace.name),
           "worker",
         );
         retireFailures(task.id, excludePrPromotionQuestionId);
         return { kind: "landed", surface: "pull_request_opened", prNumber: pr.number };
       } catch (error) {
-        const landed = getTask(_deps.db, task.id);
-        if (!landedBefore && landed && taskHasLanded(_deps.db, task.id)) {
+        const landed = getTask(deps.db, task.id);
+        if (!landedBefore && landed && taskHasLanded(deps.db, task.id)) {
           retireFailures(task.id, excludePrPromotionQuestionId);
           return landed.pr_number === null
             ? { kind: "landed", surface: "local_merge_question" }
@@ -331,60 +347,60 @@ export function createLanding(_deps: LandingDeps): Landing {
     async relandAncestors(settled) {
       const results: Array<{ taskId: string; verdict: LandingVerdict }> = [];
       for (
-        let ancestor = settled.parent_id ? getTask(_deps.db, settled.parent_id) : undefined;
+        let ancestor = settled.parent_id ? getTask(deps.db, settled.parent_id) : undefined;
         ancestor;
-        ancestor = ancestor.parent_id ? getTask(_deps.db, ancestor.parent_id) : undefined
+        ancestor = ancestor.parent_id ? getTask(deps.db, ancestor.parent_id) : undefined
       ) {
         if (ancestor.type !== "work" || ancestor.status !== "done") continue;
-        if (taskHasLanded(_deps.db, ancestor.id) && ancestor.pr_number === null) continue;
+        if (taskHasLanded(deps.db, ancestor.id) && ancestor.pr_number === null) continue;
         results.push({ taskId: ancestor.id, verdict: await landing.land(ancestor) });
       }
       return results;
     },
     async observeMergedPullRequest(question) {
       const prNumber = question.question_pending_merge_pr;
-      const resolve = buildWorkspaceResolver(_deps.resolveWorkspace, _deps.workspace);
-      if (prNumber === null || !resolve || !_deps.github) return false;
+      const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+      if (prNumber === null || !resolve || !deps.github) return false;
       try {
         const workspace = resolve(question.workspace);
-        if (!(await _deps.github.isPullRequestMerged({ path: workspace.path, number: prNumber }))) {
+        if (!(await deps.github.isPullRequestMerged({ path: workspace.path, number: prNumber }))) {
           return false;
         }
-        settleMergeQuestionAsObserved(_deps.db, question.id, prNumber, _deps.clock.now());
+        settleMergeQuestionAsObserved(deps.db, question.id, prNumber, deps.clock.now());
         return true;
       } catch {
         return false;
       }
     },
     async tick(kind, now) {
-      const resolve = buildWorkspaceResolver(_deps.resolveWorkspace, _deps.workspace);
-      const github = _deps.github;
+      const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+      const github = deps.github;
       if (!resolve || !github) return;
       if (kind === "outside_merge") {
         for (const { id, pr_number, workspace: taskWorkspace } of listOpenMergeQuestions(
-          _deps.db,
+          deps.db,
         )) {
-          const workspace = resolveOrQuarantine(_deps.db, resolve, taskWorkspace, now);
+          const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
           if (!workspace) continue;
           try {
             if (
               await github.isPullRequestMerged({ path: workspace.path, number: pr_number })
             ) {
-              settleMergeQuestionAsObserved(_deps.db, id, pr_number, now);
+              settleMergeQuestionAsObserved(deps.db, id, pr_number, now);
             }
           } catch {}
         }
         return;
       }
-      for (const { task_id, pr_number } of listPendingAutoMerges(_deps.db)) {
-        const task = getTask(_deps.db, task_id);
+      for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
+        const task = getTask(deps.db, task_id);
         if (!task) continue;
-        const workspace = resolveOrQuarantine(_deps.db, resolve, task.workspace, now);
-        if (!workspace || landingBlock(_deps.db, task_id)) continue;
+        const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, now);
+        if (!workspace || landingBlock(deps.db, task_id)) continue;
         const status = await github.getCiStatus({ path: workspace.path, number: pr_number });
         if (status === "pending") continue;
         if (status === "success") {
-          if (landingBlock(_deps.db, task_id)) continue;
+          if (landingBlock(deps.db, task_id)) continue;
           let observed = false;
           try {
             await github.mergePullRequest({ path: workspace.path, number: pr_number });
@@ -396,8 +412,8 @@ export function createLanding(_deps: LandingDeps): Landing {
             }
             observed = true;
           }
-          clearPendingAutoMerge(_deps.db, task_id);
-          appendEvent(_deps.db, {
+          clearPendingAutoMerge(deps.db, task_id);
+          appendEvent(deps.db, {
             taskId: task_id,
             workerId: observed ? BOARD_WORKER_ID : HUMAN_WORKER_ID,
             origin: "board",
@@ -408,9 +424,9 @@ export function createLanding(_deps: LandingDeps): Landing {
           });
           continue;
         }
-        clearPendingAutoMerge(_deps.db, task_id);
+        clearPendingAutoMerge(deps.db, task_id);
         registerMergeQuestion(
-          _deps.db,
+          deps.db,
           task,
           pr_number,
           `"${task.title}"'s auto_if_ci_green auto-merge found CI red on PR #${pr_number}. ` +
