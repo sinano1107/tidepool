@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
+import { TRIAGE_TIMEOUT } from "../src/triage.js";
 import {
   api,
   attachChild,
@@ -368,6 +369,72 @@ async function settleAttachedChildren(pool: Tidepool, taskId: string): Promise<v
     expect(res.isError ?? false).toBe(false);
   }
 }
+
+/** Complete an external-dial work task while an objection against its running
+ *  session is still waiting for triage to bundle it. */
+async function completeObjectedExternalWork(): Promise<any> {
+  const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
+  t = await bootTidepool({
+    workspace,
+    authority: { name: "standard", guidance: "", merge: "external" },
+  });
+  const task = await registerWork(t, "ship the objected feature");
+  await t.clock.advance(HOUR);
+  const worker = await mcpClient(t.mcpBaseUrl, task.id);
+  await worker.callTool({
+    name: "log_decision",
+    arguments: { line: "ship the implementation as written" },
+  });
+  await worker.close();
+  const entry = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
+    (candidate: any) => candidate.task_id === task.id && candidate.kind === "decision_logged",
+  );
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: entry.id,
+    comment: "the implementation still needs the agreed repair",
+  });
+  commitWork(workspace.path, "feature.txt", "finished\n");
+
+  expect((await completeViaMcp(t, task.id)).isError ?? false).toBe(false);
+  expect(t.github.requests).toEqual([]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
+    expect.objectContaining({
+      kind: "landing_deferred",
+      payload: { kind: "landing_deferred", reason: "objections", count: 1 },
+    }),
+  );
+  return task;
+}
+
+it("remote-backed(external): 異議中の完了は PR を開かず、Commit と付帯子の決着後に開く", async () => {
+  const task = await completeObjectedExternalWork();
+
+  expect(await api(t.baseUrl, "POST", "/api/triage/close")).toMatchObject({
+    status: 200,
+    json: { outcome: "closed_now" },
+  });
+  expect(t.github.requests).toEqual([]);
+
+  await settleAttachedChildren(t, task.id);
+
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.requests[0]?.branch).toBe(`task/${task.id}`);
+  expect(await questions(t)).toEqual([]);
+});
+
+it("remote-backed(external): timeout が異議を束ねても付帯子の決着後に PR が開く", async () => {
+  const task = await completeObjectedExternalWork();
+
+  await t.clock.advance(TRIAGE_TIMEOUT);
+  expect((await api(t.baseUrl, "GET", "/api/triage")).json.session).toBeNull();
+  expect(t.github.requests).toEqual([]);
+
+  await settleAttachedChildren(t, task.id);
+
+  expect(t.github.requests).toHaveLength(1);
+  expect(t.github.requests[0]?.branch).toBe(`task/${task.id}`);
+  expect(await questions(t)).toEqual([]);
+});
 
 /** 門(#402)を抜けて question が立った**後**に付帯子が付く盤面 — 回答時検証が要る理由そのもの。 */
 async function landingQuestionThenAttachedChild(): Promise<{ task: any; landing: any; workspace: any }> {
