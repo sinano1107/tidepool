@@ -38,12 +38,17 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-it("work でないタスクは着地対象ではない", async () => {
-  const workspace = await makeWorkspace(dirs, "landing-verdict");
+async function openBoard(): Promise<{ db: Db; clock: FakeClock }> {
   const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
   dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const database = openDb(join(boardDir, "board.sqlite"));
+  db = database;
+  return { db: database, clock: new FakeClock() };
+}
+
+it("work でないタスクは着地対象ではない", async () => {
+  const workspace = await makeWorkspace(dirs, "landing-verdict");
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const question = registerTask(
     db,
@@ -65,10 +70,7 @@ it("work でないタスクは着地対象ではない", async () => {
 
 it("祖先の task branch へ帰る work は着地対象ではない", async () => {
   const workspace = await makeWorkspace(dirs, "landing-lineage");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const parent = registerTask(
     db,
@@ -100,10 +102,7 @@ it("祖先の task branch へ帰る work は着地対象ではない", async () 
 
 it("保護ブランチへ運ぶ内容が無い work はその事実を返して記録する", async () => {
   const workspace = await makeWorkspace(dirs, "landing-empty");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
     db,
@@ -132,10 +131,7 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
 
 it("squash 済みで内容差が無い work は commit 差が残っていても着地しない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-squashed");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
   const task = registerTask(
@@ -162,10 +158,7 @@ it("squash 済みで内容差が無い work は commit 差が残っていても�
 
 it("未決着の付帯子がある work は理由と数を返して着地を待つ", async () => {
   const workspace = await makeWorkspace(dirs, "landing-deferred");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
     db,
@@ -205,10 +198,7 @@ it("未決着の付帯子がある work は理由と数を返して着地を待�
 
 it("GitHub の無い purely-local work は merge question 面へ着地する", async () => {
   const workspace = await makeWorkspace(dirs, "landing-local");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
     db,
@@ -237,10 +227,7 @@ it("GitHub の無い purely-local work は merge question 面へ着地する", a
 
 it("GitHub の無い remote-backed work は閉じた理由で失敗し failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-no-github");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
     db,
@@ -270,10 +257,7 @@ it("GitHub の無い remote-backed work は閉じた理由で失敗し failure q
 
 it("remote-backed work は PR を開いた面を返す", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-pr");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
   const task = registerTask(
@@ -300,10 +284,7 @@ it("remote-backed work は PR を開いた面を返す", async () => {
 
 it("open PR を持つ work の修理は同じ PR の branch を更新する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-open-pr");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
   const task = registerTask(
@@ -332,10 +313,7 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
 
 it("open PR 更新は盤面が動かした remote ref だけを再基準化する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-rebaseline");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
   const task = registerTask(
@@ -368,10 +346,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
 
 it("merge 済み PR に残った修理は閉じた理由で失敗し failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-merged-pr");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
   const task = registerTask(
@@ -406,10 +381,7 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
 
 it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-push-failure");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptPushFailure(new Error("push rejected"));
   const landing = createLanding({ db, clock, workspace, github });
@@ -439,10 +411,7 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
 
 it("PR 作成の失敗は閉じた理由で返して failure question を立てる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-pr-failure");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
   const landing = createLanding({ db, clock, workspace, github });
@@ -473,10 +442,7 @@ it("PR 作成の失敗は閉じた理由で返して failure question を立て�
 });
 
 it("workspace 不在は閉じた理由で返す", async () => {
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, github: null });
   const task = registerTask(
     db,
@@ -498,10 +464,7 @@ it("workspace 不在は閉じた理由で返す", async () => {
 
 it("needs-human workspace は閉じた理由で返す", async () => {
   const workspace = await makeWorkspace(dirs, "landing-needs-human");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
     db,
@@ -526,10 +489,7 @@ it("needs-human workspace は閉じた理由で返す", async () => {
 
 it("着地成立は積み上がった failure question を引退させ、回答中の1件だけ除外する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-retirement");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptFailure(new Error("token expired"));
   const landing = createLanding({ db, clock, workspace, github });
@@ -566,10 +526,7 @@ it("着地成立は積み上がった failure question を引退させ、回答�
 
 it("未束ねの異議がある work は同じ門で理由と数を返す", async () => {
   const workspace = await makeWorkspace(dirs, "landing-objection");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const landing = createLanding({ db, clock, workspace, github: null });
   const task = registerTask(
     db,
@@ -606,10 +563,7 @@ it("未束ねの異議がある work は同じ門で理由と数を返す", asyn
 
 it("祖先の再発火は open PR を持つ work だけを更新する", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-ancestors");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
   const root = registerTask(
@@ -665,10 +619,7 @@ it("祖先の再発火は open PR を持つ work だけを更新する", async (
 
 it("並行 retry が先に着地したら遅い再発火の失敗は failure question にしない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-race");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const create = github.createPullRequest.bind(github);
   let entered!: () => void;
@@ -719,10 +670,7 @@ it("並行 retry が先に着地したら遅い再発火の失敗は failure que
 
 it("fork 元が squash 着地した根は保護ブランチへ merge で追いついてから PR を開く", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "landing-catch-up");
-  const boardDir = await mkdtemp(join(tmpdir(), "tidepool-landing-"));
-  dirs.push(boardDir);
-  db = openDb(join(boardDir, "board.sqlite"));
-  const clock = new FakeClock();
+  const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ db, clock, workspace, github });
   const parent = registerTask(
