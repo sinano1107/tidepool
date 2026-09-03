@@ -9,8 +9,15 @@ import {
 } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
-async function completeAgentWork(t: Tidepool, title: string) {
-  const task = await registerWork(t, title);
+async function completeAgentReview(t: Tidepool, title: string) {
+  const task = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "review",
+      title,
+      purpose: `purpose of ${title}`,
+      completion_criteria: `criteria of ${title}`,
+    })
+  ).json;
   await t.clock.advance(HOUR);
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({
@@ -35,7 +42,7 @@ test("未読のある Triage を描画しても pickup は止まらない(issue 
   page,
 }) => {
   const t = await boot();
-  const skimmed = await completeAgentWork(t, "skimmed agent work");
+  const skimmed = await completeAgentReview(t, "skimmed agent work");
   await registerWork(t, "still pickable after a skim");
   const startsBeforeSkim = t.worker.started.length;
 
@@ -60,7 +67,7 @@ test("流し読みだけの Triage も queue を確認して commit でき、既
   page,
 }) => {
   const t = await boot();
-  await completeAgentWork(t, "skim this completion");
+  await completeAgentReview(t, "skim this completion");
   await registerWork(t, "live queue row");
 
   await page.goto(t.baseUrl);
@@ -103,7 +110,7 @@ test("タイムアウト済みの Triage は閉じた時刻と適用済みの操
   page,
 }) => {
   const t = await boot();
-  await completeAgentWork(t, "timeout 前に表示したログ");
+  await completeAgentReview(t, "timeout 前に表示したログ");
   registerQuestion(t, {
     title: "timeout question",
     purpose: "open a triage session",
@@ -125,7 +132,7 @@ test("タイムアウト済みの Triage は閉じた時刻と適用済みの操
   const frozenLastLogId = (await api(t.baseUrl, "GET", "/api/log")).json.entries.at(-1).id;
 
   await t.clock.advance(TRIAGE_TIMEOUT);
-  await completeAgentWork(t, "timeout 後に届いた未表示ログ");
+  await completeAgentReview(t, "timeout 後に届いた未表示ログ");
 
   // The still-rendered banner only closes a live session. It must neither
   // consume the timeout notice nor replace this Triage's frozen log snapshot.
@@ -171,14 +178,14 @@ test("開いているセッションを Triage の Commit が今閉じたと伝�
 
 test("本物の commit 失敗では既読カーソルを進めない(#279)", async ({ boot, page }) => {
   const t = await boot();
-  await completeAgentWork(t, "failed commit stays unread");
+  await completeAgentReview(t, "failed commit stays unread");
 
   await page.goto(t.baseUrl);
   const cursorBefore = (await api(t.baseUrl, "GET", "/api/log")).json.cursor;
   const frozenLastLogId = (await api(t.baseUrl, "GET", "/api/log")).json.entries.at(-1).id;
   await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
-  await completeAgentWork(t, "失敗後の再試行で未表示のまま残すログ");
+  await completeAgentReview(t, "失敗後の再試行で未表示のまま残すログ");
   await page.route("**/api/triage/close", (route) =>
     route.fulfill({
       status: 500,
@@ -208,7 +215,7 @@ test("agent の未読より新しい human エントリも既読 fold に残る(
   page,
 }) => {
   const t = await boot();
-  await completeAgentWork(t, "agent entry stays unread");
+  await completeAgentReview(t, "agent entry stays unread");
   const humanTask = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "work",
@@ -263,7 +270,7 @@ test("開いている triage session 中に queue の ↑ を押すと、停止�
   page,
 }) => {
   const t = await boot();
-  await completeAgentWork(t, "unread agent completion");
+  await completeAgentReview(t, "unread agent completion");
   await registerWork(t, "blocked by the active triage");
   await api(t.baseUrl, "POST", "/api/triage/start");
   const cursorBeforeClose = (await api(t.baseUrl, "GET", "/api/log")).json.cursor;
