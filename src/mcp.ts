@@ -3,18 +3,16 @@ import type { Router } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
+import type { Landing } from "./landing.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   assigneeNeedsApproval,
-  BOARD_WORKER_ID,
   completeTask,
   contentSourceFor,
-  countUnsettledAttachedChildren,
   DEFAULT_AUDITOR_NAME,
   DomainError,
   decomposeTask,
@@ -24,29 +22,15 @@ import {
   HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
   logDecision,
-  recordLandingDeferred,
-  recordPrOpened,
-  registerLocalMergeQuestion,
-  registerPrPromotionFailureQuestion,
   resolveTaskAgent,
-  settlePrPromotionQuestionsAsObserved,
   type Task,
-  taskHasLanded,
   taskHistory,
 } from "./tasks.js";
 import {
   buildWorkspaceResolver,
-  catchUpTaskBranch,
   ensureWorkspaceToken,
-  isRemoteBacked,
-  protectedBranch,
-  protectedBranchRef,
-  rebaselineRef,
   releaseWorkspace,
   resolveOrQuarantine,
-  resolveTaskBranchLineage,
-  taskBranch,
-  taskHasContentToLand,
   treeIsDirty,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -65,6 +49,7 @@ export interface McpDeps {
   db: Db;
   slot: Slot;
   clock: Clock;
+  landing: Landing;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task releases against
@@ -121,229 +106,6 @@ export interface McpDeps {
    *  definition). Absent → no registry configured, so `list_agents` reports
    *  only the fixed `human` line. */
   listAgents?: () => RosterAgent[];
-}
-
-/** handoff doc は PR 昇格より前に worker が書き終えているので、着地状態(push /
- *  PR / merge)については構造的に古い(issue #303)。PR 本文にだけ盤面がこの
- *  定型行を足す — handoff 自体(DB・翻訳・WebUI 表示)は無改変。PR 番号は
- *  `createPullRequest` が返る前に本文を組み立てるため書けない。 */
-const LANDING_NOTICE =
-  "This PR was opened by the tidepool board after the task completed. The handoff doc " +
-  "above was written by the worker before PR promotion, so it does not reflect landing " +
-  "state (push / PR / merge).";
-
-/** 完了の逆方向は GitHub ネイティブに委ねる(issue #49, ADR 0016) — issue-backed
- *  task の PR body に `Closes #N` を追記し、merge が issue を閉じる。PR を伴わない
- *  完了と cancel はこの経路自体を通らないので issue に触れない。 */
-export function prBody(handoffDoc: string | null, githubIssueNumber: number | null): string {
-  const doc = handoffDoc ?? "";
-  const withNotice = doc ? `${doc}\n\n${LANDING_NOTICE}` : LANDING_NOTICE;
-  if (githubIssueNumber == null) return withNotice;
-  return `${withNotice}\n\nCloses #${githubIssueNumber}`;
-}
-
-/** Root work-task completion → landing (issue #19 / ADR 0053 / ADR 0073): by the time this
- *  runs, the tree rule has either stashed the work as a WIP commit on the task branch, or
- *  failed and quarantined the workspace (releaseWorkspace swallows that
- *  failure so the completion itself still stands) — in the latter case the
- *  task branch may carry none of the finished work, so no PR is attempted.
- *  A healthy completion with no commits to carry records nothing_to_land
- *  before the remote-PR / purely-local-question surfaces diverge.
- *  Never entrusted to the worker, never lets a PR failure touch the
- *  completion that already landed — a real creation failure becomes a
- *  Tidepool failure question, while pre-existing quarantine still skips PR
- *  promotion as it did before.
- *  Work returning to an ancestor task branch, question tasks, and review
- *  tasks open no PR.
- *  strict=true is submitAnswer's synchronous retry (issue #66): every
- *  precondition that the first attempt silently skips on becomes a thrown
- *  error the human sees. */
-export async function handleRootWorkLanding(
-  deps: McpDeps,
-  task: Task,
-  strict = true,
-): Promise<void> {
-  if (task.type !== "work") {
-    if (strict) throw new Error("only work tasks can be promoted");
-    return;
-  }
-  // resolved against the task's own execution workspace (issue #26 / ADR
-  // 0009), never just the board's default, through the same fail-closed
-  // seam every other async board-driven use of a task's workspace goes
-  // through — an unresolvable name (registry drift) re-quarantines (a no-op
-  // if the task's slot release already did moments earlier) and skips the PR
-  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-  if (!resolve) {
-    if (strict) throw new Error("no workspace is configured for PR promotion");
-    return;
-  }
-  const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-  if (!workspace) {
-    if (strict) throw new Error("workspace is unavailable for PR promotion");
-    return;
-  }
-  const lineage = resolveTaskBranchLineage(deps.db, workspace, task);
-  if (lineage.branch) {
-    if (strict) throw new Error("task completion lands on an ancestor task branch, not a PR");
-    return;
-  }
-  if (workspaceNeedsHuman(deps.db, workspace.name)) {
-    if (strict) {
-      throw new Error(`workspace "${workspace.name}" needs human attention before PR promotion`);
-    }
-    return;
-  }
-  const base = protectedBranchRef(workspace);
-  if (!taskHasContentToLand(workspace, task.id)) {
-    if (strict) throw new Error(`task branch has nothing to land on "${base}"`);
-    // A previously opened PR whose branch is already present by content has
-    // no new board observation to record. This is the review-settlement
-    // re-fire after an out-of-band squash/rebase merge (ADR 0105 決定3).
-    if (task.pr_number !== null) return;
-    appendEvent(deps.db, {
-      taskId: task.id,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
-      payload: { kind: "nothing_to_land", base },
-      at: deps.clock.now(),
-    });
-    return;
-  }
-  // 着地の門(ADR 0092 決定1): 分解ツリー全体に未決着の付帯子が1つでもあれば、
-  // 3面(purely-local の merge question / PR 昇格 / auto-merge キュー投入)のどれも
-  // 走らせない。門が分岐の手前・`nothing_to_land` の後ろにあるので、差分ゼロの完了は
-  // 付帯子に関係なく従来どおり即座に記録される(ADR 0073)。
-  const unsettled = countUnsettledAttachedChildren(deps.db, task.id);
-  if (unsettled > 0) {
-    if (strict) {
-      throw new Error(`review still running: ${unsettled} attached child task(s) unsettled`);
-    }
-    recordLandingDeferred(deps.db, task.id, unsettled, deps.clock.now());
-    return;
-  }
-  if (!isRemoteBacked(workspace)) {
-    if (strict) {
-      throw new Error("purely-local work lands through a merge question, not PR promotion");
-    }
-    const purpose =
-      attributedAuthority(deps, task)?.merge === "auto_if_ci_green"
-        ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
-          `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
-          `protected branch now?`
-        : `Workspace "${workspace.name}" is purely-local and has no GitHub merge surface ` +
-          `for "${task.title}". Land its task branch on the protected branch now?`;
-    registerLocalMergeQuestion(deps.db, task, purpose, deps.clock.now());
-    return;
-  }
-  if (!deps.github) {
-    if (strict) throw new Error("GitHub is not configured for PR promotion");
-    return;
-  }
-  if (lineage.outlivedForkSource && catchUpTaskBranch(workspace, task.id)) {
-    rebaselineRef(deps.db, workspace, `refs/heads/${taskBranch(task.id)}`);
-  }
-  // ADR 0053: 既に PR を開いているタスクの着地は、PR を増やさず**その PR を更新
-  // する** —— merge back された付帯子の修理を載せるのは、開いたままの PR に向けた
-  // この1本の push である(issue #400)。再発火も strict retry も同じここを通る:
-  // 分けて書くと retry が既に開いている PR へ2本目を撃つ。merge 済みの PR には
-  // 押し直す先が無い(#504)。
-  if (task.pr_number !== null) {
-    if (await deps.github.isPullRequestMerged({ path: workspace.path, number: task.pr_number })) {
-      if (strict) throw new Error(`PR #${task.pr_number} is already merged`);
-      throw new Error(
-        `PR #${task.pr_number} is already merged, but merge-backed repair work on ` +
-          `${taskBranch(task.id)} still has content to land`,
-      );
-    }
-    await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
-    // ADR 0064 決定4: 昇格と同じく `refs/remotes/origin/task/<id>` を1本動かす —— ただし
-    // 撮り直すのは push が**成功した後**だけ。失敗後に撮ると、その窓で偽造された ref を
-    // 基準へ迎え入れる(昇格側の `finally` は push 済みの後の `gh pr create` 失敗を守る型で、
-    // ここでは push そのものが落ちうる)
-    rebaselineRef(deps.db, workspace, `refs/remotes/origin/${taskBranch(task.id)}`);
-    return;
-  }
-  // an issue-backed task's stored title is only the "#N" placeholder
-  // (rowToTask) — the PR title is another of ADR 0016's real use-moments,
-  // so it resolves the live issue instead when there is one.
-  const { title } = await contentSourceFor(task, deps.github, () => workspace.path).expand();
-  let pr: Awaited<ReturnType<typeof deps.github.createPullRequest>>;
-  try {
-    pr = await deps.github.createPullRequest({
-      path: workspace.path,
-      branch: taskBranch(task.id),
-      base: protectedBranch(workspace),
-      title,
-      body: prBody(task.handoff_doc, task.github_issue_number),
-    });
-  } finally {
-    // ADR 0064 決定4: 昇格は `refs/remotes/origin/task/<id>` を1本動かす。`gh pr create`
-    // が落ちても push は先に済んでいるので、失敗経路でも撃たなければ次の解放が
-    // 盤面自身の push を違反として読む
-    rebaselineRef(deps.db, workspace, `refs/remotes/origin/${taskBranch(task.id)}`);
-  }
-  recordPrOpened(
-    deps.db,
-    task,
-    pr.number,
-    attributedWorkerId(deps, task),
-    deps.clock.now(),
-    attributedAuthority(deps, task),
-    deps.isProtectedWorkspace?.(workspace.name),
-    "worker",
-  );
-}
-
-async function openHandoffPr(deps: McpDeps, task: Task): Promise<void> {
-  if (task.type !== "work") return;
-  const landedBefore = taskHasLanded(deps.db, task.id);
-  try {
-    await handleRootWorkLanding(deps, task, false);
-  } catch (err) {
-    // 撮った時に偽で今は真 = この呼び出しが飛んでいる最中に別経路(strict retry)が
-    // 着地を成立させた。着地済みのタスクに PR 昇格失敗 question を立てるのは人間に
-    // 無効な意思決定を見せること(issue #412 / ADR 0079 決定3)。撮った時から真だった
-    // 開いている PR への push 失敗(issue #400)は従来どおり登録する。
-    if (!landedBefore && taskHasLanded(deps.db, task.id)) return;
-    registerPrPromotionFailureQuestion(
-      deps.db,
-      task,
-      err instanceof Error ? err.message : String(err),
-      deps.clock.now(),
-    );
-    return;
-  }
-  // 着地が成立したかは「throw しなかったこと」では測れない —— 非 strict の
-  // `handleRootWorkLanding` は workspace 不在・needs-human・門の不成立で黙って
-  // return する。痕跡を読み直してから、開いたままの PR 昇格失敗 question を引退
-  // させる(issue #406)。共有の `handleRootWorkLanding` 側に置かないのは、strict
-  // retry 経路では同じ question がまだ回答処理の途中にいるため。
-  if (taskHasLanded(deps.db, task.id)) {
-    settlePrPromotionQuestionsAsObserved(deps.db, task.id, deps.clock.now());
-  }
-}
-
-/** 付帯子が決着した瞬間に、その祖先の着地を撃ち直す(ADR 0092 決定3)。走査は新設
- *  せず、決着を起こす経路(worker の complete、人間面の complete / cancel / abandon)が
- *  そのまま発火点になる。着地の根は系譜で決まり木の頂点とは限らない(着地済みの根の
- *  下で切られた修理は自分が根になる — ADR 0053)ので、完了済みの work 祖先すべてに
- *  撃つ: 根でない祖先は `handleRootWorkLanding` が系譜で飛ばし、着地済みの祖先は
- *  `taskHasLanded` が飛ばす —— ただし PR を開いたままの祖先だけは通し、開いている PR を
- *  push で更新させる(issue #400)。門はその中で読み直されるので、待っている間に新しい付帯子が
- *  付いていればもう一度待つ。 */
-export async function relandRootAncestor(deps: McpDeps, settled: Task): Promise<void> {
-  for (
-    let ancestor = settled.parent_id ? getTask(deps.db, settled.parent_id) : undefined;
-    ancestor;
-    ancestor = ancestor.parent_id ? getTask(deps.db, ancestor.parent_id) : undefined
-  ) {
-    if (ancestor.type !== "work" || ancestor.status !== "done") continue;
-    // 着地済みでも、開いたままの PR を持つ祖先だけは撃ち直す —— merge back された
-    // 修理をその PR に載せるため(ADR 0053 / issue #400)。他の着地面(着地対象なし /
-    // purely-local の着地 question)は痕跡どおり二度と起こさない。
-    if (taskHasLanded(deps.db, ancestor.id) && ancestor.pr_number === null) continue;
-    await openHandoffPr(deps, ancestor);
-  }
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's
@@ -613,9 +375,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
       );
       if (completed) {
-        await openHandoffPr(deps, completed);
+        await deps.landing.land(completed);
         // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
-        await relandRootAncestor(deps, completed);
+        await deps.landing.relandAncestors(completed);
       }
       return result;
     },

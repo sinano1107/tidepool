@@ -1594,12 +1594,18 @@ export function settleMergeQuestionAsObserved(
  *  事実と逆の決定を記録する。引退は上と同じ観測決着 —— 再発火は人間の決定ではない。
  *  再発火が二度失敗して失敗 question が積み上がっている場合もあるので、todo の行は
  *  すべて引退させる。 */
-export function settlePrPromotionQuestionsAsObserved(db: Db, taskId: string, now: Date): void {
+export function settlePrPromotionQuestionsAsObserved(
+  db: Db,
+  taskId: string,
+  now: Date,
+  excludeQuestionId?: string,
+): void {
   const rows = db
     .prepare(
-      "SELECT id FROM tasks WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo'",
+      `SELECT id FROM tasks
+        WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo' AND id <> ?`,
     )
-    .all(taskId) as Array<{ id: string }>;
+    .all(taskId, excludeQuestionId ?? "") as Array<{ id: string }>;
   for (const { id } of rows) {
     settleQuestionAsObserved(db, id, { kind: "pr_promotion_observed" }, now);
   }
@@ -2251,7 +2257,12 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
 /** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
  *  つき一度きりなので、「この待ちで既に刻んだか」は「このタスクに landing_deferred が
  *  あるか」で足りる — 付帯子が決着するたびの再検査で重複させない。 */
-export function recordLandingDeferred(db: Db, taskId: string, unsettled: number, now: Date): void {
+export function recordLandingDeferred(
+  db: Db,
+  taskId: string,
+  block: { kind: "attached_children" | "objections"; count: number },
+  now: Date,
+): void {
   const already = db
     .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind = 'landing_deferred'")
     .get(taskId);
@@ -2260,24 +2271,9 @@ export function recordLandingDeferred(db: Db, taskId: string, unsettled: number,
     taskId,
     workerId: BOARD_WORKER_ID,
     origin: "board",
-    payload: { kind: "landing_deferred", unsettled_attached_children: unsettled },
+    payload: { kind: "landing_deferred", reason: block.kind, count: block.count },
     at: now,
   });
-}
-
-/** 着地が済んでいるか(ADR 0092 決定3): 付帯子の決着が撃ち直す着地を、同じタスクで
- *  二重に起こさないための門。着地の3面それぞれが残す痕跡 — PR(`pr_opened`)、
- *  着地対象なし(`nothing_to_land`)、purely-local の着地 question — を見る。
- *  question は status を問わない: `hold` と答えた決定を再提示してはならない。 */
-export function taskHasLanded(db: Db, taskId: string): boolean {
-  const row = db
-    .prepare(
-      `SELECT 1 WHERE EXISTS (SELECT 1 FROM events
-                               WHERE task_id = ? AND kind IN ('pr_opened', 'nothing_to_land'))
-                OR EXISTS (SELECT 1 FROM tasks WHERE question_pending_local_merge_task_id = ?)`,
-    )
-    .get(taskId, taskId);
-  return row !== undefined;
 }
 
 /** The one SQL shape of "this task's execution workspace is quarantined"

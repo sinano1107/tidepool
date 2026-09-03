@@ -3,6 +3,7 @@ import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Clock } from "../src/clock.js";
 import { type Db, openDb } from "../src/db.js";
+import { unusedLanding } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 
 // issue #140 / ADR 0034: worker からの読取(WebFetch 経由の人間面 GET)を
@@ -24,6 +25,7 @@ function listApiGetPaths(): string[] {
     db: {} as Db,
     clock: {} as Clock,
     onQueueHeadChanged: () => {},
+    landing: unusedLanding,
   });
   const paths: string[] = [];
   for (const layer of (

@@ -3,6 +3,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   addTaskChange,
   api,
+  attachChild,
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
@@ -54,7 +55,7 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
   });
 });
 
-it("retrying a failed PR promotion opens the PR before settling the failure question", async () => {
+it("human retry maps failure to a visible error, then lands while excluding the answered question and retiring siblings", async () => {
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({
     workspace: ws,
@@ -67,51 +68,47 @@ it("retrying a failed PR promotion opens the PR before settling the failure ques
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
-  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (x: any) => x.type === "question",
+  const first = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.question_pending_pr_promotion_task_id === task.id,
   );
+  const repair = attachChild(t, task.id, "check the failed promotion", "human");
+  await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
+  const failures = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
+    (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
+  );
+  expect(failures).toHaveLength(2);
+  const sibling = failures.find((candidate: any) => candidate.id !== first.id);
+
+  const failed = await api(t.baseUrl, "POST", `/api/tasks/${first.id}/answer`, {
+    answers: ["retry"],
+  });
+  expect(failed).toMatchObject({ status: 409, json: { error: "token expired" } });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json).toMatchObject({
+    status: "todo",
+    question_answer: null,
+  });
   t.github.scriptFailure(null);
 
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
+  const answered = await api(t.baseUrl, "POST", `/api/tasks/${first.id}/answer`, {
     answers: ["retry"],
   });
 
   expect(answered.status).toBe(200);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json).toMatchObject({
     status: "done",
     question_answer: ["retry"],
   });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${sibling.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: null,
+  });
+  expect(
+    (await api(t.baseUrl, "GET", `/api/tasks/${sibling.id}/events`)).json,
+  ).toContainEqual(expect.objectContaining({ payload: { kind: "pr_promotion_observed" } }));
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).toBe(1);
-  expect(t.github.requests).toHaveLength(2);
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json).toContainEqual(
     expect.objectContaining({ question_pending_merge_pr: 1 }),
   );
-});
-
-it("a failed retry rejects the answer with the promotion error and keeps the question open", async () => {
-  const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace: ws });
-  t.github.scriptFailure(new Error("token expired"));
-  const task = await registerWork(t, "ship the feature");
-  await t.clock.advance(HOUR);
-  addTaskChange(ws.path, task.id);
-  const client = await mcpClient(t.mcpBaseUrl, task.id);
-  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
-  await client.close();
-  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (x: any) => x.type === "question",
-  );
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["retry"],
-  });
-
-  expect(answered).toMatchObject({ status: 409, json: { error: "token expired" } });
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({
-    status: "todo",
-    question_answer: null,
-  });
-  expect(t.github.requests).toHaveLength(2);
 });
 
 it("abandoning PR promotion settles the failure question without changing completed work", async () => {
@@ -229,7 +226,7 @@ it("a malformed POST (answer count mismatch) to an open promotion-failure questi
     answers: ["retry", "x"],
   });
 
-  // before issue #111 this ran retryPrPromotion's real PR-open before
+  // before issue #111 this ran the real promotion retry before
   // answerQuestion's own length validation ever threw — leaving a real PR
   // (and a real merge question) with nothing recorded on the board
   expect(answered.status).toBe(409);

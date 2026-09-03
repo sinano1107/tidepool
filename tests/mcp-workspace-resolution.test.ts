@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { createLanding } from "../src/landing.js";
 import { createMcpRouter } from "../src/mcp.js";
 import { Slot } from "../src/slot.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
@@ -37,6 +38,11 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
     // as the scheduler's pickup() would have done: the task branch is
     // already checked out on prod, not sandbox, by the time the worker runs
     ensureTaskBranch(db, prod, picked);
+    const resolveWorkspace = (name: string | null) => {
+      const ws = registry[name ?? "sandbox"];
+      if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
+      return ws;
+    };
 
     const app = express();
     app.use(
@@ -45,12 +51,9 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
         db,
         slot,
         clock,
+        landing: createLanding({ db, clock, workspace: sandbox, resolveWorkspace, github: null }),
         workspace: sandbox,
-        resolveWorkspace: (name) => {
-          const ws = registry[name ?? "sandbox"];
-          if (!ws) throw new UnknownWorkspaceError(name ?? "sandbox");
-          return ws;
-        },
+        resolveWorkspace,
       }),
     );
     const listener = await new Promise<import("node:http").Server>((resolve) => {

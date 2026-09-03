@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import { openDb } from "../src/db.js";
-import { FakeClock } from "./fakes.js";
+import { FakeClock, unusedLanding } from "./fakes.js";
 import { bootTidepool, mcpClient, TEST_TOKEN, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -16,7 +16,12 @@ afterEach(() => t?.stop());
 function listRoutes(): { method: string; path: string }[] {
   const db = openDb(":memory:");
   try {
-    const router = createApiRouter({ db, clock: new FakeClock(), onQueueHeadChanged: () => {} });
+    const router = createApiRouter({
+      db,
+      clock: new FakeClock(),
+      onQueueHeadChanged: () => {},
+      landing: unusedLanding,
+    });
     const stack = (
       router as unknown as {
         stack: { route?: { path: string; methods: Record<string, boolean> } }[];

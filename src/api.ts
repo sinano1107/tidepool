@@ -32,6 +32,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
+import { type Landing, landingAnnotation } from "./landing.js";
 import {
   getPaceOffsets,
   isValidOffset,
@@ -103,7 +104,6 @@ import {
   closeTriageSessionOnly,
   commitTriage,
   consumePendingDump,
-  landingAnnotation,
   listPendingDumps,
   listScratchpad,
   raiseObjection,
@@ -479,12 +479,7 @@ export interface ApiRouterDeps {
   /** The GitHub-facing seam (issue #19), reused here for the merge dial's
    *  CI-check-then-merge (issue #11). Absent → same as no workspace. */
   github?: GitHubClient;
-  /** Retries a failed PR promotion from a failure question (issue #66). */
-  retryPrPromotion?: (task: Task) => Promise<void>;
-  /** 付帯子が決着したとき、待っていた祖先の着地を撃ち直す(ADR 0092 決定3)。
-   *  人間面で決着が起こる3経路(complete / cancel / abandon)がこれを撃つ。
-   *  Absent → 着地の面を持たない盤面(PR 昇格を持たないのと同じ姿)。 */
-  relandRootAncestor?: (task: Task) => Promise<void>;
+  landing: Landing;
   /** Assignee/workspace name candidates for the registration screen (issue
    *  #12), resolved from the agent registry by the caller (main.ts) — the
    *  API layer never touches the filesystem/git registry loader itself.
@@ -627,8 +622,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     workspace,
     resolveWorkspace,
     github,
-    retryPrPromotion,
-    relandRootAncestor,
+    landing,
     registryCandidates,
     draftClient,
     defaultAgentName,
@@ -1287,7 +1281,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         auditorName,
         agentsSpeakingProviders,
         agentsUsingHarnesses,
-        relandRootAncestor,
+        landing,
       },
       req.params.id,
       parsed.data.reason,
@@ -1325,8 +1319,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           workspace,
           resolveWorkspace,
           github,
-          retryPrPromotion,
-          relandRootAncestor,
+          landing,
           agentRegistered,
           containment,
           harnessContainment,
@@ -1361,7 +1354,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, onQueueHeadChanged, relandRootAncestor },
+      { db, onQueueHeadChanged, landing },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),

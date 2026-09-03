@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import { type Db, openDb } from "../src/db.js";
-import { FakeClock } from "./fakes.js";
+import { FakeClock, unusedLanding } from "./fakes.js";
 import {
   AUTH_HEADERS,
   api,
@@ -33,7 +33,12 @@ const STATIC_GET_PATHS = ["/", "/styles.css", "/_ds_bundle.js"];
 function listGetRoutes(): string[] {
   const db = openDb(":memory:");
   try {
-    const router = createApiRouter({ db, clock: new FakeClock(), onQueueHeadChanged: () => {} });
+    const router = createApiRouter({
+      db,
+      clock: new FakeClock(),
+      onQueueHeadChanged: () => {},
+      landing: unusedLanding,
+    });
     return (router as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack
       .filter((layer) => layer.route?.methods.get)
       .map((layer) => layer.route!.path);

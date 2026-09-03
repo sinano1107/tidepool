@@ -93,10 +93,12 @@ export type EventPayload =
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
-  // ADR 0092 決定1: 着地(PR 昇格 / merge question / auto-merge キュー投入)を、
-  // 分解ツリーの未決着の付帯子が決着するまで見送った。「PR がまだ無い」を記録から
-  // 説明できるようにするための1本で、同じ待ちで繰り返しては刻まない
-  | { kind: "landing_deferred"; unsettled_attached_children: number }
+  // ADR 0092 / ADR 0106: 着地を1つの門(付帯子 / 未束ねの異議)で見送った事実。
+  | {
+      kind: "landing_deferred";
+      reason: "attached_children" | "objections";
+      count: number;
+    }
   // issue #11: a completed work task's handoff opened this PR — pr_number is
   // the durable link the merge dial (escalate / auto_if_ci_green; `external`
   // leaves the PR to GitHub's own surface — ADR 0079) reads back

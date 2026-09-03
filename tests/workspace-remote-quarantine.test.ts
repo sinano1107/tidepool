@@ -222,6 +222,7 @@ it("完了時の merge back で仲介が token を出せなくても、WIP は�
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
   expect(await questionTitles(t)).toEqual([
     expect.stringContaining("workspace sandbox needs human attention"),
+    expect.stringContaining("PR promotion failed: completes while the broker is down"),
   ]);
   expect(await quarantineReason(t)).toContain("invalid_user_token");
 });

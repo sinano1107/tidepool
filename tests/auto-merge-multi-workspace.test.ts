@@ -1,14 +1,6 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
-import { checkPendingAutoMerges } from "../src/merge.js";
-import {
-  cancelTask,
-  getTask,
-  HUMAN_WORKER_ID,
-  listPendingAutoMerges,
-} from "../src/tasks.js";
+import { cancelTask, getTask, HUMAN_WORKER_ID } from "../src/tasks.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   addTaskChange,
@@ -33,14 +25,8 @@ afterEach(async () => {
 
 const MINUTE = 60 * 1000;
 
-async function runAutoMergeTick(workspace: WorkspaceConfig) {
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    await checkPendingAutoMerges(db, t.github, () => workspace, t.clock.now());
-    return listPendingAutoMerges(db);
-  } finally {
-    db.close();
-  }
+async function runAutoMergeTick() {
+  await t.clock.advance(MINUTE);
 }
 
 it("prod workspace の低リスクタスクの auto_if_ci_green poll は、CI チェックと merge を prod の checkout に対して行う", async () => {
@@ -89,12 +75,12 @@ it("PR open 後に付いた未決着の付帯子があれば CI を読まず行�
   await client.close();
   const attached = attachChild(t, task.id, "repair before unattended merge", "human");
 
-  expect(await runAutoMergeTick(workspace)).toEqual([{ task_id: task.id, pr_number: 1 }]);
+  await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([]);
   expect(t.github.merged).toEqual([]);
 
   await api(t.baseUrl, "POST", `/api/tasks/${attached.id}/complete`, {});
-  expect(await runAutoMergeTick(workspace)).toEqual([]);
+  await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([{ path: workspace.path, number: 1 }]);
   expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
@@ -120,13 +106,13 @@ it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止
     return status;
   };
 
-  expect(await runAutoMergeTick(workspace)).toEqual([{ task_id: task.id, pr_number: 1 }]);
+  await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([{ path: workspace.path, number: 1 }]);
   expect(t.github.merged).toEqual([]);
 
   t.github.getCiStatus = getCiStatus;
   await api(t.baseUrl, "POST", `/api/tasks/${attachedId!}/complete`, {});
-  expect(await runAutoMergeTick(workspace)).toEqual([]);
+  await runAutoMergeTick();
   expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });
 
@@ -150,7 +136,7 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
     comment: "the completed decision needs a repair before merge",
   });
 
-  expect(await runAutoMergeTick(workspace)).toEqual([{ task_id: task.id, pr_number: 1 }]);
+  await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([]);
   expect(t.github.merged).toEqual([]);
 
@@ -158,15 +144,16 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
   const attached = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
     (candidate: any) => candidate.parent_id === task.id,
   );
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    for (const child of attached) {
-      cancelTask(db, getTask(db, child.id)!, "test-settlement", HUMAN_WORKER_ID, t.clock.now());
-    }
-  } finally {
-    db.close();
+  for (const child of attached) {
+    cancelTask(
+      t.db,
+      getTask(t.db, child.id)!,
+      "test-settlement",
+      HUMAN_WORKER_ID,
+      t.clock.now(),
+    );
   }
-  expect(await runAutoMergeTick(workspace)).toEqual([]);
+  await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([{ path: workspace.path, number: 1 }]);
   expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);
 });

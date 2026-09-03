@@ -2,16 +2,12 @@ import type { Db } from "./db.js";
 import { appendEvent, type EventRow, getEvent, HUMAN_FACING_KINDS } from "./events.js";
 import {
   type BoardTask,
-  countUnsettledAttachedChildren,
-  DomainError,
   getTask,
   HUMAN_WORKER_ID,
   listBoard,
   moveTask,
   registerTask,
-  subtreeSql,
   type Task,
-  taskIdForPr,
 } from "./tasks.js";
 
 export class TriageError extends Error {}
@@ -118,69 +114,6 @@ export function raiseObjection(
     payload: { kind: "objection_raised", entry_id: entryId, comment, session_id: open.id },
     at: now,
   });
-}
-
-/** ADR 0092 決定5: 着地するタスクの子孫全体に対して、今 open な triage session で
- *  raise され、まだ修理子へ束ねられていない異議の数。異議は entry の持ち主のタスクに
- *  刻まれる(`raiseObjection`)ので、分解子の判断への異議もこの範囲に入る — 束ねは
- *  Commit の行為(ADR 0046)なので、session が閉じるまでは付帯子として現れない。 */
-export function countUnbundledObjections(db: Db, taskId: string): number {
-  const open = activeTriageSession(db);
-  if (!open) return 0;
-  const { n } = db
-    .prepare(
-      `${subtreeSql("?")}
-       SELECT COUNT(*) AS n FROM events
-        WHERE kind = 'objection_raised'
-          AND json_extract(payload, '$.session_id') = ?
-          AND task_id IN (SELECT id FROM subtree)`,
-    )
-    .get(taskId, open.id) as { n: number };
-  return n;
-}
-
-/** 着地が今できない理由。付帯子を先に見る — 両方に引っかかるタスクは
- *  `attached_children` を名乗る(読み口と回答時検証で同じ理由が出るために順序を固定する)。 */
-export type LandingBlock = { kind: "attached_children" | "objections"; count: number };
-
-/** ADR 0092 決定1/決定5 の述語。回答時の検証(`assertLandingAllowed`)と Triage の
- *  読み口が共有する — 盤面が「まだ答えられない」と言う根拠は1つでなければ、UI が
- *  出すボタンと盤面が返す 409 が食い違う。 */
-export function landingBlock(db: Db, landingTaskId: string): LandingBlock | null {
-  const unsettled = countUnsettledAttachedChildren(db, landingTaskId);
-  if (unsettled > 0) return { kind: "attached_children", count: unsettled };
-  const objections = countUnbundledObjections(db, landingTaskId);
-  if (objections > 0) return { kind: "objections", count: objections };
-  return null;
-}
-
-/** Triage の読み口の注釈(ADR 0092 決定4): 着地 question なら回答可否、一般 question
- *  (エスカレーション・quarantine 確認・decompose 承認)なら null。判定は盤面側で行い
- *  WebUI は描画だけを担う。 */
-export function landingAnnotation(
-  db: Db,
-  task: Pick<
-    Task,
-    "question_pending_local_merge_task_id" | "question_pending_merge_pr" | "workspace"
-  >,
-): { blocked_by: LandingBlock["kind"] | null } | null {
-  const local = task.question_pending_local_merge_task_id;
-  const pr = task.question_pending_merge_pr;
-  if (local === null && pr === null) return null;
-  let landingTaskId: string;
-  try {
-    landingTaskId = local ?? taskIdForPr(db, pr as number, task.workspace);
-  } catch (err) {
-    if (!(err instanceof DomainError)) throw err;
-    // 着地するタスクが引けないなら回答経路も同じところで 409 になる(fail-closed —
-    // ADR 0092 決定5)。押せば必ず失敗する merge ボタンを出さないために、読み口でも
-    // 回答不能として返す。
-    // ponytail: 理由は合意済みの2値しか無いので付帯子側を名乗る。`recordPrOpened` が
-    // pr_number を書いてから question を立てるので実際には起きない状態であり、専用の
-    // 3値目が要ると分かった時点で足せばよい。
-    return { blocked_by: "attached_children" };
-  }
-  return { blocked_by: landingBlock(db, landingTaskId)?.kind ?? null };
 }
 
 type LogEntry = Omit<EventRow, "payload"> & {

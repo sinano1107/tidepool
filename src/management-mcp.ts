@@ -26,6 +26,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
+import type { Landing } from "./landing.js";
 import { toolError, toolResult } from "./mcp.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
@@ -73,11 +74,9 @@ export interface ManagementMcpDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
+  landing: Landing;
   draftClient?: DraftClient;
   onQueueHeadChanged: () => void;
-  retryPrPromotion?: (task: import("./tasks.js").Task) => Promise<void>;
-  /** 付帯子の決着で祖先の着地を撃ち直す(ADR 0092 決定3)— WebUI 側と同じ配線。 */
-  relandRootAncestor?: (task: import("./tasks.js").Task) => Promise<void>;
   defaultAgentName?: string;
   auditorName?: string;
   agentRegistered?: (name: string) => boolean;
@@ -608,8 +607,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               workspace: deps.workspace,
               resolveWorkspace: deps.resolveWorkspace,
               github: deps.github,
-              retryPrPromotion: deps.retryPrPromotion,
-              relandRootAncestor: deps.relandRootAncestor,
+              landing: deps.landing,
               agentRegistered: deps.agentRegistered,
               containment: deps.containment,
               harnessContainment: deps.harnessContainment,
