@@ -752,8 +752,7 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
     boardState: { paths: board.boardState, listWorkspaces: () => registeredWorkspaces(board) },
     // ADR 0099 決定2/5: どの容器機構でこのホストの worker を封じるか。選ぶ場所が
-    // 合成 root なのは、platform の判定が env の判定と同じ層だから — 上の
-    // `checkSandboxCapability(platform)` と同じ1行の並びである。実測した機構が
+    // 合成 root なのは、platform の判定が env の判定と同じ層だから。実測した機構が
     // 無い platform は fail-closed な機構を受け取り、boot 時の前提検査が pickup を
     // 止める(macOS の実測は #465)。
     containerRuntime: containerRuntimeFor(platform),
