@@ -332,6 +332,27 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
   git(workspace.path, "checkout", branch);
 }
 
+/** Keep shared project hooks in Git but out of the worker's physical checkout.
+ *  Non-cone sparse-checkout is the Git-native form that leaves the index and
+ *  status clean, so branch changes and the slot-release tree rule need no
+ *  special case for the hidden file. */
+export function excludeWorkspaceProjectHooks(workspace: WorkspaceConfig): void {
+  git(
+    workspace.path,
+    "sparse-checkout",
+    "set",
+    "--no-cone",
+    "/*",
+    "!.claude/settings.json",
+  );
+  if (lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
+    throw new Error(`workspace ${workspace.name}: could not exclude .claude/settings.json`);
+  }
+  if (git(workspace.path, "status", "--porcelain") !== "") {
+    throw new Error(`workspace ${workspace.name}: sparse settings exclusion left a dirty tree`);
+  }
+}
+
 /** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を
  *  訊く1つの問いで、`repo` の宣言と突き合わせる側(下の
  *  `assertRemoteDeclarationMatchesClone`)と、既存 checkout の登録時に宣言を焼く側

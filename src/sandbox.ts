@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { Task } from "./tasks.js";
 
 /** The CLI's own settings shape for a worker session (vendor shape, hence
@@ -25,8 +25,9 @@ export interface WorkerSessionSettings {
    *  mutually exclusive (measured — the blanket kills same-tier flag hooks
    *  too, and the managed tier, the one source that survives it, is a
    *  root-owned host-wide file with its override env var inert on 2.1.235).
-   *  What the blanket covered is re-covered without it: checked-in workspace
-   *  hooks now refuse the spawn (`floorOverridingSettings`, `hooks` key), and
+   *  What the blanket covered is re-covered without it: tracked project hooks
+   *  are kept out of the worker's physical checkout, untracked/local hooks
+   *  refuse the spawn (`workspaceSettingsDisposition`), and
    *  the mid-session hot-load path was already independently closed by ADR
    *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
    *  both measured and re-measured by the deploy canary). The workspace's
@@ -187,14 +188,14 @@ const DENIED_TAILNET_DOMAINS = ["*.ts.net", "raspberrypi"];
 
 /** The workspace-side settings files the CLI merges into a session's settings.
  *  Both live inside the checkout, so a `work` session can write them — which is
- *  what ADR 0037 closes and what `floorOverridingSettings` guards behind it. One
+ *  what ADR 0037 closes and what `workspaceSettingsDisposition` guards behind it. One
  *  list, because the two are the same fact about the CLI's merge order. */
 const PROJECT_SETTINGS_FILES = ["settings.json", "settings.local.json"];
 
 /** ADR 0037's OS-layer half: the sandbox confines Bash, so this is what stops a
  *  `work` session redirecting into its own settings and re-defining the floor
  *  for the *next* Bash call (project settings hot-reload mid-session — the
- *  escalation `floorOverridingSettings`, a spawn-time check, cannot reach).
+ *  escalation `workspaceSettingsDisposition`, a spawn-time check, cannot reach).
  *
  *  **File-level entries, never the `.claude` directory.** Measured on the
  *  production Pi (2.1.207): `denyWrite: [<ws>/.claude]` leaves bwrap unable to
@@ -579,17 +580,57 @@ const defaultRunOk: RunOkFn = (command, args) => {
   }
 };
 
-/** The settings keys that define a worker session's floor rather than its
- *  conveniences — `sandbox` for the OS layer (ADR 0033), `permissions` for the
- *  permission layer review's write floor now rests on (ADR 0035), and `hooks`
- *  since issue #378 retired ADR 0037's `disableAllHooks` blanket: a project
- *  hook runs harness-side — outside the sandbox — and its body (the
- *  `node_modules/.bin` a `npx …` resolves, the `scripts/*.sh` it invokes) is
- *  worker-writable even where the settings file itself is not, so a checkout
- *  carrying hooks is carrying arbitrary off-floor execution. A checkout naming
- *  any of these is claiming authorship of the floor, which is the board's
- *  alone. */
-const FLOOR_DEFINING_KEYS = ["sandbox", "permissions", "hooks"];
+/** Settings that claim authorship of the worker floor and therefore can never
+ *  be silently removed. A tracked project-tier `hooks` block is the exception:
+ *  issue #382 makes that file absent from the worker checkout instead, while
+ *  keeping the human-authored hooks in Git. */
+const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
+
+export interface WorkspaceSettingsDisposition {
+  overriding: string[];
+  projectHooks: boolean;
+}
+
+function sparseCheckoutEnabled(workspacePath: string): boolean {
+  let gitDir = join(workspacePath, ".git");
+  const dotGit = lstatSync(gitDir, { throwIfNoEntry: false });
+  if (!dotGit) return false;
+  if (dotGit.isFile()) {
+    const match = /^gitdir: (.+)$/m.exec(readFileSync(gitDir, "utf8"));
+    if (!match?.[1]) return false;
+    gitDir = resolve(workspacePath, match[1]);
+  }
+  return lstatSync(join(gitDir, "info", "sparse-checkout"), { throwIfNoEntry: false }) !== undefined;
+}
+
+function trackedSettingsFile(workspacePath: string, path: string): boolean {
+  return (
+    spawnSync("git", ["ls-files", "--error-unmatch", "--", path], {
+      cwd: workspacePath,
+      stdio: "ignore",
+    }).status === 0
+  );
+}
+
+function settingsFile(
+  workspacePath: string,
+  name: string,
+): { raw: string; tracked?: true } | "unreadable" | undefined {
+  const path = `.claude/${name}`;
+  try {
+    return { raw: readFileSync(join(workspacePath, path), "utf8") };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return "unreadable";
+    if (name !== "settings.json" || !sparseCheckoutEnabled(workspacePath)) return undefined;
+    const indexed = spawnSync("git", ["show", `:${path}`], {
+      cwd: workspacePath,
+      encoding: "utf8",
+    });
+    return indexed.status === 0 && indexed.stdout !== null
+      ? { raw: indexed.stdout, tracked: true }
+      : undefined;
+  }
+}
 
 /** The floor's one data-dependent guard, and deliberately a guard rather than
  *  part of the floor (ADR 0013:「床はデータの状態に依存しない」— the profile
@@ -622,30 +663,37 @@ const FLOOR_DEFINING_KEYS = ["sandbox", "permissions", "hooks"];
  *  so the same two-session escalation applies.
  *
  *  Fail-closed on a file it cannot parse: the CLI's own reader may accept more
- *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean". A
- *  settings file carrying neither key is left alone — hooks, env and the rest
- *  of a project's ordinary settings are none of this guard's business. */
-export function floorOverridingSettings(workspacePath: string): string[] {
+ *  than `JSON.parse` does, and "we couldn't tell" must not read as "clean".
+ *  Tracked project hooks are returned as a separate disposition for physical
+ *  exclusion; local or untracked hooks remain offending because sparse-checkout
+ *  cannot safely remove them. */
+export function workspaceSettingsDisposition(workspacePath: string): WorkspaceSettingsDisposition {
   const offending: string[] = [];
+  let projectHooks = false;
   for (const name of PROJECT_SETTINGS_FILES) {
-    let raw: string;
-    try {
-      raw = readFileSync(join(workspacePath, ".claude", name), "utf8");
-    } catch {
-      continue; // absent (or unreadable directory) — nothing to merge
+    const file = settingsFile(workspacePath, name);
+    if (file === undefined) continue;
+    if (file === "unreadable") {
+      offending.push(name);
+      continue;
     }
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        FLOOR_DEFINING_KEYS.some((key) => key in parsed)
-      ) {
+      const parsed: unknown = JSON.parse(file.raw);
+      if (typeof parsed !== "object" || parsed === null) continue;
+      if (FLOOR_DEFINING_KEYS.some((key) => key in parsed)) {
         offending.push(name);
+      } else if ("hooks" in parsed) {
+        if (
+          name === "settings.json" &&
+          (file.tracked || trackedSettingsFile(workspacePath, ".claude/settings.json"))
+        ) {
+          projectHooks = true;
+        }
+        else offending.push(name);
       }
     } catch {
       offending.push(name);
     }
   }
-  return offending;
+  return { overriding: offending, projectHooks };
 }

@@ -20,7 +20,7 @@
 # exactly like a floor that works. Nothing inside tidepool can tell the
 # difference (ADR 0027). Only a real session can.
 #
-# FOUR ROWS ACROSS TWO SESSIONS. The board verb is played by a stub MCP server
+# FIVE ROWS ACROSS TWO SESSIONS. The board verb is played by a stub MCP server
 # named `tidepool` (one tool, `ping`) that logs every call it receives — so
 # "the call reached the board" is a file, not a transcript claim.
 #
@@ -35,11 +35,10 @@
 #                        broken MCP wiring.
 #   deny          — in the live session: the Write tool aimed at BOTH settings
 #                   files must be refused BY THE CONFIGURED RULE, which the
-#                   refusal has to name. `settings.local.json` covers the fresh
-#                   create, `settings.json` the overwrite — the latter already
-#                   exists here (planted with a keep marker), so it is judged on
-#                   that marker still being in it rather than on the file's
-#                   existence.
+#                   refusal has to name. Both are absent from this worker view:
+#                   `settings.local.json` was never created and tracked
+#                   `settings.json` is sparse-excluded, so either appearing is
+#                   a breach.
 #   deny/scope    — in the CONTROL session (whose `permissions.deny` is
 #                   identical): the ban must NOT have widened from the two
 #                   settings files to `.claude/` wholesale. The rule's refusal
@@ -50,6 +49,9 @@
 #                   still green. Aimed at `.claude/skills/**` and judged on WHICH
 #                   LAYER refuses it: the rule's own words are the widening; the
 #                   mode's approval request is not (see scope_verdict).
+#   project-hook  — both workspaces carry the same committed SessionStart hook.
+#                   The live workspace has the production sparse exclusion and
+#                   must stay silent; the full-checkout control must fire it.
 #
 # THE CONTROL IS WHY ANY OF THIS MEANS ANYTHING. A session whose settings file
 # was dropped wholesale — or whose MCP stub never connected — is exactly as
@@ -210,7 +212,22 @@ scope_verdict() {
   fi
 }
 
-# The test sources this file for the two verdict functions alone; everything
+# The project-tier hook exclusion is also vendor behaviour: a future CLI could
+# start loading a tracked settings blob from the index even when sparse checkout
+# kept it out of the working tree. The full-checkout control must fire the same
+# committed hook or the live session's silence proves nothing.
+project_hook_verdict() {
+  local live_ran="$1" control_ran="$2" live_fired="$3" control_fired="$4"
+  if [[ "$live_fired" == "yes" ]]; then
+    echo "FAIL"
+  elif [[ "$live_ran" != "yes" || "$control_ran" != "yes" || "$control_fired" != "yes" ]]; then
+    echo "VACUOUS"
+  else
+    echo "PASS"
+  fi
+}
+
+# The test sources this file for the verdict functions alone; everything
 # below has side effects (ssh, mkdir, real claude sessions).
 if [[ "${HOOK_CANARY_SOURCE_ONLY:-}" == "1" ]]; then
   return 0 2>/dev/null || exit 0
@@ -328,6 +345,11 @@ if ! grep -q '"acceptEdits"' "$REPO/src/claude-worker.ts" 2>/dev/null ||
   fail "  Deploy first; the flags below would measure a shape that board never spawns."
   exit 1
 fi
+if ! grep -q 'excludeWorkspaceProjectHooks' "$REPO/src/claude-worker.ts" 2>/dev/null; then
+  fail "$REPO/src/claude-worker.ts does not apply the project-hook sparse exclusion."
+  fail "  Deploy first; the live row below would measure a shape that board never spawns."
+  exit 1
+fi
 
 # The control profile is the board's own emitted profile with ONE key deleted:
 # no hooks means nothing stands between a subagent and the stub, so a control
@@ -341,11 +363,9 @@ del s["hooks"]
 json.dump(s, open(path, "w"))
 PY
 
-# One workspace per role. The planted settings.json carries a harmless keep
-# marker and NO floor keys — issue #378's guard quarantines a hook-carrying
-# workspace before spawn, so arming one here would measure a state the board
-# never runs. The file exists so the deny row's overwrite half has a target:
-# "was it rewritten" is judged on the marker still being in it.
+# One workspace per role. Both carry the same committed, harmless project-tier
+# SessionStart hook. The live workspace gets the production sparse exclusion;
+# the control keeps a full checkout so the same hook must fire there.
 setup_ws() {
   local role="$1"
   local ws
@@ -355,7 +375,14 @@ setup_ws() {
   # creates mount points inside the project for the CLI's own project-relative
   # protected paths, `.git/config.lock` among them.
   git init -q "$ws"
-  printf '{ "env": { "TP_CANARY": "keep" } }\n' > "$ws/.claude/settings.json"
+  printf '{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"touch project-hook-fired"}]}]}}\n' \
+    > "$ws/.claude/settings.json"
+  git -C "$ws" add .claude/settings.json
+  git -C "$ws" -c user.name=canary -c user.email=canary@example.invalid \
+    commit -qm "plant project hook"
+  if [[ "$role" == "live" ]]; then
+    git -C "$ws" sparse-checkout set --no-cone '/*' '!.claude/settings.json'
+  fi
 }
 setup_ws live
 setup_ws control
@@ -516,15 +543,11 @@ run_role() {
 
   local written rule_refused skill_written
   if [[ "$role" == "live" ]]; then
-    # Both settings files, not just the one that does not exist yet. `.local`
-    # would be a fresh create; `settings.json` is already there holding the keep
-    # marker, so it is the overwrite case — the more dangerous half, and the one
-    # a file-existence check alone cannot see. Its survival is judged on the
-    # marker still being in it.
+    # Both settings files are absent in the sparse live checkout, so either one
+    # appearing is a hole in the file-level denyWrite floor.
     written=no
     [[ -f "$ws/$DENY_TARGET" ]] && written=yes
-    # a settings.json that is gone, or no longer holds the marker, was written to
-    grep -q "TP_CANARY" "$ws/.claude/settings.json" 2>/dev/null || written=yes
+    [[ -f "$ws/.claude/settings.json" ]] && written=yes
     # Two spellings for one refusal, both measured, both naming the configured
     # rule: 2.1.220's file-permission check ("File is in a directory that is
     # denied by your permission settings.") and 2.1.207's classifier quoting the
@@ -559,6 +582,18 @@ run_role() {
 run_role live
 run_role control
 
+live_ran=no
+control_ran=no
+live_fired=no
+control_fired=no
+[[ -f "$(ws_of live)/notes.txt" ]] && live_ran=yes
+[[ -f "$(ws_of control)/notes.txt" ]] && control_ran=yes
+[[ -f "$(ws_of live)/project-hook-fired" ]] && live_fired=yes
+[[ -f "$(ws_of control)/project-hook-fired" ]] && control_fired=yes
+record "project-hook" "project settings" "$live_ran/$control_ran" \
+  "fired live:$live_fired ctl:$control_fired" \
+  "$(project_hook_verdict "$live_ran" "$control_ran" "$live_fired" "$control_fired")"
+
 # ════════════════════════════════ verdict ═══════════════════════════════════
 echo
 printf '%s' "$TABLE"
@@ -573,7 +608,7 @@ fi
 
 if [[ "$status" == "0" ]]; then
   log "subagent board verbs are denied, the parent's go through, the settings files are unwritable,"
-  log "and the control proves the harness still delivers subagent MCP calls"
+  log "the live project hook is excluded, and both controls prove their delivery paths"
   rm -rf "$WORK"
 elif [[ "$status" == "2" ]]; then
   fail "nothing got out, but this run could not tell (exit 2). Read the table above:"
@@ -595,6 +630,8 @@ elif [[ "$status" == "2" ]]; then
   fail "                         a refusal quoting the deny RULE is the widening (that is a FAIL"
   fail "                         row, not this one); the MODE's own 'requested permissions to"
   fail "                         write to …' is expected and passes."
+  fail "  project-hook VACUOUS = one session did not run, or the full-checkout control hook did"
+  fail "                         not fire, so the sparse live workspace's silence proves nothing."
   fail "  kept $WORK for inspection"
 else
   fail "THE FLOOR HAS A HOLE (exit 1). One of:"
@@ -603,6 +640,7 @@ else
   fail "  - the deny widened past the two settings files to the whole .claude directory"
   fail "    (that one takes ADR 0025's @workspace skills with it — read deny/scope above)"
   fail "  - the board emitted a deny rule the CLI does not honour"
+  fail "  - a sparse-excluded project hook fired in the live worker session"
   fail "  - the sandbox never started"
   fail "  Treat it as a production incident: halt pickup and read ADR 0037 before deploying."
   fail "  kept $WORK for inspection"

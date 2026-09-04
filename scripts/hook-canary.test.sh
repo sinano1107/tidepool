@@ -125,6 +125,23 @@ scheck "no attempt at all is ambiguous, never a pass"           no  no  no  VACU
 # 転記より先にファイルシステムを信じる(deny_verdict と同じ順序)。
 scheck "a file that exists outranks whatever was reported"      yes yes yes PASS
 
+echo "project-hook — sparse live must stay silent while full-checkout control fires"
+pcheck() {
+  local what="$1" live_ran="$2" control_ran="$3" live_fired="$4" control_fired="$5" want="$6" got
+  got=$(project_hook_verdict "$live_ran" "$control_ran" "$live_fired" "$control_fired")
+  if [[ "$got" == "$want" ]]; then
+    printf '  ok   %s\n' "$what"
+  else
+    printf '  FAIL %s: wanted %s, got %s (project_hook_verdict %s %s %s %s)\n' \
+      "$what" "$want" "$got" "$live_ran" "$control_ran" "$live_fired" "$control_fired" >&2
+    failures=$((failures + 1))
+  fi
+}
+pcheck "only the full-checkout control fires" yes yes no  yes PASS
+pcheck "a hook firing in the sparse live workspace is the breach" yes yes yes yes FAIL
+pcheck "a silent control proves nothing" yes yes no no VACUOUS
+pcheck "a session that never ran proves nothing" no yes no yes VACUOUS
+
 echo
 if [[ "$failures" -eq 0 ]]; then
   echo "hook-canary verdicts: all cases pass"
