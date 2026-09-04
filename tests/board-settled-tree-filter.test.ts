@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTask, completeTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -43,7 +43,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
       },
       new Date(2),
     );
-    cancelTask(db, abandoned, "origin-question", "tidepool", new Date(3));
+    cancelTaskDirectly(db, abandoned, null, new Date(3), {});
 
     const board = listBoard(db);
 
