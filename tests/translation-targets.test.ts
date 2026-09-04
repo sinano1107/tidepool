@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
 import {
   completeTask,
   logDecision,
@@ -73,14 +74,13 @@ it("task_completed イベントの result を解決して翻訳する", async ()
     "human",
     NOW,
   );
-  const events = db
-    .prepare("SELECT id FROM events WHERE task_id = ? AND kind = 'task_completed'")
-    .get(completed.id) as { id: number };
+  const event = listEvents(db, completed.id).find((entry) => entry.kind === "task_completed");
+  expect(event).toBeDefined();
 
   const client = new FakeTranslationClient();
   client.scriptTranslation("センサーは5分ごとに湿度を報告する");
 
-  const outcome = await translateLogEntry(db, client, events.id, "Japanese", NOW);
+  const outcome = await translateLogEntry(db, client, event!.id, "Japanese", NOW);
 
   expect(outcome).toEqual({
     status: "translated",

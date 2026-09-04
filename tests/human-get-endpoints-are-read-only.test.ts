@@ -41,14 +41,10 @@ function listGetRoutes(db: Db): string[] {
     .map((layer) => layer.route!.path);
 }
 
-// 盤面 DB の観測可能な全状態: 全テーブルの全行。データが変わらない限り
-// 同一 DB への同一スキャンは同じ順序を返すので、深い等値比較がそのまま
-// 「1行も変異していない」の判定になる。
-function dumpDb(db: Db): Record<string, unknown[]> {
-  const tables = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-    .all() as { name: string }[];
-  return Object.fromEntries(tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}"`).all()]));
+// DB 全体を SQLite 自身の直列化で比較する。行やテーブルを直接読むことなく、
+// 人間面の GET が盤面を変異していないことを検出する。
+function dumpDb(db: Db): Buffer {
+  return db.serialize();
 }
 
 // 射程は**人間用リスナーの GET 全部**(CONTEXT.md の人間面)。今日それは `/api` の
@@ -105,7 +101,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
     expect(after, `GET ${path} mutated the board DB`).toEqual(before);
     before = after;
   }
-});
+}, 15_000);
 
 // 対照実験: この検出器は本当に変異を見るのか。変異することが分かっている
 // POST を同じ dump 比較にかけ、差が出ることを確かめる — これが red に

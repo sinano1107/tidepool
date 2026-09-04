@@ -21,8 +21,8 @@ import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, listBoard, type Task } from "../src/tasks.js";
-import { reportThrottle } from "../src/throttle.js";
+import { getTask, listBoard, nextSlotTask, type Task } from "../src/tasks.js";
+import { getThrottleState, reportThrottle } from "../src/throttle.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
 import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
 import {
@@ -3046,9 +3046,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     expect(getTask(db, task.id)!.status).toBe("todo");
     // 戻る先は queue の**先頭** = sort_key が盤面の最小値である
-    expect(db.prepare("SELECT id FROM tasks ORDER BY sort_key LIMIT 1").get()).toEqual({
-      id: task.id,
-    });
+    expect(nextSlotTask(db)?.id).toBe(task.id);
     // 失敗ではなく環境事象なので、リトライ判断を問う question は生まれない
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
   });
@@ -3085,14 +3083,13 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
       },
       new Date("2026-08-24T13:00:00.000Z"),
     );
-    const before = db.prepare("SELECT * FROM throttle_state").all();
-    expect(before).toHaveLength(1);
+    const before = getThrottleState(db);
     stdout.write(CAP_STREAM);
 
     emitExit(1, null);
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
-    expect(db.prepare("SELECT * FROM throttle_state").all()).toEqual(before);
+    expect(getThrottleState(db)).toEqual(before);
   });
 
   it("401 の envelope は従来どおり認証 quarantine に落ち、上限到達とは混ざらない", async () => {

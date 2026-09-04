@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { Db } from "../src/db.js";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
@@ -39,14 +38,8 @@ function readToolPayload(result: any): unknown {
   return JSON.parse(result.content[0].text);
 }
 
-function dumpDb(db: Db): unknown {
-  const snapshot: Record<string, unknown> = {};
-  for (const { name } of db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-    .all() as Array<{ name: string }>) {
-    snapshot[name] = db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all();
-  }
-  return snapshot;
+function dumpDb(db: Tidepool["db"]): Buffer {
+  return db.serialize();
 }
 
 it("管理MCP 自身は無認証リクエストを 401 で拒否する(issue #191 / ADR 0036)", async () => {
