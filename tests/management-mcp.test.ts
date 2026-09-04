@@ -38,10 +38,6 @@ function readToolPayload(result: any): unknown {
   return JSON.parse(result.content[0].text);
 }
 
-function dumpDb(db: Tidepool["db"]): Buffer {
-  return db.serialize();
-}
-
 it("管理MCP 自身は無認証リクエストを 401 で拒否する(issue #191 / ADR 0036)", async () => {
   t = await bootTidepool();
   const res = await fetch(`${t.baseUrl}/admin-mcp`, {
@@ -511,20 +507,22 @@ it("管理MCP の読取 tool は盤面データを返して DB を変えない(i
   const task = await registerWork(t, "management MCP read fixture");
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const before = dumpDb(t.db);
+    // harness の db は setup 専用。read tool の呼び出し前に共有 connection を
+    // read-only にし、書き込みを試みる tool は正常 result を返せない形で検出する。
+    t.db.pragma("query_only = ON");
     const { tools } = await client.listTools();
+    const readTools = tools.filter((tool) => readToolNames.includes(tool.name));
     const results = await Promise.all(
-      tools.filter((tool) => readToolNames.includes(tool.name)).map((tool) =>
+      readTools.map((tool) =>
         client.callTool({
           name: tool.name,
           arguments: tool.name === "get_task" ? { task_id: task.id } : {},
         }),
       ),
     );
-    const after = dumpDb(t.db);
 
-    expect(after).toEqual(before);
-    const resultByName = new Map(tools.map((tool, index) => [tool.name, results[index]]));
+    expect(results.every((result) => result.isError !== true)).toBe(true);
+    const resultByName = new Map(readTools.map((tool, index) => [tool.name, results[index]]));
     expect(readToolPayload(resultByName.get("list_board"))).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: task.id, title: task.title })]),
     );
