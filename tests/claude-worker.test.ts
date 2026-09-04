@@ -3084,6 +3084,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
       new Date("2026-08-24T13:00:00.000Z"),
     );
     const before = getThrottleState(db);
+    expect(before.observedAt).toBe("2026-08-24T13:00:00.000Z");
     stdout.write(CAP_STREAM);
 
     emitExit(1, null);
