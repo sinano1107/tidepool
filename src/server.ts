@@ -17,7 +17,6 @@ import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
   composeCommonContainment,
-  containmentPickupBlocked,
   HUMAN_SURFACE_PROBE_PATH,
   quarantineContainment,
 } from "./containment.js";
@@ -245,7 +244,8 @@ export interface ServerOptions {
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   resolveHarness?: (task: Task) => Harness;
   /** Adapter-owned sandbox/tool-surface check. Its presence also arms the
-   *  shared container and live human-surface check. Each gate is re-run at
+   *  shared container and live human-surface check. Their common result is
+   *  prepended to each Harness result, and the four questions are re-run at
    *  boot, pickup, and its Confirmation answer time. */
   harnessContainment?: HarnessContainmentCheck;
   /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
@@ -335,7 +335,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
   // platform-scoped の停止は無く、この盤面が走るホストは1つである。
   const runtimePreflight = containers.preflight();
-  if (!runtimePreflight.available) {
+  if (!runtimePreflight.available && !options.harnessContainment) {
     quarantineContainment(db, runtimePreflight.reason, options.clock.now());
   }
   // ADR 0064 決定4: registry clone の ref を動かす口を1本残らず包む。3つの admin verb
@@ -452,15 +452,21 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
   });
-  // `harnessContainment` is the one production option: adapters prove their
-  // own sandbox/tool surface through it, while its presence also arms the
-  // common container/human-surface check. startServer owns the latter because
-  // only this layer knows the bound human port.
+  // `harnessContainment` is the one production option. startServer prepends
+  // the shared container/human-surface result to each adapter's sandbox/tool
+  // result, so a common failure becomes one quarantine per Harness rather than
+  // a separate board-wide stop. Only this layer knows the bound human port.
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
-  const containment = options.harnessContainment
+  const adapterContainment = options.harnessContainment;
+  const containment = adapterContainment
     ? composeCommonContainment(() => containers.preflight(), () => probeHumanSurface?.())
     : undefined;
-  const harnessContainment = options.harnessContainment;
+  const harnessContainment = adapterContainment && containment
+    ? async (harness: Harness) => {
+        const common = await containment();
+        return common.available ? adapterContainment(harness) : common;
+      }
+    : undefined;
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -479,7 +485,6 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     agentsUsingHarnesses: options.agentsUsingHarnesses,
     resolveHarness: options.resolveHarness,
     harnessContainment,
-    containment,
     registryReachability,
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
@@ -664,9 +669,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // 実際に bind された番号を使う — テスト盤面は port: 0 で起こす。
   probeHumanSurface = () =>
     checkHumanSurfaceRefusesAnonymous(`http://127.0.0.1:${humanPort}${HUMAN_SURFACE_PROBE_PATH}`);
-  // Common containment and both Harness resources are inspected before boot
-  // returns. Pickup and Confirmation answers run the same checks again.
-  if (containment) await containmentPickupBlocked(db, containment, options.clock.now());
+  // Both Harness resources are inspected before boot returns. Pickup and
+  // Confirmation answers run the same four-question check again.
   if (harnessContainment) {
     for (const harness of ["claude-code", "codex"] as const) {
       await harnessContainmentPickupBlocked(db, harness, harnessContainment, options.clock.now());

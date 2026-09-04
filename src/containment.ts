@@ -6,9 +6,9 @@
  *     ADR 0036 / issue #154)— 自分の人間ポートへ実際に1回撃って 401 を見る。
  *
  *  Harness ごとの fs sandbox と tool surface は各 adapter が
- *  `HarnessContainmentCheck` として証明し、Harness quarantine に落とす。この共通
- *  検査と adapter 検査の両方を production で立てる口が `harnessContainment` 1つで
- *  ある。
+ *  `HarnessContainmentCheck` として証明する。この共通検査を各 adapter の答えに
+ *  前置した4問の結果が Harness quarantine に落ちるため、共通部分の不成立は全
+ *  Harness が同じ原因で止まる集積であって、別の盤面全体停止ではない。
  *
  *  2番目の検査が「token ファイルが読めた」ではないのが要点である。前者は自分の
  *  コードを信じるだけだが、後者は listen したリスナー・ミドルウェアの順序・
@@ -40,8 +40,9 @@ const UNPROBED: ContainmentCapability = {
 };
 
 /** Harnesses share the container runtime and the Board's human surface, while
- * each adapter proves its own sandbox and tool surface. A failure here is
- * genuinely host-wide, so it keeps ADR 0099's single Containment quarantine. */
+ * each adapter proves its own sandbox and tool surface. This result is
+ * prepended to each Harness check; it does not create a separate board-wide
+ * stop (CONTEXT.md: Containment capability). */
 export function composeCommonContainment(
   containerRuntime: () => SandboxCapability,
   humanSurface: () => Promise<ContainmentCapability> | undefined,
