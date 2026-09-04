@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { FakeContainerRuntime } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -141,8 +142,10 @@ it("GET /api/pause は開いている triage session を盤面全体の停止と
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([{ kind: "triage" }]);
 });
 
-it("GET /api/pause は封じ込め能力の不成立を盤面全体の停止として返す(ADR 0058)", async () => {
-  t = await bootTidepool({ sandboxCapability: () => ({ available: false, reason: "no sandbox" }) });
+it("GET /api/pause は容器機構の不成立を盤面全体の停止として返す(ADR 0058)", async () => {
+  const containers = new FakeContainerRuntime();
+  containers.scriptPreflight("container runtime unavailable");
+  t = await bootTidepool({ containerRuntime: containers });
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([{ kind: "containment" }]);
 });

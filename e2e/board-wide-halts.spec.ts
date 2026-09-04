@@ -1,6 +1,6 @@
 import { quarantineCliAuth } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
-import { usagePanelText } from "../tests/fakes.js";
+import { FakeContainerRuntime, usagePanelText } from "../tests/fakes.js";
 import { api, HOUR, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
@@ -21,13 +21,13 @@ test("Pause 中の queue ↑ は操作を隠さず、slot と toast が停止理
   await expect(page.getByText("resume to run it")).toBeVisible();
 });
 
-test("封じ込め能力が不成立なら slot と queue ↑ の toast が同じ停止理由を示す(ADR 0058)", async ({
+test("容器機構が不成立なら slot と queue ↑ の toast が同じ停止理由を示す(ADR 0058)", async ({
   boot,
   page,
 }) => {
-  const t = await boot({
-    sandboxCapability: () => ({ available: false, reason: "sandbox unavailable" }),
-  });
+  const containers = new FakeContainerRuntime();
+  containers.scriptPreflight("container runtime unavailable");
+  const t = await boot({ containerRuntime: containers });
   await registerWork(t, "waits for containment repair");
 
   await page.goto(t.baseUrl);

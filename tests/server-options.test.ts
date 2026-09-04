@@ -207,8 +207,7 @@ const source = (name: string) => readFileSync(new URL(`../src/${name}`, import.m
 /** `src/<file>` の `export interface <name>` から、**インターフェース直下**
  *  (インデント2)の任意フィールド名を読む。ソースを読み直すのが要点である ——
  *  型を import すると、テストが観測するのは自分が書いた期待値の写しになる。
- *  入れ子のフィールド(`boardState` / `containment` の中身はインデント4)は
- *  拾わない。 */
+ *  入れ子のフィールド(`boardState` の中身はインデント4)は拾わない。 */
 function optionalFields(file: string, name: string): string[] {
   const s = source(file);
   const rest = s.slice(s.indexOf(`export interface ${name} {`));
@@ -254,7 +253,7 @@ it("ServerOptions の任意フィールドは authority を除いて全て組み
   // 走査そのものが壊れていないことの control。件数だけでは正規表現が**部分的に**
   // 効かなくなった場合を見逃すので、性質の違う3つを名指しで要求する:
   // 素の口・短縮記法で渡される口・入れ子の口。
-  expect(optional).toEqual(expect.arrayContaining(["watchdog", "github", "containment"]));
+  expect(optional).toEqual(expect.arrayContaining(["watchdog", "github", "harnessContainment"]));
 
   const emitted = new Set(Object.keys(await buildServerOptions(composition())));
   // 意図的な不在は `authority` だけ(ADR 0012 / issue #36 の `resolveAuthority` に

@@ -1,29 +1,14 @@
-/** 封じ込め能力(CONTEXT.md: Containment capability)— このホストで worker の
- *  封じ込めが成立しているか、を答える**1つ**の検査。3種類の問いを束ねる:
+/** 封じ込め能力(CONTEXT.md: Containment capability)の共通部分。このホストで
+ *  worker の封じ込めが成立しているかを答える2種類の問いを束ねる:
  *
- *  1. **fs サンドボックスに入れるか**(ホストの能力。ADR 0033 / issue #60)—
- *     `checkSandboxCapability`(sandbox.ts)。
+ *  1. **worker 容器の機構前提が成立するか**(ADR 0099)。
  *  2. **自分の人間面が無認証リクエストを拒むか**(組み上がった自分自身の配線。
  *     ADR 0036 / issue #154)— 自分の人間ポートへ実際に1回撃って 401 を見る。
- *  3. **ツール面が宣言どおりか**(ホストの CLI が盤面の宣言を honor しているか。
- *     ADR 0039 / issue #164)— `/usage` ping の init が返す `tools` を Tool
- *     allowlist と集合として突き合わせる(`probeToolSurfaceCapability`)。
- *     3つ目もホストと盤面自身の性質であって特定の workspace や agent の性質では
- *     ないため、既存2つと同格に束ねられる。
  *
- *  **この3つは1つのゲートに束ねる。** どれも「worker の封じ込めが成立している
- *  か」への答えなので、停止機構も question も1つでよい — 人間から見た結果
- *  (盤面全体の pickup が止まる)が同じなのに機構が分かれていると、「今どちらで
- *  止まっているのか」を読み解く仕事が増える(ADR 0036)。したがってここは
- *  ADR 0033 が作った器(quarantine + 確認型 question + 検証つき解除)をそのまま
- *  広げたものであり、新しい器ではない。
- *
- *  **ただし「盤面全体を止めるゲートは1本だけ」ではない。** ADR 0052 が
- *  レジストリ到達性(`registry-reachability.ts`)を兄弟として足した — 器は同じ
- *  形だが束ねてはいない。「4つ目の問いとして束ねる」案は明示的に却下されている:
- *  registry に届くかは worker の封じ込めではないので、束ねるとこの束の名前が
- *  事実でなくなる。CONTEXT.md の「資源単位の原則が適用できない資源」は、その
- *  結果1つの主張ではなく2つの列挙になっている。
+ *  Harness ごとの fs sandbox と tool surface は各 adapter が
+ *  `HarnessContainmentCheck` として証明し、Harness quarantine に落とす。この共通
+ *  検査と adapter 検査の両方を production で立てる口が `harnessContainment` 1つで
+ *  ある。
  *
  *  2番目の検査が「token ファイルが読めた」ではないのが要点である。前者は自分の
  *  コードを信じるだけだが、後者は listen したリスナー・ミドルウェアの順序・
@@ -32,12 +17,12 @@ import type { Db } from "./db.js";
 import { CAPABILITY_PROBE_TIMEOUT_MS, type SandboxCapability } from "./sandbox.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
-/** 成立か、不成立ならその理由か。fs 半分(`SandboxCapability`)と同じ形を使う —
+/** 成立か、不成立ならその理由か。fs 検査(`SandboxCapability`)と同じ形を使う —
  *  「どの問いが成立していないか」は reason の文面が担うのであって、型では
- *  ない。停止機構が1つである以上、答えの型も1つでよい。 */
+ *  ない。 */
 export type ContainmentCapability = SandboxCapability;
 
-/** 封じ込め能力の検査。人間面の半分が実 HTTP を1往復するので非同期になる。 */
+/** 封じ込め能力の検査。人間面や CLI probe が非同期なので Promise を返す。 */
 export type ContainmentCheck = () => Promise<ContainmentCapability>;
 
 /** 自己検査が撃つ先: **認証があれば 200 を返すパス**(ADR 0036)。存在しない
@@ -108,38 +93,6 @@ export async function checkHumanSurfaceRefusesAnonymous(
       "that can reach this port, worker sessions included (ADR 0036). The usual cause is a " +
       "missing or unusable token hash: the board then fail-opens the human surface on purpose, " +
       "and this gate is the half that keeps it safe",
-  };
-}
-
-/** **4つの問い**を1つの答えに束ねる。安い順に引く: worker 容器の機構前提は
- *  cgroupfs の読み書き数回(ADR 0099 決定5 — boot 時だけでなく pickup と回答時にも
- *  ここで読み直される)、fs 側は spawnSync 1回で listen にも依存しない、人間面は
- *  loopback を1往復、ツール面は実 CLI を1本起こす(~2s)。手前で答えが出ているなら
- *  後ろは撃たない。
- *  `humanSurface` が undefined を返すのは listen 前だけ(server.ts が listen 後に
- *  armed する)。
- *
- *  `toolSurface` は **`null` を明示して**初めて3つ目の問いを持たない盤面になる —
- *  実 CLI を持たないテスト盤面の形であり、ゲートそのものの有無と同じ扱いである
- *  (本番の合成 root は常に渡す)。省略可能にしないのは、この口が**塞ぐ側ではなく
- *  開く側**へ倒れるためである: 忘れれば検査が1つ黙って消える。「省略 = 無制限」
- *  という footgun は作らない(CONTEXT.md の Skill allowlist が同じ理由で省略を
- *  不正にしているのと同じ線)。人間面の `undefined` はこれとは別物で、listen 前
- *  という**一過性**の状態なので fail-closed(`UNPROBED`)に倒れる。 */
-export function composeContainment(
-  containerRuntime: () => SandboxCapability,
-  sandbox: () => SandboxCapability,
-  humanSurface: () => Promise<ContainmentCapability> | undefined,
-  toolSurface: (() => Promise<ContainmentCapability>) | null,
-): ContainmentCheck {
-  return async () => {
-    const container = containerRuntime();
-    if (!container.available) return container;
-    const filesystem = sandbox();
-    if (!filesystem.available) return filesystem;
-    const human = (await humanSurface()) ?? UNPROBED;
-    if (!human.available) return human;
-    return toolSurface === null ? { available: true } : await toolSurface();
   };
 }
 

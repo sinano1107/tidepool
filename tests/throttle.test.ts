@@ -256,8 +256,9 @@ it("pickup gate の実 await 中も GET /api/pause は revalidating=true を返�
     releaseGate = resolve;
   });
   t = await bootTidepool({
-    sandboxCapability: () => ({ available: true }),
-    toolSurface: async () => {
+    resolveHarness: () => "claude-code",
+    harnessContainment: async (harness) => {
+      if (harness === "codex") return { available: true };
       if (++calls === 1) return { available: true };
       enterGate();
       await gate;
