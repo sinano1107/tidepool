@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
-import { openDb } from "../src/db.js";
+import type { Db } from "../src/db.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import { bootTidepool, mcpClient, TEST_TOKEN, type Tidepool } from "./harness.js";
 
@@ -13,36 +13,31 @@ afterEach(() => t?.stop());
  *  リストは将来のルート追加がこのテストの射程から黙って漏れる
  *  (tests/human-get-endpoints-are-read-only.test.ts と同じ手口)。GET だけでなく
  *  全メソッドを拾う: credential は読取も操作も等しく要求する(ADR 0036)。 */
-function listRoutes(): { method: string; path: string }[] {
-  const db = openDb(":memory:");
-  try {
-    const router = createApiRouter({
-      db,
-      clock: new FakeClock(),
-      onQueueHeadChanged: () => {},
-      landing: unusedLanding,
-    });
-    const stack = (
-      router as unknown as {
-        stack: { route?: { path: string; methods: Record<string, boolean> } }[];
-      }
-    ).stack;
-    return stack.flatMap((layer) =>
-      layer.route
-        ? Object.keys(layer.route.methods).map((method) => ({
-            method: method.toUpperCase(),
-            path: layer.route!.path,
-          }))
-        : [],
-    );
-  } finally {
-    db.close();
-  }
+function listRoutes(db: Db): { method: string; path: string }[] {
+  const router = createApiRouter({
+    db,
+    clock: new FakeClock(),
+    onQueueHeadChanged: () => {},
+    landing: unusedLanding,
+  });
+  const stack = (
+    router as unknown as {
+      stack: { route?: { path: string; methods: Record<string, boolean> } }[];
+    }
+  ).stack;
+  return stack.flatMap((layer) =>
+    layer.route
+      ? Object.keys(layer.route.methods).map((method) => ({
+          method: method.toUpperCase(),
+          path: layer.route!.path,
+        }))
+      : [],
+  );
 }
 
 it("/api の全ルートは credential なしでは 401(issue #153 / ADR 0036)", async () => {
   t = await bootTidepool();
-  const routes = listRoutes();
+  const routes = listRoutes(t.db);
   // 列挙の空回り(express 内部構造の変化等)で vacuous に green になる事故を弾く
   // 番犬。総数は下限ではなく実数で固定する — ルートが増減したときに人間がこの
   // 数字を意図して更新することに意味がある

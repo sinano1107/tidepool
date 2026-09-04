@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
-import { openDb } from "../src/db.js";
 import {
   api,
   bootTidepool,
@@ -22,9 +21,8 @@ const MOONSHOT_QUESTION_TITLE =
   "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped";
 
 function quarantineMoonshot(tidepool: Tidepool): void {
-  const db = openDb(`${tidepool.dir}/board.sqlite`);
+  const db = tidepool.db;
   quarantineCliAuthForProvider(db, "moonshot", tidepool.clock.now());
-  db.close();
 }
 
 it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthropic の worker は流れ続ける(確認型 question が立つ)", async () => {

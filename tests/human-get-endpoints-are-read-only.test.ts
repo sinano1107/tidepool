@@ -1,8 +1,7 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
-import { type Db, openDb } from "../src/db.js";
+import type { Db } from "../src/db.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import {
   AUTH_HEADERS,
@@ -30,21 +29,16 @@ const STATIC_GET_PATHS = ["/", "/styles.css", "/_ds_bundle.js"];
 // /api の全 GET ルートを実装そのもの(createApiRouter)から列挙する。手書きの
 // リストは将来のルート追加がこのテストの射程から黙って漏れる — 列挙が実装と
 // 同じ源から出ていれば、新しい GET は登録された瞬間からここを通る。
-function listGetRoutes(): string[] {
-  const db = openDb(":memory:");
-  try {
-    const router = createApiRouter({
-      db,
-      clock: new FakeClock(),
-      onQueueHeadChanged: () => {},
-      landing: unusedLanding,
-    });
-    return (router as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack
-      .filter((layer) => layer.route?.methods.get)
-      .map((layer) => layer.route!.path);
-  } finally {
-    db.close();
-  }
+function listGetRoutes(db: Db): string[] {
+  const router = createApiRouter({
+    db,
+    clock: new FakeClock(),
+    onQueueHeadChanged: () => {},
+    landing: unusedLanding,
+  });
+  return (router as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack
+    .filter((layer) => layer.route?.methods.get)
+    .map((layer) => layer.route!.path);
 }
 
 // 盤面 DB の観測可能な全状態: 全テーブルの全行。データが変わらない限り
@@ -79,7 +73,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   const task = await registerWork(t, "a task to view");
   expect(task.id).toBeTruthy();
 
-  const routes = listGetRoutes();
+  const routes = listGetRoutes(t.db);
   // 列挙の空回り(express 内部構造の変化等)で vacuous に green になる事故を
   // 弾く番犬。総数は下限ではなく実数で固定する — 下限だと1本消えても気づけず、
   // ルートが増減したときに人間がこの数字を意図して更新することに意味がある
@@ -98,25 +92,18 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
     ),
   ];
 
-  // registerQuestion と同じ seam: 同じ SQLite ファイルへの第二の接続は WAL の
-  // 下で安全。サーバーが書けばこの接続からも見える
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    let before = dumpDb(db);
-    for (const path of paths) {
-      // issue #153: 人間面は credential を要求する。ここが測るのは無変異性で
-      // あって認証ではないので、道具側の bearer を付けて読み取り経路まで届かせる
-      const res = await fetch(`${t.baseUrl}${path}`, { headers: AUTH_HEADERS });
-      await res.text();
-      // 200 で固定する。「500 未満」だと将来 404 や 503 の早期 return に落ちた
-      // ルートを素通りさせ、読み取り経路を1行も走らないまま合格してしまう
-      expect(res.status, `GET ${path} did not reach its read path`).toBe(200);
-      const after = dumpDb(db);
-      expect(after, `GET ${path} mutated the board DB`).toEqual(before);
-      before = after;
-    }
-  } finally {
-    db.close();
+  let before = dumpDb(t.db);
+  for (const path of paths) {
+    // issue #153: 人間面は credential を要求する。ここが測るのは無変異性で
+    // あって認証ではないので、道具側の bearer を付けて読み取り経路まで届かせる
+    const res = await fetch(`${t.baseUrl}${path}`, { headers: AUTH_HEADERS });
+    await res.text();
+    // 200 で固定する。「500 未満」だと将来 404 や 503 の早期 return に落ちた
+    // ルートを素通りさせ、読み取り経路を1行も走らないまま合格してしまう
+    expect(res.status, `GET ${path} did not reach its read path`).toBe(200);
+    const after = dumpDb(t.db);
+    expect(after, `GET ${path} mutated the board DB`).toEqual(before);
+    before = after;
   }
 });
 
@@ -125,18 +112,13 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
 // ならない検出器なら上の green は無意味になる
 it("対照: 変異する POST は同じ検出器で差分として見える", async () => {
   t = await bootTidepool();
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    const before = dumpDb(db);
-    const res = await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "a mutating request",
-      purpose: "p",
-      completion_criteria: "c",
-    });
-    expect(res.status).toBe(201);
-    expect(dumpDb(db)).not.toEqual(before);
-  } finally {
-    db.close();
-  }
+  const before = dumpDb(t.db);
+  const res = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title: "a mutating request",
+    purpose: "p",
+    completion_criteria: "c",
+  });
+  expect(res.status).toBe(201);
+  expect(dumpDb(t.db)).not.toEqual(before);
 });

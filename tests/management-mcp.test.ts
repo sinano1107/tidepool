@@ -1,6 +1,5 @@
-import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { openDb } from "../src/db.js";
+import type { Db } from "../src/db.js";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
@@ -40,19 +39,14 @@ function readToolPayload(result: any): unknown {
   return JSON.parse(result.content[0].text);
 }
 
-function dumpDb(dbPath: string): unknown {
-  const db = openDb(dbPath);
-  try {
-    const snapshot: Record<string, unknown> = {};
-    for (const { name } of db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-      .all() as Array<{ name: string }>) {
-      snapshot[name] = db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all();
-    }
-    return snapshot;
-  } finally {
-    db.close();
+function dumpDb(db: Db): unknown {
+  const snapshot: Record<string, unknown> = {};
+  for (const { name } of db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+    .all() as Array<{ name: string }>) {
+    snapshot[name] = db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all();
   }
+  return snapshot;
 }
 
 it("管理MCP 自身は無認証リクエストを 401 で拒否する(issue #191 / ADR 0036)", async () => {
@@ -524,7 +518,7 @@ it("管理MCP の読取 tool は盤面データを返して DB を変えない(i
   const task = await registerWork(t, "management MCP read fixture");
   const client = await managementMcpClient(t.baseUrl);
   try {
-    const before = dumpDb(join(t.dir, "board.sqlite"));
+    const before = dumpDb(t.db);
     const { tools } = await client.listTools();
     const results = await Promise.all(
       tools.filter((tool) => readToolNames.includes(tool.name)).map((tool) =>
@@ -534,7 +528,7 @@ it("管理MCP の読取 tool は盤面データを返して DB を変えない(i
         }),
       ),
     );
-    const after = dumpDb(join(t.dir, "board.sqlite"));
+    const after = dumpDb(t.db);
 
     expect(after).toEqual(before);
     const resultByName = new Map(tools.map((tool, index) => [tool.name, results[index]]));
@@ -554,17 +548,11 @@ it("管理MCP の読取 tool は盤面データを返して DB を変えない(i
 
 it("管理MCP は issue-backed content を保存済みプレースホルダーのまま返す(issue #191)", async () => {
   t = await bootTidepool();
-  const db = openDb(join(t.dir, "board.sqlite"));
-  let issueTask;
-  try {
-    issueTask = registerTask(
-      db,
-      { type: "work", workspace: "tidepool", github_issue_number: 49 },
-      t.clock.now(),
-    );
-  } finally {
-    db.close();
-  }
+  const issueTask = registerTask(
+    t.db,
+    { type: "work", workspace: "tidepool", github_issue_number: 49 },
+    t.clock.now(),
+  );
   const client = await managementMcpClient(t.baseUrl);
   try {
     const result: any = await client.callTool({ name: "list_board", arguments: {} });
@@ -785,24 +773,18 @@ it("register_task は空の content を protocol error ではなく domain tool 
 it("complete_task は human assignee の task だけを mcp origin で完了する(issue #192)", async () => {
   t = await bootTidepool();
   const humanTask = await registerWork(t, "confirm the tide gauge licence", undefined, undefined, "human");
-  const db = openDb(join(t.dir, "board.sqlite"));
-  let agentTask!: ReturnType<typeof registerTask>;
-  try {
-    agentTask = registerTask(
-      db,
-      {
-        type: "work",
-        title: "agent-owned task",
-        purpose: "exercise the completion gate",
-        completion_criteria: "the management MCP refuses it",
-        assignee: "fake-worker",
-      },
-      t.clock.now(),
-      "fake-worker",
-    );
-  } finally {
-    db.close();
-  }
+  const agentTask = registerTask(
+    t.db,
+    {
+      type: "work",
+      title: "agent-owned task",
+      purpose: "exercise the completion gate",
+      completion_criteria: "the management MCP refuses it",
+      assignee: "fake-worker",
+    },
+    t.clock.now(),
+    "fake-worker",
+  );
   const client = await managementMcpClient(t.baseUrl);
   try {
     const done: any = await client.callTool({ name: "complete_task", arguments: { task_id: humanTask.id } });

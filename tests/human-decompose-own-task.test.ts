@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -17,12 +15,7 @@ afterEach(() => t?.stop());
  *  exercise the exception at the seam that actually reads it — the gate
  *  itself only looks at the Task row's fields, never how it got there. */
 function forceInProgress(t: Tidepool, taskId: string): void {
-  const db = openDb(join(t.dir, "board.sqlite"));
-  try {
-    db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(taskId);
-  } finally {
-    db.close();
-  }
+  t.db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(taskId);
 }
 
 it("実行中でも、自分自身(assignee: human)のタスクへの子追加は許可される", async () => {

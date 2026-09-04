@@ -3,7 +3,6 @@ import {
   CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
   quarantineCliAuth,
 } from "../src/cli-auth.js";
-import { openDb } from "../src/db.js";
 import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -29,9 +28,8 @@ it("cliAuth question が開いている間は盤面全体のpickupを止める(A
   t = await bootTidepool({
     cliAuth: async () => ({ status: "unauthorized", reason: "API returned 401" }),
   });
-  const db = openDb(`${t.dir}/board.sqlite`);
+  const db = t.db;
   quarantineCliAuth(db, t.clock.now());
-  db.close();
   await registerWork(t, "waits for authentication repair");
 
   await t.clock.advance(HOUR);

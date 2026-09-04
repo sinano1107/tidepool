@@ -1,8 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { setPaceOffsets, setProviderPaceOffset } from "../src/pace-offsets.js";
 import { setSpendDown } from "../src/spend-down.js";
 import {
@@ -13,16 +12,15 @@ import {
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool | undefined;
-let dir: string | undefined;
 
 afterEach(async () => {
-  await t?.stopServer();
-  if (dir) await rm(dir, { recursive: true, force: true });
+  await t?.stop();
 });
 
 it("Provider/window の観測値・offset・freshness・CLI version を pause と queue に永続表示する", async () => {
-  dir = await mkdtemp(join(tmpdir(), "tidepool-provider-usage-"));
-  const db = openDb(join(dir, "board.sqlite"));
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-usage-"));
+  t = await bootTidepool({ dir });
+  const db = t.db;
   const observedAt = new Date("2026-08-28T08:00:00.000Z");
   reportProviderUsage(db, {
     provider: "openai",
@@ -56,9 +54,6 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
     window: "primary",
     offset: 25,
   });
-  db.close();
-
-  t = await bootTidepool({ dir });
   const expected = [
     {
       provider: "openai",
@@ -114,9 +109,9 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
 });
 
 it("openDb は既存の account-wide throttle と offsets を anthropic の Provider/window 状態へ移す", async () => {
-  dir = await mkdtemp(join(tmpdir(), "tidepool-provider-migration-"));
-  const path = join(dir, "board.sqlite");
-  const db = openDb(path);
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-migration-"));
+  t = await bootTidepool({ dir });
+  const db = t.db;
   const observedAt = new Date("2026-08-28T08:00:00.000Z");
   reportThrottle(
     db,
@@ -132,10 +127,8 @@ it("openDb は既存の account-wide throttle と offsets を anthropic の Prov
     observedAt,
   );
   setPaceOffsets(db, { session: 25, week: 15, fable: 5 });
-  db.close();
-
-  // Reopening is the migration seam; HTTP is the only assertion surface.
-  openDb(path).close();
+  // Rebooting is the migration seam; HTTP is the only assertion surface.
+  await t.stopServer();
   t = await bootTidepool({ dir });
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage).toEqual([
@@ -172,9 +165,9 @@ it("openDb は既存の account-wide throttle と offsets を anthropic の Prov
 });
 
 it("legacy の未観測 window は migration 後も Anthropic unobservable のまま", async () => {
-  dir = await mkdtemp(join(tmpdir(), "tidepool-provider-unobservable-migration-"));
-  const path = join(dir, "board.sqlite");
-  const db = openDb(path);
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-unobservable-migration-"));
+  t = await bootTidepool({ dir });
+  const db = t.db;
   reportThrottle(
     db,
     {
@@ -188,8 +181,7 @@ it("legacy の未観測 window は migration 後も Anthropic unobservable の�
     },
     new Date("2026-08-28T08:00:00.000Z"),
   );
-  db.close();
-  openDb(path).close();
+  await t.stopServer();
   t = await bootTidepool({ dir });
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage[0]).toMatchObject({
@@ -198,8 +190,9 @@ it("legacy の未観測 window は migration 後も Anthropic unobservable の�
   });
 });
 
-it("OpenAI Provider window は active Spend-down で pace line を外し 100% cap だけを残す", () => {
-  const db = openDb(":memory:");
+it("OpenAI Provider window は active Spend-down で pace line を外し 100% cap だけを残す", async () => {
+  t = await bootTidepool();
+  const db = t.db;
   const now = new Date("2026-08-28T08:00:00.000Z");
   setSpendDown(db, "session", now);
 
@@ -224,5 +217,4 @@ it("OpenAI Provider window は active Spend-down で pace line を外し 100% ca
   );
 
   expect(observed.windows[0]).toMatchObject({ throttled: false, resumesAt: null });
-  db.close();
 });

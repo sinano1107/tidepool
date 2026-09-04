@@ -1,7 +1,5 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import {
   bootTidepool,
@@ -34,13 +32,11 @@ async function completeIssueBackedTask(dirs: string[], handoff: Record<string, s
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   const t = await bootTidepool({ workspace: ws });
 
-  const db = openDb(join(t.dir, "board.sqlite"));
   const task = registerTask(
-    db,
+    t.db,
     { type: "work", workspace: ws.name, github_issue_number: 49 },
     t.clock.now(),
   );
-  db.close();
 
   t.github.scriptIssue(49, {
     title: "ログイン画面のバグ",
@@ -93,9 +89,7 @@ it("PR body は handoff の直後・`Closes #N` の直前に盤面の定型フ�
   expect(footer).toMatch(/board/i);
   expect(footer).not.toMatch(/#\d/);
 
-  const dbAfter = openDb(join(t.dir, "board.sqlite"));
-  const stored = getTask(dbAfter, task.id);
-  dbAfter.close();
+  const stored = getTask(t.db, task.id);
   expect(stored?.handoff_doc).not.toContain("opened by the tidepool board");
 });
 
@@ -103,9 +97,8 @@ it("通常タスク(github_issue_number なし)の complete_task 成立後、PR 
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
 
-  const db = openDb(join(t.dir, "board.sqlite"));
   const task = registerTask(
-    db,
+    t.db,
     {
       type: "work",
       workspace: ws.name,
@@ -115,7 +108,6 @@ it("通常タスク(github_issue_number なし)の complete_task 成立後、PR 
     },
     t.clock.now(),
   );
-  db.close();
 
   await t.clock.advance(HOUR);
   commitWork(ws.path, "notes.txt", "finished\n");

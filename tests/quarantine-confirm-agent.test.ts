@@ -1,8 +1,6 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
-import { openDb } from "../src/db.js";
 import {
   api,
   bootTidepool,
@@ -34,9 +32,8 @@ it("quarantine 済み agent 宛ての todo はキュービューで skipped、�
   const delegated = await registerDelegated(t, "delegated to navigator", "navigator");
   const other = await registerWork(t, "runs under the default agent");
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineAgent(db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
-  db.close();
 
   await t.clock.advance(HOUR);
 
@@ -55,9 +52,8 @@ it("quarantine question への回答は、その agent 名宛ての todo がま�
   t = await bootTidepool();
   const delegated = await registerDelegated(t, "delegated to navigator", "navigator");
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineAgent(db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
-  db.close();
 
   const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = before.find((x: any) => x.type === "question");
@@ -79,12 +75,11 @@ it("その agent 名宛ての todo がもう存在しなければ、回答が受
   const delegated = await registerDelegated(t, "delegated to navigator", "navigator");
   const other = await registerWork(t, "waiting behind the quarantine");
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineAgent(db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
   // the human's own repair: reassign the delegated task away from the
   // quarantined agent name (a plain human move, not the answer itself)
   db.prepare("UPDATE tasks SET assignee = NULL WHERE id = ?").run(delegated.id);
-  db.close();
 
   const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = before.find((x: any) => x.type === "question");

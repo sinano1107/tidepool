@@ -2,7 +2,6 @@ import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { BOARD_WORKER_ID } from "../src/tasks.js";
 import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import {
@@ -65,9 +64,8 @@ it("同一 workspace への2度目の quarantine は quarantine question を増�
   const before = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = before.find((x: any) => x.type === "question");
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineWorkspace(db, ws.name, new Error("second, unrelated tree-rule failure"), t.clock.now());
-  db.close();
 
   const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(after.filter((x: any) => x.question_quarantine_workspace === ws.name)).toHaveLength(1);
@@ -147,9 +145,8 @@ it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由�
   await t.clock.advance(HOUR); // picked up — assignee はワーカー自身の id
 
   // ワーカー id が盤面名義と衝突してしまった状態をシミュレート
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(BOARD_WORKER_ID, task.id);
-  db.close();
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({
@@ -173,9 +170,8 @@ it("remote 正本を宣言した workspace の解除は、仲介が token を出
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   t.github.scriptUnreachable("sinano1107/tidepool");
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineWorkspace(db, "sandbox", new Error("fetch failed"), t.clock.now());
-  db.close();
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question",
   );
@@ -194,9 +190,8 @@ it("remote 正本を宣言した workspace の解除は、仲介が token を出
 it("token が出せていれば解除はそのまま受理される —— 新しい文法は増やしていない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineWorkspace(db, "sandbox", new Error("fetch failed"), t.clock.now());
-  db.close();
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question",
   );

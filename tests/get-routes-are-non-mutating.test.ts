@@ -1,8 +1,7 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Clock } from "../src/clock.js";
-import { type Db, openDb } from "../src/db.js";
+import type { Db } from "../src/db.js";
 import { unusedLanding } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 
@@ -38,24 +37,18 @@ function listApiGetPaths(): string[] {
   return paths;
 }
 
-/** DB ファイル全体のスナップショット。第二コネクション(WAL 下で安全 —
- *  harness の registerQuestion と同じ手筋)で全テーブルを rowid 順にダンプ
- *  する。tasks の主キーは TEXT だが WITHOUT ROWID 指定はどのテーブルにも
- *  無いので、暗黙の rowid で決定的にソートできる。 */
-function dumpDb(dbPath: string): unknown {
-  const db = openDb(dbPath);
-  try {
-    const tables = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-      .all() as Array<{ name: string }>;
-    const snapshot: Record<string, unknown> = {};
-    for (const { name } of tables) {
-      snapshot[name] = db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all();
-    }
-    return snapshot;
-  } finally {
-    db.close();
+/** DB ファイル全体のスナップショット。harness の setup connection で全テーブルを
+ *  rowid 順にダンプする。tasks の主キーは TEXT だが WITHOUT ROWID 指定はどの
+ *  テーブルにも無いので、暗黙の rowid で決定的にソートできる。 */
+function dumpDb(db: Db): unknown {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+    .all() as Array<{ name: string }>;
+  const snapshot: Record<string, unknown> = {};
+  for (const { name } of tables) {
+    snapshot[name] = db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all();
   }
+  return snapshot;
 }
 
 const GET_ROUTES = listApiGetPaths();
@@ -120,8 +113,7 @@ async function seedBoard(t: Tidepool): Promise<{ taskId: string }> {
 it("コントロール: 何もしなければ DB ダンプは安定している(比較機構そのものの健全性)", async () => {
   t = await bootTidepool();
   await seedBoard(t);
-  const dbPath = join(t.dir, "board.sqlite");
-  expect(dumpDb(dbPath)).toEqual(dumpDb(dbPath));
+  expect(dumpDb(t.db)).toEqual(dumpDb(t.db));
 });
 
 /** 「未収載ルート」の失敗メッセージ — 収載テスト自身と it.each 内の防御的
@@ -156,11 +148,10 @@ it("ROUTE_URL の全キーは実在の GET ルートである(削除済みルー
 it("コントロール: 純粋な GET を挟んでも DB ダンプは安定している(before/after 比較の窓を閉じる)", async () => {
   t = await bootTidepool();
   await seedBoard(t);
-  const dbPath = join(t.dir, "board.sqlite");
 
-  const before = dumpDb(dbPath);
+  const before = dumpDb(t.db);
   const res = await api(t.baseUrl, "GET", "/api/push/vapid-public-key");
-  const after = dumpDb(dbPath);
+  const after = dumpDb(t.db);
 
   expect(res.status).toBe(200);
   expect(after).toEqual(before);
@@ -181,11 +172,9 @@ it.each(GET_ROUTES)("GET /api%s は DB を変異させない(ADR 0034)", async (
   const buildUrl = ROUTE_URL[route];
   if (!buildUrl) throw new Error(notCoveredMessage(route));
   const url = buildUrl(fixtures);
-  const dbPath = join(t.dir, "board.sqlite");
-
-  const before = dumpDb(dbPath);
+  const before = dumpDb(t.db);
   const res = await api(t.baseUrl, "GET", `/api${url}`);
-  const after = dumpDb(dbPath);
+  const after = dumpDb(t.db);
 
   // seedBoard exists precisely so every route's happy path is live — a bare
   // DB-diff check can't tell "reached the real read and changed nothing"

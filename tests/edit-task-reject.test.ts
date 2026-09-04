@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
@@ -36,13 +34,12 @@ it("parent link の付け替え(parent_id)を含む編集は 400 で拒否され
 
 it("issue-backed の参照番号(github_issue_number)の編集は 400 で拒否される", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const task = registerTask(
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
   );
-  db.close();
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, {
     github_issue_number: 50,
@@ -126,13 +123,12 @@ it("issue-backed タスクの内容(title)と workspace の編集は 400 で拒�
     workspace: { name: "tidepool", path: "/fake/path" },
     resolveWorkspace: (w) => ({ name: w ?? "tidepool", path: "/fake/path" }),
   });
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const task = registerTask(
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
   );
-  db.close();
 
   const content = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, {
     title: "override the issue title",
@@ -151,9 +147,8 @@ it("実行中なら自分(assignee: human)のタスクでも編集は拒否さ�
   // no code path drives a human task into in_progress in normal flow, so drive
   // the row directly — the gate reads only the row's fields (same technique as
   // tests/human-decompose-own-task.test.ts)
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(task.id);
-  db.close();
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { title: "rename my own" });
   expect(res.status).toBe(400);

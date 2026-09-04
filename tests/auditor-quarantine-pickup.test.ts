@@ -1,8 +1,6 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { quarantineAgent } from "../src/agent.js";
-import { openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
 
@@ -31,9 +29,8 @@ it("Auditor が quarantine されている間、defaultAgentName が健全でも
   const review = await registerIndependentReview(t, "rca (auditor): work A");
   const work = await registerWork(t, "unrelated work");
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineAgent(db, DEFAULT_AUDITOR_NAME, new Error("auditor unavailable"), t.clock.now());
-  db.close();
 
   await t.clock.advance(HOUR);
 

@@ -2,7 +2,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import {
   api,
@@ -141,13 +140,12 @@ it("escalate は dirty でも拒否されず、WIP コミットの subject に�
 it("issue参照タスクの WIP コミット subject はプレースホルダを載せず素の形になる", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const task = registerTask(
     db,
     { type: "work", workspace: ws.name, github_issue_number: 240 },
     t.clock.now(),
   );
-  db.close();
   t.github.scriptIssue(240, { title: "workerは必ずcommitメッセージを考えてほしい", body: "", comments: [] });
   await t.clock.advance(HOUR);
 

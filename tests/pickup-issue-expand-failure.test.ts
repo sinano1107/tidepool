@@ -1,7 +1,5 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { IssueGoneError } from "../src/github.js";
 import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, makeWorkspace, type Tidepool } from "./harness.js";
@@ -16,13 +14,12 @@ afterEach(async () => {
 it("issue参照タスクの展開が一時的に失敗したら、そのサイクルの pickup を skip し、復旧後の poll で拾う(issue #49 設計点5)", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace(dirs, "tidepool") });
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const task = registerTask(
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
   );
-  db.close();
 
   t.github.scriptIssueFailure(new Error("GitHub is down"));
   await t.clock.advance(HOUR);
@@ -43,13 +40,12 @@ it("issue参照タスクの展開が一時的に失敗したら、そのサイ�
 it("issue参照の確定的失敗(not found / close 済み)では retry/abandon の failure question が生まれ、worker は起動しない(issue #49 設計点5)", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace(dirs, "tidepool") });
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const task = registerTask(
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
   );
-  db.close();
 
   t.github.scriptIssueFailure(new IssueGoneError({ path: "/x", number: 49 }, "closed"));
   await t.clock.advance(HOUR);
