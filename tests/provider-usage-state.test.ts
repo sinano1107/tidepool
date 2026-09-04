@@ -12,16 +12,13 @@ import {
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool | undefined;
-let dir: string | undefined;
 
 afterEach(async () => {
   await t?.stop();
-  t = undefined;
-  dir = undefined;
 });
 
 it("Provider/window の観測値・offset・freshness・CLI version を pause と queue に永続表示する", async () => {
-  dir = await mkdtemp(join(tmpdir(), "tidepool-provider-usage-"));
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-usage-"));
   t = await bootTidepool({ dir });
   const db = t.db;
   const observedAt = new Date("2026-08-28T08:00:00.000Z");
@@ -112,7 +109,7 @@ it("Provider/window の観測値・offset・freshness・CLI version を pause �
 });
 
 it("openDb は既存の account-wide throttle と offsets を anthropic の Provider/window 状態へ移す", async () => {
-  dir = await mkdtemp(join(tmpdir(), "tidepool-provider-migration-"));
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-migration-"));
   t = await bootTidepool({ dir });
   const db = t.db;
   const observedAt = new Date("2026-08-28T08:00:00.000Z");
@@ -168,7 +165,7 @@ it("openDb は既存の account-wide throttle と offsets を anthropic の Prov
 });
 
 it("legacy の未観測 window は migration 後も Anthropic unobservable のまま", async () => {
-  dir = await mkdtemp(join(tmpdir(), "tidepool-provider-unobservable-migration-"));
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-provider-unobservable-migration-"));
   t = await bootTidepool({ dir });
   const db = t.db;
   reportThrottle(
