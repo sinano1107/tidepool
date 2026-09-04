@@ -6,11 +6,6 @@ import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-/** fs 半分と人間面の半分は成立している盤面。ADR 0039 が足したのは**3つ目の問い**
- *  なので、他の半分の不成立と混ざらない盤面で駆動する(issue #154 が fs 半分に
- *  対して取ったのと同じ姿勢)。 */
-const SANDBOX_OK = () => ({ available: true }) as const;
-
 /** 宣言どおりの work セッションの面(ADR 0039 の測定と同じ17本)。ここでも実装を
  *  import せず独立した literal で書く。 */
 const WORK_SURFACE = [
@@ -61,6 +56,15 @@ function scriptedProbe(initial: ContainmentCapability) {
   };
 }
 
+const CLAUDE_ROUTE = {
+  resolveHarness: () => "claude-code" as const,
+  agentsUsingHarnesses: (harnesses: readonly string[]) =>
+    harnesses.includes("claude-code") ? ["fake-worker"] : [],
+};
+
+const harnessCheck = (check: () => Promise<ContainmentCapability>) => async (harness: string) =>
+  harness === "claude-code" ? check() : ({ available: true } as const);
+
 // ── ping から答えへの写像(正本の側)────────────────────────────────────
 
 it("ping が観測した面が宣言どおりなら成立する", async () => {
@@ -93,25 +97,29 @@ it("検査は毎回 ping を撃ち直す(memoize しない)— 解除の検証�
 
 // ── 封じ込め能力の3つ目の問いとしての振る舞い(ゲートの側)──────────────
 
-it("ツール面がずれているホストは pickup が止まり、Tidepool 名義の確認 question が立つ", async () => {
+it("ツール面がずれた Claude Harness は pickup が止まり、確認 question が立つ", async () => {
   const drifted = scriptedProbe({
     available: false,
     reason: "this host's claude CLI offered CronCreate on top of the allowlist",
   });
-  t = await bootTidepool({ sandboxCapability: SANDBOX_OK, toolSurface: drifted.probe });
+  t = await bootTidepool({
+    ...CLAUDE_ROUTE,
+    harnessContainment: harnessCheck(drifted.probe),
+  });
   await registerWork(t, "work that must not run on a host whose tool surface drifted");
 
   const question = await openQuestion(t);
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
-  // 既存の器のまま: 1択の確認型、盤面(Tidepool)名義、止まる資源は盤面全体
+  // 既存の器のまま: 1択の確認型、盤面(Tidepool)名義、停止は Harness 資源だけ
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
+  expect(question.question_quarantine_harness).toBe("claude-code");
   expect(question.purpose).toContain("CronCreate");
 });
 
-it("成立しているホストは素通り — 3つ目の問いは pickup を止めない", async () => {
+it("ツール面が成立している Claude Harness は pickup を止めない", async () => {
   const ok = scriptedProbe({ available: true });
-  t = await bootTidepool({ sandboxCapability: SANDBOX_OK, toolSurface: ok.probe });
+  t = await bootTidepool({ ...CLAUDE_ROUTE, harnessContainment: harnessCheck(ok.probe) });
   const task = await registerWork(t, "work on a host whose tool surface matches the allowlist");
 
   await t.clock.advance(HOUR);
@@ -124,14 +132,17 @@ it("ずれたままの回答は受理されない — question は open のま�
     available: false,
     reason: "this host's claude CLI offered CronCreate on top of the allowlist",
   });
-  t = await bootTidepool({ sandboxCapability: SANDBOX_OK, toolSurface: drifted.probe });
+  t = await bootTidepool({
+    ...CLAUDE_ROUTE,
+    harnessContainment: harnessCheck(drifted.probe),
+  });
   const question = await openQuestion(t);
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["repaired by hand"],
   });
   expect(res.status).toBe(409);
-  expect(res.json.error).toContain("worker containment is still not established");
+  expect(res.json.error).toContain("claude-code Harness containment is still not established");
   expect((await questions(t))[0].status).toBe("todo");
 });
 
@@ -140,7 +151,10 @@ it("面を直せば回答が受理され、pickup が再開する(回答時に�
     available: false,
     reason: "this host's claude CLI offered CronCreate on top of the allowlist",
   });
-  t = await bootTidepool({ sandboxCapability: SANDBOX_OK, toolSurface: drifted.probe });
+  t = await bootTidepool({
+    ...CLAUDE_ROUTE,
+    harnessContainment: harnessCheck(drifted.probe),
+  });
   const task = await registerWork(t, "work that waited for a repaired tool surface");
   const question = await openQuestion(t);
   const before = drifted.calls();
@@ -158,9 +172,15 @@ it("面を直せば回答が受理され、pickup が再開する(回答時に�
 it("fs 半分が不成立ならツール面の ping は撃たない — 安い順に引く", async () => {
   // 実 CLI を1本起こす検査なので、手前の半分で答えが出ているなら撃たない。
   const ok = scriptedProbe({ available: true });
+  const sandbox: ContainmentCapability = {
+    available: false,
+    reason: "bwrap could not create a sandbox",
+  };
   t = await bootTidepool({
-    sandboxCapability: () => ({ available: false, reason: "bwrap could not create a sandbox" }),
-    toolSurface: ok.probe,
+    ...CLAUDE_ROUTE,
+    harnessContainment: harnessCheck(async () => {
+      return sandbox.available ? ok.probe() : sandbox;
+    }),
   });
   await openQuestion(t);
   expect(ok.calls()).toBe(0);

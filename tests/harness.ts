@@ -15,7 +15,6 @@ import {
 import type { BoardStatePath } from "../src/board-state.js";
 import type { CliAuthCheck } from "../src/cli-auth.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
-import type { ContainmentCapability } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { GitHubAuth } from "../src/github-auth.js";
@@ -30,7 +29,6 @@ import type {
   RegistrySource,
   RosterAgent,
 } from "../src/registry.js";
-import type { SandboxCapability } from "../src/sandbox.js";
 import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
 import type { ProviderUsageResource } from "../src/throttle.js";
@@ -175,6 +173,8 @@ export interface BootOptions {
   openaiUsage?: CodexAppServerProbe;
   resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
   resolveHarness?: (task: Task) => Harness;
+  /** Adapter-owned sandbox/tool-surface capability seam. Passing it arms the
+   *  shared container and human-surface checks too. */
   harnessContainment?: HarnessContainmentCheck;
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
@@ -186,17 +186,6 @@ export interface BootOptions {
   cliAuth?: CliAuthCheck;
   /** ADR 0075: optional token expiry used only for advance warning. */
   cliAuthExpiresAt?: Date;
-  /** 封じ込め能力ゲートの fs 半分(ADR 0033 / issue #60)。**渡すとゲートごと
-   *  arm される**ので、人間面の自己検査(ADR 0036 / issue #154)も一緒に効く。
-   *  Absent → ゲートを持たない盤面(既定): テストの spawn は ScriptedWorker で、
-   *  封じ込める実プロセスが無い。ゲートそのものを駆動するテストだけが渡す。 */
-  sandboxCapability?: () => SandboxCapability;
-  /** 封じ込め能力ゲートの3つ目の問い(ADR 0039 決定3 / issue #164): 観測された
-   *  ツール面が Tool allowlist と一致するか。実物は `/usage` ping なので、ここでは
-   *  seam ごと差し替える(ADR 0027)。**`sandboxCapability` と一緒に渡さないと
-   *  ゲートそのものが arm されない**(封じ込めは1つの検査であって3つのゲートでは
-   *  ない)。Absent → 3つ目の問いを持たない盤面: 実 CLI を持たないテストの既定形。 */
-  toolSurface?: () => Promise<ContainmentCapability>;
   /** 盤面自身の状態パスと、boot 一斉検査の対象(ADR 0040 / issue #149)。
    *  Absent → 守る状態パスを持たない盤面(既定): テスト盤面は実プロセスの env を
    *  持たないので、重なりガードそのものを駆動するテストだけが渡す。 */
@@ -277,11 +266,6 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     githubAuth: options.githubAuth,
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
-    containment: options.sandboxCapability && {
-      sandboxCapability: options.sandboxCapability,
-      // 明示の null = 3つ目の問いを持たないテスト盤面(server.ts の口が省略を許さない)
-      toolSurface: options.toolSurface ?? null,
-    },
   });
   const db = openDb(dbPath);
   let stopped = false;

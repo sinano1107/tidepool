@@ -751,21 +751,8 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     // するだけで、起動は拒まない)と、quarantine 解除の検証が撃ち直す先。
     // registryDir が無ければ workspace という概念自体が無いので列挙も無い。
     boardState: { paths: board.boardState, listWorkspaces: () => registeredWorkspaces(board) },
-    // 封じ込め能力の fail-closed ゲート(ADR 0033 / issue #60、ADR 0036 / issue
-    // #154、ADR 0039 / issue #164)。ここが唯一の実検査の配線点 — テスト盤面は
-    // 封じ込める実プロセスを持たないので、このゲート自体を持たない。人間面の
-    // 自己検査は startServer が実ポートを知った後に自分で足す。
-    //
-    // ツール面の問いは**関数のまま**渡す(結果のスナップショットではない): 検査は
-    // 起動時・pickup ごと・quarantine の回答受理時に撃ち直され、解除の検証がその
-    // 再実行に依っている(ADR 0039 決定3)。
-    containment: {
-      sandboxCapability: () => checkSandboxCapability(platform),
-      toolSurface: () => probeToolSurfaceCapability(),
-    },
     // ADR 0099 決定2/5: どの容器機構でこのホストの worker を封じるか。選ぶ場所が
-    // 合成 root なのは、platform の判定が env の判定と同じ層だから — 上の
-    // `checkSandboxCapability(platform)` と同じ1行の並びである。実測した機構が
+    // 合成 root なのは、platform の判定が env の判定と同じ層だから。実測した機構が
     // 無い platform は fail-closed な機構を受け取り、boot 時の前提検査が pickup を
     // 止める(macOS の実測は #465)。
     containerRuntime: containerRuntimeFor(platform),

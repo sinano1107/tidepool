@@ -17,8 +17,6 @@ import {
   type ContainmentCapability,
   checkHumanSurfaceRefusesAnonymous,
   composeCommonContainment,
-  composeContainment,
-  containmentPickupBlocked,
   HUMAN_SURFACE_PROBE_PATH,
   quarantineContainment,
 } from "./containment.js";
@@ -46,7 +44,6 @@ import {
   type RosterAgent,
   remoteTrackingRef,
 } from "./registry.js";
-import type { SandboxCapability } from "./sandbox.js";
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
@@ -246,6 +243,10 @@ export interface ServerOptions {
   resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   resolveHarness?: (task: Task) => Harness;
+  /** Adapter-owned sandbox/tool-surface check. Its presence also arms the
+   *  shared container and live human-surface check. Their common result is
+   *  prepended to each Harness result, and the four questions are re-run at
+   *  boot, pickup, and its Confirmation answer time. */
   harnessContainment?: HarnessContainmentCheck;
   /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
    *  re-verification a provider-auth Confirmation question's answer fires.
@@ -311,27 +312,6 @@ export interface ServerOptions {
      *  起動は続く(sweepBoardStateOverlap が握る)。 */
     listWorkspaces: () => WorkspaceConfig[];
   };
-  /** 封じ込め能力(CONTEXT.md)のゲート。**この口の有無が、盤面全体を止めうる
-   *  ゲートを持つかどうかそのもの**であり、2つの半分のどちらにも効く — 有無が
-   *  ここ1箇所で読み切れる形にしてある。Absent → ゲートを持たない盤面: 実
-   *  プロセスを持たないテスト盤面の既定(そこに spawn される実 CLI はそもそも
-   *  無い)。main.ts は常に渡す。
-   *
-   *  渡すのは **fs 半分**(ADR 0033: このホストで worker サンドボックスが実際に
-   *  使えるか)と**ツール面の問い**(ADR 0039 / issue #164: `/usage` ping で観測した
-   *  面が Tool allowlist と一致するか — 実 CLI を1本起こすので合成 root が持つ)。
-   *  **「自分の人間面が無認証リクエストを拒むか」(ADR 0036 / issue #154)は
-   *  startServer 自身が足す** — 撃つ先の実ポートを知っているのは listen した本人
-   *  だけで、composition root(main.ts)には導出できないため。
-   *
-   *  boot 時と pickup ごと、そして quarantine の回答受理時に読み直す。 */
-  containment?: {
-    sandboxCapability: () => SandboxCapability;
-    /** ツール面の問い(ADR 0039)。**`null` を明示すると**3つ目の問いを持たない
-     *  盤面になる(実 CLI を持たないテスト盤面の形)。省略できない口にしてあるのは、
-     *  忘れたときに検査が黙って1つ消えるのを型で止めるため。 */
-    toolSurface: (() => Promise<ContainmentCapability>) | null;
-  };
   /** 容器機構(ADR 0099 決定2 の唯一の新 seam)。**省略できない** — 既定を持つと、
    *  配線を1本忘れた盤面が黙って弱い回収へ落ちる(ADR 0099 決定5 が禁じている
    *  状態そのもの)。本番の選択は合成 root の `containerRuntimeFor(platform)`。 */
@@ -355,7 +335,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
   // platform-scoped の停止は無く、この盤面が走るホストは1つである。
   const runtimePreflight = containers.preflight();
-  if (!runtimePreflight.available) {
+  if (!runtimePreflight.available && !options.harnessContainment) {
     quarantineContainment(db, runtimePreflight.reason, options.clock.now());
   }
   // ADR 0064 決定4: registry clone の ref を動かす口を1本残らず包む。3つの admin verb
@@ -472,25 +452,21 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
   });
-  // 封じ込め能力(CONTEXT.md)の合成。fs 半分は呼び出し側から、人間面の自己検査は
-  // ここで足す — 撃つ先の実ポートは listen するまで確定しない(port: 0 のテスト
-  // 盤面では特に)ので、armed になるのは listen の直後。それまでは合成側が
-  // fail-closed の答えを返す(containment.ts の UNPROBED)。
-  // ゲートの有無は `containment` の有無**だけ**で読み切れる(1箇所)。3つ目の問いは
-  // その中で `null` を明示して外す — 省略で消える口にはしていない(containment.ts)。
-  const gate = options.containment;
+  // `harnessContainment` is the one production option. startServer prepends
+  // the shared container/human-surface result to each adapter's sandbox/tool
+  // result, so a common failure becomes one quarantine per Harness rather than
+  // a separate board-wide stop. Only this layer knows the bound human port.
   let probeHumanSurface: (() => Promise<ContainmentCapability>) | undefined;
-  const containment = gate
-    ? options.harnessContainment
-      ? composeCommonContainment(() => containers.preflight(), () => probeHumanSurface?.())
-      : composeContainment(
-          () => containers.preflight(),
-          gate.sandboxCapability,
-          () => probeHumanSurface?.(),
-          gate.toolSurface,
-        )
+  const adapterContainment = options.harnessContainment;
+  const containment = adapterContainment
+    ? composeCommonContainment(() => containers.preflight(), () => probeHumanSurface?.())
     : undefined;
-  const harnessContainment = options.harnessContainment;
+  const harnessContainment = adapterContainment && containment
+    ? async (harness: Harness) => {
+        const common = await containment();
+        return common.available ? adapterContainment(harness) : common;
+      }
+    : undefined;
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -509,7 +485,6 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     agentsUsingHarnesses: options.agentsUsingHarnesses,
     resolveHarness: options.resolveHarness,
     harnessContainment,
-    containment,
     registryReachability,
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
@@ -694,14 +669,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // 実際に bind された番号を使う — テスト盤面は port: 0 で起こす。
   probeHumanSurface = () =>
     checkHumanSurfaceRefusesAnonymous(`http://127.0.0.1:${humanPort}${HUMAN_SURFACE_PROBE_PATH}`);
-  // ADR 0033: 起動時にも一度検査する — pickup 時だけだと、封じ込めを失ったまま
-  // 再起動した盤面は次の poll(最大1時間後)まで「止まっている理由」を出さない。
-  // 副作用は pickup ゲートと同一の関数なので、question は多くとも1枚に収まる。
-  // 戻り値は捨てる — boot 時点では止める相手(pickup poll)がまだ走っておらず、
-  // 欲しいのは副作用の question だけ。実際の停止は同じ関数を呼ぶ pickup ゲート。
-  // **await する**: 起動が返った時点で盤面の封じ込め状態が確定していてほしい
-  // (実 HTTP を1往復するので、投げっぱなしだと「起動直後は無検査」の窓ができる)。
-  if (containment) await containmentPickupBlocked(db, containment, options.clock.now());
+  // Both Harness resources are inspected before boot returns. Pickup and
+  // Confirmation answers run the same four-question check again.
   if (harnessContainment) {
     for (const harness of ["claude-code", "codex"] as const) {
       await harnessContainmentPickupBlocked(db, harness, harnessContainment, options.clock.now());

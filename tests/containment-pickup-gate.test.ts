@@ -16,9 +16,12 @@ afterEach(() => t?.stop());
  *  開く(ADR 0036)。封じ込め能力の自己検査が測るのはまさにこの状態である。 */
 const NO_CREDENTIAL = { tokenHash: () => undefined };
 
-/** fs サンドボックス側は成立している、という盤面。issue #154 が足したのは
- *  「もう半分」なので、fs 半分の不成立と混ざらない盤面で駆動する。 */
-const SANDBOX_OK = () => ({ available: true }) as const;
+const HARNESS_OPTIONS = {
+  resolveHarness: () => "claude-code" as const,
+  agentsUsingHarnesses: (harnesses: readonly string[]) =>
+    harnesses.includes("claude-code") ? ["fake-worker"] : [],
+  harnessContainment: async () => ({ available: true }) as const,
+};
 
 const questions = async (t: Tidepool) =>
   ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((x) => x.type === "question");
@@ -29,12 +32,14 @@ const questions = async (t: Tidepool) =>
 const openQuestion = async (t: Tidepool) =>
   await vi.waitFor(async () => {
     const open = await questions(t);
-    expect(open).toHaveLength(1);
-    return open[0];
+    expect(open).toHaveLength(2);
+    const claude = open.find((item) => item.question_quarantine_harness === "claude-code");
+    expect(claude).toBeDefined();
+    return claude;
   });
 
 it("認証が外れた盤面は封じ込め能力が不成立 — pickup が止まる(issue #154 / ADR 0036)", async () => {
-  t = await bootTidepool({ credential: NO_CREDENTIAL, sandboxCapability: SANDBOX_OK });
+  t = await bootTidepool({ ...HARNESS_OPTIONS, credential: NO_CREDENTIAL });
   await registerWork(t, "work that must not run beside a bare human surface");
 
   const question = await openQuestion(t);
@@ -42,30 +47,33 @@ it("認証が外れた盤面は封じ込め能力が不成立 — pickup が止�
   // 裸の人間面の隣で走らせない: 子プロセスは1つも起動しない
   expect(t.worker.started).toEqual([]);
 
-  // fs サンドボックスと同じ1択の確認型 — 停止機構も question も1つのまま
+  // fs サンドボックスと同じ1択の確認型 — 停止機構は Harness quarantine のまま
   expect(question.question_items[0].options).toEqual(["repaired by hand"]);
   // 「token ファイルが読めなかった」ではなく、**観測された実際の形**が残る
   expect(question.purpose).toContain("200");
   expect(question.purpose).toContain("human surface");
 });
 
-it("自己検査は listen 後に走る — 起動時点で既に question が立っている(issue #154)", async () => {
+it("自己検査は listen 後に走る — 起動時点で各 Harness の question が立っている(issue #154)", async () => {
   // `sandboxPickupBlocked` は `app.listen` より前に呼ばれていた。自己検査は自分の
   // ポートを撃つので、そのままでは測る相手がいない。
-  t = await bootTidepool({ credential: NO_CREDENTIAL, sandboxCapability: SANDBOX_OK });
+  t = await bootTidepool({ ...HARNESS_OPTIONS, credential: NO_CREDENTIAL });
 
-  expect(await questions(t)).toHaveLength(1);
+  expect((await questions(t)).map((item) => item.question_quarantine_harness).sort()).toEqual([
+    "claude-code",
+    "codex",
+  ]);
 });
 
-it("止まっている間に何度 poll しても question は増えない(1資源につき1枚)", async () => {
-  t = await bootTidepool({ credential: NO_CREDENTIAL, sandboxCapability: SANDBOX_OK });
+it("止まっている間に何度 poll しても question は増えない(1 Harness につき1枚)", async () => {
+  t = await bootTidepool({ ...HARNESS_OPTIONS, credential: NO_CREDENTIAL });
   await registerWork(t, "work that must not run beside a bare human surface");
   await openQuestion(t);
 
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
   await t.clock.advance(HOUR);
-  expect(await questions(t)).toHaveLength(1);
+  expect(await questions(t)).toHaveLength(2);
   expect(t.worker.started).toEqual([]);
 });
 
@@ -86,8 +94,8 @@ function repairableCredential() {
 
 it("認証が壊れたままの回答は受理されない — question は open のまま(検証つき解除)", async () => {
   t = await bootTidepool({
+    ...HARNESS_OPTIONS,
     credential: repairableCredential().credential,
-    sandboxCapability: SANDBOX_OK,
   });
   const question = await openQuestion(t);
 
@@ -96,13 +104,13 @@ it("認証が壊れたままの回答は受理されない — question は open
   });
   // workspace quarantine の tree 検証拒否と同じ 409(DomainError)
   expect(res.status).toBe(409);
-  expect(res.json.error).toContain("worker containment is still not established");
-  expect((await questions(t))[0].status).toBe("todo");
+  expect(res.json.error).toContain("claude-code Harness containment is still not established");
+  expect((await questions(t)).find((item) => item.id === question.id)?.status).toBe("todo");
 });
 
 it("認証を直せば回答が受理され、pickup が再開する(issue #154 の完了条件)", async () => {
   const cred = repairableCredential();
-  t = await bootTidepool({ credential: cred.credential, sandboxCapability: SANDBOX_OK });
+  t = await bootTidepool({ ...HARNESS_OPTIONS, credential: cred.credential });
   const task = await registerWork(t, "work that waited for a repaired human surface");
   const question = await openQuestion(t);
   expect(t.worker.started).toEqual([]);
@@ -117,18 +125,18 @@ it("認証を直せば回答が受理され、pickup が再開する(issue #154 
 
 it("直っただけでは再開しない — 人間の確認回答が解除の唯一の門(quarantine と同じ)", async () => {
   const cred = repairableCredential();
-  t = await bootTidepool({ credential: cred.credential, sandboxCapability: SANDBOX_OK });
+  t = await bootTidepool({ ...HARNESS_OPTIONS, credential: cred.credential });
   await registerWork(t, "work that waited for a repaired human surface");
-  await openQuestion(t);
+  const question = await openQuestion(t);
 
   cred.repair();
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
-  expect((await questions(t))[0].status).toBe("todo");
+  expect((await questions(t)).find((item) => item.id === question.id)?.status).toBe("todo");
 });
 
 it("認証が効いている盤面は素通り — 自己検査が 401 を観測すれば pickup は進む", async () => {
-  t = await bootTidepool({ sandboxCapability: SANDBOX_OK });
+  t = await bootTidepool(HARNESS_OPTIONS);
   const task = await registerWork(t, "work on a board whose human surface answers 401");
 
   await t.clock.advance(HOUR);
