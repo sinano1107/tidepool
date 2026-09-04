@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { listPushSubscriptions } from "../src/push.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -15,7 +13,7 @@ it("POST /api/push/subscribe が購読を保存する", async () => {
   });
   expect(res.status).toBe(201);
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   expect(listPushSubscriptions(db)).toEqual([
     { endpoint: "https://push.example/abc", p256dh: "key-p256dh", auth: "key-auth" },
   ]);
@@ -33,6 +31,6 @@ it("DELETE /api/push/subscribe が該当 endpoint を取り除く", async () => 
   });
   expect(res.status).toBe(200);
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   expect(listPushSubscriptions(db)).toEqual([]);
 });

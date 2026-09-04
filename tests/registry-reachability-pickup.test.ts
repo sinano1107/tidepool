@@ -1,5 +1,4 @@
-import { expect, it } from "vitest";
-import { openDb } from "../src/db.js";
+import { afterEach, expect, it } from "vitest";
 import { loadRegistry, refreshRegistry } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
@@ -8,6 +7,9 @@ import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, fakeContainers, healthyUsageText, ScriptedWorker } from "./fakes.js";
 import { api, bootTidepool, HOUR, registerWork } from "./harness.js";
 import { makeRemoteBackedRegistry } from "./registry-fixture.js";
+
+let t: Awaited<ReturnType<typeof bootTidepool>>;
+afterEach(() => t?.stop());
 
 // ここが測るのは**ゲートが spawn の手前で実際に fetch を撃つこと**である。worker は
 // fake なので、実 worker がどの ref を読むかはここでは測れない —— それは
@@ -22,7 +24,8 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     `---\nname: deckhand\ndescription: Definition merged on remote\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nRemote definition.\n`,
     "merged registry change",
   );
-  const db = openDb(":memory:");
+  t = await bootTidepool();
+  const db = t.db;
   const clock = new FakeClock();
   const spawnedVersions: string[] = [];
   const worker: WorkerAdapter = {
@@ -62,7 +65,8 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
 });
 
 it("registry に到達できない間は盤面全体の pickup を止め、確認 question を1枚だけ立てる(ADR 0052)", async () => {
-  const db = openDb(":memory:");
+  t = await bootTidepool();
+  const db = t.db;
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
   const scheduler = startScheduler({
@@ -113,18 +117,14 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
 // **手前**の同期プレフィックスで止まる。壊れている間の /usage 観測はもう走らない
 // (pickup しないという結果は同一 — 消えるのは無駄な観測だけ)。
 it("registry 質問が開いている間、poll は /usage を観測しない(ADR 0068 決定5)", async () => {
-  const t = await bootTidepool({
+  t = await bootTidepool({
     registryReachability: async () => ({ available: false, reason: "origin is unreachable" }),
   });
-  try {
-    await registerWork(t, "waits for the registry");
-    await t.clock.advance(HOUR); // 1回目の poll: 質問がまだ無いので観測は走り、質問が立つ
-    const first = (await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt;
-    expect(first).not.toBeNull();
+  await registerWork(t, "waits for the registry");
+  await t.clock.advance(HOUR); // 1回目の poll: 質問がまだ無いので観測は走り、質問が立つ
+  const first = (await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt;
+  expect(first).not.toBeNull();
 
-    await t.clock.advance(HOUR); // 2回目の poll: 質問が開いているので手前で止まる
-    expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt).toBe(first);
-  } finally {
-    await t.stop();
-  }
+  await t.clock.advance(HOUR); // 2回目の poll: 質問が開いているので手前で止まる
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.observedAt).toBe(first);
 });

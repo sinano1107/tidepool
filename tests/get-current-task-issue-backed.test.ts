@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import { bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
@@ -10,13 +8,12 @@ afterEach(() => t?.stop());
 it("get_current_task はissue参照タスクの場合、GitHubのissueから解決した内容を返す(issue #49, ADR 0016: spawn時のlive展開)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const task = registerTask(
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49 },
     t.clock.now(),
   );
-  db.close();
 
   t.github.scriptIssue(49, {
     title: "ログイン画面のバグ",

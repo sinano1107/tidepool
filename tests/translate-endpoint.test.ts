@@ -1,5 +1,4 @@
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { getTask, logDecision } from "../src/tasks.js";
 import { reportThrottle } from "../src/throttle.js";
 import { FakeTranslationClient } from "./fakes.js";
@@ -29,15 +28,13 @@ it("decision log の一行を翻訳する(type: log_entry)", async () => {
     purpose: "p",
     completion_criteria: "c",
   });
-  const db = openDb(`${t.dir}/board.sqlite`);
   const eventId = logDecision(
-    db,
-    getTask(db, registered.json.id)!,
+    t.db,
+    getTask(t.db, registered.json.id)!,
     "decided to use approach A",
     "tako",
     t.clock.now(),
   );
-  db.close();
 
   const res = await api(t.baseUrl, "POST", "/api/translate", { type: "log_entry", event_id: eventId });
 
@@ -88,9 +85,7 @@ it("throttled 中は翻訳を実行せず、応答が throttled と区別でき�
   const translationClient = new FakeTranslationClient();
   t = await bootTidepool({ translationClient });
 
-  const db = (await import("../src/db.js")).openDb(`${t.dir}/board.sqlite`);
-  reportThrottle(db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, t.clock.now());
-  db.close();
+  reportThrottle(t.db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, t.clock.now());
 
   const question = registerQuestion(t, {
     title: "merge decision",

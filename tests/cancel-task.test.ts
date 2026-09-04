@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import {
   api,
   bootTidepool,
@@ -114,9 +112,8 @@ it("実行中(他人)のタスクの直接 cancel は拒否される", async () 
 it("実行中なら自分(assignee: human)のタスクでも直接 cancel は拒否される(cancel の線も「実行中でない」)", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "my own task", undefined, undefined, "human");
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   db.prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ?").run(task.id);
-  db.close();
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/cancel`, {});
   expect(res.status).toBe(400);

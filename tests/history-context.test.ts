@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
 import {
   api,
@@ -256,7 +254,7 @@ it("a work child of a done parent receives the parent's handoff document", async
   await parentClient.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await parentClient.close();
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const repair = registerTask(
     db,
     {
@@ -269,7 +267,6 @@ it("a work child of a done parent receives the parent's handoff document", async
     t.clock.now(),
     BOARD_WORKER_ID,
   );
-  db.close();
 
   await t.clock.advance(HOUR);
   const client = await mcpClient(t.mcpBaseUrl, repair.id);

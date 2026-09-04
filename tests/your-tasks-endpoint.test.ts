@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -79,13 +77,12 @@ it("GET /api/your-tasks の各行は塞いでいる親を blocking で運ぶ(iss
 it("GET /api/your-tasks も issue 参照タスクを live 展開する — 他の行と同じ読み口(issue #301)", async () => {
   t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const issueBacked = registerTask(
     db,
     { type: "work", workspace: "tidepool", github_issue_number: 49, assignee: "human" },
     t.clock.now(),
   );
-  db.close();
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "b", comments: [] });
 
   const rows: any[] = (await api(t.baseUrl, "GET", "/api/your-tasks")).json;

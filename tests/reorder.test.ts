@@ -1,7 +1,5 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { quarantineWorkspace } from "../src/workspace.js";
 import {
   api,
@@ -175,9 +173,8 @@ it("a skipped row at the raw head does not swallow the ↑ of the task below it"
   // "prod" is never picked up, so it exists as a name in workspace_state alone
   t = await bootTidepool({ workspace: await makeWorkspace(dirs, "sandbox") });
   const stuck = await registerWork(t, "stuck in prod", "prod");
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   quarantineWorkspace(db, "prod", new Error("tree rule failed"), t.clock.now());
-  db.close();
   const runnable = await registerWork(t, "keeps flowing in sandbox", "sandbox");
 
   // the raw todo head is the quarantined-workspace task; the slot skips it

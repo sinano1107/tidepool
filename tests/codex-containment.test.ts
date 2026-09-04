@@ -1,10 +1,9 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
   type CodexCapabilityObservation,
   checkCodexCapability,
 } from "../src/codex-worker.js";
-import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { harnessContainmentPickupBlocked } from "../src/harness-containment.js";
 import { submitAnswer } from "../src/human-verbs.js";
@@ -14,7 +13,10 @@ import { Slot } from "../src/slot.js";
 import { getTask, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, healthyUsageText, passthroughContainers, unusedLanding } from "./fakes.js";
-import { api, bootTidepool, registerWork } from "./harness.js";
+import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+
+let t: Tidepool;
+afterEach(() => t?.stop());
 
 const VALID: CodexCapabilityObservation = {
   cliVersion: CODEX_CLI_VERSION,
@@ -58,7 +60,8 @@ it.each([
 });
 
 it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {
-  const db = openDb(":memory:");
+  t = await bootTidepool();
+  const db = t.db;
   const clock = new FakeClock();
   const started: string[] = [];
   const worker: WorkerAdapter = {
@@ -110,7 +113,8 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
 });
 
 it("a Harness quarantine answer is accepted only after the same live check recovers", async () => {
-  const db = openDb(":memory:");
+  t = await bootTidepool();
+  const db = t.db;
   const clock = new FakeClock();
   let repaired = false;
   const check = async () => repaired

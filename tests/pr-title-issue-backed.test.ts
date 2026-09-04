@@ -1,7 +1,5 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import {
   bootTidepool,
@@ -32,13 +30,12 @@ it("issue参照タスクの complete_task 成立後、PR の title は GitHub �
   const { workspace: ws } = await makeRemoteBackedWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
 
-  const db = openDb(join(t.dir, "board.sqlite"));
+  const db = t.db;
   const task = registerTask(
     db,
     { type: "work", workspace: ws.name, github_issue_number: 49 },
     t.clock.now(),
   );
-  db.close();
 
   t.github.scriptIssue(49, {
     title: "ログイン画面のバグ",
