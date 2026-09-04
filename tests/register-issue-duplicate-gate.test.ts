@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cancelTask, completeTask, listBoard, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, listBoard, registerTask } from "../src/tasks.js";
 import { FakeDraftClient } from "./fakes.js";
 import { api, bootTidepool, FULL_HANDOFF, type Tidepool } from "./harness.js";
 
@@ -31,7 +31,7 @@ describe("登録ゲートの重複検査(issue #104): 未決着の同一参照�
   it("cancelled で決着した参照も再登録を妨げない — abandon 後の再挑戦は正当な再登録", () => {
     const db = t.db;
     const first = registerTask(db, ref, new Date(0));
-    cancelTask(db, first, "origin-question", "tidepool", new Date(1));
+    cancelTaskDirectly(db, first, null, new Date(1), {});
 
     const again = registerTask(db, ref, new Date(2));
     expect(again.github_issue_number).toBe(49);

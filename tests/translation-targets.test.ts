@@ -8,7 +8,6 @@ import {
   completeTask,
   logDecision,
   registerTask,
-  renderHandoffMarkdown,
   splitHandoffMarkdown,
 } from "../src/tasks.js";
 import {
@@ -98,25 +97,37 @@ it("存在しない event id は TranslationTargetError を投げる", async () 
   );
 });
 
-it("splitHandoffMarkdown は renderHandoffMarkdown の見出し+本文を往復して復元する", () => {
-  const rendered = renderHandoffMarkdown({
+it("splitHandoffMarkdown は completeTask の handoff の見出し+本文を復元する", async () => {
+  const db = await freshDb();
+  const task = registerTask(
+    db,
+    { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "human" },
+    NOW,
+  );
+  const completed = completeTask(db, task, {
     outcome: "sensor reports moisture every 5 minutes",
     deliverables: "src/sensor.ts",
-  });
+  }, "human", NOW);
 
-  expect(splitHandoffMarkdown(rendered)).toEqual([
+  expect(splitHandoffMarkdown(completed.handoff_doc!)).toEqual([
     { heading: "Outcome vs completion criteria", body: "sensor reports moisture every 5 minutes" },
     { heading: "Deliverable locations", body: "src/sensor.ts" },
   ]);
 });
 
-it("splitHandoffMarkdown は本文中の `## ` 行(コードブロック内のコメント等)を見出しと誤認しない", () => {
-  const rendered = renderHandoffMarkdown({
+it("splitHandoffMarkdown は completeTask の本文中の `## ` 行(コードブロック内のコメント等)を見出しと誤認しない", async () => {
+  const db = await freshDb();
+  const task = registerTask(
+    db,
+    { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "human" },
+    NOW,
+  );
+  const completed = completeTask(db, task, {
     outcome: "see the note below",
     deliverables: "```sh\n## this is a shell comment, not a heading\necho hi\n```",
-  });
+  }, "human", NOW);
 
-  expect(splitHandoffMarkdown(rendered)).toEqual([
+  expect(splitHandoffMarkdown(completed.handoff_doc!)).toEqual([
     { heading: "Outcome vs completion criteria", body: "see the note below" },
     {
       heading: "Deliverable locations",

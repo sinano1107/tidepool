@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTask, completeTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
 
 describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)", () => {
   it("全ステータス・type・親子関係が揃い、blocked は導出値、skipped は現れない", () => {
@@ -55,7 +55,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       { type: "work", title: "chase a dead lead", purpose: "p", completion_criteria: "c" },
       new Date(6),
     );
-    cancelTask(db, abandoned, "origin-question", "tidepool", new Date(7));
+    cancelTaskDirectly(db, abandoned, null, new Date(7), {});
 
     const board = listBoard(db);
 

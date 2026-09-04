@@ -47,7 +47,7 @@ export const BOARD_WORKER_ID = "tidepool";
 export type TaskType = "work" | "question" | "review";
 /** `blocked` is deliberately absent: it is derived from unfinished children
  *  the parent waits for (CONTEXT.md), never stored. */
-export type TaskStatus = "todo" | "in_progress" | "done" | "cancelled";
+type TaskStatus = "todo" | "in_progress" | "done" | "cancelled";
 
 export interface Task {
   id: string;
@@ -152,7 +152,7 @@ export interface TaskContent {
   completion_criteria: string;
 }
 
-export interface PendingChildSpec extends TaskContent {
+interface PendingChildSpec extends TaskContent {
   /** The decision-log entry this child would have rested on had it registered
    *  normally — carried through so an approved child keeps the same
    *  provenance as an ordinary decomposed sibling. */
@@ -241,7 +241,7 @@ export function rowToTask(row: TaskRow): Task {
  *  form. `detail` holds implications specific to this item — the shared
  *  situation goes on the question task's `purpose` instead, so a triage
  *  reader isn't re-reading the same context once per item. */
-export interface QuestionItem {
+interface QuestionItem {
   title: string;
   detail?: string;
   options: string[];
@@ -470,7 +470,7 @@ export function countUnsettledTasksReferencing(
  *  deferring to the issue body rather than a field the issue doesn't have —
  *  none of the three is ever stored, this runs fresh at every use (spawn and
  *  UI display). */
-export function deriveTaskContentFromIssue(issue: Issue): TaskContent {
+function deriveTaskContentFromIssue(issue: Issue): TaskContent {
   return {
     title: issue.title,
     purpose:
@@ -660,7 +660,7 @@ export const HANDOFF_FIELDS = [
   "resume_context",
   "known_issues",
 ] as const;
-export type HandoffField = (typeof HANDOFF_FIELDS)[number];
+type HandoffField = (typeof HANDOFF_FIELDS)[number];
 export type HandoffDoc = Record<HandoffField, string>;
 
 const HANDOFF_HEADINGS: Record<HandoffField, string> = {
@@ -672,7 +672,7 @@ const HANDOFF_HEADINGS: Record<HandoffField, string> = {
   known_issues: "Known issues not worth a task",
 };
 
-export function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
+function renderHandoffMarkdown(handoff: Partial<HandoffDoc>): string {
   return HANDOFF_FIELDS.filter((f) => handoff[f]?.trim())
     .map((f) => `## ${HANDOFF_HEADINGS[f]}\n\n${handoff[f]}`)
     .join("\n\n");
@@ -869,7 +869,7 @@ function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
   return next === undefined ? after.sort_key + 1 : (after.sort_key + next.sort_key) / 2;
 }
 
-export interface EscalateInput {
+interface EscalateInput {
   /** The shared situation behind every item in this bundle (issue #30) —
    *  becomes the registered question task's `purpose`. */
   context: string;
@@ -967,7 +967,7 @@ function cancelUnsettledSubtree(
  *  0006): the failure question the abandon came from is named on every
  *  cancelled task. Internal only — answerQuestion's abandon branch is the sole
  *  caller; no MCP or JSON API surface. */
-export function cancelTask(
+function cancelTask(
   db: Db,
   task: Task,
   originQuestionId: string,
@@ -1468,7 +1468,7 @@ export interface ChildSpec extends TaskContent {
 /** The registering worker's authority, resolved by the caller (the MCP layer)
  *  against the board's one configured profile (issue #11) — decomposeTask
  *  itself stays free of any registry/file-loading dependency. */
-export interface AuthorityContext {
+interface AuthorityContext {
   assignable_to?: string[];
   allowed_workspaces?: string[];
   /** The merge dial (issue #11, three-valued since ADR 0079 — see registry.ts):
@@ -1675,7 +1675,7 @@ function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
   );
 }
 
-export interface PendingAutoMerge {
+interface PendingAutoMerge {
   task_id: string;
   pr_number: number;
 }
@@ -1691,7 +1691,7 @@ export function listPendingAutoMerges(db: Db): PendingAutoMerge[] {
  *  so a dial that declared the merge outside the board is out of scope by
  *  construction, not by a filter that could drift. Empty means the scan makes
  *  no network call at all. */
-export interface OpenMergeQuestion {
+interface OpenMergeQuestion {
   id: string;
   pr_number: number;
   workspace: string | null;
@@ -1843,7 +1843,7 @@ export function assigneeNeedsApproval(
  *  this exact pair rather than a free-form escalation. */
 const PENDING_CHILD_OPTIONS = ["approve", "reject"] as const;
 
-export interface DecomposeInput {
+interface DecomposeInput {
   reason: string;
   children: ChildSpec[];
 }
@@ -1980,7 +1980,7 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
  *  so a `task_registered` event by `HUMAN_WORKER_ID` is exactly "a human
  *  registered this task" (a root the human registered, or a child they added
  *  via human decompose). No separate provenance marker is needed. */
-export function isHumanRegistered(db: Db, taskId: string): boolean {
+function isHumanRegistered(db: Db, taskId: string): boolean {
   const row = db
     .prepare(
       `SELECT 1 FROM events
@@ -2021,7 +2021,7 @@ function assertUnsettledNotInProgress(task: Task, verb: string, allowOwnInProgre
  *  rearranging an agent-decomposed tree is the objection → repair task →
  *  assignee's own replan route's job, not this one's — direct rearrangement
  *  here would erase the fix-forward signal that route depends on. */
-export function assertHumanDecomposable(db: Db, parent: Task): void {
+function assertHumanDecomposable(db: Db, parent: Task): void {
   assertUnsettledNotInProgress(parent, "decomposed by a human", true);
   if (hasAgentRegisteredChild(db, parent.id)) {
     throw new DomainError(
@@ -2036,7 +2036,7 @@ export function assertHumanDecomposable(db: Db, parent: Task): void {
  *  agent-registered decompose child is out of scope; the objection → repair
  *  route handles dissatisfaction with it), unsettled, and not in_progress. The
  *  `verb` distinguishes the two callers' error wording. */
-export function assertHumanEditableScope(db: Db, task: Task, verb: string): void {
+function assertHumanEditableScope(db: Db, task: Task, verb: string): void {
   if (!isHumanRegistered(db, task.id)) {
     throw new DomainError(
       `only a human-registered task can be ${verb} — an agent's decompose child is out of scope`,
@@ -2212,7 +2212,7 @@ export function editTask(
  *  child the parent waits for — either part of a decomposition decision or an
  *  escalation question. `parentRef` is the SQL expression holding the
  *  parent's id. */
-export function unfinishedChildSql(parentRef: string): string {
+function unfinishedChildSql(parentRef: string): string {
   return `EXISTS (SELECT 1 FROM tasks c
             WHERE c.parent_id = ${parentRef}
               AND c.status NOT IN ('done', 'cancelled')
@@ -2223,7 +2223,7 @@ export function unfinishedChildSql(parentRef: string): string {
  *  parent waits for?". `listYourTasks` applies it to the row itself to name the
  *  parent it is holding up, so the predicate has one home rather than a copy
  *  per read口. `rowRef` is the SQL alias of the child row. */
-export function awaitedChildSql(rowRef: string): string {
+function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR ${rowRef}.type = 'question')`;
 }
 
@@ -2283,7 +2283,7 @@ export function recordLandingDeferred(
  *  apart. `taskWorkspaceRef` is the SQL expression holding the candidate
  *  task's `workspace` column; `defaultRef` is the SQL expression (a bound
  *  param, named or positional) holding the board's default workspace name. */
-export function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: string): string {
+function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: string): string {
   return `EXISTS (SELECT 1 FROM workspace_state w
             WHERE w.name = COALESCE(${taskWorkspaceRef}, ${defaultRef}) AND w.needs_human = 1)`;
 }
@@ -2297,7 +2297,7 @@ export function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: st
  *  holding the board's default agent name. A task's assignee is never
  *  literally `human` when this runs (the caller excludes it beforehand), so
  *  no separate carve-out is needed here. */
-export function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string): string {
+function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string): string {
   return `EXISTS (SELECT 1 FROM agent_state a
             WHERE a.name = COALESCE(${taskAssigneeRef}, ${defaultRef}) AND a.needs_human = 1)`;
 }
@@ -2321,7 +2321,7 @@ export function resolveTaskAgent(
  *  to NULL, which `agentQuarantinedSql`'s COALESCE/`=` already treats as "no
  *  fallback, gate only an explicit assignee" — no separate null-guard needed
  *  here. */
-export function typeAwareDefaultAgentSql(
+function typeAwareDefaultAgentSql(
   taskTypeRef: string,
   defaultAgentRef: string,
   auditorRef: string,
@@ -2363,7 +2363,7 @@ const HELD_IDS_CTE = `
 `;
 
 /** `idRef` is the SQL expression holding the candidate task's id. */
-export function heldSql(idRef: string): string {
+function heldSql(idRef: string): string {
   return `${idRef} IN (SELECT id FROM held_ids WHERE id NOT IN
             (SELECT id FROM tasks WHERE type = 'question'))`;
 }
@@ -2389,7 +2389,7 @@ const SETTLED_TREE_CTE = `
 `;
 
 /** `idRef` is the SQL expression holding the candidate task's id. */
-export function settledTreeSql(idRef: string): string {
+function settledTreeSql(idRef: string): string {
   return `${idRef} IN (SELECT id FROM tree_status
             WHERE root_id NOT IN (SELECT root_id FROM unsettled_roots))`;
 }
@@ -2551,7 +2551,7 @@ export function listQueue(
  *  null when it holds up nobody. Presentation of this read口 only, not a column
  *  on `Task`: it decides which completion door the human surface opens (one tap
  *  vs. the handoff dialog). */
-export type YourTask = Task & { blocking: string | null };
+type YourTask = Task & { blocking: string | null };
 
 /** The your-tasks list (issue #13): every unsettled `human`-assignee task,
  *  the persistent home the Assignee/Slot glossary entries promise them — they
@@ -2592,7 +2592,7 @@ export function latestChild(db: Db, parentId: string): Task | undefined {
  *  question's answer, a done work's handoff doc verbatim, or the abandon
  *  question that cancelled any child. HistoryChildContext inherits this
  *  shape so replacing the old settled-only bundle cannot drop a field. */
-export interface SettledChildContext {
+interface SettledChildContext {
   title: string;
   status: "done" | "cancelled";
   handoff_doc?: string | null;
@@ -2605,18 +2605,18 @@ export interface SettledChildContext {
   origin_question?: { title: string; answer: string[] | null } | null;
 }
 
-export type HistoryChildContext = TaskContent &
+type HistoryChildContext = TaskContent &
   Omit<SettledChildContext, "title" | "status"> & {
     status: BoardTask["status"];
     you?: true;
   };
 
-export interface DecisionHistoryEntry {
+interface DecisionHistoryEntry {
   decision: string;
   children: HistoryChildContext[];
 }
 
-export type TaskHistoryEntry =
+type TaskHistoryEntry =
   | DecisionHistoryEntry
   | { completion: string | null }
   | { child_outside_the_decomposition: HistoryChildContext };

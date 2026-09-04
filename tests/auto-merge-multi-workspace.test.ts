@@ -1,6 +1,5 @@
 import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
-import { cancelTask, getTask, HUMAN_WORKER_ID } from "../src/tasks.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   addTaskChange,
@@ -140,19 +139,16 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
   expect(t.github.ciChecks).toEqual([]);
   expect(t.github.merged).toEqual([]);
 
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await api(t.baseUrl, "POST", "/api/triage/close");
   const attached = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
     (candidate: any) => candidate.parent_id === task.id,
   );
   for (const child of attached) {
-    cancelTask(
-      t.db,
-      getTask(t.db, child.id)!,
-      "test-settlement",
-      HUMAN_WORKER_ID,
-      t.clock.now(),
-    );
+    const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${child.id}/cancel`);
+    expect(cancelled.status, cancelled.json.error).toBe(200);
   }
+  await api(t.baseUrl, "POST", "/api/pause", { paused: false });
   await runAutoMergeTick();
   expect(t.github.ciChecks).toEqual([{ path: workspace.path, number: 1 }]);
   expect(t.github.merged).toEqual([{ path: workspace.path, number: 1 }]);
