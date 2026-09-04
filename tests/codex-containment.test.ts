@@ -10,7 +10,7 @@ import { submitAnswer } from "../src/human-verbs.js";
 import { canonicalHarness } from "../src/registry.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
-import { getTask, registerTask, type Task } from "../src/tasks.js";
+import { getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, healthyUsageText, passthroughContainers, unusedLanding } from "./fakes.js";
 import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
@@ -105,10 +105,10 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
 
   expect(started).toEqual([claude.id]);
   expect(codex.status).toBe("todo");
-  const quarantine = db.prepare(
-    "SELECT id FROM tasks WHERE question_quarantine_harness = 'codex' AND status = 'todo'",
-  ).get() as { id: string };
-  expect(getTask(db, quarantine.id)?.question_quarantine_harness).toBe("codex");
+  const quarantine = listBoard(db).find(
+    (task) => task.question_quarantine_harness === "codex" && task.status === "todo",
+  );
+  expect(quarantine).toMatchObject({ question_quarantine_harness: "codex", status: "todo" });
   scheduler.stop();
 });
 
@@ -122,10 +122,12 @@ it("a Harness quarantine answer is accepted only after the same live check recov
     : { available: false as const, reason: "permission canary failed" };
 
   expect(await harnessContainmentPickupBlocked(db, "codex", check, clock.now())).toBe(true);
-  const row = db.prepare(
-    "SELECT id FROM tasks WHERE question_quarantine_harness = 'codex'",
-  ).get() as { id: string };
-  const question = getTask(db, row.id)!;
+  const questionId = listBoard(db).find(
+    (task) => task.question_quarantine_harness === "codex",
+  )?.id;
+  expect(questionId).toBeDefined();
+  const question = getTask(db, questionId!);
+  expect(question).toBeDefined();
   await expect(submitAnswer(
     {
       db,
@@ -133,12 +135,12 @@ it("a Harness quarantine answer is accepted only after the same live check recov
       harnessContainment: async () => check(),
       landing: unusedLanding,
     },
-    question,
+    question!,
     ["repaired by hand"],
     undefined,
     () => clock.now(),
   )).rejects.toThrow("still not established");
-  expect(getTask(db, row.id)?.status).toBe("todo");
+  expect(getTask(db, questionId!)?.status).toBe("todo");
 
   repaired = true;
   await submitAnswer(
@@ -148,13 +150,13 @@ it("a Harness quarantine answer is accepted only after the same live check recov
       harnessContainment: async () => check(),
       landing: unusedLanding,
     },
-    question,
+    question!,
     ["repaired by hand"],
     "updated the pinned CLI",
     () => clock.now(),
   );
-  expect(getTask(db, row.id)?.status).toBe("done");
-  expect(listEvents(db, row.id).at(-1)?.payload).toMatchObject({
+  expect(getTask(db, questionId!)?.status).toBe("done");
+  expect(listEvents(db, questionId!).at(-1)?.payload).toMatchObject({
     kind: "harness_reinstated",
     harness: "codex",
   });

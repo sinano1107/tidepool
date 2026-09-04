@@ -5,7 +5,6 @@ import type { Db } from "../src/db.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import {
   AUTH_HEADERS,
-  api,
   bootTidepool,
   makeWorkspace,
   registerWork,
@@ -41,16 +40,6 @@ function listGetRoutes(db: Db): string[] {
     .map((layer) => layer.route!.path);
 }
 
-// 盤面 DB の観測可能な全状態: 全テーブルの全行。データが変わらない限り
-// 同一 DB への同一スキャンは同じ順序を返すので、深い等値比較がそのまま
-// 「1行も変異していない」の判定になる。
-function dumpDb(db: Db): Record<string, unknown[]> {
-  const tables = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-    .all() as { name: string }[];
-  return Object.fromEntries(tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}"`).all()]));
-}
-
 // 射程は**人間用リスナーの GET 全部**(CONTEXT.md の人間面)。今日それは `/api` の
 // ルーターと `server.ts` が直接 `app` に置く静的配信の2種で尽きている — 管理MCP
 // (ADR 0032)はまだこのリスナーに mount されていない。mount された時点でその GET
@@ -73,6 +62,10 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   const task = await registerWork(t, "a task to view");
   expect(task.id).toBeTruthy();
 
+  // harness の db は setup 専用。fixture を置いた後に共有 connection 自体を
+  // read-only にし、どの GET からでも書き込みを試みれば 200 でなくす。
+  t.db.pragma("query_only = ON");
+
   const routes = listGetRoutes(t.db);
   // 列挙の空回り(express 内部構造の変化等)で vacuous に green になる事故を
   // 弾く番犬。総数は下限ではなく実数で固定する — 下限だと1本消えても気づけず、
@@ -92,7 +85,6 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
     ),
   ];
 
-  let before = dumpDb(t.db);
   for (const path of paths) {
     // issue #153: 人間面は credential を要求する。ここが測るのは無変異性で
     // あって認証ではないので、道具側の bearer を付けて読み取り経路まで届かせる
@@ -101,24 +93,5 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
     // 200 で固定する。「500 未満」だと将来 404 や 503 の早期 return に落ちた
     // ルートを素通りさせ、読み取り経路を1行も走らないまま合格してしまう
     expect(res.status, `GET ${path} did not reach its read path`).toBe(200);
-    const after = dumpDb(t.db);
-    expect(after, `GET ${path} mutated the board DB`).toEqual(before);
-    before = after;
   }
-});
-
-// 対照実験: この検出器は本当に変異を見るのか。変異することが分かっている
-// POST を同じ dump 比較にかけ、差が出ることを確かめる — これが red に
-// ならない検出器なら上の green は無意味になる
-it("対照: 変異する POST は同じ検出器で差分として見える", async () => {
-  t = await bootTidepool();
-  const before = dumpDb(t.db);
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title: "a mutating request",
-    purpose: "p",
-    completion_criteria: "c",
-  });
-  expect(res.status).toBe(201);
-  expect(dumpDb(t.db)).not.toEqual(before);
 });
