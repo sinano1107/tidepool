@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Task } from "./tasks.js";
 
 /** The CLI's own settings shape for a worker session (vendor shape, hence
@@ -586,21 +586,12 @@ const defaultRunOk: RunOkFn = (command, args) => {
  *  keeping the human-authored hooks in Git. */
 const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
 
-export interface WorkspaceSettingsDisposition {
-  overriding: string[];
-  projectHooks: boolean;
-}
-
 function sparseCheckoutEnabled(workspacePath: string): boolean {
-  let gitDir = join(workspacePath, ".git");
-  const dotGit = lstatSync(gitDir, { throwIfNoEntry: false });
-  if (!dotGit) return false;
-  if (dotGit.isFile()) {
-    const match = /^gitdir: (.+)$/m.exec(readFileSync(gitDir, "utf8"));
-    if (!match?.[1]) return false;
-    gitDir = resolve(workspacePath, match[1]);
-  }
-  return lstatSync(join(gitDir, "info", "sparse-checkout"), { throwIfNoEntry: false }) !== undefined;
+  const configured = spawnSync("git", ["config", "--bool", "core.sparseCheckout"], {
+    cwd: workspacePath,
+    encoding: "utf8",
+  });
+  return configured.status === 0 && configured.stdout.trim() === "true";
 }
 
 function trackedSettingsFile(workspacePath: string, path: string): boolean {
@@ -667,7 +658,7 @@ function settingsFile(
  *  Tracked project hooks are returned as a separate disposition for physical
  *  exclusion; local or untracked hooks remain offending because sparse-checkout
  *  cannot safely remove them. */
-export function workspaceSettingsDisposition(workspacePath: string): WorkspaceSettingsDisposition {
+export function workspaceSettingsDisposition(workspacePath: string) {
   const offending: string[] = [];
   let projectHooks = false;
   for (const name of PROJECT_SETTINGS_FILES) {
