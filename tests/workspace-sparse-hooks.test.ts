@@ -11,14 +11,18 @@ import {
   releaseWorkspace,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { commitWork, git, makeWorkspace } from "./harness.js";
+import { FakeContainerRuntime } from "./fakes.js";
+import { bootTidepool, commitWork, git, makeWorkspace, type Tidepool } from "./harness.js";
 
 const dirs: string[] = [];
 let db: Db | undefined;
+let tidepool: Tidepool | undefined;
 
 afterEach(async () => {
   db?.close();
   db = undefined;
+  await tidepool?.stop();
+  tidepool = undefined;
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -75,4 +79,43 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
   expect(() => readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toThrow();
   materializeWorkspaceProjectSettings(workspace);
   expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
+});
+
+it("再起動は前 process が残した sparse settings を human side へ戻す", async () => {
+  const workspace = await makeWorkspace(dirs, "sparse-hooks-restart");
+  await mkdir(join(workspace.path, ".claude"), { recursive: true });
+  const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
+  await writeFile(join(workspace.path, ".claude", "settings.json"), settings);
+  git(workspace.path, "add", ".claude/settings.json");
+  git(workspace.path, "commit", "-m", "share project hooks");
+  excludeWorkspaceProjectHooks(workspace);
+
+  tidepool = await bootTidepool({
+    workspace,
+    boardState: { paths: [], listWorkspaces: () => [workspace] },
+  });
+
+  expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
+});
+
+it("再起動時に前 worker の不在を証明できなければ sparse settings を戻さない", async () => {
+  const workspace = await makeWorkspace(dirs, "sparse-hooks-restart-unsafe");
+  await mkdir(join(workspace.path, ".claude"), { recursive: true });
+  await writeFile(
+    join(workspace.path, ".claude", "settings.json"),
+    JSON.stringify({ hooks: { PostToolUse: [] } }),
+  );
+  git(workspace.path, "add", ".claude/settings.json");
+  git(workspace.path, "commit", "-m", "share project hooks");
+  excludeWorkspaceProjectHooks(workspace);
+  const containers = new FakeContainerRuntime();
+  containers.scriptPreflight("a previous worker container is still populated");
+
+  tidepool = await bootTidepool({
+    workspace,
+    containerRuntime: containers,
+    boardState: { paths: [], listWorkspaces: () => [workspace] },
+  });
+
+  expect(() => readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toThrow();
 });

@@ -103,7 +103,8 @@ issue #378 の「`hooks` キーがあれば一律 quarantine」は狭める。�
 `.claude/settings.json` に commit するのが自然であり、その存在だけで workspace を実行不能にする必要はない。
 そこで **tracked `settings.json` が hooks だけ(+通常キー)なら、worker session 中だけ Git の sparse-checkout で
 実体化から外し、worker container の回収を観測してから戻す**。project hook は worker には効かず、同じ Workspace の盤面外 human session
-には従来どおり効く。Git の正本には残るため、task branch の差分へ settings の削除を混ぜない。
+には従来どおり効く。Git の正本には残るため、task branch の差分へ settings の削除を混ぜない。盤面の再起動で
+回収 callback が失われた場合も、前 process の不在を container 機構が証明した後に残存する除外を戻す。
 
 同じファイルに `sandbox` / `permissions` があれば床の著者権の主張なので従来どおり quarantine する。
 untracked `settings.json` の hooks、`settings.local.json` の床キー、壊れた JSON も同じである。既に worker 用の

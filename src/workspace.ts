@@ -18,7 +18,7 @@ import {
   remoteTrackingRef,
   type WorkspaceEntry,
 } from "./registry.js";
-import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
+import { SANDBOX_SHADOW_PATHS, workspaceSettingsDisposition } from "./sandbox.js";
 import {
   BOARD_WORKER_ID,
   getTask,
@@ -363,6 +363,34 @@ export function materializeWorkspaceProjectSettings(workspace: WorkspaceConfig):
   git(workspace.path, "sparse-checkout", "add", "/.claude/settings.json");
   if (!lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
     throw new Error(`workspace ${workspace.name}: could not restore .claude/settings.json`);
+  }
+}
+
+/** Recover a sparse exclusion left by a previous board process. The caller
+ *  must first prove that the old worker-container set is empty; otherwise
+ *  restoring hooks would expose them to a process that survived the restart. */
+export function restoreWorkspaceProjectSettingsAtBoot(
+  db: Db,
+  listWorkspaces: () => WorkspaceConfig[],
+  now: Date,
+): void {
+  let workspaces: WorkspaceConfig[];
+  try {
+    workspaces = listWorkspaces();
+  } catch (err) {
+    console.error(
+      "[workspace] could not enumerate registered workspaces for project-settings recovery; " +
+        `shared human hooks may remain hidden (${String(err)})`,
+    );
+    return;
+  }
+  for (const workspace of workspaces) {
+    if (!workspaceSettingsDisposition(workspace.path).hiddenProjectSettings) continue;
+    try {
+      materializeWorkspaceProjectSettings(workspace);
+    } catch (err) {
+      quarantineWorkspace(db, workspace.name, err, now);
+    }
   }
 }
 
