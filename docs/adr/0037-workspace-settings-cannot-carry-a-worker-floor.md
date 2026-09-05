@@ -102,7 +102,7 @@ blanket を外しても床の勘定は合う:
 issue #378 の「`hooks` キーがあれば一律 quarantine」は狭める。複数人が共有する正当な project hook は
 `.claude/settings.json` に commit するのが自然であり、その存在だけで workspace を実行不能にする必要はない。
 そこで **tracked `settings.json` が hooks だけ(+通常キー)なら、worker session 中だけ Git の sparse-checkout で
-実体化から外し、slot 解放時に戻す**。project hook は worker には効かず、同じ Workspace の盤面外 human session
+実体化から外し、worker container の回収を観測してから戻す**。project hook は worker には効かず、同じ Workspace の盤面外 human session
 には従来どおり効く。Git の正本には残るため、task branch の差分へ settings の削除を混ぜない。
 
 同じファイルに `sandbox` / `permissions` があれば床の著者権の主張なので従来どおり quarantine する。

@@ -6,6 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import {
   excludeWorkspaceProjectHooks,
+  materializeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
   releaseWorkspace,
   workspaceNeedsHuman,
@@ -21,7 +22,7 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-it("hooks settings は worker 中だけ sparse にし、親子の WIP に混ぜず human side へ戻す", async () => {
+it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜず、worker 回収後に戻せる", async () => {
   const workspace = await makeWorkspace(dirs, "sparse-hooks");
   await mkdir(join(workspace.path, ".claude"), { recursive: true });
   const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
@@ -45,7 +46,7 @@ it("hooks settings は worker 中だけ sparse にし、親子の WIP に混ぜ�
   excludeWorkspaceProjectHooks(workspace);
   commitWork(workspace.path, "parent.txt", "parent work\n");
   releaseWorkspace(db, workspace, parent, now);
-  expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
+  expect(() => readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toThrow();
 
   const child = registerTask(
     db,
@@ -71,5 +72,7 @@ it("hooks settings は worker 中だけ sparse にし、親子の WIP に混ぜ�
     "child.txt",
   );
   expect(git(workspace.path, "show", `task/${child.id}:.claude/settings.json`)).toBe(settings);
+  expect(() => readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toThrow();
+  materializeWorkspaceProjectSettings(workspace);
   expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
 });

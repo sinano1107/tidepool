@@ -121,10 +121,16 @@ function recordingSpawn() {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const killed: NodeJS.Signals[] = [];
-  const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
+  const exitListeners: Array<
+    Array<(code: number | null, signal: NodeJS.Signals | null) => void>
+  > = [];
   const errorListeners: Array<(err: Error) => void> = [];
   const spawn: ContainerSpawn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env });
+    const processExitListeners: Array<
+      (code: number | null, signal: NodeJS.Signals | null) => void
+    > = [];
+    exitListeners.push(processExitListeners);
     return {
       stdout,
       stderr,
@@ -136,19 +142,26 @@ function recordingSpawn() {
           | ((err: Error) => void),
       ) => {
         if (event === "exit") {
-          exitListeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
+          processExitListeners.push(
+            listener as (code: number | null, signal: NodeJS.Signals | null) => void,
+          );
         }
         if (event === "error") errorListeners.push(listener as (err: Error) => void);
       },
     };
   };
   const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    for (const listener of exitListeners) listener(code, signal);
+    for (const processListeners of exitListeners) {
+      for (const listener of processListeners) listener(code, signal);
+    }
+  };
+  const emitExitAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
+    for (const listener of exitListeners[index] ?? []) listener(code, signal);
   };
   const emitError = (err: Error) => {
     for (const listener of errorListeners) listener(err);
   };
-  return { calls, stdout, stderr, killed, spawn, emitExit, emitError };
+  return { calls, stdout, stderr, killed, spawn, emitExit, emitExitAt, emitError };
 }
 
 /** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
@@ -1149,7 +1162,7 @@ describe("ClaudeCodeWorker", () => {
     );
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project hooks");
-    const { start, calls, db } = await makeWorker({
+    const { start, calls, db, emitExit } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
     start("task-sbx-plain-settings");
@@ -1157,6 +1170,13 @@ describe("ClaudeCodeWorker", () => {
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
     expect(git(ws.path, "status", "--porcelain")).toBe("");
+
+    emitExit(0, null);
+    await vi.waitFor(() =>
+      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toContain(
+        '"hooks"',
+      ),
+    );
   });
 
   it("sparse 後に branch の settings.json が床キーへ変われば index の内容で quarantine する", async () => {
@@ -1188,6 +1208,31 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toHaveLength(1);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
     expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+  });
+
+  it("同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さない", async () => {
+    const ws = await makeWorkspace([], "tracked-hooks-overlap");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
+    await writeFile(join(ws.path, ".claude", "settings.json"), settings);
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    const { start, calls, emitExitAt } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+
+    start("task-hooks-first");
+    start("task-hooks-second");
+    expect(calls).toHaveLength(2);
+
+    emitExitAt(0, 0, null);
+    await Promise.resolve();
+    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+
+    emitExitAt(1, 0, null);
+    await vi.waitFor(() =>
+      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(settings),
+    );
   });
 
   it("sparse 後に branch の settings.json から hooks が消えれば通常 project settings を再実体化する", async () => {

@@ -1536,6 +1536,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  強制回収は容器の側なので、ここに居るのは root 1本でよい。A finished
    *  process removes itself so a stale entry never outlives it. */
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
+  /** Shared project hooks stay hidden until every overlapping session in the
+   *  workspace has actually left its container. Slot release happens earlier,
+   *  inside the worker's final MCP call, so it is not an exit boundary. */
+  private readonly projectHookSessions = new Map<string, number>();
   /** ADR 0018: resolved once at construction, same "config edge" posture as
    *  the rest of `options` — env access itself stays in main.ts. */
   private readonly workspacesDir: string;
@@ -1551,6 +1555,27 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
     this.validateDefaults(loadRegistry(options.registry.dir, options.registry.mode));
+  }
+
+  private restoreProjectSettingsAfterReclaim(
+    reclaimed: Promise<void>,
+    workspace: WorkspaceConfig,
+  ): void {
+    const key = workspace.path;
+    this.projectHookSessions.set(key, (this.projectHookSessions.get(key) ?? 0) + 1);
+    void reclaimed.then(() => {
+      const remaining = (this.projectHookSessions.get(key) ?? 1) - 1;
+      if (remaining > 0) {
+        this.projectHookSessions.set(key, remaining);
+        return;
+      }
+      this.projectHookSessions.delete(key);
+      try {
+        materializeWorkspaceProjectSettings(workspace);
+      } catch (err) {
+        quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
+      }
+    });
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
@@ -1745,7 +1770,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     }
     if (settings.projectHooks) {
       try {
+        const reclaimed = this.containers.open(task.id).reclaimed;
         excludeWorkspaceProjectHooks(workspace);
+        this.restoreProjectSettingsAfterReclaim(reclaimed, workspace);
       } catch (err) {
         quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
         return;

@@ -972,7 +972,6 @@ export function releaseWorkspace(
   tokenFailure?: unknown,
 ): void {
   try {
-    materializeWorkspaceProjectSettings(workspace);
     releaseTree(workspace, task);
     // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
     // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
