@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import {
+  excludeWorkspaceProjectHooks,
   prepareWorkspaceAtPickup,
   releaseWorkspace,
   workspaceNeedsHuman,
@@ -20,21 +21,13 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-it("sparse な hooks workspace は親から子を fork して WIP を退避しても settings をタスク差分へ混ぜない", async () => {
+it("hooks settings は worker 中だけ sparse にし、親子の WIP に混ぜず human side へ戻す", async () => {
   const workspace = await makeWorkspace(dirs, "sparse-hooks");
   await mkdir(join(workspace.path, ".claude"), { recursive: true });
   const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
   await writeFile(join(workspace.path, ".claude", "settings.json"), settings);
   git(workspace.path, "add", ".claude/settings.json");
   git(workspace.path, "commit", "-m", "share project hooks");
-  git(
-    workspace.path,
-    "sparse-checkout",
-    "set",
-    "--no-cone",
-    "/*",
-    "!.claude/settings.json",
-  );
   db = openDb(":memory:");
   const now = new Date("2026-09-04T00:00:00.000Z");
   const parent = registerTask(
@@ -49,8 +42,10 @@ it("sparse な hooks workspace は親から子を fork して WIP を退避し�
   );
 
   await prepareWorkspaceAtPickup(db, workspace, parent, {});
+  excludeWorkspaceProjectHooks(workspace);
   commitWork(workspace.path, "parent.txt", "parent work\n");
   releaseWorkspace(db, workspace, parent, now);
+  expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
 
   const child = registerTask(
     db,
@@ -64,6 +59,7 @@ it("sparse な hooks workspace は親から子を fork して WIP を退避し�
     now,
   );
   await prepareWorkspaceAtPickup(db, workspace, child, {});
+  excludeWorkspaceProjectHooks(workspace);
   expect(readFileSync(join(workspace.path, "parent.txt"), "utf8")).toBe("parent work\n");
   writeFileSync(join(workspace.path, "child.txt"), "child work\n");
   releaseWorkspace(db, workspace, child, now);
@@ -75,5 +71,5 @@ it("sparse な hooks workspace は親から子を fork して WIP を退避し�
     "child.txt",
   );
   expect(git(workspace.path, "show", `task/${child.id}:.claude/settings.json`)).toBe(settings);
-  expect(() => readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toThrow();
+  expect(readFileSync(join(workspace.path, ".claude", "settings.json"), "utf8")).toBe(settings);
 });

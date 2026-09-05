@@ -1190,6 +1190,36 @@ describe("ClaudeCodeWorker", () => {
     expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
   });
 
+  it("sparse 後に branch の settings.json から hooks が消えれば通常 project settings を再実体化する", async () => {
+    const ws = await makeWorkspace([], "tracked-hooks-ordinary-change");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    await writeFile(
+      join(ws.path, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [] } }),
+    );
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    git(ws.path, "checkout", "-b", "ordinary-settings");
+    const ordinary = JSON.stringify({ model: "sonnet" });
+    await writeFile(join(ws.path, ".claude", "settings.json"), ordinary);
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "replace hooks with ordinary settings");
+    git(ws.path, "checkout", "main");
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+
+    start("task-hooks-safe");
+    expect(calls).toHaveLength(1);
+    git(ws.path, "checkout", "ordinary-settings");
+    start("task-hooks-ordinary");
+
+    expect(calls).toHaveLength(2);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(ordinary);
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+  });
+
   it("床キーを持たない通常の project settings(model 等)は spawn を止めない", async () => {
     const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
     await mkdir(join(wsDir, ".claude"), { recursive: true });

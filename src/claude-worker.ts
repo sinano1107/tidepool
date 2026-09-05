@@ -51,6 +51,7 @@ import type { WorkerContainers } from "./worker-container.js";
 import {
   excludeWorkspaceProjectHooks,
   guardRegistryDefaultBranch,
+  materializeWorkspaceProjectSettings,
   quarantineWorkspace,
   resolveExecutionWorkspace,
   resolveOrQuarantine,
@@ -1745,6 +1746,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     if (settings.projectHooks) {
       try {
         excludeWorkspaceProjectHooks(workspace);
+      } catch (err) {
+        quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
+        return;
+      }
+    } else if (settings.hiddenProjectSettings) {
+      try {
+        materializeWorkspaceProjectSettings(workspace);
       } catch (err) {
         quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
         return;

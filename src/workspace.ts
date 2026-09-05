@@ -353,6 +353,19 @@ export function excludeWorkspaceProjectHooks(workspace: WorkspaceConfig): void {
   }
 }
 
+/** Put project settings back when no worker owns the checkout. Appending an
+ *  include pattern preserves any other sparse-checkout rules while making the
+ *  shared human-side configuration visible again. */
+export function materializeWorkspaceProjectSettings(workspace: WorkspaceConfig): void {
+  if (!git(workspace.path, "ls-files", "-v", "--", ".claude/settings.json").startsWith("S ")) {
+    return;
+  }
+  git(workspace.path, "sparse-checkout", "add", "/.claude/settings.json");
+  if (!lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
+    throw new Error(`workspace ${workspace.name}: could not restore .claude/settings.json`);
+  }
+}
+
 /** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を
  *  訊く1つの問いで、`repo` の宣言と突き合わせる側(下の
  *  `assertRemoteDeclarationMatchesClone`)と、既存 checkout の登録時に宣言を焼く側
@@ -959,6 +972,7 @@ export function releaseWorkspace(
   tokenFailure?: unknown,
 ): void {
   try {
+    materializeWorkspaceProjectSettings(workspace);
     releaseTree(workspace, task);
     // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
     // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する

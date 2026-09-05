@@ -586,40 +586,37 @@ const defaultRunOk: RunOkFn = (command, args) => {
  *  keeping the human-authored hooks in Git. */
 const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
 
-function sparseCheckoutEnabled(workspacePath: string): boolean {
-  const configured = spawnSync("git", ["config", "--bool", "core.sparseCheckout"], {
+function settingsIndexState(workspacePath: string, path: string): "tracked" | "hidden" | undefined {
+  const indexed = spawnSync("git", ["ls-files", "-v", "--", path], {
     cwd: workspacePath,
     encoding: "utf8",
   });
-  return configured.status === 0 && configured.stdout.trim() === "true";
-}
-
-function trackedSettingsFile(workspacePath: string, path: string): boolean {
-  return (
-    spawnSync("git", ["ls-files", "--error-unmatch", "--", path], {
-      cwd: workspacePath,
-      stdio: "ignore",
-    }).status === 0
-  );
+  if (indexed.status !== 0 || indexed.stdout === "") return undefined;
+  return indexed.stdout.startsWith("S ") ? "hidden" : "tracked";
 }
 
 function settingsFile(
   workspacePath: string,
   name: string,
-): { raw: string; tracked?: true } | "unreadable" | undefined {
+): { raw: string; tracked?: true; hidden?: true } | "unreadable" | undefined {
   const path = `.claude/${name}`;
   try {
     return { raw: readFileSync(join(workspacePath, path), "utf8") };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") return "unreadable";
-    if (name !== "settings.json" || !sparseCheckoutEnabled(workspacePath)) return undefined;
+    if (
+      name !== "settings.json" ||
+      settingsIndexState(workspacePath, ".claude/settings.json") !== "hidden"
+    ) {
+      return undefined;
+    }
     const indexed = spawnSync("git", ["show", `:${path}`], {
       cwd: workspacePath,
       encoding: "utf8",
     });
     return indexed.status === 0 && indexed.stdout !== null
-      ? { raw: indexed.stdout, tracked: true }
-      : undefined;
+      ? { raw: indexed.stdout, tracked: true, hidden: true }
+      : "unreadable";
   }
 }
 
@@ -661,6 +658,7 @@ function settingsFile(
 export function workspaceSettingsDisposition(workspacePath: string) {
   const offending: string[] = [];
   let projectHooks = false;
+  let hiddenProjectSettings = false;
   for (const name of PROJECT_SETTINGS_FILES) {
     const file = settingsFile(workspacePath, name);
     if (file === undefined) continue;
@@ -668,6 +666,7 @@ export function workspaceSettingsDisposition(workspacePath: string) {
       offending.push(name);
       continue;
     }
+    if (name === "settings.json" && file.hidden) hiddenProjectSettings = true;
     try {
       const parsed: unknown = JSON.parse(file.raw);
       if (typeof parsed !== "object" || parsed === null) continue;
@@ -676,7 +675,8 @@ export function workspaceSettingsDisposition(workspacePath: string) {
       } else if ("hooks" in parsed) {
         if (
           name === "settings.json" &&
-          (file.tracked || trackedSettingsFile(workspacePath, ".claude/settings.json"))
+          (file.tracked ||
+            settingsIndexState(workspacePath, ".claude/settings.json") !== undefined)
         ) {
           projectHooks = true;
         }
@@ -686,5 +686,5 @@ export function workspaceSettingsDisposition(workspacePath: string) {
       offending.push(name);
     }
   }
-  return { overriding: offending, projectHooks };
+  return { overriding: offending, projectHooks, hiddenProjectSettings };
 }

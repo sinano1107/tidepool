@@ -101,26 +101,12 @@ blanket を外しても床の勘定は合う:
 
 issue #378 の「`hooks` キーがあれば一律 quarantine」は狭める。複数人が共有する正当な project hook は
 `.claude/settings.json` に commit するのが自然であり、その存在だけで workspace を実行不能にする必要はない。
-worker は ADR 0037 の二層の書き込み禁止により同ファイルを再作成できないため、盤面は spawn 前に
-`git sparse-checkout set --no-cone '/*' '!.claude/settings.json'` を適用する。ファイルは Git の tree と index
-に残る一方、worker の working tree には現れず、project tier の hook は読み込まれない。SKIP_WORKTREE
-なので branch 切替・親 task branch からの fork・slot-release tree rule は通常どおり働き、settings の削除を
-タスク差分へ混ぜる特例も復元処理も要らない。
+そこで **tracked `settings.json` が hooks だけ(+通常キー)なら、worker session 中だけ Git の sparse-checkout で
+実体化から外し、slot 解放時に戻す**。project hook は worker には効かず、同じ Workspace の盤面外 human session
+には従来どおり効く。Git の正本には残るため、task branch の差分へ settings の削除を混ぜない。
 
-緩和は **tracked `settings.json` の hooks だけ**である。同じファイルに `sandbox` / `permissions` があれば
-床の著者権の主張なので従来どおり quarantine する。untracked の `settings.json` は sparse-checkout で安全に
-消せず、`settings.local.json` は人間の local data であって盤面が排除できないため、どちらの hooks も
-quarantine のまま。壊れた JSON も fail-closed のままである。既に sparse な checkout では working tree の
-不在を「設定なし」と読まず index の blob を検査し、branch 側で床キーへ変わっていれば quarantine する。
-
-この形は issue #382 の control 付き実測で固定した。通常 checkout では project `SessionStart` hook が発火し、
-同じ commit を sparse 除外すると発火しなかった。worker profile の `denyWrite` 下では
-`git sparse-checkout disable` と skip-worktree を明示的に無視する checkout の双方が settings の作成を
-`Operation not permitted` で拒否され、失敗後も sparse 設定と clean tree は維持された。素の
-`git checkout -- .claude/settings.json` は sparse pathspec の段階で拒否された。実測の transcript は issue に属し、
-ADR が持つのはそこから決まった上記の境界だけである。
-
-CLI が将来 working tree ではなく index の blob から project settings を読むようになれば、この境界は盤面の
-コードを変えずに壊れる。そのため deploy-pi の既存 hook canary の live/control workspace に同じ tracked hook を
-置く。live だけを sparse 除外し、live では沈黙、full-checkout control では発火することを、既存2セッションの
-追加行として毎デプロイ測る。control が発火しない回は live の沈黙を合格にせず VACUOUS とする。
+同じファイルに `sandbox` / `permissions` があれば床の著者権の主張なので従来どおり quarantine する。
+untracked `settings.json` の hooks、`settings.local.json` の床キー、壊れた JSON も同じである。既に worker 用の
+sparse 状態なら working tree の不在を「設定なし」と読まず Git の正本を検査し、hooks のない通常設定へ変わった
+branch では worker にも再び見せる。根拠となる CLI / Git の control 付き実測は issue #382 に置き、vendor 挙動の
+drift は deploy-pi の hook canary で full-checkout control と対にして測る。
