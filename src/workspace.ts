@@ -18,7 +18,7 @@ import {
   remoteTrackingRef,
   type WorkspaceEntry,
 } from "./registry.js";
-import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
+import { SANDBOX_SHADOW_PATHS, workspaceSettingsDisposition } from "./sandbox.js";
 import {
   BOARD_WORKER_ID,
   getTask,
@@ -330,6 +330,68 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
     );
   }
   git(workspace.path, "checkout", branch);
+}
+
+/** Keep shared project hooks in Git but out of the worker's physical checkout.
+ *  Non-cone sparse-checkout is the Git-native form that leaves the index and
+ *  status clean, so branch changes and the slot-release tree rule need no
+ *  special case for the hidden file. */
+export function excludeWorkspaceProjectHooks(workspace: WorkspaceConfig): void {
+  git(
+    workspace.path,
+    "sparse-checkout",
+    "set",
+    "--no-cone",
+    "/*",
+    "!.claude/settings.json",
+  );
+  if (lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
+    throw new Error(`workspace ${workspace.name}: could not exclude .claude/settings.json`);
+  }
+  if (git(workspace.path, "status", "--porcelain") !== "") {
+    throw new Error(`workspace ${workspace.name}: sparse settings exclusion left a dirty tree`);
+  }
+}
+
+/** Put project settings back when no worker owns the checkout. Appending an
+ *  include pattern preserves any other sparse-checkout rules while making the
+ *  shared human-side configuration visible again. */
+export function materializeWorkspaceProjectSettings(workspace: WorkspaceConfig): void {
+  if (!git(workspace.path, "ls-files", "-v", "--", ".claude/settings.json").startsWith("S ")) {
+    return;
+  }
+  git(workspace.path, "sparse-checkout", "add", "/.claude/settings.json");
+  if (!lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
+    throw new Error(`workspace ${workspace.name}: could not restore .claude/settings.json`);
+  }
+}
+
+/** Recover a sparse exclusion left by a previous board process. The caller
+ *  must first prove that the old worker-container set is empty; otherwise
+ *  restoring hooks would expose them to a process that survived the restart. */
+export function restoreWorkspaceProjectSettingsAtBoot(
+  db: Db,
+  listWorkspaces: () => WorkspaceConfig[],
+  now: Date,
+): void {
+  let workspaces: WorkspaceConfig[];
+  try {
+    workspaces = listWorkspaces();
+  } catch (err) {
+    console.error(
+      "[workspace] could not enumerate registered workspaces for project-settings recovery; " +
+        `shared human hooks may remain hidden (${String(err)})`,
+    );
+    return;
+  }
+  for (const workspace of workspaces) {
+    if (!workspaceSettingsDisposition(workspace.path).hiddenProjectSettings) continue;
+    try {
+      materializeWorkspaceProjectSettings(workspace);
+    } catch (err) {
+      quarantineWorkspace(db, workspace.name, err, now);
+    }
+  }
 }
 
 /** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を

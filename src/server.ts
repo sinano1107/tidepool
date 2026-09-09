@@ -58,6 +58,7 @@ import {
   pathIsRegistryClone,
   rebaselinePublishedRefs,
   rebaselineRef,
+  restoreWorkspaceProjectSettingsAtBoot,
   type WorkspaceConfig,
 } from "./workspace.js";
 import type { PublishWorkspaceFn, WorkspaceAdmin } from "./workspace-create.js";
@@ -384,6 +385,16 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       "the server restarted while this task was in progress; no self-report is " +
         "possible (ADR 0001: a restart never drains gracefully).",
       buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
+      options.clock.now(),
+    );
+  }
+  // issue #382: sparse-checkout survives a board crash while the in-memory
+  // reclamation callback does not. Only restore after the container preflight
+  // proves no process from the previous board can still hot-load the hooks.
+  if (runtimePreflight.available && options.boardState) {
+    restoreWorkspaceProjectSettingsAtBoot(
+      db,
+      options.boardState.listWorkspaces,
       options.clock.now(),
     );
   }

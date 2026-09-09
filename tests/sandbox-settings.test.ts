@@ -1,9 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { buildSandboxSettings, floorOverridingSettings, skillReadPaths } from "../src/sandbox.js";
+import { describe, expect, it } from "vitest";
+import { buildSandboxSettings, skillReadPaths } from "../src/sandbox.js";
 
 /** ADR 0033: worker セッションの Bash はハーネス内蔵サンドボックス(macOS
  *  Seatbelt / Linux bubblewrap)で workspace に封じる。この純関数はその
@@ -148,88 +145,6 @@ describe("skillReadPaths", () => {
   });
 });
 
-/** 床を定義する2キーのガード。CLI は per-task の `--settings` とは別に
- *  workspace 側の `.claude/settings.json` / `settings.local.json` も読んで
- *  **merge** するため、checkout がそこに床を書けば効いてしまう。
- *
- *  issue #60 の実測(`sandbox`): `enabled: false` は `--settings` 側が勝つが、
- *  `filesystem.allowRead` はマージされて効いてしまい(canary が読めた)、
- *  `--setting-sources user` でも `--setting-sources ""` でも止まらなかった。
- *  issue #144 の実測(`permissions`): local tier の `permissions.allow` が
- *  `manual` の書き込み床を持ち上げた(`sh -c '… > f'` が通った)。
- *
- *  work セッションは workspace に書けるので、放置するとどちらも「自分で床を
- *  広げて次の spawn で抜ける」経路が残る。 */
-describe("floorOverridingSettings", () => {
-  const dirs: string[] = [];
-  afterEach(async () => {
-    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-  });
-
-  async function workspaceWith(files: Record<string, string>): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "tidepool-sbx-ws-"));
-    dirs.push(dir);
-    if (Object.keys(files).length > 0) await mkdir(join(dir, ".claude"), { recursive: true });
-    for (const [name, body] of Object.entries(files)) {
-      await writeFile(join(dir, ".claude", name), body);
-    }
-    return dir;
-  }
-
-  // issue #378 でこの主張は**反転した**: かつては「無害化は disableAllHooks の
-  // 仕事なので hooks は素通し」だったが、盤面自身の deny hook と disableAllHooks
-  // は排他(実測)なので blanket は外れ、workspace hook の無害化はこの guard が
-  // 引き受ける。hook はハーネス側=サンドボックスの外で走り、その本体
-  // (`npx biome` の node_modules/.bin、`scripts/*.sh` 等)は worker が書ける —
-  // 文面が人間author でも本体は信用できない、が quarantine の理由。
-  // tidepool 自身の biome hook はこのために repo から settings.local.json
-  // (gitignore 済み、fresh clone に付いてこない)へ退去した。
-  it("hooks を持つ project settings は検出する — hook はサンドボックスの外で走り、その本体は worker が書ける(issue #378 / ADR 0037 改訂)", async () => {
-    const dir = await workspaceWith({
-      "settings.json": JSON.stringify({
-        hooks: {
-          PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "npm run fmt" }] }],
-        },
-      }),
-    });
-    expect(floorOverridingSettings(dir)).toEqual(["settings.json"]);
-  });
-
-  it(".claude が無い workspace は素通しする", async () => {
-    expect(floorOverridingSettings(await workspaceWith({}))).toEqual([]);
-  });
-
-  it("settings.json が sandbox ブロックを持てば検出する", async () => {
-    const dir = await workspaceWith({
-      "settings.json": JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } } }),
-    });
-    expect(floorOverridingSettings(dir)).toEqual(["settings.json"]);
-  });
-
-  it("settings.local.json も同じく検出する(git 管理外でもディスク上にあれば CLI は読む)", async () => {
-    const dir = await workspaceWith({
-      "settings.local.json": JSON.stringify({ sandbox: { enabled: false } }),
-    });
-    expect(floorOverridingSettings(dir)).toEqual(["settings.local.json"]);
-  });
-
-  it("読めない/壊れた settings は fail-closed に倒す — こちらの parser と CLI の解釈が食い違う余地を残さない", async () => {
-    const dir = await workspaceWith({ "settings.json": "{ not json" });
-    expect(floorOverridingSettings(dir)).toEqual(["settings.json"]);
-  });
-
-  it("permissions ブロックも検出する(ADR 0035): local tier の permissions.allow は manual の床を持ち上げる", async () => {
-    // #60 が allowRead で塞いだのと同じ二段階エスカレーション経路の1階上。
-    // 実測(2.1.220)で settings.local.json の permissions.allow を置くと
-    // `sh -c '… > f'` が通った。work セッションは自分の checkout に書けるので、
-    // review が封じ込めるはずの当の行為者が床を外せることになる。
-    const dir = await workspaceWith({
-      "settings.local.json": JSON.stringify({ permissions: { allow: ["Bash(sh -c:*)"] } }),
-    });
-    expect(floorOverridingSettings(dir)).toEqual(["settings.local.json"]);
-  });
-});
-
 /** ADR 0035(issue #144): review の書き込み床は permission 層が担うが、CLI の
  *  `sandbox.autoAllowBashIfSandboxed`(既定 true)が「サンドボックス内の Bash は
  *  承認不要」を意味するため、これを切らないと `--permission-mode manual` の床は
@@ -266,7 +181,8 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
  *
  *  この hook は ADR 0037 の `disableAllHooks: true` と排他だった(実測: 同じ
  *  flag tier の hook も巻き添えで死ぬ)。そこで blanket は外し、workspace 側
- *  hook の無害化は floorOverridingSettings の quarantine(下の describe)へ移る。
+ *  hook は tracked project file なら worker checkout から物理排除し、それ以外は
+ *  workspaceSettingsDisposition の quarantine へ移る(issue #382)。
  *  hot-load 経路(worker が settings を書いて次の呼び出しで hook を効かせる)は
  *  ADR 0037 の書き込み2層(sandbox denyWrite + Edit() deny)が既に独立に閉じて
  *  いる。 */

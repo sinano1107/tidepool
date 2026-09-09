@@ -121,10 +121,16 @@ function recordingSpawn() {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const killed: NodeJS.Signals[] = [];
-  const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
+  const exitListeners: Array<
+    Array<(code: number | null, signal: NodeJS.Signals | null) => void>
+  > = [];
   const errorListeners: Array<(err: Error) => void> = [];
   const spawn: ContainerSpawn = (command, args, opts) => {
     calls.push({ command, args, cwd: opts.cwd, env: opts.env });
+    const processExitListeners: Array<
+      (code: number | null, signal: NodeJS.Signals | null) => void
+    > = [];
+    exitListeners.push(processExitListeners);
     return {
       stdout,
       stderr,
@@ -136,19 +142,26 @@ function recordingSpawn() {
           | ((err: Error) => void),
       ) => {
         if (event === "exit") {
-          exitListeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
+          processExitListeners.push(
+            listener as (code: number | null, signal: NodeJS.Signals | null) => void,
+          );
         }
         if (event === "error") errorListeners.push(listener as (err: Error) => void);
       },
     };
   };
   const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    for (const listener of exitListeners) listener(code, signal);
+    for (const processListeners of exitListeners) {
+      for (const listener of processListeners) listener(code, signal);
+    }
+  };
+  const emitExitAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
+    for (const listener of exitListeners[index] ?? []) listener(code, signal);
   };
   const emitError = (err: Error) => {
     for (const listener of errorListeners) listener(err);
   };
-  return { calls, stdout, stderr, killed, spawn, emitExit, emitError };
+  return { calls, stdout, stderr, killed, spawn, emitExit, emitExitAt, emitError };
 }
 
 /** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
@@ -1064,13 +1077,29 @@ describe("ClaudeCodeWorker", () => {
     // 境界の内側)。
   });
 
-  it("workspace が自前の .claude/settings.json で sandbox を再定義していたら spawn せず workspace を quarantine する(issue #60: 床を自分で広げてから抜ける2セッション経路を塞ぐ)", async () => {
+  it.each([
+    [
+      "settings.json の sandbox + hooks",
+      "settings.json",
+      JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } }, hooks: {} }),
+    ],
+    [
+      "settings.json の permissions",
+      "settings.json",
+      JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
+    ],
+    ["untracked settings.json の hooks", "settings.json", JSON.stringify({ hooks: {} })],
+    ["settings.local.json の hooks", "settings.local.json", JSON.stringify({ hooks: {} })],
+    [
+      "settings.local.json の permissions",
+      "settings.local.json",
+      JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
+    ],
+    ["壊れた settings.json", "settings.json", "{ not json"],
+  ])("%s は spawn せず workspace を quarantine する", async (_case, name, body) => {
     const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
     await mkdir(join(wsDir, ".claude"), { recursive: true });
-    await writeFile(
-      join(wsDir, ".claude", "settings.json"),
-      JSON.stringify({ sandbox: { filesystem: { allowRead: ["/"] } } }),
-    );
+    await writeFile(join(wsDir, ".claude", name), body);
     const { start, calls, db } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
     });
@@ -1124,23 +1153,116 @@ describe("ClaudeCodeWorker", () => {
     expect(question?.purpose).not.toContain("settings.local.json");
   });
 
-  // issue #378 で反転: かつて hooks は「sandbox を含まない通常の settings」として
-  // 素通しだった。disableAllHooks の blanket が外れた今、workspace の hook は
-  // worker セッション内で実際に発火しうる(本体はサンドボックス外で走り、
-  // worker が書ける)ので、床キーと同格に spawn を止める。
-  it("hooks を持つ project settings は spawn を止めて quarantine する(issue #378 — disableAllHooks 廃止の代替)", async () => {
-    const wsDir = await mkdtemp(join(tmpdir(), "tidepool-ws-"));
-    await mkdir(join(wsDir, ".claude"), { recursive: true });
+  it("tracked settings.json の hooks は spawn 前に実体化から外し、workspace を quarantine しない(issue #382)", async () => {
+    const ws = await makeWorkspace([], "tracked-hooks");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
     await writeFile(
-      join(wsDir, ".claude", "settings.json"),
-      JSON.stringify({ hooks: { PostToolUse: [] } }),
+      join(ws.path, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [] }, model: "sonnet" }),
     );
-    const { start, calls, db } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    const { start, calls, db, emitExit } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
     start("task-sbx-plain-settings");
-    expect(calls).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
+
+    emitExit(0, null);
+    await vi.waitFor(() =>
+      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toContain(
+        '"hooks"',
+      ),
+    );
+  });
+
+  it("sparse 後に branch の settings.json が床キーへ変われば index の内容で quarantine する", async () => {
+    const ws = await makeWorkspace([], "tracked-hooks-floor-change");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    await writeFile(
+      join(ws.path, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [] } }),
+    );
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    git(ws.path, "checkout", "-b", "unsafe-settings");
+    await writeFile(
+      join(ws.path, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
+    );
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "replace hooks with a floor override");
+    git(ws.path, "checkout", "main");
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+
+    start("task-hooks-safe");
+    expect(calls).toHaveLength(1);
+    git(ws.path, "checkout", "unsafe-settings");
+    start("task-hooks-unsafe");
+
+    expect(calls).toHaveLength(1);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+  });
+
+  it("同じ workspace の次 session が先に始まっても、全 container の回収までは hooks を戻さない", async () => {
+    const ws = await makeWorkspace([], "tracked-hooks-overlap");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    const settings = JSON.stringify({ hooks: { PostToolUse: [] } });
+    await writeFile(join(ws.path, ".claude", "settings.json"), settings);
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    const { start, calls, emitExitAt } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+
+    start("task-hooks-first");
+    start("task-hooks-second");
+    expect(calls).toHaveLength(2);
+
+    emitExitAt(0, 0, null);
+    await Promise.resolve();
+    expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
+
+    emitExitAt(1, 0, null);
+    await vi.waitFor(() =>
+      expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(settings),
+    );
+  });
+
+  it("sparse 後に branch の settings.json から hooks が消えれば通常 project settings を再実体化する", async () => {
+    const ws = await makeWorkspace([], "tracked-hooks-ordinary-change");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    await writeFile(
+      join(ws.path, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PostToolUse: [] } }),
+    );
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    git(ws.path, "checkout", "-b", "ordinary-settings");
+    const ordinary = JSON.stringify({ model: "sonnet" });
+    await writeFile(join(ws.path, ".claude", "settings.json"), ordinary);
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "replace hooks with ordinary settings");
+    git(ws.path, "checkout", "main");
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+
+    start("task-hooks-safe");
+    expect(calls).toHaveLength(1);
+    git(ws.path, "checkout", "ordinary-settings");
+    start("task-hooks-ordinary");
+
+    expect(calls).toHaveLength(2);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toBe(ordinary);
+    expect(git(ws.path, "status", "--porcelain")).toBe("");
   });
 
   it("床キーを持たない通常の project settings(model 等)は spawn を止めない", async () => {

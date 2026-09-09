@@ -29,7 +29,7 @@ import {
   type RosterAgent,
   SKILL_WILDCARD,
 } from "./registry.js";
-import { buildSandboxSettings, floorOverridingSettings } from "./sandbox.js";
+import { buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
 import {
   countAdvisorConsultations,
   parseInitField,
@@ -49,7 +49,9 @@ import { composeTerminalScreen } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
 import type { WorkerContainers } from "./worker-container.js";
 import {
+  excludeWorkspaceProjectHooks,
   guardRegistryDefaultBranch,
+  materializeWorkspaceProjectSettings,
   quarantineWorkspace,
   resolveExecutionWorkspace,
   resolveOrQuarantine,
@@ -1309,7 +1311,7 @@ const defaultEnumerateTools: EnumerateToolsFn = () =>
   // neutral cwd で撃つ: workspace の cwd で撃つと、その checkout の
   // `.claude/settings.json` の `permissions.deny` が面を削って(測定3)「ホストの
   // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
-  // `floorOverridingSettings` がすでにその担当である。
+  // `workspaceSettingsDisposition` がすでにその担当である。
   atNeutralCwd("tidepool-tools-", (cwd) =>
     runInitPing(cwd, TOOL_SURFACE_PROBE_ARGS, "tools", TOOL_SURFACE_PROBE_TIMEOUT_MS),
   );
@@ -1534,6 +1536,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  強制回収は容器の側なので、ここに居るのは root 1本でよい。A finished
    *  process removes itself so a stale entry never outlives it. */
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
+  /** Shared project hooks stay hidden until every overlapping session in the
+   *  workspace has actually left its container. Slot release happens earlier,
+   *  inside the worker's final MCP call, so it is not an exit boundary. */
+  private readonly projectHookSessions = new Map<string, number>();
   /** ADR 0018: resolved once at construction, same "config edge" posture as
    *  the rest of `options` — env access itself stays in main.ts. */
   private readonly workspacesDir: string;
@@ -1549,6 +1555,27 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // fail at boot, not at first pickup: a misconfigured registry must refuse
     // to start the board rather than wedge the first task
     this.validateDefaults(loadRegistry(options.registry.dir, options.registry.mode));
+  }
+
+  private restoreProjectSettingsAfterReclaim(
+    reclaimed: Promise<void>,
+    workspace: WorkspaceConfig,
+  ): void {
+    const key = workspace.path;
+    this.projectHookSessions.set(key, (this.projectHookSessions.get(key) ?? 0) + 1);
+    void reclaimed.then(() => {
+      const remaining = (this.projectHookSessions.get(key) ?? 1) - 1;
+      if (remaining > 0) {
+        this.projectHookSessions.set(key, remaining);
+        return;
+      }
+      this.projectHookSessions.delete(key);
+      try {
+        materializeWorkspaceProjectSettings(workspace);
+      } catch (err) {
+        quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
+      }
+    });
   }
 
   /** Boot-time validation only: the configured default workspace/agent/
@@ -1703,7 +1730,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // own `.claude/settings.json` with the per-task `--settings` floor below,
     // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
     // entries win, and a `permissions.allow` entry lifts review's manual write
-    // floor (both measured — see floorOverridingSettings). A work session can
+    // floor (both measured — see workspaceSettingsDisposition). A work session can
     // write its own checkout, so this would be a two-session escalation: widen
     // the floor in session N, walk out in N+1. A workspace that redefines the
     // floor is a broken resource — quarantined like a dirty tree, and no session
@@ -1725,20 +1752,38 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       quarantineWorkspace(this.options.db, workspace.name, new Error(overlap.reason), this.options.clock.now());
       return;
     }
-    const overriding = floorOverridingSettings(workspace.path);
+    const settings = workspaceSettingsDisposition(workspace.path);
+    const overriding = settings.overriding;
     if (overriding.length > 0) {
       quarantineWorkspace(
         this.options.db,
         workspace.name,
         new Error(
-          `workspace carries .claude/${overriding.join(", .claude/")} declaring its own ` +
-            "sandbox, permissions, or hooks settings, which would widen the worker floor " +
-            "(ADR 0033 / ADR 0035 / issue #378: a project hook runs outside the sandbox and " +
-            "its body is worker-writable) — remove the sandbox, permissions, and hooks blocks",
+          `workspace carries unsafe .claude/${overriding.join(", .claude/")}: it is invalid, ` +
+            "declares sandbox/permissions, or carries hooks outside tracked settings.json " +
+            "(ADR 0033 / ADR 0035 / issues #378 and #382) — repair the JSON, remove floor " +
+            "blocks, or commit project hooks in .claude/settings.json",
         ),
         this.options.clock.now(),
       );
       return;
+    }
+    if (settings.projectHooks) {
+      try {
+        const reclaimed = this.containers.open(task.id).reclaimed;
+        excludeWorkspaceProjectHooks(workspace);
+        this.restoreProjectSettingsAfterReclaim(reclaimed, workspace);
+      } catch (err) {
+        quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
+        return;
+      }
+    } else if (settings.hiddenProjectSettings) {
+      try {
+        materializeWorkspaceProjectSettings(workspace);
+      } catch (err) {
+        quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
+        return;
+      }
     }
     // a review task's unset assignee resolves to the Auditor pointer, not
     // this worker's configured default agent (issue #42 / CONTEXT.md's

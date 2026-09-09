@@ -96,3 +96,18 @@ blanket を外しても床の勘定は合う:
 **canary は測る対象ごと作り直した**(hook-canary.sh): 「workspace hook は沈黙する」は測る意味を失い(その状態は spawn 前に quarantine される — vitest の領分)、代わりに「盤面の deny hook が subagent の盤面 verb を止め、親を通す」を、呼び出しを実受する stub MCP のログで測る。control は hooks キーを削った同一プロファイルで subagent が届くこと — 届かなければ live の沈黙は配線切れと区別できず VACUOUS。deny / deny/scope 行は変更なし。測定結果は issue #378 のコメントを参照(measurement belongs to the issue)。
 
 **hook の判定は「`agent_id` が付いていること」に依存し、JSON は読めるが `agent_id` が無い入力は素通しする(その形が親スレッドだから)。** つまり vendor が `agent_id` を**改名**した日は subagent が無音で通る — 壊れた JSON への deny(fail-closed)はこの改名を覆わない。それを検出するのが canary の live 行であり、この床は canary の定期実行(CLI 更新ごと)とセットでしか成立しない。
+
+## 追記: tracked project hooks は quarantine せず実体化から外す(issue #382、2026-09-04)
+
+issue #378 の「`hooks` キーがあれば一律 quarantine」は狭める。複数人が共有する正当な project hook は
+`.claude/settings.json` に commit するのが自然であり、その存在だけで workspace を実行不能にする必要はない。
+そこで **tracked `settings.json` が hooks だけ(+通常キー)なら、worker session 中だけ Git の sparse-checkout で
+実体化から外し、worker container の回収を観測してから戻す**。project hook は worker には効かず、同じ Workspace の盤面外 human session
+には従来どおり効く。Git の正本には残るため、task branch の差分へ settings の削除を混ぜない。盤面の再起動で
+回収 callback が失われた場合も、前 process の不在を container 機構が証明した後に残存する除外を戻す。
+
+同じファイルに `sandbox` / `permissions` があれば床の著者権の主張なので従来どおり quarantine する。
+untracked `settings.json` の hooks、`settings.local.json` の床キー、壊れた JSON も同じである。既に worker 用の
+sparse 状態なら working tree の不在を「設定なし」と読まず Git の正本を検査し、hooks のない通常設定へ変わった
+branch では worker にも再び見せる。根拠となる CLI / Git の control 付き実測は issue #382 に置き、vendor 挙動の
+drift は deploy-pi の hook canary で full-checkout control と対にして測る。
