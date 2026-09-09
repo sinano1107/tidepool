@@ -16,9 +16,10 @@ import {
 import { FakeClock } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 
-/** 後始末モジュール(ADR 0109 決定1)。3経路が共有する型であり、**門は
- *  `slot.currentTaskId` の再観測ひとつ**である —— 回収済み観測は非同期に届くので、
- *  その間に次の session が枠に入っていることがありうる。 */
+/** 後始末モジュール(ADR 0109 決定1)。3経路が共有する型である。門の主は
+ *  `slot.currentTaskId` の再観測 —— 回収済み観測は非同期に届くので、その間に次の
+ *  session が枠に入っていることがありうる。梯子の底で保留されている session
+ *  (`heldForContainment`)も同じ点で弾く(ADR 0099 決定3)。 */
 
 const dirs: string[] = [];
 afterEach(async () => {

@@ -36,7 +36,7 @@ export interface TeardownDeps {
   heldForContainment?: (taskId: string) => boolean;
 }
 
-/** 経路ごとに違うのはこの4つだけである。 */
+/** 経路ごとに違うのはここに挙げたものだけである。 */
 export interface TeardownStep {
   /** ツリー規律の**前**に走る記録 —— watchdog の failure question がこれ(自分の
    *  escalate を真似て、記録を先に置く)。 */
