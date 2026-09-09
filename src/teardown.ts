@@ -54,12 +54,28 @@ export interface TeardownStep {
  *  ので、その間に次の session が枠に入っていることがありうる —— 他人の slot を
  *  解放しないために、ここで観測しなおす(`capInterruptionHandler` が ADR 0104 の
  *  実装時に局所的に取った自衛と同じ形で、それが1つの session につきちょうど1回を
- *  保証する)。 */
+ *  保証する)。
+ *
+ *  **投げない。** 呼び口は全部 fire-and-forget の `void` である(回収済み観測の
+ *  `.then`、adapter の中断ハンドラ、起動時の復旧)—— 解放が同期だった頃は例外が
+ *  MCP 呼び出しの返り値になったが、今ここで投げれば unhandled rejection として盤面
+ *  ごと落ち、しかも未了は行に残るので次の起動でも同じ所で落ちる。個々の失敗は
+ *  すでにそれぞれの位置で quarantine に落ちている(`releaseWorkspace`)ので、ここへ
+ *  届くのは想定外だけである: 記録して流し、枠は握られたまま「後始末待ち」として
+ *  読み口に残す(ADR 0083 追記2 と同じ姿勢)。 */
 export async function runTeardown(
   deps: TeardownDeps,
   taskId: string,
   step: TeardownStep = {},
 ): Promise<void> {
+  try {
+    await teardown(deps, taskId, step);
+  } catch (err) {
+    console.error(`[teardown] task ${taskId}:`, err);
+  }
+}
+
+async function teardown(deps: TeardownDeps, taskId: string, step: TeardownStep): Promise<void> {
   const { db, clock, slot } = deps;
   if (slot.currentTaskId !== taskId) return;
   const task = getTask(db, taskId);
