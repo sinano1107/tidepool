@@ -720,6 +720,9 @@ export class CodexWorker implements WorkerAdapter {
         },
         at: this.options.clock.now(),
       });
+      // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— usage と
+      // transcript を書いた後に強制回収を撃つ。Harness 非依存に、盤面 supervisor 経由。
+      this.containers.forceReclaim(task.id);
     });
   }
 

@@ -714,16 +714,7 @@ function wipSubject(task: Task): string {
  *  failure alike — so nothing rests on the agent having tidied up. */
 export function releaseTree(workspace: WorkspaceConfig, task: Task): void {
   const taskId = task.id;
-  // the WIP commit lands on the task branch or nowhere: a session that
-  // wandered off its branch (e.g. onto main) must not have its leavings
-  // committed there — refusing here is what makes the main-write ban
-  // structural, and the refusal lands in the quarantine path
-  const head = git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
-  if (head !== taskBranch(taskId)) {
-    throw new Error(
-      `workspace ${workspace.name} is on '${head}', not '${taskBranch(taskId)}' — refusing to commit`,
-    );
-  }
+  assertOnTaskBranch(workspace, taskId);
   for (const path of shadowRemnants(workspace)) {
     rmSync(join(workspace.path, path), { force: true });
   }
@@ -733,6 +724,53 @@ export function releaseTree(workspace: WorkspaceConfig, task: Task): void {
   }
   if (git(workspace.path, "status", "--porcelain") !== "") {
     throw new Error(`workspace ${workspace.name} still dirty after WIP commit`);
+  }
+}
+
+/** the WIP commit lands on the task branch or nowhere: a session that wandered
+ *  off its branch (e.g. onto main) must not have its leavings committed there —
+ *  refusing here is what makes the main-write ban structural, and the refusal
+ *  lands in the quarantine path. 完了経路の後始末(下記)も同じ位置でこれを読む ——
+ *  そこでは何もコミットしないが、自分のブランチに居ないまま「done」と報告した
+ *  session の成果は、どこへ merge-back すればよいのかも分からない(#234 ケース1)。 */
+function assertOnTaskBranch(workspace: WorkspaceConfig, taskId: string): void {
+  const head = git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
+  if (head !== taskBranch(taskId)) {
+    throw new Error(
+      `workspace ${workspace.name} is on '${head}', not '${taskBranch(taskId)}' — refusing to commit`,
+    );
+  }
+}
+
+/** ADR 0084 の完了の門が掛かる述語(work タスクかつ workspace が needs-human でない)。
+ *  ADR 0109 決定3 が「退避しない」範囲も**同じ述語**である —— 門が verb の手前で clean を
+ *  要求している範囲でだけ、後始末時の汚れは成果ではなく残存プロセスの露見だと言える。 */
+export function completionTreeGateApplies(db: Db, task: Task, workspace: WorkspaceConfig): boolean {
+  return task.type === "work" && !workspaceNeedsHuman(db, workspace.name);
+}
+
+/** 完了経路の後始末が tree rule の代わりに走らせる**検査**(ADR 0109 決定3)。
+ *
+ *  完了の門(ADR 0084)が verb の手前で clean を要求している以上、後始末の時点で
+ *  ツリーに現れる変更は成果ではなく「done と報告した**後**に書かれたもの」——
+ *  すなわち残存プロセスの露見である。退避すればそれが WIP になり、次の一手である
+ *  merge-back が祖先ブランチへ運んでしまうので、退避せず投げて quarantine に落とす。
+ *
+ *  shadow 残骸(ADR 0069 の3条件)の削除だけは判定の**手前**で走る。これを省くと
+ *  サンドボックス下の完了が全部 quarantine に落ちる。`--untracked-files=all` が要る
+ *  理由は `treeIsDirty` と同じ(丸ごと untracked なディレクトリの畳み込み)。 */
+function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: Task): void {
+  assertOnTaskBranch(workspace, task.id);
+  for (const path of shadowRemnants(workspace)) {
+    rmSync(join(workspace.path, path), { force: true });
+  }
+  const status = git(workspace.path, "status", "--porcelain", "--untracked-files=all");
+  if (status !== "") {
+    throw new Error(
+      `workspace ${workspace.name} was written to after task ${task.id} reported done — ` +
+        "the completion gate required a clean tree before the verb, so these changes are not " +
+        "the session's deliverable but a process that outlived its own report (ADR 0109)",
+    );
   }
 }
 
@@ -998,9 +1036,17 @@ export function releaseWorkspace(
   mergeBack = false,
   githubAuth?: GitHubAuth,
   tokenFailure?: unknown,
+  /** 完了経路の後始末か(ADR 0109 決定3)。門が掛かる範囲では退避ではなく検査を
+   *  走らせる —— 掛からない範囲(review の完了・escalate・decompose)は従来どおり
+   *  退避する: そこでの WIP はタスクブランチに留まり、merge-back に載らない。 */
+  completed = false,
 ): void {
   try {
-    releaseTree(workspace, task);
+    if (completed && completionTreeGateApplies(db, task, workspace)) {
+      assertNothingWrittenAfterCompletion(workspace, task);
+    } else {
+      releaseTree(workspace, task);
+    }
     // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
     // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
     assertOnlyTaskBranchMoved(db, workspace, task.id);

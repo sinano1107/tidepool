@@ -47,6 +47,7 @@ import {
 import { startScheduler } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
+import { runTeardown, sessionInTeardown } from "./teardown.js";
 import type { ProviderUsageResource } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
@@ -463,6 +464,31 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
   });
+  // ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。in-memory の callback は
+  // 盤面の crash を越えないので、行に残った未了をここで拾い、**容器機構の前提検査が
+  // 「前の盤面のプロセスは残っていない」を証明してから**残りを完走させる —— 証明の前に
+  // 進めば、生き残った process の居る workspace を盤面が書く(#382 が sparse-checkout の
+  // 復元で踏んだのと同じ形で、置き場所も同じ)。検査が通らない間は Containment
+  // quarantine が pickup を止めており、未了は行に残ったまま次の起動を待つ。
+  const unfinishedTeardown = sessionInTeardown(db);
+  if (unfinishedTeardown && runtimePreflight.available) {
+    const teardownTask = getTask(db, unfinishedTeardown.taskId);
+    // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
+    // 走り切るまで pickup は進まない
+    slot.occupy(unfinishedTeardown.taskId);
+    void runTeardown(
+      {
+        db,
+        clock: options.clock,
+        slot,
+        resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
+        githubAuth: options.githubAuth,
+        landing,
+      },
+      unfinishedTeardown.taskId,
+      { completion: teardownTask?.status === "done" },
+    );
+  }
   // `harnessContainment` is the one production option. startServer prepends
   // the shared container/human-surface result to each adapter's sandbox/tool
   // result, so a common failure becomes one quarantine per Harness rather than
@@ -515,6 +541,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         containers,
         workspace: options.workspace,
         resolveWorkspace: options.resolveWorkspace,
+        githubAuth: options.githubAuth,
         config: options.watchdog,
       })
     : undefined;
@@ -561,6 +588,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     slot,
     clock: options.clock,
     landing,
+    // ADR 0109 決定1: 最終 verb の後の解放は、この supervisor の回収済み観測の
+    // 後ろでしか走らない
+    containers,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github,

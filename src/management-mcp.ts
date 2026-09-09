@@ -52,6 +52,7 @@ import {
   listQueue,
   listYourTasks,
 } from "./tasks.js";
+import { sessionInTeardown } from "./teardown.js";
 import type { ProviderUsageResource } from "./throttle.js";
 import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
@@ -221,9 +222,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   // ADR 0068 決定3: the envelope is this ADR's real fix — an agent reading the
   // queue here receives "why is it quiet" in the same one read, since MCP has
   // no banner channel to fill the gap.
-  server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () =>
-    toolResult({
+  server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () => {
+    // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない
+    const teardown = sessionInTeardown(deps.db);
+    return toolResult({
       halts: boardHalts(deps.db, deps.throttleRevalidating),
+      ...(teardown ? { teardown } : {}),
       tasks: listQueue(
         deps.db,
         deps.workspace?.name,
@@ -238,8 +242,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           deps.agentsUsingUsageResources,
         ),
       ),
-    }),
-  );
+    });
+  });
   server.registerTool("list_your_tasks", { description: "List unsettled tasks assigned to the human." }, async () =>
     toolResult(listYourTasks(deps.db)),
   );

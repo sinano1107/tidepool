@@ -3264,6 +3264,10 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
       () => ws,
     );
     const task = start("task-capped-ordering");
+    // ADR 0109 決定4: root の exit を観測した adapter はその場で強制回収を撃つ。ここで
+    // 測りたいのは「送達も exit も観測ではない」なので、force では空にならないホスト —
+    // 行儀よく exit しない子孫が残っている session — を明示的にスクリプトする。
+    runtime.hold(task.id);
     // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット)を
     // 実物で通す —— tree rule はその基準に対して退避する
     await prepareWorkspaceAtPickup(db, ws, task, {});
