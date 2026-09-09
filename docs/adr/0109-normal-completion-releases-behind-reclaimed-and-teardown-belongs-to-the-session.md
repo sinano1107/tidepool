@@ -6,7 +6,7 @@
 
 1. **通常完了の解放も回収済み観測を門とする。** domain verb は final MCP call の中で同期に着地し、response はすぐ返る —— worker exit と回収済み観測を待つ循環待ちは作らない。workspace の解放(tree rule / merge-back / 休止位置)と slot の解放だけが回収済み観測の後ろへ移り、cap 中断・watchdog 強制回収と**1つの型**を共有する。ADR 0099 決定2 の「回収は再実装されない」がこの経路にも及ぶ。
 
-2. **後始末(teardown)は worker session の一局面であり、session の終わりは root process の exit ではなく回収済み観測である。** slot を占めるのは task ではなく session であり、タスクが決着した後も後始末の間は session が握り続ける。`worker_exited` は root process の観測点として位置を変えない —— トークン消費はそこからしか取れず、session の終わりと観測点は別の瞬間でよい。後始末中の slot はキューの読み口の停止列挙に1行として現れる(ADR 0068 決定5)—— 「タスクは `done` なのに次が始まらない」は既存のどの語彙とも一致せず、説明が無ければ人間は古い停止と誤読する。
+2. **後始末(teardown)は worker session の一局面であり、session の終わりは root process の exit ではなく回収済み観測である。** slot を占めるのは task ではなく session であり、タスクが決着した後も後始末の間は session が握り続ける。`worker_exited` は root process の観測点として位置を変えない —— トークン消費はそこからしか取れず、session の終わりと観測点は別の瞬間でよい。後始末は**盤面全体の停止ではない**(止められるより狭い資源の話ですらなく、枠がまだ空いていないだけである)。ただし「今なぜ pickup が起きないか」に答える読み口は、停止の列挙と**並べて**後始末を報せる —— 「タスクは `done` なのに次が始まらない」は既存のどの語彙とも一致せず、説明が無ければ人間は古い停止と誤読する。
 
 3. **完了経路では、後始末時に dirty なツリーは成果ではなく残存プロセスの露見である。** 完了の門(ADR 0084)が verb の手前で clean を要求している以上、そこに現れる変更は「done と報告した後に書かれたもの」でしかない。退避せず workspace quarantine に落とす —— WIP コミットにすれば次の行の merge-back がそれを祖先ブランチへ運ぶ。掛かる範囲は完了の門と同じ述語であり、review の完了・`escalate`・`decompose` は従来どおり退避する(タスクブランチに留まり merge-back しないので、失われるより残るほうが人間の修理材料になる)。
 
