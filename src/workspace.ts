@@ -671,24 +671,44 @@ function shadowRemnants(workspace: WorkspaceConfig): string[] {
   });
 }
 
-/** ADR 0084 の完了の門が読む「作業ツリーに未コミットの変更が残っているか」。tree rule と
- *  同じ基準 —— shadow 残骸(上記)だけは数えない —— で、こちらは**何も変えない**。
+/** shadow 残骸(ADR 0069 の3条件)を除いた「作業ツリーに残っている未コミットの変更」の
+ *  観測。**綴りはこの1つである**(ADR 0084 決定3): 門の dirty 判定も完了経路の検査も
+ *  ここを読む —— 判定を2箇所に複製すると、片方だけが残骸を数えて無実の拒否か取りこぼしが
+ *  生まれる。
  *
  *  `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
  *  ディレクトリを `?? .claude/` の1行に畳むので、残骸の除外がパス一致で効かなくなり
  *  `.claude/agents` だけの残骸が dirty に数えられる。
  *
+ *  **観測できなければ投げる。** 飲むかどうかは呼び手の判断であり、経路ごとに違う。 */
+function uncommittedChanges(workspace: WorkspaceConfig): string[] {
+  const remnants = new Set<string>(shadowRemnants(workspace));
+  return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
+    .split("\n")
+    .filter((line) => line !== "" && !remnants.has(line.slice(3)));
+}
+
+/** shadow 残骸(ADR 0069 の3条件)を消す。tree rule の退避も完了経路の検査も、判定の
+ *  **手前**で同じ削除を走らせる —— これを省くとサンドボックス下の解放が全部 quarantine に
+ *  落ちる。 */
+function removeShadowRemnants(workspace: WorkspaceConfig): void {
+  for (const path of shadowRemnants(workspace)) {
+    rmSync(join(workspace.path, path), { force: true });
+  }
+}
+
+/** ADR 0084 の完了の門が読む「作業ツリーに未コミットの変更が残っているか」。tree rule と
+ *  同じ基準(上記)で、こちらは**何も変えない**。
+ *
  *  **観測に失敗したら `false` を返す**(ADR 0084 決定2): git repository 自体が壊れている
  *  workspace で「commit してから呼び直せ」は worker に実行不能なことを求める指示になる。
- *  握り潰しをここに置くのは、飲むのを**この関数自身の git 観測に限る**ためである ——
- *  呼び出し側のロジックの失敗まで一緒に飲むと、門が理由なく開く。黙って開くわけでも
- *  ない: 直後の解放で tree rule が同じ git に躓き、quarantine が人間に届く。 */
+ *  握り潰しをここに置くのは、飲むのを**観測に限る**ためである —— 呼び出し側のロジックの
+ *  失敗まで一緒に飲むと、門が理由なく開く。黙って開くわけでもない: 直後の解放で tree rule
+ *  が同じ git に躓き、quarantine が人間に届く。**その網は完了経路には無い**(tree rule が
+ *  検査に置き換わる)ので、そちらは飲まない —— `assertNothingWrittenAfterCompletion`。 */
 export function treeIsDirty(workspace: WorkspaceConfig): boolean {
   try {
-    const remnants = new Set<string>(shadowRemnants(workspace));
-    return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
-      .split("\n")
-      .some((line) => line !== "" && !remnants.has(line.slice(3)));
+    return uncommittedChanges(workspace).length > 0;
   } catch {
     return false;
   }
@@ -715,9 +735,7 @@ function wipSubject(task: Task): string {
 export function releaseTree(workspace: WorkspaceConfig, task: Task): void {
   const taskId = task.id;
   assertOnTaskBranch(workspace, taskId);
-  for (const path of shadowRemnants(workspace)) {
-    rmSync(join(workspace.path, path), { force: true });
-  }
+  removeShadowRemnants(workspace);
   git(workspace.path, "add", "-A");
   if (git(workspace.path, "status", "--porcelain") !== "") {
     git(workspace.path, "commit", "-m", wipSubject(task));
@@ -756,16 +774,14 @@ export function completionTreeGateApplies(db: Db, task: Task, workspace: Workspa
  *  すなわち残存プロセスの露見である。退避すればそれが WIP になり、次の一手である
  *  merge-back が祖先ブランチへ運んでしまうので、退避せず投げて quarantine に落とす。
  *
- *  shadow 残骸(ADR 0069 の3条件)の削除だけは判定の**手前**で走る。これを省くと
- *  サンドボックス下の完了が全部 quarantine に落ちる。`--untracked-files=all` が要る
- *  理由は `treeIsDirty` と同じ(丸ごと untracked なディレクトリの畳み込み)。 */
+ *  読む綴りは門と同じ1つ(`uncommittedChanges` / ADR 0084 決定3)で、shadow 残骸の削除も
+ *  tree rule と同じ手前の位置で走る。**観測の失敗は飲まない**: 門の側の握り潰しが安全なのは
+ *  直後の解放で tree rule が同じ git に躓いて quarantine が人間に届くからであり、完了経路
+ *  ではその tree rule がこの検査に置き換わっていて網が無い(ADR 0109 決定3)。 */
 function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: Task): void {
   assertOnTaskBranch(workspace, task.id);
-  for (const path of shadowRemnants(workspace)) {
-    rmSync(join(workspace.path, path), { force: true });
-  }
-  const status = git(workspace.path, "status", "--porcelain", "--untracked-files=all");
-  if (status !== "") {
+  removeShadowRemnants(workspace);
+  if (uncommittedChanges(workspace).length > 0) {
     throw new Error(
       `workspace ${workspace.name} was written to after task ${task.id} reported done — ` +
         "the completion gate required a clean tree before the verb, so these changes are not " +

@@ -49,14 +49,14 @@ export const BOARD_WRITE_LANGUAGE_RULE =
  *  —— 不変条件は attribution の門・完了経路の検査・強制回収が持ち、この一文が守るのは
  *  トークンだけである(締めのターンだけは機械で殺せないことが実測で確定している)。
  *  3経路で1つの定数を共有する。 */
-export const SESSION_OVER_NOTICE =
+const SESSION_OVER_NOTICE =
   "Session over. End your turn now: no further tool calls, no file edits, no closing " +
   "summary. Nothing reads anything you produce after this point, and the board is " +
   "waiting for this session's processes to exit before it releases the workspace.";
 
 /** 後始末に入った session からの以降の呼び出しに返すもの(ADR 0109 決定6)。失敗として
  *  読ませると別の手を試されるので、上の一文と同じことを言わせる。 */
-export const SESSION_OVER_TOOL_ERROR =
+const SESSION_OVER_TOOL_ERROR =
   "this session is over; stop and end your turn — no further tool calls, no file edits, " +
   "no closing summary. Nothing reads anything you produce after this point.";
 
@@ -80,6 +80,10 @@ export interface McpDeps {
   github?: GitHubClient;
   /** The board's GitHub identity (ADR 0093) for completion-time workspace refresh. */
   githubAuth?: GitHubAuth;
+  /** watchdog の `heldForContainment`(ADR 0099 決定3)。梯子の底で保留されている
+   *  session の後始末は、遅れて届いた回収済み観測ではなく確認回答だけが進める。
+   *  Absent → watchdog を持たない盤面(梯子そのものが無い)。 */
+  heldForContainment?: (taskId: string) => boolean;
   /** This board's one configured worker's authority profile (issue #11).
    *  Absent → assignable_to and allowed_workspaces are both unrestricted.
    *  Superseded by `resolveAuthority` below when both are given. */
@@ -254,8 +258,10 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
  *
  *  `gate` は verb の**前**に走る(ADR 0084 の完了の門)。門を持つ verb だけが workspace を
  *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
- *  error で終わった escalate / decompose にまでその副作用が及ぶ。解決済みの workspace は
- *  そのまま後始末へ渡す(1つの verb 呼び出しで2度撃たない)。 */
+ *  error で終わった escalate / decompose にまでその副作用が及ぶ。門が解決した結果は
+ *  **解決できなかったとき(`null`)も含めて**そのまま後始末へ渡す —— `undefined` で渡すと
+ *  後始末が「まだ解決していない」と読んで同じ観測をもう一度 quarantine する(1つの verb
+ *  呼び出しで2度撃たない)。 */
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
@@ -264,7 +270,7 @@ function runReleasingVerb(
   gate?: (task: Task, workspace: WorkspaceConfig) => void,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
-    const workspace = gate ? resolveTaskWorkspace(deps, task) : undefined;
+    const workspace = gate ? (resolveTaskWorkspace(deps, task) ?? null) : undefined;
     if (gate && workspace) gate(task, workspace);
     const result = verb(task, attributedWorkerId(deps, task), deps.clock.now());
     // 後始末に入った(CONTEXT.md「後始末」)。枠を握っているのは task ではなく
@@ -278,6 +284,7 @@ function runReleasingVerb(
       resolve: buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
       githubAuth: deps.githubAuth,
       landing: deps.landing,
+      heldForContainment: deps.heldForContainment,
     };
     const reclaimed = deps.containers?.reclaimed(task.id) ?? Promise.resolve();
     void reclaimed.then(() => runTeardown(teardown, task.id, { completion, workspace }));

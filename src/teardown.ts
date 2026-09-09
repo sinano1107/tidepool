@@ -27,6 +27,13 @@ export interface TeardownDeps {
    *  失敗より先に PR 昇格の失敗を人間へ届けてしまう。Absent → 着地口を持たない呼び手
    *  (起動時の復旧より前の段)。 */
   landing?: Landing;
+  /** **この session が梯子の底で保留されているか**(ADR 0099 決定3)。回収 timeout で
+   *  Containment quarantine に落ちた session は、確認 question ただ1つを解放の門とする ——
+   *  遅れて届いた回収済み観測が、その門を跨いで workspace と slot を解放してはならない。
+   *  盤面全体の quarantine ではなくこの述語を読むのは、無関係な理由(harness containment /
+   *  前提検査)で開いた quarantine が完了の後始末を黙って no-op にすると、誰も再起動しない
+   *  まま枠が刺さるからである。Absent → watchdog を持たない盤面(梯子そのものが無い)。 */
+  heldForContainment?: (taskId: string) => boolean;
 }
 
 /** 経路ごとに違うのはこの4つだけである。 */
@@ -43,18 +50,22 @@ export interface TeardownStep {
   /** 完了経路(ADR 0109 決定1・3): 退避ではなく検査を走らせ、work タスクなら
    *  merge-back まで進む。 */
   completion?: boolean;
-  /** 既に解決済みの workspace。`resolveOrQuarantine` は quarantine の**副作用**を
-   *  持つので、完了の門が先に解決している経路では1つの verb 呼び出しで2度撃たない。 */
-  workspace?: WorkspaceConfig;
+  /** 門が既に解決した workspace。`resolveOrQuarantine` は解決できない名前を
+   *  **quarantine する副作用を持って `undefined` を返す**ので、「解決済み・該当なし」を
+   *  `null` で、「まだ解決していない」を `undefined` で言い分ける —— 区別しないと、
+   *  門が既に撃った quarantine を後始末が同じ観測でもう一度撃つ(1つの verb 呼び出しで
+   *  2度撃たない)。 */
+  workspace?: WorkspaceConfig | null;
 }
 
 /** 後始末の一撃(ADR 0109 決定1): tree rule → 状態遷移 → slot 解放。
  *
- *  **門は `slot.currentTaskId` の再観測ひとつである。** 回収済み観測は非同期に届く
+ *  **門は `slot.currentTaskId` の再観測である。** 回収済み観測は非同期に届く
  *  ので、その間に次の session が枠に入っていることがありうる —— 他人の slot を
  *  解放しないために、ここで観測しなおす(`capInterruptionHandler` が ADR 0104 の
  *  実装時に局所的に取った自衛と同じ形で、それが1つの session につきちょうど1回を
- *  保証する)。
+ *  保証する)。梯子の底で保留されている session(`heldForContainment`)も同じ点で
+ *  弾く —— そこでの解放の門は確認 question ただ1つである(ADR 0099 決定3)。
  *
  *  **投げない。** 呼び口は全部 fire-and-forget の `void` である(回収済み観測の
  *  `.then`、adapter の中断ハンドラ、起動時の復旧)—— 解放が同期だった頃は例外が
@@ -77,13 +88,18 @@ export async function runTeardown(
 
 async function teardown(deps: TeardownDeps, taskId: string, step: TeardownStep): Promise<void> {
   const { db, clock, slot } = deps;
-  if (slot.currentTaskId !== taskId) return;
+  // 解放してよいか。枠の主がまだこの session であること(回収済み観測は非同期に届く)と、
+  // 梯子の底で保留されていないこと(ADR 0099 決定3)の2つを1点から読む。
+  const releasable = () =>
+    slot.currentTaskId === taskId && deps.heldForContainment?.(taskId) !== true;
+  if (!releasable()) return;
   const task = getTask(db, taskId);
   if (!task) return;
   if (step.ready && !step.ready(task)) return;
   const workspace =
-    step.workspace ??
-    (deps.resolve && resolveOrQuarantine(db, deps.resolve, task.workspace, clock.now()));
+    step.workspace === undefined
+      ? deps.resolve && resolveOrQuarantine(db, deps.resolve, task.workspace, clock.now())
+      : step.workspace;
   const mergeBack = Boolean(step.completion) && task.type === "work";
   // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の取得だけが
   // ネットワークなので、同期の `releaseWorkspace` の手前で撃つ。失敗は投げずに持ち越す
@@ -96,8 +112,8 @@ async function teardown(deps: TeardownDeps, taskId: string, step: TeardownStep):
       tokenFailure = err ?? new Error("GitHub token acquisition failed");
     }
   }
-  // その await を跨ぐ間に枠の主が変わっていることがありうるので、門をもう一度読む
-  if (slot.currentTaskId !== taskId) return;
+  // その await を跨ぐ間に枠の主が変わる / 梯子の底へ落ちることがありうるので、門をもう一度読む
+  if (!releasable()) return;
   const now = clock.now();
   step.record?.(task, now);
   if (workspace) {
@@ -124,8 +140,7 @@ async function teardown(deps: TeardownDeps, taskId: string, step: TeardownStep):
 }
 
 /** slot-release tree rule の一撃だけ(CONTEXT.md「Slot-release tree rule」)。
- *  slot を持たない呼び手 —— 起動時の中断処理と、回収 timeout 後に確認回答で
- *  解放される経路 —— が使う。resolve が無い盤面では no-op。 */
+ *  slot を触らない呼び手 —— `failTask` —— が使う。resolve が無い盤面では no-op。 */
 export function runTreeRule(
   db: Db,
   resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
@@ -146,7 +161,7 @@ export function markTeardown(db: Db, taskId: string, now: Date): void {
   );
 }
 
-export function clearTeardown(db: Db, taskId: string): void {
+function clearTeardown(db: Db, taskId: string): void {
   db.prepare("UPDATE tasks SET teardown_started_at = NULL WHERE id = ?").run(taskId);
 }
 

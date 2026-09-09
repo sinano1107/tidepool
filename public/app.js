@@ -799,6 +799,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === "pause");
   const throttle = pause.throttle;
+  const teardown = queueEnvelope.teardown;
   const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
   const fmtTime = (iso) => {
     const d = new Date(iso);
@@ -965,7 +966,15 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     }
   };
   const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
-  const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : fableThrottled ? {
+  const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : teardown ? {
+    // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
+    // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
+    // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
+    color: "var(--sun-4)",
+    taskId: teardown.taskId,
+    line: "session teardown \xB7 nothing new starts",
+    meta: `waiting for this session's processes to exit \xB7 since ${fmtTime(teardown.startedAt)}`
+  } : fableThrottled ? {
     // fable line only (ADR 0030): the board keeps flowing — fable-model
     // tasks alone wait for their catch-up
     color: "var(--rock-3)",

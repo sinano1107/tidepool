@@ -136,6 +136,9 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   // 資源単位の表示に要る完全な throttle(windows / fable 詳細)は /pause から —
   // halts の throttle entry と一部重複するが、把握して受け入れた重複である
   const throttle = pause.throttle;
+  // 後始末は停止の列挙とは**並んで**運ばれる (ADR 0109 決定2) — 枠がまだ空いていない
+  // 状態であって、盤面全体の停止ではない
+  const teardown = queueEnvelope.teardown;
   const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
   const fmtTime = (iso) => {
     const d = new Date(iso);
@@ -309,6 +312,15 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       : { color: 'var(--tide-4)', line: liveTitle(running), meta: running.assignee ?? '', taskId: running.id }
     : pickupHalt
     ? pickupHalt.slot
+    : teardown
+    ? {
+        // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
+        // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
+        // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
+        color: 'var(--sun-4)', taskId: teardown.taskId,
+        line: 'session teardown · nothing new starts',
+        meta: `waiting for this session's processes to exit · since ${fmtTime(teardown.startedAt)}`,
+      }
     : fableThrottled
     ? {
         // fable line only (ADR 0030): the board keeps flowing — fable-model

@@ -542,6 +542,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         workspace: options.workspace,
         resolveWorkspace: options.resolveWorkspace,
         githubAuth: options.githubAuth,
+        landing,
         config: options.watchdog,
       })
     : undefined;
@@ -591,6 +592,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     // ADR 0109 決定1: 最終 verb の後の解放は、この supervisor の回収済み観測の
     // 後ろでしか走らない
     containers,
+    // ADR 0099 決定3: 梯子の底へ落ちた session の解放の門は確認 question ただ1つ ——
+    // 遅れて届いた回収済み観測が跨がないよう、watchdog の保留を後始末が読む
+    heldForContainment: watchdog?.heldForContainment,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github,

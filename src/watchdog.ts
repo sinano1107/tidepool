@@ -2,6 +2,7 @@ import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import type { GitHubAuth } from "./github-auth.js";
+import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
 import {
   escalateTask,
@@ -53,6 +54,11 @@ export interface PendingReclaim {
 
 export interface Watchdog extends PendingReclaim {
   stop: () => void;
+  /** **この session が梯子の底で保留されているか**(ADR 0099 決定3)。回収 timeout で
+   *  Containment quarantine に落ちた session の後始末は、確認回答だけが進める ——
+   *  遅れて届いた回収済み観測はこの述語で弾かれる。`pendingReclaim` では代われない:
+   *  あちらは容器の側も読むので、空が観測された瞬間に false になる。 */
+  heldForContainment: (taskId: string) => boolean;
 }
 
 /** The task's most recent pickup, not its first: a retried task is picked up
@@ -178,12 +184,23 @@ export function startWatchdog(deps: {
   /** ADR 0093: 完了済み session の後始末が確認回答で解放されるとき、merge-back の
    *  帰り先を決める fetch がここの token を要る。 */
   githubAuth?: GitHubAuth;
+  /** 完了済み session の後始末がここを通る(確認回答で解放される経路)—— 着地は
+   *  後始末の中で走るので(ADR 0109 決定1)、これが無いと梯子の底へ落ちた完了は
+   *  merge-back まで進んだきり PR 昇格 / 着地が永久に起きない。 */
+  landing?: Landing;
   config: WatchdogConfig;
 }): Watchdog {
   const { db, clock, slot, worker, containers, workspace, resolveWorkspace, config } = deps;
   const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
   const reclaimTimeout = config.reclaimTimeout ?? RECLAIM_TIMEOUT;
-  const teardown: TeardownDeps = { db, clock, slot, resolve, githubAuth: deps.githubAuth };
+  const teardown: TeardownDeps = {
+    db,
+    clock,
+    slot,
+    resolve,
+    githubAuth: deps.githubAuth,
+    landing: deps.landing,
+  };
   // keyed by task id; reset whenever a fresh pickup shows up for that id so a
   // retried run starts its own graceful-stop clock instead of inheriting
   // the previous run's already-tripped state
@@ -327,6 +344,7 @@ export function startWatchdog(deps: {
   const cancel = clock.setInterval(tick, WATCHDOG_TICK);
   return {
     stop: cancel,
+    heldForContainment: (taskId) => pending === taskId,
     pendingReclaim: () => (pending !== null && containers.pendingReclaim(pending) ? pending : undefined),
     acceptReclaimed: () => {
       if (pending === null) return;

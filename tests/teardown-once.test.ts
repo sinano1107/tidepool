@@ -3,10 +3,16 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
 import { Slot } from "../src/slot.js";
-import { pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { runTeardown, type TeardownDeps } from "../src/teardown.js";
-import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
+import {
+  prepareWorkspaceAtPickup,
+  resolveOrQuarantine,
+  UnknownWorkspaceError,
+  type WorkspaceConfig,
+} from "../src/workspace.js";
 import { FakeClock } from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 
@@ -73,4 +79,47 @@ it("枠の主が入れ替わっていたら何もしない —— 他人の slot
   expect(transitions).toEqual([]);
   expect(slot.currentTaskId).toBe("someone-else");
   expect(git(ws.path, "status", "--porcelain")).not.toBe("");
+});
+
+it("門が既に解決した workspace は後始末で解決し直さない —— 同じ観測で2度撃たない", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const slot = new Slot();
+  const registered = registerTask(
+    db,
+    {
+      type: "work",
+      title: "one",
+      purpose: "why",
+      completion_criteria: "done",
+      workspace: "ghost",
+    },
+    clock.now(),
+  );
+  const task = pickupTask(db, registered, "deckhand", clock.now());
+  slot.occupy(task.id);
+  let resolveCalls = 0;
+  const resolve = () => {
+    resolveCalls++;
+    throw new UnknownWorkspaceError("ghost");
+  };
+
+  // 完了の門(`runReleasingVerb`)が verb の**手前**で解決する —— 解決できない名前は
+  // ここで quarantine される。その結果は「解決済み・該当なし」として後始末へ渡る
+  const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
+  expect(resolved).toBeUndefined();
+  await runTeardown({ db, clock, slot, resolve }, task.id, {
+    completion: true,
+    workspace: resolved ?? null,
+  });
+
+  expect(resolveCalls).toBe(1);
+  const quarantine = listBoard(db).find((t) => t.question_quarantine_workspace === "ghost");
+  expect(quarantine).toBeDefined();
+  // 2度目は同じ観測を cause として重ねて記録するだけ = 人間には理由が二重に見える
+  expect(listEvents(db, quarantine?.id ?? "").map((e) => e.payload.kind)).not.toContain(
+    "quarantine_refired",
+  );
+  // 門が閉じたわけではない: 枠はきちんと空く
+  expect(slot.currentTaskId).toBeNull();
 });

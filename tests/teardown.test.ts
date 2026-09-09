@@ -1,6 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { FakeContainerRuntime } from "./fakes.js";
 import {
@@ -37,12 +35,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 const started = () => t.worker.started.map((task) => task.id);
 
-const quarantineQuestion = async () =>
-  (await questions(t)).find((q: any) => q.title.includes("needs human attention"));
-
 const payload = (result: any) => JSON.parse(result.content[0].text);
-
-const MIN = 60 * 1000;
 
 it("容器が生きている間は次の task が pickup されない —— 進めるのは回収済み観測である", async () => {
   t = await bootTidepool();
@@ -160,124 +153,6 @@ it("解放系 verb 3つの返り値に終了の指示が入る", async () => {
     expect(payload(result).session_over).toContain("Session over. End your turn now");
     await t.stop();
   }
-});
-
-it("完了の報告の後に書かれたものは成果ではない —— WIP も merge-back も無く workspace が quarantine に落ちる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace: ws });
-  const task = await registerWork(t, "work");
-  await t.clock.advance(HOUR);
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
-  const mainBefore = git(ws.path, "rev-parse", "main");
-  t.containers.hold(task.id);
-
-  await completeViaMcp(t, task.id);
-  // 決着を報告した後に、まだ生きていた process が書く
-  writeFileSync(join(ws.path, "after-the-report.txt"), "written by a process that outlived\n");
-  t.containers.fireEmpty(task.id);
-  await settle();
-
-  expect((await quarantineQuestion())?.purpose).toContain("after task");
-  // 退避されていない: WIP コミットは無く、汚れはそのまま人間の修理材料として残る
-  expect(git(ws.path, "log", "--oneline", `task/${task.id}`)).not.toContain("WIP");
-  expect(git(ws.path, "status", "--porcelain")).not.toBe("");
-  // merge-back も走っていない —— 報告後の書き込みが祖先ブランチへ運ばれることはない
-  expect(git(ws.path, "rev-parse", "main")).toBe(mainBefore);
-});
-
-it("汚れが shadow 残骸の3条件だけを満たすなら、削除された上で通常どおり完了する", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace: ws });
-  const task = await registerWork(t, "work");
-  await t.clock.advance(HOUR);
-  commitWork(ws.path, "deliverable.txt", "the real work\n");
-  t.containers.hold(task.id);
-
-  await completeViaMcp(t, task.id);
-  // ADR 0069 の3条件(既知パス・untracked・0バイト)—— サンドボックスの影であって
-  // セッションの遺物ではない
-  mkdirSync(join(ws.path, ".claude"), { recursive: true });
-  writeFileSync(join(ws.path, ".claude", "agents"), "");
-  t.containers.fireEmpty(task.id);
-  await settle();
-
-  expect(await quarantineQuestion()).toBeUndefined();
-  expect(git(ws.path, "status", "--porcelain")).toBe("");
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-});
-
-it("escalate の後始末では、着地後の書き込みが従来どおり WIP としてタスクブランチに退避される", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace: ws });
-  const task = await registerWork(t, "work");
-  await t.clock.advance(HOUR);
-  t.containers.hold(task.id);
-  const client = await mcpClient(t.mcpBaseUrl, task.id);
-  await client.callTool({
-    name: "escalate",
-    arguments: {
-      context: "a decision outside my authority",
-      questions: [{ title: "which way?", options: ["a", "b"], recommendation: "a" }],
-    },
-  });
-  await client.close();
-
-  writeFileSync(join(ws.path, "half-done.txt"), "work in flight\n");
-  t.containers.fireEmpty(task.id);
-  await settle();
-
-  expect(await quarantineQuestion()).toBeUndefined();
-  expect(git(ws.path, "log", "--oneline", `task/${task.id}`)).toContain("WIP");
-  expect(git(ws.path, "show", `task/${task.id}:half-done.txt`)).toBe("work in flight");
-});
-
-it("review の完了でも退避する —— 完了の門を持たない解放の WIP はタスクブランチに留まる", async () => {
-  const ws = await makeWorkspace(dirs, "sandbox");
-  t = await bootTidepool({ workspace: ws });
-  const task = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "review",
-      title: "review the deliverable",
-      purpose: "check it against the criteria",
-      completion_criteria: "findings are recorded",
-    })
-  ).json;
-  await t.clock.advance(HOUR);
-  t.containers.hold(task.id);
-  const client = await mcpClient(t.mcpBaseUrl, task.id);
-  await client.callTool({ name: "complete_task", arguments: {} });
-  await client.close();
-
-  writeFileSync(join(ws.path, "reviewer-leavings.txt"), "notes\n");
-  t.containers.fireEmpty(task.id);
-  await settle();
-
-  expect(await quarantineQuestion()).toBeUndefined();
-  expect(git(ws.path, "show", `task/${task.id}:reviewer-leavings.txt`)).toBe("notes");
-});
-
-it("最終 verb 着地後に root が exit しないまま時限を超えると既存の梯子に乗る —— failure question は立たず task は done のまま", async () => {
-  t = await bootTidepool({
-    watchdog: { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN },
-  });
-  const task = await registerWork(t, "one");
-  await t.clock.advance(HOUR);
-  t.containers.hold(task.id);
-  await completeViaMcp(t, task.id);
-
-  // backstop(既定は回収 timeout と同じ尺度)まではまだ何も起きない
-  await t.clock.advance(4 * MIN);
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([]);
-
-  await t.clock.advance(2 * MIN); // backstop 超過 → 強制回収
-  await t.clock.advance(5 * MIN); // 回収 timeout → Containment quarantine
-
-  const containment = (await questions(t)).find((q: any) => q.title.includes("containment"));
-  expect(containment.purpose).toContain("finished its work and reported it");
-  // タスクの決着は host 側の事情で覆らない
-  expect((await questions(t)).some((q: any) => q.title.includes("watchdog killed"))).toBe(false);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([{ kind: "containment" }]);
 });
 
 it("「今なぜ pickup が起きないか」の読み口が後始末を報せる —— 停止の列挙そのものは増えない", async () => {
