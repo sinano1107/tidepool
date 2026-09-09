@@ -24,7 +24,8 @@ import { BOARD_WORKER_ID, buildWorkspaceResolver, type WorkspaceConfig } from ".
 export const WATCHDOG_TICK = 60 * 1000;
 
 /** 強制回収を送ってから回収済み観測を諦めるまで(ADR 0099 決定3)。tick 1本より
- *  十分長く取る — 猶予と同じく「待つ時間」であって、機構の性質ではない。 */
+ *  十分長く取る — 猶予と同じく「待つ時間」であって、機構の性質ではない。後始末の
+ *  backstop(ADR 0109 決定5)も同じ尺度なので、待つ時間はこの1つである。 */
 const RECLAIM_TIMEOUT = 5 * 60 * 1000;
 
 export interface WatchdogConfig {
@@ -33,11 +34,10 @@ export interface WatchdogConfig {
   timeLimits: Partial<Record<TaskType, number>>;
   /** 畳み込み停止から強制回収までの猶予。 */
   grace: number;
-  /** 強制回収から回収済み観測までの上限。省略時 `RECLAIM_TIMEOUT`。 */
+  /** 強制回収から回収済み観測までの上限。ADR 0109 決定5 の後始末の backstop
+   *  ——「最終 verb は着地したのに root が exit しない」だけを見る時限 —— も
+   *  同じ尺度で、この1つを共有する。 */
   reclaimTimeout?: number;
-  /** 後始末の backstop(ADR 0109 決定5): 「最終 verb は着地したのに root が exit
-   *  しない」だけを見る時限。既定は回収 timeout と同じ尺度。 */
-  teardownBackstop?: number;
 }
 
 /** 回収済み観測の不成立(CONTEXT.md「Worker 容器」)で止まっている slot の門
@@ -183,7 +183,6 @@ export function startWatchdog(deps: {
   const { db, clock, slot, worker, containers, workspace, resolveWorkspace, config } = deps;
   const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
   const reclaimTimeout = config.reclaimTimeout ?? RECLAIM_TIMEOUT;
-  const teardownBackstop = config.teardownBackstop ?? reclaimTimeout;
   const teardown: TeardownDeps = { db, clock, slot, resolve, githubAuth: deps.githubAuth };
   // keyed by task id; reset whenever a fresh pickup shows up for that id so a
   // retried run starts its own graceful-stop clock instead of inheriting
@@ -258,10 +257,9 @@ export function startWatchdog(deps: {
       if (now - forcedAt >= reclaimTimeout) onTeardownReclaimTimeout(taskId);
       return;
     }
-    if (now - new Date(session.startedAt).getTime() >= teardownBackstop) {
+    if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) {
       forceSentAt.set(taskId, now);
       containers.forceReclaim(taskId);
-      void containers.reclaimed(taskId).then(() => teardownTick(taskId));
     }
   }
 

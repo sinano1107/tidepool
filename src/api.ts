@@ -1616,10 +1616,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // 見れば「タスクは done なのに次が始まらない」であり、説明が無ければ古い停止と
   // 誤読される。
   function teardownJson() {
-    const session = sessionInTeardown(db);
-    return session
-      ? { teardown: { taskId: session.taskId, startedAt: session.startedAt } }
-      : {};
+    const teardown = sessionInTeardown(db);
+    return teardown ? { teardown } : {};
   }
 
   // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。`throttle` は資源単位の

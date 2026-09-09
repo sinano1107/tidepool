@@ -101,10 +101,9 @@ export async function runTeardown(
   slot.release();
   // 着地は枠を空けた後に撃つ(従来 `complete_task` が解放の後に撃っていたのと同じ位置)
   if (step.completion && deps.landing && task.status === "done") {
-    const completed = getTask(db, taskId) ?? task;
-    await deps.landing.land(completed);
+    await deps.landing.land(task);
     // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
-    await deps.landing.relandAncestors(completed);
+    await deps.landing.relandAncestors(task);
   }
 }
 
