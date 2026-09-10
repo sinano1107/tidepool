@@ -2635,16 +2635,6 @@ describe("advisor capability (issue #33)", () => {
     expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "opus" });
   });
 
-  it("「上位ティアの行を advisor に使える」フラグが立つと、advisor は上位ティアの行から導出される", async () => {
-    const { start, db } = await makeWorker(withAdvisor);
-    db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 1)").run();
-    start("task-spawn-frontier-advisor");
-    const spawned = listEvents(db, "task-spawn-frontier-advisor").find(
-      (e) => e.kind === "worker_spawned",
-    );
-    expect(spawned!.payload).toMatchObject({ advisor: "fable" });
-  });
-
   // registry_commit があるので frontmatter の文字列は後から引ける。**イベント履歴
   // だけで**確定できないのはホスト側のマスクのほうなので、記録するのは「盤面が
   // 実際にピン留めした値」— マスク下は null に畳まれる。

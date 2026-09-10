@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { Provider } from "./registry.js";
 import type { TaskType } from "./tasks.js";
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
@@ -189,7 +190,7 @@ export type EventPayload =
        *  that provider's own notation. These are no longer recoverable from
        *  `registry_commit`: agent.md carries no compute, so the only record of
        *  what this session actually burned is here. */
-      provider: "anthropic" | "moonshot" | "openai";
+      provider: Provider;
       model: string;
       effort: string;
       /** ADR 0110 決定3: **why** it was that setting — `"agent"` when the

@@ -28,6 +28,12 @@ export interface ExecutionSettingRow {
  *  DB が正本。 */
 export type ExecutionSettingTable = readonly ExecutionSettingRow[];
 
+/** moonshot 向きの spawn と auth probe が env に載せるモデル表記(ADR 0097 決定4
+ *  の注入一式の3つ目)。probe は agent の定義も要求も持たない**盤面自身の**呼び
+ *  出しなので、表を引かずこの定数を読む —— 表は agent の実行設定を決めるもので、
+ *  盤面が自分の probe を走らせる向き先ではない。 */
+export const MOONSHOT_DEFAULT_MODEL = "kimi-k3[1m]";
+
 /** 配布される種の表。`/implementation-delegation` §4 / §5 の表と**同じ内容・同じ
  *  鮮度管理**で、ズレたら片方を直す(ADR 0110 / spec #541)。
  *
@@ -43,19 +49,13 @@ export const SEED_EXECUTION_SETTINGS: ExecutionSettingTable = [
   { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high" },
   { provider: "anthropic", tier: "standard", model: "opus", effort: "high" },
   { provider: "anthropic", tier: "frontier", model: "fable", effort: "high" },
-  { provider: "moonshot", tier: "economy", model: "kimi-k3[1m]", effort: "high" },
-  { provider: "moonshot", tier: "standard", model: "kimi-k3[1m]", effort: "high" },
-  { provider: "moonshot", tier: "frontier", model: "kimi-k3[1m]", effort: "high" },
+  { provider: "moonshot", tier: "economy", model: MOONSHOT_DEFAULT_MODEL, effort: "high" },
+  { provider: "moonshot", tier: "standard", model: MOONSHOT_DEFAULT_MODEL, effort: "high" },
+  { provider: "moonshot", tier: "frontier", model: MOONSHOT_DEFAULT_MODEL, effort: "high" },
   { provider: "openai", tier: "economy", model: "gpt-5.6-terra", effort: "high" },
   { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high" },
   { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high" },
 ];
-
-/** moonshot 向きの spawn と auth probe が env に載せるモデル表記(ADR 0097 決定4
- *  の注入一式の3つ目)。probe は agent の定義も要求も持たない**盤面自身の**呼び
- *  出しなので、表を引かずこの定数を読む —— 表は agent の実行設定を決めるもので、
- *  盤面が自分の probe を走らせる向き先ではない。 */
-export const MOONSHOT_DEFAULT_MODEL = "kimi-k3[1m]";
 
 /** worker session が実際に走る計算資源の組(CONTEXT.md「実行設定」)と、その出所。
  *  `advisor` が undefined であって null でないのは、消費する側 ——

@@ -45,6 +45,7 @@ import {
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
+  type AgentDefinition,
   assertValidAgentDefinition,
   canonicalHarness,
   InvalidAgentDefinitionError,
@@ -309,7 +310,10 @@ function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<t
  *  表に行が無いときは null に倒す: null は既に「モデル窓が当たらない」の綴りで
  *  あり、pickup はそのまま進んで spawn 側の例外が表の穴を名指しする。ここで
  *  投げれば scheduler の tick ごと倒れる。 */
-function executionModel(db: Db, definition: Parameters<typeof resolveExecutionSetting>[1]): string | null {
+function executionModel(
+  db: Db,
+  definition: Pick<AgentDefinition, "provider" | "tier" | "advisor">,
+): string | null {
   try {
     return resolveExecutionSetting(db, definition).model;
   } catch (error) {

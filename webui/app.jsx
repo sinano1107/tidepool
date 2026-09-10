@@ -1071,9 +1071,8 @@ function agentDraftDirty(d, base) {
     || d.systemPrompt !== base.systemPrompt
     || d.authority !== base.authority
     || d.provider !== base.provider
-    || d.model.trim() !== base.model
-    || d.effort.trim() !== base.effort
-    || d.advisor.trim() !== base.advisor
+    || d.tier !== base.tier
+    || d.advisor !== base.advisor
     || !sameStrings(d.skills, base.skills);
 }
 

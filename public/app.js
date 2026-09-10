@@ -1510,7 +1510,7 @@ function agentBody(d) {
   };
 }
 function agentDraftDirty(d, base) {
-  return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.model.trim() !== base.model || d.effort.trim() !== base.effort || d.advisor.trim() !== base.advisor || !sameStrings(d.skills, base.skills);
+  return d.icon !== base.icon || d.description.trim() !== base.description || d.systemPrompt !== base.systemPrompt || d.authority !== base.authority || d.provider !== base.provider || d.tier !== base.tier || d.advisor !== base.advisor || !sameStrings(d.skills, base.skills);
 }
 const PROVIDER_PLACEHOLDER = { value: "", label: "choose one \u2014 provider is required" };
 const TIER_OPTIONS = [

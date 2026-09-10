@@ -159,21 +159,22 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     expect(git(registryDir, "show", "main:agents/crab.md")).not.toContain("advisor:");
   });
 
-  // ADR 0110 決定1: フォームは退役フィールドを持たないので、素通しすれば登録の門が
-  // 黙って書き換えたことになる。直し方(表とティア)は理由文が指す。
-  it("退役したピン留めが残る定義は編集も拒否され、コミットを積まない", async () => {
+  // ADR 0110 決定1 が拒むのは登録される値であって、既に git にある行ではない ——
+  // 手で commit された旧い定義は pickup で quarantine されるので、盤面から直せる
+  // ことが唯一の修復経路の代わりになる(塞ぐと registry repo の手編集しか残らない)。
+  it("退役したピン留めが残る定義でも編集は通り、書き直された定義からピン留めが消える", async () => {
     const registryDir = await makeMainRegistry({
       "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\nmodel: opus\n---\np\n",
     });
-    const before = git(registryDir, "rev-parse", "HEAD");
 
-    await expect(
-      updateAgent(
-        { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
-        { registry: { dir: registryDir, mode: "purely-local" } },
-      ),
-    ).rejects.toThrow(/ADR 0110/);
-    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    await updateAgent(
+      { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
+      { registry: { dir: registryDir, mode: "purely-local" } },
+    );
+
+    const written = git(registryDir, "show", "main:agents/crab.md");
+    expect(written).not.toContain("model:");
+    expect(written).toContain("description: d2");
   });
 
   it("実効フィールドが不変な再送はコミットなしの成功で、version も上がらない", async () => {

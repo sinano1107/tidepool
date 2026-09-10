@@ -130,10 +130,13 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
   // no-change 編集はコミットなしの成功(workspace-create.ts の porcelain
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
   // 存在せず、実効フィールドが同じ再送で刻印だけ進めない
-  // 保存されている定義そのものが成立していなければ編集も通さない(ADR 0110
-  // 決定1)—— フォームは退役フィールドを持たないので、素通しすると「登録の門が
-  // 黙って直した」ことになる。直し方(表とティア)は例外の理由文が指す。
-  assertValidAgentDefinition(input.name, existing);
+  // 検査するのは**提出された定義**だけで、保存されている側の退役フィールドは
+  // 通行止めにしない(ADR 0110 決定1 が拒むのは「登録される値」であって、既に
+  // git にある行ではない)。手で commit された旧い agent.md はこの門を通した
+  // 編集で `retiredFields: []` として書き直され、盤面から直せる —— 塞ぐと、
+  // pickup で quarantine される定義の唯一の修復経路が registry repo の手編集
+  // だけになる。人間面の credential(ADR 0036)を通った編集であり、フォームは
+  // 定義を丸ごと提出するので、黙って直したことにはならない。
   const normalizedInput = { ...input, advisor: input.advisor === true };
   assertValidAgentDefinition(input.name, normalizedInput);
   if (!sameEffectiveFields(existing, normalizedInput)) {
