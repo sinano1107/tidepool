@@ -44,8 +44,8 @@ import {
 } from "./profile-create.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
-  type AuthorityProfile,
   type AgentDefinition,
+  type AuthorityProfile,
   assertValidAgentDefinition,
   canonicalHarness,
   InvalidAgentDefinitionError,
