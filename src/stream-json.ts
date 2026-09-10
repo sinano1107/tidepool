@@ -49,10 +49,32 @@ export function readInitField(
   return value as string[];
 }
 
-/** The line-taking form, for the `/usage` init ping — it reads its own stdout
- *  and has no other concern to share a decode with. */
-export const parseInitField = (line: string, field: "skills" | "tools"): string[] | null =>
-  readInitField(parseStreamLine(line), field);
+/** The init line's `mcp_servers` — **the names only** (ADR 0108 決定2). Beside
+ *  `readInitField` rather than inside it: that one's contract is "a field that
+ *  is an array of strings", and this field is an array of `{name, status}`
+ *  objects, so generalizing it would dirty the `skills`/`tools` contract for
+ *  one caller.
+ *
+ *  `status` is deliberately dropped on the floor. The board compares names and
+ *  only in the excess direction — a `tidepool` that shows up `status: "failed"`
+ *  is a *missing*-side event, which ADR 0039 決定3 chose not to fail containment
+ *  on; returning the status here would invite that back in through the side
+ *  door. Reading the surface at all (rather than counting `mcp__` verbs in
+ *  `tools`) is what catches a server that is attached but hands out no verbs.
+ *
+ *  Fail-closed like every vendor-shape read here: a non-init line, a field that
+ *  isn't an array, or an element with no name reads as "not the init report"
+ *  rather than as an empty surface. */
+export function readInitMcpServers(parsed: Record<string, unknown> | null): string[] | null {
+  if (!isInitLine(parsed)) return null;
+  const value = (parsed as Record<string, unknown>).mcp_servers;
+  if (!Array.isArray(value)) return null;
+  const names = value.map((entry) =>
+    typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>).name : null,
+  );
+  if (!names.every((name) => typeof name === "string")) return null;
+  return names as string[];
+}
 
 /** The init line's `model` — the CLI's **resolved** main model id, e.g.
  *  `claude-sonnet-5` for a `--model sonnet` spawn (issue #33, measured). Only

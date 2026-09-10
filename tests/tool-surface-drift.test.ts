@@ -10,8 +10,12 @@ import { checkToolSurface } from "../src/claude-worker.js";
  *  検知は双方向である。観測 ⊃ 期待は「宣言が honor されなくなった / 新ツールが
  *  素通りしてきた」、観測 ⊂ 期待は「挙げた名前が改名・廃止されて黙って不活性化した」
  *  (測定8: `TodoWrite` と `Bogus` が何の警告もなく消えた)。後者は worker が能力を
- *  1つ失ったまま走り続けるので、タスクが詰まって初めて分かる。したがって照合は
- *  **集合の一致**である。
+ *  1つ失ったまま走り続けるので、タスクが詰まって初めて分かる。したがって組み込み
+ *  ツールの照合は**集合の一致**である。
+ *
+ *  MCP 軸は非対称で、**過剰側だけ**を見る(ADR 0108 決定1)。ADR 0039 決定3 が
+ *  `mcp__` を照合から外した理由は欠落側にしか掛からないので、宣言外のサーバが面に
+ *  あれば不成立、欠落は一切見ない。
  *
  *  期待値はここでも独立した literal で書く。 */
 describe("checkToolSurface", () => {
@@ -37,9 +41,9 @@ describe("checkToolSurface", () => {
   ];
 
   it("宣言どおりの面は成立 — 順序は問わない(集合の一致)", () => {
-    expect(checkToolSurface(WORK_SURFACE, "work")).toEqual({ available: true });
+    expect(checkToolSurface(WORK_SURFACE, "work", [])).toEqual({ available: true });
     // init の `tools` 配列の順序は CLI の内部順であって盤面の綴り順ではない
-    expect(checkToolSurface([...WORK_SURFACE].reverse(), "work")).toEqual({ available: true });
+    expect(checkToolSurface([...WORK_SURFACE].reverse(), "work", [])).toEqual({ available: true });
   });
 
   it("`mcp__` で始まるエントリは比較対象から外す — MCP の落下を封じ込めの不成立に化けさせない", () => {
@@ -47,14 +51,14 @@ describe("checkToolSurface", () => {
     // 「盤面の MCP が落ちている」が封じ込め能力の不成立に化ける。それは別の障害で
     // あり別の扱いを受けるべきである(ADR 0039 決定3)。
     expect(
-      checkToolSurface([...WORK_SURFACE, "mcp__tidepool__get_current_task"], "work"),
+      checkToolSurface([...WORK_SURFACE, "mcp__tidepool__get_current_task"], "work", []),
     ).toEqual({ available: true });
     // verb が1本も無い(MCP 未接続)セッションも、ツール面としては宣言どおり
-    expect(checkToolSurface(WORK_SURFACE, "work")).toEqual({ available: true });
+    expect(checkToolSurface(WORK_SURFACE, "work", [])).toEqual({ available: true });
   });
 
   it("観測 ⊃ 期待は不成立 — 素通りしてきたツールを名前で挙げる", () => {
-    const result = checkToolSurface([...WORK_SURFACE, "CronCreate", "RemoteTrigger"], "work");
+    const result = checkToolSurface([...WORK_SURFACE, "CronCreate", "RemoteTrigger"], "work", []);
     // 3時にラズパイの前で読む文になっていること: 観測された**具体名**が要る
     // (`available === false &&` は判別共用体の絞り込み — sandbox-capability.test.ts と同形)
     expect(result.available === false && result.reason).toContain("CronCreate");
@@ -65,6 +69,7 @@ describe("checkToolSurface", () => {
     const result = checkToolSurface(
       WORK_SURFACE.filter((tool) => tool !== "Glob" && tool !== "TaskOutput"),
       "work",
+      [],
     );
     expect(result.available === false && result.reason).toContain("Glob");
     expect(result.available === false && result.reason).toContain("TaskOutput");
@@ -76,6 +81,7 @@ describe("checkToolSurface", () => {
     const result = checkToolSurface(
       [...WORK_SURFACE.filter((tool) => tool !== "Grep"), "Bogus"],
       "work",
+      [],
     );
     expect(result.available === false && result.reason).toContain("Bogus");
     expect(result.available === false && result.reason).toContain("Grep");
@@ -84,7 +90,7 @@ describe("checkToolSurface", () => {
   it("review は review の期待集合で照合する — 編集系が面に残っていたら不成立", () => {
     // review の面に `Write` が残っているのは、`--tools` による除去が honor されて
     // いないということである。深層防御の2層目が observable であることの実体がこれ。
-    const result = checkToolSurface(WORK_SURFACE, "review");
+    const result = checkToolSurface(WORK_SURFACE, "review", []);
     expect(result.available === false && result.reason).toContain("Write");
     expect(result.available === false && result.reason).toContain("Edit");
     expect(result.available === false && result.reason).toContain("NotebookEdit");
@@ -110,12 +116,35 @@ describe("checkToolSurface", () => {
           "TaskStop",
         ],
         "review",
+        [],
       ),
     ).toEqual({ available: true });
   });
 
   it("空の観測は不成立 — 「測れなかった」を「無事」と読ませない", () => {
-    const result = checkToolSurface([], "work");
+    const result = checkToolSurface([], "work", []);
     expect(result.available).toBe(false);
+  });
+
+  // ── MCP 軸(ADR 0108 決定1): 過剰側のみ ──────────────────────────────
+
+  it("宣言していない MCP サーバが面にあれば不成立 — そのサーバ名が本文に載る", () => {
+    // 盤面が MCP について宣言しているのは自分が書いた `--mcp-config` と
+    // `--strict-mcp-config` の2つだけなので、それ以外の名前が面にあることは
+    // 「このホストの CLI が盤面の宣言を honor しなくなった」である。宣言を直すのか
+    // CLI を pin するのかを人間が決められるよう、余った具体名が要る。
+    const result = checkToolSurface(WORK_SURFACE, "work", ["tidepool", "computer-use"]);
+    expect(result.available === false && result.reason).toContain("computer-use");
+  });
+
+  it("盤面が宣言した `tidepool` だけなら成立 — 実セッションの形", () => {
+    expect(checkToolSurface(WORK_SURFACE, "work", ["tidepool"])).toEqual({ available: true });
+  });
+
+  it("MCP サーバが1つも無い面も成立 — probe の形であり、盤面の MCP が落ちた形でもある", () => {
+    // 欠落は一切見ない(ADR 0039 決定3 / ADR 0108 決定1)。probe は
+    // `--mcp-config` を運ばないので面は空、実セッションで空なら盤面の MCP が
+    // 落ちているだけ —— どちらも封じ込めの不成立ではない。
+    expect(checkToolSurface(WORK_SURFACE, "work", [])).toEqual({ available: true });
   });
 });
