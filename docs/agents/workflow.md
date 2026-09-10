@@ -73,4 +73,9 @@ One issue per session, cleared between them. Two implementation sessions in one 
 
 - **Agreeing the seams**, before the first test. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask. The seams on offer are the three in ADR 0107 — server boundary (`bootTidepool`), domain layer (exported functions, asserted through exports), schema layer (SQL, migrations only) — and a behaviour is stated once, at the lowest seam it shows at.
 - **Merging the pull request.** The skill stops at an open PR and never merges, closes, or ticks acceptance criteria.
-- **Closing the originating issue.** It stays open until the change has been confirmed on the real deployment — an implementation issue closing on merge is not evidence the symptom is gone.
+- **Closing the originating issue.** It closes when the change has been confirmed at the venue its
+  subject demands — CI for what the suite covers, the Lima VM for worker-facing behaviour
+  (containers, reclaim, containment, a real worker run — [machine-setup.md](./machine-setup.md)),
+  production for what nothing else can show. Merging alone is not that confirmation. When
+  production really is the only venue, the issue stays open and carries `verify:production`, so
+  the open set still reads as a queue of work to do — see [triage-labels.md](./triage-labels.md).

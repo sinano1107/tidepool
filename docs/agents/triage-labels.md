@@ -33,3 +33,20 @@ Same colon-namespaced shape as `model:*` (e.g. `model:opus`, which pins the mode
 | `env:cloud` | The task completes end-to-end — implementation **and** verification — inside a cloud Claude Code session (isolated container, repo clone, `claude` CLI available). |
 
 Absent means completion needs something outside the cloud container: hardware the container cannot reach (ssh to the Pi over Tailscale, #83), human-performed acceptance (browser E2E per ADR 0027, e.g. #55/#78), real external accounts or ops (machine-user setup, #50), or verification that can only be observed in a browser UI (#47). An issue whose agent portion is cloud-workable but whose acceptance is human-performed does **not** qualify — the label promises the whole loop closes in the cloud.
+
+## Verification labels
+
+| Label                | Meaning                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `verify:production`  | The change is merged; the only confirmation still missing is one that production alone can show. |
+
+Absent is the point: an open issue with no `verify:*` label is work not yet done, so the open set
+reads as a queue. The label comes off when the observation lands, and the issue closes with it.
+
+**A label, not a comment.** The queue is read as a list — `gh issue list`, the web list — and a
+comment only speaks once the issue is already open. Filter the queue with
+`gh issue list --search '-label:verify:production'`.
+
+Most implementation issues never carry it. The venue a change's subject demands is usually CI or the
+Lima VM (`docs/agents/machine-setup.md`), and the Pi is production-only — "don't make checkouts there
+to test a change". This label is for the residue: behaviour that only the deployed board can show.
