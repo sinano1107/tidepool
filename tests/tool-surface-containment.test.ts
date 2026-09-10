@@ -68,7 +68,8 @@ const harnessCheck = (check: () => Promise<ContainmentCapability>) => async (har
 // ── ping から答えへの写像(正本の側)────────────────────────────────────
 
 it("ping が観測した面が宣言どおりなら成立する", async () => {
-  expect(await probeToolSurfaceCapability(async () => WORK_SURFACE)).toEqual({ available: true });
+  const observed = async () => ({ tools: WORK_SURFACE, mcpServers: [] });
+  expect(await probeToolSurfaceCapability(observed)).toEqual({ available: true });
 });
 
 it("ping が失敗したら不成立 — 「測れなかった」は「無事」ではない", async () => {
@@ -80,7 +81,10 @@ it("ping が失敗したら不成立 — 「測れなかった」は「無事」
 });
 
 it("ping が allowlist 外のツールを観測したら不成立 — 具体名が残る", async () => {
-  const result = await probeToolSurfaceCapability(async () => [...WORK_SURFACE, "CronCreate"]);
+  const result = await probeToolSurfaceCapability(async () => ({
+    tools: [...WORK_SURFACE, "CronCreate"],
+    mcpServers: [],
+  }));
   expect(result.available === false && result.reason).toContain("CronCreate");
 });
 
@@ -88,7 +92,7 @@ it("検査は毎回 ping を撃ち直す(memoize しない)— 解除の検証�
   let calls = 0;
   const enumerate = async () => {
     calls += 1;
-    return WORK_SURFACE;
+    return { tools: WORK_SURFACE, mcpServers: [] };
   };
   await probeToolSurfaceCapability(enumerate);
   await probeToolSurfaceCapability(enumerate);

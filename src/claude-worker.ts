@@ -32,9 +32,9 @@ import {
 import { buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
 import {
   countAdvisorConsultations,
-  parseInitField,
   parseStreamLine,
   readInitField,
+  readInitMcpServers,
   readInitModel,
 } from "./stream-json.js";
 import {
@@ -372,7 +372,8 @@ const MCP_TOOL_PREFIX = "mcp__";
  *  サンドボックス / 人間面の自己検査)と同格に束ねられ、不成立なら盤面全体の
  *  pickup が止まる。
  *
- *  照合は**集合の一致**である。どちらの向きもずれであり、しかも意味が違う:
+ *  組み込みツールの照合は**集合の一致**である。どちらの向きもずれであり、しかも
+ *  意味が違う:
  *
  *  - **観測 ⊃ 期待** — 盤面の宣言が honor されなくなった / 新ツールが素通りしてきた。
  *    `--tools` の外にあるのは `RemoteTrigger`(人間のアカウント名義の OAuth token を
@@ -381,18 +382,34 @@ const MCP_TOOL_PREFIX = "mcp__";
  *    (測定8)。worker は能力を1つ失ったまま走り続けるので、放っておくとタスクが
  *    詰まって初めて分かる
  *
+ *  **MCP 軸は非対称で、過剰側だけを見る**(ADR 0108 決定1)。ADR 0039 決定3 が
+ *  `mcp__` を照合から外した理由 —— サーバが繋がらなかったセッションでは verb が
+ *  丸ごと消え、「盤面の MCP が落ちている」が封じ込めの不成立に化ける —— は欠落側に
+ *  しか掛からない。盤面が MCP について宣言している姿勢は自分が書いた `--mcp-config`
+ *  と `--strict-mcp-config` の2つなので、宣言していないサーバが面にあることは
+ *  「CLI が盤面の宣言を honor しなくなった」であり、組み込みツールの過剰側と同じ
+ *  意味になる。見るのは `mcpServers` の**名前だけ**である — `tidepool` が
+ *  `status: "failed"` で現れるのは欠落側の事象で、status を条件に入れると欠落側の
+ *  停止を裏口から再導入することになる。
+ *
  *  純関数であり、**封じ込め能力の probe(`probeToolSurfaceCapability`)と worker 自身の
  *  init 行の照合が同じこれを共有する** — 期待集合を2箇所に置かない(ADR 0039
  *  決定3)。答えの型も封じ込め能力の他の半分と同じ1つ(`ContainmentCapability`)。 */
 export function checkToolSurface(
   observed: string[],
   taskType: Task["type"],
+  mcpServers: string[],
 ): ContainmentCapability {
   const expected = spawnTools(taskType);
   const builtIn = observed.filter((tool) => !tool.startsWith(MCP_TOOL_PREFIX));
   const unexpected = builtIn.filter((tool) => !expected.includes(tool));
   const missing = expected.filter((tool) => !builtIn.includes(tool));
-  if (unexpected.length === 0 && missing.length === 0) return { available: true };
+  // task type には依らない — `spawnAllowedTools` が MCP verb を両プロファイルに
+  // 載せており、盤面が書く `--mcp-config` も task type を見ない。
+  const unexpectedServers = mcpServers.filter((server) => server !== MCP_SERVER_NAME);
+  if (unexpected.length === 0 && missing.length === 0 && unexpectedServers.length === 0) {
+    return { available: true };
+  }
   // 観測された**具体名**を両方向とも本文に置く。封じ込めの question は「直して
   // から答える」ものなので、どの名前が余ってどの名前が消えたのかが読めなければ
   // 修理できない(人間面の半分が観測した status code を本文に置くのと同じ線)。
@@ -403,16 +420,21 @@ export function checkToolSurface(
     missing.length > 0
       ? `the allowlist named ${missing.join(", ")} but the session never got them`
       : undefined,
+    unexpectedServers.length > 0
+      ? `it attached the MCP server ${unexpectedServers.join(", ")}, which the board never declared`
+      : undefined,
   ].filter((part) => part !== undefined);
   return {
     available: false,
     reason:
       `this host's claude CLI no longer gives a ${taskType} session the tool surface the board ` +
-      `declared (ADR 0039): ${observations.join("; ")}. A tool the board never named is a side ` +
-      "channel the WORKER_PROTOCOL closes in prose only, and a name that no longer exists goes " +
-      "inert with no warning — so either direction means the board's declaration and the CLI " +
-      "have parted ways. Check the CLI version against the Tool allowlist (CONTEXT.md), then " +
-      "fix the list or pin the CLI",
+      `declared (ADR 0039 / 0108): ${observations.join("; ")}. A tool the board never named is a ` +
+      "side channel the WORKER_PROTOCOL closes in prose only, an MCP server it never named got " +
+      "onto the surface past the board's own `--mcp-config`, and a name that no longer exists " +
+      "goes inert with no warning — so any of these means the board's declaration and the CLI " +
+      "have parted ways. Check the CLI version against what the board declares (CONTEXT.md): " +
+      "the Tool allowlist for a built-in, `--mcp-config` + `--strict-mcp-config` for a server. " +
+      "Then fix the declaration or pin the CLI",
   };
 }
 
@@ -1190,17 +1212,23 @@ export function initPingSpawnOptions(cwd: string): {
   return { cwd, stdio: ["ignore", "pipe", "ignore"], env: boardCallEnv() };
 }
 
-/** One `/usage` init-report ping: run the CLI at `cwd` and return the init
- *  event's `field` array, or null if the ping never produced one. Two callers
- *  now — ADR 0025's skill enumeration and ADR 0039's tool-surface probe — which
- *  is the whole reason the ADR could say "tools も見るだけの小改造で済む": this is
- *  already the mechanism that takes an init event and hands it back. */
-function runInitPing(
+/** One `/usage` init-report ping: run the CLI at `cwd`, hand each stdout line's
+ *  decoded form to `project`, and return what it read off the init event — or
+ *  null if the ping never produced one it could read. Two callers — ADR 0025's
+ *  skill enumeration and ADR 0039's tool-surface probe — which is the whole
+ *  reason the ADR could say "tools も見るだけの小改造で済む": this is already the
+ *  mechanism that takes an init event and hands it back.
+ *
+ *  It takes a **projector** rather than a field name because the tool-surface
+ *  probe reads two things off the one init line (ADR 0108 決定2). A field name
+ *  can only answer with one array, and this ping runs at boot and on every
+ *  pickup, so a second read must not cost a second ping. */
+function runInitPing<T>(
   cwd: string,
   extraArgs: string[],
-  field: "skills" | "tools",
+  project: (parsed: Record<string, unknown> | null) => T | null,
   timeoutMs: number = SKILL_ENUM_TIMEOUT_MS,
-): Promise<string[] | null> {
+): Promise<T | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof nodeSpawn>;
     try {
@@ -1210,9 +1238,9 @@ function runInitPing(
       return;
     }
     let buffered = "";
-    let observed: string[] | null = null;
+    let observed: T | null = null;
     let settled = false;
-    const finish = (result: string[] | null) => {
+    const finish = (result: T | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -1230,27 +1258,28 @@ function runInitPing(
       buffered += chunk.toString();
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
-      for (const line of lines) observed = parseInitField(line, field) ?? observed;
+      for (const line of lines) observed = project(parseStreamLine(line)) ?? observed;
     });
     // an unlistened "error" (missing binary) would crash the board process
     child.on("error", () => finish(null));
     child.on("exit", () => {
-      observed = parseInitField(buffered, field) ?? observed;
+      observed = project(parseStreamLine(buffered)) ?? observed;
       finish(observed);
     });
   });
 }
 
-const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) => runInitPing(cwd, [], "skills");
+const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) =>
+  runInitPing(cwd, [], (parsed) => readInitField(parsed, "skills"));
 
 /** A ping at a *neutral* cwd: a fresh empty directory, so nothing a checkout
  *  carries takes part in what the CLI resolves. Cleaned up only AFTER the probe
  *  resolves — the CLI is still running against this cwd until then, so removing
  *  it mid-probe would be a race. */
-function atNeutralCwd(
+function atNeutralCwd<T>(
   prefix: string,
-  probe: (cwd: string) => Promise<string[] | null>,
-): Promise<string[] | null> {
+  probe: (cwd: string) => Promise<T | null>,
+): Promise<T | null> {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   return probe(dir).finally(() => {
     try {
@@ -1261,11 +1290,15 @@ function atNeutralCwd(
   });
 }
 
-/** The tool-surface probe's boundary (ADR 0039 決定3): what built-in tools a
- *  session on this host actually gets when the board declares its allowlist, or
- *  null if the ping failed. Injected so the capability answer is tested without a
- *  real CLI (same posture as EnumerateSkillsFn). */
-export type EnumerateToolsFn = () => Promise<string[] | null>;
+/** The tool-surface probe's boundary (ADR 0039 決定3 / ADR 0108 決定1): what a
+ *  session on this host actually gets when the board declares its allowlist —
+ *  the built-in `tools` **and** the `mcp_servers` names, both read off the one
+ *  init line — or null if the ping produced neither. Injected so the capability
+ *  answer is tested without a real CLI (same posture as EnumerateSkillsFn).
+ *
+ *  Both or nothing: a half-read init line is not an observation of the surface,
+ *  and null already means "could not observe" on this seam. */
+export type EnumerateToolsFn = () => Promise<{ tools: string[]; mcpServers: string[] } | null>;
 
 // 3つ目の問いの正本の ping(ADR 0039 決定3)。**work のリストで撃つ — review 用に
 // 2本目は撃たない。** review は work の真部分集合なので、改名で不活性化した名前
@@ -1289,11 +1322,23 @@ export type EnumerateToolsFn = () => Promise<string[] | null>;
 // (ADR 0039 測定3)、本番の worker では起きない欠落を封じ込めの不成立に化けさせる。
 // SKILL_ENUM_ARGS 側には足さない — skill 列挙は user tier の skill を見るのが
 // 目的で(`enumerateHostSkills` の @host 集合)、そこに足すと集合が壊れる。
+//
+// `--strict-mcp-config` は**姿勢であってタスク単位の生成物ではない**ので、probe が
+// `--mcp-config` を運ばないと決めた線に抵触しない(ADR 0108 決定3)。足さないと probe の
+// MCP 面は**ホストのもの**になり、人間が持つコネクタが面に出て、worker の封じ込めと
+// 無関係な理由で盤面全体が止まる(実測: neutral cwd の probe 形で claude.ai コネクタが4つ)。
+//
+// **probe の MCP 面が空になる理由は1つではない。** strict が落とすのはホストのコネクタで
+// あって、ADR 0108 が問題にしている dynamic な注入(Claude Code は Computer Use をそう配る)
+// ではない。後者を止めているのは probe でも `-p` である。つまりこの probe は「盤面の宣言が
+// honor されているか」と「`-p` の門がまだ立っているか」を同時に見ており、
+// strict が dynamic を落とすと読んではならない。
 const TOOL_SURFACE_PROBE_ARGS = [
   "--permission-mode",
   "acceptEdits",
   "--setting-sources",
   "project",
+  "--strict-mcp-config",
   "--tools",
   spawnTools("work").join(","),
 ];
@@ -1313,7 +1358,19 @@ const defaultEnumerateTools: EnumerateToolsFn = () =>
   // 封じ込め能力の不成立」に化ける。それは workspace の性質であって別の資源であり、
   // `workspaceSettingsDisposition` がすでにその担当である。
   atNeutralCwd("tidepool-tools-", (cwd) =>
-    runInitPing(cwd, TOOL_SURFACE_PROBE_ARGS, "tools", TOOL_SURFACE_PROBE_TIMEOUT_MS),
+    runInitPing(
+      cwd,
+      TOOL_SURFACE_PROBE_ARGS,
+      (parsed) => {
+        // 1本の init 行から2つ読む。片方でも読めなければ観測そのものが無かったと
+        // して null に倒す — 呼び出し側の「観測できなかった = 不成立」がそのまま
+        // 受ける(ADR 0108 決定2)。
+        const tools = readInitField(parsed, "tools");
+        const mcpServers = readInitMcpServers(parsed);
+        return tools && mcpServers ? { tools, mcpServers } : null;
+      },
+      TOOL_SURFACE_PROBE_TIMEOUT_MS,
+    ),
   );
 
 /** 封じ込め能力の3つ目の問い(ADR 0039 決定3)の正本: `/usage` ping を**その場で
@@ -1336,13 +1393,14 @@ export async function probeToolSurfaceCapability(
       available: false,
       reason:
         "the board could not observe the tool surface its own `claude` CLI hands a worker " +
-        "session (the /usage ping produced no init report — a missing binary, a stalled auth " +
-        "prompt, or a timeout) — whether the declared Tool allowlist is honored is unknown, " +
-        "and unknown is not safe (ADR 0039)",
+        "session (the /usage ping produced no readable init report — a missing binary, a " +
+        "stalled auth prompt, a timeout, or an init line carrying no `tools`/`mcp_servers`) — " +
+        "whether the declared Tool allowlist is honored is unknown, and unknown is not safe " +
+        "(ADR 0039)",
     };
   }
   // work プロファイルで撃っている(TOOL_SURFACE_PROBE_ARGS のコメント参照)
-  return checkToolSurface(observed, "work");
+  return checkToolSurface(observed.tools, "work", observed.mcpServers);
 }
 
 /** The skills-picker candidate source (issue #106 / ADR 0025): the `@host`
@@ -2316,11 +2374,35 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  init 行が無いセッション(壊れた行・`tools` を持たない init)は判定しない —
    *  観測が無いことを不成立に化けさせるのは正本(ping)の仕事である。サブエージェント
    *  を起こしたセッションでも親の stream に init 行は1本しか出ない(実測)ので、
-   *  この判定が同一セッション内で二度走ることはない。 */
+   *  この判定が同一セッション内で二度走ることはない。
+   *
+   *  **`mcp_servers` が読めないのは別の話で、ここが不成立に倒す。** `tools` の門を
+   *  抜けた時点で手元にあるのは**読めた init 報告**であり、そこで `mcp_servers` だけが
+   *  読めないのは torn な行ではなくベンダー側の形の変化である。しかもこれを正本に
+   *  委ねられない —— probe は `--strict-mcp-config` を運び `--mcp-config` を運ばないので
+   *  その `mcp_servers` は**構造上いつも空**で、要素の形が変わっても空配列は空配列の
+   *  まま通る。要素を持つのは `tidepool` が付いた実セッションだけなので、要素の形の
+   *  ドリフトを見られる面はここしか無い。null を `[]` に潰すと MCP 軸が丸ごと黙って
+   *  死ぬ(`readInitMcpServers` が低い seam で fail-closed に倒しているのを1層上で
+   *  取り消すことになる)。 */
   private checkSessionToolSurface(task: Task, parsed: Record<string, unknown> | null): boolean {
     const tools = readInitField(parsed, "tools");
     if (!tools) return false;
-    const surface = checkToolSurface(tools, task.type);
+    const mcpServers = readInitMcpServers(parsed);
+    const surface: ContainmentCapability = mcpServers
+      ? checkToolSurface(tools, task.type, mcpServers)
+      : {
+          available: false,
+          reason:
+            "this host's claude CLI reported a session's built-in tools but an `mcp_servers` " +
+            "the board could not read (ADR 0108): the init line carried the field in a shape " +
+            "with no server names. The /usage probe cannot cover this — it runs " +
+            "`--strict-mcp-config` with no `--mcp-config`, so its own MCP surface is empty by " +
+            "construction and an element shape it never sees cannot fail it. Whether an " +
+            "undeclared MCP server is on the surface is therefore unknown here, and unknown is " +
+            "not safe (ADR 0039). Check the CLI version, then teach `readInitMcpServers` the " +
+            "new shape or pin the CLI",
+        };
     if (surface.available) return true;
     console.error(`[worker] tool surface drift on task ${task.id}: ${surface.reason}`);
     this.containers.forceReclaim(task.id);

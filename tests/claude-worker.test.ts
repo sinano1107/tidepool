@@ -1294,8 +1294,11 @@ describe("ClaudeCodeWorker", () => {
   // ループで init 行の `tools` も見る。追加コストは実質ゼロで、**実セッションその
   // ものを**測れる。不成立時は既存の封じ込め能力の経路にそのまま乗る(盤面全体の
   // pickup 停止 + Tidepool 名義の確認 question)。
-  const initLine = (tools: string[]) =>
-    `${JSON.stringify({ type: "system", subtype: "init", tools })}\n`;
+  // `mcp_servers` は 2.1.267 の init 行に必ず出る(実測)。実セッションでは盤面が
+  // 書いた `tidepool` が1つ載るが、載っている名前が宣言どおりかは MCP 軸の話なので、
+  // 組み込みツールの照合を見るここでは空で置く。
+  const initLine = (tools: string[], mcpServers: unknown[] = []) =>
+    `${JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers: mcpServers })}\n`;
   const containmentQuestion = (db: ReturnType<typeof openDb>) =>
     listBoard(db).find((t) => t.type === "question" && t.question_quarantine_sandbox !== null);
 
@@ -1399,6 +1402,23 @@ describe("ClaudeCodeWorker", () => {
     stdout.write(`{"type":"result","result":"done"}\n`);
     stdout.write(`{not json\n`);
     await vi.waitFor(() => expect(containmentQuestion(db)).toBeUndefined());
+  });
+
+  it("`tools` は読めて `mcp_servers` が読めない init 行は不成立 — 正本には見えない面(ADR 0108)", async () => {
+    // `tools` の門を抜けた時点で手元にあるのは**読めた init 報告**なので、そこで
+    // `mcp_servers` だけが読めないのは torn な行ではなく形の変化である。正本の ping は
+    // `--strict-mcp-config` を `--mcp-config` 無しで撃つので `mcp_servers` は構造上
+    // いつも空 —— 要素の形が変わっても空配列は空配列のまま通る。要素を持つのは
+    // `tidepool` が付いた実セッションだけなので、ここで倒さないと MCP 軸が黙って死ぬ。
+    const { start, stdout, db } = await makeWorker();
+    start("task-init-mcp-unreadable", null, "deckhand", "work");
+    stdout.write(initLine(WORK_SURFACE, [{ status: "connected" }]));
+    const question = await vi.waitFor(() => {
+      const q = containmentQuestion(db);
+      expect(q).toBeDefined();
+      return q!;
+    });
+    expect(question.purpose).toContain("mcp_servers");
   });
 
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
