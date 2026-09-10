@@ -69,9 +69,7 @@ export function readInitMcpServers(parsed: Record<string, unknown> | null): stri
   if (!isInitLine(parsed)) return null;
   const value = (parsed as Record<string, unknown>).mcp_servers;
   if (!Array.isArray(value)) return null;
-  const names = value.map((entry) =>
-    typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>).name : null,
-  );
+  const names = value.map((entry) => (entry as { name?: unknown } | null)?.name);
   if (!names.every((name) => typeof name === "string")) return null;
   return names as string[];
 }

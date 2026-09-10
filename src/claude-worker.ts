@@ -404,9 +404,8 @@ export function checkToolSurface(
   const builtIn = observed.filter((tool) => !tool.startsWith(MCP_TOOL_PREFIX));
   const unexpected = builtIn.filter((tool) => !expected.includes(tool));
   const missing = expected.filter((tool) => !builtIn.includes(tool));
-  // 期待集合はここでも盤面のコード定数から導く(2つ目の literal を作らない)。
   // task type には依らない — `spawnAllowedTools` が MCP verb を両プロファイルに
-  // 載せており、`--mcp-config` も task type を見ない。
+  // 載せており、盤面が書く `--mcp-config` も task type を見ない。
   const unexpectedServers = mcpServers.filter((server) => server !== MCP_SERVER_NAME);
   if (unexpected.length === 0 && missing.length === 0 && unexpectedServers.length === 0) {
     return { available: true };
@@ -430,10 +429,10 @@ export function checkToolSurface(
     reason:
       `this host's claude CLI no longer gives a ${taskType} session the tool surface the board ` +
       `declared (ADR 0039 / 0108): ${observations.join("; ")}. A tool the board never named is a ` +
-      "side channel the WORKER_PROTOCOL closes in prose only, an MCP server it never named is one " +
-      "the board's own `--mcp-config` and `--strict-mcp-config` were supposed to be the whole of, " +
-      "and a name that no longer exists goes inert with no warning — so any of these means the " +
-      "board's declaration and the CLI have parted ways. Check the CLI version against the Tool " +
+      "side channel the WORKER_PROTOCOL closes in prose only, an MCP server it never named got " +
+      "onto the surface past the board's own `--mcp-config`, and a name that no longer exists " +
+      "goes inert with no warning — so any of these means the board's declaration and the CLI " +
+      "have parted ways. Check the CLI version against the Tool " +
       "allowlist (CONTEXT.md), then fix the list or pin the CLI",
   };
 }
@@ -1298,8 +1297,7 @@ function atNeutralCwd<T>(
  *
  *  Both or nothing: a half-read init line is not an observation of the surface,
  *  and null already means "could not observe" on this seam. */
-export type ToolSurfaceObservation = { tools: string[]; mcpServers: string[] };
-export type EnumerateToolsFn = () => Promise<ToolSurfaceObservation | null>;
+export type EnumerateToolsFn = () => Promise<{ tools: string[]; mcpServers: string[] } | null>;
 
 // 3つ目の問いの正本の ping(ADR 0039 決定3)。**work のリストで撃つ — review 用に
 // 2本目は撃たない。** review は work の真部分集合なので、改名で不活性化した名前
