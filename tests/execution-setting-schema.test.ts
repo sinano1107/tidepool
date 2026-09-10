@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import {
-  isFrontierAdvisorEnabled,
-  loadExecutionSettingTable,
-  SEED_EXECUTION_SETTINGS,
-} from "../src/execution-setting.js";
+import { resolveExecutionSetting, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
+
+/** 表を読む口は production の呼び手(`resolveExecutionSetting`)しかない
+ *  (ADR 0107 決定5)。schema 層のテストは行を SQL で直に言い、読めていることは
+ *  その呼び手を通して確かめる。 */
+const deckhand = { provider: "anthropic", tier: undefined, advisor: false };
 
 async function boardPath(name: string): Promise<string> {
   return join(await mkdtemp(join(tmpdir(), `tidepool-${name}-`)), "board.sqlite");
@@ -22,7 +23,7 @@ it("実行設定の表は種の既定から DB へ初期化される(ADR 0110 �
       (a, b) => a.provider.localeCompare(b.provider) || a.tier.localeCompare(b.tier),
     ),
   );
-  expect(loadExecutionSettingTable(db)).toEqual(SEED_EXECUTION_SETTINGS);
+  expect(resolveExecutionSetting(db, deckhand)).toMatchObject({ model: "opus", effort: "high" });
   db.close();
 });
 
@@ -46,8 +47,9 @@ it("初期化の後は DB が正本 — 書き換えた行は再オープンで�
 it("「上位ティアの行を advisor に使える」フラグの既定は false(未設定の盤面は advisor を main と同一に倒す)", async () => {
   const path = await boardPath("frontier-advisor-default");
   const db = openDb(path);
-  expect(isFrontierAdvisorEnabled(db)).toBe(false);
+  const withAdvisor = { provider: "anthropic", tier: "economy", advisor: true };
+  expect(resolveExecutionSetting(db, withAdvisor).advisor).toBe("sonnet");
   db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 1)").run();
-  expect(isFrontierAdvisorEnabled(db)).toBe(true);
+  expect(resolveExecutionSetting(db, withAdvisor).advisor).toBe("fable");
   db.close();
 });

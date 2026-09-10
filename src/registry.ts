@@ -532,11 +532,13 @@ const agentFrontmatterSchema = z.looseObject({
   provider: z.string(),
   // 自由文字列のまま(`provider` と同じ理由 — 列挙の検査は門であって読み込みでは
   // ない、ADR 0097 決定3)。値の集合は ADR 0110 の3ティア。
-  tier: z.string().optional(),
+  // nullish: 値の無い `tier:` の1行(YAML では null)で registry 読み取り全体を
+  // 倒さない —— 空白だけの値と同じく「書かれていない」として扱う。
+  tier: z.string().nullish(),
   // 真偽値へ変わった側(ADR 0110 決定1)。旧綴りの自由文字列も**読めてしまう**
   // ようにしてあるのは、手で commit された `advisor: opus` が registry 読み取り
   // 全体を倒さないため —— 退役フィールドとして門が1体だけ隔離する。
-  advisor: z.union([z.boolean(), z.string()]).optional(),
+  advisor: z.union([z.boolean(), z.string()]).nullish(),
   icon: z
     .string()
     .refine(isSingleTwemojiGrapheme, {
@@ -739,7 +741,7 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     authority: meta.authority,
     description: meta.description,
     provider: meta.provider,
-    tier: isWritten(meta.tier) ? meta.tier : undefined,
+    tier: isWritten(meta.tier) ? (meta.tier as string) : undefined,
     advisor: meta.advisor === true,
     retiredFields: retiredExecutionFields(parsed),
     icon: meta.icon,

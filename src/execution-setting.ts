@@ -94,10 +94,7 @@ export interface ExecutionRequest {
  *  まま別のモデルで走らせれば、記録された実行設定が嘘になる。表の穴は運用者の
  *  設定漏れなので、agent の quarantine ではなく spawn の失敗として上げる。 */
 export class IncompleteExecutionSettingTableError extends Error {
-  constructor(
-    public readonly provider: Provider,
-    public readonly tier: Tier,
-  ) {
+  constructor(provider: Provider, tier: Tier) {
     super(
       `the board's execution-setting table has no row for ${provider} / ${tier} — ` +
         "add it before a task can run there (ADR 0110 決定3)",
@@ -111,10 +108,7 @@ export class IncompleteExecutionSettingTableError extends Error {
  *  には何も出ない)、盤面から見て成功セッションと区別が付かない。黙って advisor
  *  無しで走らせないために spawn 前に倒す。 */
 export class AdvisorPairingError extends Error {
-  constructor(
-    public readonly mainTier: Tier,
-    public readonly advisorTier: Tier,
-  ) {
+  constructor(mainTier: Tier, advisorTier: Tier) {
     super(
       `advisor tier ${advisorTier} cannot advise a ${mainTier} main model ` +
         "(the advisor must be at least as capable), so the session would run with no advisor at all (ADR 0110 決定3)",
@@ -172,9 +166,9 @@ export function selectExecutionSetting(
 }
 
 /** 盤面の表を DB から読む(ADR 0110 決定3: 種から初期化された後は DB が正本)。
- *  seed と同じ並びで返す —— 表は9行の定数サイズで、pickup ごとに読み直しても
- *  安いし、#545 の編集が次の pickup から効くのはそのおかげである。 */
-export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
+ *  表は9行の定数サイズなので pickup ごとに読み直してよく、#545 の編集が次の
+ *  pickup から効くのはそのおかげである。 */
+function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
   return db
     .prepare("SELECT provider, tier, model, effort FROM execution_settings")
     .all() as ExecutionSettingRow[];
@@ -182,7 +176,7 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
 
 /** 「上位ティアの行を advisor に使ってよい」(ExecutionRequest.frontierAdvisor)。
  *  行が無い = 未設定 = false —— display_language と同じ「行が無ければ既定」の形。 */
-export function isFrontierAdvisorEnabled(db: Db): boolean {
+function isFrontierAdvisorEnabled(db: Db): boolean {
   const row = db.prepare("SELECT frontier_advisor FROM execution_defaults WHERE id = 1").get() as
     | { frontier_advisor: number }
     | undefined;

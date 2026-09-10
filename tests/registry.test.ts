@@ -108,6 +108,16 @@ describe("loadRegistry", () => {
     expect(loadRegistry(clean, "purely-local").agents.deckhand!.retiredFields).toEqual([]);
   });
 
+  it("値の無い tier: / advisor: の1行は registry 読み取り全体を倒さない(書かれていないと同じ)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\ntier:\nadvisor:\n---\nYou are Deckhand.\n`,
+    });
+    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
+    expect(agent.tier).toBeUndefined();
+    expect(agent.advisor).toBe(false);
+    expect(agent.retiredFields).toEqual([]);
+  });
+
   it("frontmatter の tier は optional の自由文字列: 列挙の検査は門(provider と同じ形)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\ntier: frontier\n---\nYou are Deckhand.\n`,
