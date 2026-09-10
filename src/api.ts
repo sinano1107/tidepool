@@ -84,6 +84,7 @@ import {
   presentTask,
   type Task,
 } from "./tasks.js";
+import { sessionInTeardown } from "./teardown.js";
 import {
   getProviderUsage,
   getThrottleState,
@@ -1609,6 +1610,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     return providerUsage.length === 0 ? {} : { providerUsage };
   }
 
+  // ADR 0109 決定2 / CONTEXT.md「後始末」: 「今なぜ pickup が起きないか」に答える
+  // 読み口は、盤面全体の停止の列挙と**並べて**後始末を報せる。**列挙そのものには
+  // 加えない** —— 後始末は停止ではなく、枠がまだ空いていない状態である。人間から
+  // 見れば「タスクは done なのに次が始まらない」であり、説明が無ければ古い停止と
+  // 誤読される。
+  function teardownJson() {
+    const teardown = sessionInTeardown(db);
+    return teardown ? { teardown } : {};
+  }
+
   // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。`throttle` は資源単位の
   // 表示(windows / fable 詳細)に要る完全な形のまま残る — halts の throttle
   // entry と一部重複するが、把握して受け入れた重複である
@@ -1616,6 +1627,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const { resetsAt: resumesAt, ...throttle } = getThrottleState(db);
     res.json({
       halts: boardHalts(db, throttleRevalidating),
+      ...teardownJson(),
       throttle: { ...throttle, resumesAt, revalidating: throttleRevalidating() },
       spendDown: spendDownJson(),
       ...providerUsageJson(),
@@ -1816,6 +1828,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.get("/queue", async (_req, res) => {
     res.json({
       halts: boardHalts(db, throttleRevalidating),
+      ...teardownJson(),
       ...providerUsageJson(),
       tasks: await presentLive(
         // 資源単位の skip(fable 線 ADR 0030・provider 認証の quarantine ADR

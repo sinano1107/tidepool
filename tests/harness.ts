@@ -228,7 +228,12 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     // issue #153: テスト盤面も本番と同じく必ず credential を持つ(「省略 =
     // 認証なし」の口は作らない)。既定で提示するのは TEST_TOKEN。
     credential: options.credential ?? TEST_CREDENTIAL,
-    worker: () => worker,
+    // 本番の adapter と同じく、盤面側 supervisor を factory から受け取る —— root の
+    // exit で強制回収を撃つのは adapter の仕事である(ADR 0109 決定4)
+    worker: (deps) => {
+      worker.useContainers(deps.containers);
+      return worker;
+    },
     containerRuntime: containers,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
@@ -268,17 +273,20 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     boardState: options.boardState,
   });
   const db = openDb(dbPath);
+  const mcpBaseUrl = `http://127.0.0.1:${server.mcpPort}`;
+  boards.set(mcpBaseUrl, worker);
   let stopped = false;
   const stopServer = async () => {
     if (!stopped) {
       await server.stop();
       db.close();
+      boards.delete(mcpBaseUrl);
     }
     stopped = true;
   };
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
-    mcpBaseUrl: `http://127.0.0.1:${server.mcpPort}`,
+    mcpBaseUrl,
     clock,
     worker,
     containers,
@@ -294,12 +302,40 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   };
 }
 
+/** この harness が起こした盤面の worker、MCP の口の URL 引き。解放系 verb を撃った
+ *  client に「session がそこで終わる」を演じさせるために要る(下記)。 */
+const boards = new Map<string, ScriptedWorker>();
+
+/** 最終 verb を着地させた session は、そこで終わる(CONTEXT.md「後始末」)。行儀のよい
+ *  worker の root process は締めのターンの直後に exit し、adapter が盤面 supervisor 経由で
+ *  強制回収を撃つ(ADR 0109 決定4)—— 既定の容器はそれで空になり、後始末が走って枠が空く。
+ *
+ *  `ScriptedWorker` は process を持たないので、その exit をここで演じる: 締めのターンの
+ *  長さはゼロである。**まだ生きている session**(空にならない容器)を測りたいテストは
+ *  `t.containers.hold(taskId)` を先に呼ぶ —— `FakeContainerRuntime` が最初から持っている
+ *  「回収に失敗するホストは明示的にスクリプトする」と同じ形である。 */
+const RELEASING_VERBS = new Set(["complete_task", "decompose", "escalate"]);
+
 /** Real MCP client over streamable HTTP, attributed to a task via ?task=. */
 export async function mcpClient(baseUrl: string, taskId?: string): Promise<Client> {
   const url = new URL(`${baseUrl}/mcp`);
   if (taskId !== undefined) url.searchParams.set("task", taskId);
   const client = new Client({ name: "tidepool-test", version: "0.0.0" });
   await client.connect(new StreamableHTTPClientTransport(url));
+  const worker = boards.get(baseUrl);
+  if (worker && taskId !== undefined) {
+    const callTool = client.callTool.bind(client);
+    client.callTool = (async (params: Parameters<Client["callTool"]>[0], ...rest: never[]) => {
+      const result = await callTool(params, ...rest);
+      if (RELEASING_VERBS.has(params.name) && result.isError !== true) {
+        worker.exit(taskId);
+        // 後始末は回収済み観測の後ろ = microtask の先にある。テストが続きを読む前に
+        // 走り切らせる(実物では締めのターンと exit にかかる時間がここに入る)
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return result;
+    }) as Client["callTool"];
+  }
   return client;
 }
 

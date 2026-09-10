@@ -1,6 +1,8 @@
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
+import type { GitHubAuth } from "./github-auth.js";
+import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
 import {
   escalateTask,
@@ -10,20 +12,21 @@ import {
   type TaskType,
   unfinishedDecisionSiblingCount,
 } from "./tasks.js";
+import {
+  runTeardown,
+  runTreeRule,
+  sessionInTeardown,
+  type TeardownDeps,
+} from "./teardown.js";
 import type { WorkerAdapter } from "./worker.js";
 import type { WorkerContainers } from "./worker-container.js";
-import {
-  BOARD_WORKER_ID,
-  buildWorkspaceResolver,
-  releaseWorkspace,
-  resolveOrQuarantine,
-  type WorkspaceConfig,
-} from "./workspace.js";
+import { BOARD_WORKER_ID, buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
 
 /** 強制回収を送ってから回収済み観測を諦めるまで(ADR 0099 決定3)。tick 1本より
- *  十分長く取る — 猶予と同じく「待つ時間」であって、機構の性質ではない。 */
+ *  十分長く取る — 猶予と同じく「待つ時間」であって、機構の性質ではない。後始末の
+ *  backstop(ADR 0109 決定5)も同じ尺度なので、待つ時間はこの1つである。 */
 const RECLAIM_TIMEOUT = 5 * 60 * 1000;
 
 export interface WatchdogConfig {
@@ -32,7 +35,9 @@ export interface WatchdogConfig {
   timeLimits: Partial<Record<TaskType, number>>;
   /** 畳み込み停止から強制回収までの猶予。 */
   grace: number;
-  /** 強制回収から回収済み観測までの上限。省略時 `RECLAIM_TIMEOUT`。 */
+  /** 強制回収から回収済み観測までの上限。ADR 0109 決定5 の後始末の backstop
+   *  ——「最終 verb は着地したのに root が exit しない」だけを見る時限 —— も
+   *  同じ尺度で、この1つを共有する。 */
   reclaimTimeout?: number;
 }
 
@@ -49,6 +54,11 @@ export interface PendingReclaim {
 
 export interface Watchdog extends PendingReclaim {
   stop: () => void;
+  /** **この session が梯子の底で保留されているか**(ADR 0099 決定3)。回収 timeout で
+   *  Containment quarantine に落ちた session の後始末は、確認回答だけが進める ——
+   *  遅れて届いた回収済み観測はこの述語で弾かれる。`pendingReclaim` では代われない:
+   *  あちらは容器の側も読むので、空が観測された瞬間に false になる。 */
+  heldForContainment: (taskId: string) => boolean;
 }
 
 /** The task's most recent pickup, not its first: a retried task is picked up
@@ -94,6 +104,19 @@ export function failTask(
   // call; the tree rule runs after, same order as every releasing MCP verb —
   // a tree-rule failure adds its own quarantine question on top, it never
   // replaces the failure question
+  registerFailureQuestion(db, task, title, reason, now);
+  runTreeRule(db, resolve, task, now);
+}
+
+/** failure question そのもの。後始末の型を通る watchdog 経路は tree rule を
+ *  `runTeardown` 側に任せるので、記録だけを撃つこちらを使う。 */
+function registerFailureQuestion(
+  db: Db,
+  task: Task,
+  title: string,
+  reason: string,
+  now: Date,
+): void {
   escalateTask(
     db,
     task,
@@ -112,50 +135,26 @@ export function failTask(
     now,
     "board",
   );
-  runTreeRule(db, resolve, task, now);
-}
-
-/** slot-release tree rule の一撃(CONTEXT.md「Slot-release tree rule」)。
- *  resolve が無い盤面(workspace 追跡なし)では no-op。 */
-function runTreeRule(
-  db: Db,
-  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
-  task: Task,
-  now: Date,
-): void {
-  if (!resolve) return;
-  const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);
-  if (resolved) releaseWorkspace(db, resolved, task, now);
 }
 
 /** 上限到達による中断(CONTEXT.md / ADR 0104)の盤面側の一撃。adapter は
  *  「Provider が 429 で断った」ことと「容器が空になった」ことだけを観測し、
  *  ここへ task id を渡す —— slot も tree rule も盤面の側にある(ADR 0099 決定1)。
  *
- *  順序と門は watchdog の回収受理(`acceptReclaimed` / `onReclaimed`)と同型で、
- *  違いは failure question を立てないことだけである: リトライ判断が存在しない
- *  以上、問いに判断価値が無い(ADR 0007 の理路)。同じ理由で `failTask` を通さず、
- *  失敗統計も汚さない。
+ *  通る型は通常完了・watchdog の強制回収と同じ後始末(`runTeardown`)であり、違いは
+ *  failure question を立てないことだけである: リトライ判断が存在しない以上、問いに
+ *  判断価値が無い(ADR 0007 の理路)。同じ理由で `failTask` を通さず、失敗統計も汚さない。
  *
- *  slot と status の門も同じ: 回収済み観測は非同期に届くので、その間に
- *  session が自己申告して次のタスクが slot に入っていることがありうる —— 他人の
- *  slot を解放しないために、ここで観測しなおす。 */
-export function capInterruptionHandler(deps: {
-  db: Db;
-  clock: Clock;
-  slot: Slot;
-  /** watchdog と同じ resolver(`buildWorkspaceResolver` 製)。無ければ workspace
-   *  追跡の無い盤面なので tree rule は走らない。 */
-  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined;
-}): (taskId: string) => void {
+ *  slot と status の門は後始末モジュールが持つ: 回収済み観測は非同期に届くので、その間に
+ *  session が自己申告して次のタスクが slot に入っていることがありうる —— 他人の slot を
+ *  解放しないために、そこで観測しなおす(ADR 0104 の実装時にこの経路だけが取った自衛が、
+ *  ADR 0109 で3経路の共有物になった)。 */
+export function capInterruptionHandler(deps: TeardownDeps): (taskId: string) => void {
   return (taskId) => {
-    if (deps.slot.currentTaskId !== taskId) return;
-    const task = getTask(deps.db, taskId);
-    if (!task || task.status !== "in_progress") return;
-    const now = deps.clock.now();
-    runTreeRule(deps.db, deps.resolve, task, now);
-    returnForCapInterruption(deps.db, task, now);
-    deps.slot.release();
+    void runTeardown(deps, taskId, {
+      ready: (task) => task.status === "in_progress",
+      transition: (task, now) => returnForCapInterruption(deps.db, task, now),
+    });
   };
 }
 
@@ -182,11 +181,26 @@ export function startWatchdog(deps: {
    *  ADR 0009), read fresh every call. Absent → every task fails against the
    *  board's single fixed `workspace` (pre-#26 behavior). */
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  /** ADR 0093: 完了済み session の後始末が確認回答で解放されるとき、merge-back の
+   *  帰り先を決める fetch がここの token を要る。 */
+  githubAuth?: GitHubAuth;
+  /** 完了済み session の後始末がここを通る(確認回答で解放される経路)—— 着地は
+   *  後始末の中で走るので(ADR 0109 決定1)、これが無いと梯子の底へ落ちた完了は
+   *  merge-back まで進んだきり PR 昇格 / 着地が永久に起きない。 */
+  landing?: Landing;
   config: WatchdogConfig;
 }): Watchdog {
   const { db, clock, slot, worker, containers, workspace, resolveWorkspace, config } = deps;
   const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
   const reclaimTimeout = config.reclaimTimeout ?? RECLAIM_TIMEOUT;
+  const teardown: TeardownDeps = {
+    db,
+    clock,
+    slot,
+    resolve,
+    githubAuth: deps.githubAuth,
+    landing: deps.landing,
+  };
   // keyed by task id; reset whenever a fresh pickup shows up for that id so a
   // retried run starts its own graceful-stop clock instead of inheriting
   // the previous run's already-tripped state
@@ -199,24 +213,25 @@ export function startWatchdog(deps: {
   const settled = new Set<string>();
   let pending: string | null = null;
 
-  /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む。 */
+  /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む ——
+   *  通る型は通常完了・上限到達による中断と同じ後始末である(ADR 0109 決定1)。 */
   function onReclaimed(taskId: string, limit: number): void {
     if (settled.has(taskId)) return;
-    if (slot.currentTaskId !== taskId) return;
-    const task = getTask(db, taskId);
-    if (!task || task.status !== "in_progress") return;
-    settled.add(taskId);
-    failTask(
-      db,
-      task,
-      `watchdog killed task: ${task.title}`,
-      `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
-        `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
-        "No self-report is possible.",
-      resolve,
-      clock.now(),
-    );
-    slot.release();
+    void runTeardown(teardown, taskId, {
+      ready: (task) => task.status === "in_progress",
+      record: (task, now) => {
+        settled.add(taskId);
+        registerFailureQuestion(
+          db,
+          task,
+          `watchdog killed task: ${task.title}`,
+          `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
+            `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
+            "No self-report is possible.",
+          now,
+        );
+      },
+    });
   }
 
   /** 空を観測できないまま timeout。失敗の記録は残すが slot は解放しない —
@@ -246,11 +261,51 @@ export function startWatchdog(deps: {
     );
   }
 
+  /** 後始末の時限(ADR 0109 決定5)。「最終 verb は着地したのに root が exit しない」
+   *  だけを見る backstop で、超過したら既存の梯子(強制回収 → 回収 timeout →
+   *  Containment quarantine)へ合流する。計測の起点は後始末に入った時刻であり、
+   *  行が持つ**再起動をまたげる事実**から読む。 */
+  function teardownTick(taskId: string): void {
+    const session = sessionInTeardown(db);
+    if (session?.taskId !== taskId || settled.has(taskId)) return;
+    const now = clock.now().getTime();
+    const forcedAt = forceSentAt.get(taskId);
+    if (forcedAt !== undefined) {
+      if (now - forcedAt >= reclaimTimeout) onTeardownReclaimTimeout(taskId);
+      return;
+    }
+    if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) {
+      forceSentAt.set(taskId, now);
+      containers.forceReclaim(taskId);
+    }
+  }
+
+  /** 完了済み session が梯子の底まで落ちたとき。**failure question は立てない** ——
+   *  タスクの決着は host 側の事情で覆らない(ADR 0109 決定4)。 */
+  function onTeardownReclaimTimeout(taskId: string): void {
+    settled.add(taskId);
+    pending = taskId;
+    quarantineContainment(
+      db,
+      `the worker session for task ${taskId} finished its work and reported it, but its ` +
+        "processes are still running on this host: the board force-reclaimed the container and " +
+        `could not observe it going empty within ${reclaimTimeout}ms. The task itself stays ` +
+        "done — what is still held is this host's workspaces and the execution slot, until " +
+        "this is answered",
+      clock.now(),
+    );
+  }
+
   function tick(): void {
     const taskId = slot.currentTaskId;
     if (taskId === null) return;
     const task = getTask(db, taskId);
-    if (!task || task.status !== "in_progress") return;
+    if (!task) return;
+    // 決着済みのタスクが枠を握っているなら、それは後始末である(CONTEXT.md「後始末」)
+    if (task.status !== "in_progress") {
+      teardownTick(taskId);
+      return;
+    }
     const limit = config.timeLimits[task.type];
     if (limit === undefined) return;
 
@@ -289,18 +344,22 @@ export function startWatchdog(deps: {
   const cancel = clock.setInterval(tick, WATCHDOG_TICK);
   return {
     stop: cancel,
+    heldForContainment: (taskId) => pending === taskId,
     pendingReclaim: () => (pending !== null && containers.pendingReclaim(pending) ? pending : undefined),
     acceptReclaimed: () => {
       if (pending === null) return;
       // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の
       // 直前でもう一度読む(1資源1枚の quarantine と同じ posture)
       if (containers.pendingReclaim(pending)) return;
-      const task = getTask(db, pending);
+      const taskId = pending;
       pending = null;
       // slot が解放される瞬間に tree rule が走る、の対を閉じる(CONTEXT.md
-      // 「Slot-release tree rule」)— 回収 timeout の時点では走らせていない
-      if (task) runTreeRule(db, resolve, task, clock.now());
-      slot.release();
+      // 「Slot-release tree rule」)— 回収 timeout の時点では走らせていない。
+      // 完了済み session の後始末なら、通る型は通常完了と同じである(退避ではなく
+      // 検査 + merge-back / 休止位置。ADR 0109 決定3)
+      void runTeardown(teardown, taskId, {
+        completion: sessionInTeardown(db)?.taskId === taskId,
+      });
     },
   };
 }

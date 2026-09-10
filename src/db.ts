@@ -519,6 +519,10 @@ export function openDb(path: string): Db {
     "question_quarantine_provider_auth",
     "question_quarantine_harness",
     "workspace",
+    // ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。最終 verb が着地した
+    // 時刻を持ち、後始末が完走した時点で null に戻る —— in-memory の callback は
+    // 盤面の crash を越えないので、起動時に拾うにはこの1列が要る。
+    "teardown_started_at",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }

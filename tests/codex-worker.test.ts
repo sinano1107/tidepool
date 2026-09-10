@@ -265,7 +265,11 @@ describe("CodexWorker (ADR 0098)", () => {
     f.worker.gracefulStop(value.id);
     f.process.exit(null, "SIGINT");
 
-    expect(f.process.killed).toEqual(["SIGINT"]);
+    // 畳み込み停止の SIGINT のあと、root の exit を観測した盤面が容器を強制回収する
+    // (ADR 0109 決定4)。passthrough の器ではそれが既に終わった子への SIGKILL に
+    // なるが、実機構では「容器に残るものを畳む」操作であり、adapter は signal を
+    // 選んでいない(ADR 0099 決定2)。
+    expect(f.process.killed).toEqual(["SIGINT", "SIGKILL"]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({
       kind: "worker_exited",
       exit_code: null,

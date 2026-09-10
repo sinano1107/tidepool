@@ -105,8 +105,12 @@ export class WorkerContainers {
     return this.live.get(sessionId)?.container.reclaimed ?? Promise.resolve();
   }
 
-  /** force を送ったのに空をまだ観測できていない容器か。**回収済み観測の不成立**
-   *  そのものであり、Containment quarantine の解除がここを読み直す。 */
+  /** 強制回収を送ったのに、まだ空を観測できていない容器か。ADR 0109 決定4 で force は
+   *  **root process の exit ごとに常態化した**ので、これ単独では回収済み観測の不成立を
+   *  意味しない —— 正常に終わった session も、exit から容器が空になるまでの一瞬ここを
+   *  通る。不成立と言えるのは、梯子の底(回収 timeout)まで落ちた session だけをここへ
+   *  渡す watchdog の `pending` 経由の読みであり、Containment quarantine の解除は
+   *  それを読み直す。 */
   pendingReclaim(sessionId: string): boolean {
     return this.live.get(sessionId)?.forced ?? false;
   }

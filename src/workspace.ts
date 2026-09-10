@@ -671,24 +671,44 @@ function shadowRemnants(workspace: WorkspaceConfig): string[] {
   });
 }
 
-/** ADR 0084 の完了の門が読む「作業ツリーに未コミットの変更が残っているか」。tree rule と
- *  同じ基準 —— shadow 残骸(上記)だけは数えない —— で、こちらは**何も変えない**。
+/** shadow 残骸(ADR 0069 の3条件)を除いた「作業ツリーに残っている未コミットの変更」の
+ *  観測。**綴りはこの1つである**(ADR 0084 決定3): 門の dirty 判定も完了経路の検査も
+ *  ここを読む —— 判定を2箇所に複製すると、片方だけが残骸を数えて無実の拒否か取りこぼしが
+ *  生まれる。
  *
  *  `--untracked-files=all` は必須である: 既定の porcelain は丸ごと untracked な
  *  ディレクトリを `?? .claude/` の1行に畳むので、残骸の除外がパス一致で効かなくなり
  *  `.claude/agents` だけの残骸が dirty に数えられる。
  *
+ *  **観測できなければ投げる。** 飲むかどうかは呼び手の判断であり、経路ごとに違う。 */
+function uncommittedChanges(workspace: WorkspaceConfig): string[] {
+  const remnants = new Set<string>(shadowRemnants(workspace));
+  return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
+    .split("\n")
+    .filter((line) => line !== "" && !remnants.has(line.slice(3)));
+}
+
+/** shadow 残骸(ADR 0069 の3条件)を消す。tree rule の退避も完了経路の検査も、判定の
+ *  **手前**で同じ削除を走らせる —— これを省くとサンドボックス下の解放が全部 quarantine に
+ *  落ちる。 */
+function removeShadowRemnants(workspace: WorkspaceConfig): void {
+  for (const path of shadowRemnants(workspace)) {
+    rmSync(join(workspace.path, path), { force: true });
+  }
+}
+
+/** ADR 0084 の完了の門が読む「作業ツリーに未コミットの変更が残っているか」。tree rule と
+ *  同じ基準(上記)で、こちらは**何も変えない**。
+ *
  *  **観測に失敗したら `false` を返す**(ADR 0084 決定2): git repository 自体が壊れている
  *  workspace で「commit してから呼び直せ」は worker に実行不能なことを求める指示になる。
- *  握り潰しをここに置くのは、飲むのを**この関数自身の git 観測に限る**ためである ——
- *  呼び出し側のロジックの失敗まで一緒に飲むと、門が理由なく開く。黙って開くわけでも
- *  ない: 直後の解放で tree rule が同じ git に躓き、quarantine が人間に届く。 */
+ *  握り潰しをここに置くのは、飲むのを**観測に限る**ためである —— 呼び出し側のロジックの
+ *  失敗まで一緒に飲むと、門が理由なく開く。黙って開くわけでもない: 直後の解放で tree rule
+ *  が同じ git に躓き、quarantine が人間に届く。**その網は完了経路には無い**(tree rule が
+ *  検査に置き換わる)ので、そちらは飲まない —— `assertNothingWrittenAfterCompletion`。 */
 export function treeIsDirty(workspace: WorkspaceConfig): boolean {
   try {
-    const remnants = new Set<string>(shadowRemnants(workspace));
-    return git(workspace.path, "status", "--porcelain", "--untracked-files=all")
-      .split("\n")
-      .some((line) => line !== "" && !remnants.has(line.slice(3)));
+    return uncommittedChanges(workspace).length > 0;
   } catch {
     return false;
   }
@@ -714,25 +734,59 @@ function wipSubject(task: Task): string {
  *  failure alike — so nothing rests on the agent having tidied up. */
 export function releaseTree(workspace: WorkspaceConfig, task: Task): void {
   const taskId = task.id;
-  // the WIP commit lands on the task branch or nowhere: a session that
-  // wandered off its branch (e.g. onto main) must not have its leavings
-  // committed there — refusing here is what makes the main-write ban
-  // structural, and the refusal lands in the quarantine path
-  const head = git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
-  if (head !== taskBranch(taskId)) {
-    throw new Error(
-      `workspace ${workspace.name} is on '${head}', not '${taskBranch(taskId)}' — refusing to commit`,
-    );
-  }
-  for (const path of shadowRemnants(workspace)) {
-    rmSync(join(workspace.path, path), { force: true });
-  }
+  assertOnTaskBranch(workspace, taskId);
+  removeShadowRemnants(workspace);
   git(workspace.path, "add", "-A");
   if (git(workspace.path, "status", "--porcelain") !== "") {
     git(workspace.path, "commit", "-m", wipSubject(task));
   }
   if (git(workspace.path, "status", "--porcelain") !== "") {
     throw new Error(`workspace ${workspace.name} still dirty after WIP commit`);
+  }
+}
+
+/** the WIP commit lands on the task branch or nowhere: a session that wandered
+ *  off its branch (e.g. onto main) must not have its leavings committed there —
+ *  refusing here is what makes the main-write ban structural, and the refusal
+ *  lands in the quarantine path. 完了経路の後始末(下記)も同じ位置でこれを読む ——
+ *  そこでは何もコミットしないが、自分のブランチに居ないまま「done」と報告した
+ *  session の成果は、どこへ merge-back すればよいのかも分からない(#234 ケース1)。 */
+function assertOnTaskBranch(workspace: WorkspaceConfig, taskId: string): void {
+  const head = git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
+  if (head !== taskBranch(taskId)) {
+    throw new Error(
+      `workspace ${workspace.name} is on '${head}', not '${taskBranch(taskId)}' — refusing to commit`,
+    );
+  }
+}
+
+/** ADR 0084 の完了の門が掛かる述語(work タスクかつ workspace が needs-human でない)。
+ *  ADR 0109 決定3 が「退避しない」範囲も**同じ述語**である —— 門が verb の手前で clean を
+ *  要求している範囲でだけ、後始末時の汚れは成果ではなく残存プロセスの露見だと言える。 */
+export function completionTreeGateApplies(db: Db, task: Task, workspace: WorkspaceConfig): boolean {
+  return task.type === "work" && !workspaceNeedsHuman(db, workspace.name);
+}
+
+/** 完了経路の後始末が tree rule の代わりに走らせる**検査**(ADR 0109 決定3)。
+ *
+ *  完了の門(ADR 0084)が verb の手前で clean を要求している以上、後始末の時点で
+ *  ツリーに現れる変更は成果ではなく「done と報告した**後**に書かれたもの」——
+ *  すなわち残存プロセスの露見である。退避すればそれが WIP になり、次の一手である
+ *  merge-back が祖先ブランチへ運んでしまうので、退避せず投げて quarantine に落とす。
+ *
+ *  読む綴りは門と同じ1つ(`uncommittedChanges` / ADR 0084 決定3)で、shadow 残骸の削除も
+ *  tree rule と同じ手前の位置で走る。**観測の失敗は飲まない**: 門の側の握り潰しが安全なのは
+ *  直後の解放で tree rule が同じ git に躓いて quarantine が人間に届くからであり、完了経路
+ *  ではその tree rule がこの検査に置き換わっていて網が無い(ADR 0109 決定3)。 */
+function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: Task): void {
+  assertOnTaskBranch(workspace, task.id);
+  removeShadowRemnants(workspace);
+  if (uncommittedChanges(workspace).length > 0) {
+    throw new Error(
+      `workspace ${workspace.name} was written to after task ${task.id} reported done — ` +
+        "the completion gate required a clean tree before the verb, so these changes are not " +
+        "the session's deliverable but a process that outlived its own report (ADR 0109)",
+    );
   }
 }
 
@@ -998,9 +1052,17 @@ export function releaseWorkspace(
   mergeBack = false,
   githubAuth?: GitHubAuth,
   tokenFailure?: unknown,
+  /** 完了経路の後始末か(ADR 0109 決定3)。門が掛かる範囲では退避ではなく検査を
+   *  走らせる —— 掛からない範囲(review の完了・escalate・decompose)は従来どおり
+   *  退避する: そこでの WIP はタスクブランチに留まり、merge-back に載らない。 */
+  completed = false,
 ): void {
   try {
-    releaseTree(workspace, task);
+    if (completed && completionTreeGateApplies(db, task, workspace)) {
+      assertNothingWrittenAfterCompletion(workspace, task);
+    } else {
+      releaseTree(workspace, task);
+    }
     // ADR 0064 決定5: 盤面自身が他の ref を書き始める**前**でなければならない ——
     // 順序を誤ると盤面が自分の不変条件を踏んで自分を quarantine する
     assertOnlyTaskBranchMoved(db, workspace, task.id);

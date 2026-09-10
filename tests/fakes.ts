@@ -152,11 +152,15 @@ export class FakeClock implements Clock {
 }
 
 /** Scripted stand-in at the WorkerAdapter seam: records what it was asked to
- *  start and to fold up, in call order. 強制回収は adapter の口ではないので
- *  ここには現れない — それは `FakeContainerRuntime` の側にある(ADR 0099 決定2)。 */
+ *  start and to fold up, in call order. 強制回収は adapter が**選ぶ**ものではなく
+ *  盤面側 supervisor の操作である(ADR 0099 決定2)—— adapter が持つのは「root process が
+ *  exit した」の観測点だけで、そこで supervisor に force を撃たせる(ADR 0109 決定4)。
+ *  それが `exit` である。 */
 export class ScriptedWorker implements WorkerAdapter {
   readonly started: Task[] = [];
   readonly gracefulStops: string[] = [];
+  readonly exits: string[] = [];
+  private containers: WorkerContainers | undefined;
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
@@ -173,6 +177,20 @@ export class ScriptedWorker implements WorkerAdapter {
 
   gracefulStop(taskId: string): void {
     this.gracefulStops.push(taskId);
+  }
+
+  /** 盤面側 supervisor を渡す(本番の adapter が factory で受け取るのと同じもの)。 */
+  useContainers(containers: WorkerContainers): void {
+    this.containers = containers;
+  }
+
+  /** この session の root process が exit した、の観測(ADR 0109 決定4)。実 adapter が
+   *  usage と transcript を書いた後にすることと同じ —— 盤面 supervisor 経由で容器を
+   *  強制回収する。**送達であって回収の完了ではない**: 空になるかどうかは容器の側
+   *  (`FakeContainerRuntime`)が決め、`hold` された容器はこれでは空にならない。 */
+  exit(taskId: string): void {
+    this.exits.push(taskId);
+    this.containers?.forceReclaim(taskId);
   }
 
   async checkUsage(): Promise<string | null> {

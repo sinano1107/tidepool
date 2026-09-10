@@ -2263,6 +2263,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       if (capInterrupted) {
         void this.containers.reclaimed(task.id).then(() => this.options.onCapInterrupted?.(task.id));
       }
+      // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
+      // ある —— 行儀よく exit するのを待たずにここで強制回収を撃つ。usage と transcript を
+      // 書いた後であること(上の worker_exited がその両方を確定させている)。これは
+      // **送達であって回収の完了ではなく**、ADR 0099 決定1 の語彙は不変である: 門は
+      // 回収済み観測ただ1つで、後始末はその後ろでしか走らない。この force が pickup を
+      // 進めることは無く、そこへ早く到達させるだけである。
+      this.containers.forceReclaim(task.id);
       // issue #356: この session の Precedent を投影する。**worker_exited を
       // 書いたあと**でなければ exit / usage 参照が投影に入らず、**書き込み
       // ストリームが閉じたあと**でなければ transcript の末尾が届いていない —

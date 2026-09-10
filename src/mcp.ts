@@ -26,15 +26,15 @@ import {
   type Task,
   taskHistory,
 } from "./tasks.js";
+import { markTeardown, runTeardown, type TeardownDeps } from "./teardown.js";
+import type { WorkerContainers } from "./worker-container.js";
 import {
   buildWorkspaceResolver,
-  ensureWorkspaceToken,
-  releaseWorkspace,
+  completionTreeGateApplies,
   resolveOrQuarantine,
   treeIsDirty,
   UnknownWorkspaceError,
   type WorkspaceConfig,
-  workspaceNeedsHuman,
 } from "./workspace.js";
 
 /** ADR 0015 (2026-08-21 addendum) / issue #415: the board-language rule lives
@@ -45,11 +45,30 @@ export const BOARD_WRITE_LANGUAGE_RULE =
   "Write in English even when the task's payload is in another language; " +
   "human-authored text you quote stays in its original language.";
 
+/** ADR 0109 決定6: 最終 verb の返り値に置く終了の指示。**送達であって保証ではない**
+ *  —— 不変条件は attribution の門・完了経路の検査・強制回収が持ち、この一文が守るのは
+ *  トークンだけである(締めのターンだけは機械で殺せないことが実測で確定している)。
+ *  3経路で1つの定数を共有する。 */
+const SESSION_OVER_NOTICE =
+  "Session over. End your turn now: no further tool calls, no file edits, no closing " +
+  "summary. Nothing reads anything you produce after this point, and the board is " +
+  "waiting for this session's processes to exit before it releases the workspace.";
+
+/** 後始末に入った session からの以降の呼び出しに返すもの(ADR 0109 決定6)。失敗として
+ *  読ませると別の手を試されるので、上の一文と同じことを言わせる。 */
+const SESSION_OVER_TOOL_ERROR =
+  "this session is over; stop and end your turn — no further tool calls, no file edits, " +
+  "no closing summary. Nothing reads anything you produce after this point.";
+
 export interface McpDeps {
   db: Db;
   slot: Slot;
   clock: Clock;
   landing: Landing;
+  /** 盤面側 supervisor(ADR 0099 決定2)。最終 verb の着地後、後始末はこの
+   *  **回収済み観測**の後ろでしか走らない(ADR 0109 決定1)。Absent → 容器を
+   *  持たない盤面なので、観測は即座に解決したものとして扱う。 */
+  containers?: WorkerContainers;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task releases against
@@ -61,6 +80,10 @@ export interface McpDeps {
   github?: GitHubClient;
   /** The board's GitHub identity (ADR 0093) for completion-time workspace refresh. */
   githubAuth?: GitHubAuth;
+  /** watchdog の `heldForContainment`(ADR 0099 決定3)。梯子の底で保留されている
+   *  session の後始末は、遅れて届いた回収済み観測ではなく確認回答だけが進める。
+   *  Absent → watchdog を持たない盤面(梯子そのものが無い)。 */
+  heldForContainment?: (taskId: string) => boolean;
   /** This board's one configured worker's authority profile (issue #11).
    *  Absent → assignable_to and allowed_workspaces are both unrestricted.
    *  Superseded by `resolveAuthority` below when both are given. */
@@ -175,6 +198,10 @@ function resolveAttributedTask(
   if (attributedTaskId === null || attributedTaskId !== deps.slot.currentTaskId) {
     return { error: "call is not attributed to the current slot task" };
   }
+  // ADR 0109 決定2/6: 最終 verb が着地した session は、枠こそ握っているが盤面には
+  // もう触れない —— 読取(`get_current_task`)も含めて全部ここで拒む。門が閉じるのは
+  // verb の**着地の後**なので、最初の解放系 verb 自身はここに掛からない。
+  if (deps.slot.inTeardown) return { error: SESSION_OVER_TOOL_ERROR };
   const task = getTask(deps.db, attributedTaskId);
   if (!task) return { error: "current task not found" };
   return { task };
@@ -210,7 +237,7 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | unde
  *  (/api・管理MCP)と共有しているからで、拒否は handoff invariant と同じ domain error
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。 */
 function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: WorkspaceConfig): void {
-  if (task.type !== "work" || workspaceNeedsHuman(deps.db, workspace.name)) return;
+  if (!completionTreeGateApplies(deps.db, task, workspace)) return;
   if (!treeIsDirty(workspace)) return;
   throw new DomainError(
     "the task workspace has uncommitted changes — commit them on the task branch first, " +
@@ -220,48 +247,48 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
 }
 
 /** Verbs that end the slot session (complete, decompose, escalate): run the
- *  domain verb attributed to the slot worker, then free the slot. Work
- *  completion opts into lineage merge-back; every other release only stashes
- *  WIP. A domain error keeps the slot — the session continues.
+ *  domain verb attributed to the slot worker, then hand the release to the
+ *  session's 後始末. Work completion opts into lineage merge-back; every other
+ *  release only stashes WIP. A domain error keeps the slot — the session
+ *  continues.
+ *
+ *  ADR 0109 決定1: verb は final MCP call の中で同期に着地し、response はすぐ返る ——
+ *  workspace の解放と slot の解放**だけ**が回収済み観測の後ろへ移る。worker exit と
+ *  回収済み観測を待つ循環待ちは作らない(待つのは `void` の先である)。
  *
  *  `gate` は verb の**前**に走る(ADR 0084 の完了の門)。門を持つ verb だけが workspace を
  *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
- *  error で終わった escalate / decompose にまでその副作用が及ぶ。 */
+ *  error で終わった escalate / decompose にまでその副作用が及ぶ。門が解決した結果は
+ *  **解決できなかったとき(`null`)も含めて**そのまま後始末へ渡す —— `undefined` で渡すと
+ *  後始末が「まだ解決していない」と読んで同じ観測をもう一度 quarantine する(1つの verb
+ *  呼び出しで2度撃たない)。 */
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
-  verb: (task: Task, workerId: string, now: Date) => unknown,
-  mergeBack = false,
+  verb: (task: Task, workerId: string, now: Date) => object,
+  completion = false,
   gate?: (task: Task, workspace: WorkspaceConfig) => void,
 ) {
-  return runVerb(deps, attributedTaskId, async (task) => {
-    let workspace = gate ? resolveTaskWorkspace(deps, task) : undefined;
+  return runVerb(deps, attributedTaskId, (task) => {
+    const workspace = gate ? (resolveTaskWorkspace(deps, task) ?? null) : undefined;
     if (gate && workspace) gate(task, workspace);
     const result = verb(task, attributedWorkerId(deps, task), deps.clock.now());
-    // the tree rule runs between the domain verb and the release: a domain
-    // error above keeps the session (and its tree) alive, but once the verb
-    // lands the WIP is stashed before anything else can enter the workspace.
-    // A tree-rule failure falls back to quarantine — the verb already
-    // landed, so the release stands, and needs-human halts further pickups.
-    if (!gate) workspace = resolveTaskWorkspace(deps, task);
-    if (workspace) {
-      const merge = mergeBack && task.type === "work";
-      // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の
-      // 取得だけがネットワークなので、同期の `releaseWorkspace` の手前で撃つ。
-      // 失敗は投げずに持ち越す: ここで投げると verb は既に着地しているのに tree rule
-      // も slot の解放も走らない。`releaseWorkspace` が fetch 失敗と同じ位置で投げる。
-      let tokenFailure: unknown;
-      if (merge) {
-        try {
-          await ensureWorkspaceToken(workspace, deps.githubAuth);
-        } catch (err) {
-          tokenFailure = err ?? new Error("GitHub token acquisition failed");
-        }
-      }
-      releaseWorkspace(deps.db, workspace, task, deps.clock.now(), merge, deps.githubAuth, tokenFailure);
-    }
-    deps.slot.release();
-    return result;
+    // 後始末に入った(CONTEXT.md「後始末」)。枠を握っているのは task ではなく
+    // session であり、この事実は再起動をまたぐので行にも持つ(ADR 0109 決定5)。
+    markTeardown(deps.db, task.id, deps.clock.now());
+    deps.slot.enterTeardown();
+    const teardown: TeardownDeps = {
+      db: deps.db,
+      clock: deps.clock,
+      slot: deps.slot,
+      resolve: buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
+      githubAuth: deps.githubAuth,
+      landing: deps.landing,
+      heldForContainment: deps.heldForContainment,
+    };
+    const reclaimed = deps.containers?.reclaimed(task.id) ?? Promise.resolve();
+    void reclaimed.then(() => runTeardown(teardown, task.id, { completion, workspace }));
+    return { ...result, session_over: SESSION_OVER_NOTICE };
   });
 }
 
@@ -359,28 +386,20 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           .optional(),
       },
     },
-    async ({ handoff }) => {
-      let completed: Task | undefined;
-      // await が要る: `runReleasingVerb` は release の中で仲介への往復を挟みうる
-      // ので、待たずに PR を開くと tree rule / merge-back より先に昇格が走る。
-      const result = await runReleasingVerb(
+    async ({ handoff }) =>
+      // 着地(PR 昇格)は後始末の中、**merge-back の後**に走る(ADR 0109 決定1):
+      // 待たずに PR を開くと tree rule / merge-back より先に昇格が走り、昇格は古い
+      // remote-tracking ref を読む。response はここで先に返る。
+      runReleasingVerb(
         deps,
         attributedTaskId,
         (task, workerId, now) => {
           const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
-          completed = done;
           return { id: done.id, status: done.status };
         },
         true,
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
-      );
-      if (completed) {
-        await deps.landing.land(completed);
-        // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
-        await deps.landing.relandAncestors(completed);
-      }
-      return result;
-    },
+      ),
   );
 
   server.registerTool(
