@@ -57,23 +57,23 @@ ADR 0048 が abandon カスケードのために切る集合(分解判断に乗�
 
 read-only の判定行為。read-only は**行為の性質であって行為者の性質ではない** — review タスクは実行者が誰であれ(self review を含め)読み取り専用の権限で実行される。その帰結として **review は書き込みの系譜に対して透明である**(ADR 0053): レビュアーは対象の差分を読むために被レビュータスクのブランチに立つが、そのブランチは独自のコミットを永久に持たないため、fork 元を系譜から探す側からは飛ばされる(Branch discipline 参照)。タスクブランチは決着後も削除されず、そのタスクが産んだ差分の恒久記録であり続けるので、成果が既に保護ブランチへ着地した後でもレビュー対象の差分は完全に読める。レビュアーは決して直さない — 発見は修理タスクになり、改善提案は具体的な diff(instruction / authority profile / テンプレートの変更)として人間への承認 question に登録される(散文の反省文は禁止)。トリガーは3層あるが、どの層も同じ review タスク type である:
 
-1. **完了時レビュー** — review flag で opt-in されたタスクの完了時に自動生成。対象はそのタスクの成果物。被レビュータスクが decompose していた場合、その決着済み子の handoff doc も文脈注入に含まれる — 統合点のレビュアーは統合された部品の記録を読める(ADR 0045)
+1. **完了時レビュー** — **統合点で必須**(ルートの work task と risk flag の子。登録者の宣言によらず完了時に自動生成、ADR 0111 — 旧・review flag による opt-in の線は改訂)。非ルートの子は既定で親に委譲され、review flag が付いた子だけ個別に見る。対象はそのタスクの成果物。被レビュータスクが decompose していた場合、その決着済み子の handoff doc も文脈注入に含まれる — 統合点のレビュアーは統合された部品の記録を読める(ADR 0045)
 2. **fix-forward レビュー** — 異議による修理の際の根本原因分析
 3. **Meta-review(メタレビュー)** — ログ全体を対象に、繰り返される escalation(→ 権限を広げ委譲)や fix-forward(→ 権限を狭める)のパターンを蒸留する。Condensation ループの担い手。v1 では自動走査はなく、手動登録されたタスクとして始まる — scratchpad の meta-review 振り分けはその入口
 
 review タスクは親なしの**ルート**としても登録できる。入口は2つ — scratchpad の meta-review 振り分けと、人間の Register 直接登録(用途は**独立監査**: 完了タスクを前提とせず「この workspace を読み取り専用で監査し、発見は修理タスクにする」— read-only 保証と Auditor 解決は review type だけが運べる)。ルート review には被レビュータスクの文脈注入(親の decision log・handoff doc)がないため、レビュー対象は purpose の散文と workspace 指定が運ぶ — 構造化された対象フィールドは作らない(2026-07-15 の grilling: purpose の既存の線と同じく、対象を機械が読む要求が出た時点で再検討)。
 
-レビューには2種類あり、価値の源泉で区別される: **当事者レビュー**(self RCA — 「なぜ自分はあの判断をしたか」はセッション文脈を持つ本人にしか書けない。内部情報が価値)と**独立レビュー**(layer 1 の完了時レビュー・layer 2 の独立監査 — 対象の判断に利害を持たない距離が価値)。独立レビューは Auditor に解決される。当事者レビューの「self」は歴史的事実 — 異議されたログエントリを実際に書いた worker — であり、ポインタへの参照ではなく確定値。当事者レビューの spawn には、盤面が worker session 記録の hash から**当時の** agent 定義本文を注入する — RCA は洗練後の現在版ではなく、判断を形作った当時版を証拠として読む(ADR 0020)。当時版は異議されたログエントリごとに解決される — 異議された判断が異なる版の session にまたがるときは、各判断を形作ったそれぞれの版が証拠になり、1版に畳まれない(2026-07-22 の grilling、issue #87)。ただし実行自体は現在の定義で行う(修理は再現実験ではない — ADR 0019)。人間が書いたエントリに当事者レビューは生まれない(最終監査者に自分を監査させる輪は作らない)。レビューの指摘は review タスクの分解子としての修理タスクになり(修理の決着後、統合復帰したレビューが直りを見届けてから完了する)、システムへの改善提案は registry を workspace とする registry-edit タスクの decompose として現れ、レビュアーの権限外ゆえ常に人間への承認 question に変換される。
+レビューには2種類あり、価値の源泉で区別される: **当事者レビュー**(self RCA — 「なぜ自分はあの判断をしたか」はセッション文脈を持つ本人にしか書けない。内部情報が価値)と**独立レビュー**(layer 1 の完了時レビュー・layer 2 の独立監査 — 対象の判断に利害を持たない距離が価値)。独立レビューは Auditor に解決される。当事者レビューの「self」は歴史的事実 — 異議されたログエントリを実際に書いた worker — であり、ポインタへの参照ではなく確定値。当事者レビューの spawn には、盤面が worker session 記録の hash から**当時の** agent 定義本文を注入する — RCA は洗練後の現在版ではなく、判断を形作った当時版を証拠として読む(ADR 0020)。当時版は異議されたログエントリごとに解決される — 異議された判断が異なる版の session にまたがるときは、各判断を形作ったそれぞれの版が証拠になり、1版に畳まれない(2026-07-22 の grilling、issue #87)。ただし実行自体は現在の定義で行う(修理は再現実験ではない — ADR 0019)。人間が書いたエントリに当事者レビューは生まれない(最終監査者に自分を監査させる輪は作らない)。**review は終端** — review タスク自身はレビューされず(review type への review flag は登録時に拒否)、findings への異議が review のレビューである。second opinion は人間のルート review。「受理」は status ではなく統合点レビューの完了(`review_by` が複数なら全部)から導出される派生状態(ADR 0111)。**reviewer は普通の agent** — 観点を持つ reviewer(security / standards / UX …)は agent 名 = 専門性(ADR 0019)で表し、read-only は type が保証する。レビューの指摘は review タスクの分解子としての修理タスクになり(修理の決着後、統合復帰したレビューが直りを見届けてから完了する)、システムへの改善提案は registry を workspace とする registry-edit タスクの decompose として現れ、レビュアーの権限外ゆえ常に人間への承認 question に変換される。
 
 ## Auditor(監査ポインタ)
 
-独立レビューのタスクが解決される先。default agent・既定 workspace と同型の、盤面が持つ第3のポインタであり、registry の普通のエージェント(レビュー専門の instructions を持つ)を指す。常に値を持ち「未設定」という状態はない — 解決できない名前は既存の agent quarantine が封じ込める(auditor 依存のタスクだけが止まり、盤面の他は流れ続ける)。「auditor」はエージェントの属性ではなく盤面が持つ役割の割当。ポインタの既定名は `fugu` 🐡(ADR 0089 — 命名は ADR 0017 の線、役割名 `auditor` は profile 側に置く)。
+独立レビューのタスクのうち `review_by` の無いものが解決される先 — 「書かなかった人間」の受け皿(ADR 0111。組み込み化の検討は別 issue)。default agent・既定 workspace と同型の、盤面が持つ第3のポインタであり、registry の普通のエージェント(レビュー専門の instructions を持つ)を指す。常に値を持ち「未設定」という状態はない — 解決できない名前は既存の agent quarantine が封じ込める(auditor 依存のタスクだけが止まり、盤面の他は流れ続ける)。「auditor」はエージェントの属性ではなく盤面が持つ役割の割当。ポインタの既定名は `fugu` 🐡(ADR 0089 — 命名は ADR 0017 の線、役割名 `auditor` は profile 側に置く)。
 
 review type の未指定 assignee がこのポインタへ解決されることは、Assignee の解決規則の type 別の枝であって別の規則ではない。したがって**同じ到達範囲を要求する** — ゲート・表示・帰属の記録のすべてが、type を見た解決を通る。この解決を問える相手は実行される type に限られる: **question は解決先を持たない**(回答されるものであって pickup されるものではないため、走らせるエージェントが存在しない)。「どのエージェントとして走るか」と「このカードは誰のものか」は別の問いであり、後者に対してのみ question は答えを持つ(あなた) — 1つの規則に両方を答えさせると、実行側の読み口が一つずつ「ただし question は別」と打ち消すことになる(2026-08-09 の grilling)。
 
 ## Review flag(レビューフラグ)
 
-完了時レビュー(layer 1)へのタスク単位の opt-in。必須ではない。宣言者は登録者であり、人間・エージェントを問わない — エージェントは decompose の子に宣言でき、監視への opt-in は権限を広げないため risk flag と違い検査も承認変換もない(エージェント発のレビュー要請の唯一の経路 — review type の登録はエージェントに開かれず、独立監査の提案は escalation が担う。ADR 0021)。flag の宣言は登録時。人間登録タスクでは未消費の間(未決着かつ実行中でない間)編集できる — 旧・不変の線は撤回(2026-07-24 の grilling、issue #130): ルート review は完了**後**の救済であり、todo 中に付け忘れへ気づいたケースを救えない(flag だけが「完了の瞬間の自動発火」を運ぶ)。agent が decompose の子に宣言した flag は従来どおり登録後不変 — 編集は人間登録タスクに限る(Edit 参照)。review_by は flag への同乗ゆえ、実装時には flag と同じ門で編集可となる(ADR 0031 の登録時宣言のみ・非伝播・2段フォールバックの設計は無傷)。レビュアーの指名(review_by)は flag への同乗として設計済み(未実装): 乗り物と同じく登録時宣言のみ・非伝播で、指名は登録者の assignable_to で検査され、フォールバックはタスク指名 → 盤面 Auditor の2段のみ — workspace 単位の役割ポインタは作らない(ADR 0031、2026-07-22 の grilling、issue #84)。子のレビューは既定で親に委譲される(分解された作業の品質は統合点で判断するのが最良)が、親の完了前に外部影響を持つ子 — risk flag で識別される — は個別にレビューされる。
+**非ルートの子を、統合点を待たず個別に完了時レビューへ出す**ためのタスク単位の opt-in(ADR 0111 — 旧・「完了時レビューへの opt-in、必須ではない」はルートの必須化で意味が狭まった。ルートは flag によらずレビューされる)。宣言者は登録者であり、人間・エージェントを問わない — エージェントは decompose の子に宣言でき、監視への opt-in は権限を広げないため risk flag と違い検査も承認変換もない(エージェント発のレビュー要請の唯一の経路 — review type の登録はエージェントに開かれず、独立監査の提案は escalation が担う。ADR 0021)。flag の宣言は登録時。人間登録タスクでは未消費の間(未決着かつ実行中でない間)編集できる — 旧・不変の線は撤回(2026-07-24 の grilling、issue #130): ルート review は完了**後**の救済であり、todo 中に付け忘れへ気づいたケースを救えない(flag だけが「完了の瞬間の自動発火」を運ぶ)。agent が decompose の子に宣言した flag は従来どおり登録後不変 — 編集は人間登録タスクに限る(Edit 参照)。レビュアーの指名(`review_by`)は **flag への同乗をやめ、task の独立フィールド(list)** になる(ADR 0111 — ルートに flag が無くなるため)。登録時宣言のみ・非伝播・登録者の assignable_to で検査、フォールバックはタスク指名 → 盤面 Auditor の2段のみ — workspace 単位の役割ポインタは作らない(ADR 0031、2026-07-22 の grilling、issue #84)。同じ乗り物に `review_tier`(review の要求ティア、task に1つ)が乗る(実行設定 参照)。誰を付けるかの学習は登録者(decompose する親)の Behavior であり、selector は「誰」を選ばない。子のレビューは既定で親に委譲される(分解された作業の品質は統合点で判断するのが最良)が、親の完了前に外部影響を持つ子 — risk flag で識別される — は個別にレビューされる。
 
 ## Escalation(エスカレーション)
 
@@ -99,7 +99,7 @@ worker が読めるのは自タスクと、盤面が文脈として届けたも�
 
 ## Advisor(アドバイザー)
 
-worker がタスクの途中で上位モデルに判断の相談をするオプション能力。**worker session だけが持ちうる** —— 盤面自身の呼び出しはこの能力を持たない(Board call 参照)。advisor は助言のみを返し、決して行動しない — 助言を踏まえた判断はあくまで worker 本人の判断として decision log と完了時レビューに全部吸収される。Subagent と同じく説明責任を分割しない側(ADR 0010 の線)であり、権限内判断の質を高めるが決裁権の境界は決して広げない。エージェント単位の opt-in(フィールド不在 = 無効)であり、**配布される既定の agent(種)は持たない**(2026-08-21 の grilling、issue #307 / ADR 0094 — 旧・「運用上は原則すべてのエージェントに付与し、外したい特殊ケースだけ無効化する」の線は撤回)。既定は最小の床と運用者が足せる余地を提供するもので、付与はその registry の運用者が決める。運用上は付与が有利でありうる — 手戻り(fix-forward)はトークンと人間の時間の両方を消費する — が、実測では1相談がセッション費用の3〜4割を占め、黙って全員に課すことを正当化する重さではなかった。有効・無効の正本は registry(agent.md)であり、切り替えは registry への書き込み — 盤面側のオーバーライドは持たない。加えて、advisor は **正準経路が提供する能力**でもある — その Provider / Harness の経路に相談機構が無い agent が advisor を持つ定義は**不正な組み合わせ**であり、registry への登録と pickup の検査で拒否される(2026-08-23 の grilling / ADR 0097、2026-08-24 の grilling / issue #195)。盤面は Provider から正準経路を導出して可否を判定し、registry に Harness を宣言させない。これは kill switch ともオーバーライドとも違い、黙って無効化するのではなく定義が成立しないという扱いである。各セッションの実効 advisor 構成は機械記録され、構成の帰属は常にイベント履歴から確定できる。記録は2枚に分かれる: spawn 時に**盤面が何をピン留めしたか**、終了時に**実際に相談が走ったか**(相談は起きて初めて観測できるので、後者だけが「走った」を言える)。終了時の記録はモデルごとの使用量内訳を観測のまま含み、advisor への帰属は盤面が推論しない — 読み手がピン留めの記録と突き合わせて確定する(ADR 0094)。advisor への相談を前置きとして課せるのは権限内の迷いに対してのみ — 決裁権外の判断のエスカレーションには一切の前置きを課さない(安全弁は無摩擦のまま)。相談の記録は機械観測のみで、自己申告には依らない。
+worker がタスクの途中で上位モデルに判断の相談をするオプション能力。**worker session だけが持ちうる** —— 盤面自身の呼び出しはこの能力を持たない(Board call 参照)。advisor は助言のみを返し、決して行動しない — 助言を踏まえた判断はあくまで worker 本人の判断として decision log と完了時レビューに全部吸収される。Subagent と同じく説明責任を分割しない側(ADR 0010 の線)であり、権限内判断の質を高めるが決裁権の境界は決して広げない。エージェント単位の opt-in(フィールド不在 = 無効)であり、宣言は**有無だけ**(Provider entry ごとの真偽値。model 名は書かない — advisor は main 以上のティアでなければならず、main が selector で動くと固定した model 名の妥当性が変わる。advisor の model は実行設定の一部として表から解決され、盤面が spawn 前に組み合わせを検証する — headless の CLI は不正な組み合わせを exit ではなく advisor 無しで起動する。ADR 0110)。**配布される既定の agent(種)は持たない**(2026-08-21 の grilling、issue #307 / ADR 0094 — 旧・「運用上は原則すべてのエージェントに付与し、外したい特殊ケースだけ無効化する」の線は撤回)。既定は最小の床と運用者が足せる余地を提供するもので、付与はその registry の運用者が決める。運用上は付与が有利でありうる — 手戻り(fix-forward)はトークンと人間の時間の両方を消費する — が、実測では1相談がセッション費用の3〜4割を占め、黙って全員に課すことを正当化する重さではなかった。有効・無効の正本は registry(agent.md)であり、切り替えは registry への書き込み — 盤面側のオーバーライドは持たない。加えて、advisor は **正準経路が提供する能力**でもある — その Provider / Harness の経路に相談機構が無い agent が advisor を持つ定義は**不正な組み合わせ**であり、registry への登録と pickup の検査で拒否される(2026-08-23 の grilling / ADR 0097、2026-08-24 の grilling / issue #195)。盤面は Provider から正準経路を導出して可否を判定し、registry に Harness を宣言させない。これは kill switch ともオーバーライドとも違い、黙って無効化するのではなく定義が成立しないという扱いである。各セッションの実効 advisor 構成は機械記録され、構成の帰属は常にイベント履歴から確定できる。記録は2枚に分かれる: spawn 時に**盤面が何をピン留めしたか**、終了時に**実際に相談が走ったか**(相談は起きて初めて観測できるので、後者だけが「走った」を言える)。終了時の記録はモデルごとの使用量内訳を観測のまま含み、advisor への帰属は盤面が推論しない — 読み手がピン留めの記録と突き合わせて確定する(ADR 0094)。advisor への相談を前置きとして課せるのは権限内の迷いに対してのみ — 決裁権外の判断のエスカレーションには一切の前置きを課さない(安全弁は無摩擦のまま)。相談の記録は機械観測のみで、自己申告には依らない。
 
 唯一の例外が **kill switch(緊急マスク)**: 盤面ホストの運用設定で全 advisor を一時停止できる。registry には置かない — エージェントの定義ではなく運用上の緊急マスクであり、advisor 側の障害・仕様変更時に agent.md を1枚も触らず止められることが存在理由(experimental な機能をフリート全員に配る代償)。「盤面側のオーバーライドを持たない」の線とは矛盾しない — マスクは advisor を**足す**方向には一切効かず、実効構成を濁らせずに一律ゼロへ倒すだけで、その事実もイベント履歴に残る。
 
@@ -110,11 +110,12 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 - **種別**: **Knowledge**(事実。承認不要、出所必須)と **Behavior**(振る舞い。承認必須)。**Precedent** は過去の判断 + outcome + 機械観測された行動列の投影であり、Behavior を起草する材料。その単位は **Episode** = worker session 1回で、中身は tool 呼び出し1回を最小粒度とする行動列と、その中に位置を持つ decision のマーカー、outcome(decision 単位の表示済み・異議、session 単位の完了・PR merge・exit)、当時の agent 定義の版(2026-08-18 の grilling、issue #356)。decision は軸ではなくマーカーであり、「ある判断までに何をしたか」は読み出し時のスライスである。
 - **状態**: `candidate` / `approved`。worker に注入・retrieval されるのは approved のみ。承認は文言に対して行い、統合で書き換えたら再承認。「振る舞いの変更は人間承認」の線は、記憶がどのファイルに住むかではなく、この状態に引かれる。
 - **不変条件**: 削除は無く無効化のみ。すべてのエントリはイベント id か commit に遡れる。記憶は決裁権を広げない — 位置づけは Advisor と同じで、変わるのは権限内判断の質だけ。
-- **スコープ**: workspace(+盤面全体の少数)。agent ごとに隔離した記憶は作らない。Precedent は (workspace, agent) で引け、各 episode に当時の agent 定義の版を刻む。
+- **スコープ**: workspace(+盤面全体の少数)。agent ごとに隔離した記憶は作らない。Precedent は (workspace, agent) で引け、各 episode に当時の agent 定義の版を刻む。**Behavior は宛先**(agent 名 or 全員)を持つ — 全員が読めるが注入は宛先で絞る。隔離ではなく宛先で「agent ごとの記憶」が成立する(ADR 0083 追記3)。Knowledge に宛先は無い。
+- **階層**: エントリは `path` を持ち、INDEX は保存物ではなく派生の純粋目次(prefix の子の title を並べたもの)。spawn 時は最上位 INDEX + 関連 leaf、MCP pull で枝を降りる。合成要約は観測されてから。user memory(外部ストア)は Memory の外 — tool の話。
 - **書き手**: Precedent は盤面が投影し agent は書かない。Knowledge は worker の明示 tool と人間。Behavior の candidate は fix-forward RCA(review layer 2)、approved 提案は meta-review(layer 3)が起草し、承認 question を経て確定する。
-- **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)。
+- **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)。session 記録には当時のストアの snapshot 識別子と注入した entry・token 量も乗る — 実行設定の評価で知識条件を隠れた変数にしないため。
 
-registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタにとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。
+registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタ(+ Provider entry と既定の要求ティア。model / effort は持たない — 実行設定 参照)にとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。
 
 ## Decision log(判断ログ)
 
@@ -222,7 +223,7 @@ authority profile の必須フィールド。**人間の merge 判断がどの�
 
 ## Assignee(アサイン先)
 
-タスクを実行する worker への割当。登録時は任意で、指定した場合は委譲先の要求として登録者の決裁権(assignable_to)に対して検査され、registry に解決できない名前は登録時に即拒否される。human への委譲も assignable_to の検査対象 — この検査が human 宛てに守るのは権限ではなく**人間の注意予算**であり、assignable_to に human を持たない agent も封じられてはいない(承認 question への変換に落ちる)。直接割り当ては、承認の実績が見えた agent の profile に後から human を足して開く — Condensation の線(2026-07-21 の grilling、issue #116)。値は3通りに読まれる: **未指定 = その時の盤面の既定 agent への参照**(pickup の瞬間に解決され、値は焼き込まれない — Workspace の「既定への参照」と同型)、**エージェント名 = その agent として実行**(spawn の瞬間に registry から解決される)、**human = slot の外**(人間タスクとして並行する)。割当待ちという停止状態は存在しない — 未指定のタスクは assign を待たず既定へ流れる。
+タスクを実行する worker への割当。登録時は任意で、指定した場合は委譲先の要求として登録者の決裁権(assignable_to)に対して検査され、registry に解決できない名前は登録時に即拒否される。human への委譲も assignable_to の検査対象 — この検査が human 宛てに守るのは権限ではなく**人間の注意予算**であり、assignable_to に human を持たない agent も封じられてはいない(承認 question への変換に落ちる)。直接割り当ては、承認の実績が見えた agent の profile に後から human を足して開く — Condensation の線(2026-07-21 の grilling、issue #116)。assignee は「誰として走るか」であり、「何で走るか」(model / effort / Provider)は別の問い — 実行設定 参照。値は3通りに読まれる: **未指定 = その時の盤面の既定 agent への参照**(pickup の瞬間に解決され、値は焼き込まれない — Workspace の「既定への参照」と同型)、**エージェント名 = その agent として実行**(spawn の瞬間に registry から解決される)、**human = slot の外**(人間タスクとして並行する)。割当待ちという停止状態は存在しない — 未指定のタスクは assign を待たず既定へ流れる。
 
 未指定が参照であることは、**盤面のあらゆる読み口が解決を通す**という要求を伴う。ゲート(pickup 候補・quarantine 判定)だけでなく、**表示**も**帰属の記録**も同じ解決を通る — 盤面が「pickup すれば fugu が走る」と知っているのに Board が「未割当」と描くのは、ADR 0011 が存在しないと決めた状態を人間の目に作ることであり、`task_picked_up` が実際の実行者と違う名前を記録するのは監査証跡の誤りである(2026-08-09 の grilling、issue #221 / #223)。表示の読み口は**解決値をそのまま描く** — 解決値と明示値を視覚的に区別しない。盤面は既に `blocked` / `held` / `skipped` を導出値として、導出と明示せずに描いており、assignee だけ別の作法を採る理由がない。「何が保存されているか」を扱う面(編集フォーム)は素の値を読み、そこでは `(default agent)` が正しい表示である — 面ごとに答えるべき問いが違う。
 
@@ -267,7 +268,7 @@ _Avoid_: 畳み中・畳み込み中(畳み込み停止は watchdog が撃つ合
 
 ## Board call(盤面呼び出し)
 
-盤面が**自分自身の機能のために**回す AI 呼び出し(2026-08-04 の grilling、issue #174)。v1 の用途は AI 下書き・表示時翻訳・worker に与える面の事前確認・使用量の読み取り。Worker session と対をなす概念であり、**worker session ではない** —— タスクにも slot にも属さず、assignee を持たず、decision log にも現れない。説明責任の主体は実行者ではなく盤面自身(= 人間)である。 各用途は使う Provider を呼び出しごとに明示し、盤面全体の暗黙の既定 Provider は持たない。
+盤面が**自分自身の機能のために**回す AI 呼び出し(2026-08-04 の grilling、issue #174)。v1 の用途は AI 下書き・表示時翻訳・worker に与える面の事前確認・使用量の読み取り。配分評価(Allocation review 参照)もここで回す。Worker session と対をなす概念であり、**worker session ではない** —— タスクにも slot にも属さず、assignee を持たず、decision log にも現れない。説明責任の主体は実行者ではなく盤面自身(= 人間)である。 各用途は使う Provider を呼び出しごとに明示し、盤面全体の暗黙の既定 Provider は持たない。
 
 したがって **advisor を持たない**(Advisor 参照) —— advisor は worker がタスクの途中で判断の質を上げるための能力であり、盤面の内部処理には相談すべき判断が無い。この不在はホスト環境の設定に委ねられず、**盤面が呼び出しごとに明示的に宣言する**: 別の目的で渡した設定の副作用として advisor が結果的に不在になっている状態は、ホスト側の1行で静かに反転しうるため不在の綴りとして認めない(ADR 0044)。同じ理由で逆向きも成立する —— ホストの環境設定が worker の advisor を黙って落とすことも許されない(有効・無効の正本は registry と kill switch のみ)。
 
@@ -393,11 +394,40 @@ worker session または Board call を、モデルとの対話・道具や prob
 
 ## Canonical route(正準経路)
 
-盤面が Provider ごとに一つ定める、AI 呼び出しを実行する Harness への経路。エージェントは Provider だけを宣言し、Board call は呼び出しごとに Provider を明示する。別の Provider / Harness の組み合わせが実行可能になっても正準経路は黙って切り替わらず、障害時にも別の Harness へ自動 fallback しない(2026-08-24 の grilling、issue #195)。advisor など agent が要求するオプション能力の可否もこの経路から導出され、未対応の要求は registry への登録と pickup の両方で拒否される — 黙って能力を落として走らせない。
+盤面が Provider ごとに一つ定める、AI 呼び出しを実行する Harness への経路。エージェントは Provider だけを宣言し、Board call は呼び出しごとに Provider を明示する。別の Provider / Harness の組み合わせが実行可能になっても正準経路は黙って切り替わらず、障害時にも別の Harness へ自動 fallback しない(2026-08-24 の grilling、issue #195)。advisor など agent が要求するオプション能力の可否もこの経路から導出され、未対応の要求は registry への登録と pickup の両方で拒否される — 黙って能力を落として走らせない。検査は Provider entry 単位(ADR 0110)。
 
 ## Provider(プロバイダ)
 
-worker session の発話が向かう**推論の提供元** — 課金元と資格情報の帰属で区別される概念であり、起動する CLI であるハーネス(Claude Code 等)とは独立している(2026-08-23 の grilling / ADR 0096・0097 — Kimi 対応の検討で分離された)。同じハーネスが複数の provider を喋りうる: 例えば Claude Code harness の向き先は Anthropic 本家(サブスクリプション)にも Moonshot Platform(従量課金)にもなりうる。provider はエージェント単位で選ばれ、どの provider を喋るかは worker の能力ではなく registry の宣言である。宣言は**必須** — 「省略 = 既定 provider」という暗黙の既定は、書き忘れと意図の区別がつかないため作らない(2026-08-23 の grilling / ADR 0097)。provider ごとに資格情報は別物であり、ある provider の資格情報の失効は別の provider の発話可能性に影響しない — 「あらゆる AI 発話が同じ1つの資格情報で行われる」という前提は provider が1つのときだけ成立する(動力の認証 参照)。なお provider の選択は規約上の意味を持ちうる: サブスクリプションは対話利用専用という提供元の規約がある場合、無人の worker session は従量課金の provider に限られる(ADR 0096)。
+worker session の発話が向かう**推論の提供元** — 課金元と資格情報の帰属で区別される概念であり、起動する CLI であるハーネス(Claude Code 等)とは独立している(2026-08-23 の grilling / ADR 0096・0097 — Kimi 対応の検討で分離された)。同じハーネスが複数の provider を喋りうる: 例えば Claude Code harness の向き先は Anthropic 本家(サブスクリプション)にも Moonshot Platform(従量課金)にもなりうる。provider はエージェント単位で**許される集合**として宣言され、どれで走るかは pickup 時に selector が選ぶ(実行設定 参照、ADR 0110)。宣言は**任意の entry 配列**で、省略 = 盤面が資格情報を持つ全 Provider を床の構成(advisor なし)で — 隠れた既定が無いので、旧・「宣言は必須」(ADR 0097、書き忘れと意図の区別)の論拠は消えた。entry を書くのは経路依存の能力(advisor)を束ねたい agent と Provider を絞りたい運用者。Provider の除外(Throttle / 認証 / 温存)は entry 単位で、全 entry が除外されて初めて skipped。provider ごとに資格情報は別物であり、ある provider の資格情報の失効は別の provider の発話可能性に影響しない — 「あらゆる AI 発話が同じ1つの資格情報で行われる」という前提は provider が1つのときだけ成立する(動力の認証 参照)。なお provider の選択は規約上の意味を持ちうる: サブスクリプションは対話利用専用という提供元の規約がある場合、無人の worker session は従量課金の provider に限られる(ADR 0096)。
+
+## 実行設定(Execution setting)
+
+worker session が実際に走る (provider, model, effort, advisor model) の組。agent の属性ではなく **pickup の瞬間に selector が選び**、`worker_spawned` に値と出所(task の要求 / agent の既定ティア / 盤面既定)を刻む(ADR 0110 — 旧・agent.md の `model` / `effort` による固定は廃止。ADR 0005 の「常に明示ピン留め」は維持され、fallback の出所が adapter 定数から盤面の表へ移った)。学習器のセルはこの組を観測された具体 id で持つ。
+_Avoid_: 計算資源、execution profile
+
+## 要求(Execution request)
+
+task が持つ2列 — **必要品質**(ティア: 廉価 / 主力 / 上位)と**優先順位**(quality / cost / speed)。登録者(人間の Register、decompose の ChildSpec、triage)が書き、未指定は盤面既定(未指定と既定選択は記録上区別する — 要求ティアは難易度の申告として学習の文脈変数になる)。agent.md の `tier` は task に要求が無いときの既定。制約(外部送信可・予算・温存)は task に置かない — workspace と盤面設定の側。review の要求は `review_tier`(task に1つ)。
+_Avoid_: 具体モデル名の指定
+
+## Selector(選択器)
+
+pickup 時に要求・盤面設定の表(Provider × ティア → alias または model と既定 effort。advisor model は「上位ティアの champion、main が上位なら同一」で導出)・Policy の除外(Throttle オフセット / Spend-down / Provider 認証)・Provider 順位から実行設定を1つ決める**決定論の規則**。Provider をまたぐ選択もここ(「Claude 温存 = Codex に流す」)。「誰が走るか」(Assignee)は選ばない。review task の設定は表からのみ解決し、学習器は昇格後も work task にしか触れない。表の行は alias(anthropic の `sonnet` / `opus` / `fable` は CLI 更新で前進する)か具体 id で、そのティアの現 champion。方針の入口は settings タブと管理MCP — 「Allocation Policy」という独立のエンティティは作らない。
+_Avoid_: Router、Allocation Policy
+
+## 学習器(Learner)
+
+selector の候補として **shadow** で走る統計層。pickup ごとに「自分ならこう選ぶ」を記録だけし、routing meta-review の判断 + 承認 question で昇格して selector になる(製品の形であり実験用ではない — Memory の candidate → approved と同型)。事前分布は表(観測1件分の重み)、盤面全体の事後分布が各 workspace の事前分布。受理率は pin で条件づけ(相談の有無で割らない)、費用は session 合計、相談回数は費用の3値帰属(0回 / advisor ≠ main の内訳 / 分離不能)と配分評価にのみ使う。昇格後もデータの無いセルでは表と一致する。
+_Avoid_: bandit、optimizer
+
+## 配分評価(Allocation review)
+
+品質判定(review の verdict + findings)を固定した**後**に、盤面が Board call で問う「この結果に対する実行設定は適切だったか」— `allocation`(appropriate / underpowered / overpowered / uncertain)と `cause`(capability / task_ambiguity / environment / missing_information)。episode への**判断種別**の注釈で、観測と混ぜない。review session はモデル名・価格・routing を入力に持たない(ADR 0111)。
+_Avoid_: Supervisor、Phase 2
+
+## Interview(面接)
+
+実績の無いセル(新モデル)を本番を賭けずに測る review type のルート task。発火は事象駆動(新セルの出現、meta-review / 人間の要求)で閾値は置かず、提案は escalation → 承認 question → 人間名義で登録。probe + rubric を先に decision log に書き、候補セルごとの work 子を使い捨てブランチで走らせ(PR 無し、ブランチは残す)、統合復帰後に agent / model を伏せた handoff を採点する。結果は interview 種別の outcome。probe の著者は常に agent(ADR 0111)。
 
 ## Question(質問)
 
@@ -466,7 +496,7 @@ handoff は PR 昇格(盤面の push → PR 作成)より前に worker が書き
 Provider ごとのアカウント単位(エージェント単位ではない)の予防的な絞り。各 Provider が持つ使用量ウィンドウ(session / week と、存在する場合の model 固有線)ごとに、使用率を**ペース線**(= 経過時間割合 − オフセット)と比較し、超えている間その Provider 内で絞りが効く。この状態を **throttled** と呼ぶ(旧・一律閾値80%は廃止 — 目的は「上限手前で止まる」ことではなく「ウィンドウ全体で一定ペースを保って使い切る」こと。2026-07-22 の grilling、ADR 0030。Provider 単位への細分化は 2026-08-24 の grilling、issue #195)。
 
 - **オフセット**は Provider / ウィンドウごとの盤面設定で、意味は「**人間の取り分の予約**」— 盤面は常に経過ペースよりオフセット分だけ遅れて走り、空けた分がそのサブスクリプションでの人間自身の対話利用に残る。ウィンドウ開始直後のオフセット相当時間は使用率ゼロでも流れない(予約の意味論そのもの)
-- session / week (その Provider の all models) の超過は、その Provider を喋る agent の pickup と Board call だけを skip する。**model 固有ウィンドウの超過は該当 model のタスクだけを skip し、同じ Provider の他 model と別 Provider は流れ続ける**(Quarantine の資源単位停止と同型)
+- session / week (その Provider の all models) の超過は、その Provider の entry と Board call だけを除外する — agent に別の Provider entry があれば selector はそちらを選び、全 entry が除外されて初めて pickup が skip される(ADR 0110)。**model 固有ウィンドウの超過は該当 model のタスクだけを skip し、同じ Provider の他 model と別 Provider は流れ続ける**(Quarantine の資源単位停止と同型)
 - model 固有ウィンドウは観測されたときだけ存在する — session / week が健全に読めているのに固有行が無ければ「個別制限のないプラン」であり、その model は Provider 全体線だけで流れる(不在は観測失敗ではなくプランの正常な姿でありうる)
 - 解除は人間を介さない自動再開で、待ち先はウィンドウのリセット時刻ではなく **catch-up 時刻**(経過割合がペース線に追いつく瞬間)。これはタスクのリトライではないため、Watchdog の「自動リトライは存在しない」原則の例外にはならない
 - 使用率100%は全ウィンドウ常時のハードキャップ(Spend-down 中に残る唯一の線)
@@ -496,7 +526,7 @@ Provider ごとのアカウント単位(エージェント単位ではない)の
 
 ## Swell / Condensation
 
-Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。ADR 0083 でループの形が定まった: 学習の入力は異議(完了エントリへの異議を含む)だけで、正の信号は Displayed(表示済み・異議なし)から機械導出する。異議ごとに fix-forward RCA が Memory の Behavior candidate を書き、周期(盤面設定、既定は週次)の meta-review が candidate 群の繰り返しを**判断で**見て approved 提案を起草し、人間承認 question で確定する — 数値閾値は使わない。人間の明示指示は1回で候補化してよいが承認 question は経由する。authority の変更は従来どおり registry への diff。
+Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。ADR 0083 でループの形が定まった: 学習の入力は異議(完了エントリへの異議を含む)だけで、正の信号は Displayed(表示済み・異議なし)から機械導出する。異議ごとに fix-forward RCA が Memory の Behavior candidate を書き、周期(盤面設定、既定は週次)の meta-review が candidate 群の繰り返しを**判断で**見て approved 提案を起草し、人間承認 question で確定する — 数値閾値は使わない。周期は1つだが task は**主題ごとに別**(Behavior meta-review と routing meta-review、主題ごとに未決着1本まで — ADR 0111)。routing 側は学習器の shadow と実際の乖離・配分評価の分布・新セルを読み、表の diff と Interview の提案を承認 question に出す。人間の明示指示は1回で候補化してよいが承認 question は経由する。authority の変更は従来どおり registry への diff。
 
 ## Display language(表示言語)
 
