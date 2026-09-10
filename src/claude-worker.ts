@@ -28,7 +28,6 @@ import {
   isPluginGlob,
   loadRegistry,
   ownEntry,
-  type Provider,
   type Registry,
   type RegistrySource,
   type RosterAgent,
