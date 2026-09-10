@@ -432,8 +432,9 @@ export function checkToolSurface(
       "side channel the WORKER_PROTOCOL closes in prose only, an MCP server it never named got " +
       "onto the surface past the board's own `--mcp-config`, and a name that no longer exists " +
       "goes inert with no warning — so any of these means the board's declaration and the CLI " +
-      "have parted ways. Check the CLI version against the Tool " +
-      "allowlist (CONTEXT.md), then fix the list or pin the CLI",
+      "have parted ways. Check the CLI version against what the board declares (CONTEXT.md): " +
+      "the Tool allowlist for a built-in, `--mcp-config` + `--strict-mcp-config` for a server. " +
+      "Then fix the declaration or pin the CLI",
   };
 }
 
@@ -2373,13 +2374,35 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  init 行が無いセッション(壊れた行・`tools` を持たない init)は判定しない —
    *  観測が無いことを不成立に化けさせるのは正本(ping)の仕事である。サブエージェント
    *  を起こしたセッションでも親の stream に init 行は1本しか出ない(実測)ので、
-   *  この判定が同一セッション内で二度走ることはない。同じ線を MCP 軸にも伸ばす:
-   *  `mcp_servers` が読めなければ MCP 軸は判定しない(ADR 0108 決定1 の規則は過剰側
-   *  だけなので、空の観測は元から no-op である)。 */
+   *  この判定が同一セッション内で二度走ることはない。
+   *
+   *  **`mcp_servers` が読めないのは別の話で、ここが不成立に倒す。** `tools` の門を
+   *  抜けた時点で手元にあるのは**読めた init 報告**であり、そこで `mcp_servers` だけが
+   *  読めないのは torn な行ではなくベンダー側の形の変化である。しかもこれを正本に
+   *  委ねられない —— probe は `--strict-mcp-config` を運び `--mcp-config` を運ばないので
+   *  その `mcp_servers` は**構造上いつも空**で、要素の形が変わっても空配列は空配列の
+   *  まま通る。要素を持つのは `tidepool` が付いた実セッションだけなので、要素の形の
+   *  ドリフトを見られる面はここしか無い。null を `[]` に潰すと MCP 軸が丸ごと黙って
+   *  死ぬ(`readInitMcpServers` が低い seam で fail-closed に倒しているのを1層上で
+   *  取り消すことになる)。 */
   private checkSessionToolSurface(task: Task, parsed: Record<string, unknown> | null): boolean {
     const tools = readInitField(parsed, "tools");
     if (!tools) return false;
-    const surface = checkToolSurface(tools, task.type, readInitMcpServers(parsed) ?? []);
+    const mcpServers = readInitMcpServers(parsed);
+    const surface: ContainmentCapability = mcpServers
+      ? checkToolSurface(tools, task.type, mcpServers)
+      : {
+          available: false,
+          reason:
+            "this host's claude CLI reported a session's built-in tools but an `mcp_servers` " +
+            "the board could not read (ADR 0108): the init line carried the field in a shape " +
+            "with no server names. The /usage probe cannot cover this — it runs " +
+            "`--strict-mcp-config` with no `--mcp-config`, so its own MCP surface is empty by " +
+            "construction and an element shape it never sees cannot fail it. Whether an " +
+            "undeclared MCP server is on the surface is therefore unknown here, and unknown is " +
+            "not safe (ADR 0039). Check the CLI version, then teach `readInitMcpServers` the " +
+            "new shape or pin the CLI",
+        };
     if (surface.available) return true;
     console.error(`[worker] tool surface drift on task ${task.id}: ${surface.reason}`);
     this.containers.forceReclaim(task.id);
