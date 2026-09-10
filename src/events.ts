@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { Provider } from "./registry.js";
 import type { TaskType } from "./tasks.js";
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
@@ -184,6 +185,21 @@ export type EventPayload =
       registry_commit: string;
       definition_version: string;
       advisor: string | null;
+      /** ADR 0110 決定3: the execution setting the selector chose for this
+       *  pickup — the provider it speaks, and the model / effort pinned in
+       *  that provider's own notation. These are no longer recoverable from
+       *  `registry_commit`: agent.md carries no compute, so the only record of
+       *  what this session actually burned is here. */
+      provider: Provider;
+      model: string;
+      effort: string;
+      /** ADR 0110 決定3: **why** it was that setting — `"agent"` when the
+       *  agent's own `tier` decided, `"board"` when the board default did.
+       *  A task-level request (`"task"`) is #543. Recorded beside the values
+       *  because "which model" and "who asked for it" are separate facts: the
+       *  learner reads the first, a human asking "why was it this model" reads
+       *  the second. */
+      source: { tier: "agent" | "board" };
       /** ADR 0098: the Harness/version actually selected for this session. */
       harness: "claude-code" | "codex";
       cli_version: string;

@@ -34,7 +34,6 @@ const AGENTS = [
     description: "review only",
     icon: "🪸",
     skills: ["@workspace"],
-    model: "sonnet",
   },
 ];
 
@@ -98,7 +97,7 @@ test("index → section → record → edit → cancel", async ({ boot, page }) 
   await expect(page.getByRole("heading", { name: "reef-crab" })).toBeVisible();
   await expect(page.getByText("implementation work")).toBeVisible();
   await expect(page.getByText("Prefers small commits.")).toBeVisible();
-  await expect(page.getByText("adapter default").first()).toBeVisible(); // model 未設定
+  await expect(page.getByText("board default").first()).toBeVisible(); // tier 未設定
   await expect(page.getByText("docs:*")).toBeVisible();
   expect(await page.locator("input, select, textarea").count()).toBe(0);
 
@@ -106,7 +105,7 @@ test("index → section → record → edit → cancel", async ({ boot, page }) 
   await page.getByRole("button", { name: "Edit" }).click();
   const save = page.getByRole("button", { name: "Save changes — commits to the registry" });
   await expect(save).toBeDisabled();
-  await page.getByPlaceholder("adapter default if empty").first().fill("opus");
+  await page.getByLabel("Default tier").selectOption("economy");
   await expect(save).toBeEnabled();
 
   // Cancel は明示的な破棄なので確認を挟まず閲覧に戻る(確認は「別カード/画面/タブへ

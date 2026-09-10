@@ -5,8 +5,8 @@ import { UnknownAgentError } from "./agent.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
+  assertValidAgentDefinition,
   assertValidAgentName,
-  assertValidProvider,
   assertValidSkillAllowlist,
   isSingleTwemojiGrapheme,
   loadRegistry,
@@ -32,13 +32,15 @@ export interface CreateAgentInput {
   authority: string;
   description: string;
   /** The provider declaration (ADR 0097 決定1) — required like the registry
-   *  field it lands in; the enum and the advisor combination are checked
-   *  against `assertValidProvider` before anything is written. */
+   *  field it lands in; the enum, the tier and the advisor combination are all
+   *  checked against `assertValidAgentDefinition` before anything is written. */
   provider: string;
   icon?: string;
-  model?: string;
-  effort?: string;
-  advisor?: string;
+  /** 既定の要求ティア(ADR 0110 決定1)。省略 → 盤面既定。model / effort は
+   *  もう受け取らない —— 実行設定は pickup 時に盤面の表から選ばれる。 */
+  tier?: string;
+  /** advisor を持つか(ADR 0110 決定1: 真偽値であって model 名ではない)。 */
+  advisor?: boolean;
   /** The skill allowlist (issue #56 / ADR 0025), threaded through wholesale
    *  like every other field: `skills` is a required frontmatter field, so a
    *  file the verb writes without it would fail the next `loadRegistry`. The
@@ -101,10 +103,10 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
-  assertValidProvider(input.name, input.provider, normalizeAdvisor(input.advisor), input.skills);
+  assertValidAgentDefinition(input.name, { ...input, advisor: input.advisor === true });
   commitAgentFile(
     deps,
-    { ...input, advisor: normalizeAdvisor(input.advisor), version: "1" },
+    { ...input, advisor: input.advisor === true, retiredFields: [], version: "1" },
     `create agent ${input.name} via WebUI`,
   );
 }
@@ -128,25 +130,22 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
   // no-change 編集はコミットなしの成功(workspace-create.ts の porcelain
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
   // 存在せず、実効フィールドが同じ再送で刻印だけ進めない
-  const normalizedInput = { ...input, advisor: normalizeAdvisor(input.advisor) };
-  assertValidProvider(
-    input.name,
-    normalizedInput.provider,
-    normalizedInput.advisor,
-    normalizedInput.skills,
-  );
+  // 検査するのは**提出された定義**だけで、保存されている側の退役フィールドは
+  // 通行止めにしない(ADR 0110 決定1 が拒むのは「登録される値」であって、既に
+  // git にある行ではない)。手で commit された旧い agent.md はこの門を通した
+  // 編集で `retiredFields: []` として書き直され、盤面から直せる —— 塞ぐと、
+  // pickup で quarantine される定義の唯一の修復経路が registry repo の手編集
+  // だけになる。人間面の credential(ADR 0036)を通った編集であり、フォームは
+  // 定義を丸ごと提出するので、黙って直したことにはならない。
+  const normalizedInput = { ...input, advisor: input.advisor === true };
+  assertValidAgentDefinition(input.name, normalizedInput);
   if (!sameEffectiveFields(existing, normalizedInput)) {
     commitAgentFile(
       deps,
-      { ...normalizedInput, version: bumpVersion(existing.version) },
+      { ...normalizedInput, retiredFields: [], version: bumpVersion(existing.version) },
       `update agent ${input.name} via WebUI`,
     );
   }
-}
-
-/** An empty advisor means the capability is absent, not a blank model name. */
-function normalizeAdvisor(advisor: string | undefined): string | undefined {
-  return advisor?.trim() || undefined;
 }
 
 /** version 以外の全フィールド(編集フォームが送るもの)の一致。systemPrompt
@@ -157,8 +156,7 @@ function sameEffectiveFields(existing: AgentDefinition, input: UpdateAgentInput)
     existing.description === input.description &&
     existing.provider === input.provider &&
     existing.icon === input.icon &&
-    existing.model === input.model &&
-    existing.effort === input.effort &&
+    existing.tier === input.tier &&
     existing.advisor === input.advisor &&
     sameSkills(existing.skills, input.skills) &&
     existing.systemPrompt === input.systemPrompt.trim()
@@ -284,7 +282,7 @@ function bumpVersion(version: string): string {
  *  fields are omitted, not serialized as null — round-trip keeps them
  *  undefined. */
 function serializeAgentFile(definition: AgentDefinition): string {
-  const meta: Record<string, string | string[]> = {
+  const meta: Record<string, string | string[] | boolean> = {
     version: definition.version,
     authority: definition.authority,
     description: definition.description,
@@ -296,9 +294,10 @@ function serializeAgentFile(definition: AgentDefinition): string {
     skills: definition.skills,
   };
   if (definition.icon !== undefined) meta.icon = definition.icon;
-  if (definition.model !== undefined) meta.model = definition.model;
-  if (definition.effort !== undefined) meta.effort = definition.effort;
-  if (definition.advisor !== undefined) meta.advisor = definition.advisor;
+  if (definition.tier !== undefined) meta.tier = definition.tier;
+  // 偽は「advisor を持たない」の既定なので書かない(不在 = 無効、CONTEXT.md の
+  // Advisor)。真のときだけ1行増える。
+  if (definition.advisor) meta.advisor = true;
   // 外側の空白は trim して書く: parseAgentFile が body.trim() で読む以上、
   // 保存できるのは trim 済みの正規形だけ — 書き込み側も同じ正規形に揃える
   // ことでラウンドトリップと no-change 判定(sameEffectiveFields)が一致する

@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { resolveExecutionAgent, UnknownAgentError } from "../src/agent.js";
-import { InvalidAgentProviderError, type Registry } from "../src/registry.js";
+import { InvalidAgentDefinitionError, type Registry } from "../src/registry.js";
 
 function makeRegistry(
   agents: Record<string, {
     authority: string;
     provider?: string;
-    advisor?: string;
+    advisor?: boolean;
+    tier?: string;
     skills?: string[];
+    retiredFields?: string[];
   }>,
 ): Registry {
   return {
@@ -21,7 +23,9 @@ function makeRegistry(
           authority: a.authority,
           description: `${name} agent`,
           provider: a.provider ?? "anthropic",
-          advisor: a.advisor,
+          tier: a.tier,
+          advisor: a.advisor === true,
+          retiredFields: a.retiredFields ?? [],
           skills: a.skills ?? ["*"],
           systemPrompt: `You are ${name}.`,
         },
@@ -86,23 +90,23 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     }
   });
 
-  it("provider が列挙にない定義は InvalidAgentProviderError を投げ、quarantine すべき agent 名を運ぶ(ADR 0097 決定1)", () => {
+  it("provider が列挙にない定義は InvalidAgentDefinitionError を投げ、quarantine すべき agent 名を運ぶ(ADR 0097 決定1)", () => {
     const registry = makeRegistry({ deckhand: { authority: "standard", provider: "moonshto" } });
     try {
       resolveExecutionAgent(registry, "deckhand", null);
       expect.unreachable();
     } catch (err) {
-      expect(err).toBeInstanceOf(InvalidAgentProviderError);
-      expect((err as InvalidAgentProviderError).agentName).toBe("deckhand");
+      expect(err).toBeInstanceOf(InvalidAgentDefinitionError);
+      expect((err as InvalidAgentDefinitionError).agentName).toBe("deckhand");
     }
   });
 
-  it("advisor を持つ定義に advisor を提供しない provider(moonshot)の組み合わせは InvalidAgentProviderError(ADR 0097 決定3)", () => {
+  it("advisor を持つ定義に advisor を提供しない provider(moonshot)の組み合わせは InvalidAgentDefinitionError(ADR 0097 決定3)", () => {
     const registry = makeRegistry({
-      deckhand: { authority: "standard", provider: "moonshot", advisor: "opus" },
+      deckhand: { authority: "standard", provider: "moonshot", advisor: true },
     });
     expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
-      InvalidAgentProviderError,
+      InvalidAgentDefinitionError,
     );
   });
 
@@ -111,7 +115,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
       deckhand: { authority: "standard", provider: "openai", skills: ["tdd"] },
     });
     expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
-      InvalidAgentProviderError,
+      InvalidAgentDefinitionError,
     );
   });
 
@@ -121,17 +125,29 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     expect(resolved.definition.provider).toBe("moonshot");
   });
 
-  it("空白だけの advisor は未設定と同じ — moonshot との組み合わせも pickup 解決で受理される(登録 verb の normalizeAdvisor と同じ正規化で判定 — gate 間で drift しない)", () => {
-    const registry = makeRegistry({
-      deckhand: { authority: "standard", provider: "moonshot", advisor: "  \t " },
-    });
-    expect(resolveExecutionAgent(registry, "deckhand", null).definition.provider).toBe("moonshot");
-  });
-
   it("anthropic で advisor を持つ定義は従来どおり解決される", () => {
     const registry = makeRegistry({
-      deckhand: { authority: "standard", provider: "anthropic", advisor: "opus" },
+      deckhand: { authority: "standard", provider: "anthropic", advisor: true },
     });
-    expect(resolveExecutionAgent(registry, "deckhand", null).definition.advisor).toBe("opus");
+    expect(resolveExecutionAgent(registry, "deckhand", null).definition.advisor).toBe(true);
+  });
+
+  it("退役したピン留め(model / effort / 旧綴りの advisor)が残る定義は pickup 解決で拒否され、その agent 名の quarantine に落ちる(ADR 0110 決定1)", () => {
+    const registry = makeRegistry({
+      deckhand: { authority: "standard", retiredFields: ["model", "effort"] },
+    });
+    expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
+      InvalidAgentDefinitionError,
+    );
+  });
+
+  it("列挙にないティアも同じ門で拒否される(ADR 0110 決定1 — 読み込みは倒さない)", () => {
+    const registry = makeRegistry({ deckhand: { authority: "standard", tier: "luxury" } });
+    expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
+      InvalidAgentDefinitionError,
+    );
+    expect(() =>
+      resolveExecutionAgent(makeRegistry({ deckhand: { authority: "standard", tier: "frontier" } }), "deckhand", null),
+    ).not.toThrow();
   });
 });

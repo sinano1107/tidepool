@@ -20,7 +20,7 @@ import {
   HUMAN_SURFACE_PROBE_PATH,
   quarantineContainment,
 } from "./containment.js";
-import { type Db, openDb } from "./db.js";
+import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -159,7 +159,11 @@ export type WorkerFactory = (deps: {
 }) => WorkerAdapter;
 
 export interface ServerOptions {
-  dbPath: string;
+  /** 盤面の唯一の SQLite 接続。合成 root が開いて渡す —— server-options の
+   *  resolver たちが合成の時点で盤面の行(実行設定の表、ADR 0110)を読む必要が
+   *  あり、`startServer` の中で開いていては間に合わない。閉じるのは下の
+   *  `stop()`(開いた側ではなく、盤面の寿命を持つ側が閉じる)。 */
+  db: Db;
   port: number;
   /** `/mcp`'s own port, always bound to 127.0.0.1 (issue #37): kept off
    *  `port` so `tailscale serve` can publish web/`/api`/static files without
@@ -327,7 +331,7 @@ export interface TidepoolServer {
 }
 
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
-  const db = openDb(options.dbPath);
+  const { db } = options;
   const slot = new Slot();
   const containers = new WorkerContainers(options.containerRuntime);
   // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ

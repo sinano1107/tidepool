@@ -11,6 +11,7 @@ import {
   resolveTokenFile,
   rotateToken,
 } from "../src/auth.js";
+import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 
@@ -117,7 +118,7 @@ async function bootWithTokenFile(tokenFile: string): Promise<TidepoolServer> {
   const clock = new FakeClock();
   const { credential } = openHumanCredential({ tokenFile, origins: ["http://127.0.0.1:4589"] });
   return startServer({
-    dbPath: join(dir, "board.sqlite"),
+    db: openDb(join(dir, "board.sqlite")),
     port: 0,
     mcpPort: 0,
     clock,

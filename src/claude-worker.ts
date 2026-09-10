@@ -15,6 +15,11 @@ import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, listEvents } from "./events.js";
+import {
+  type ExecutionSetting,
+  MOONSHOT_DEFAULT_MODEL,
+  resolveExecutionSetting,
+} from "./execution-setting.js";
 import { REVIEWER_AUTHORITY_PROFILE } from "./mcp.js";
 import { projectAndPersist } from "./precedent.js";
 import {
@@ -23,7 +28,6 @@ import {
   isPluginGlob,
   loadRegistry,
   ownEntry,
-  type Provider,
   type Registry,
   type RegistrySource,
   type RosterAgent,
@@ -66,10 +70,12 @@ const EFFORT_LEVELS: readonly string[] = ["low", "medium", "high", "xhigh", "max
 export const CLAUDE_CLI_VERSION = "2.1.241 (Claude Code)";
 
 /** Shared by boot-time default validation and every per-task spawn — one
- *  check, not a copy at each call site. */
-function assertKnownEffort(definition: AgentDefinition): void {
-  if (definition.effort !== undefined && !EFFORT_LEVELS.includes(definition.effort)) {
-    throw new Error(`unknown effort level: ${definition.effort}`);
+ *  check, not a copy at each call site. 検査する値の出所は盤面の表になったが
+ *  (ADR 0110 決定3)、閉じた5値を知っているのは今も adapter だけである
+ *  (ADR 0005)。 */
+function assertKnownEffort(effort: string): void {
+  if (!EFFORT_LEVELS.includes(effort)) {
+    throw new Error(`unknown effort level: ${effort}`);
   }
 }
 
@@ -583,15 +589,6 @@ const CLAUDE_SUBSCRIPTION_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
  *  `provider: moonshot`. */
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/anthropic";
 
-/** The `--model` fallback per provider (ADR 0005's pinning rule, spelled in
- *  the provider's own notation — a moonshot spawn handed "sonnet" dies with
- *  model-not-found). `kimi-k3[1m]` is the default in Moonshot's official
- *  Claude Code guide (platform.kimi.ai, 2026-08). */
-const PROVIDER_DEFAULT_MODEL: Record<Exclude<Provider, "openai">, string> = {
-  anthropic: "sonnet",
-  moonshot: "kimi-k3[1m]",
-};
-
 /** Where the Moonshot Platform key lives: the board's state-file home, never
  *  the board's env (ADR 0097 決定4 — human-surface-credential の「平文は
  *  process.env に乗せない — worker spawn が継承するから」と同じ doctrine)。
@@ -688,16 +685,14 @@ export function boardCallEnvWithoutThinking(): NodeJS.ProcessEnv {
  *  value ADR 0041's `work` = 90分 reasons against. */
 const STREAM_IDLE_TIMEOUT_MS = 600_000;
 
-/** The provider-routing triple one worker spawn carries (ADR 0097 決定4 /
- *  issue #445): which provider the session speaks, the model pinned in that
- *  provider's own notation (ADR 0005), and — moonshot only — the credential
- *  read from the key file. Derived **once per pickup** in `start()` and
- *  carried to `launch()` and `workerSpawnEnv` as one value: the provider
- *  cast, the default-model fallback, and the key read each have exactly one
- *  spelling, so the spawn path consumes them rather than re-deriving any. */
-export interface ProviderRouting {
-  provider: Provider;
-  model: string;
+/** What one worker spawn carries (ADR 0097 決定4 / issue #445): the resolved
+ *  execution setting — which provider the session speaks and what it runs
+ *  there, pinned in that provider's own notation (ADR 0005) — and, moonshot
+ *  only, the credential read from the key file. Derived **once per pickup** in
+ *  `start()` and carried to `launch()` and `workerSpawnEnv` as one value: the
+ *  provider cast, the setting resolution, and the key read each have exactly
+ *  one spelling, so the spawn path consumes them rather than re-deriving any. */
+export interface ProviderRouting extends ExecutionSetting {
   moonshotApiKey: string | undefined;
 }
 
@@ -795,7 +790,7 @@ export function moonshotCliAuthEnv(keyFile: string | undefined): NodeJS.ProcessE
   for (const name of CLAUDE_SUBSCRIPTION_ENV) delete env[name];
   env[ANTHROPIC_BASE_URL_ENV] = MOONSHOT_BASE_URL;
   env[ANTHROPIC_AUTH_TOKEN_ENV] = readMoonshotApiKey(resolveMoonshotApiKeyFile(keyFile));
-  env[ANTHROPIC_MODEL_ENV] = PROVIDER_DEFAULT_MODEL.moonshot;
+  env[ANTHROPIC_MODEL_ENV] = MOONSHOT_DEFAULT_MODEL;
   return env;
 }
 
@@ -1645,7 +1640,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   private validateDefaults(registry: Registry): void {
     resolveExecutionWorkspace(registry, this.options.workspace, null, this.workspacesDir);
     const agent = resolveExecutionAgent(registry, this.options.agent, null);
-    assertKnownEffort(agent.definition);
+    // 表から解決した値を検査する(ADR 0110 決定3): 既定 agent が走るティアの行の
+    // effort が閉じた5値の外なら、盤面は最初のタスクで詰まる前に起動を拒む。
+    assertKnownEffort(resolveExecutionSetting(this.options.db, agent.definition).effort);
   }
 
   /** ADR 0020 part 4: a party review (self RCA) is a review task with a
@@ -1861,7 +1858,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       this.options.clock.now(),
     );
     if (!agent) return;
-    assertKnownEffort(agent.definition);
     // ADR 0097 決定4 / issue #445: the provider routing is derived once, here
     // — registry 側が resolveExecutionAgent で検証済み(ADR 0097 決定1)なので、
     // provider の値は PROVIDER_VALUES に閉じており、値が意味するもの(URL・env
@@ -1870,17 +1866,19 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // a missing-key failure inside a promise; its absence refuses the pickup
     // (MoonshotApiKeyMissingError, a failed start) rather than spawning a
     // worker that can only 401.
-    const provider = agent.definition.provider as Provider;
-    if (provider === "openai") {
+    // ADR 0110 決定3: pickup の瞬間に selector が実行設定を1つ選ぶ。表に行が
+    // 無い / advisor の組み合わせが不成立なら例外で pickup を拒む —— どちらも
+    // 「黙って別のモデルで走る」「黙って advisor 無しで走る」の代わりである。
+    // provider の綴りもここから1つだけ取る(上の「derived once」の線)。
+    const setting = resolveExecutionSetting(this.options.db, agent.definition);
+    if (setting.provider === "openai") {
       throw new Error('canonical route "openai -> codex" cannot run through Claude Code (ADR 0098)');
     }
+    assertKnownEffort(setting.effort);
     const routing: ProviderRouting = {
-      provider,
-      // ADR 0005's pinning rule, spelled in the provider's own model notation —
-      // "sonnet" means nothing to the Moonshot endpoint (model-not-found)
-      model: agent.definition.model ?? PROVIDER_DEFAULT_MODEL[provider],
+      ...setting,
       moonshotApiKey:
-        provider === "moonshot"
+        setting.provider === "moonshot"
           ? readMoonshotApiKey(resolveMoonshotApiKeyFile(this.options.moonshotApiKeyFile))
           : undefined,
     };
@@ -2034,7 +2032,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // host-side kill switch (判断8) collapses the capability to absent rather
     // than sitting beside it — "no advisor this session" then has a single
     // spelling in the flags, in the env, and in worker_spawned.
-    const advisor = this.options.advisorDisabled === true ? undefined : definition.advisor;
+    const advisor = this.options.advisorDisabled === true ? undefined : routing.advisor;
     const cliVersion = typeof this.options.cliVersion === "function"
       ? this.options.cliVersion()
       : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
@@ -2116,7 +2114,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // (skills included), so no per-skill enumeration is needed (ADR 0025
         // point 5).
         ...(enforcement.disableSlashCommands ? ["--disable-slash-commands"] : []),
-        ...pinnedModelFlags(routing.model, definition.effort ?? "medium"),
+        ...pinnedModelFlags(routing.model, routing.effort),
         // issue #33: spelled here and not inside pinnedModelFlags — that helper
         // is shared with the board's own draft/translation CLI calls, which must
         // never acquire an advisor. Absence is not spelled by omission; see
@@ -2184,6 +2182,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // — the two differ under the kill switch, and only the frontmatter is
         // recoverable from registry_commit above.
         advisor: advisor ?? null,
+        // ADR 0110 決定3: 選んだ実行設定とその出所。kill switch は advisor だけを
+        // マスクするので(判断8)、model / effort / provider は選ばれたまま。
+        provider: routing.provider,
+        model: routing.model,
+        effort: routing.effort,
+        source: routing.source,
         harness: "claude-code",
         cli_version: cliVersion,
       },

@@ -76,7 +76,7 @@ You are Fugu.
   const clock = new FakeClock();
 
   server = await startServer({
-    dbPath: join(boardDir, "board.sqlite"),
+    db: openDb(join(boardDir, "board.sqlite")),
     port: 0,
     mcpPort: 0,
     credential: TEST_CREDENTIAL,

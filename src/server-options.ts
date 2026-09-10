@@ -23,13 +23,16 @@ import type { Clock } from "./clock.js";
 import { createCodexAppServerProbe } from "./codex-app-server.js";
 import {
   CODEX_CLI_VERSION,
-  CODEX_DEFAULT_MODEL,
   CodexWorker,
   createCodexCapabilityCheck,
 } from "./codex-worker.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
+import {
+  IncompleteExecutionSettingTableError,
+  resolveExecutionSetting,
+} from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -41,10 +44,11 @@ import {
 } from "./profile-create.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
+  type AgentDefinition,
   type AuthorityProfile,
-  assertValidProvider,
+  assertValidAgentDefinition,
   canonicalHarness,
-  InvalidAgentProviderError,
+  InvalidAgentDefinitionError,
   loadRegistry,
   ownEntry,
   type Provider,
@@ -120,7 +124,6 @@ export const WATCHDOG: WatchdogConfig = {
  *  registry 由来の口がすべて `registryDir` 1つに掛かっているのがこの盤面の形で、
  *  未設定なら「registry という概念自体が無い盤面」— 各口が個別に既定へ落ちる。 */
 export interface BoardComposition {
-  dbPath: string;
   port: number;
   /** `/mcp` 自身のポート(issue #37)。worker が叩く MCP URL もここから作る。 */
   mcpPort: number;
@@ -300,8 +303,28 @@ function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<t
   };
 }
 
+/** その agent が実際に焼くモデル(ADR 0110 決定3)。**spawn 側と同じ1本**
+ *  (`resolveExecutionSetting`)を通す —— ここに「agent の model」を別に持てば、
+ *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。
+ *
+ *  表に行が無いときは null に倒す: null は既に「モデル窓が当たらない」の綴りで
+ *  あり、pickup はそのまま進んで spawn 側の例外が表の穴を名指しする。ここで
+ *  投げれば scheduler の tick ごと倒れる。 */
+function executionModel(
+  db: Db,
+  definition: Pick<AgentDefinition, "provider" | "tier" | "advisor">,
+): string | null {
+  try {
+    return resolveExecutionSetting(db, definition).model;
+  } catch (error) {
+    if (error instanceof IncompleteExecutionSettingTableError) return null;
+    throw error;
+  }
+}
+
 function usageResourceResolver(
   board: BoardComposition,
+  db: Db,
 ): ((task: Task) => { provider: Provider; model: string | null }) | undefined {
   if (!board.registryDir) return undefined;
   return (task) => {
@@ -310,7 +333,7 @@ function usageResourceResolver(
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
     return {
       provider: agent.definition.provider as Provider,
-      model: agent.definition.model ?? (agent.definition.provider === "openai" ? CODEX_DEFAULT_MODEL : null),
+      model: executionModel(db, agent.definition),
     };
   };
 }
@@ -323,10 +346,10 @@ function agentsUsingHarnessesResolver(
     Object.values(loadBoardRegistry(board).agents)
       .filter((agent) => {
         try {
-          assertValidProvider(agent.name, agent.provider, agent.advisor, agent.skills);
+          assertValidAgentDefinition(agent.name, agent);
           return harnesses.includes(canonicalHarness(agent.provider as Provider));
         } catch (error) {
-          if (error instanceof InvalidAgentProviderError) return false;
+          if (error instanceof InvalidAgentDefinitionError) return false;
           throw error;
         }
       })
@@ -454,12 +477,12 @@ function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
  *  でも通る)なので、部分一致で fable 系と判定する。default agent が fable
  *  なら assignee 未設定のタスクもここに含まれる名前へ解決される(SQL 側の
  *  COALESCE)。registry なし → fable 判定は不可能、skip なし。 */
-function fableAgentsResolver(board: BoardComposition): (() => string[]) | undefined {
+function fableAgentsResolver(board: BoardComposition, db: Db): (() => string[]) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
     Object.values(loadBoardRegistry(board).agents)
-      .filter((agent) => agent.model?.toLowerCase().includes("fable"))
+      .filter((agent) => executionModel(db, agent)?.toLowerCase().includes("fable"))
       .map((agent) => agent.name);
 }
 
@@ -484,6 +507,7 @@ function agentsSpeakingProvidersResolver(
 
 function agentsUsingUsageResourcesResolver(
   board: BoardComposition,
+  db: Db,
 ): ((resources: readonly ProviderUsageResource[]) => string[]) | undefined {
   if (!board.registryDir) return undefined;
   return (resources) =>
@@ -491,8 +515,7 @@ function agentsUsingUsageResourcesResolver(
       .filter((agent) =>
         resources.some(
           (resource) =>
-            resource.provider === agent.provider &&
-            resource.model === (agent.model ?? (agent.provider === "openai" ? CODEX_DEFAULT_MODEL : null)),
+            resource.provider === agent.provider && resource.model === executionModel(db, agent),
         ),
       )
       .map((agent) => agent.name);
@@ -504,7 +527,7 @@ function agentsUsingUsageResourcesResolver(
  *  delegation-aware successor to a single board-wide fixed profile, which
  *  every task shared regardless of who it was actually assigned to. An
  *  assignee the registry no longer knows (drift since the owning task's own
- *  session spawned) or whose definition no longer stands (InvalidAgentProviderError,
+ *  session spawned) or whose definition no longer stands (InvalidAgentDefinitionError,
  *  ADR 0097) falls back to unrestricted here rather than throwing —
  *  the spawn-time gate (ClaudeCodeWorker.start) is what quarantines that.
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
@@ -517,7 +540,7 @@ function authorityResolver(
     try {
       return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee).profile;
     } catch (err) {
-      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentProviderError)) {
+      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
         throw err;
       }
       return undefined;
@@ -665,7 +688,7 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
  *
  *  ADR 0027 の線には触れない: server 境界の**上**にある合成の検査であって、
  *  境界の下に新しいテスト層を作る話ではない。 */
-export async function buildServerOptions(board: BoardComposition): Promise<ServerOptions> {
+export async function buildServerOptions(board: BoardComposition, db: Db): Promise<ServerOptions> {
   // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
   // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
   await bootRefresh(board);
@@ -688,7 +711,7 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     return sandbox.available ? probeToolSurfaceCapability() : sandbox;
   };
   return {
-    dbPath: board.dbPath,
+    db,
     credential: board.credential,
     port: board.port,
     mcpPort: board.mcpPort,
@@ -717,11 +740,11 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     // the skills picker's candidate source (issue #106): the real `claude` CLI's
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
-    fableAgents: fableAgentsResolver(board),
+    fableAgents: fableAgentsResolver(board, db),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
-    agentsUsingUsageResources: agentsUsingUsageResourcesResolver(board),
+    agentsUsingUsageResources: agentsUsingUsageResourcesResolver(board, db),
     openaiUsage,
-    resolveUsageResource: usageResourceResolver(board),
+    resolveUsageResource: usageResourceResolver(board, db),
     agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board),
     harnessContainment: board.registryDir

@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import type { CreateAgentInput } from "../src/agent-create.js";
 import { InvalidAgentIconError, UnknownAuthorityProfileError } from "../src/agent-create.js";
-import { InvalidAgentNameError, InvalidAgentProviderError } from "../src/registry.js";
+import { InvalidAgentDefinitionError, InvalidAgentNameError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -25,7 +25,8 @@ it("POST /api/agents は検証済み入力を createAgent オーケストレー�
     skills: ["*"],
     description: "General agent",
     icon: "🐙",
-    advisor: "future-advisor-id",
+    tier: "economy",
+    advisor: true,
     systemPrompt: "You are Tako.",
   });
 
@@ -39,7 +40,8 @@ it("POST /api/agents は検証済み入力を createAgent オーケストレー�
       skills: ["*"],
       description: "General agent",
       icon: "🐙",
-      advisor: "future-advisor-id",
+      tier: "economy",
+      advisor: true,
       systemPrompt: "You are Tako.",
     },
   ]);
@@ -158,11 +160,11 @@ it("未知 authority(UnknownAuthorityProfileError)は 400 でメッセージを�
   expect(res.json.error).toContain("ghost");
 });
 
-it("不正 provider(InvalidAgentProviderError)は 400 でメッセージを返す(ADR 0097)", async () => {
+it("不正 provider(InvalidAgentDefinitionError)は 400 でメッセージを返す(ADR 0097)", async () => {
   t = await bootTidepool({
     agentAdmin: {
       create: async () => {
-        throw new InvalidAgentProviderError("tako", 'unknown provider "moonshto"');
+        throw new InvalidAgentDefinitionError("tako", 'unknown provider "moonshto"');
       },
     },
   });

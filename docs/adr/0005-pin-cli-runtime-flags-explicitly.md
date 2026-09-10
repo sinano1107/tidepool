@@ -1,5 +1,7 @@
 # エージェント実行に影響するCLIフラグは常に明示的にピン留めする
 
+**Status 追記: fallback の出所は ADR-0110 で盤面の表へ移った** —— 「agent 定義に値が無くても spawn 時は常に既定値込みで明示的に CLI へ渡す」という要求は不変で、変わったのは**どこから既定が来るか**だけである。`--model` は `sonnet`、`--effort` は `medium` という adapter 定数の fallback は廃止され、pickup 時に selector が盤面の provider × ティアの表から選ぶ(agent 定義は `model` / `effort` を持たなくなった)。`--effort` を閉じた5値で adapter が enum 検査する線も、`--model` にホワイトリストを作らない線もそのまま生きている —— 表から来た値を同じ場所で検査する。
+
 `claude` CLIはホスト上のセッション状態(直前に選んだmodel、effortなど)を記憶する。無関係なディレクトリでの操作がそのままtidepoolのagent実行に漏れ出すと、安定性(再現性のない挙動)と監査可能性(ログに現れた挙動がagent定義から追跡できない)を損なう。対策として、agent定義(`AgentDefinition`)に値が無くても、spawn時は常に既定値込みで明示的にCLIへ渡す — `--model`は`sonnet`、`--effort`は`medium`にフォールバックし、CLIのデフォルト任せ(フラグ省略)にはしない。
 
 バリデーションは、CLI側で値の集合が閉じている場合にのみadapter層(`ClaudeCodeWorker`)で行う。`--effort`は`low`/`medium`/`high`/`xhigh`/`max`の5値に固定されているため、この5値でenumチェックし、不正値はfail-fastでconstructor時にthrowする(既存のworkspace/agent/profileチェックと同じパターン)。一方`--model`はエイリアスとフルネームから成るオープンな集合で、新モデルのリリースごとに有効値が増える。この集合を検証しようとするとtidepool側のホワイトリストが常に古くなり、正当な新モデル指定を誤って拒否するリスクの方が、防ぎたかった「安定性の欠如」より実害が大きい。`AgentDefinition`のスキーマ(`registry.ts`)自体は`model`/`effort`いずれも自由文字列のままとし、vendor固有の知識(有効値の集合)はadapter層に閉じ込める — 将来Claude以外のバックエンドに拡張する際の障壁にしないため。

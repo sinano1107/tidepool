@@ -31,8 +31,8 @@ import { toolError, toolResult } from "./mcp.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
   type Harness,
+  InvalidAgentDefinitionError,
   InvalidAgentNameError,
-  InvalidAgentProviderError,
   InvalidAllowedDomainError,
   InvalidAuthorityProfileNameError,
   InvalidReviewAllowedCommandError,
@@ -133,9 +133,8 @@ const agentFieldsSchema = z.object({
   description: z.string().min(1),
   provider: z.string().min(1),
   icon: z.string().optional(),
-  model: z.string().optional(),
-  effort: z.string().optional(),
-  advisor: z.string().optional(),
+  tier: z.string().optional(),
+  advisor: z.boolean().optional(),
   skills: z.array(z.string()),
   system_prompt: z.string(),
 });
@@ -165,7 +164,7 @@ function registryToolError(err: unknown) {
     err instanceof UnknownAuthorityProfileError ||
     err instanceof InvalidAgentIconError ||
     err instanceof InvalidSkillAllowlistError ||
-    err instanceof InvalidAgentProviderError ||
+    err instanceof InvalidAgentDefinitionError ||
     err instanceof InvalidReviewAllowedCommandError ||
     err instanceof InvalidAllowedDomainError ||
     err instanceof InvalidAuthorityProfileNameError

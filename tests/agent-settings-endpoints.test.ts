@@ -5,7 +5,7 @@ import {
   UnknownAuthorityProfileError,
   type UpdateAgentInput,
 } from "../src/agent-create.js";
-import { InvalidAgentProviderError } from "../src/registry.js";
+import { InvalidAgentDefinitionError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
@@ -24,8 +24,8 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
           skills: ["*"],
           description: "General agent",
           icon: "🐙",
-          model: undefined,
-          effort: undefined,
+          advisor: false,
+          retiredFields: [],
           systemPrompt: "You are Tako.",
         },
       ],
@@ -46,8 +46,9 @@ it("GET /api/agents は編集フォーム用の一覧と authority 候補を1往
         skills: ["*"],
         description: "General agent",
         icon: "🐙",
-        model: undefined,
-        effort: undefined,
+        tier: undefined,
+        advisor: false,
+        retiredFields: [],
         systemPrompt: "You are Tako.",
       },
     ],
@@ -82,7 +83,8 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
     provider: "anthropic",
     skills: ["*"],
     description: "Updated description",
-    advisor: "opus",
+    tier: "frontier",
+    advisor: true,
     systemPrompt: "You are Tako, updated.",
   });
 
@@ -95,7 +97,8 @@ it("PATCH /api/agents/:name は URL の名前と body を updateAgent へ渡し�
       provider: "anthropic",
       skills: ["*"],
       description: "Updated description",
-      advisor: "opus",
+      tier: "frontier",
+      advisor: true,
       systemPrompt: "You are Tako, updated.",
     },
   ]);
@@ -213,11 +216,11 @@ it("body に provider が無い PATCH は 400(必須 — ADR 0097 決定1)", asy
   expect(calls).toEqual([]);
 });
 
-it("不正 provider(InvalidAgentProviderError)は 400(ADR 0097 — 列挙外・advisor 組み合わせ)", async () => {
+it("不正 provider(InvalidAgentDefinitionError)は 400(ADR 0097 — 列挙外・advisor 組み合わせ)", async () => {
   t = await bootTidepool({
     agentAdmin: {
       update: async () => {
-        throw new InvalidAgentProviderError("tako", 'unknown provider "moonshto"');
+        throw new InvalidAgentDefinitionError("tako", 'unknown provider "moonshto"');
       },
     },
   });

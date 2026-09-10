@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 import { AUTH_HEADERS, TEST_CREDENTIAL } from "./harness.js";
@@ -21,7 +22,7 @@ it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートで
   dir = await mkdtemp(join(tmpdir(), "tidepool-mcp-port-"));
   const bootClock = new FakeClock();
   server = await startServer({
-    dbPath: join(dir, "board.sqlite"),
+    db: openDb(join(dir, "board.sqlite")),
     port: 0,
     mcpPort: 0,
     clock: bootClock,
