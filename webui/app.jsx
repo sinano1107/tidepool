@@ -1111,7 +1111,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
         <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
       <Select label="Default tier" options={TIER_OPTIONS} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
-      <Checkbox label="advisor — this agent may consult a stronger model at decision points"
+      <Checkbox testId="agent-advisor" label="advisor — this agent may consult a stronger model at decision points"
         checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={draft.skills} onChange={(v) => set('skills', v)} />
     </React.Fragment>

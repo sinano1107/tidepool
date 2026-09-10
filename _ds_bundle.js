@@ -394,8 +394,8 @@ Object.assign(__ds_scope, { TypeBadge });
 
 // design-system/components/forms/Checkbox.jsx
 try { (() => {
-function Checkbox({ label, checked = false, onChange, disabled = false, style }) {
-  return /* @__PURE__ */ React.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 9, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.45 : 1, ...style } }, /* @__PURE__ */ React.createElement("span", { style: {
+function Checkbox({ label, checked = false, onChange, disabled = false, style, testId }) {
+  return /* @__PURE__ */ React.createElement("label", { "data-testid": testId, style: { display: "inline-flex", alignItems: "center", gap: 9, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.45 : 1, ...style } }, /* @__PURE__ */ React.createElement("span", { style: {
     width: 18,
     height: 18,
     flexShrink: 0,

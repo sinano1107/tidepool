@@ -1541,6 +1541,7 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
   ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(Select, { label: "Authority", options: authorityOptions, value: draft.authority, onChange: (e) => set("authority", e.target.value) }), /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: [PROVIDER_PLACEHOLDER, ...providerOptions], value: draft.provider, onChange: (e) => set("provider", e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Default tier", options: TIER_OPTIONS, value: draft.tier, onChange: (e) => set("tier", e.target.value) }), /* @__PURE__ */ React.createElement(
     Checkbox,
     {
+      testId: "agent-advisor",
       label: "advisor \u2014 this agent may consult a stronger model at decision points",
       checked: draft.advisor,
       onChange: () => set("advisor", !draft.advisor)

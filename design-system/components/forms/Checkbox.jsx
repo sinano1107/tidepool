@@ -1,6 +1,6 @@
-export function Checkbox({ label, checked = false, onChange, disabled = false, style }) {
+export function Checkbox({ label, checked = false, onChange, disabled = false, style, testId }) {
   return (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 9, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.45 : 1, ...style }}>
+    <label data-testid={testId} style={{ display: 'inline-flex', alignItems: 'center', gap: 9, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.45 : 1, ...style }}>
       <span style={{
         width: 18, height: 18, flexShrink: 0, boxSizing: 'border-box',
         borderRadius: 'var(--radius-xs)',
