@@ -23,13 +23,13 @@ import type { Clock } from "./clock.js";
 import { createCodexAppServerProbe } from "./codex-app-server.js";
 import {
   CODEX_CLI_VERSION,
-  CODEX_DEFAULT_MODEL,
   CodexWorker,
   createCodexCapabilityCheck,
 } from "./codex-worker.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
+import { CODEX_DEFAULT_MODEL } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -120,7 +120,6 @@ export const WATCHDOG: WatchdogConfig = {
  *  registry 由来の口がすべて `registryDir` 1つに掛かっているのがこの盤面の形で、
  *  未設定なら「registry という概念自体が無い盤面」— 各口が個別に既定へ落ちる。 */
 export interface BoardComposition {
-  dbPath: string;
   port: number;
   /** `/mcp` 自身のポート(issue #37)。worker が叩く MCP URL もここから作る。 */
   mcpPort: number;
@@ -665,7 +664,7 @@ function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
  *
  *  ADR 0027 の線には触れない: server 境界の**上**にある合成の検査であって、
  *  境界の下に新しいテスト層を作る話ではない。 */
-export async function buildServerOptions(board: BoardComposition): Promise<ServerOptions> {
+export async function buildServerOptions(board: BoardComposition, db: Db): Promise<ServerOptions> {
   // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
   // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
   await bootRefresh(board);
@@ -688,7 +687,7 @@ export async function buildServerOptions(board: BoardComposition): Promise<Serve
     return sandbox.available ? probeToolSurfaceCapability() : sandbox;
   };
   return {
-    dbPath: board.dbPath,
+    db,
     credential: board.credential,
     port: board.port,
     mcpPort: board.mcpPort,

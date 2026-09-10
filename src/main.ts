@@ -9,6 +9,7 @@ import { resolveMoonshotApiKeyFile } from "./claude-worker.js";
 import { resolveCliAuthExpiry } from "./cli-auth.js";
 import { SystemClock } from "./clock.js";
 import { resolveCodexExecutable } from "./codex-worker.js";
+import { openDb } from "./db.js";
 import {
   DEFAULT_AGENT_NAME,
   DEFAULT_AUDITOR_NAME,
@@ -139,9 +140,12 @@ for (const message of messages) {
 // **ServerOptions の口の一覧は持たない** —— 一覧を持てば、任意フィールドを1つ
 // 渡し忘れても型もテストも何も言わない(watchdog が本番で一度も走っていなかった
 // のがその形)。口の一覧は server-options.ts が単独で持ち、テストがそれを観測する。
+// 盤面の唯一の SQLite 接続はここで開く: server-options の resolver たちが合成の
+// 時点で盤面の行(実行設定の表、ADR 0110)を読むため、`startServer` の中で開いて
+// いては間に合わない。閉じるのは server の `stop()`。
+const db = openDb(dbPath);
 const server = await startServer(
   await buildServerOptions({
-    dbPath,
     port,
     mcpPort,
     credential,
@@ -171,7 +175,7 @@ const server = await startServer(
     vapid: vapidConfig(),
     translationClient: translationClientFactory(),
     cliAuthExpiresAt: resolveCliAuthExpiry(process.env.TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT),
-  }),
+  }, db),
 );
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

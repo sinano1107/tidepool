@@ -31,10 +31,15 @@ import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
  *
  *  `registryDir` は未設定にする: registry 由来の口がすべてそこ1つに掛かって
  *  いるので、ディスクを一切触らずに本番と同じ組み立てを走らせられる。 */
+/** 合成に db を渡す(ADR 0110: 実行設定の表を読む resolver が合成時に要る)。
+ *  この suite が観測するのは口の一覧であって行ではないので、in-memory で足りる。 */
+function buildOptions(board: BoardComposition) {
+  return buildServerOptions(board, openDb(":memory:"));
+}
+
 function composition(): BoardComposition {
   const clock = new FakeClock();
   return {
-    dbPath: ":memory:",
     port: 0,
     mcpPort: 0,
     credential: TEST_CREDENTIAL,
@@ -84,7 +89,7 @@ Codex agent.
 `,
   });
   dirs.push(registryDir);
-  const options = await buildServerOptions({
+  const options = await buildOptions({
     ...composition(),
     registryDir,
     workspaceName: "tidepool",
@@ -117,7 +122,7 @@ it("remote-backed registry を宣言した盤面は到達性検査を持つ(ADR 
   const { registryDir } = await makeRemoteBackedRegistry();
   dirs.push(registryDir);
 
-  const options = await buildServerOptions({
+  const options = await buildOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -142,7 +147,7 @@ it("origin/main がまだ無い remote-backed 盤面でも、起動時 refresh �
   // remote は生きているが tracking ref だけが無い = 張り直した直後の姿
   execFileSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: registryDir });
 
-  const options = await buildServerOptions({
+  const options = await buildOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -162,7 +167,7 @@ it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ
   });
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const options = await buildServerOptions({
+  const options = await buildOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -192,7 +197,7 @@ it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0
     "remote registry definition",
   );
 
-  const options = await buildServerOptions({
+  const options = await buildOptions({
     ...composition(),
     registryDir,
     registryMode: "remote-backed",
@@ -218,7 +223,7 @@ function optionalFields(file: string, name: string): string[] {
 // #172 そのもの。本番の盤面は watchdog を**必ず**持つ — 持たない盤面は、詰まった
 // セッションが唯一の slot を握ったまま誰にも回収されない盤面である。
 it("組み立てられたオプションは watchdog を持つ(#172)", async () => {
-  const options = await buildServerOptions(composition());
+  const options = await buildOptions(composition());
 
   expect(options.watchdog).toBe(WATCHDOG);
 });
@@ -255,7 +260,7 @@ it("ServerOptions の任意フィールドは authority を除いて全て組み
   // 素の口・短縮記法で渡される口・入れ子の口。
   expect(optional).toEqual(expect.arrayContaining(["watchdog", "github", "harnessContainment"]));
 
-  const emitted = new Set(Object.keys(await buildServerOptions(composition())));
+  const emitted = new Set(Object.keys(await buildOptions(composition())));
   // 意図的な不在は `authority` だけ(ADR 0012 / issue #36 の `resolveAuthority` に
   // 置換済み)。**この期待値は src ではなくここに置く** — 除外を1つ増やすことは
   // 「その口は本番で永久に立たない」という宣言であり、#172 と同じ穴を開け直す
@@ -389,7 +394,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ADR 0024: 盤面の GitHub 身元。token ファイルは読まれるまで触られないので、実在
   // しないパスでも「身元を持つ盤面」を組める(同一性だけを見る下の assertion 用)
   const githubAuth = new GitHubAuth("/nonexistent/github-token");
-  const options = await buildServerOptions({
+  const options = await buildOptions({
     ...composition(),
     registryDir,
     workspacesDir,
@@ -457,7 +462,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
 // —— この suite が macOS(未実測)でも Pi(cgroup v2)でも同じ主張になるよう、
 // 「未実測の理由で止まるのは linux 以外のときだけ」という形で測る。
 it("容器機構は platform で選ばれ、実測が無いホストでは fail-closed になる(#463)", async () => {
-  const capability = (await buildServerOptions(composition())).containerRuntime.preflight();
+  const capability = (await buildOptions(composition())).containerRuntime.preflight();
 
   const unmeasured =
     capability.available === false && capability.reason.includes("passes the worker container contract");

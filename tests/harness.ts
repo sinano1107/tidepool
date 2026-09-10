@@ -220,8 +220,11 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const containers = options.containerRuntime ?? new FakeContainerRuntime();
   const github = new FakeGitHubClient();
   const push = new FakePushClient();
+  // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
+  // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
+  const db = openDb(dbPath);
   const server = await startServer({
-    dbPath,
+    db,
     port: 0,
     mcpPort: 0,
     clock,
@@ -272,14 +275,12 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
   });
-  const db = openDb(dbPath);
   const mcpBaseUrl = `http://127.0.0.1:${server.mcpPort}`;
   boards.set(mcpBaseUrl, worker);
   let stopped = false;
   const stopServer = async () => {
     if (!stopped) {
       await server.stop();
-      db.close();
       boards.delete(mcpBaseUrl);
     }
     stopped = true;
