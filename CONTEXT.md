@@ -412,7 +412,7 @@ _Avoid_: 具体モデル名の指定
 
 ## Selector(選択器)
 
-pickup 時に要求・盤面設定の表(Provider × ティア → alias または model と既定 effort。advisor model は「上位ティアの champion、main が上位なら同一」で導出)・Policy の除外(Throttle オフセット / Spend-down / Provider 認証)・Provider 順位から実行設定を1つ決める**決定論の規則**。Provider をまたぐ選択もここ(「Claude 温存 = Codex に流す」)。「誰が走るか」(Assignee)は選ばない。review task の設定は表からのみ解決し、学習器は昇格後も work task にしか触れない。表の行は alias(anthropic の `sonnet` / `opus` / `fable` は CLI 更新で前進する)か具体 id(openai の `gpt-5.6-terra` / `gpt-5.6-sol` / `gpt-6-astra` —— Codex の `-m` は alias を受けないと実測)で、そのティアの現 champion。表は配布物の種から DB へ一度だけ初期化され、以後は DB が正本。要求が無いときの盤面既定は `standard`。方針の入口は settings タブと管理MCP — 「Allocation Policy」という独立のエンティティは作らない。
+pickup 時に要求・盤面設定の表(Provider × ティア → alias または model と既定 effort。advisor model は「上位ティアの champion、main が上位なら同一」で導出)・Policy の除外(Throttle オフセット / Spend-down / Provider 認証)・Provider 順位から実行設定を1つ決める**決定論の規則**。Provider をまたぐ選択もここ(「Claude 温存 = Codex に流す」)。「誰が走るか」(Assignee)は選ばない。review task の設定は表からのみ解決し、学習器は昇格後も work task にしか触れない。表の行は alias(anthropic の `sonnet` / `opus` / `fable` は CLI 更新で前進する)か具体 id(openai の `gpt-5.6-terra` / `gpt-5.6-sol` / `gpt-6-astra` —— Codex の `-m` は alias を受けないと実測)で、そのティアの現 champion。表は配布物の種から DB へ一度だけ初期化され、以後は DB が正本。要求が無いときの盤面既定は `economy` —— 配布される既定は最小の床であり、上げるのは運用者の判断(ADR 0094 の advisor と同じ線)。方針の入口は settings タブと管理MCP — 「Allocation Policy」という独立のエンティティは作らない。
 _Avoid_: Router、Allocation Policy
 
 ## 学習器(Learner)

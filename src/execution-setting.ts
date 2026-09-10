@@ -8,10 +8,16 @@ import type { AgentDefinition, Provider } from "./registry.js";
 export const TIERS = ["economy", "standard", "frontier"] as const;
 export type Tier = (typeof TIERS)[number];
 
-/** task にも agent にも要求が無いときのティア(`/implementation-delegation` §1 の
- *  「既定は主力ティア」)。#545 が設定面を開くまでは盤面設定に出さない —— 動かす
- *  口が無い値を DB に置いても、定数に手順が1つ増えるだけである。 */
-export const BOARD_DEFAULT_TIER: Tier = "standard";
+/** task にも agent にも要求が無いときのティア。**配布される既定は最小の床**で
+ *  あり、上げるのは運用者の判断である(ADR 0094 の advisor と同じ線 ——「既定は
+ *  最小の床と、運用者が足せる余地を提供するもの」)。`/implementation-delegation`
+ *  §1 の「既定は主力ティア」は別の軸 —— 人間が tidepool の実装 issue を委任する
+ *  ときの好みであって、盤面が全 workspace の全 agent に配る床の根拠ではない。
+ *  この値のおかげで、ADR 0110 が動かしたのは fallback の**出所**(adapter 定数 →
+ *  盤面の表)であって model そのものではない、という決定文どおりになる。
+ *  #545 が設定面を開くまでは盤面設定に出さない —— 動かす口が無い値を DB に置いても、
+ *  定数に手順が1つ増えるだけである。 */
+export const BOARD_DEFAULT_TIER: Tier = "economy";
 
 /** 表の1行: この provider のこのティアの現 champion と、そこで使う effort。
  *  「alias か具体 id か」の判別子は**持たない** —— どちらも CLI に渡す文字列で

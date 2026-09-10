@@ -98,7 +98,7 @@ Codex agent.
 
   expect(options.resolveUsageResource?.({ assignee: null } as Task)).toEqual({
     provider: "openai",
-    model: "gpt-5.6-sol",
+    model: "gpt-5.6-terra",
   });
 });
 
@@ -433,7 +433,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.fableAgents?.()).toEqual([]);
   expect(options.resolveUsageResource?.({ assignee: "deckhand" } as any)).toEqual({
     provider: "anthropic",
-    model: "opus",
+    model: "sonnet",
   });
   expect(options.openaiUsage).toBeTypeOf("function");
   expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);

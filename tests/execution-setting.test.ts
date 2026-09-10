@@ -12,9 +12,9 @@ import {
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
 
-it("ティアは廉価 / 主力 / 上位の3段で、盤面既定は主力(ADR 0110 決定3)", () => {
+it("ティアは廉価 / 主力 / 上位の3段で、盤面既定は廉価 —— 配布される既定は最小の床(ADR 0094 の線)", () => {
   expect(TIERS).toEqual(["economy", "standard", "frontier"]);
-  expect(BOARD_DEFAULT_TIER).toBe("standard");
+  expect(BOARD_DEFAULT_TIER).toBe("economy");
 });
 
 it("種の表は `/implementation-delegation` の表と同じ内容を持つ — anthropic は alias 行、openai は具体 id 行(実測: Codex の -m は Astra / Sol / Terra を alias として受けない)", () => {
@@ -36,7 +36,7 @@ it("tier を書かない agent は盤面既定のティアで解決され、出�
     selectExecutionSetting({ provider: "anthropic", tier: undefined, advisor: false, frontierAdvisor: false }, table),
   ).toEqual({
     provider: "anthropic",
-    model: "opus",
+    model: "sonnet",
     effort: "high",
     advisor: undefined,
     source: { tier: "board" },

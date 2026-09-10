@@ -1524,7 +1524,7 @@ describe("ClaudeCodeWorker", () => {
   it("model は常に明示的に渡す: agent が tier を書かなければ盤面既定のティアの行(ホストのモデル設定を漏らさない)", async () => {
     const { start, calls } = await makeWorker();
     start();
-    expect(calls[0]!.args.join(" ")).toContain("--model opus");
+    expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
   });
 
   it("agent が tier を書けばその行の model を使う", async () => {
@@ -1548,7 +1548,7 @@ describe("ClaudeCodeWorker", () => {
       listEvents(board.db, "task-setting-board").find((e) => e.kind === "worker_spawned")!.payload,
     ).toMatchObject({
       provider: "anthropic",
-      model: "opus",
+      model: "sonnet",
       effort: "high",
       source: { tier: "board" },
     });
@@ -1565,7 +1565,7 @@ describe("ClaudeCodeWorker", () => {
   it("表の行を書き換えれば次の spawn の model / effort が変わる — 正本は DB であって adapter の定数ではない", async () => {
     const { start, calls, db } = await makeWorker();
     db.prepare(
-      "UPDATE execution_settings SET model = 'claude-opus-5', effort = 'max' WHERE provider = 'anthropic' AND tier = 'standard'",
+      "UPDATE execution_settings SET model = 'claude-opus-5', effort = 'max' WHERE provider = 'anthropic' AND tier = 'economy'",
     ).run();
     start();
     expect(calls[0]!.args.join(" ")).toContain("--model claude-opus-5");
@@ -1576,7 +1576,7 @@ describe("ClaudeCodeWorker", () => {
     const registryDir = await makeRegistry();
     const db = openDb(":memory:");
     db.prepare(
-      "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier = 'standard'",
+      "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier = 'economy'",
     ).run();
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(
@@ -1598,7 +1598,7 @@ describe("ClaudeCodeWorker", () => {
     const registryDir = await makeRegistry();
     const db = openDb(":memory:");
     db.prepare(
-      "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier = 'standard'",
+      "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier = 'economy'",
     ).run();
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(
@@ -2187,7 +2187,7 @@ describe("ClaudeCodeWorker", () => {
         definition_version: "0.3.1",
         advisor: null,
         provider: "anthropic",
-        model: "opus",
+        model: "sonnet",
         effort: "high",
         source: { tier: "board" },
         harness: "claude-code",
@@ -2236,7 +2236,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
@@ -2266,7 +2266,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
 
@@ -2293,7 +2293,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
@@ -2315,7 +2315,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2385,7 +2385,7 @@ describe("ClaudeCodeWorker", () => {
         definition_version: "0.2.0",
         advisor: null,
         provider: "anthropic",
-        model: "opus",
+        model: "sonnet",
         effort: "high",
         source: { tier: "board" },
         harness: "claude-code",
@@ -2405,7 +2405,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2459,7 +2459,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     // independent review: unset assignee → resolves to the Auditor pointer
@@ -2535,7 +2535,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, calls } = await makeWorker(withAdvisor);
     start();
     const call = calls[0]!;
-    expect(advisorFlag(call.args)).toBe("opus");
+    expect(advisorFlag(call.args)).toBe("sonnet");
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
   });
 
@@ -2552,7 +2552,7 @@ describe("advisor capability (issue #33)", () => {
       const { start, calls } = await makeWorker(withAdvisor);
       start();
       const call = calls[0]!;
-      expect(advisorFlag(call.args)).toBe("opus");
+      expect(advisorFlag(call.args)).toBe("sonnet");
       expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
       // git identity は env の上に重ねられる —— 消したキーを復活させないことと、
       // 重ね順を変えたことで identity 側が落ちていないことを1本で見る(issue #53)
@@ -2595,7 +2595,7 @@ describe("advisor capability (issue #33)", () => {
 
     const unmasked = await makeWorker(withAdvisor);
     unmasked.start("task-unmasked");
-    expect(advisorFlag(unmasked.calls[0]!.args)).toBe("opus");
+    expect(advisorFlag(unmasked.calls[0]!.args)).toBe("sonnet");
   });
 
   // ── anthropics/claude-code#69238 の回避 env ────────────────────
@@ -2632,7 +2632,7 @@ describe("advisor capability (issue #33)", () => {
     const { start, db } = await makeWorker(withAdvisor);
     start("task-spawn-advisor");
     const spawned = listEvents(db, "task-spawn-advisor").find((e) => e.kind === "worker_spawned");
-    expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "opus" });
+    expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "sonnet" });
   });
 
   // registry_commit があるので frontmatter の文字列は後から引ける。**イベント履歴
@@ -3050,7 +3050,7 @@ You are Kipper, the tidepool board's Kimi work agent.
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
       // 実効挙動不変の根拠: モデルは env ではなくフラグでピン留めされる
       // (値の出所は盤面の表 —— ADR 0110 決定3)
-      expect(calls[0]!.args.join(" ")).toContain("--model opus");
+      expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
       expect(calls[0]!.args.join(" ")).toContain("--effort high");
     } finally {
       vi.unstubAllEnvs();
