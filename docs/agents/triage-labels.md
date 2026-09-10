@@ -45,7 +45,8 @@ reads as a queue. The label comes off when the observation lands, and the issue 
 
 **A label, not a comment.** The queue is read as a list — `gh issue list`, the web list — and a
 comment only speaks once the issue is already open. Filter the queue with
-`gh issue list --search '-label:verify:production'`.
+`gh issue list --search '-label:verify:production'`. The filter names the venue, so a second
+`verify:*` label means fixing the filter here too — otherwise its issues quietly read as work again.
 
 Most implementation issues never carry it. The venue a change's subject demands is usually CI or the
 Lima VM (`docs/agents/machine-setup.md`), and the Pi is production-only — "don't make checkouts there
