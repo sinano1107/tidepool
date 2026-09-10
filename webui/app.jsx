@@ -1033,7 +1033,7 @@ function agentDraftOf(agent) {
     icon: agent.icon ?? '', description: agent.description ?? '',
     systemPrompt: agent.systemPrompt ?? '', authority: agent.authority ?? '',
     provider: agent.provider ?? '',
-    model: agent.model ?? '', effort: agent.effort ?? '', advisor: agent.advisor ?? '',
+    tier: agent.tier ?? '', advisor: agent.advisor === true,
     // GET /api/agents already returns skills (ADR 0025)
     skills: agent.skills ?? [],
   };
@@ -1044,7 +1044,7 @@ function agentDraftOf(agent) {
 // author sees it and edits it before creating.
 const NEW_AGENT_DRAFT = {
   icon: '', description: '', systemPrompt: '', authority: '',
-  provider: '', model: '', effort: '', advisor: '', skills: ['@workspace'],
+  provider: '', tier: '', advisor: false, skills: ['@workspace'],
 };
 
 // The API body those fields make. The optional ones drop out when blank, so a
@@ -1055,9 +1055,8 @@ function agentBody(d) {
     description: d.description.trim(),
     provider: d.provider,
     icon: d.icon.trim() || undefined,
-    model: d.model.trim() || undefined,
-    effort: d.effort.trim() || undefined,
-    advisor: d.advisor.trim() || undefined,
+    tier: d.tier || undefined,
+    advisor: d.advisor || undefined,
     skills: d.skills,
     systemPrompt: d.systemPrompt,
   };
@@ -1085,10 +1084,22 @@ function agentDraftDirty(d, base) {
 // PROVIDER_OPTIONS) so the client never duplicates the enumeration.
 const PROVIDER_PLACEHOLDER = { value: '', label: 'choose one — provider is required' };
 
+// The requested tier (ADR 0110 決定1). Optional, unlike the provider above: the
+// blank entry is the real "no default of my own", which resolves to the board's
+// default tier at pickup. Model and effort are not fields here at all any more —
+// the board's provider × tier table decides them, and #545 opens that table for
+// editing.
+const TIER_OPTIONS = [
+  { value: '', label: "board default — standard, unless the board's table says otherwise" },
+  { value: 'economy', label: 'economy — the cheap tier' },
+  { value: 'standard', label: 'standard — the workhorse tier' },
+  { value: 'frontier', label: 'frontier — the top tier' },
+];
+
 // Those fields as controls, shared by the record card and the create form so
 // the two never drift — the agent analogue of ProfileFields.
 function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }) {
-  const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return (
     <React.Fragment>
       <AgentIconPicker value={draft.icon} onChange={(v) => set('icon', v)} />
@@ -1100,11 +1111,9 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
         <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', e.target.value)} />
         <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Input label="Model" value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="adapter default if empty" />
-        <Input label="Effort" value={draft.effort} onChange={(e) => set('effort', e.target.value)} placeholder="adapter default if empty" />
-      </div>
-      <Input label="Advisor model" value={draft.advisor} onChange={(e) => set('advisor', e.target.value)} placeholder="no advisor if empty" />
+      <Select label="Default tier" options={TIER_OPTIONS} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
+      <Checkbox label="advisor — this agent may consult a stronger model at decision points"
+        checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={draft.skills} onChange={(v) => set('skills', v)} />
     </React.Fragment>
   );
@@ -1159,10 +1168,9 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
             <FieldRow label="provider" kind={agent.provider ? 'mono' : 'unset'} value={agent.provider ?? ''} unsetLabel="—" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <FieldRow label="model" kind={agent.model ? 'mono' : 'unset'} value={agent.model ?? ''} unsetLabel="adapter default" />
-            <FieldRow label="effort" kind={agent.effort ? 'mono' : 'unset'} value={agent.effort ?? ''} unsetLabel="adapter default" />
+            <FieldRow label="default tier" kind={agent.tier ? 'mono' : 'unset'} value={agent.tier ?? ''} unsetLabel="board default" />
+            <FieldRow label="advisor" kind={agent.advisor ? 'mono' : 'unset'} value={agent.advisor ? 'yes' : ''} unsetLabel="no advisor" />
           </div>
-          <FieldRow label="advisor model" kind={agent.advisor ? 'mono' : 'unset'} value={agent.advisor ?? ''} unsetLabel="no advisor" />
           <FieldRow label="skills" kind={(agent.skills ?? []).length ? 'tags' : 'unset'} tags={agent.skills ?? []}
             scheme="skills" wildcardHint="every skill" unsetLabel="no skills allowed" />
         </React.Fragment>

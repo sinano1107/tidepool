@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 
 export type Db = Database.Database;
 
@@ -287,6 +288,28 @@ export function openDb(path: string): Db {
       resumes_at     TEXT,
       PRIMARY KEY (provider, window, model)
     );
+    -- ADR 0110 決定3: 実行設定の表 —— provider × ティア → そのティアの現
+    -- champion と既定 effort。配布物の種(execution-setting.ts の
+    -- SEED_EXECUTION_SETTINGS)から**一度だけ**初期化し、以後は DB が正本で、
+    -- 消した行も再オープンで戻らない(#545 が settings タブと管理MCP から
+    -- 編集できるようにする)。model が alias(anthropic)か具体 id(openai)か
+    -- の判別子は持たない —— どちらも CLI に渡す文字列である。
+    CREATE TABLE IF NOT EXISTS execution_settings (
+      provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
+      tier     TEXT NOT NULL CHECK (tier IN ('economy', 'standard', 'frontier')),
+      model    TEXT NOT NULL,
+      effort   TEXT NOT NULL,
+      PRIMARY KEY (provider, tier)
+    );
+
+    -- ADR 0110 決定3 の盤面設定側: 「上位ティアの行を advisor に使ってよい」。
+    -- Fable の usage-credits 同意も org の availableModels も盤面からは読めない
+    -- ので、立つまでは advisor を main と同一に倒す。行が無い = 未設定 = false。
+    CREATE TABLE IF NOT EXISTS execution_defaults (
+      id               INTEGER PRIMARY KEY CHECK (id = 1),
+      frontier_advisor INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS provider_pace_offsets (
       provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
       window   TEXT NOT NULL,
@@ -736,6 +759,16 @@ export function openDb(path: string): Db {
       SELECT 'anthropic', 'fable', 'fable', NULL, NULL, NULL, fable_throttled, fable_resume_at
       FROM throttle_state WHERE id = 1 AND fable_throttled IS NOT NULL;
     `);
+  }
+  // 種の表からの初期化は**一度だけ**(ADR 0110 決定3: 以後は DB が正本)。
+  // provider_pace_offsets の INSERT OR IGNORE と違って行ごとに撃たないのは、
+  // 運用者が消した行が再オープンのたびに生え直すのが「正本は DB」と矛盾する
+  // ためである。
+  if (!db.prepare("SELECT 1 FROM execution_settings LIMIT 1").get()) {
+    const insert = db.prepare(
+      "INSERT INTO execution_settings (provider, tier, model, effort) VALUES (?, ?, ?, ?)",
+    );
+    for (const row of SEED_EXECUTION_SETTINGS) insert.run(row.provider, row.tier, row.model, row.effort);
   }
   db.exec(`
     INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)

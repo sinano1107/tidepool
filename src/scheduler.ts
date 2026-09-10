@@ -22,7 +22,7 @@ import {
 import { getProviderPaceOffset } from "./pace-offsets.js";
 import {
   type Harness,
-  InvalidAgentProviderError,
+  InvalidAgentDefinitionError,
   type Provider,
   type RegistryReachabilityCheck,
   type RegistrySource,
@@ -597,7 +597,7 @@ export function startScheduler(deps: {
           try {
             harness = resolveHarness(head);
           } catch (error) {
-            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentProviderError)) {
+            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
               throw error;
             }
             quarantineAgent(db, assignee, error, clock.now());
@@ -616,7 +616,7 @@ export function startScheduler(deps: {
           try {
             resource = resolveUsageResource(head);
           } catch (error) {
-            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentProviderError)) {
+            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
               throw error;
             }
             quarantineAgent(db, assignee, error, clock.now());

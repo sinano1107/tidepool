@@ -8,7 +8,7 @@ import {
   listAgentViews,
   UnknownAuthorityProfileError,
 } from "../src/agent-create.js";
-import { InvalidAgentNameError, InvalidAgentProviderError, InvalidSkillAllowlistError, loadRegistry } from "../src/registry.js";
+import { InvalidAgentDefinitionError, InvalidAgentNameError, InvalidSkillAllowlistError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -43,9 +43,8 @@ describe("createAgent: 正常系(issue #70)", () => {
         provider: "anthropic",
         description: "General work agent for the tidepool board",
         icon: "🐙",
-        model: "claude-sonnet-5",
-        effort: "high",
-        advisor: "opus",
+        tier: "frontier",
+        advisor: true,
         skills: ["@workspace"],
         systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
       },
@@ -61,9 +60,9 @@ describe("createAgent: 正常系(issue #70)", () => {
       provider: "anthropic",
       description: "General work agent for the tidepool board",
       icon: "🐙",
-      model: "claude-sonnet-5",
-      effort: "high",
-      advisor: "opus",
+      tier: "frontier",
+      advisor: true,
+      retiredFields: [],
       skills: ["@workspace"],
       systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
     });
@@ -77,7 +76,7 @@ describe("createAgent: 正常系(issue #70)", () => {
     expect(git(registryDir, "log", "-1", "--format=%s")).toBe("create agent tako via WebUI");
   });
 
-  it("icon/model/effort/advisor を省略すると frontmatter にキー自体が現れず、ラウンドトリップでも undefined のまま", async () => {
+  it("icon/tier/advisor を省略すると frontmatter にキー自体が現れず、ラウンドトリップでも不在のまま", async () => {
     const registryDir = await makeMainRegistry();
 
     await createAgent(
@@ -96,8 +95,7 @@ describe("createAgent: 正常系(issue #70)", () => {
     // の working tree ではなく着地先の ref から読む(loadRegistry と同じ規律)
     const raw = git(registryDir, "show", "main:agents/hermit.md");
     expect(raw).not.toContain("icon");
-    expect(raw).not.toContain("model");
-    expect(raw).not.toContain("effort");
+    expect(raw).not.toContain("tier");
     expect(raw).not.toContain("advisor");
     const agent = loadRegistry(registryDir, "purely-local").agents.hermit;
     expect(agent).toEqual({
@@ -107,9 +105,9 @@ describe("createAgent: 正常系(issue #70)", () => {
       provider: "anthropic",
       description: "Minimal agent",
       icon: undefined,
-      model: undefined,
-      effort: undefined,
-      advisor: undefined,
+      tier: undefined,
+      advisor: false,
+      retiredFields: [],
       skills: ["*"],
       systemPrompt: "You are Hermit.",
     });
@@ -384,13 +382,13 @@ describe("createAgent: provider 検証(ADR 0097 — 必須・列挙・advisor �
     systemPrompt: "p",
   };
 
-  it("列挙(anthropic / moonshot)にない provider は InvalidAgentProviderError で拒否され、コミットを積まない", async () => {
+  it("列挙(anthropic / moonshot)にない provider は InvalidAgentDefinitionError で拒否され、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
       createAgent({ ...base, provider: "moonshto" }, { registry: { dir: registryDir, mode: "purely-local" } }),
-    ).rejects.toThrow(InvalidAgentProviderError);
+    ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     // 不正 provider が書き込まれていれば loadRegistry ごと落ちる — それが起きていない
     expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeUndefined();
@@ -402,10 +400,10 @@ describe("createAgent: provider 検証(ADR 0097 — 必須・列挙・advisor �
 
     await expect(
       createAgent(
-        { ...base, provider: "moonshot", advisor: "opus" },
+        { ...base, provider: "moonshot", advisor: true },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
-    ).rejects.toThrow(InvalidAgentProviderError);
+    ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").agents.tako).toBeUndefined();
   });
@@ -419,7 +417,7 @@ describe("createAgent: provider 検証(ADR 0097 — 必須・列挙・advisor �
         { ...base, provider: "openai", skills: ["tdd"] },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
-    ).rejects.toThrow(InvalidAgentProviderError);
+    ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
@@ -435,15 +433,17 @@ describe("createAgent: provider 検証(ADR 0097 — 必須・列挙・advisor �
     expect(git(registryDir, "show", "main:agents/tako.md")).toContain("provider: moonshot");
   });
 
-  it("空白だけの advisor は未設定と同じ — moonshot との組み合わせも拒否されない(normalizeAdvisor と同じ正規化で判定)", async () => {
+  it("列挙にないティアは登録時に拒否され、コミットを積まない(ADR 0110 決定1)", async () => {
     const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
 
-    await createAgent(
-      { ...base, provider: "moonshot", advisor: "  \t " },
-      { registry: { dir: registryDir, mode: "purely-local" } },
-    );
-
-    expect(loadRegistry(registryDir, "purely-local").agents.tako!.provider).toBe("moonshot");
+    await expect(
+      createAgent(
+        { ...base, tier: "luxury" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toThrow(InvalidAgentDefinitionError);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 });
 
@@ -465,8 +465,9 @@ describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
       provider: "anthropic",
       description: "General agent",
       icon: "🐙",
-      model: undefined,
-      effort: undefined,
+      tier: undefined,
+      advisor: false,
+      retiredFields: [],
       skills: ["*"],
       systemPrompt: "You are Tako.",
     });

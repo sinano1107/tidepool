@@ -96,13 +96,29 @@ describe("loadRegistry", () => {
     expect(registry.agents.tako!.icon).toBe("\u{1F419}");
   });
 
-  it("frontmatter の model は optional: あれば読み、なければ undefined", async () => {
-    const withModel = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nmodel: opus\n---\nYou are Deckhand.\n`,
+  // ADR 0110 決定1: 実行設定は agent.md から出ていった。読み込みは倒れず(退役
+  // フィールドを名前で覚えるだけ)、拒否するのは登録と pickup の門である。
+  it("退役した model / effort は読み込みを倒さず、その名前が retiredFields に残る", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nmodel: opus\neffort: high\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withModel, "purely-local").agents.deckhand!.model).toBe("opus");
+    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
+    expect(agent.retiredFields).toEqual(["model", "effort"]);
+    const clean = await makeRegistry();
+    expect(loadRegistry(clean, "purely-local").agents.deckhand!.retiredFields).toEqual([]);
+  });
+
+  it("frontmatter の tier は optional の自由文字列: 列挙の検査は門(provider と同じ形)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\ntier: frontier\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.tier).toBe("frontier");
+    const unknown = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\ntier: luxury\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(unknown, "purely-local").agents.deckhand!.tier).toBe("luxury");
     const without = await makeRegistry();
-    expect(loadRegistry(without, "purely-local").agents.deckhand!.model).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").agents.deckhand!.tier).toBeUndefined();
   });
 
   it("frontmatter の description は必須: 欠落は登録時にエラーになる(roster の1行を担う散文 — issue #43 / ADR 0014)", async () => {
@@ -120,33 +136,25 @@ describe("loadRegistry", () => {
     );
   });
 
-  it("frontmatter の effort は optional: あれば読み、なければ undefined", async () => {
-    const withEffort = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\neffort: high\n---\nYou are Deckhand.\n`,
+  // ADR 0110 決定1: advisor は真偽値になった。旧綴り(model 名の自由文字列)も
+  // **読めて**、退役フィールドとして門が拒む —— 手で commit された1行が registry
+  // 読み取り全体を倒さないため。
+  it("frontmatter の advisor は真偽値: true なら真、省略なら偽", async () => {
+    const withAdvisor = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: true\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withEffort, "purely-local").agents.deckhand!.effort).toBe("high");
+    expect(loadRegistry(withAdvisor, "purely-local").agents.deckhand!.advisor).toBe(true);
     const without = await makeRegistry();
-    expect(loadRegistry(without, "purely-local").agents.deckhand!.effort).toBeUndefined();
+    expect(loadRegistry(without, "purely-local").agents.deckhand!.advisor).toBe(false);
   });
 
-  // issue #33 / 判断4: `model` と同じ**開いた集合**なので、値の妥当性はここで
-  // 検査しない(ADR 0042)。エイリアスも具体 id も同じ自由文字列として通す。
-  it("frontmatter の advisor は optional: あれば読み、なければ undefined", async () => {
-    const withAdvisor = await makeRegistry({
+  it("旧綴りの advisor(model 名)は読み込みを倒さず、退役フィールドとして残る", async () => {
+    const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: opus\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withAdvisor, "purely-local").agents.deckhand!.advisor).toBe("opus");
-    const without = await makeRegistry();
-    expect(loadRegistry(without, "purely-local").agents.deckhand!.advisor).toBeUndefined();
-  });
-
-  // ADR 0042: 具体 id も同じ口を通る。「エイリアスだけ」と読める形にしない —
-  // ホストの CLI 版でエイリアスの解決先が動く以上、具体 id を書くのは正当な選択。
-  it("frontmatter の advisor は具体モデル id も同じ自由文字列として通す(ADR 0042)", async () => {
-    const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: claude-opus-5\n---\nYou are Deckhand.\n`,
-    });
-    expect(loadRegistry(dir, "purely-local").agents.deckhand!.advisor).toBe("claude-opus-5");
+    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
+    expect(agent.advisor).toBe(false);
+    expect(agent.retiredFields).toEqual(["advisor"]);
   });
 
   it("frontmatter の provider を読み込む(ADR 0097 決定1: 推論の向き先・課金元の宣言 — harness とは独立した概念)", async () => {
@@ -169,7 +177,7 @@ describe("loadRegistry", () => {
     });
     const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
     expect(agent.provider).toBe("moonshto");
-    expect(agent.advisor).toBe("opus");
+    expect(agent.retiredFields).toEqual(["advisor"]);
   });
 
   it("frontmatter の icon は optional: あれば読み、なければ undefined", async () => {

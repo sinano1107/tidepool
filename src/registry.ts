@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { TIERS } from "./execution-setting.js";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
@@ -33,23 +34,25 @@ export interface AgentDefinition {
    *  ここでは自由文字列のまま持つ — 列挙・組み合わせの違反は読み込みを倒さず、
    *  登録と pickup の門が拒否/隔離する(ADR 0097 決定3)。 */
   provider: string;
-  /** Base-AI model for this agent (CONTEXT.md: agent = base AI + skills +
-   *  instructions + authority profile). Absent → the adapter's default. */
-  model?: string;
-  /** Reasoning effort for this agent's sessions. Absent → the adapter's
-   *  default. Free string here — the closed set of valid values (if any)
-   *  is vendor knowledge that belongs to the adapter, not this registry
-   *  (ADR 0005). */
-  effort?: string;
-  /** Advisor capability (issue #33 / CONTEXT.md の Advisor): the model this
-   *  agent's worker sessions may consult at decision points. Absent → no
-   *  advisor at all (機構としての既定は無効 — the adapter then spawns with the
-   *  advisor tool explicitly disabled, ADR 0042). Sibling of `model`/`effort`
-   *  and free string for the same reason: the valid set is open (aliases *and*
-   *  full model ids) and, unlike either of those, an alias's meaning is
-   *  **host-CLI-version dependent** — vendor knowledge that a registry schema
-   *  cannot hold without going stale (ADR 0005 / ADR 0042). */
-  advisor?: string;
+  /** 既定の要求ティア(CONTEXT.md「要求」/ ADR 0110 決定1): この agent の
+   *  セッションが既定でどの品質ティアを要求するか。省略 → 盤面既定
+   *  (`BOARD_DEFAULT_TIER`)。「常に上位で」と言いたい Auditor のような役割の
+   *  ための1行であり、model 名ではない —— 具体の model / effort は pickup 時に
+   *  selector が盤面の表から選ぶ。ここでは `provider` と同じく自由文字列のまま
+   *  持ち、列挙の検査は登録と pickup の門(`assertValidAgentDefinition`)が行う。 */
+  tier?: string;
+  /** Advisor capability (issue #33 / CONTEXT.md の Advisor): この agent の worker
+   *  session が判断点で上位モデルに相談してよいか。**真偽値であって model 名では
+   *  ない**(ADR 0110 決定1)—— advisor は main 以上のティアでなければならず、
+   *  main が selector で動く以上、固定した model 名は書いた時点でしか正しくない。
+   *  実際に相談する model は実行設定の一部として表から導出される。 */
+  advisor: boolean;
+  /** ピン留めが退役した後も agent.md に残っている値の名前(ADR 0110 決定1)。
+   *  `model` / `effort`(実行設定へ移った)と、自由文字列のままの `advisor`
+   *  (真偽値へ変わった)。**読み込みでは倒さない** —— 手で commit された違反が
+   *  registry 全体を煉瓦にしないよう、拒否するのは登録と pickup の門である
+   *  (`provider` の列挙違反と同じ扱い、ADR 0097 決定3)。 */
+  retiredFields: readonly string[];
   /** Visual identity emoji for this agent (issue #52), shown by the board
    *  UI's AgentChip. Absent → the UI falls back to hashed initials. Loader
    *  checks only structural validity — a single Twemoji-covered grapheme
@@ -168,51 +171,71 @@ export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filte
   (provider) => CANONICAL_ROUTES[provider].advisor,
 );
 
-/** An agent definition's provider declaration breaks ADR 0097: the value is
- *  outside PROVIDER_VALUES, or it names a provider that does not offer an
- *  advisor while the definition declares one. Thrown at the gates that admit
- *  a definition — registration (agent-create.ts) and pickup resolution
- *  (agent.ts's resolveExecutionAgent) — never at load: a hand-committed
- *  violation must quarantine the one agent, not brick the whole registry read. */
-export class InvalidAgentProviderError extends Error {
+/** 定義が成立していない(ADR 0097 決定3 / ADR 0110 決定1): provider が列挙の外、
+ *  advisor を提供しない正準経路に advisor が宣言されている、ティアが列挙の外、
+ *  あるいは退役したピン留めが残っている。定義を受け入れる門 —— 登録
+ *  (agent-create.ts)と pickup 解決(agent.ts の resolveExecutionAgent)—— で
+ *  投げ、**読み込みでは投げない**: 手で commit された違反は registry 全体を
+ *  煉瓦にせず、その agent 1体を隔離する。 */
+export class InvalidAgentDefinitionError extends Error {
   constructor(
     public readonly agentName: string,
     reason: string,
   ) {
     super(`agent ${agentName}: ${reason}`);
-    this.name = "InvalidAgentProviderError";
+    this.name = "InvalidAgentDefinitionError";
   }
 }
 
-/** The provider half of a definition's validity (ADR 0097 決定1/3) — one
- *  assertion shared by the registration verbs and the pickup resolution so
- *  the two gates can't drift. A blank `advisor` is normalized to absent
- *  *here*, at the assertion boundary: the registration side normalizes before
- *  writing (agent-create.ts's normalizeAdvisor), and a hand-committed file
- *  may carry a whitespace-only value the pickup side reads raw — judging the
- *  normalized value in this one place keeps both gates reaching the same
- *  verdict on the same definition. */
-export function assertValidProvider(
+/** 門が見る定義の断面。登録の verb は人間が送ったフォームの値を、pickup 解決は
+ *  読み込み済みの `AgentDefinition` を、それぞれこの形で渡す。 */
+export interface AgentDefinitionCheck {
+  provider: string;
+  advisor: boolean;
+  tier?: string;
+  skills?: readonly string[];
+  retiredFields?: readonly string[];
+}
+
+/** 定義が成立しているかの検査(ADR 0097 決定1/3 / ADR 0110 決定1)—— 登録の verb
+ *  と pickup 解決が**同じ1つの assertion** を通ることで、2つの門が別々の判定に
+ *  ずれることがない。空白だけの値の正規化は parse 側(`isWritten`)に寄せてある
+ *  ので、手で書かれたファイルと フォームから来た値が同じ判定に至る。 */
+export function assertValidAgentDefinition(
   agentName: string,
-  provider: string,
-  advisor: string | undefined,
-  skills: readonly string[] = [],
+  definition: AgentDefinitionCheck,
 ): void {
+  const { provider, advisor, tier, skills = [], retiredFields = [] } = definition;
+  if (retiredFields.length > 0) {
+    throw new InvalidAgentDefinitionError(
+      agentName,
+      `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")} (ADR 0110 決定1). ` +
+        "model and effort are chosen at pickup from the board's provider × tier table, and advisor is a " +
+        `boolean whose model is derived from that same table — declare a tier (${TIERS.join(" / ")}) ` +
+        "and/or `advisor: true` instead",
+    );
+  }
   if (!(PROVIDER_VALUES as readonly string[]).includes(provider)) {
-    throw new InvalidAgentProviderError(
+    throw new InvalidAgentDefinitionError(
       agentName,
       `unknown provider "${provider}" (expected one of ${PROVIDER_VALUES.join(" / ")})`,
     );
   }
+  if (tier !== undefined && !(TIERS as readonly string[]).includes(tier)) {
+    throw new InvalidAgentDefinitionError(
+      agentName,
+      `unknown tier "${tier}" (expected one of ${TIERS.join(" / ")}) — ADR 0110 決定1`,
+    );
+  }
   const route = CANONICAL_ROUTES[provider as Provider];
-  if (advisor?.trim() && !route.advisor) {
-    throw new InvalidAgentProviderError(
+  if (advisor && !route.advisor) {
+    throw new InvalidAgentDefinitionError(
       agentName,
       `canonical route "${provider} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand (ADR 0098)`,
     );
   }
   if (route.harness === "codex" && skills.length > 0) {
-    throw new InvalidAgentProviderError(
+    throw new InvalidAgentDefinitionError(
       agentName,
       `canonical route "${provider} -> ${route.harness}" does not offer skills in v1 — ` +
         "a definition declaring a non-empty allowlist does not stand (ADR 0098)",
@@ -507,9 +530,13 @@ const agentFrontmatterSchema = z.looseObject({
   authority: z.string(),
   description: z.string(),
   provider: z.string(),
-  model: z.string().optional(),
-  effort: z.string().optional(),
-  advisor: z.string().optional(),
+  // 自由文字列のまま(`provider` と同じ理由 — 列挙の検査は門であって読み込みでは
+  // ない、ADR 0097 決定3)。値の集合は ADR 0110 の3ティア。
+  tier: z.string().optional(),
+  // 真偽値へ変わった側(ADR 0110 決定1)。旧綴りの自由文字列も**読めてしまう**
+  // ようにしてあるのは、手で commit された `advisor: opus` が registry 読み取り
+  // 全体を倒さないため —— 退役フィールドとして門が1体だけ隔離する。
+  advisor: z.union([z.boolean(), z.string()]).optional(),
   icon: z
     .string()
     .refine(isSingleTwemojiGrapheme, {
@@ -678,13 +705,31 @@ export function agentBodyAtCommit(
   return splitFrontmatter(raw)?.body.trim();
 }
 
+/** 空白だけ・null・キー不在をまとめて「書かれていない」とする(登録の門が
+ *  かつて `normalizeAdvisor` で行っていた正規化を、両方の門が同じ判定に至る
+ *  よう parse の側に1つだけ置いた)。 */
+function isWritten(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+/** agent.md に残っている退役フィールド(ADR 0110 決定1)。`model` / `effort` は
+ *  実行設定へ移り、`advisor` は自由文字列から真偽値へ変わった —— どれも黙って
+ *  無視すると「書いたのに効かない値」になるので、門が名前を挙げて拒否する。 */
+function retiredExecutionFields(raw: unknown): string[] {
+  const meta = (raw ?? {}) as Record<string, unknown>;
+  const fields = ["model", "effort"].filter((name) => isWritten(meta[name]));
+  if (typeof meta.advisor === "string" && meta.advisor.trim() !== "") fields.push("advisor");
+  return fields;
+}
+
 function parseAgentFile(name: string, raw: string): AgentDefinition {
   const split = splitFrontmatter(raw);
   if (!split) {
     throw new Error(`agent ${name}: missing frontmatter`);
   }
   const { frontmatter, body } = split;
-  const meta = agentFrontmatterSchema.parse(parseYaml(frontmatter));
+  const parsed = parseYaml(frontmatter);
+  const meta = agentFrontmatterSchema.parse(parsed);
   // grammar-only (ADR 0025): the schema guarantees `skills` is a string array;
   // this rejects malformed vocabulary before the definition is trusted.
   assertValidSkillAllowlist(meta.skills);
@@ -694,9 +739,9 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     authority: meta.authority,
     description: meta.description,
     provider: meta.provider,
-    model: meta.model,
-    effort: meta.effort,
-    advisor: meta.advisor,
+    tier: isWritten(meta.tier) ? meta.tier : undefined,
+    advisor: meta.advisor === true,
+    retiredFields: retiredExecutionFields(parsed),
     icon: meta.icon,
     skills: meta.skills,
     systemPrompt: body.trim(),

@@ -605,7 +605,7 @@ export class CodexWorker implements WorkerAdapter {
     }
     // ADR 0005 の明示ピン留めは Codex 側でも同じ強さで効く。model と effort の
     // 既定は adapter ごとに書かず、Claude 側と同じ1つの解決関数を通す。
-    const setting = resolveExecutionSetting("openai", agent.definition);
+    const setting = resolveExecutionSetting(this.options.db, agent.definition);
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     const hook = installBoardHook(this.options.codexHome);
     const hookState = join(dirname(hook), `${task.id}-${basename(taskTemp)}.subagent-turns.json`);
@@ -654,7 +654,13 @@ export class CodexWorker implements WorkerAdapter {
         kind: "worker_spawned",
         registry_commit: registry.commit,
         definition_version: agent.definition.version,
+        // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
+        // 実行設定に advisor は決して載らない
         advisor: null,
+        provider: setting.provider,
+        model: setting.model,
+        effort: setting.effort,
+        source: setting.source,
         harness: "codex",
         cli_version: this.options.cliVersion,
       },

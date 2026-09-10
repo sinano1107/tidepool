@@ -47,8 +47,8 @@ import { getQuietHours, HH_MM_PATTERN, setBoardTimezone, setQuietHours } from ".
 import {
   authorityProfileSchema,
   type Harness,
+  InvalidAgentDefinitionError,
   InvalidAgentNameError,
-  InvalidAgentProviderError,
   InvalidAllowedDomainError,
   InvalidAuthorityProfileNameError,
   InvalidReviewAllowedCommandError,
@@ -272,16 +272,18 @@ const createAgentSchema = z.object({
   name: z.string().min(1),
   authority: z.string().min(1),
   description: z.string().min(1),
-  // provider (ADR 0097 決定1): required — the string shape only; the enum
-  // and the advisor combination (assertValidProvider) live in the domain, so
-  // callers get a domain error, same as name/authority/icon/skills here.
+  // provider (ADR 0097 決定1): required — the string shape only; the enum,
+  // the tier and the advisor combination (assertValidAgentDefinition) live in
+  // the domain, so callers get a domain error, same as name/authority/icon/
+  // skills here.
   provider: z.string().min(1),
   icon: z.string().optional(),
-  model: z.string().optional(),
-  effort: z.string().optional(),
-  // `advisor` is an open CLI-owned model vocabulary (ADR 0042). This boundary
-  // carries its spelling but deliberately does not attempt validation here.
-  advisor: z.string().optional(),
+  // 既定の要求ティア(ADR 0110 決定1)。列挙の検査は domain 側 —— model /
+  // effort はもうこの境界を通らない(実行設定は盤面の表が決める)。
+  tier: z.string().optional(),
+  // advisor は真偽値(ADR 0110 決定1): 相談してよいか、だけ。相談先の model は
+  // 表から導出されるので、この境界は model 名を運ばない。
+  advisor: z.boolean().optional(),
   // skill allowlist (issue #56 / ADR 0025): required — the array shape only;
   // the vocabulary grammar (assertValidSkillAllowlist) and inventory-agnostic
   // treatment live in the domain, so callers get a domain error, not a schema
@@ -915,7 +917,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof UnknownAuthorityProfileError ||
         err instanceof InvalidAgentIconError ||
         err instanceof InvalidSkillAllowlistError ||
-        err instanceof InvalidAgentProviderError
+        err instanceof InvalidAgentDefinitionError
       ) {
         res.status(400).json({ error: err.message });
       } else {
@@ -978,7 +980,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof UnknownAuthorityProfileError ||
         err instanceof InvalidAgentIconError ||
         err instanceof InvalidSkillAllowlistError ||
-        err instanceof InvalidAgentProviderError
+        err instanceof InvalidAgentDefinitionError
       ) {
         res.status(400).json({ error: err.message });
       } else {

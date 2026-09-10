@@ -99,7 +99,7 @@ worker が読めるのは自タスクと、盤面が文脈として届けたも�
 
 ## Advisor(アドバイザー)
 
-worker がタスクの途中で上位モデルに判断の相談をするオプション能力。**worker session だけが持ちうる** —— 盤面自身の呼び出しはこの能力を持たない(Board call 参照)。advisor は助言のみを返し、決して行動しない — 助言を踏まえた判断はあくまで worker 本人の判断として decision log と完了時レビューに全部吸収される。Subagent と同じく説明責任を分割しない側(ADR 0010 の線)であり、権限内判断の質を高めるが決裁権の境界は決して広げない。エージェント単位の opt-in(フィールド不在 = 無効)であり、宣言は**有無だけ**(Provider entry ごとの真偽値。model 名は書かない — advisor は main 以上のティアでなければならず、main が selector で動くと固定した model 名の妥当性が変わる。advisor の model は実行設定の一部として表から解決され、盤面が spawn 前に組み合わせを検証する — headless の CLI は不正な組み合わせを exit ではなく advisor 無しで起動する。ADR 0110)。**配布される既定の agent(種)は持たない**(2026-08-21 の grilling、issue #307 / ADR 0094 — 旧・「運用上は原則すべてのエージェントに付与し、外したい特殊ケースだけ無効化する」の線は撤回)。既定は最小の床と運用者が足せる余地を提供するもので、付与はその registry の運用者が決める。運用上は付与が有利でありうる — 手戻り(fix-forward)はトークンと人間の時間の両方を消費する — が、実測では1相談がセッション費用の3〜4割を占め、黙って全員に課すことを正当化する重さではなかった。有効・無効の正本は registry(agent.md)であり、切り替えは registry への書き込み — 盤面側のオーバーライドは持たない。加えて、advisor は **正準経路が提供する能力**でもある — その Provider / Harness の経路に相談機構が無い agent が advisor を持つ定義は**不正な組み合わせ**であり、registry への登録と pickup の検査で拒否される(2026-08-23 の grilling / ADR 0097、2026-08-24 の grilling / issue #195)。盤面は Provider から正準経路を導出して可否を判定し、registry に Harness を宣言させない。これは kill switch ともオーバーライドとも違い、黙って無効化するのではなく定義が成立しないという扱いである。各セッションの実効 advisor 構成は機械記録され、構成の帰属は常にイベント履歴から確定できる。記録は2枚に分かれる: spawn 時に**盤面が何をピン留めしたか**、終了時に**実際に相談が走ったか**(相談は起きて初めて観測できるので、後者だけが「走った」を言える)。終了時の記録はモデルごとの使用量内訳を観測のまま含み、advisor への帰属は盤面が推論しない — 読み手がピン留めの記録と突き合わせて確定する(ADR 0094)。advisor への相談を前置きとして課せるのは権限内の迷いに対してのみ — 決裁権外の判断のエスカレーションには一切の前置きを課さない(安全弁は無摩擦のまま)。相談の記録は機械観測のみで、自己申告には依らない。
+worker がタスクの途中で上位モデルに判断の相談をするオプション能力。**worker session だけが持ちうる** —— 盤面自身の呼び出しはこの能力を持たない(Board call 参照)。advisor は助言のみを返し、決して行動しない — 助言を踏まえた判断はあくまで worker 本人の判断として decision log と完了時レビューに全部吸収される。Subagent と同じく説明責任を分割しない側(ADR 0010 の線)であり、権限内判断の質を高めるが決裁権の境界は決して広げない。エージェント単位の opt-in(フィールド不在 = 無効)であり、宣言は**有無だけ**(Provider entry ごとの真偽値。model 名は書かない — advisor は main 以上のティアでなければならず、main が selector で動くと固定した model 名の妥当性が変わる。advisor の model は実行設定の一部として表から解決され —— 上位ティアの行、main が既に上位なら main と同一 ——、盤面が spawn 前にティアの水準で組み合わせを検証する。headless の CLI は不正な組み合わせを exit ではなく advisor 無しで起動し、その未 attach は stream-json に一切通知が出ない(2026-09-10 実測)。上位ティアの行を advisor に使ってよいかは盤面設定のフラグで、立つまでは advisor は main と同一に倒れる —— Fable の usage-credits 同意も org の `availableModels` も盤面からは読めないため。ADR 0110)。**配布される既定の agent(種)は持たない**(2026-08-21 の grilling、issue #307 / ADR 0094 — 旧・「運用上は原則すべてのエージェントに付与し、外したい特殊ケースだけ無効化する」の線は撤回)。既定は最小の床と運用者が足せる余地を提供するもので、付与はその registry の運用者が決める。運用上は付与が有利でありうる — 手戻り(fix-forward)はトークンと人間の時間の両方を消費する — が、実測では1相談がセッション費用の3〜4割を占め、黙って全員に課すことを正当化する重さではなかった。有効・無効の正本は registry(agent.md)であり、切り替えは registry への書き込み — 盤面側のオーバーライドは持たない。加えて、advisor は **正準経路が提供する能力**でもある — その Provider / Harness の経路に相談機構が無い agent が advisor を持つ定義は**不正な組み合わせ**であり、registry への登録と pickup の検査で拒否される(2026-08-23 の grilling / ADR 0097、2026-08-24 の grilling / issue #195)。盤面は Provider から正準経路を導出して可否を判定し、registry に Harness を宣言させない。これは kill switch ともオーバーライドとも違い、黙って無効化するのではなく定義が成立しないという扱いである。各セッションの実効 advisor 構成は機械記録され、構成の帰属は常にイベント履歴から確定できる。記録は2枚に分かれる: spawn 時に**盤面が何をピン留めしたか**、終了時に**実際に相談が走ったか**(相談は起きて初めて観測できるので、後者だけが「走った」を言える)。終了時の記録はモデルごとの使用量内訳を観測のまま含み、advisor への帰属は盤面が推論しない — 読み手がピン留めの記録と突き合わせて確定する(ADR 0094)。advisor への相談を前置きとして課せるのは権限内の迷いに対してのみ — 決裁権外の判断のエスカレーションには一切の前置きを課さない(安全弁は無摩擦のまま)。相談の記録は機械観測のみで、自己申告には依らない。
 
 唯一の例外が **kill switch(緊急マスク)**: 盤面ホストの運用設定で全 advisor を一時停止できる。registry には置かない — エージェントの定義ではなく運用上の緊急マスクであり、advisor 側の障害・仕様変更時に agent.md を1枚も触らず止められることが存在理由(experimental な機能をフリート全員に配る代償)。「盤面側のオーバーライドを持たない」の線とは矛盾しない — マスクは advisor を**足す**方向には一切効かず、実効構成を濁らせずに一律ゼロへ倒すだけで、その事実もイベント履歴に残る。
 
@@ -115,7 +115,7 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 - **書き手**: Precedent は盤面が投影し agent は書かない。Knowledge は worker の明示 tool と人間。Behavior の candidate は fix-forward RCA(review layer 2)、approved 提案は meta-review(layer 3)が起草し、承認 question を経て確定する。
 - **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)。session 記録には当時のストアの snapshot 識別子と注入した entry・token 量も乗る — 実行設定の評価で知識条件を隠れた変数にしないため。
 
-registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタ(+ Provider entry と既定の要求ティア。model / effort は持たない — 実行設定 参照)にとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。
+registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタ(+ Provider entry と既定の要求ティア `tier`、advisor の真偽。model / effort は持たない — 実行設定 参照)にとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。
 
 ## Decision log(判断ログ)
 
@@ -407,12 +407,12 @@ _Avoid_: 計算資源、execution profile
 
 ## 要求(Execution request)
 
-task が持つ2列 — **必要品質**(ティア: 廉価 / 主力 / 上位)と**優先順位**(quality / cost / speed)。登録者(人間の Register、decompose の ChildSpec、triage)が書き、未指定は盤面既定(未指定と既定選択は記録上区別する — 要求ティアは難易度の申告として学習の文脈変数になる)。agent.md の `tier` は task に要求が無いときの既定。制約(外部送信可・予算・温存)は task に置かない — workspace と盤面設定の側。review の要求は `review_tier`(task に1つ)。
+task が持つ2列 — **必要品質**(ティア: `economy` / `standard` / `frontier` = 廉価 / 主力 / 上位)と**優先順位**(quality / cost / speed)。登録者(人間の Register、decompose の ChildSpec、triage)が書き、未指定は盤面既定(未指定と既定選択は記録上区別する — 要求ティアは難易度の申告として学習の文脈変数になる)。agent.md の `tier` は task に要求が無いときの既定。制約(外部送信可・予算・温存)は task に置かない — workspace と盤面設定の側。review の要求は `review_tier`(task に1つ)。
 _Avoid_: 具体モデル名の指定
 
 ## Selector(選択器)
 
-pickup 時に要求・盤面設定の表(Provider × ティア → alias または model と既定 effort。advisor model は「上位ティアの champion、main が上位なら同一」で導出)・Policy の除外(Throttle オフセット / Spend-down / Provider 認証)・Provider 順位から実行設定を1つ決める**決定論の規則**。Provider をまたぐ選択もここ(「Claude 温存 = Codex に流す」)。「誰が走るか」(Assignee)は選ばない。review task の設定は表からのみ解決し、学習器は昇格後も work task にしか触れない。表の行は alias(anthropic の `sonnet` / `opus` / `fable` は CLI 更新で前進する)か具体 id で、そのティアの現 champion。方針の入口は settings タブと管理MCP — 「Allocation Policy」という独立のエンティティは作らない。
+pickup 時に要求・盤面設定の表(Provider × ティア → alias または model と既定 effort。advisor model は「上位ティアの champion、main が上位なら同一」で導出)・Policy の除外(Throttle オフセット / Spend-down / Provider 認証)・Provider 順位から実行設定を1つ決める**決定論の規則**。Provider をまたぐ選択もここ(「Claude 温存 = Codex に流す」)。「誰が走るか」(Assignee)は選ばない。review task の設定は表からのみ解決し、学習器は昇格後も work task にしか触れない。表の行は alias(anthropic の `sonnet` / `opus` / `fable` は CLI 更新で前進する)か具体 id(openai の `gpt-5.6-terra` / `gpt-5.6-sol` / `gpt-6-astra` —— Codex の `-m` は alias を受けないと実測)で、そのティアの現 champion。表は配布物の種から DB へ一度だけ初期化され、以後は DB が正本。要求が無いときの盤面既定は `standard`。方針の入口は settings タブと管理MCP — 「Allocation Policy」という独立のエンティティは作らない。
 _Avoid_: Router、Allocation Policy
 
 ## 学習器(Learner)

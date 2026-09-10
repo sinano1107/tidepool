@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { UnknownAgentError } from "../src/agent.js";
 import { UnknownAuthorityProfileError, updateAgent } from "../src/agent-create.js";
-import { InvalidAgentProviderError, loadRegistry } from "../src/registry.js";
+import { InvalidAgentDefinitionError, loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -44,8 +44,9 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       provider: "anthropic",
       description: "Rewritten description",
       icon: "🦀",
-      model: undefined,
-      effort: undefined,
+      tier: undefined,
+      advisor: false,
+      retiredFields: [],
       skills: ["@workspace"],
       systemPrompt: "You are Deckhand, rewritten.",
     });
@@ -135,9 +136,9 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
 });
 
 describe("updateAgent: no-change 編集(issue #70 — workspace-create の porcelain チェックの agent 版)", () => {
-  it("空白だけの advisor を未設定へ戻すと frontmatter から消し、実効構成の変更として version を進める(issue #175)", async () => {
+  it("advisor を外すと frontmatter から消し、実効構成の変更として version を進める(issue #175)", async () => {
     const registryDir = await makeMainRegistry({
-      "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\nadvisor: opus\n---\np\n",
+      "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\nadvisor: true\n---\np\n",
     });
 
     await updateAgent(
@@ -146,16 +147,33 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
         authority: "standard",
         provider: "anthropic",
         description: "d",
-        advisor: "  \t ",
+        advisor: false,
         skills: ["*"],
         systemPrompt: "p",
       },
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
-    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", advisor: undefined });
+    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", advisor: false });
     // registryDir 自身の working tree ではなく着地先の ref から読む(ADR 0052 決定6)
     expect(git(registryDir, "show", "main:agents/crab.md")).not.toContain("advisor:");
+  });
+
+  // ADR 0110 決定1: フォームは退役フィールドを持たないので、素通しすれば登録の門が
+  // 黙って書き換えたことになる。直し方(表とティア)は理由文が指す。
+  it("退役したピン留めが残る定義は編集も拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry({
+      "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\nmodel: opus\n---\np\n",
+    });
+    const before = git(registryDir, "rev-parse", "HEAD");
+
+    await expect(
+      updateAgent(
+        { name: "crab", authority: "standard", provider: "anthropic", description: "d2", skills: ["*"], systemPrompt: "p" },
+        { registry: { dir: registryDir, mode: "purely-local" } },
+      ),
+    ).rejects.toThrow(/ADR 0110/);
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
   it("実効フィールドが不変な再送はコミットなしの成功で、version も上がらない", async () => {
@@ -224,7 +242,7 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
     expect(git(registryDir, "show", "main:agents/deckhand.md")).toContain("provider: moonshot");
   });
 
-  it("列挙にない provider への付け替えは InvalidAgentProviderError で拒否され、コミットを積まない", async () => {
+  it("列挙にない provider への付け替えは InvalidAgentDefinitionError で拒否され、コミットを積まない", async () => {
     const registryDir = await makeMainRegistry();
     const before = git(registryDir, "rev-parse", "HEAD");
 
@@ -233,7 +251,7 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
         { name: "deckhand", authority: "standard", provider: "moonshto", description: "d", skills: ["*"], systemPrompt: "p" },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
-    ).rejects.toThrow(InvalidAgentProviderError);
+    ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
 
@@ -243,10 +261,10 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
 
     await expect(
       updateAgent(
-        { name: "deckhand", authority: "standard", provider: "moonshot", advisor: "opus", description: "d", skills: ["*"], systemPrompt: "p" },
+        { name: "deckhand", authority: "standard", provider: "moonshot", advisor: true, description: "d", skills: ["*"], systemPrompt: "p" },
         { registry: { dir: registryDir, mode: "purely-local" } },
       ),
-    ).rejects.toThrow(InvalidAgentProviderError);
+    ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.provider).toBe("anthropic");
   });

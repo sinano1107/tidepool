@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
 import {
-  assertValidProvider,
+  assertValidAgentDefinition,
   canonicalHarness,
-  InvalidAgentProviderError,
+  InvalidAgentDefinitionError,
   PROVIDER_VALUES,
 } from "../src/registry.js";
 
@@ -16,21 +16,21 @@ it("Provider は1つの正準 Harness に解決され、agent 定義に harness 
 });
 
 it("OpenAI / Codex の正準経路に無い advisor は登録時と pickup 時の共有検査で拒否される(ADR 0098)", () => {
-  expect(() => assertValidProvider("deckhand", "openai", "gpt-5.6-sol")).toThrow(
-    new InvalidAgentProviderError(
+  expect(() => assertValidAgentDefinition("deckhand", { provider: "openai", advisor: true })).toThrow(
+    new InvalidAgentDefinitionError(
       "deckhand",
       'canonical route "openai -> codex" does not offer an advisor — a definition declaring one does not stand (ADR 0098)',
     ),
   );
-  expect(() => assertValidProvider("deckhand", "openai", undefined)).not.toThrow();
+  expect(() => assertValidAgentDefinition("deckhand", { provider: "openai", advisor: false })).not.toThrow();
 });
 
 it("OpenAI / Codex v1 に無い skill capability も共有検査で拒否される(ADR 0098)", () => {
-  expect(() => assertValidProvider("deckhand", "openai", undefined, ["tdd"])).toThrow(
-    new InvalidAgentProviderError(
+  expect(() => assertValidAgentDefinition("deckhand", { provider: "openai", advisor: false, skills: ["tdd"] })).toThrow(
+    new InvalidAgentDefinitionError(
       "deckhand",
       'canonical route "openai -> codex" does not offer skills in v1 — a definition declaring a non-empty allowlist does not stand (ADR 0098)',
     ),
   );
-  expect(() => assertValidProvider("deckhand", "openai", undefined, [])).not.toThrow();
+  expect(() => assertValidAgentDefinition("deckhand", { provider: "openai", advisor: false, skills: [] })).not.toThrow();
 });

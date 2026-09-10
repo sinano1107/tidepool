@@ -426,10 +426,14 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // assignee 未設定は defaultAgentName へ、registry の知らない名前は undefined へ
   expect(options.resolveAuthority?.(null)).toBeDefined();
   expect(options.resolveAuthority?.("nobody")).toBeUndefined();
-  expect(options.fableAgents?.()).toEqual([]); // fixture の agent に model 指定は無い
+  // ADR 0110 決定3: model は agent の宣言ではなく盤面の表から来る —— fixture の
+  // agent は tier を書いていないので盤面既定(standard)の行、すなわち fable では
+  // ない。この2つが**同じ1本**(resolveExecutionSetting)を通っていることが、
+  // モデル窓の除外が黙って効かなくなる形を塞いでいる。
+  expect(options.fableAgents?.()).toEqual([]);
   expect(options.resolveUsageResource?.({ assignee: "deckhand" } as any)).toEqual({
     provider: "anthropic",
-    model: null,
+    model: "opus",
   });
   expect(options.openaiUsage).toBeTypeOf("function");
   expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);

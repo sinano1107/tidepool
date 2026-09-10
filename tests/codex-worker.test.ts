@@ -68,8 +68,6 @@ description: Codex agent
 version: 1.2.3
 authority: standard
 provider: openai
-model: gpt-5.6-sol
-effort: high
 skills: []
 ---
 You are the Codex worker.`,
@@ -144,6 +142,14 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("hooks.PreToolUse=");
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload).toMatchObject({
       kind: "worker_spawned",
+      // ADR 0110 決定3: -m と model_reasoning_effort に渡した値そのもの、および
+      // ティアの出所(この agent は tier を書いていないので盤面既定)
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      effort: "high",
+      source: { tier: "board" },
+      // openai の正準経路は advisor を提供しない(ADR 0098)
+      advisor: null,
       harness: "codex",
       cli_version: CLI_VERSION,
     });

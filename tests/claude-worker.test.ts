@@ -1519,43 +1519,70 @@ describe("ClaudeCodeWorker", () => {
     }
   });
 
-  it("model は常に明示的に渡す: frontmatter に無ければ sonnet(ホストのモデル設定を漏らさない)", async () => {
+  // ADR 0110 決定3: fallback の出所が adapter 定数から盤面の表へ移った。明示
+  // ピン留めの要求(ADR 0005)は不変で、変わったのは**どこから値が来るか**だけ。
+  it("model は常に明示的に渡す: agent が tier を書かなければ盤面既定のティアの行(ホストのモデル設定を漏らさない)", async () => {
     const { start, calls } = await makeWorker();
-    start();
-    expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
-  });
-
-  it("frontmatter に model があればそれを使う", async () => {
-    const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\nmodel: opus\n---\nYou are Deckhand.\n`,
-    });
     start();
     expect(calls[0]!.args.join(" ")).toContain("--model opus");
   });
 
-  it("effort は常に明示的に渡す: frontmatter に無ければ medium(ホストの effort 設定を漏らさない)", async () => {
-    const { start, calls } = await makeWorker();
+  it("agent が tier を書けばその行の model を使う", async () => {
+    const { start, calls } = await makeWorker({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: economy\n---\nYou are Deckhand.\n`,
+    });
     start();
-    expect(calls[0]!.args.join(" ")).toContain("--effort medium");
+    expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
   });
 
-  it("frontmatter に effort があればそれを使う", async () => {
-    const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\neffort: high\n---\nYou are Deckhand.\n`,
-    });
+  it("effort は常に明示的に渡す: 値は表の行から来る(ホストの effort 設定を漏らさない)", async () => {
+    const { start, calls } = await makeWorker();
     start();
     expect(calls[0]!.args.join(" ")).toContain("--effort high");
   });
 
-  it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する)", async () => {
-    const registryDir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\neffort: super-fast\n---\nYou are Deckhand.\n`,
+  it("worker_spawned は選ばれた実行設定と、そのティアの出所を刻む(ADR 0110 決定3 — agent.md からはもう復元できない事実)", async () => {
+    const board = await makeWorker();
+    board.start("task-setting-board");
+    expect(
+      listEvents(board.db, "task-setting-board").find((e) => e.kind === "worker_spawned")!.payload,
+    ).toMatchObject({
+      provider: "anthropic",
+      model: "opus",
+      effort: "high",
+      source: { tier: "board" },
     });
+
+    const agent = await makeWorker({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: frontier\n---\nYou are Deckhand.\n`,
+    });
+    agent.start("task-setting-agent");
+    expect(
+      listEvents(agent.db, "task-setting-agent").find((e) => e.kind === "worker_spawned")!.payload,
+    ).toMatchObject({ model: "fable", source: { tier: "agent" } });
+  });
+
+  it("表の行を書き換えれば次の spawn の model / effort が変わる — 正本は DB であって adapter の定数ではない", async () => {
+    const { start, calls, db } = await makeWorker();
+    db.prepare(
+      "UPDATE execution_settings SET model = 'claude-opus-5', effort = 'max' WHERE provider = 'anthropic' AND tier = 'standard'",
+    ).run();
+    start();
+    expect(calls[0]!.args.join(" ")).toContain("--model claude-opus-5");
+    expect(calls[0]!.args.join(" ")).toContain("--effort max");
+  });
+
+  it("未知の effort 値は boot 時のコンストラクタで即座に失敗する(ADR 0005: CLI 側で閉じた集合はここで検証する — 値の出所が表になっても検査の場所は adapter のまま)", async () => {
+    const registryDir = await makeRegistry();
+    const db = openDb(":memory:");
+    db.prepare(
+      "UPDATE execution_settings SET effort = 'super-fast' WHERE provider = 'anthropic' AND tier = 'standard'",
+    ).run();
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(
       () =>
         new ClaudeCodeWorker({
-          db: openDb(":memory:"),
+          db,
           clock: new FakeClock(),
           registry: { dir: registryDir, mode: "purely-local" },
           agent: "deckhand",
@@ -1568,14 +1595,16 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("effort: ultracode は未知の effort 値として reject される(CLI --effort の閉じた5値に無く、xhigh+workflow orchestration への迂回路にならない・issue #31)", async () => {
-    const registryDir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\neffort: ultracode\n---\nYou are Deckhand.\n`,
-    });
+    const registryDir = await makeRegistry();
+    const db = openDb(":memory:");
+    db.prepare(
+      "UPDATE execution_settings SET effort = 'ultracode' WHERE provider = 'anthropic' AND tier = 'standard'",
+    ).run();
     const logDir = await mkdtemp(join(tmpdir(), "tidepool-worker-logs-"));
     expect(
       () =>
         new ClaudeCodeWorker({
-          db: openDb(":memory:"),
+          db,
           clock: new FakeClock(),
           registry: { dir: registryDir, mode: "purely-local" },
           agent: "deckhand",
@@ -2157,6 +2186,10 @@ describe("ClaudeCodeWorker", () => {
         registry_commit: oldHash,
         definition_version: "0.3.1",
         advisor: null,
+        provider: "anthropic",
+        model: "opus",
+        effort: "high",
+        source: { tier: "board" },
         harness: "claude-code",
         cli_version: "test",
       },
@@ -2203,7 +2236,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
@@ -2233,7 +2266,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
 
@@ -2260,7 +2293,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
@@ -2282,7 +2315,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2351,6 +2384,10 @@ describe("ClaudeCodeWorker", () => {
         registry_commit: "0000000000000000000000000000000000000000",
         definition_version: "0.2.0",
         advisor: null,
+        provider: "anthropic",
+        model: "opus",
+        effort: "high",
+        source: { tier: "board" },
         harness: "claude-code",
         cli_version: "test",
       },
@@ -2368,7 +2405,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2422,7 +2459,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "opus", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     // independent review: unset assignee → resolves to the Auditor pointer
@@ -2467,7 +2504,7 @@ describe("ClaudeCodeWorker", () => {
  *  worker_exited に残るか。実 CLI は使わず、既存の ContainerSpawn seam に fake stream を
  *  流す(ADR 0027 / ADR 0041 §4)。 */
 describe("advisor capability (issue #33)", () => {
-  const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nadvisor: opus\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
+  const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nadvisor: true\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
   const withAdvisor = { "agents/deckhand.md": ADVISOR_MD };
 
   /** `--advisor` に渡された値(フラグごと無ければ undefined)。 */
@@ -2591,11 +2628,21 @@ describe("advisor capability (issue #33)", () => {
 
   // ── 判断6 前半: worker_spawned は「盤面が何をピン留めしたか」 ──────
 
-  it("worker_spawned は盤面がピン留めした advisor を記録する(判断6)", async () => {
+  it("worker_spawned は盤面がピン留めした advisor を記録する(判断6)。フラグが立つまでは main と同一のモデル —— agent.md には真偽しか書かれていない", async () => {
     const { start, db } = await makeWorker(withAdvisor);
     start("task-spawn-advisor");
     const spawned = listEvents(db, "task-spawn-advisor").find((e) => e.kind === "worker_spawned");
     expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "opus" });
+  });
+
+  it("「上位ティアの行を advisor に使える」フラグが立つと、advisor は上位ティアの行から導出される", async () => {
+    const { start, db } = await makeWorker(withAdvisor);
+    db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 1)").run();
+    start("task-spawn-frontier-advisor");
+    const spawned = listEvents(db, "task-spawn-frontier-advisor").find(
+      (e) => e.kind === "worker_spawned",
+    );
+    expect(spawned!.payload).toMatchObject({ advisor: "fable" });
   });
 
   // registry_commit があるので frontmatter の文字列は後から引ける。**イベント履歴
@@ -3012,8 +3059,9 @@ You are Kipper, the tidepool board's Kimi work agent.
       // 従来通りの認証継承: Claude のサブスク資格情報は残る
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
       // 実効挙動不変の根拠: モデルは env ではなくフラグでピン留めされる
-      expect(calls[0]!.args.join(" ")).toContain("--model sonnet");
-      expect(calls[0]!.args.join(" ")).toContain("--effort medium");
+      // (値の出所は盤面の表 —— ADR 0110 決定3)
+      expect(calls[0]!.args.join(" ")).toContain("--model opus");
+      expect(calls[0]!.args.join(" ")).toContain("--effort high");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -3056,29 +3104,18 @@ You are Kipper, the tidepool board's Kimi work agent.
     }
   });
 
-  it("moonshot agent の --model は provider のモデル表記にピン留めされる(frontmatter 優先、省略時は Moonshot 既定)", async () => {
+  it("moonshot agent の --model は provider のモデル表記でピン留めされ、env にも同じ値が載る(表の moonshot 行、ADR 0005 / 0110)", async () => {
     const keyFile = await makeMoonshotKeyFile();
-    const withModel = await makeWorker(
-      {
-        "agents/kipper.md": MOONSHOT_AGENT_MD.replace(
-          "provider: moonshot",
-          "provider: moonshot\nmodel: kimi-k2.7-code",
-        ),
-      },
-      { moonshotApiKeyFile: keyFile },
-    );
-    withModel.start("task-kimi-model", null, "kipper");
-    const flag = (args: string[]) => args[args.indexOf("--model") + 1];
-    expect(flag(withModel.calls[0]!.args)).toBe("kimi-k2.7-code");
-    expect(withModel.calls[0]!.env.ANTHROPIC_MODEL).toBe("kimi-k2.7-code");
-
-    const withoutModel = await makeWorker(
+    const worker = await makeWorker(
       { "agents/kipper.md": MOONSHOT_AGENT_MD },
       { moonshotApiKeyFile: keyFile },
     );
-    withoutModel.start("task-kimi-default", null, "kipper");
-    // ホストのモデル設定を漏らさないための既定も provider の表記で(ADR 0005)
-    expect(flag(withoutModel.calls[0]!.args)).toBe("kimi-k3[1m]");
+    worker.start("task-kimi-default", null, "kipper");
+    const flag = (args: string[]) => args[args.indexOf("--model") + 1];
+    // ホストのモデル設定を漏らさないための値も provider の表記で(ADR 0005)。
+    // moonshot は3ティアとも同じ行なので、既定ティアでもこの1つに解決する。
+    expect(flag(worker.calls[0]!.args)).toBe("kimi-k3[1m]");
+    expect(worker.calls[0]!.env.ANTHROPIC_MODEL).toBe("kimi-k3[1m]");
   });
 
   it("キー未配置で moonshot agent を spawn しようとすると、置き場を指す失敗で pickup が止まり、spawn もイベント記録もされない(issue #445)", async () => {

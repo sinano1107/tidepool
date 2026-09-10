@@ -29,7 +29,10 @@ import {
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
-import { CODEX_DEFAULT_MODEL } from "./execution-setting.js";
+import {
+  IncompleteExecutionSettingTableError,
+  resolveExecutionSetting,
+} from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -42,9 +45,9 @@ import {
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
   type AuthorityProfile,
-  assertValidProvider,
+  assertValidAgentDefinition,
   canonicalHarness,
-  InvalidAgentProviderError,
+  InvalidAgentDefinitionError,
   loadRegistry,
   ownEntry,
   type Provider,
@@ -299,8 +302,25 @@ function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<t
   };
 }
 
+/** その agent が実際に焼くモデル(ADR 0110 決定3)。**spawn 側と同じ1本**
+ *  (`resolveExecutionSetting`)を通す —— ここに「agent の model」を別に持てば、
+ *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。
+ *
+ *  表に行が無いときは null に倒す: null は既に「モデル窓が当たらない」の綴りで
+ *  あり、pickup はそのまま進んで spawn 側の例外が表の穴を名指しする。ここで
+ *  投げれば scheduler の tick ごと倒れる。 */
+function executionModel(db: Db, definition: Parameters<typeof resolveExecutionSetting>[1]): string | null {
+  try {
+    return resolveExecutionSetting(db, definition).model;
+  } catch (error) {
+    if (error instanceof IncompleteExecutionSettingTableError) return null;
+    throw error;
+  }
+}
+
 function usageResourceResolver(
   board: BoardComposition,
+  db: Db,
 ): ((task: Task) => { provider: Provider; model: string | null }) | undefined {
   if (!board.registryDir) return undefined;
   return (task) => {
@@ -309,7 +329,7 @@ function usageResourceResolver(
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
     return {
       provider: agent.definition.provider as Provider,
-      model: agent.definition.model ?? (agent.definition.provider === "openai" ? CODEX_DEFAULT_MODEL : null),
+      model: executionModel(db, agent.definition),
     };
   };
 }
@@ -322,10 +342,10 @@ function agentsUsingHarnessesResolver(
     Object.values(loadBoardRegistry(board).agents)
       .filter((agent) => {
         try {
-          assertValidProvider(agent.name, agent.provider, agent.advisor, agent.skills);
+          assertValidAgentDefinition(agent.name, agent);
           return harnesses.includes(canonicalHarness(agent.provider as Provider));
         } catch (error) {
-          if (error instanceof InvalidAgentProviderError) return false;
+          if (error instanceof InvalidAgentDefinitionError) return false;
           throw error;
         }
       })
@@ -453,12 +473,12 @@ function registeredWorkspaces(board: BoardComposition): WorkspaceConfig[] {
  *  でも通る)なので、部分一致で fable 系と判定する。default agent が fable
  *  なら assignee 未設定のタスクもここに含まれる名前へ解決される(SQL 側の
  *  COALESCE)。registry なし → fable 判定は不可能、skip なし。 */
-function fableAgentsResolver(board: BoardComposition): (() => string[]) | undefined {
+function fableAgentsResolver(board: BoardComposition, db: Db): (() => string[]) | undefined {
   const { registryDir } = board;
   if (!registryDir) return undefined;
   return () =>
     Object.values(loadBoardRegistry(board).agents)
-      .filter((agent) => agent.model?.toLowerCase().includes("fable"))
+      .filter((agent) => executionModel(db, agent)?.toLowerCase().includes("fable"))
       .map((agent) => agent.name);
 }
 
@@ -483,6 +503,7 @@ function agentsSpeakingProvidersResolver(
 
 function agentsUsingUsageResourcesResolver(
   board: BoardComposition,
+  db: Db,
 ): ((resources: readonly ProviderUsageResource[]) => string[]) | undefined {
   if (!board.registryDir) return undefined;
   return (resources) =>
@@ -490,8 +511,7 @@ function agentsUsingUsageResourcesResolver(
       .filter((agent) =>
         resources.some(
           (resource) =>
-            resource.provider === agent.provider &&
-            resource.model === (agent.model ?? (agent.provider === "openai" ? CODEX_DEFAULT_MODEL : null)),
+            resource.provider === agent.provider && resource.model === executionModel(db, agent),
         ),
       )
       .map((agent) => agent.name);
@@ -503,7 +523,7 @@ function agentsUsingUsageResourcesResolver(
  *  delegation-aware successor to a single board-wide fixed profile, which
  *  every task shared regardless of who it was actually assigned to. An
  *  assignee the registry no longer knows (drift since the owning task's own
- *  session spawned) or whose definition no longer stands (InvalidAgentProviderError,
+ *  session spawned) or whose definition no longer stands (InvalidAgentDefinitionError,
  *  ADR 0097) falls back to unrestricted here rather than throwing —
  *  the spawn-time gate (ClaudeCodeWorker.start) is what quarantines that.
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
@@ -516,7 +536,7 @@ function authorityResolver(
     try {
       return resolveExecutionAgent(loadBoardRegistry(board), defaultAgentName, assignee).profile;
     } catch (err) {
-      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentProviderError)) {
+      if (!(err instanceof UnknownAgentError) && !(err instanceof InvalidAgentDefinitionError)) {
         throw err;
       }
       return undefined;
@@ -716,11 +736,11 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // the skills picker's candidate source (issue #106): the real `claude` CLI's
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
-    fableAgents: fableAgentsResolver(board),
+    fableAgents: fableAgentsResolver(board, db),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
-    agentsUsingUsageResources: agentsUsingUsageResourcesResolver(board),
+    agentsUsingUsageResources: agentsUsingUsageResourcesResolver(board, db),
     openaiUsage,
-    resolveUsageResource: usageResourceResolver(board),
+    resolveUsageResource: usageResourceResolver(board, db),
     agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board),
     harnessContainment: board.registryDir
