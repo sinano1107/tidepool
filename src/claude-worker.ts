@@ -1871,7 +1871,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 無い / advisor の組み合わせが不成立なら例外で pickup を拒む —— どちらも
     // 「黙って別のモデルで走る」「黙って advisor 無しで走る」の代わりである。
     // provider の綴りもここから1つだけ取る(上の「derived once」の線)。
-    const setting = resolveExecutionSetting(this.options.db, agent.definition, task.tier ?? undefined);
+    const setting = resolveExecutionSetting(this.options.db, agent.definition, task.tier);
     if (setting.provider === "openai") {
       throw new Error('canonical route "openai -> codex" cannot run through Claude Code (ADR 0098)');
     }

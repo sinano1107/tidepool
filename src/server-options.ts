@@ -319,7 +319,7 @@ function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<t
 function executionModel(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier" | "advisor">,
-  taskTier: Tier | undefined,
+  taskTier: Tier | null | undefined,
 ): string | null {
   try {
     return resolveExecutionSetting(db, definition, taskTier).model;
@@ -340,7 +340,7 @@ function usageResourceResolver(
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
     return {
       provider: agent.definition.provider as Provider,
-      model: executionModel(db, agent.definition, task.tier ?? undefined),
+      model: executionModel(db, agent.definition, task.tier),
     };
   };
 }

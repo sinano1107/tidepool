@@ -158,15 +158,6 @@ function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): E
   return row;
 }
 
-/** 解決順(task の要求 > agent の `tier` > 盤面既定、ADR 0110 決定2)のうち
- *  **どの段で決まったか**。値の一致では畳まない —— agent と同じティアを task が
- *  要求した場合も出所は `"task"` で、学習器が読む文脈変数は「登録者が難易度を
- *  申告した」という事実そのものである。 */
-function tierSource(request: ExecutionRequest): TierSource {
-  if (request.taskTier !== undefined) return "task";
-  return request.agentTier !== undefined ? "agent" : "board";
-}
-
 /** pickup 1回ぶんの実行設定を決める決定論の規則(CONTEXT.md「Selector」/ ADR 0110
  *  決定3)。「誰が走るか」(Assignee)は選ばない —— 選ぶのは、その agent が走る
  *  計算資源だけである。
@@ -195,7 +186,9 @@ export function selectExecutionSetting(
     model: main.model,
     effort: main.effort,
     advisor,
-    source: { tier: tierSource(request) },
+    // 解決順のどの段で決まったか。値の一致では畳まない —— agent と同じティアを
+    // task が要求しても出所は "task" で、それが学習の文脈変数になる。
+    source: { tier: request.taskTier !== undefined ? "task" : request.agentTier !== undefined ? "agent" : "board" },
   };
 }
 
@@ -228,12 +221,14 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier" | "advisor">,
-  taskTier: Tier | undefined,
+  /** task の要求ティア。`null` は行の綴りのまま受ける —— 呼び手は3つとも
+   *  `task.tier` を持っており、各々で undefined へ直させる理由が無い。 */
+  taskTier: Tier | null | undefined,
 ): ExecutionSetting {
   return selectExecutionSetting(
     {
       provider: definition.provider as Provider,
-      taskTier,
+      taskTier: taskTier ?? undefined,
       agentTier: definition.tier as Tier | undefined,
       advisor: definition.advisor,
       frontierAdvisor: isFrontierAdvisorEnabled(db),
