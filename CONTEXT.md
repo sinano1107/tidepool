@@ -112,7 +112,7 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 - **不変条件**: 削除は無く無効化のみ。すべてのエントリはイベント id か commit に遡れる。記憶は決裁権を広げない — 位置づけは Advisor と同じで、変わるのは権限内判断の質だけ。
 - **スコープ**: workspace(+盤面全体の少数)。agent ごとに隔離した記憶は作らない。Precedent は (workspace, agent) で引け、各 episode に当時の agent 定義の版を刻む。**Behavior は宛先**(agent 名 or 全員)を持つ — 全員が読めるが注入は宛先で絞る。隔離ではなく宛先で「agent ごとの記憶」が成立する(ADR 0083 追記3)。Knowledge に宛先は無い。
 - **階層**: エントリは `path` を持ち、INDEX は保存物ではなく派生の純粋目次(prefix の子の title を並べたもの)。spawn 時は最上位 INDEX + 関連 leaf、MCP pull で枝を降りる。合成要約は観測されてから。user memory(外部ストア)は Memory の外 — tool の話。
-- **書き手**: Precedent は盤面が投影し agent は書かない。Knowledge は worker の明示 tool と人間。Behavior の candidate は fix-forward RCA(review layer 2)、approved 提案は meta-review(layer 3)が起草し、承認 question を経て確定する。
+- **書き手**: Precedent は盤面が投影し agent は書かない。Knowledge は worker の明示 tool と人間。Behavior の candidate は fix-forward RCA(review layer 2)、approved 提案は meta-review(layer 3)が起草し、承認 question を経て確定する。ただし candidate を書くのは帰責が学習に向く異議だけで、行き先(Behavior / Knowledge / なし)と宛先は cause から導出する(ADR 0115、帰責 参照)。`preference` の candidate は RCA ではなく Board call が steering の文言から起草する。
 - **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)。session 記録には当時のストアの snapshot 識別子と注入した entry・token 量も乗る — 実行設定の評価で知識条件を隠れた変数にしないため。
 
 registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタ(+ Provider entry と既定の要求ティア `tier`、advisor の真偽。model / effort は持たない — 実行設定 参照)にとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。
@@ -141,11 +141,16 @@ registry の agent.md は担当範囲・判断の優先順位・制約・従う�
 
 ## Objection(異議)
 
-ログ流し読みにおける唯一の明示アクション。沈黙 = 承認であり、異議には方向コメント(steering)が必須。個々のログエントリへの注釈として即時永続化され、コミット時に「異議のあったタスクごとに1つの修理タスク(repair task)」へ束ねられる。修理タスクは異議されたタスクの**子**として登録される(ADR 0046) — worker が他タスクを読む手段は存在せず、帰属だけが元タスクの文脈を運ぶ配線であるため。束ねが運ぶのは方向コメントの列ではなく「**異議されたログエントリの本文と、それに向けられた方向コメント**」の対である — どのコメントがどの判断に向けられたかは、束ねた瞬間に失われて復元できない。同じ対が layer 2 の RCA review にも渡る(Review 参照)。
+ログ流し読みにおける唯一の明示アクション。沈黙 = 承認であり、異議には方向コメント(steering)が必須。個々のログエントリへの注釈として即時永続化され、コミット時に「異議のあったタスクごとに1つの修理タスク(repair task)」へ束ねられる。修理タスクは異議されたタスクの**子**として登録される(ADR 0046) — worker が他タスクを読む手段は存在せず、帰属だけが元タスクの文脈を運ぶ配線であるため。束ねが運ぶのは方向コメントの列ではなく「**異議されたログエントリの本文と、それに向けられた方向コメント**」の対である — どのコメントがどの判断に向けられたかは、束ねた瞬間に失われて復元できない。同じ対が layer 2 の RCA review にも渡る(Review 参照)。束ねの前に、盤面は異議されたエントリごとに帰責を付け、修理以外に何を立てるか(RCA / candidate の直接起草 / 何も立てない)はその cause の集合で決まる(ADR 0115、帰責 参照)。異議そのものは観測であって評価ではない — 記録の形は帰責によって変わらない。
 
 異議の効果は**異議されたタスクの状態に依らない**(2026-08-05 の grilling、issue #181 / ADR 0049)。完了エントリにも異議は打てるが決着済みタスクの完了は取り消されないのと同じく、走行中タスクへの異議もその完了を塞がない — 異議は完了基準への異議ではなく**判断への異議**であり、効果は fix-forward 一本だからである(修理タスクと RCA review はどちらも付帯子)。異議されたタスクの完了は塞がれないが、着地は異議が打たれた瞬間から待つ — 束ねられて修理子になり、それが決着するまで(着地 参照、ADR 0092 / ADR 0106)。昇格を止めるべき異議があるなら、それは異議経路ではなく merge の門が持つ判断であり、その門は ADR 0092 で置かれた。
 
 注釈は**エントリの事実であってセッションの状態ではない**(2026-08-17 の grilling、issue #371 / ADR 0085)。打たれた異議は束ねられた後もログエントリの注釈として残り、ログの読取面(WebUI・管理MCP の純読取)はエントリごとに異議の列を運ぶ — 決着済みタスクの行にも歴史として出る。読み手は注釈を**commit 待ち**(今の open セッション由来 — まだ束ねられていない操舵)と**束ね済み**(閉じたセッション由来 — 既に修理タスクになった歴史)の2状態で読み分け、コミットで束ねられる件数は commit 待ちだけを数える。同じ判断に2度目の異議を打つことは正当だが(別セッションなら別の修理タスクへ束ねられる)、既に付いている注釈を読めることが「読み返して追記するか」の判断材料になる。
+
+## 帰責(Attribution)
+
+異議されたエントリごとに盤面が Board call で付ける**判断種別の注釈**(ADR 0115)。保存する値は `cause` 1つで、語彙は配分評価と共有する — `capability`(worker の落ち度)/ `task_ambiguity`・`missing_information`(登録者が要求や文脈を渡し損ねた)/ `preference`・`requirement_change`(人間の好み・後からの要件変更)/ `environment`(外部の変化)。持ち主(worker / 登録者 / 人間 / 環境)は cause からの読み方であり列ではない。影響の大きさは軸に持たない。異議が束ねられる commit 時、RCA の**前**に付き、判定できなければ `uncertain` で RCA を立てて、その決着後に findings を証拠に確定させる — `uncertain` は最終値にならない。self RCA は自己申告なので帰責を書かない。帰責が決めるのは3つ: RCA を立てるか、Behavior / Knowledge の candidate を書くか(書く場合は宛先)、routing 学習器が outcome の異議を負の信号に数えるか。異議率の定義(Displayed が分母)は動かさない。「worker の評価」「maturity」という概念は立てない。人間による帰責の上書きは、誤判定が観測されてから。
+_Avoid_: 異議の重み、severity、worker evaluation
 
 ## Displayed(表示済み)
 
@@ -422,7 +427,7 @@ _Avoid_: bandit、optimizer
 
 ## 配分評価(Allocation review)
 
-品質判定(review の verdict + findings)を固定した**後**に、盤面が Board call で問う「この結果に対する実行設定は適切だったか」— `allocation`(appropriate / underpowered / overpowered / uncertain)と `cause`(capability / task_ambiguity / environment / missing_information)。episode への**判断種別**の注釈で、観測と混ぜない。review session はモデル名・価格・routing を入力に持たない(ADR 0111)。
+品質判定(review の verdict + findings)を固定した**後**に、盤面が Board call で問う「この結果に対する実行設定は適切だったか」— `allocation`(appropriate / underpowered / overpowered / uncertain)と `cause`(capability / task_ambiguity / environment / missing_information — 帰責と共有する語彙で、異議でしか現れない `preference` / `requirement_change` を含めて1本、ADR 0115)。episode への**判断種別**の注釈で、観測と混ぜない。帰責(エントリ単位、異議が契機)とは同じ episode に別々に並ぶ。review session はモデル名・価格・routing を入力に持たない(ADR 0111)。
 _Avoid_: Supervisor、Phase 2
 
 ## Interview(面接)
@@ -526,7 +531,7 @@ Provider ごとのアカウント単位(エージェント単位ではない)の
 
 ## Swell / Condensation
 
-Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。ADR 0083 でループの形が定まった: 学習の入力は異議(完了エントリへの異議を含む)だけで、正の信号は Displayed(表示済み・異議なし)から機械導出する。異議ごとに fix-forward RCA が Memory の Behavior candidate を書き、周期(盤面設定、既定は週次)の meta-review が candidate 群の繰り返しを**判断で**見て approved 提案を起草し、人間承認 question で確定する — 数値閾値は使わない。周期は1つだが task は**主題ごとに別**(Behavior meta-review と routing meta-review、主題ごとに未決着1本まで — ADR 0111)。routing 側は学習器の shadow と実際の乖離・配分評価の分布・新セルを読み、表の diff と Interview の提案を承認 question に出す。人間の明示指示は1回で候補化してよいが承認 question は経由する。authority の変更は従来どおり registry への diff。
+Swell = 外部からの周期的なタスク流入・処理サイクル。Condensation = ログが meta-review 層(= review layer 3)で蒸留され、具体的な diff(instruction / authority の変更)として戻ってくる内部自己調整ループ。ADR 0083 でループの形が定まった: 学習の入力は異議(完了エントリへの異議を含む)だけで、正の信号は Displayed(表示済み・異議なし)から機械導出する。帰責が学習に向く異議ごとに fix-forward RCA(`preference` なら Board call)が Memory の Behavior candidate を書き(ADR 0115 — 人間の好みや要件変更、環境の変化は candidate にならない)、周期(盤面設定、既定は週次)の meta-review が candidate 群の繰り返しを**判断で**見て approved 提案を起草し、人間承認 question で確定する — 数値閾値は使わない。周期は1つだが task は**主題ごとに別**(Behavior meta-review と routing meta-review、主題ごとに未決着1本まで — ADR 0111)。routing 側は学習器の shadow と実際の乖離・配分評価の分布・新セルを読み(学習器の outcome は帰責で条件づけ、人間・環境由来の異議を負の信号に数えない)、表の diff と Interview の提案を承認 question に出す。人間の明示指示は1回で候補化してよいが承認 question は経由する。authority の変更は従来どおり registry への diff。
 
 ## Display language(表示言語)
 
