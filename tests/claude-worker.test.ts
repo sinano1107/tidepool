@@ -51,6 +51,8 @@ function makeTask(
     completion_criteria: "no drip for 24h",
     risk_flag: 0,
     review_flag: 0,
+    tier: null,
+    priority: null,
     parent_id: null,
     based_on_decision: null,
     sort_key: 1,

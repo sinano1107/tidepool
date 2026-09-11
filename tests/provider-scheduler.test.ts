@@ -249,3 +249,53 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([firstOpenai.id, secondOpenai.id]);
 });
+
+it("model-specific window が外すのは当たった task だけ —— 同じ agent の要求なしタスクは走り続ける(ADR 0110 決定3)", async () => {
+  t = await bootTidepool({
+    openaiUsage: async (now) => ({
+      status: "observed",
+      provider: "openai",
+      cliVersion: "codex-cli 0.147.0",
+      plan: "plus",
+      windows: [
+        {
+          name: "primary",
+          model: null,
+          usedPercent: 0,
+          durationMs: 5 * HOUR,
+          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+        },
+        {
+          name: "primary",
+          model: "gpt-frontier",
+          usedPercent: 50,
+          durationMs: 5 * HOUR,
+          resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+        },
+      ],
+    }),
+    // #543 以降、model は agent ではなく **task の要求**で決まる
+    resolveUsageResource: (task) => ({
+      provider: "openai",
+      model: task.tier === "frontier" ? "gpt-frontier" : "gpt-economy",
+    }),
+    agentsUsingUsageResources: () => ["sole-agent"],
+  });
+  const requested = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title: "frontier を要求して窓に当たる",
+      purpose: "p",
+      completion_criteria: "c",
+      assignee: "sole-agent",
+      tier: "frontier",
+    })
+  ).json;
+  const plain = await registerWork(t, "要求なしなので別のモデルで走る", undefined, undefined, "sole-agent");
+
+  await t.clock.advance(HOUR);
+  // agent ごと外すと plain も止まる —— 外れるのは窓に当たった task だけ
+  expect(t.worker.started.map((task) => task.id)).toEqual([plain.id]);
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  expect(queue.find((task) => task.id === requested.id)?.status).toBe("skipped");
+});

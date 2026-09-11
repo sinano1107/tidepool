@@ -3,6 +3,7 @@ import type { Router } from "express";
 import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
@@ -459,6 +460,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
                 "Opt this child into an independent review of its deliverable on completion. " +
                   "No authority check applies — declaring it is never out of scope.",
               ),
+            tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
+            priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
         ),
       },

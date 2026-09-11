@@ -111,6 +111,19 @@ const TASKS_TABLE_DDL = `
       -- task. workspace (already above) doubles as the repo half of the
       -- reference for such a task.
       github_issue_number INTEGER,
+      -- the task's execution request (ADR 0110 決定2, CONTEXT.md「要求」): the
+      -- required quality tier and the priority that orders tied candidates,
+      -- either null for "unstated". Null is the *absence* of a request, and
+      -- is distinguished in the record from "the board default was chosen" —
+      -- the latter shows up as worker_spawned.source.tier, never here.
+      -- Deliberately no CHECK: the enum is stated once in the domain
+      -- (registerTask / decomposeTask throw DomainError, ADR 0110 決定2), and
+      -- the ALTER below adds bare TEXT columns to existing boards — a CHECK
+      -- here and not there is exactly the drift this shared DDL exists to
+      -- prevent. Constraints (provider限定・予算) are deliberately NOT columns
+      -- here: those live on the workspace and the board settings.
+      tier                TEXT,
+      priority            TEXT,
       created_at          TEXT NOT NULL,
       -- exactly one content source, exclusively (issue #49, ADR 0016): an
       -- ordinary task carries all three content fields and no
@@ -546,6 +559,10 @@ export function openDb(path: string): Db {
     // 時刻を持ち、後始末が完走した時点で null に戻る —— in-memory の callback は
     // 盤面の crash を越えないので、起動時に拾うにはこの1列が要る。
     "teardown_started_at",
+    // ADR 0110 決定2 / issue #543: 要求2列。TASKS_TABLE_DDL 側と同じ**素の
+    // TEXT** —— 片方にだけ CHECK を足せば fresh 盤面と migrate 盤面が drift する。
+    "tier",
+    "priority",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }

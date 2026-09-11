@@ -15,6 +15,7 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents, listLog } from "./events.js";
+import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
@@ -567,6 +568,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional(),
+        tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
+        priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
         decompose_reason: z.string().optional(),
       },
     },

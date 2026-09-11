@@ -32,6 +32,7 @@ import type { DraftClient } from "./draft.js";
 import {
   IncompleteExecutionSettingTableError,
   resolveExecutionSetting,
+  type Tier,
 } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -309,13 +310,19 @@ function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<t
  *
  *  表に行が無いときは null に倒す: null は既に「モデル窓が当たらない」の綴りで
  *  あり、pickup はそのまま進んで spawn 側の例外が表の穴を名指しする。ここで
- *  投げれば scheduler の tick ごと倒れる。 */
+ *  投げれば scheduler の tick ごと倒れる。
+ *
+ *  `taskTier` は task の要求(#543)。task が手元にある呼び手 —— pickup の
+ *  モデル窓判定(`resolveUsageResource`)—— は必ず渡す: 渡し忘れれば要求ティアで
+ *  走る task がその窓をすり抜け、全テスト緑のまま除外が効かなくなる。agent 名の
+ *  集合を答える呼び手には task が無く、undefined を渡す(下記)。 */
 function executionModel(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier" | "advisor">,
+  taskTier: Tier | null | undefined,
 ): string | null {
   try {
-    return resolveExecutionSetting(db, definition).model;
+    return resolveExecutionSetting(db, definition, taskTier).model;
   } catch (error) {
     if (error instanceof IncompleteExecutionSettingTableError) return null;
     throw error;
@@ -333,7 +340,7 @@ function usageResourceResolver(
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
     return {
       provider: agent.definition.provider as Provider,
-      model: executionModel(db, agent.definition),
+      model: executionModel(db, agent.definition, task.tier),
     };
   };
 }
@@ -482,7 +489,9 @@ function fableAgentsResolver(board: BoardComposition, db: Db): (() => string[]) 
   if (!registryDir) return undefined;
   return () =>
     Object.values(loadBoardRegistry(board).agents)
-      .filter((agent) => executionModel(db, agent)?.toLowerCase().includes("fable"))
+      // task 単位ではなく agent 名の集合を答える面なので、要求は undefined ——
+      // 「その agent が要求なしで走ればどのモデルか」の判定である(#543)
+      .filter((agent) => executionModel(db, agent, undefined)?.toLowerCase().includes("fable"))
       .map((agent) => agent.name);
 }
 
@@ -515,7 +524,9 @@ function agentsUsingUsageResourcesResolver(
       .filter((agent) =>
         resources.some(
           (resource) =>
-            resource.provider === agent.provider && resource.model === executionModel(db, agent),
+            resource.provider === agent.provider &&
+            // fable 線と同じく agent 名の集合を答える面 —— task は手元に無い
+            resource.model === executionModel(db, agent, undefined),
         ),
       )
       .map((agent) => agent.name);

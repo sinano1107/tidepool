@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventOrigin, type EventPayload, taskDecisionLog } from "./events.js";
+import { PRIORITIES, type Priority, TIERS, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 
@@ -71,6 +72,16 @@ export interface Task {
   completion_criteria: string;
   risk_flag: number;
   review_flag: number;
+  /** The task's execution request (CONTEXT.md「要求」, ADR 0110 決定2): the
+   *  required quality tier, or null when the registrant stated none — the
+   *  selector then falls back to the agent's `tier` and the board default,
+   *  and records which of the three decided (`worker_spawned.source.tier`).
+   *  Null is "unstated", never "the default was chosen". */
+  tier: Tier | null;
+  /** The other half of the request: how tied candidates are ordered
+   *  (CONTEXT.md「要求」). Stored only — the selector does not read it while
+   *  an agent speaks a single Provider and there is nothing to order. */
+  priority: Priority | null;
   parent_id: string | null;
   /** Decision-log entry this decomposed child rests on; null outside a decomposition decision. */
   based_on_decision: number | null;
@@ -173,6 +184,12 @@ interface PendingChildSpec extends TaskContent {
    *  child converted for another reason — risk/assignee/workspace — must not
    *  lose it in transit). */
   review_flag?: boolean;
+  /** The execution request originally written at decompose time, honored
+   *  as-is on materialization — a child converted for another reason
+   *  (risk/assignee/workspace) must not lose the tier its parent asked for,
+   *  same line as `review_flag` above. */
+  tier?: string;
+  priority?: string;
 }
 
 /** The SQLite shape of a task: items/answer/pending-child are JSON TEXT
@@ -319,6 +336,13 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to. Absent for an ordinary task. */
   github_issue_number?: number;
+  /** CONTEXT.md「要求」 — the required quality tier and the priority that
+   *  orders tied candidates (ADR 0110 決定2). Typed as open strings, not the
+   *  enums, because every door keeps its schema permissive and lets this
+   *  layer say once which values exist (`assertExecutionRequest`); a narrower
+   *  type here would only move that statement into each door's zod schema. */
+  tier?: string;
+  priority?: string;
 }
 
 /** Every question carries 1-4 items (issue #30), each with 2-4 options plus a
@@ -382,6 +406,21 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     if (!input.parent_id) {
       throw new DomainError("a cancel option requires a parent task");
     }
+  }
+}
+
+/** ADR 0110 決定2 / CONTEXT.md「要求」: the two request columns hold an enum
+ *  each, stated **once**, here. Every door (JSON API, 管理MCP, worker MCP's
+ *  decompose) keeps its own schema permissive and lets a bad value arrive as
+ *  a DomainError from this layer — spelling the enum per door would mean
+ *  three places to update when the vocabulary moves. An unstated column is
+ *  not a bad value: null is the request's absence. */
+function assertExecutionRequest(input: Pick<RegisterTaskInput, "tier" | "priority">): void {
+  if (input.tier !== undefined && !(TIERS as readonly string[]).includes(input.tier)) {
+    throw new DomainError(`unknown tier "${input.tier}" — one of ${TIERS.join(", ")}`);
+  }
+  if (input.priority !== undefined && !(PRIORITIES as readonly string[]).includes(input.priority)) {
+    throw new DomainError(`unknown priority "${input.priority}" — one of ${PRIORITIES.join(", ")}`);
   }
 }
 
@@ -556,6 +595,7 @@ export function registerTask(
 ): Task {
   assertQuestionSpec(input);
   assertGithubRef(input);
+  assertExecutionRequest(input);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
@@ -584,6 +624,9 @@ export function registerTask(
     completion_criteria: content.completion_criteria,
     risk_flag: input.risk_flag ? 1 : 0,
     review_flag: input.review_flag ? 1 : 0,
+    // assertExecutionRequest above has already closed these to the enums
+    tier: (input.tier as Tier | undefined) ?? null,
+    priority: (input.priority as Priority | undefined) ?? null,
     parent_id: input.parent_id ?? null,
     based_on_decision: input.based_on_decision ?? null,
     sort_key: maxKey + 1,
@@ -611,12 +654,12 @@ export function registerTask(
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-         risk_flag, review_flag, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
+         risk_flag, review_flag, tier, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
          question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
-         @risk_flag, @review_flag, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
+         @risk_flag, @review_flag, @tier, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
          @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @created_at)`,
@@ -1463,6 +1506,11 @@ export interface ChildSpec extends TaskContent {
    *  sits outside the authority checks above, unlike risk_flag/assignee/
    *  workspace). */
   review_flag?: boolean;
+  /** The child's own execution request (CONTEXT.md「要求」): the decomposing
+   *  parent's judgement about how hard this slice is, carried into the
+   *  child's own pickup. Same open-string posture as RegisterTaskInput. */
+  tier?: string;
+  priority?: string;
 }
 
 /** The registering worker's authority, resolved by the caller (the MCP layer)
@@ -1873,6 +1921,11 @@ export function decomposeTask(
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
+  // before anything registers: a child whose request is a bad value must not
+  // survive as a pending_child on an approval question, where it would only
+  // throw at the moment a human clicks approve (registerTask validates the
+  // *question*, not the spec it carries).
+  for (const child of input.children) assertExecutionRequest(child);
   if (input.reason.length === 0) {
     throw new DomainError("a decomposition requires a reason");
   }
@@ -1929,6 +1982,8 @@ export function decomposeTask(
               assignee: child.assignee,
               workspace,
               review_flag: child.review_flag,
+              tier: child.tier,
+              priority: child.priority,
               based_on_decision: decisionId,
             },
             based_on_decision: decisionId,
@@ -2772,6 +2827,13 @@ export function nextSlotTask(
    *  (ADR 0030)。該当タスクは workspace/agent quarantine と同じ「資源単位の
    *  skip」で候補から外れ、他のタスクは流れ続ける。 */
   excludedAssignees?: string[],
+  /** モデル固有の窓が超過中のタスクそのもの(ADR 0110 決定3)。要求ティアが
+   *  task ごとに違う以上、**agent 単位の除外では広すぎる** —— 同じ agent の
+   *  要求なしタスクは別のモデルで走るのに、先頭の1本が窓に当たっただけで
+   *  一緒に止まる(「全 entry が除外されて初めて skipped」に反する)。
+   *  provider 全体の窓は今も agent 単位(`excludedAssignees`)—— そちらは
+   *  その agent のどのタスクも走れないので、広さが実態と一致する。 */
+  excludedTaskIds?: string[],
 ): Task | undefined {
   const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
   const row = db
@@ -2792,6 +2854,8 @@ export function nextSlotTask(
            OR COALESCE(t.assignee, ${fallback}) IS NULL
            OR COALESCE(t.assignee, ${fallback}) NOT IN (
              SELECT value FROM json_each(@excludedAssignees)))
+         AND (@excludedTaskIds IS NULL
+           OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,
     )
     .get({
@@ -2800,6 +2864,7 @@ export function nextSlotTask(
       auditorName: auditorName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
       excludedAssignees: excludedAssignees ? JSON.stringify(excludedAssignees) : null,
+      excludedTaskIds: excludedTaskIds?.length ? JSON.stringify(excludedTaskIds) : null,
     }) as TaskRow | undefined;
   return row && rowToTask(row);
 }

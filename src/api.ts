@@ -154,6 +154,12 @@ const registerTaskSchema = z.object({
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
+  // the execution request (ADR 0110 決定2): open strings here, same
+  // permissive-shape posture as the content fields above — which tiers and
+  // priorities exist is the domain's to say (registerTask), so a bad value
+  // is a 400 carrying the domain's own error rather than a schema tree
+  tier: z.string().optional(),
+  priority: z.string().optional(),
   // human decompose (ADR 0047 decision 7): the reason is required for a
   // `parent_id` child and checked at the shared human door; roots do not need one.
   decompose_reason: z.string().optional(),

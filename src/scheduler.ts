@@ -588,7 +588,11 @@ export function startScheduler(deps: {
         agentsUsingUsageResources,
         false,
       ) ?? [];
-      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+      // ADR 0110 決定3: モデル固有の窓に当たるのは**その task の実行設定**であって
+      // agent ではない —— 要求ティアが task ごとに違う以上、agent を丸ごと外すと
+      // 別のモデルで走るはずの兄弟まで止まる。provider 全体の窓だけが agent 単位。
+      const excludedTasks: string[] = [];
+      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       while (head) {
         const assignee = resolveTaskAgent(head, worker.id, auditorName);
@@ -602,12 +606,12 @@ export function startScheduler(deps: {
             }
             quarantineAgent(db, assignee, error, clock.now());
             excluded.push(assignee);
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
             continue;
           }
           if (await harnessContainmentPickupBlocked(db, harness, harnessContainment, clock.now())) {
             excluded.push(assignee);
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
             continue;
           }
         }
@@ -621,7 +625,7 @@ export function startScheduler(deps: {
             }
             quarantineAgent(db, assignee, error, clock.now());
             excluded.push(assignee);
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
             continue;
           }
           const observation =
@@ -647,11 +651,12 @@ export function startScheduler(deps: {
             const providerWide =
               observation.status !== "observed" ||
               relevant.some((window) => window.model === null && window.throttled);
-            const blockedAgents = providerWide
-              ? (agentsSpeakingProviders?.([resource.provider]) ?? [assignee])
-              : [assignee];
-            excluded.push(...blockedAgents);
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded);
+            if (providerWide) {
+              excluded.push(...(agentsSpeakingProviders?.([resource.provider]) ?? [assignee]));
+            } else {
+              excludedTasks.push(head.id);
+            }
+            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
             continue;
           }
         }
