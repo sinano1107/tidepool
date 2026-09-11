@@ -294,46 +294,58 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
   return row?.frontier_advisor === 1;
 }
 
-/** 盤面境界の1行: この agent の定義から、盤面の表と設定を読んで候補を並べる。
- *  Claude / Codex 両アダプタと、pickup の除外判定・queue の skipped 表示が
- *  **同じこの1本**を通る —— 「その agent は何のモデルで走るのか」の答えが2つ
- *  あってはならない(モデル窓の除外は、答えがずれた瞬間に全テスト緑のまま黙って
- *  効かなくなる面である)。
+/** 盤面境界の1行: この agent の定義から selector の入力を組む。Claude / Codex 両
+ *  アダプタと、pickup の除外判定・queue の skipped 表示が**同じこの1本**を通る ——
+ *  「その agent は何のモデルで走るのか」の答えが2つあってはならない(モデル窓の
+ *  除外は、答えがずれた瞬間に全テスト緑のまま黙って効かなくなる面である)。
  *
  *  Provider 順位は `PROVIDER_VALUES`(資格情報の宣言順)。#545 が設定面を開くまで
  *  盤面設定には出さない —— 動かす口が無い値を DB に置いても手順が1つ増えるだけ。
  *
  *  `provider` / `tier` の文字列が列挙に収まっていることは、定義を受け入れる門
  *  (`assertValidAgentDefinition`)が既に保証している。 */
-export function executionSettingsFor(
+function selectorInputFor(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
   /** task の要求ティア。`null` は行の綴りのまま受ける —— 呼び手は3つとも
    *  `task.tier` を持っており、各々で undefined へ直させる理由が無い。 */
   taskTier: Tier | null | undefined,
+): SelectorInput {
+  return {
+    entries: definition.provider.map((entry) => ({
+      provider: entry.name as Provider,
+      advisor: entry.advisor,
+    })),
+    providerRank: PROVIDER_VALUES,
+    taskTier: taskTier ?? undefined,
+    agentTier: definition.tier as Tier | undefined,
+    frontierAdvisor: isFrontierAdvisorEnabled(db),
+  };
+}
+
+/** この agent の候補を Provider 順位で並べる(除外は当てない)。pickup の除外判定と
+ *  queue の skipped 表示が、観測で育つ除外集合に対して selector を引き直すための口。 */
+export function executionSettingsFor(
+  db: Db,
+  definition: Pick<AgentDefinition, "provider" | "tier">,
+  taskTier: Tier | null | undefined,
 ): ExecutionSetting[] {
   return executionSettingCandidates(
-    {
-      entries: definition.provider.map((entry) => ({
-        provider: entry.name as Provider,
-        advisor: entry.advisor,
-      })),
-      providerRank: PROVIDER_VALUES,
-      taskTier: taskTier ?? undefined,
-      agentTier: definition.tier as Tier | undefined,
-      frontierAdvisor: isFrontierAdvisorEnabled(db),
-    },
+    selectorInputFor(db, definition, taskTier),
     loadExecutionSettingTable(db),
   );
 }
 
-/** 盤面境界の選択そのもの: 候補を作り、除外を当てて1つ選ぶ。除外を渡さない
- *  呼び手(spawn 側)にとっては「今日の挙動」= 先頭 entry の設定である。 */
+/** 盤面境界の選択そのもの: 除外を当てずに1つ選ぶ —— spawn 側にとっての「今日の
+ *  挙動」= Provider 順位の先頭 entry の設定である。除外を当てた選択は pickup の
+ *  側にあり、そちらは育った除外集合を `firstSelectable` へ渡す。 */
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
   taskTier: Tier | null | undefined,
-  excluded: ExecutionExclusions = NO_EXCLUSIONS,
 ): ExecutionSetting | null {
-  return firstSelectable(executionSettingsFor(db, definition, taskTier), excluded);
+  return selectExecutionSetting(
+    selectorInputFor(db, definition, taskTier),
+    loadExecutionSettingTable(db),
+  );
 }

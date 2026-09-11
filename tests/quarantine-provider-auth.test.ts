@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import type { ExecutionSetting } from "../src/execution-setting.js";
+import type { Provider } from "../src/registry.js";
 import {
   api,
   bootTidepool,
@@ -14,6 +16,16 @@ import {
 /** issue #446 / ADR 0097 決定2: provider 単位の資源への細分化のゲート面。
  *  moonshot の失効は moonshot を喋る agent の pickup だけを止め(確認型
  *  question が立つ)、anthropic の worker と board call は止まらない。 */
+
+/** 除外を当てる前の候補1件(provider-scheduler.test.ts と同じ形)。 */
+const candidate = (provider: Provider, model: string): ExecutionSetting => ({
+  provider,
+  model,
+  effort: "high",
+  advisor: undefined,
+  source: { tier: "board", provider: "only" },
+});
+
 let t: Tidepool;
 afterEach(() => t?.stop());
 
@@ -133,20 +145,8 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
     openaiUsage,
     taskExecutionCandidates: (task) => [
       task.assignee === "codex-agent"
-        ? {
-            provider: "openai",
-            model: "gpt-5.6-sol",
-            effort: "high",
-            advisor: undefined,
-            source: { tier: "board", provider: "only" },
-          }
-        : {
-            provider: "anthropic",
-            model: "claude-opus-4-1",
-            effort: "high",
-            advisor: undefined,
-            source: { tier: "board", provider: "only" },
-          },
+        ? candidate("openai", "gpt-5.6-sol")
+        : candidate("anthropic", "claude-opus-4-1"),
     ],
   });
   const codex = await registerWork(t, "waits for Codex login", undefined, undefined, "codex-agent");
