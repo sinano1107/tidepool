@@ -16,6 +16,7 @@ import {
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
+  windowMatchesModel,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -91,8 +92,33 @@ export function allEntriesExcluded(
   candidates?: TaskExecutionCandidates,
 ): boolean {
   if (!candidates) return false;
-  const settings = candidates(task);
+  let settings: ExecutionSetting[];
+  try {
+    settings = candidates(task);
+  } catch (error) {
+    // 定義が成立していない / registry が知らない assignee。**読み口では投げない**
+    // —— 候補が組めないときと同じく偽である(判定できないものを skipped とは
+    // 言わない)。scheduler は同じ例外を自分で捕まえて agent を quarantine し、
+    // その行は quarantine の枝で skipped として現れる。表示側がここで投げると、
+    // 1行の定義違反でキュー全体が 500 になる。
+    if (error instanceof UnknownAgentError || error instanceof InvalidAgentDefinitionError) {
+      return false;
+    }
+    throw error;
+  }
   return settings.length > 0 && firstSelectable(settings, excluded) === null;
+}
+
+/** 「この行は全 entry が除外されているか」を答える述語を、今の除外集合に対して
+ *  1つ作る(ADR 0110 決定3)。queue の skipped 表示(`/api/queue` と `list_queue`)
+ *  と move route の Pickable head が**同じこの1本**を呼ぶ —— 読み口ごとに同じ
+ *  クロージャを書くと、片方だけが古い除外集合を読むようになる。 */
+export function entryExclusionPredicate(
+  db: Db,
+  candidates?: TaskExecutionCandidates,
+): (task: ExecutionCandidateTarget) => boolean {
+  const excluded = pickupExclusions(db);
+  return (task) => allEntriesExcluded(task, excluded, candidates);
 }
 
 /** **legacy 経路**の名前集合 —— Provider ごとの usage 観測を持たない盤面
@@ -721,10 +747,11 @@ export function startScheduler(deps: {
           observedProviders.set(setting.provider, observation);
           const model = setting.model;
           const relevant = observation.windows.filter(
-            (window) =>
-              window.model === null ||
-              window.model === model ||
-              (window.model === "fable" && model.toLowerCase().includes("fable")),
+            // provider 全体の窓(model === null)は常に関係する。model 固有の窓の
+            // 照合は除外を当てる側と同じ1つの式を通す(`windowMatchesModel`)——
+            // ここに別の式を書くと、保存された観測を読む skipped 表示と同じ poll
+            // で観測し直すゲートが、非 fable の model 名で黙ってズレる。
+            (window) => window.model === null || windowMatchesModel(window.model, model),
           );
           if (observation.status === "observed" && !relevant.some((window) => window.throttled)) break;
           for (const window of relevant) {

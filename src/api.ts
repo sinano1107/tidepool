@@ -66,10 +66,8 @@ import {
 } from "./registry-write.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import {
-  allEntriesExcluded,
-  type ExecutionCandidateTarget,
+  entryExclusionPredicate,
   pickupExcludedAssignees,
-  pickupExclusions,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
@@ -685,11 +683,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     );
   /** 「この行は全 entry が除外されているか」。scheduler の poll が同じ式を、同じ
    *  poll で観測し直した除外集合に対して当てる(ADR 0110 決定3)。 */
-  const entriesAllExcluded = () => {
-    const excluded = pickupExclusions(db);
-    return (task: ExecutionCandidateTarget) =>
-      allEntriesExcluded(task, excluded, taskExecutionCandidates);
-  };
+  const entriesAllExcluded = () => entryExclusionPredicate(db, taskExecutionCandidates);
 
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);

@@ -2,13 +2,14 @@ import { afterEach, expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import type { Provider } from "../src/registry.js";
+import { InvalidAgentDefinitionError, type Provider } from "../src/registry.js";
 import { usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
+  managementMcpClient,
   mcpClient,
   registerWork,
   type Tidepool,
@@ -385,4 +386,69 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
     multi: queue.find((task) => task.id === multi.id)?.status,
     plain: queue.find((task) => task.id === plain.id)?.status,
   }).toEqual({ blocked: "skipped", multi: "in_progress", plain: "todo" });
+});
+
+it("全 entry が除外された行は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / CONTEXT.md「Pickable head」)", async () => {
+  t = await bootTidepool({
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task.tier),
+  });
+  // 上の行は frontier を要求するので fable 行に解決され、唯一の entry が
+  // 温存中の窓に当たる。下の行は要求なし = economy 行なのでその窓に当たらない
+  const blocked = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title: "温存中の fable 窓に当たる frontier",
+      purpose: "p",
+      completion_criteria: "c",
+      tier: "frontier",
+    })
+  ).json;
+
+  t.worker.scriptUsage(fableOverPace(t.clock.now()));
+  await t.clock.advance(HOUR);
+  // この poll では候補が blocked しか無く、全 entry 除外なので何も走らない
+  expect(t.worker.started).toEqual([]);
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  expect(queue.find((task) => task.id === blocked.id)?.status).toBe("skipped");
+
+  // 素の先頭は blocked のままだが、候補の先頭は下の runnable。1回の ↑ が空振り
+  // しないことが、Pickable head が entry 集合で判定されている証拠である
+  const runnable = await registerWork(t, "要求なしなので別の行で走る");
+  await api(t.baseUrl, "POST", `/api/tasks/${runnable.id}/move`, { after: null });
+  expect(t.worker.started.map((task) => task.id)).toEqual([runnable.id]);
+});
+
+it("候補の解決が定義違反で倒れても queue の読み口は 200 を返す —— 1行のドリフトでキュー全体を落とさない(#544)", async () => {
+  t = await bootTidepool({
+    taskExecutionCandidates: (task) => {
+      // registry が後から壊れた agent(登録時には成立していた)。scheduler は
+      // 同じ例外を自分で捕まえて quarantine するが、読み口は投げてはならない
+      if (task.assignee === "drifted-agent") {
+        throw new InvalidAgentDefinitionError("drifted-agent", "unknown provider \"typo\"");
+      }
+      return executionSettingsFor(
+        t.db,
+        { provider: [{ name: "anthropic", advisor: false }], tier: undefined },
+        task.tier,
+      );
+    },
+  });
+  const drifted = await registerWork(t, "定義が壊れた agent の行", undefined, undefined, "drifted-agent");
+
+  const queue = await api(t.baseUrl, "GET", "/api/queue");
+  expect(queue.status).toBe(200);
+  // 判定できないものを skipped とは言わない —— quarantine の枝がその行を答える
+  expect((queue.json.tasks as any[]).find((task) => task.id === drifted.id)?.status).toBe("todo");
+
+  const mcp = await managementMcpClient(t.baseUrl);
+  try {
+    const result = (await mcp.callTool({ name: "list_queue", arguments: {} })) as {
+      content: { text: string }[];
+    };
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.tasks.find((task: any) => task.id === drifted.id).status).toBe("todo");
+  } finally {
+    await mcp.close();
+  }
 });

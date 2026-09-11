@@ -45,10 +45,8 @@ import {
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import {
-  allEntriesExcluded,
-  type ExecutionCandidateTarget,
+  entryExclusionPredicate,
   pickupExcludedAssignees,
-  pickupExclusions,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -230,11 +228,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   // queue here receives "why is it quiet" in the same one read, since MCP has
   // no banner channel to fill the gap.
   /** queue の skipped 表示を scheduler のゲートと同じ式から導く(ADR 0110 決定3)。 */
-  const skippedByEntries = (deps: ManagementMcpDeps) => {
-    const excluded = pickupExclusions(deps.db);
-    return (task: ExecutionCandidateTarget) =>
-      allEntriesExcluded(task, excluded, deps.taskExecutionCandidates);
-  };
+  const skippedByEntries = (deps: ManagementMcpDeps) =>
+    entryExclusionPredicate(deps.db, deps.taskExecutionCandidates);
 
   server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () => {
     // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない

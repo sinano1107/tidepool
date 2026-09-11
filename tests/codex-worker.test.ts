@@ -155,6 +155,29 @@ describe("CodexWorker (ADR 0098)", () => {
     });
   });
 
+  it("盤面が順位で選んだ openai の設定を渡されれば、anthropic を先頭に持つ agent でも codex で走る(#544 の demo —— spawn 側の再解決は順位1位の anthropic を返して拒否になる)", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-carried-setting");
+    f.worker.start(value, {
+      provider: "openai",
+      model: "gpt-6-astra",
+      effort: "high",
+      advisor: undefined,
+      source: { tier: "task", provider: "rank" },
+    });
+    expect(f.process.calls[0]!.args).toEqual(
+      expect.arrayContaining(["-m", "gpt-6-astra"]),
+    );
+    expect(
+      listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload,
+    ).toMatchObject({
+      provider: "openai",
+      model: "gpt-6-astra",
+      source: { tier: "task", provider: "rank" },
+      harness: "codex",
+    });
+  });
+
   it("the spawned Board-owned hook denies Tidepool MCP only from subagent turns and fails closed", async () => {
     const f = await fixture();
     const value = task(f.db, "codex-hook");

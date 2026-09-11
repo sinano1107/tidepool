@@ -124,7 +124,19 @@ export interface ExecutionExclusions {
 }
 
 /** 何も除外されていない(今日の spawn 経路の既定)。 */
-export const NO_EXCLUSIONS: ExecutionExclusions = { providers: [], models: [] };
+const NO_EXCLUSIONS: ExecutionExclusions = { providers: [], models: [] };
+
+/** 観測された1つの窓が、この model に当たるか。**綴りはここ1つ**(issue #544):
+ *  除外を当てる `firstSelectable` と、scheduler が「この設定に関係する窓」を絞る
+ *  filter が別々の式を持つと、保存された観測を読む表示と同じ poll で観測し直す
+ *  ゲートが、全テスト緑のまま非 fable の model 名でズレる。
+ *
+ *  部分一致を持つのは ADR 0030 の線 —— CLI の `--model` は開かれた文字列で、
+ *  表の `fable` のような alias 行は世代が進めば `claude-fable-5` のような具体 id
+ *  として観測される。 */
+export function windowMatchesModel(windowModel: string, model: string): boolean {
+  return windowModel === model || model.toLowerCase().includes(windowModel.toLowerCase());
+}
 
 /** 1回の pickup が決める実行設定の入力(CONTEXT.md「Selector」)。
  *
@@ -211,7 +223,7 @@ function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): E
  *  kill switch(ADR 0043)はここでは見ない —— 「この session に advisor は無い」
  *  という盤面ホストの運用マスクは registry の宣言とは別の層で、選んだ**後**に
  *  被せる(claude-worker.ts の launch)。 */
-export function executionSettingCandidates(
+function executionSettingCandidates(
   request: SelectorInput,
   table: ExecutionSettingTable,
 ): ExecutionSetting[] {
@@ -255,8 +267,7 @@ export function firstSelectable(
         !excluded.models.some(
           (window) =>
             window.provider === candidate.provider &&
-            (window.model === candidate.model ||
-              candidate.model.toLowerCase().includes(window.model.toLowerCase())),
+            windowMatchesModel(window.model, candidate.model),
         ),
     ) ?? null
   );
