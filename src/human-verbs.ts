@@ -249,6 +249,8 @@ export async function registerThroughHumanDoor(
               workspace: input.workspace,
               risk_flag: input.risk_flag,
               review_flag: input.review_flag,
+              tier: input.tier,
+              priority: input.priority,
             },
           ],
         },

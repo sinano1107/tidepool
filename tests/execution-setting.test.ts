@@ -5,6 +5,7 @@ import {
   BOARD_DEFAULT_TIER,
   type ExecutionSettingTable,
   IncompleteExecutionSettingTableError,
+  PRIORITIES,
   SEED_EXECUTION_SETTINGS,
   selectExecutionSetting,
   TIERS,
@@ -33,7 +34,7 @@ it("種の表は `/implementation-delegation` の表と同じ内容を持つ —
 
 it("tier を書かない agent は盤面既定のティアで解決され、出所は board", () => {
   expect(
-    selectExecutionSetting({ provider: "anthropic", tier: undefined, advisor: false, frontierAdvisor: false }, table),
+    selectExecutionSetting({ provider: "anthropic", taskTier: undefined, agentTier: undefined, advisor: false, frontierAdvisor: false }, table),
   ).toEqual({
     provider: "anthropic",
     model: "sonnet",
@@ -45,7 +46,7 @@ it("tier を書かない agent は盤面既定のティアで解決され、出�
 
 it("agent の tier は盤面既定より優先され、出所は agent", () => {
   expect(
-    selectExecutionSetting({ provider: "anthropic", tier: "economy", advisor: false, frontierAdvisor: false }, table),
+    selectExecutionSetting({ provider: "anthropic", taskTier: undefined, agentTier: "economy", advisor: false, frontierAdvisor: false }, table),
   ).toEqual({
     provider: "anthropic",
     model: "sonnet",
@@ -57,33 +58,33 @@ it("agent の tier は盤面既定より優先され、出所は agent", () => {
 
 it("provider が違えば同じティアでもその provider の表記で解決される", () => {
   expect(
-    selectExecutionSetting({ provider: "openai", tier: "frontier", advisor: false, frontierAdvisor: false }, table)
+    selectExecutionSetting({ provider: "openai", taskTier: undefined, agentTier: "frontier", advisor: false, frontierAdvisor: false }, table)
       .model,
   ).toBe("gpt-6-astra");
   expect(
-    selectExecutionSetting({ provider: "moonshot", tier: "economy", advisor: false, frontierAdvisor: false }, table)
+    selectExecutionSetting({ provider: "moonshot", taskTier: undefined, agentTier: "economy", advisor: false, frontierAdvisor: false }, table)
       .model,
   ).toBe("kimi-k3[1m]");
 });
 
 it("advisor が真でも「Fable を advisor に使える」フラグが立つまでは main と同一のモデルに倒れる(Fable の同意も org の availableModels も盤面から読めない)", () => {
   expect(
-    selectExecutionSetting({ provider: "anthropic", tier: "economy", advisor: true, frontierAdvisor: false }, table)
+    selectExecutionSetting({ provider: "anthropic", taskTier: undefined, agentTier: "economy", advisor: true, frontierAdvisor: false }, table)
       .advisor,
   ).toBe("sonnet");
   expect(
-    selectExecutionSetting({ provider: "anthropic", tier: "standard", advisor: true, frontierAdvisor: false }, table)
+    selectExecutionSetting({ provider: "anthropic", taskTier: undefined, agentTier: "standard", advisor: true, frontierAdvisor: false }, table)
       .advisor,
   ).toBe("opus");
 });
 
 it("フラグが立てば advisor は上位ティアの champion、main が既に上位なら main と同一", () => {
   expect(
-    selectExecutionSetting({ provider: "anthropic", tier: "standard", advisor: true, frontierAdvisor: true }, table)
+    selectExecutionSetting({ provider: "anthropic", taskTier: undefined, agentTier: "standard", advisor: true, frontierAdvisor: true }, table)
       .advisor,
   ).toBe("fable");
   const frontier = selectExecutionSetting(
-    { provider: "anthropic", tier: "frontier", advisor: true, frontierAdvisor: true },
+    { provider: "anthropic", taskTier: undefined, agentTier: "frontier", advisor: true, frontierAdvisor: true },
     table,
   );
   expect(frontier.advisor).toBe(frontier.model);
@@ -92,14 +93,14 @@ it("フラグが立てば advisor は上位ティアの champion、main が既�
 it("要求されたティアの行が表に無ければ spawn を拒否する — 表が不完全なまま別のモデルへ黙って倒れない", () => {
   const partial: ExecutionSettingTable = table.filter((row) => row.tier !== "economy");
   expect(() =>
-    selectExecutionSetting({ provider: "anthropic", tier: "economy", advisor: false, frontierAdvisor: false }, partial),
+    selectExecutionSetting({ provider: "anthropic", taskTier: undefined, agentTier: "economy", advisor: false, frontierAdvisor: false }, partial),
   ).toThrow(new IncompleteExecutionSettingTableError("anthropic", "economy"));
 });
 
 it("advisor の導出先(上位ティア)の行が無い場合も、advisor 無しで走らせず拒否する", () => {
   const partial: ExecutionSettingTable = table.filter((row) => row.tier !== "frontier");
   expect(() =>
-    selectExecutionSetting({ provider: "anthropic", tier: "standard", advisor: true, frontierAdvisor: true }, partial),
+    selectExecutionSetting({ provider: "anthropic", taskTier: undefined, agentTier: "standard", advisor: true, frontierAdvisor: true }, partial),
   ).toThrow(new IncompleteExecutionSettingTableError("anthropic", "frontier"));
 });
 
@@ -110,4 +111,56 @@ it("pairing はティアの水準だけで判定する — advisor が main 未�
   expect(() => assertAdvisorPairing("standard", "economy")).toThrow(new AdvisorPairingError("standard", "economy"));
   expect(() => assertAdvisorPairing("standard", "standard")).not.toThrow();
   expect(() => assertAdvisorPairing("economy", "frontier")).not.toThrow();
+});
+
+it("優先順位は quality / cost / speed の3値(CONTEXT.md「要求」)", () => {
+  expect(PRIORITIES).toEqual(["quality", "cost", "speed"]);
+});
+
+it("task の要求ティアは agent の tier より優先され、出所は task(ADR 0110 決定2)", () => {
+  expect(
+    selectExecutionSetting(
+      { provider: "anthropic", taskTier: "frontier", agentTier: "economy", advisor: false, frontierAdvisor: false },
+      table,
+    ),
+  ).toEqual({
+    provider: "anthropic",
+    model: "fable",
+    effort: "high",
+    advisor: undefined,
+    source: { tier: "task" },
+  });
+});
+
+it("task の要求ティアは agent が tier を持たなくても盤面既定より優先される", () => {
+  expect(
+    selectExecutionSetting(
+      { provider: "anthropic", taskTier: "standard", agentTier: undefined, advisor: false, frontierAdvisor: false },
+      table,
+    ),
+  ).toEqual({
+    provider: "anthropic",
+    model: "opus",
+    effort: "high",
+    advisor: undefined,
+    source: { tier: "task" },
+  });
+});
+
+it("task の要求が agent の tier と同じ値でも出所は task —— 「誰が要求したか」は値の一致で消えない", () => {
+  expect(
+    selectExecutionSetting(
+      { provider: "anthropic", taskTier: "economy", agentTier: "economy", advisor: false, frontierAdvisor: false },
+      table,
+    ).source,
+  ).toEqual({ tier: "task" });
+});
+
+it("task の要求ティアは advisor の導出にも効く —— main が動けば pairing の基準も動く", () => {
+  expect(
+    selectExecutionSetting(
+      { provider: "anthropic", taskTier: "frontier", agentTier: "economy", advisor: true, frontierAdvisor: true },
+      table,
+    ).advisor,
+  ).toBe("fable");
 });

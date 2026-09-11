@@ -8,6 +8,18 @@ import type { AgentDefinition, Provider } from "./registry.js";
 export const TIERS = ["economy", "standard", "frontier"] as const;
 export type Tier = (typeof TIERS)[number];
 
+/** 要求のもう1列: 同点候補の並べ替えの基準(CONTEXT.md「要求」)。**selector は
+ *  今これを読まない** —— 単一 Provider の agent しか居ない間は候補が1つしか無く、
+ *  通しても効かない値が1つ増えるだけである。列に入るところまでが #543 で、
+ *  Provider 順位と候補集合が来る #544 が並べ替えの読み手になる。 */
+export const PRIORITIES = ["quality", "cost", "speed"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
+/** 解決されたティアが**誰の要求だったか**(ADR 0110 決定3)。events 側の
+ *  `worker_spawned.source` と同じ union を2箇所に書くと必ず片方だけ動くので、
+ *  綴りはここ1つにして events.ts は型として取り込む。 */
+export type TierSource = "task" | "agent" | "board";
+
 /** task にも agent にも要求が無いときのティア。**配布される既定は最小の床**で
  *  あり、上げるのは運用者の判断である(ADR 0094 の advisor と同じ線 ——「既定は
  *  最小の床と、運用者が足せる余地を提供するもの」)。`/implementation-delegation`
@@ -74,18 +86,25 @@ export interface ExecutionSetting {
   effort: string;
   advisor: string | undefined;
   /** ADR 0110 決定3: 選んだ値だけでなく**なぜその値になったか**を刻む。今は
-   *  ティアの出所1つ —— `"agent"` は agent.md の `tier`、`"board"` は盤面既定。
-   *  task の要求(`"task"`)は #543 が足す。 */
-  source: { tier: "agent" | "board" };
+   *  ティアの出所1つ —— `"task"` は task の要求列、`"agent"` は agent.md の
+   *  `tier`、`"board"` は盤面既定。未指定(列が null)と「既定を選んだ」が
+   *  記録上区別されるのはこの1値による。 */
+  source: { tier: TierSource };
 }
 
-/** 1回の pickup が決める実行設定の入力(CONTEXT.md「Selector」)。task の要求2列
- *  (#543)と Provider entry の配列(#544)はまだここに無い —— 今日の agent は
- *  単一 Provider で、要求は agent の既定ティアか盤面既定のどちらかである。 */
+/** 1回の pickup が決める実行設定の入力(CONTEXT.md「Selector」)。Provider entry
+ *  の配列(#544)はまだここに無い —— 今日の agent は単一 Provider である。
+ *
+ *  ティアの要求元が2つになったので、どちらの `tier` かは**フィールド名で**言う
+ *  (`tier` 1つのままでは解決済みの値と生の要求が同じ綴りになる)。どちらも省略可
+ *  だが省略を `undefined` として**明示させる** —— 任意フィールドにすると、新しい
+ *  呼び手が task の要求を渡し忘れても型が通り、要求が黙って落ちる。 */
 export interface ExecutionRequest {
   provider: Provider;
+  /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
+  taskTier: Tier | undefined;
   /** agent.md の `tier`。省略 → 盤面既定。 */
-  tier: Tier | undefined;
+  agentTier: Tier | undefined;
   /** agent.md の `advisor`(真偽)。model 名は書かれない —— 導出は下記。 */
   advisor: boolean;
   /** 盤面設定:「上位ティアの行を advisor に使ってよい」。立つまで advisor は
@@ -139,6 +158,15 @@ function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): E
   return row;
 }
 
+/** 解決順(task の要求 > agent の `tier` > 盤面既定、ADR 0110 決定2)のうち
+ *  **どの段で決まったか**。値の一致では畳まない —— agent と同じティアを task が
+ *  要求した場合も出所は `"task"` で、学習器が読む文脈変数は「登録者が難易度を
+ *  申告した」という事実そのものである。 */
+function tierSource(request: ExecutionRequest): TierSource {
+  if (request.taskTier !== undefined) return "task";
+  return request.agentTier !== undefined ? "agent" : "board";
+}
+
 /** pickup 1回ぶんの実行設定を決める決定論の規則(CONTEXT.md「Selector」/ ADR 0110
  *  決定3)。「誰が走るか」(Assignee)は選ばない —— 選ぶのは、その agent が走る
  *  計算資源だけである。
@@ -154,7 +182,7 @@ export function selectExecutionSetting(
   request: ExecutionRequest,
   table: ExecutionSettingTable,
 ): ExecutionSetting {
-  const tier = request.tier ?? BOARD_DEFAULT_TIER;
+  const tier = request.taskTier ?? request.agentTier ?? BOARD_DEFAULT_TIER;
   const main = rowFor(table, request.provider, tier);
   let advisor: string | undefined;
   if (request.advisor) {
@@ -167,7 +195,7 @@ export function selectExecutionSetting(
     model: main.model,
     effort: main.effort,
     advisor,
-    source: { tier: request.tier === undefined ? "board" : "agent" },
+    source: { tier: tierSource(request) },
   };
 }
 
@@ -200,11 +228,13 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier" | "advisor">,
+  taskTier: Tier | undefined,
 ): ExecutionSetting {
   return selectExecutionSetting(
     {
       provider: definition.provider as Provider,
-      tier: definition.tier as Tier | undefined,
+      taskTier,
+      agentTier: definition.tier as Tier | undefined,
       advisor: definition.advisor,
       frontierAdvisor: isFrontierAdvisorEnabled(db),
     },

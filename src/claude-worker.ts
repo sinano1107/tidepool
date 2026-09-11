@@ -1642,7 +1642,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const agent = resolveExecutionAgent(registry, this.options.agent, null);
     // 表から解決した値を検査する(ADR 0110 決定3): 既定 agent が走るティアの行の
     // effort が閉じた5値の外なら、盤面は最初のタスクで詰まる前に起動を拒む。
-    assertKnownEffort(resolveExecutionSetting(this.options.db, agent.definition).effort);
+    // 起動時検査なので task は無い —— 既定 agent の既定ティアの行を見る
+    assertKnownEffort(resolveExecutionSetting(this.options.db, agent.definition, undefined).effort);
   }
 
   /** ADR 0020 part 4: a party review (self RCA) is a review task with a
@@ -1870,7 +1871,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 無い / advisor の組み合わせが不成立なら例外で pickup を拒む —— どちらも
     // 「黙って別のモデルで走る」「黙って advisor 無しで走る」の代わりである。
     // provider の綴りもここから1つだけ取る(上の「derived once」の線)。
-    const setting = resolveExecutionSetting(this.options.db, agent.definition);
+    const setting = resolveExecutionSetting(this.options.db, agent.definition, task.tier ?? undefined);
     if (setting.provider === "openai") {
       throw new Error('canonical route "openai -> codex" cannot run through Claude Code (ADR 0098)');
     }

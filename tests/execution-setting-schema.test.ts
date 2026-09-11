@@ -23,7 +23,7 @@ it("実行設定の表は種の既定から DB へ初期化される(ADR 0110 �
       (a, b) => a.provider.localeCompare(b.provider) || a.tier.localeCompare(b.tier),
     ),
   );
-  expect(resolveExecutionSetting(db, deckhand)).toMatchObject({ model: "sonnet", effort: "high" });
+  expect(resolveExecutionSetting(db, deckhand, undefined)).toMatchObject({ model: "sonnet", effort: "high" });
   db.close();
 });
 
@@ -48,8 +48,8 @@ it("「上位ティアの行を advisor に使える」フラグの既定は fal
   const path = await boardPath("frontier-advisor-default");
   const db = openDb(path);
   const withAdvisor = { provider: "anthropic", tier: "economy", advisor: true };
-  expect(resolveExecutionSetting(db, withAdvisor).advisor).toBe("sonnet");
+  expect(resolveExecutionSetting(db, withAdvisor, undefined).advisor).toBe("sonnet");
   db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 1)").run();
-  expect(resolveExecutionSetting(db, withAdvisor).advisor).toBe("fable");
+  expect(resolveExecutionSetting(db, withAdvisor, undefined).advisor).toBe("fable");
   db.close();
 });

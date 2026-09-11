@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { TierSource } from "./execution-setting.js";
 import type { Provider } from "./registry.js";
 import type { TaskType } from "./tasks.js";
 
@@ -193,13 +194,14 @@ export type EventPayload =
       provider: Provider;
       model: string;
       effort: string;
-      /** ADR 0110 決定3: **why** it was that setting — `"agent"` when the
-       *  agent's own `tier` decided, `"board"` when the board default did.
-       *  A task-level request (`"task"`) is #543. Recorded beside the values
+      /** ADR 0110 決定3: **why** it was that setting — `"task"` when the
+       *  task's own request column decided, `"agent"` when the agent's `tier`
+       *  did, `"board"` when the board default did. Recorded beside the values
        *  because "which model" and "who asked for it" are separate facts: the
        *  learner reads the first, a human asking "why was it this model" reads
-       *  the second. */
-      source: { tier: "agent" | "board" };
+       *  the second. It is also the only place "the default was chosen" is
+       *  distinguished from "nothing was requested" (CONTEXT.md「要求」). */
+      source: { tier: TierSource };
       /** ADR 0098: the Harness/version actually selected for this session. */
       harness: "claude-code" | "codex";
       cli_version: string;
