@@ -117,7 +117,7 @@ const TASKS_TABLE_DDL = `
       -- is distinguished in the record from "the board default was chosen" —
       -- the latter shows up as worker_spawned.source.tier, never here.
       -- Deliberately no CHECK: the enum is stated once in the domain
-      -- (registerTask / decomposeTask throw DomainError, ADR 0107 決定3), and
+      -- (registerTask / decomposeTask throw DomainError, ADR 0110 決定2), and
       -- the ALTER below adds bare TEXT columns to existing boards — a CHECK
       -- here and not there is exactly the drift this shared DDL exists to
       -- prevent. Constraints (provider限定・予算) are deliberately NOT columns

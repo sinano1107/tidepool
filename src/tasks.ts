@@ -413,8 +413,7 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
  *  each, stated **once**, here. Every door (JSON API, 管理MCP, worker MCP's
  *  decompose) keeps its own schema permissive and lets a bad value arrive as
  *  a DomainError from this layer — spelling the enum per door would mean
- *  three places to update when the vocabulary moves (ADR 0107 決定3: a
- *  behaviour is stated at the lowest seam it shows at). An unstated column is
+ *  three places to update when the vocabulary moves. An unstated column is
  *  not a bad value: null is the request's absence. */
 function assertExecutionRequest(input: Pick<RegisterTaskInput, "tier" | "priority">): void {
   if (input.tier !== undefined && !(TIERS as readonly string[]).includes(input.tier)) {
@@ -2828,6 +2827,13 @@ export function nextSlotTask(
    *  (ADR 0030)。該当タスクは workspace/agent quarantine と同じ「資源単位の
    *  skip」で候補から外れ、他のタスクは流れ続ける。 */
   excludedAssignees?: string[],
+  /** モデル固有の窓が超過中のタスクそのもの(ADR 0110 決定3)。要求ティアが
+   *  task ごとに違う以上、**agent 単位の除外では広すぎる** —— 同じ agent の
+   *  要求なしタスクは別のモデルで走るのに、先頭の1本が窓に当たっただけで
+   *  一緒に止まる(「全 entry が除外されて初めて skipped」に反する)。
+   *  provider 全体の窓は今も agent 単位(`excludedAssignees`)—— そちらは
+   *  その agent のどのタスクも走れないので、広さが実態と一致する。 */
+  excludedTaskIds?: string[],
 ): Task | undefined {
   const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
   const row = db
@@ -2848,6 +2854,8 @@ export function nextSlotTask(
            OR COALESCE(t.assignee, ${fallback}) IS NULL
            OR COALESCE(t.assignee, ${fallback}) NOT IN (
              SELECT value FROM json_each(@excludedAssignees)))
+         AND (@excludedTaskIds IS NULL
+           OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,
     )
     .get({
@@ -2856,6 +2864,7 @@ export function nextSlotTask(
       auditorName: auditorName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
       excludedAssignees: excludedAssignees ? JSON.stringify(excludedAssignees) : null,
+      excludedTaskIds: excludedTaskIds?.length ? JSON.stringify(excludedTaskIds) : null,
     }) as TaskRow | undefined;
   return row && rowToTask(row);
 }

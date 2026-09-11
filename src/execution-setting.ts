@@ -15,6 +15,18 @@ export type Tier = (typeof TIERS)[number];
 export const PRIORITIES = ["quality", "cost", "speed"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
+/** 要求2列を受け取る入口(管理MCP の `register_task`、worker MCP の `decompose`)が
+ *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い
+ *  ティア名や古い意味を喋り続ける。`priority` の文面が「並べ替える」ではなく
+ *  「記録される」なのは実態どおりで、selector は今この列を読まない(上記)——
+ *  効きもしない設定をエージェントに書かせない。 */
+export const TIER_FIELD_DESCRIPTION =
+  `Required quality tier for this task: ${TIERS.join(" / ")}. ` +
+  "Omit to fall back to the agent's own tier, then the board default.";
+export const PRIORITY_FIELD_DESCRIPTION =
+  `Recorded on this task: ${PRIORITIES.join(" / ")}. ` +
+  "It orders tied candidates once more than one Provider can run the task; with a single Provider it has no effect yet.";
+
 /** 解決されたティアが**誰の要求だったか**(ADR 0110 決定3)。events 側の
  *  `worker_spawned.source` と同じ union を2箇所に書くと必ず片方だけ動くので、
  *  綴りはここ1つにして events.ts は型として取り込む。 */
@@ -95,11 +107,16 @@ export interface ExecutionSetting {
 /** 1回の pickup が決める実行設定の入力(CONTEXT.md「Selector」)。Provider entry
  *  の配列(#544)はまだここに無い —— 今日の agent は単一 Provider である。
  *
+ *  **`ExecutionRequest` とは呼ばない**: CONTEXT.md の「要求(Execution request)」は
+ *  task が持つ2列のことで、この型はそれに盤面設定と agent の宣言を足した selector
+ *  の入力である。用語は CONTEXT.md が正本(docs/agents/domain.md)なので、別物に
+ *  同じ名前を当てない。
+ *
  *  ティアの要求元が2つになったので、どちらの `tier` かは**フィールド名で**言う
  *  (`tier` 1つのままでは解決済みの値と生の要求が同じ綴りになる)。どちらも省略可
  *  だが省略を `undefined` として**明示させる** —— 任意フィールドにすると、新しい
  *  呼び手が task の要求を渡し忘れても型が通り、要求が黙って落ちる。 */
-export interface ExecutionRequest {
+export interface SelectorInput {
   provider: Provider;
   /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
   taskTier: Tier | undefined;
@@ -170,7 +187,7 @@ function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): E
  *  という盤面ホストの運用マスクは registry の宣言とは別の層で、選んだ**後**に
  *  被せる(claude-worker.ts の launch)。 */
 export function selectExecutionSetting(
-  request: ExecutionRequest,
+  request: SelectorInput,
   table: ExecutionSettingTable,
 ): ExecutionSetting {
   const tier = request.taskTier ?? request.agentTier ?? BOARD_DEFAULT_TIER;
@@ -201,7 +218,7 @@ function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
     .all() as ExecutionSettingRow[];
 }
 
-/** 「上位ティアの行を advisor に使ってよい」(ExecutionRequest.frontierAdvisor)。
+/** 「上位ティアの行を advisor に使ってよい」(SelectorInput.frontierAdvisor)。
  *  行が無い = 未設定 = false —— display_language と同じ「行が無ければ既定」の形。 */
 function isFrontierAdvisorEnabled(db: Db): boolean {
   const row = db.prepare("SELECT frontier_advisor FROM execution_defaults WHERE id = 1").get() as
