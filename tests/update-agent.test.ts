@@ -41,11 +41,10 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       name: "deckhand",
       version: "0.3.2",
       authority: "standard",
-      provider: "anthropic",
+      provider: [{ name: "anthropic", advisor: false }],
       description: "Rewritten description",
       icon: "🦀",
       tier: undefined,
-      advisor: false,
       retiredFields: [],
       skills: ["@workspace"],
       systemPrompt: "You are Deckhand, rewritten.",
@@ -154,7 +153,10 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
-    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", advisor: false });
+    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({
+      version: "4",
+      provider: [{ name: "anthropic", advisor: false }],
+    });
     // registryDir 自身の working tree ではなく着地先の ref から読む(ADR 0052 決定6)
     expect(git(registryDir, "show", "main:agents/crab.md")).not.toContain("advisor:");
   });
@@ -238,7 +240,7 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
 
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toMatchObject({
       version: "0.3.2",
-      provider: "moonshot",
+      provider: [{ name: "moonshot", advisor: false }],
     });
     expect(git(registryDir, "show", "main:agents/deckhand.md")).toContain("provider: moonshot");
   });
@@ -267,7 +269,7 @@ describe("updateAgent: provider 検証(ADR 0097 — 編集でも登録時と同�
       ),
     ).rejects.toThrow(InvalidAgentDefinitionError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
-    expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.provider).toBe("anthropic");
+    expect(loadRegistry(registryDir, "purely-local").agents.deckhand!.provider).toEqual([{ name: "anthropic", advisor: false }]);
   });
 });
 

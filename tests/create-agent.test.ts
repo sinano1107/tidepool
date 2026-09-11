@@ -57,11 +57,10 @@ describe("createAgent: 正常系(issue #70)", () => {
       // 作成時の version は機械刻印 — 呼び出し側は渡せない(入力型に version がない)
       version: "1",
       authority: "standard",
-      provider: "anthropic",
+      provider: [{ name: "anthropic", advisor: true }],
       description: "General work agent for the tidepool board",
       icon: "🐙",
       tier: "frontier",
-      advisor: true,
       retiredFields: [],
       skills: ["@workspace"],
       systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
@@ -102,11 +101,10 @@ describe("createAgent: 正常系(issue #70)", () => {
       name: "hermit",
       version: "1",
       authority: "standard",
-      provider: "anthropic",
+      provider: [{ name: "anthropic", advisor: false }],
       description: "Minimal agent",
       icon: undefined,
       tier: undefined,
-      advisor: false,
       retiredFields: [],
       skills: ["*"],
       systemPrompt: "You are Hermit.",
@@ -429,7 +427,7 @@ describe("createAgent: provider 検証(ADR 0097 — 必須・列挙・advisor �
       { registry: { dir: registryDir, mode: "purely-local" } },
     );
 
-    expect(loadRegistry(registryDir, "purely-local").agents.tako!.provider).toBe("moonshot");
+    expect(loadRegistry(registryDir, "purely-local").agents.tako!.provider).toEqual([{ name: "moonshot", advisor: false }]);
     expect(git(registryDir, "show", "main:agents/tako.md")).toContain("provider: moonshot");
   });
 

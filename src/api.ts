@@ -65,7 +65,11 @@ import {
   DeletionConfirmationRequiredError,
 } from "./registry-write.js";
 import { RepoAccessMissingError } from "./repo-access.js";
-import { pickupExcludedAssignees } from "./scheduler.js";
+import {
+  entryExclusionPredicate,
+  pickupExcludedAssignees,
+  type TaskExecutionCandidates,
+} from "./scheduler.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
   type BoardTask,
@@ -89,7 +93,6 @@ import {
   getProviderUsage,
   getThrottleState,
   isFablePickupBlocked,
-  type ProviderUsageResource,
 } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import {
@@ -539,8 +542,12 @@ export interface ApiRouterDeps {
    *  display shares with the scheduler's gate. Absent → no registry configured,
    *  so no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定(Provider 順位
+   *  で並び、除外は当たっていない)。queue の skipped 表示と Pickable head の判定が
+   *  scheduler のゲートと同じ式を共有するための口。Absent → registry を持たない
+   *  盤面なので、entry は知りようがなく何も skipped にならない。 */
+  taskExecutionCandidates?: TaskExecutionCandidates;
   /** The public half of the board's VAPID keypair (issue #14) — the WebUI
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
@@ -652,8 +659,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     translationClient,
     fableAgents,
     agentsSpeakingProviders,
-    agentsUsingUsageResources,
     agentsUsingHarnesses,
+    taskExecutionCandidates,
     isProtectedWorkspace,
     boardState,
   } = deps;
@@ -661,19 +668,22 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.use(json());
   // one cache per router = per process (the API is booted once per board)
   const issueContent = new IssueContentCache();
-  /** 資源単位の skip(fable 線 ADR 0030・provider 認証の quarantine ADR 0097
-   *  決定2)で候補から外れる assignee の集合。pickup の述語(`nextSlotTask`)と
-   *  キュービューの skipped 表示は同じ集合を見なければならない(tasks.ts の
-   *  「乖離させない」の線) — 述語だけでなく、そこへ渡す引数も1つの式から出す。 */
+  /** 資源単位の skip で候補から外れるもの(ADR 0030 の fable 線 / ADR 0110 決定3 の
+   *  entry 除外)。pickup の述語(`nextSlotTask`)とキュービューの skipped 表示は
+   *  同じ集合を見なければならない(tasks.ts の「乖離させない」の線) — 述語だけ
+   *  でなく、そこへ渡す引数も1つの式から出す。 */
   const excludedAssignees = () =>
     pickupExcludedAssignees(
       db,
       isFablePickupBlocked(db, clock.now()),
       fableAgents,
-      agentsSpeakingProviders,
-      agentsUsingHarnesses,
-      agentsUsingUsageResources,
+      // entry を持つ盤面は agent 名で外さない —— 下の述語がより細かく答える
+      taskExecutionCandidates ? undefined : agentsSpeakingProviders,
+      taskExecutionCandidates ? undefined : agentsUsingHarnesses,
     );
+  /** 「この行は全 entry が除外されているか」。scheduler の poll が同じ式を、同じ
+   *  poll で観測し直した除外集合に対して当てる(ADR 0110 決定3)。 */
+  const entriesAllExcluded = () => entryExclusionPredicate(db, taskExecutionCandidates);
 
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
@@ -1203,6 +1213,25 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
+  /** Pickable head(issue #299 / ADR 0110 決定3): slot が実際に歩く述語と同じ
+   *  歩き方 —— 全 entry が除外された task は候補ではないので、次を見る。 */
+  function pickableHead() {
+    const excluded = entriesAllExcluded();
+    const skipped: string[] = [];
+    for (;;) {
+      const head = nextSlotTask(
+        db,
+        workspace?.name,
+        defaultAgentName,
+        auditorName,
+        excludedAssignees(),
+        skipped,
+      );
+      if (!head || !excluded(head)) return head;
+      skipped.push(head.id);
+    }
+  }
+
   router.post("/tasks/:id/move", (req, res) => {
     const parsed = moveTaskSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1228,13 +1257,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // `GET /queue` passes — a raw head that could never be picked (a blocked
     // parent, a held row, a quarantined workspace/agent, an assignee over the
     // fable line) must not swallow the human's first ↑.
-    const headBefore = nextSlotTask(
-      db,
-      workspace?.name,
-      defaultAgentName,
-      auditorName,
-      excludedAssignees(),
-    )?.id;
+    const headBefore = pickableHead()?.id;
     const moved = moveTask(db, task, after, clock.now());
     // "run now" is specifically a todo already at the pickable head, moved to
     // the head again — an explicit immediate-poll trigger (issue #82
@@ -1842,7 +1865,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // 資源単位の skip(fable 線 ADR 0030・provider 認証の quarantine ADR
         // 0097 決定2)に該当するタスクだけが skipped に見える — 盤面全体の停止は
         // 行に現れず、上の halts が一度に答える
-        listQueue(db, workspace?.name, defaultAgentName, auditorName, excludedAssignees()),
+        listQueue(
+          db,
+          workspace?.name,
+          defaultAgentName,
+          auditorName,
+          excludedAssignees(),
+          entriesAllExcluded(),
+        ),
       ),
     });
   });

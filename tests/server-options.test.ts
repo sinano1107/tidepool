@@ -96,10 +96,9 @@ Codex agent.
     defaultAgentName: "codex-agent",
   });
 
-  expect(options.resolveUsageResource?.({ assignee: null } as Task)).toEqual({
-    provider: "openai",
-    model: "gpt-5.6-terra",
-  });
+  expect(options.taskExecutionCandidates?.({ assignee: null } as Task)).toMatchObject([
+    { provider: "openai", model: "gpt-5.6-terra" },
+  ]);
 });
 
 // spawn がどの ref を読むかは worker options の口に載っていなければ決まらない
@@ -431,10 +430,9 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // ない。この2つが**同じ1本**(resolveExecutionSetting)を通っていることが、
   // モデル窓の除外が黙って効かなくなる形を塞いでいる。
   expect(options.fableAgents?.()).toEqual([]);
-  expect(options.resolveUsageResource?.({ assignee: "deckhand" } as any)).toEqual({
-    provider: "anthropic",
-    model: "sonnet",
-  });
+  expect(options.taskExecutionCandidates?.({ assignee: "deckhand" } as any)).toMatchObject([
+    { provider: "anthropic", model: "sonnet" },
+  ]);
   expect(options.openaiUsage).toBeTypeOf("function");
   expect(options.agentAdmin?.authorityProfiles?.()).toEqual(["standard"]);
   // registry ゲートで初めて立つ口

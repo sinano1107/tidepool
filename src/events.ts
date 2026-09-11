@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import type { TierSource } from "./execution-setting.js";
+import type { ProviderSource, TierSource } from "./execution-setting.js";
 import type { Provider } from "./registry.js";
 import type { TaskType } from "./tasks.js";
 
@@ -200,8 +200,13 @@ export type EventPayload =
        *  because "which model" and "who asked for it" are separate facts: the
        *  learner reads the first, a human asking "why was it this model" reads
        *  the second. It is also the only place "the default was chosen" is
-       *  distinguished from "nothing was requested" (CONTEXT.md「要求」). */
-      source: { tier: TierSource };
+       *  distinguished from "nothing was requested" (CONTEXT.md「要求」).
+       *
+       *  `provider` は Provider の出所(ADR 0110 決定5 / issue #544): `"only"` は
+       *  agent が entry を1つしか宣言していなかった、`"rank"` は残った候補から
+       *  Provider 順位で選んだ。「温存中の anthropic を避けて openai で走った」が
+       *  事後に読めるのはこの1値による。 */
+      source: { tier: TierSource; provider: ProviderSource };
       /** ADR 0098: the Harness/version actually selected for this session. */
       harness: "claude-code" | "codex";
       cli_version: string;

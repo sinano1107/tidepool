@@ -24,16 +24,18 @@ export interface AgentDefinition {
    *  label. Required — an agent registered without one has no way to be
    *  picked from a roster, same hygiene as issue #41's assignable_to. */
   description: string;
-  /** Provider (CONTEXT.md の Provider / ADR 0097 決定1): 推論の向き先・課金元の
-   *  宣言 — harness(起動する CLI)とは独立した概念で、同じ harness が複数の
-   *  provider を喋りうる。Required — 「省略 = 既定 provider」という暗黙は
-   *  書き忘れと意図の区別がつかないため作らない(skill 許可リストの
-   *  「省略=無制限の footgun は作らない」と同じ線)。値の列挙と検証は registry
-   *  側(`PROVIDER_VALUES` / `assertValidProvider`)、値が意味するもの
-   *  (エンドポイント・env 名・モデル表記)はアダプタ側の定数(ADR 0005)。
-   *  ここでは自由文字列のまま持つ — 列挙・組み合わせの違反は読み込みを倒さず、
-   *  登録と pickup の門が拒否/隔離する(ADR 0097 決定3)。 */
-  provider: string;
+  /** この agent が走ってよい Provider(CONTEXT.md の Provider / ADR 0110 決定1)。
+   *  **正規化された entry の配列**であり、agent.md 側の3つの綴り(省略 / 単一
+   *  文字列 / 配列)は `normalizeProviderEntries` が1つのこの形へ畳む —— 読み手
+   *  (selector・門・spawn)が綴りの分岐を持たないための正規形である。
+   *  省略の意味は「盤面が知る全 Provider を advisor 無しの床の構成で」で、
+   *  ADR 0097 決定1 の「必須」はここで撤回された。
+   *
+   *  値の列挙と検証は registry 側(`PROVIDER_VALUES` / `assertValidAgentDefinition`)、
+   *  値が意味するもの(エンドポイント・env 名・モデル表記)はアダプタ側の定数
+   *  (ADR 0005)。名前は自由文字列のまま持つ — 列挙・組み合わせの違反は読み込みを
+   *  倒さず、登録と pickup の門が拒否/隔離する(ADR 0097 決定3)。 */
+  provider: readonly AgentProviderEntry[];
   /** 既定の要求ティア(CONTEXT.md「要求」/ ADR 0110 決定1): この agent の
    *  セッションが既定でどの品質ティアを要求するか。省略 → 盤面既定
    *  (`BOARD_DEFAULT_TIER`)。「常に上位で」と言いたい Auditor のような役割の
@@ -41,12 +43,6 @@ export interface AgentDefinition {
    *  selector が盤面の表から選ぶ。ここでは `provider` と同じく自由文字列のまま
    *  持ち、列挙の検査は登録と pickup の門(`assertValidAgentDefinition`)が行う。 */
   tier?: string;
-  /** Advisor capability (issue #33 / CONTEXT.md の Advisor): この agent の worker
-   *  session が判断点で上位モデルに相談してよいか。**真偽値であって model 名では
-   *  ない**(ADR 0110 決定1)—— advisor は main 以上のティアでなければならず、
-   *  main が selector で動く以上、固定した model 名は書いた時点でしか正しくない。
-   *  実際に相談する model は実行設定の一部として表から導出される。 */
-  advisor: boolean;
   /** ピン留めが退役した後も agent.md に残っている値の名前(ADR 0110 決定1)。
    *  `model` / `effort`(実行設定へ移った)と、自由文字列のままの `advisor`
    *  (真偽値へ変わった)。**読み込みでは倒さない** —— 手で commit された違反が
@@ -133,6 +129,42 @@ export type MergeDial = (typeof MERGE_DIAL_VALUES)[number];
 export const PROVIDER_VALUES = ["anthropic", "moonshot", "openai"] as const;
 export type Provider = (typeof PROVIDER_VALUES)[number];
 
+/** 正規化された Provider entry(ADR 0110 決定1): 「この Provider で、advisor は
+ *  あり / なし」の1件。advisor が entry 単位なのは、経路依存の能力だからである
+ *  (ADR 0097 決定3)—— agent が複数の Provider を持つと、advisor は agent の
+ *  性質ではなく「その経路で走るときの性質」になる。`name` は自由文字列のまま
+ *  (列挙の検査は門)。 */
+export interface AgentProviderEntry {
+  name: string;
+  advisor: boolean;
+}
+
+/** agent.md の3つの綴りを1つの正規形へ畳む(ADR 0110 決定1)。**登録の verb と
+ *  parse が同じこの1本を通る** —— 2箇所で畳めば、フォームから来た定義と手で
+ *  commit された定義が別の形になり、門が別々の判定に至る。
+ *
+ *  - 省略 → 盤面が知る全 Provider(`PROVIDER_VALUES` の宣言順)を床の構成で
+ *  - 単一文字列 → 長さ1の entry(今日の綴り)
+ *  - 配列 → 要素は文字列または `{name, advisor?}`
+ *
+ *  トップレベルの `advisor` は**全 entry に掛かる**。掛かった先が advisor を
+ *  提供しない経路なら、黙って落とさず門が定義ごと拒む(ADR 0097 決定3)——
+ *  entry 側に `advisor` が書かれていれば、そちらが掛かる。 */
+export function normalizeProviderEntries(
+  provider: unknown,
+  advisor: boolean,
+): AgentProviderEntry[] {
+  if (provider === undefined || provider === null || provider === "") {
+    return PROVIDER_VALUES.map((name) => ({ name, advisor }));
+  }
+  const written = Array.isArray(provider) ? provider : [provider];
+  return written.map((entry) =>
+    typeof entry === "string"
+      ? { name: entry, advisor }
+      : { name: (entry as AgentProviderEntry).name, advisor: (entry as { advisor?: boolean }).advisor ?? advisor },
+  );
+}
+
 /** The local execution harness selected by a canonical Provider route (ADR
  *  0098). This is board-owned routing state, never registry frontmatter. */
 export type Harness = "claude-code" | "codex";
@@ -190,8 +222,9 @@ export class InvalidAgentDefinitionError extends Error {
 /** 門が見る定義の断面。登録の verb は人間が送ったフォームの値を、pickup 解決は
  *  読み込み済みの `AgentDefinition` を、それぞれこの形で渡す。 */
 export interface AgentDefinitionCheck {
-  provider: string;
-  advisor: boolean;
+  /** 正規化済みの entry 配列(ADR 0110 決定1)。登録の verb は
+   *  `normalizeProviderEntries` を通した値を渡す —— 門が綴りの分岐を持たない。 */
+  provider: readonly AgentProviderEntry[];
   tier?: string;
   skills?: readonly string[];
   retiredFields?: readonly string[];
@@ -205,7 +238,7 @@ export function assertValidAgentDefinition(
   agentName: string,
   definition: AgentDefinitionCheck,
 ): void {
-  const { provider, advisor, tier, skills = [], retiredFields = [] } = definition;
+  const { provider: entries, tier, skills = [], retiredFields = [] } = definition;
   if (retiredFields.length > 0) {
     throw new InvalidAgentDefinitionError(
       agentName,
@@ -215,10 +248,11 @@ export function assertValidAgentDefinition(
         "and/or `advisor: true` instead",
     );
   }
-  if (!(PROVIDER_VALUES as readonly string[]).includes(provider)) {
+  if (entries.length === 0) {
     throw new InvalidAgentDefinitionError(
       agentName,
-      `unknown provider "${provider}" (expected one of ${PROVIDER_VALUES.join(" / ")})`,
+      "an empty provider list leaves no route this agent could ever run on — omit the field " +
+        "to run on every Provider the board knows (ADR 0110 決定1)",
     );
   }
   if (tier !== undefined && !(TIERS as readonly string[]).includes(tier)) {
@@ -227,19 +261,30 @@ export function assertValidAgentDefinition(
       `unknown tier "${tier}" (expected one of ${TIERS.join(" / ")}) — ADR 0110 決定1`,
     );
   }
-  const route = CANONICAL_ROUTES[provider as Provider];
-  if (advisor && !route.advisor) {
-    throw new InvalidAgentDefinitionError(
-      agentName,
-      `canonical route "${provider} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand (ADR 0098)`,
-    );
-  }
-  if (route.harness === "codex" && skills.length > 0) {
-    throw new InvalidAgentDefinitionError(
-      agentName,
-      `canonical route "${provider} -> ${route.harness}" does not offer skills in v1 — ` +
-        "a definition declaring a non-empty allowlist does not stand (ADR 0098)",
-    );
+  // entry 単位(ADR 0110 決定1): advisor も skill も**その経路**の性質なので、
+  // 1つの entry が成立しないなら定義全体が成立しない —— 成立しない entry を
+  // 黙って外して残りで走らせるのは、ADR 0097 決定3 が拒んだ「黙って落とす」である。
+  for (const { name, advisor } of entries) {
+    if (!(PROVIDER_VALUES as readonly string[]).includes(name)) {
+      throw new InvalidAgentDefinitionError(
+        agentName,
+        `unknown provider "${name}" (expected one of ${PROVIDER_VALUES.join(" / ")})`,
+      );
+    }
+    const route = CANONICAL_ROUTES[name as Provider];
+    if (advisor && !route.advisor) {
+      throw new InvalidAgentDefinitionError(
+        agentName,
+        `canonical route "${name} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand (ADR 0098)`,
+      );
+    }
+    if (route.harness === "codex" && skills.length > 0) {
+      throw new InvalidAgentDefinitionError(
+        agentName,
+        `canonical route "${name} -> ${route.harness}" does not offer skills in v1 — ` +
+          "a definition declaring a non-empty allowlist does not stand (ADR 0098)",
+      );
+    }
   }
 }
 
@@ -529,7 +574,17 @@ const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
   description: z.string(),
-  provider: z.string(),
+  // 3つの綴り(省略 / 単一文字列 / entry 配列、ADR 0110 決定1)をそのまま受け、
+  // 正規化は `normalizeProviderEntries` が1箇所で行う。要素の中身は自由文字列の
+  // まま —— 列挙の検査は門であって読み込みではない(ADR 0097 決定3)。
+  provider: z
+    .union([
+      z.string(),
+      z.array(
+        z.union([z.string(), z.looseObject({ name: z.string(), advisor: z.boolean().optional() })]),
+      ),
+    ])
+    .nullish(),
   // 自由文字列のまま(`provider` と同じ理由 — 列挙の検査は門であって読み込みでは
   // ない、ADR 0097 決定3)。値の集合は ADR 0110 の3ティア。
   // nullish: 値の無い `tier:` の1行(YAML では null)で registry 読み取り全体を
@@ -740,9 +795,8 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     version: meta.version,
     authority: meta.authority,
     description: meta.description,
-    provider: meta.provider,
+    provider: normalizeProviderEntries(meta.provider, meta.advisor === true),
     tier: isWritten(meta.tier) ? (meta.tier as string) : undefined,
-    advisor: meta.advisor === true,
     retiredFields: retiredExecutionFields(parsed),
     icon: meta.icon,
     skills: meta.skills,

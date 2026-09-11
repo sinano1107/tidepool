@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { resolveExecutionAgent, UnknownAgentError } from "../src/agent.js";
-import { InvalidAgentDefinitionError, type Registry } from "../src/registry.js";
+import {
+  InvalidAgentDefinitionError,
+  normalizeProviderEntries,
+  type Registry,
+} from "../src/registry.js";
 
 function makeRegistry(
   agents: Record<string, {
     authority: string;
     provider?: string;
+    providers?: string[];
+    entries?: { name: string; advisor?: boolean }[];
     advisor?: boolean;
     tier?: string;
     skills?: string[];
@@ -22,9 +28,11 @@ function makeRegistry(
           version: "0.0.1",
           authority: a.authority,
           description: `${name} agent`,
-          provider: a.provider ?? "anthropic",
+          provider: normalizeProviderEntries(
+            a.entries ?? a.providers ?? a.provider ?? "anthropic",
+            a.advisor === true,
+          ),
           tier: a.tier,
-          advisor: a.advisor === true,
           retiredFields: a.retiredFields ?? [],
           skills: a.skills ?? ["*"],
           systemPrompt: `You are ${name}.`,
@@ -110,6 +118,37 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     );
   });
 
+  // ADR 0110 決定1: 検査は entry 単位。advisor を提供しない経路の entry が1つでも
+  // あれば、その定義は成立しない —— 黙って落とさない線(ADR 0097 決定3)は、entry が
+  // 増えても「掛かっている entry のどれかが不成立なら拒否」として残る。
+  it("advisor を提供しない経路の entry が混じる定義は、advisor を持つ entry が他にあっても拒否される(ADR 0110 決定1)", () => {
+    const registry = makeRegistry({
+      deckhand: { authority: "standard", providers: ["anthropic", "openai"], advisor: true, skills: [] },
+    });
+    expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
+      InvalidAgentDefinitionError,
+    );
+  });
+
+  it("entry ごとに advisor を落とせば、advisor を提供しない Provider を併記した定義も成立する", () => {
+    const registry = makeRegistry({
+      deckhand: {
+        authority: "standard",
+        entries: [
+          { name: "anthropic", advisor: true },
+          { name: "openai", advisor: false },
+        ],
+        // openai の正準経路は v1 で skill を提供しないので、その entry を持つ定義は
+        // 空の allowlist でなければ成立しない(ADR 0098 の検査も entry 単位)
+        skills: [],
+      },
+    });
+    expect(resolveExecutionAgent(registry, "deckhand", null).definition.provider).toEqual([
+      { name: "anthropic", advisor: true },
+      { name: "openai", advisor: false },
+    ]);
+  });
+
   it("OpenAI / Codex v1 に無い skill allowlist は pickup 解決でも拒否される(ADR 0098)", () => {
     const registry = makeRegistry({
       deckhand: { authority: "standard", provider: "openai", skills: ["tdd"] },
@@ -122,14 +161,16 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
   it("moonshot でも advisor を持たない定義は従来どおり解決される", () => {
     const registry = makeRegistry({ deckhand: { authority: "standard", provider: "moonshot" } });
     const resolved = resolveExecutionAgent(registry, "deckhand", null);
-    expect(resolved.definition.provider).toBe("moonshot");
+    expect(resolved.definition.provider).toEqual([{ name: "moonshot", advisor: false }]);
   });
 
   it("anthropic で advisor を持つ定義は従来どおり解決される", () => {
     const registry = makeRegistry({
       deckhand: { authority: "standard", provider: "anthropic", advisor: true },
     });
-    expect(resolveExecutionAgent(registry, "deckhand", null).definition.advisor).toBe(true);
+    expect(resolveExecutionAgent(registry, "deckhand", null).definition.provider).toEqual([
+      { name: "anthropic", advisor: true },
+    ]);
   });
 
   it("退役したピン留め(model / effort / 旧綴りの advisor)が残る定義は pickup 解決で拒否され、その agent 名の quarantine に落ちる(ADR 0110 決定1)", () => {

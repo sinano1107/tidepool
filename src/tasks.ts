@@ -2570,6 +2570,11 @@ export function listQueue(
    *  `pickupExcludedAssignees`)から渡す。該当タスクだけが skipped 表示になる
    *  (盤面全体の throttled とは独立)。 */
   skippedAssignees?: string[],
+  /** 実行設定の entry がすべて除外されている task(ADR 0110 決定3 / issue #544)。
+   *  SQL の後で当てるのは、判定に task の要求ティアが要るから —— agent 名では
+   *  引けない。`nextSlotTask` の `excludedTaskIds` と同じ1つの式
+   *  (scheduler.ts の `pickupExclusions` + selector)から渡す。 */
+  isSkipped?: (task: BoardTask) => boolean,
 ): BoardTask[] {
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   const rows = boardRows(
@@ -2598,7 +2603,10 @@ export function listQueue(
       question_items: parseJson<QuestionItem[]>(row.question_items),
       question_answer: parseJson<string[]>(row.question_answer),
       question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
-    }));
+    }))
+    .map((task) =>
+      task.status === "todo" && isSkipped?.(task) ? { ...task, status: "skipped" as const } : task,
+    );
 }
 
 /** How a your-tasks row appears (issue #301): `blocking` names the parent this

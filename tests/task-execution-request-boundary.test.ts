@@ -221,6 +221,6 @@ You are Tako.
   // agent は economy を宣言しているが、task の要求が勝つ
   expect(events.find((e: any) => e.kind === "worker_spawned").payload).toMatchObject({
     model: "fable",
-    source: { tier: "task" },
+    source: { tier: "task", provider: "only" },
   });
 });

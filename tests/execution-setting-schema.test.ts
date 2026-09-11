@@ -8,7 +8,7 @@ import { resolveExecutionSetting, SEED_EXECUTION_SETTINGS } from "../src/executi
 /** 表を読む口は production の呼び手(`resolveExecutionSetting`)しかない
  *  (ADR 0107 決定5)。schema 層のテストは行を SQL で直に言い、読めていることは
  *  その呼び手を通して確かめる。 */
-const deckhand = { provider: "anthropic", tier: undefined, advisor: false };
+const deckhand = { provider: [{ name: "anthropic", advisor: false }], tier: undefined };
 
 async function boardPath(name: string): Promise<string> {
   return join(await mkdtemp(join(tmpdir(), `tidepool-${name}-`)), "board.sqlite");
@@ -47,9 +47,9 @@ it("初期化の後は DB が正本 — 書き換えた行は再オープンで�
 it("「上位ティアの行を advisor に使える」フラグの既定は false(未設定の盤面は advisor を main と同一に倒す)", async () => {
   const path = await boardPath("frontier-advisor-default");
   const db = openDb(path);
-  const withAdvisor = { provider: "anthropic", tier: "economy", advisor: true };
-  expect(resolveExecutionSetting(db, withAdvisor, undefined).advisor).toBe("sonnet");
+  const withAdvisor = { provider: [{ name: "anthropic", advisor: true }], tier: "economy" };
+  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("sonnet");
   db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 1)").run();
-  expect(resolveExecutionSetting(db, withAdvisor, undefined).advisor).toBe("fable");
+  expect(resolveExecutionSetting(db, withAdvisor, undefined)?.advisor).toBe("fable");
   db.close();
 });

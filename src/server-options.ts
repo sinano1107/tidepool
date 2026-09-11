@@ -30,6 +30,8 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import {
+  type ExecutionSetting,
+  executionSettingsFor,
   IncompleteExecutionSettingTableError,
   resolveExecutionSetting,
   type Tier,
@@ -61,9 +63,9 @@ import {
   refreshRegistry,
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
+import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
-import type { ProviderUsageResource } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
 
@@ -262,9 +264,9 @@ export function buildWorkerOptions(
  *  合成 root から渡されるのは env 由来のスカラだけになる。 */
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
-  const resolveHarness = harnessResolver(board);
-  if (!registryDir || !resolveHarness) return () => new LoggingWorker();
+  if (!registryDir) return () => new LoggingWorker();
   return ({ db, clock, containers, onCapInterrupted }) => {
+    const resolveHarness = harnessResolver(board, db)!;
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
       id: board.defaultAgentName,
@@ -294,54 +296,57 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   };
 }
 
-function harnessResolver(board: BoardComposition): ((task: Task) => ReturnType<typeof canonicalHarness>) | undefined {
+/** 除外を当てずに選ばれる実行設定 —— **選択と dispatch を同じ1本から出す**
+ *  (ADR 0098 / #544)。盤面が選んだ設定を渡さずに `start(task)` した場合の
+ *  行き先で、渡された場合は router がその Provider から直に導く。 */
+function harnessResolver(
+  board: BoardComposition,
+  db: Db,
+): ((task: Task) => ReturnType<typeof canonicalHarness>) | undefined {
   if (!board.registryDir) return undefined;
   return (task) => {
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
-    return canonicalHarness(agent.definition.provider as Provider);
+    const setting = resolveExecutionSetting(db, agent.definition, task.tier);
+    if (!setting) throw new InvalidAgentDefinitionError(name, "no Provider entry to run on");
+    return canonicalHarness(setting.provider);
   };
 }
 
-/** その agent が実際に焼くモデル(ADR 0110 決定3)。**spawn 側と同じ1本**
- *  (`resolveExecutionSetting`)を通す —— ここに「agent の model」を別に持てば、
+/** この agent の候補(ADR 0110 決定1/3、issue #544)。**spawn 側と同じ1本**
+ *  (`executionSettingsFor`)を通す —— ここに「agent の model」を別に持てば、
  *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。
  *
- *  表に行が無いときは null に倒す: null は既に「モデル窓が当たらない」の綴りで
- *  あり、pickup はそのまま進んで spawn 側の例外が表の穴を名指しする。ここで
- *  投げれば scheduler の tick ごと倒れる。
- *
- *  `taskTier` は task の要求(#543)。task が手元にある呼び手 —— pickup の
- *  モデル窓判定(`resolveUsageResource`)—— は必ず渡す: 渡し忘れれば要求ティアで
- *  走る task がその窓をすり抜け、全テスト緑のまま除外が効かなくなる。agent 名の
- *  集合を答える呼び手には task が無く、undefined を渡す(下記)。 */
-function executionModel(
+ *  表に行が無いときは空の候補に倒す: pickup はそのまま進んで spawn 側の例外が
+ *  表の穴を名指しする。ここで投げれば scheduler の tick ごと倒れ、skipped に
+ *  落とせば設定漏れが「静かに走らないタスク」になる。 */
+function candidatesOrEmpty(
   db: Db,
-  definition: Pick<AgentDefinition, "provider" | "tier" | "advisor">,
+  definition: Pick<AgentDefinition, "provider" | "tier">,
   taskTier: Tier | null | undefined,
-): string | null {
+): ExecutionSetting[] {
   try {
-    return resolveExecutionSetting(db, definition, taskTier).model;
+    return executionSettingsFor(db, definition, taskTier);
   } catch (error) {
-    if (error instanceof IncompleteExecutionSettingTableError) return null;
+    if (error instanceof IncompleteExecutionSettingTableError) return [];
     throw error;
   }
 }
 
-function usageResourceResolver(
+/** pickup の除外判定と queue の skipped 表示が共有する口。`task.tier` を必ず渡すのが
+ *  この口の要点である(#543 の申し送り): 渡し忘れれば要求ティアで走る task が
+ *  モデル窓をすり抜け、表示と実際の判定がずれる。 */
+function taskExecutionCandidatesResolver(
   board: BoardComposition,
   db: Db,
-): ((task: Task) => { provider: Provider; model: string | null }) | undefined {
+): TaskExecutionCandidates | undefined {
   if (!board.registryDir) return undefined;
   return (task) => {
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
-    return {
-      provider: agent.definition.provider as Provider,
-      model: executionModel(db, agent.definition, task.tier),
-    };
+    return candidatesOrEmpty(db, agent.definition, task.tier);
   };
 }
 
@@ -354,7 +359,10 @@ function agentsUsingHarnessesResolver(
       .filter((agent) => {
         try {
           assertValidAgentDefinition(agent.name, agent);
-          return harnesses.includes(canonicalHarness(agent.provider as Provider));
+          // entry のどれか1つでもその Harness なら該当する(ADR 0110 決定1)
+          return agent.provider.some((entry) =>
+            harnesses.includes(canonicalHarness(entry.name as Provider)),
+          );
         } catch (error) {
           if (error instanceof InvalidAgentDefinitionError) return false;
           throw error;
@@ -491,7 +499,7 @@ function fableAgentsResolver(board: BoardComposition, db: Db): (() => string[]) 
     Object.values(loadBoardRegistry(board).agents)
       // task 単位ではなく agent 名の集合を答える面なので、要求は undefined ——
       // 「その agent が要求なしで走ればどのモデルか」の判定である(#543)
-      .filter((agent) => executionModel(db, agent, undefined)?.toLowerCase().includes("fable"))
+      .filter((agent) => candidatesOrEmpty(db, agent, undefined)[0]?.model.toLowerCase().includes("fable"))
       .map((agent) => agent.name);
 }
 
@@ -509,25 +517,10 @@ function agentsSpeakingProvidersResolver(
   return (providers) =>
     Object.values(loadBoardRegistry(board).agents)
       // registry 側の provider は自由文字列のまま(ADR 0097 決定3 — 読み込みを
-      // 倒さない)なので、ここでは文字列として突き合わせる
-      .filter((agent) => (providers as readonly string[]).includes(agent.provider))
-      .map((agent) => agent.name);
-}
-
-function agentsUsingUsageResourcesResolver(
-  board: BoardComposition,
-  db: Db,
-): ((resources: readonly ProviderUsageResource[]) => string[]) | undefined {
-  if (!board.registryDir) return undefined;
-  return (resources) =>
-    Object.values(loadBoardRegistry(board).agents)
+      // 倒さない)なので、ここでは文字列として突き合わせる。entry のどれか1つでも
+      // その Provider を喋れば該当する(ADR 0110 決定1)
       .filter((agent) =>
-        resources.some(
-          (resource) =>
-            resource.provider === agent.provider &&
-            // fable 線と同じく agent 名の集合を答える面 —— task は手元に無い
-            resource.model === executionModel(db, agent, undefined),
-        ),
+        agent.provider.some((entry) => (providers as readonly string[]).includes(entry.name)),
       )
       .map((agent) => agent.name);
 }
@@ -753,11 +746,10 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board, db),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
-    agentsUsingUsageResources: agentsUsingUsageResourcesResolver(board, db),
     openaiUsage,
-    resolveUsageResource: usageResourceResolver(board, db),
+    taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
     agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
-    resolveHarness: harnessResolver(board),
+    resolveHarness: harnessResolver(board, db),
     harnessContainment: board.registryDir
       ? (harness) => harness === "codex"
         ? (codexContainment?.() ?? Promise.resolve({

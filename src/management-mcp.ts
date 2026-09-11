@@ -44,7 +44,11 @@ import {
   type RegistryReachabilityCheck,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
-import { pickupExcludedAssignees } from "./scheduler.js";
+import {
+  entryExclusionPredicate,
+  pickupExcludedAssignees,
+  type TaskExecutionCandidates,
+} from "./scheduler.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
   getTask,
@@ -54,7 +58,6 @@ import {
   listYourTasks,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
-import type { ProviderUsageResource } from "./throttle.js";
 import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -96,8 +99,10 @@ export interface ManagementMcpDeps {
    *  the given providers — the pickup exclusion set `list_queue`'s `skipped`
    *  display shares with the scheduler's gate. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  /** ADR 0110 決定1/3 / issue #544: queue の skipped 表示が scheduler のゲートと
+   *  同じ式を通るための口(api.ts と同じもの)。 */
+  taskExecutionCandidates?: TaskExecutionCandidates;
   /** scheduler のメモリ内の再観測中フラグ (ADR 0041 の明示注入)。読み口だけの
    *  盤面では未注入で、その場合 throttle の再観測中は現れない。 */
   throttleRevalidating?: () => boolean;
@@ -222,6 +227,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   // ADR 0068 決定3: the envelope is this ADR's real fix — an agent reading the
   // queue here receives "why is it quiet" in the same one read, since MCP has
   // no banner channel to fill the gap.
+  /** queue の skipped 表示を scheduler のゲートと同じ式から導く(ADR 0110 決定3)。 */
+  const skippedByEntries = (deps: ManagementMcpDeps) =>
+    entryExclusionPredicate(deps.db, deps.taskExecutionCandidates);
+
   server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () => {
     // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない
     const teardown = sessionInTeardown(deps.db);
@@ -237,10 +246,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           deps.db,
           isFablePickupBlocked(deps.db, deps.clock.now()),
           deps.fableAgents,
-          deps.agentsSpeakingProviders,
-          deps.agentsUsingHarnesses,
-          deps.agentsUsingUsageResources,
+          deps.taskExecutionCandidates ? undefined : deps.agentsSpeakingProviders,
+          deps.taskExecutionCandidates ? undefined : deps.agentsUsingHarnesses,
         ),
+        skippedByEntries(deps),
       ),
     });
   });

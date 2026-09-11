@@ -1,4 +1,5 @@
-import type { Harness } from "./registry.js";
+import type { ExecutionSetting } from "./execution-setting.js";
+import { canonicalHarness, type Harness } from "./registry.js";
 import type { Task } from "./tasks.js";
 
 /** Boundary between the board and whatever executes tasks (design principle 7:
@@ -16,8 +17,13 @@ export interface WorkerAdapter {
    *  attribution on events an unspecified assignee's task generates; never
    *  written onto a task's own `assignee` column. */
   readonly id: string;
-  /** Fire-and-forget: the worker acts back on the board via MCP. */
-  start(task: Task): void;
+  /** Fire-and-forget: the worker acts back on the board via MCP.
+   *
+   *  `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
+   *  **渡されたらそれを使う** —— adapter が spawn 時に解決し直すと、除外の文脈を
+   *  持たない再解決が scheduler と違う entry を選びうる(温存中の Provider で
+   *  走る)。省略 → 除外なしで解決した今日の挙動。 */
+  start(task: Task, setting?: ExecutionSetting): void;
   /** 畳み込み停止(graceful stop): `taskId` の session に、自己終了と作業の
    *  畳み込みを促す合図を送る。**送達のみで、従われる保証はない** — 合図の
    *  選択(Claude なら SIGTERM)は Harness の性質なので adapter の実装詳細に
@@ -50,8 +56,11 @@ export class CanonicalWorkerRouter implements WorkerAdapter {
     this.adapters = options.adapters;
   }
 
-  start(task: Task): void {
-    this.adapters[this.resolveHarness(task)].start(task);
+  start(task: Task, setting?: ExecutionSetting): void {
+    // 選ばれた実行設定があれば、その Provider の正準経路へ出す —— 「どの Harness で
+    // 走るか」を Provider と別に解決すると、選択と dispatch がずれる(ADR 0098)。
+    const harness = setting ? canonicalHarness(setting.provider) : this.resolveHarness(task);
+    this.adapters[harness].start(task, setting);
   }
 
   gracefulStop(taskId: string): void {

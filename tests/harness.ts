@@ -29,9 +29,9 @@ import type {
   RegistrySource,
   RosterAgent,
 } from "../src/registry.js";
+import type { TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
-import type { ProviderUsageResource } from "../src/throttle.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
@@ -169,9 +169,10 @@ export interface BootOptions {
    *  given providers, read fresh every poll by the scheduler's provider-auth
    *  gate. Absent → no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
   openaiUsage?: CodexAppServerProbe;
-  resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
+  /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定を Provider 順位で
+   *  並べたもの(除外は未適用)。渡した盤面は Provider ごとの usage 観測を行う。 */
+  taskExecutionCandidates?: TaskExecutionCandidates;
   resolveHarness?: (task: Task) => Harness;
   /** Adapter-owned sandbox/tool-surface capability seam. Passing it arms the
    *  shared container and human-surface checks too. */
@@ -260,9 +261,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
-    agentsUsingUsageResources: options.agentsUsingUsageResources,
     openaiUsage: options.openaiUsage,
-    resolveUsageResource: options.resolveUsageResource,
+    taskExecutionCandidates: options.taskExecutionCandidates,
     resolveHarness: options.resolveHarness,
     harnessContainment: options.harnessContainment,
     agentsUsingHarnesses: options.agentsUsingHarnesses,

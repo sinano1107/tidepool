@@ -12,6 +12,12 @@ import {
   containmentPickupBlocked,
 } from "./containment.js";
 import type { Db } from "./db.js";
+import {
+  type ExecutionExclusions,
+  type ExecutionSetting,
+  firstSelectable,
+  windowMatchesModel,
+} from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -21,8 +27,10 @@ import {
 } from "./harness-containment.js";
 import { getProviderPaceOffset } from "./pace-offsets.js";
 import {
+  canonicalHarness,
   type Harness,
   InvalidAgentDefinitionError,
+  PROVIDER_VALUES,
   type Provider,
   type RegistryReachabilityCheck,
   type RegistrySource,
@@ -44,7 +52,6 @@ import {
   blockedProviderUsageResources,
   evaluateAndReportProviderUsage,
   type ProviderUsageObservation,
-  type ProviderUsageResource,
   reportProviderUsage,
   reportThrottle,
 } from "./throttle.js";
@@ -69,32 +76,70 @@ import {
 
 export const HOURLY = 60 * 60 * 1000;
 
-/** ADR 0097 決定2 / issue #446: the one expression every reader of the pickup
- *  candidate set shares — fable-line exclusions (ADR 0030) plus the agents
- *  speaking an auth-quarantined provider — so the scheduler's gate, the queue
- *  view's `skipped` display, and the move route's pickable-head check can never
- *  drift apart (tasks.ts の「乖離させない」の線 — 述語だけでなく、そこへ渡す
- *  引数も1つの式から出す)。`fableBlocked` stays the caller's own derivation
- *  (the scheduler passes its just-observed decision, the views the stored
- *  gate) — only the composition is shared. Empty normalizes to `undefined`,
- *  nextSlotTask's "no exclusion" spelling. */
+/** candidates を引くのに要る task の断面。queue の行(`BoardTask`)からも引けるので、
+ *  pickup のゲートと skipped 表示が同じ関数を共有できる。 */
+export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier">;
+export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => ExecutionSetting[];
+
+/** この task の entry が**すべて**除外されているか(ADR 0110 決定3 / issue #544)。
+ *  scheduler の pickup ゲートも、queue の skipped 表示も、move route の Pickable
+ *  head もこの1つの述語を通る —— 「走る」と「skipped と表示する」が退化して
+ *  ズレることがない。候補が組めない(表に行が無い)ときは偽: 判定できないものを
+ *  skipped とは言わず、spawn 側の例外が表の穴を名指しする。 */
+export function allEntriesExcluded(
+  task: ExecutionCandidateTarget,
+  excluded: ExecutionExclusions,
+  candidates?: TaskExecutionCandidates,
+): boolean {
+  if (!candidates) return false;
+  let settings: ExecutionSetting[];
+  try {
+    settings = candidates(task);
+  } catch (error) {
+    // 定義が成立していない / registry が知らない assignee。**読み口では投げない**
+    // —— 候補が組めないときと同じく偽である(判定できないものを skipped とは
+    // 言わない)。scheduler は同じ例外を自分で捕まえて agent を quarantine し、
+    // その行は quarantine の枝で skipped として現れる。表示側がここで投げると、
+    // 1行の定義違反でキュー全体が 500 になる。
+    if (error instanceof UnknownAgentError || error instanceof InvalidAgentDefinitionError) {
+      return false;
+    }
+    throw error;
+  }
+  return settings.length > 0 && firstSelectable(settings, excluded) === null;
+}
+
+/** 「この行は全 entry が除外されているか」を答える述語を、今の除外集合に対して
+ *  1つ作る(ADR 0110 決定3)。queue の skipped 表示(`/api/queue` と `list_queue`)
+ *  と move route の Pickable head が**同じこの1本**を呼ぶ —— 読み口ごとに同じ
+ *  クロージャを書くと、片方だけが古い除外集合を読むようになる。 */
+export function entryExclusionPredicate(
+  db: Db,
+  candidates?: TaskExecutionCandidates,
+): (task: ExecutionCandidateTarget) => boolean {
+  const excluded = pickupExclusions(db);
+  return (task) => allEntriesExcluded(task, excluded, candidates);
+}
+
+/** **legacy 経路**の名前集合 —— Provider ごとの usage 観測を持たない盤面
+ *  (`taskExecutionCandidates` を配線できない盤面)だけが通る面である。fable 線
+ *  (ADR 0030)・provider 認証の quarantine(ADR 0097 決定2)・Harness の封じ込め
+ *  (ADR 0098)を agent 名で外す。
+ *
+ *  **entry を持つ盤面はここを通らない**(ADR 0110 決定3 / issue #544): agent 名で
+ *  外すと、別の Provider の entry を持つ agent が道連れになる —— 「全 entry が除外
+ *  されて初めて skipped」に反する。そちらは `pickupExclusions` + selector が答える。
+ *
+ *  Empty normalizes to `undefined`, nextSlotTask's "no exclusion" spelling. */
 export function pickupExcludedAssignees(
   db: Db,
   fableBlocked: boolean,
   fableAgents?: () => string[],
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[],
-  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[],
-  includeStoredUsage = true,
 ): string[] | undefined {
   const fable = fableBlocked && fableAgents ? fableAgents() : [];
-  const usageResources = includeStoredUsage ? blockedProviderUsageResources(db) : [];
-  const quarantinedProviders = [
-    ...new Set([
-      ...quarantinedAuthProviders(db),
-      ...usageResources.filter((resource) => resource.model === null).map((resource) => resource.provider),
-    ]),
-  ];
+  const quarantinedProviders = quarantinedAuthProviders(db);
   const providerExcluded =
     quarantinedProviders.length > 0 && agentsSpeakingProviders
       ? agentsSpeakingProviders(quarantinedProviders)
@@ -102,13 +147,49 @@ export function pickupExcludedAssignees(
   const harnesses = quarantinedHarnesses(db);
   const harnessExcluded =
     harnesses.length > 0 && agentsUsingHarnesses ? agentsUsingHarnesses(harnesses) : [];
-  const modelResources = usageResources.filter((resource) => resource.model !== null);
-  const modelExcluded =
-    modelResources.length > 0 && agentsUsingUsageResources
-      ? agentsUsingUsageResources(modelResources)
-      : [];
-  const all = [...new Set([...fable, ...providerExcluded, ...harnessExcluded, ...modelExcluded])];
+  const all = [...new Set([...fable, ...providerExcluded, ...harnessExcluded])];
   return all.length > 0 ? all : undefined;
+}
+
+/** **pickup の除外条件を組む1つの式**(ADR 0110 決定3 / issue #544)。scheduler の
+ *  ゲートも queue の skipped 表示も Pickable head の判定も、この集合を selector
+ *  (`firstSelectable`)へ渡して同じ答えを得る —— 述語だけでなく、そこへ渡す
+ *  引数も1つの式から出す(tasks.ts の「乖離させない」の線)。
+ *
+ *  agent 名ではなく **entry を外す**のが #544 の要点である: provider 認証の
+ *  quarantine も Harness の封じ込めも「その Provider では走れない」であって
+ *  「この agent は走れない」ではない —— 別の entry を持つ agent はそちらで走る。
+ *
+ *  `includeStoredUsage` は「保存された観測を読むか」。scheduler は同じ poll の
+ *  中で観測し直すので false で始め、観測のたびにこの集合を育てる。 */
+export function pickupExclusions(db: Db, includeStoredUsage = true): ExecutionExclusions {
+  const usageResources = includeStoredUsage ? blockedProviderUsageResources(db) : [];
+  const harnesses = quarantinedHarnesses(db);
+  return {
+    providers: [
+      ...new Set([
+        ...quarantinedAuthProviders(db),
+        ...usageResources
+          .filter((resource) => resource.model === null)
+          .map((resource) => resource.provider),
+        ...PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider))),
+      ]),
+    ],
+    models: usageResources.flatMap((resource) =>
+      resource.model === null ? [] : [{ provider: resource.provider, model: resource.model }],
+    ),
+  };
+}
+
+/** 観測された1つの窓を除外集合へ足す(scheduler の poll の中で育つ側)。 */
+function withExclusion(
+  excluded: ExecutionExclusions,
+  provider: Provider,
+  model: string | null,
+): ExecutionExclusions {
+  return model === null
+    ? { ...excluded, providers: [...excluded.providers, provider] }
+    : { ...excluded, models: [...excluded.models, { provider, model }] };
 }
 
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
@@ -227,21 +308,23 @@ export function startScheduler(deps: {
    *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
-  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
-   *  the given providers, read fresh every poll — the provider-auth quarantine
-   *  skips exactly those agents' tasks (same resource-scoped skip as the fable
-   *  line and the workspace/agent quarantines). Absent → no registry
-   *  configured, so no agent's provider is knowable and nothing is skipped. */
+  /** legacy 経路の名前集合(`pickupExcludedAssignees`)。entry を持つ盤面
+   *  (`taskExecutionCandidates` あり)では読まない —— agent 名で外すと別 Provider の
+   *  entry まで道連れになる(ADR 0110 決定3)。 */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
+  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** ADR 0098 / issue #454: structured OpenAI subscription observation. */
   openaiUsage?: CodexAppServerProbe;
-  /** Resolves the candidate's actual billed Provider/model from the registry. */
-  resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
-  /** Agent names whose canonical route uses one of the named Harnesses. */
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  /** この task が走りうる実行設定を Provider 順位で並べたもの(ADR 0110 決定1/3、
+   *  issue #544)。除外は**当てずに**返す —— 除外は同じ poll の中で観測のたびに
+   *  育つので、育つたびに selector を引き直すのはこの scheduler の仕事である。
+   *  Absent → Provider ごとの usage 観測を持たない盤面(legacy: 盤面全体の
+   *  Claude usage と fable 線だけ)。 */
+  taskExecutionCandidates?: TaskExecutionCandidates;
   /** ADR 0098: candidate-scoped Harness safety check. A failed Harness is
-   *  excluded for this poll while another route remains eligible. */
+   *  excluded for this poll while another route remains eligible. legacy 経路
+   *  (`taskExecutionCandidates` 不在)だけが使う —— entry 経路では選ばれた
+   *  実行設定の Provider から正準 Harness が決まる。 */
   resolveHarness?: (task: Task) => Harness;
   harnessContainment?: HarnessContainmentCheck;
   /** 封じ込め能力の fail-closed ゲート(ADR 0033 / ADR 0036): このホストで
@@ -277,10 +360,9 @@ export function startScheduler(deps: {
     github,
     fableAgents,
     agentsSpeakingProviders,
-    agentsUsingUsageResources,
-    openaiUsage,
-    resolveUsageResource,
     agentsUsingHarnesses,
+    openaiUsage,
+    taskExecutionCandidates,
     resolveHarness,
     harnessContainment,
     containment,
@@ -292,7 +374,7 @@ export function startScheduler(deps: {
   let inFlight = false;
   let throttleRevalidating = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
-  if (resolveUsageResource) db.prepare("DELETE FROM throttle_state").run();
+  if (taskExecutionCandidates) db.prepare("DELETE FROM throttle_state").run();
 
   async function pickupBlocked(): Promise<boolean> {
     if (slot.currentTaskId !== null) return true;
@@ -342,7 +424,10 @@ export function startScheduler(deps: {
     quarantineWorkspace(db, workspace.name, cause, clock.now());
   }
 
-  async function pickup(task: Task): Promise<void> {
+  /** `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
+   *  adapter へそのまま運ぶ —— spawn 側で解決し直すと、除外の文脈を持たない再解決が
+   *  scheduler と違う entry を選びうる(温存中の Provider で走る)。 */
+  async function pickup(task: Task, setting?: ExecutionSetting): Promise<void> {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor pointer,
@@ -385,14 +470,14 @@ export function startScheduler(deps: {
         return;
       }
       try {
-        worker.start(picked);
+        worker.start(picked, setting);
       } catch (err) {
         console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
       }
       return;
     }
     try {
-      worker.start(picked);
+      worker.start(picked, setting);
     } catch (err) {
       // a failed start may not crash the board. The task keeps the slot — the
       // same deliberate wedge as a restart-interrupted task — until the
@@ -566,7 +651,7 @@ export function startScheduler(deps: {
         return;
       }
       let decision: ThrottleDecision | undefined;
-      if (!resolveUsageResource) {
+      if (!taskExecutionCandidates) {
         decision = (await checkThrottle(db, clock, worker, cliAuth)).decision;
         if (decision.throttled) {
           if (decision.resetsAt) resumeTimer.schedule("legacy", decision.resetsAt);
@@ -575,91 +660,122 @@ export function startScheduler(deps: {
         }
       }
       // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
-      // 外す — Quarantine と同じ「資源単位の停止」。認証が失効した provider を
-      // 喋る agent のタスクも同じ資源単位の skip で外れる(ADR 0097 決定2 /
-      // issue #446) — 集合の合成は読み口と共有する1つの式に集約してある。
+      // 外す — Quarantine と同じ「資源単位の停止」。entry 経路ではこれは model 窓の
+      // 除外として現れるので、agent 名の集合を使うのは legacy 経路だけである。
       const fableWindow = decision?.windows.fable;
-      const excluded = pickupExcludedAssignees(
-        db,
-        fableWindow?.throttled ?? false,
-        fableAgents,
-        agentsSpeakingProviders,
-        agentsUsingHarnesses,
-        agentsUsingUsageResources,
-        false,
-      ) ?? [];
-      // ADR 0110 決定3: モデル固有の窓に当たるのは**その task の実行設定**であって
-      // agent ではない —— 要求ティアが task ごとに違う以上、agent を丸ごと外すと
-      // 別のモデルで走るはずの兄弟まで止まる。provider 全体の窓だけが agent 単位。
+      // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)—— と
+      // legacy 経路の fable 線 —— だけになった(ADR 0110 決定3 / issue #544)。
+      const excluded =
+        pickupExcludedAssignees(
+          db,
+          fableWindow?.throttled ?? false,
+          fableAgents,
+          taskExecutionCandidates ? undefined : agentsSpeakingProviders,
+          taskExecutionCandidates ? undefined : agentsUsingHarnesses,
+        ) ?? [];
+      // ADR 0110 決定3: 除外が当たるのは**その task の entry**であって agent では
+      // ない —— 要求ティアが task ごとに違う以上、agent を丸ごと外すと別のモデルで
+      // 走るはずの兄弟まで止まり、別の Provider を持つ entry まで道連れになる。
       const excludedTasks: string[] = [];
+      let entryExcluded = pickupExclusions(db, false);
       let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
+      /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */
+      const nextHead = () =>
+        nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
+      let chosen: ExecutionSetting | undefined;
       while (head) {
         const assignee = resolveTaskAgent(head, worker.id, auditorName);
-        if (resolveHarness && harnessContainment) {
-          let harness: Harness;
-          try {
-            harness = resolveHarness(head);
-          } catch (error) {
-            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
-              throw error;
+        if (!taskExecutionCandidates) {
+          // legacy 経路: Provider ごとの観測を持たない盤面。Harness の封じ込めだけを
+          // agent 単位で見る(entry 経路ではこれも entry の除外条件に畳まれている)。
+          if (resolveHarness && harnessContainment) {
+            let harness: Harness;
+            try {
+              harness = resolveHarness(head);
+            } catch (error) {
+              if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
+                throw error;
+              }
+              quarantineAgent(db, assignee, error, clock.now());
+              excluded.push(assignee);
+              head = nextHead();
+              continue;
             }
-            quarantineAgent(db, assignee, error, clock.now());
-            excluded.push(assignee);
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
-            continue;
+            if (await harnessContainmentPickupBlocked(db, harness, harnessContainment, clock.now())) {
+              excluded.push(assignee);
+              head = nextHead();
+              continue;
+            }
           }
-          if (await harnessContainmentPickupBlocked(db, harness, harnessContainment, clock.now())) {
-            excluded.push(assignee);
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
-            continue;
-          }
+          break;
         }
-        if (resolveUsageResource) {
-          let resource: ReturnType<typeof resolveUsageResource>;
-          try {
-            resource = resolveUsageResource(head);
-          } catch (error) {
-            if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
-              throw error;
-            }
-            quarantineAgent(db, assignee, error, clock.now());
-            excluded.push(assignee);
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
+        let candidates: ExecutionSetting[];
+        try {
+          candidates = taskExecutionCandidates(head);
+        } catch (error) {
+          if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
+            throw error;
+          }
+          quarantineAgent(db, assignee, error, clock.now());
+          excluded.push(assignee);
+          head = nextHead();
+          continue;
+        }
+        // 表に行が無い(候補が組めない)—— 判定できないので pickup はそのまま進め、
+        // spawn 側の例外が表の穴を名指しする。ここで skipped にすると、設定漏れが
+        // 「静かに走らないタスク」として現れてしまう。
+        if (candidates.length === 0) break;
+        let setting = firstSelectable(candidates, entryExcluded);
+        while (setting) {
+          if (
+            harnessContainment &&
+            (await harnessContainmentPickupBlocked(
+              db,
+              canonicalHarness(setting.provider),
+              harnessContainment,
+              clock.now(),
+            ))
+          ) {
+            entryExcluded = withExclusion(entryExcluded, setting.provider, null);
+            setting = firstSelectable(candidates, entryExcluded);
             continue;
           }
           const observation =
-            observedProviders.get(resource.provider) ??
-            (await observeProviderUsage(resource.provider));
-          observedProviders.set(resource.provider, observation);
+            observedProviders.get(setting.provider) ??
+            (await observeProviderUsage(setting.provider));
+          observedProviders.set(setting.provider, observation);
+          const model = setting.model;
           const relevant = observation.windows.filter(
-            (window) =>
-              window.model === null ||
-              window.model === resource.model ||
-              (window.model === "fable" && resource.model?.toLowerCase().includes("fable")),
+            // provider 全体の窓(model === null)は常に関係する。model 固有の窓の
+            // 照合は除外を当てる側と同じ1つの式を通す(`windowMatchesModel`)——
+            // ここに別の式を書くと、保存された観測を読む skipped 表示と同じ poll
+            // で観測し直すゲートが、非 fable の model 名で黙ってズレる。
+            (window) => window.model === null || windowMatchesModel(window.model, model),
           );
-          const blocked = observation.status !== "observed" || relevant.some((window) => window.throttled);
-          if (blocked) {
-            for (const window of relevant) {
-              if (window.throttled && window.resumesAt) {
-                resumeTimer.schedule(
-                  `${resource.provider}:${window.window}:${window.model ?? ""}`,
-                  window.resumesAt,
-                );
-              }
+          if (observation.status === "observed" && !relevant.some((window) => window.throttled)) break;
+          for (const window of relevant) {
+            if (window.throttled && window.resumesAt) {
+              resumeTimer.schedule(
+                `${setting.provider}:${window.window}:${window.model ?? ""}`,
+                window.resumesAt,
+              );
             }
-            const providerWide =
-              observation.status !== "observed" ||
-              relevant.some((window) => window.model === null && window.throttled);
-            if (providerWide) {
-              excluded.push(...(agentsSpeakingProviders?.([resource.provider]) ?? [assignee]));
-            } else {
-              excludedTasks.push(head.id);
-            }
-            head = nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
-            continue;
           }
+          // 観測不能は provider 全体の fail-closed、model 窓はその model だけ
+          const providerWide =
+            observation.status !== "observed" ||
+            relevant.some((window) => window.model === null && window.throttled);
+          entryExcluded = withExclusion(entryExcluded, setting.provider, providerWide ? null : model);
+          setting = firstSelectable(candidates, entryExcluded);
         }
+        if (setting === null) {
+          // 全 entry が除外されて初めて、この task は候補から落ちる(ADR 0110 決定3)
+          excludedTasks.push(head.id);
+          head = nextHead();
+          continue;
+        }
+        chosen = setting;
         break;
       }
       throttleRevalidating = false;
@@ -677,7 +793,7 @@ export function startScheduler(deps: {
       )
         return;
       if (!(await issuePickupGate(head))) return;
-      await pickup(head);
+      await pickup(head, chosen);
     } finally {
       throttleRevalidating = false;
       inFlight = false;
@@ -695,6 +811,6 @@ export function startScheduler(deps: {
       resumeTimer.cancel();
     },
     pollNow,
-    isThrottleRevalidating: () => resolveUsageResource ? false : throttleRevalidating,
+    isThrottleRevalidating: () => (taskExecutionCandidates ? false : throttleRevalidating),
   };
 }
