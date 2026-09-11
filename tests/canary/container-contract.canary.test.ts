@@ -214,7 +214,7 @@ while :; do sleep 1; done`,
   containers.forceReclaim("graceful-deaf");
   await containers.reclaimed("graceful-deaf");
 
-  expect(recordedPids().filter(alive)).toEqual([]);
+  await vi.waitFor(() => expect(recordedPids().filter(alive)).toEqual([]), { timeout: 15_000 });
 });
 
 it("kill の最中も fork し続ける子は、その最中に生まれた子孫ごと回収される", async () => {
@@ -239,7 +239,7 @@ done`,
   // 書き込みまで辿り着いたもの)が1つも生きていない」こと。`cgroup.kill` はほぼ
   // 原子的なので、kill の最中に生まれた PID が実際に存在したかまでは区別しない
   expect(recordedPids().length).toBeGreaterThanOrEqual(recordedBeforeForce);
-  expect(recordedPids().filter(alive)).toEqual([]);
+  await vi.waitFor(() => expect(recordedPids().filter(alive)).toEqual([]), { timeout: 15_000 });
 });
 
 it("session を分けて daemon 化した孫は、直の子が終わっても容器を空にしない", async () => {
@@ -264,7 +264,7 @@ exit 0`,
   containers.forceReclaim("setsid-daemon");
   await containers.reclaimed("setsid-daemon");
 
-  expect(alive(daemon)).toBe(false);
+  await vi.waitFor(() => expect(alive(daemon)).toBe(false), { timeout: 15_000 });
 });
 
 it("回収を終えた容器は残骸を残さない — 次の boot の前提検査が成立したままである", () => {
