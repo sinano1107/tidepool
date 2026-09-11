@@ -7,6 +7,7 @@ import type {
   IssueInspection,
   TaskDraft,
 } from "../src/draft.js";
+import type { ExecutionSetting } from "../src/execution-setting.js";
 import type {
   CiStatus,
   CreatePrInput,
@@ -158,6 +159,10 @@ export class FakeClock implements Clock {
  *  それが `exit` である。 */
 export class ScriptedWorker implements WorkerAdapter {
   readonly started: Task[] = [];
+  /** 盤面が pickup の瞬間に選んだ実行設定(ADR 0110 決定3 / issue #544)。実 adapter は
+   *  これを spawn にピン留めして `worker_spawned` に刻む —— 盤面境界で観測できるのは
+   *  「何を渡したか」までで、刻まれることは adapter の seam が1度だけ言う。 */
+  readonly startedSettings: (ExecutionSetting | undefined)[] = [];
   readonly gracefulStops: string[] = [];
   readonly exits: string[] = [];
   private containers: WorkerContainers | undefined;
@@ -171,8 +176,9 @@ export class ScriptedWorker implements WorkerAdapter {
     readonly id = "fake-worker",
   ) {}
 
-  start(task: Task): void {
+  start(task: Task, setting?: ExecutionSetting): void {
     this.started.push(task);
+    this.startedSettings.push(setting);
   }
 
   gracefulStop(taskId: string): void {

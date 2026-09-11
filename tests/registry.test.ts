@@ -6,6 +6,7 @@ import {
   assertValidWorkspaceName,
   InvalidWorkspaceNameError,
   loadRegistry,
+  PROVIDER_VALUES,
   type Registry,
   refreshRegistry,
 } from "../src/registry.js";
@@ -114,7 +115,7 @@ describe("loadRegistry", () => {
     });
     const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
     expect(agent.tier).toBeUndefined();
-    expect(agent.advisor).toBe(false);
+    expect(agent.provider).toEqual([{ name: "anthropic", advisor: false }]);
     expect(agent.retiredFields).toEqual([]);
   });
 
@@ -149,13 +150,17 @@ describe("loadRegistry", () => {
   // ADR 0110 決定1: advisor は真偽値になった。旧綴り(model 名の自由文字列)も
   // **読めて**、退役フィールドとして門が拒む —— 手で commit された1行が registry
   // 読み取り全体を倒さないため。
-  it("frontmatter の advisor は真偽値: true なら真、省略なら偽", async () => {
+  it("frontmatter の advisor は真偽値で、全 entry に掛かる: true なら真、省略なら偽(ADR 0110 決定1)", async () => {
     const withAdvisor = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: true\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(withAdvisor, "purely-local").agents.deckhand!.advisor).toBe(true);
+    expect(loadRegistry(withAdvisor, "purely-local").agents.deckhand!.provider).toEqual([
+      { name: "anthropic", advisor: true },
+    ]);
     const without = await makeRegistry();
-    expect(loadRegistry(without, "purely-local").agents.deckhand!.advisor).toBe(false);
+    expect(loadRegistry(without, "purely-local").agents.deckhand!.provider).toEqual([
+      { name: "anthropic", advisor: false },
+    ]);
   });
 
   it("旧綴りの advisor(model 名)は読み込みを倒さず、退役フィールドとして残る", async () => {
@@ -163,7 +168,7 @@ describe("loadRegistry", () => {
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: opus\n---\nYou are Deckhand.\n`,
     });
     const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
-    expect(agent.advisor).toBe(false);
+    expect(agent.provider).toEqual([{ name: "anthropic", advisor: false }]);
     expect(agent.retiredFields).toEqual(["advisor"]);
   });
 
@@ -171,14 +176,31 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nprovider: anthropic\n---\nYou are Deckhand.\n`,
     });
-    expect(loadRegistry(dir, "purely-local").agents.deckhand!.provider).toBe("anthropic");
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.provider).toEqual([
+      { name: "anthropic", advisor: false },
+    ]);
   });
 
-  it("frontmatter の provider は必須: 欠落は登録時にエラーになる(ADR 0097 決定1 — 「省略 = 既定 provider」という暗黙は書き忘れと意図の区別がつかない)", async () => {
+  // ADR 0110 決定1 が ADR 0097 決定1 を撤回した:省略の意味が「特定の1つ」ではなく
+  // 「盤面が知る全 Provider を床の構成で」になったので、書き忘れと意図の区別がつかない
+  // という論拠が消えた。
+  it("frontmatter の provider の省略は盤面が知る全 Provider を advisor 無しの床の構成で(ADR 0110 決定1)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\n---\nYou are Deckhand.\n`,
     });
-    expect(() => loadRegistry(dir, "purely-local")).toThrow(/provider/i);
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.provider).toEqual(
+      PROVIDER_VALUES.map((name) => ({ name, advisor: false })),
+    );
+  });
+
+  it("frontmatter の provider は entry の配列でもよく、entry ごとの advisor はトップレベルより優先される(ADR 0110 決定1)", async () => {
+    const dir = await makeRegistry({
+      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: true\nprovider:\n  - anthropic\n  - name: openai\n    advisor: false\n---\nYou are Deckhand.\n`,
+    });
+    expect(loadRegistry(dir, "purely-local").agents.deckhand!.provider).toEqual([
+      { name: "anthropic", advisor: true },
+      { name: "openai", advisor: false },
+    ]);
   });
 
   it("provider の値の列挙・advisor 組み合わせの検査は読み込みではなく登録と pickup の門(ADR 0097 決定3): 未知の値も読み込め、違反はその agent 名の quarantine に留まり registry 読み取り全体を倒さない", async () => {
@@ -186,7 +208,7 @@ describe("loadRegistry", () => {
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nprovider: moonshto\nadvisor: opus\n---\nYou are Deckhand.\n`,
     });
     const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
-    expect(agent.provider).toBe("moonshto");
+    expect(agent.provider).toEqual([{ name: "moonshto", advisor: false }]);
     expect(agent.retiredFields).toEqual(["advisor"]);
   });
 

@@ -1,5 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
+import type { ExecutionSetting } from "../src/execution-setting.js";
+import { executionSettingsFor } from "../src/execution-setting.js";
+import type { Provider } from "../src/registry.js";
 import { usagePanelText } from "./fakes.js";
 import {
   api,
@@ -13,6 +16,16 @@ import {
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+/** 除外を当てる前の候補1件。この suite が言いたいのは「どの資源に当たるか」なので、
+ *  entry の並びは各テストが自分で書く(#544 以降、盤面は候補の**列**を渡す)。 */
+const candidate = (provider: Provider, model: string): ExecutionSetting => ({
+  provider,
+  model,
+  effort: "high",
+  advisor: undefined,
+  source: { tier: "board", provider: "only" },
+});
 
 it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復後は元の順序へ戻り、実行中 worker を止めない", async () => {
   let openaiThrottled = true;
@@ -40,12 +53,11 @@ it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復�
   });
   t = await bootTidepool({
     openaiUsage,
-    resolveUsageResource: (task) =>
+    taskExecutionCandidates: (task) => [
       task.assignee === "codex-agent"
-        ? { provider: "openai", model: "gpt-5.6-sol" }
-        : { provider: "anthropic", model: "claude-opus-4-1" },
-    agentsSpeakingProviders: (providers) =>
-      providers.includes("openai") ? ["codex-agent"] : ["claude-agent"],
+        ? candidate("openai", "gpt-5.6-sol")
+        : candidate("anthropic", "claude-opus-4-1"),
+    ],
   });
   const openai = await registerWork(t, "first, but throttled", undefined, undefined, "codex-agent");
   const anthropic = await registerWork(t, "second and healthy", undefined, undefined, "claude-agent");
@@ -106,14 +118,9 @@ it("model-specific window は同じ OpenAI Provider の対象 model だけを sk
         },
       ],
     }),
-    resolveUsageResource: (task) => ({
-      provider: "openai",
-      model: task.assignee === "limited-agent" ? "gpt-limited" : "gpt-healthy",
-    }),
-    agentsUsingUsageResources: (resources) =>
-      resources.some((resource) => resource.provider === "openai" && resource.model === "gpt-limited")
-        ? ["limited-agent"]
-        : [],
+    taskExecutionCandidates: (task) => [
+      candidate("openai", task.assignee === "limited-agent" ? "gpt-limited" : "gpt-healthy"),
+    ],
   });
   const limited = await registerWork(t, "limited model first", undefined, undefined, "limited-agent");
   const healthy = await registerWork(t, "healthy model second", undefined, undefined, "healthy-agent");
@@ -133,12 +140,11 @@ it("OpenAI usage が観測不能なら question を立てず OpenAI だけ fail-
       cliVersion: "codex-cli 0.147.0",
       reason: "required App Server method or response schema drifted",
     }),
-    resolveUsageResource: (task) =>
+    taskExecutionCandidates: (task) => [
       task.assignee === "codex-agent"
-        ? { provider: "openai", model: "gpt-5.6-sol" }
-        : { provider: "anthropic", model: "claude-opus-4-1" },
-    agentsSpeakingProviders: (providers) =>
-      providers.includes("openai") ? ["codex-agent"] : ["claude-agent"],
+        ? candidate("openai", "gpt-5.6-sol")
+        : candidate("anthropic", "claude-opus-4-1"),
+    ],
   });
   const codex = await registerWork(t, "unobservable OpenAI", undefined, undefined, "codex-agent");
   const claude = await registerWork(t, "healthy Anthropic", undefined, undefined, "claude-agent");
@@ -186,8 +192,7 @@ it("Provider/window ごとの catch-up timer は別 window の遅い reset に�
         },
       ],
     }),
-    resolveUsageResource: () => ({ provider: "openai", model: "gpt-5.6-sol" }),
-    agentsSpeakingProviders: () => ["codex-agent"],
+    taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
   });
   const task = await registerWork(t, "wakes at primary catch-up", undefined, undefined, "codex-agent");
 
@@ -224,12 +229,11 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
         },
       ],
     }),
-    resolveUsageResource: (task) =>
+    taskExecutionCandidates: (task) => [
       task.assignee === "claude-agent"
-        ? { provider: "anthropic", model: "claude-opus-4-1" }
-        : { provider: "openai", model: "gpt-5.6-sol" },
-    agentsSpeakingProviders: (providers) =>
-      providers.includes("anthropic") ? ["claude-agent"] : ["codex-agent"],
+        ? candidate("anthropic", "claude-opus-4-1")
+        : candidate("openai", "gpt-5.6-sol"),
+    ],
   });
   t.worker.scriptUsage(usagePanelText({
     session: { percent: 50, resetsAt: new Date(5 * HOUR) },
@@ -275,11 +279,9 @@ it("model-specific window が外すのは当たった task だけ —— 同じ 
       ],
     }),
     // #543 以降、model は agent ではなく **task の要求**で決まる
-    resolveUsageResource: (task) => ({
-      provider: "openai",
-      model: task.tier === "frontier" ? "gpt-frontier" : "gpt-economy",
-    }),
-    agentsUsingUsageResources: () => ["sole-agent"],
+    taskExecutionCandidates: (task) => [
+      candidate("openai", task.tier === "frontier" ? "gpt-frontier" : "gpt-economy"),
+    ],
   });
   const requested = (
     await api(t.baseUrl, "POST", "/api/tasks", {
@@ -298,4 +300,89 @@ it("model-specific window が外すのは当たった task だけ —— 同じ 
   expect(t.worker.started.map((task) => task.id)).toEqual([plain.id]);
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
   expect(queue.find((task) => task.id === requested.id)?.status).toBe("skipped");
+});
+
+/* ------------------------------------------------------------------ *
+ * entry 配列(issue #544): 温存中の Provider を飛ばして他所へ流れる
+ * ------------------------------------------------------------------ */
+
+/** session/week は健全なまま、anthropic の fable 窓だけが超過している観測
+ *  (ADR 0030 / throttle.test.ts の同じ数字)。 */
+function fableOverPace(now: Date): string {
+  return usagePanelText({
+    session: { percent: 0, resetsAt: new Date(now.getTime() + 3 * HOUR) },
+    week: { percent: 5, resetsAt: new Date(now.getTime() + 2 * 24 * HOUR) },
+    fable: { percent: 84, resetsAt: new Date(now.getTime() + 12 * HOUR) },
+  });
+}
+
+const healthyOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
+  status: "observed",
+  provider: "openai",
+  cliVersion: "codex-cli 0.147.0",
+  plan: "plus",
+  windows: [
+    {
+      name: "primary",
+      model: null,
+      usedPercent: 0,
+      durationMs: 5 * HOUR,
+      resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
+    },
+  ],
+});
+
+it("anthropic を温存中でも openai entry を持つ agent の task は走り、単一 entry の task だけが skipped —— queue 表示と pickup の判定は同じ式(#543 申し送り / ADR 0110 決定5)", async () => {
+  // 候補は**実物の selector**(盤面の表 + Provider 順位)から作る —— fake が
+  // 順位や model を自前で持つと、ここで測れるのは fake の側だけになる
+  const entries = (...names: string[]) => ({
+    provider: names.map((name) => ({ name, advisor: false })),
+    tier: undefined,
+  });
+  t = await bootTidepool({
+    openaiUsage: healthyOpenai,
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(
+        t.db,
+        task.assignee === "multi-agent" ? entries("anthropic", "openai") : entries("anthropic"),
+        task.tier,
+      ),
+  });
+  const frontier = async (title: string, assignee: string) =>
+    (
+      await api(t.baseUrl, "POST", "/api/tasks", {
+        type: "work",
+        title,
+        purpose: "p",
+        completion_criteria: "c",
+        assignee,
+        tier: "frontier",
+      })
+    ).json;
+  // 先頭から: 単一 entry の frontier(全 entry 除外)→ 複数 entry の frontier →
+  // 要求なし(同じ agent だが economy の行なので窓に当たらない)
+  const blocked = await frontier("anthropic しか持たない frontier", "solo-agent");
+  const multi = await frontier("openai へ流れる frontier", "multi-agent");
+  const plain = await registerWork(t, "要求なしなので別のモデル", undefined, undefined, "solo-agent");
+
+  t.worker.scriptUsage(fableOverPace(t.clock.now()));
+  await t.clock.advance(HOUR);
+
+  // 温存中の anthropic を飛ばして openai の entry で走る。選ばれた設定は
+  // adapter へそのまま運ばれ、実 adapter はこれを worker_spawned に刻む
+  expect(t.worker.started.map((task) => task.id)).toEqual([multi.id]);
+  expect(t.worker.startedSettings[0]).toMatchObject({
+    provider: "openai",
+    model: "gpt-6-astra",
+    source: { tier: "task", provider: "rank" },
+  });
+
+  // queue の skipped 表示は scheduler のゲートと同じ1つの式から出る —— 要求を持つ
+  // task だけが skipped で、同じ agent の要求なし task は候補のまま残る
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  expect({
+    blocked: queue.find((task) => task.id === blocked.id)?.status,
+    multi: queue.find((task) => task.id === multi.id)?.status,
+    plain: queue.find((task) => task.id === plain.id)?.status,
+  }).toEqual({ blocked: "skipped", multi: "in_progress", plain: "todo" });
 });

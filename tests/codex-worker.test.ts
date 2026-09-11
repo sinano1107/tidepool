@@ -147,7 +147,7 @@ describe("CodexWorker (ADR 0098)", () => {
       provider: "openai",
       model: "gpt-5.6-terra",
       effort: "high",
-      source: { tier: "board" },
+      source: { tier: "board", provider: "only" },
       // openai の正準経路は advisor を提供しない(ADR 0098)
       advisor: null,
       harness: "codex",

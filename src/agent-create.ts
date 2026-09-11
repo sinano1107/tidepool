@@ -5,11 +5,13 @@ import { UnknownAgentError } from "./agent.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
   type AgentDefinition,
+  type AgentProviderEntry,
   assertValidAgentDefinition,
   assertValidAgentName,
   assertValidSkillAllowlist,
   isSingleTwemojiGrapheme,
   loadRegistry,
+  normalizeProviderEntries,
   ownEntry,
   type Registry,
   type RegistrySource,
@@ -103,12 +105,9 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps)
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
-  assertValidAgentDefinition(input.name, { ...input, advisor: input.advisor === true });
-  commitAgentFile(
-    deps,
-    { ...input, advisor: input.advisor === true, retiredFields: [], version: "1" },
-    `create agent ${input.name} via WebUI`,
-  );
+  const definition = normalizedDefinition(input);
+  assertValidAgentDefinition(input.name, definition);
+  commitAgentFile(deps, { ...definition, retiredFields: [], version: "1" }, `create agent ${input.name} via WebUI`);
 }
 
 /** The edit half (issue #70): the same fields as creation — the form
@@ -137,29 +136,52 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
   // pickup で quarantine される定義の唯一の修復経路が registry repo の手編集
   // だけになる。人間面の credential(ADR 0036)を通った編集であり、フォームは
   // 定義を丸ごと提出するので、黙って直したことにはならない。
-  const normalizedInput = { ...input, advisor: input.advisor === true };
-  assertValidAgentDefinition(input.name, normalizedInput);
-  if (!sameEffectiveFields(existing, normalizedInput)) {
+  const definition = normalizedDefinition(input);
+  assertValidAgentDefinition(input.name, definition);
+  if (!sameEffectiveFields(existing, definition)) {
     commitAgentFile(
       deps,
-      { ...normalizedInput, retiredFields: [], version: bumpVersion(existing.version) },
+      { ...definition, retiredFields: [], version: bumpVersion(existing.version) },
       `update agent ${input.name} via WebUI`,
     );
   }
 }
 
+/** フォームの入力を registry の正規形へ(ADR 0110 決定1)。フォームは単一
+ *  provider + advisor チェックボックスのまま = 長さ1の entry で、綴りを畳むのは
+ *  parse と共有する1本(`normalizeProviderEntries`)である。 */
+function normalizedDefinition(
+  input: CreateAgentInput,
+): Omit<AgentDefinition, "version" | "retiredFields"> {
+  return { ...input, provider: normalizeProviderEntries(input.provider, input.advisor === true) };
+}
+
 /** version 以外の全フィールド(編集フォームが送るもの)の一致。systemPrompt
  *  は保存される正規形(trim 済み — serializeAgentFile 参照)で比較する。 */
-function sameEffectiveFields(existing: AgentDefinition, input: UpdateAgentInput): boolean {
+function sameEffectiveFields(
+  existing: AgentDefinition,
+  input: Omit<AgentDefinition, "version" | "retiredFields">,
+): boolean {
   return (
     existing.authority === input.authority &&
     existing.description === input.description &&
-    existing.provider === input.provider &&
+    sameProviderEntries(existing.provider, input.provider) &&
     existing.icon === input.icon &&
     existing.tier === input.tier &&
-    existing.advisor === input.advisor &&
     sameSkills(existing.skills, input.skills) &&
     existing.systemPrompt === input.systemPrompt.trim()
+  );
+}
+
+function sameProviderEntries(
+  existing: readonly AgentProviderEntry[],
+  input: readonly AgentProviderEntry[],
+): boolean {
+  return (
+    existing.length === input.length &&
+    existing.every(
+      (entry, i) => entry.name === input[i]!.name && entry.advisor === input[i]!.advisor,
+    )
   );
 }
 
@@ -172,11 +194,26 @@ function sameSkills(existing: string[], input: string[]): boolean {
 
 /** One agent as the settings surface's edit form needs it (issue #70):
  *  the full definition, systemPrompt included — the form resubmits every
- *  field, so the view must carry every field. */
-export type AgentView = AgentDefinition;
+ *  field, so the view must carry every field.
+ *
+ *  **フォームの形であって定義の形ではない**(ADR 0110 決定1): `provider` は
+ *  単一の select、`advisor` はチェックボックスのままで、複数 entry の表示・編集は
+ *  spec #541 の Out of Scope。複数 entry の agent(手書きの agent.md だけが持てる)
+ *  は名前を並べて見せ、そのまま保存しようとすれば門が列挙違反として拒む ——
+ *  黙って先頭 entry だけを残して書き戻すことはしない。 */
+export interface AgentView extends Omit<AgentDefinition, "provider"> {
+  provider: string;
+  advisor: boolean;
+}
 
 export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
-  return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents);
+  return Object.values(loadRegistry(deps.registry.dir, deps.registry.mode).agents).map(
+    (definition) => ({
+      ...definition,
+      provider: definition.provider.map((entry) => entry.name).join(", "),
+      advisor: definition.provider.every((entry) => entry.advisor),
+    }),
+  );
 }
 
 /** ADR 0087 決定1 の agent 半分: `agents/<name>.md` を committed main から除去する。
@@ -282,13 +319,18 @@ function bumpVersion(version: string): string {
  *  fields are omitted, not serialized as null — round-trip keeps them
  *  undefined. */
 function serializeAgentFile(definition: AgentDefinition): string {
-  const meta: Record<string, string | string[] | boolean> = {
+  const meta: Record<string, string | boolean | (string | AgentProviderEntry)[]> = {
     version: definition.version,
     authority: definition.authority,
     description: definition.description,
-    // required (ADR 0097 決定1), always written — a file without it fails
-    // the next loadRegistry, same as `skills` below
-    provider: definition.provider,
+    // 長さ1の entry は今日の綴りで書き戻す(ADR 0110 決定1)—— 配布される種の
+    // agent 定義と手元 registry がそのままの形で残り、移行が要らない
+    provider:
+      definition.provider.length === 1
+        ? definition.provider[0]!.name
+        : definition.provider.map((entry) =>
+            entry.advisor ? { name: entry.name, advisor: true } : entry.name,
+          ),
     // required (ADR 0025): always written, even the empty list — a file
     // without it fails the next loadRegistry
     skills: definition.skills,
@@ -296,8 +338,9 @@ function serializeAgentFile(definition: AgentDefinition): string {
   if (definition.icon !== undefined) meta.icon = definition.icon;
   if (definition.tier !== undefined) meta.tier = definition.tier;
   // 偽は「advisor を持たない」の既定なので書かない(不在 = 無効、CONTEXT.md の
-  // Advisor)。真のときだけ1行増える。
-  if (definition.advisor) meta.advisor = true;
+  // Advisor)。真のときだけ1行増える —— 長さ1の entry の advisor はトップレベルの
+  // 綴りへ戻る(全 entry に掛かる、ADR 0110 決定1)。
+  if (definition.provider.length === 1 && definition.provider[0]!.advisor) meta.advisor = true;
   // 外側の空白は trim して書く: parseAgentFile が body.trim() で読む以上、
   // 保存できるのは trim 済みの正規形だけ — 書き込み側も同じ正規形に揃える
   // ことでラウンドトリップと no-change 判定(sameEffectiveFields)が一致する

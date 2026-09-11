@@ -1572,7 +1572,7 @@ describe("ClaudeCodeWorker", () => {
       provider: "anthropic",
       model: "sonnet",
       effort: "high",
-      source: { tier: "board" },
+      source: { tier: "board", provider: "only" },
     });
 
     const agent = await makeWorker({
@@ -1581,7 +1581,35 @@ describe("ClaudeCodeWorker", () => {
     agent.start("task-setting-agent");
     expect(
       listEvents(agent.db, "task-setting-agent").find((e) => e.kind === "worker_spawned")!.payload,
-    ).toMatchObject({ model: "fable", source: { tier: "agent" } });
+    ).toMatchObject({ model: "fable", source: { tier: "agent", provider: "only" } });
+  });
+
+  it("worker_spawned は Provider の出所も刻む —— 単一 entry の agent は only(ADR 0110 決定5 / issue #544)", async () => {
+    const board = await makeWorker();
+    board.start("task-provider-source");
+    expect(
+      listEvents(board.db, "task-provider-source").find((e) => e.kind === "worker_spawned")!.payload,
+    ).toMatchObject({ provider: "anthropic", source: { tier: "board", provider: "only" } });
+  });
+
+  it("盤面が選んだ実行設定を渡されたら、spawn 側で解決し直さずそれで走る(#544 —— 再解決は除外の文脈を持たない)", async () => {
+    const { worker, db, calls } = await makeWorker();
+    const task = makeTask("task-carried-setting", null, "deckhand", "work");
+    insertTask(db, task);
+    // 盤面の表の economy 行は sonnet。渡された設定はそれと違う値で、しかも
+    // 「順位で選ばれた」出所を持つ —— どちらも再解決からは出てこない
+    worker.start(task, {
+      provider: "anthropic",
+      model: "opus",
+      effort: "max",
+      advisor: undefined,
+      source: { tier: "task", provider: "rank" },
+    });
+    expect(calls[0]!.args.join(" ")).toContain("--model opus");
+    expect(calls[0]!.args.join(" ")).toContain("--effort max");
+    expect(
+      listEvents(db, "task-carried-setting").find((e) => e.kind === "worker_spawned")!.payload,
+    ).toMatchObject({ model: "opus", effort: "max", source: { tier: "task", provider: "rank" } });
   });
 
   it("表の行を書き換えれば次の spawn の model / effort が変わる — 正本は DB であって adapter の定数ではない", async () => {
@@ -2211,7 +2239,7 @@ describe("ClaudeCodeWorker", () => {
         provider: "anthropic",
         model: "sonnet",
         effort: "high",
-        source: { tier: "board" },
+        source: { tier: "board", provider: "only" },
         harness: "claude-code",
         cli_version: "test",
       },
@@ -2258,7 +2286,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
@@ -2288,7 +2316,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
 
@@ -2315,7 +2343,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v1Hash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
@@ -2337,7 +2365,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: v2Hash, definition_version: "0.4.0", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2409,7 +2437,7 @@ describe("ClaudeCodeWorker", () => {
         provider: "anthropic",
         model: "sonnet",
         effort: "high",
-        source: { tier: "board" },
+        source: { tier: "board", provider: "only" },
         harness: "claude-code",
         cli_version: "test",
       },
@@ -2427,7 +2455,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: main, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
@@ -2481,7 +2509,7 @@ describe("ClaudeCodeWorker", () => {
       taskId: objected.id,
       workerId: "deckhand",
         origin: "webui",
-      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board" }, harness: "claude-code", cli_version: "test" },
+      payload: { kind: "worker_spawned", registry_commit: oldHash, definition_version: "0.3.1", advisor: null, provider: "anthropic", model: "sonnet", effort: "high", source: { tier: "board", provider: "only" }, harness: "claude-code", cli_version: "test" },
       at: new FakeClock().now(),
     });
     // independent review: unset assignee → resolves to the Auditor pointer

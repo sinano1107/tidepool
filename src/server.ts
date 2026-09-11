@@ -44,11 +44,10 @@ import {
   type RosterAgent,
   remoteTrackingRef,
 } from "./registry.js";
-import { startScheduler } from "./scheduler.js";
+import { startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
 import { runTeardown, sessionInTeardown } from "./teardown.js";
-import type { ProviderUsageResource } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { capInterruptionHandler, failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
@@ -244,9 +243,12 @@ export interface ServerOptions {
    *  the given providers, read fresh by the scheduler's provider-auth gate.
    *  Absent → no registry configured, so no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingUsageResources?: (resources: readonly ProviderUsageResource[]) => string[];
   openaiUsage?: CodexAppServerProbe;
-  resolveUsageResource?: (task: Task) => { provider: Provider; model: string | null };
+  /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定(Provider 順位順、
+   *  除外は未適用)。pickup のゲート・queue の skipped 表示・Pickable head の判定が
+   *  同じ1つの式を共有するための口。Absent → Provider ごとの usage 観測を持たない
+   *  盤面(legacy: 盤面全体の Claude usage と fable 線だけ)。 */
+  taskExecutionCandidates?: TaskExecutionCandidates;
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   resolveHarness?: (task: Task) => Harness;
   /** Adapter-owned sandbox/tool-surface check. Its presence also arms the
@@ -520,10 +522,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     github: options.github,
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
-    agentsUsingUsageResources: options.agentsUsingUsageResources,
-    openaiUsage: options.openaiUsage,
-    resolveUsageResource: options.resolveUsageResource,
     agentsUsingHarnesses: options.agentsUsingHarnesses,
+    openaiUsage: options.openaiUsage,
+    taskExecutionCandidates: options.taskExecutionCandidates,
     resolveHarness: options.resolveHarness,
     harnessContainment,
     registryReachability,
@@ -644,8 +645,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       translationClient: options.translationClient,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
-      agentsUsingUsageResources: options.agentsUsingUsageResources,
       agentsUsingHarnesses: options.agentsUsingHarnesses,
+      taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,
       // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
       // 床と同じ1つの配列(3箇所で別々に組み立てない)
@@ -676,8 +677,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
-      agentsUsingUsageResources: options.agentsUsingUsageResources,
       agentsUsingHarnesses: options.agentsUsingHarnesses,
+      taskExecutionCandidates: options.taskExecutionCandidates,
       throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspaceAdmin,
       agentAdmin,

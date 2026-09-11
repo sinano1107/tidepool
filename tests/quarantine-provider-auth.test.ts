@@ -131,12 +131,23 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
         };
   t = await bootTidepool({
     openaiUsage,
-    resolveUsageResource: (task) =>
+    taskExecutionCandidates: (task) => [
       task.assignee === "codex-agent"
-        ? { provider: "openai", model: "gpt-5.6-sol" }
-        : { provider: "anthropic", model: "claude-opus-4-1" },
-    agentsSpeakingProviders: (providers) =>
-      providers.includes("openai") ? ["codex-agent"] : ["claude-agent"],
+        ? {
+            provider: "openai",
+            model: "gpt-5.6-sol",
+            effort: "high",
+            advisor: undefined,
+            source: { tier: "board", provider: "only" },
+          }
+        : {
+            provider: "anthropic",
+            model: "claude-opus-4-1",
+            effort: "high",
+            advisor: undefined,
+            source: { tier: "board", provider: "only" },
+          },
+    ],
   });
   const codex = await registerWork(t, "waits for Codex login", undefined, undefined, "codex-agent");
   const claude = await registerWork(t, "keeps flowing", undefined, undefined, "claude-agent");
