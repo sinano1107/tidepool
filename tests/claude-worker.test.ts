@@ -22,6 +22,7 @@ import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, nextSlotTask, type Task } from "../src/tasks.js";
+import { sessionInTeardown } from "../src/teardown.js";
 import { getThrottleState, reportThrottle } from "../src/throttle.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
 import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
@@ -3353,6 +3354,8 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     stdout.write(CAP_STREAM);
 
     emitExit(1, null);
+    expect(sessionInTeardown(db)).toEqual({ taskId: task.id, startedAt: new FakeClock().now().toISOString() });
+    expect(slot.inTeardown).toBe(true);
     await new Promise((resolve) => setImmediate(resolve));
 
     // 容器はまだ空になっていない — exit を観測に数えない

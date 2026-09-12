@@ -3,7 +3,7 @@ import type { Db } from "./db.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
-import { getTask, type Task } from "./tasks.js";
+import { getTask, returnForCapInterruption, type Task } from "./tasks.js";
 import {
   ensureWorkspaceToken,
   releaseWorkspace,
@@ -56,6 +56,19 @@ export interface TeardownStep {
    *  門が既に撃った quarantine を後始末が同じ観測でもう一度撃つ(1つの verb 呼び出しで
    *  2度撃たない)。 */
   workspace?: WorkspaceConfig | null;
+}
+
+/** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・
+ *  回収済み観測は同じ規則を通す。経路を表す別の永続事実は持たない。 */
+export function teardownStep(db: Db, taskId: string): TeardownStep {
+  const task = getTask(db, taskId);
+  if (task?.status === "in_progress") {
+    return {
+      ready: (current) => current.status === "in_progress",
+      transition: (current, now) => returnForCapInterruption(db, current, now),
+    };
+  }
+  return { completion: task?.status === "done" };
 }
 
 /** 後始末の一撃(ADR 0109 決定1): tree rule → 状態遷移 → slot 解放。
@@ -152,7 +165,7 @@ export function runTreeRule(
   if (resolved) releaseWorkspace(db, resolved, task, now);
 }
 
-/** 最終 verb が着地した = 後始末に入った(ADR 0109 決定5)。in-memory の callback は
+/** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は
  *  盤面の crash を越えないので、未了は行に持つ。 */
 export function markTeardown(db: Db, taskId: string, now: Date): void {
   db.prepare("UPDATE tasks SET teardown_started_at = ? WHERE id = ?").run(

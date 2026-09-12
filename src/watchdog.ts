@@ -7,16 +7,17 @@ import type { Slot } from "./slot.js";
 import {
   escalateTask,
   getTask,
-  returnForCapInterruption,
   type Task,
   type TaskType,
   unfinishedDecisionSiblingCount,
 } from "./tasks.js";
 import {
+  markTeardown,
   runTeardown,
   runTreeRule,
   sessionInTeardown,
   type TeardownDeps,
+  teardownStep,
 } from "./teardown.js";
 import type { WorkerAdapter } from "./worker.js";
 import type { WorkerContainers } from "./worker-container.js";
@@ -149,12 +150,13 @@ function registerFailureQuestion(
  *  session が自己申告して次のタスクが slot に入っていることがありうる —— 他人の slot を
  *  解放しないために、そこで観測しなおす(ADR 0104 の実装時にこの経路だけが取った自衛が、
  *  ADR 0109 で3経路の共有物になった)。 */
-export function capInterruptionHandler(deps: TeardownDeps): (taskId: string) => void {
-  return (taskId) => {
-    void runTeardown(deps, taskId, {
-      ready: (task) => task.status === "in_progress",
-      transition: (task, now) => returnForCapInterruption(deps.db, task, now),
-    });
+export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, reclaimed: Promise<void>) => void {
+  return (taskId, reclaimed) => {
+    if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
+    if (getTask(deps.db, taskId)?.status !== "in_progress") return;
+    markTeardown(deps.db, taskId, deps.clock.now());
+    deps.slot.enterTeardown();
+    void reclaimed.then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
   };
 }
 
@@ -217,6 +219,8 @@ export function startWatchdog(deps: {
    *  通る型は通常完了・上限到達による中断と同じ後始末である(ADR 0109 決定1)。 */
   function onReclaimed(taskId: string, limit: number): void {
     if (settled.has(taskId)) return;
+    // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。
+    if (sessionInTeardown(db)?.taskId === taskId) return;
     void runTeardown(teardown, taskId, {
       ready: (task) => task.status === "in_progress",
       record: (task, now) => {
@@ -261,17 +265,20 @@ export function startWatchdog(deps: {
     );
   }
 
-  /** 後始末の時限(ADR 0109 決定5)。「最終 verb は着地したのに root が exit しない」
-   *  だけを見る backstop で、超過したら既存の梯子(強制回収 → 回収 timeout →
-   *  Containment quarantine)へ合流する。計測の起点は後始末に入った時刻であり、
-   *  行が持つ**再起動をまたげる事実**から読む。 */
-  function teardownTick(taskId: string): void {
+  /** 後始末に入った時刻からの backstop。最終 verb 後は強制回収 → 回収 timeout の
+   *  2段、cap は exit 時に強制回収が済んでいるので回収 timeout の1段(ADR 0113)。 */
+  function teardownTick(task: Task): void {
+    const taskId = task.id;
     const session = sessionInTeardown(db);
     if (session?.taskId !== taskId || settled.has(taskId)) return;
     const now = clock.now().getTime();
+    if (task.status === "in_progress") {
+      if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) onTeardownReclaimTimeout(task);
+      return;
+    }
     const forcedAt = forceSentAt.get(taskId);
     if (forcedAt !== undefined) {
-      if (now - forcedAt >= reclaimTimeout) onTeardownReclaimTimeout(taskId);
+      if (now - forcedAt >= reclaimTimeout) onTeardownReclaimTimeout(task);
       return;
     }
     if (now - new Date(session.startedAt).getTime() >= reclaimTimeout) {
@@ -282,15 +289,18 @@ export function startWatchdog(deps: {
 
   /** 完了済み session が梯子の底まで落ちたとき。**failure question は立てない** ——
    *  タスクの決着は host 側の事情で覆らない(ADR 0109 決定4)。 */
-  function onTeardownReclaimTimeout(taskId: string): void {
+  function onTeardownReclaimTimeout(task: Task): void {
+    const taskId = task.id;
     settled.add(taskId);
     pending = taskId;
     quarantineContainment(
       db,
-      `the worker session for task ${taskId} finished its work and reported it, but its ` +
-        "processes are still running on this host: the board force-reclaimed the container and " +
+      (task.status === "in_progress"
+        ? `the worker session for task ${taskId} was interrupted by the Provider usage cap and will return to the queue head after teardown, but its `
+        : `the worker session for task ${taskId} finished its work and reported it, but its `) +
+        "processes may still be running on this host: the board force-reclaimed the container and " +
         `could not observe it going empty within ${reclaimTimeout}ms. The task itself stays ` +
-        "done — what is still held is this host's workspaces and the execution slot, until " +
+        `${task.status} — what is still held is this host's workspaces and the execution slot, until ` +
         "this is answered",
       clock.now(),
     );
@@ -301,14 +311,6 @@ export function startWatchdog(deps: {
     if (taskId === null) return;
     const task = getTask(db, taskId);
     if (!task) return;
-    // 決着済みのタスクが枠を握っているなら、それは後始末である(CONTEXT.md「後始末」)
-    if (task.status !== "in_progress") {
-      teardownTick(taskId);
-      return;
-    }
-    const limit = config.timeLimits[task.type];
-    if (limit === undefined) return;
-
     const pickup = pickedUpAt(db, taskId);
     if (lastSeenPickup.get(taskId) !== pickup) {
       lastSeenPickup.set(taskId, pickup);
@@ -316,6 +318,14 @@ export function startWatchdog(deps: {
       forceSentAt.delete(taskId);
       settled.delete(taskId);
     }
+    // cap は in_progress のまま後始末に入る(ADR 0113)。タスク種別の梯子より先に読む。
+    if (sessionInTeardown(db)?.taskId === taskId) {
+      teardownTick(task);
+      return;
+    }
+    if (task.status !== "in_progress") return;
+    const limit = config.timeLimits[task.type];
+    if (limit === undefined) return;
     if (settled.has(taskId)) return;
 
     const now = clock.now().getTime();
@@ -357,9 +367,7 @@ export function startWatchdog(deps: {
       // 「Slot-release tree rule」)— 回収 timeout の時点では走らせていない。
       // 完了済み session の後始末なら、通る型は通常完了と同じである(退避ではなく
       // 検査 + merge-back / 休止位置。ADR 0109 決定3)
-      void runTeardown(teardown, taskId, {
-        completion: sessionInTeardown(db)?.taskId === taskId,
-      });
+      void runTeardown(teardown, taskId, teardownStep(db, taskId));
     },
   };
 }

@@ -224,7 +224,7 @@ export function buildWorkerOptions(
     db: Db;
     clock: Clock;
     containers: WorkerContainers;
-    onCapInterrupted: (taskId: string) => void;
+    onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
   },
 ): ClaudeWorkerOptions {
   return {
