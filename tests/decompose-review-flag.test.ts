@@ -133,8 +133,8 @@ it("受理は統合点レビューがすべて完了するまで偽で、最後�
   );
   for (const review of reviews) {
     await t.clock.advance(HOUR);
-    const client = await mcpClient(t.mcpBaseUrl, review.id);
     if (review.id === reviews.at(-1).id) {
+      const client = await mcpClient(t.mcpBaseUrl, review.id);
       await client.callTool({
         name: "decompose",
         arguments: {
@@ -158,7 +158,6 @@ it("受理は統合点レビューがすべて完了するまで偽で、最後�
     });
     expect(result.isError ?? false).toBe(false);
     await completionClient.close();
-    await client.close();
     expect(await accepted()).toBe(review.id === reviews.at(-1).id);
   }
 });
