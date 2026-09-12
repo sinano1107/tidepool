@@ -45,3 +45,8 @@ boot した盤面を要る。一方で盤面は boot 時に既定 workspace を 
 本文は測定上何も変えなかった。効いている証拠のない散文を種に焼き込むと、template から registry を再構成する
 たびにその含意ごと引き継ぐので、決定3 と同じ線で auditor の本文も空にする。fugu が tako と違う点は frontmatter
 (authority / skills / icon / description)が運ぶ。
+
+## 追記(2026-09-12 / issue #540)
+
+auditor は盤面の組み込み agent になり(ADR 0117)、種は auditor の2ファイルを書かなくなる — 決定4・5 の auditor 分は組み込みが引き受ける。
+決定3 の「自由に書かせる」根拠は撤回: generalist の本文は構造的に空で、空はキャンバスではない(ADR 0117 決定3)。本文空の帰結自体は変わらない。

@@ -67,7 +67,7 @@ review タスクは親なしの**ルート**としても登録できる。入口
 
 ## Auditor(監査ポインタ)
 
-独立レビューのタスクのうち `review_by` の無いものが解決される先 — 「書かなかった人間」の受け皿(ADR 0111。組み込み化の検討は別 issue)。default agent・既定 workspace と同型の、盤面が持つ第3のポインタであり、registry の普通のエージェント(レビュー専門の instructions を持つ)を指す。常に値を持ち「未設定」という状態はない — 解決できない名前は既存の agent quarantine が封じ込める(auditor 依存のタスクだけが止まり、盤面の他は流れ続ける)。「auditor」はエージェントの属性ではなく盤面が持つ役割の割当。ポインタの既定名は `fugu` 🐡(ADR 0089 — 命名は ADR 0017 の線、役割名 `auditor` は profile 側に置く)。
+独立レビューのタスクのうち `review_by` の無いものが解決される先 — 「書かなかった人間」の受け皿(ADR 0111)。default agent・既定 workspace と同型の、盤面が持つ第3のポインタ。既定の指し先は盤面の**組み込み agent** `fugu` 🐡(ADR 0117 — 命名は ADR 0017 の線)で、registry の agent 名を指定すればそちらへ付け替わる。常に値を持ち「未設定」という状態はない — 解決できない名前は既存の agent quarantine が封じ込める(auditor 依存のタスクだけが止まり、盤面の他は流れ続ける)。「auditor」はエージェントの属性ではなく盤面が持つ役割の割当。
 
 review type の未指定 assignee がこのポインタへ解決されることは、Assignee の解決規則の type 別の枝であって別の規則ではない。したがって**同じ到達範囲を要求する** — ゲート・表示・帰属の記録のすべてが、type を見た解決を通る。この解決を問える相手は実行される type に限られる: **question は解決先を持たない**(回答されるものであって pickup されるものではないため、走らせるエージェントが存在しない)。「どのエージェントとして走るか」と「このカードは誰のものか」は別の問いであり、後者に対してのみ question は答えを持つ(あなた) — 1つの規則に両方を答えさせると、実行側の読み口が一つずつ「ただし question は別」と打ち消すことになる(2026-08-09 の grilling)。
 
@@ -115,7 +115,7 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 - **書き手**: Precedent は盤面が投影し agent は書かない。Knowledge は worker の明示 tool と人間。Behavior の candidate は fix-forward RCA(review layer 2)、approved 提案は meta-review(layer 3)が起草し、承認 question を経て確定する。ただし candidate を書くのは帰責が学習に向く異議だけで、行き先(Behavior / Knowledge / なし)と宛先は cause から導出する(ADR 0115、帰責 参照)。`preference` の candidate は RCA ではなく Board call が steering の文言から起草する。
 - **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)。session 記録には当時のストアの snapshot 識別子と注入した entry・token 量も乗る — 実行設定の評価で知識条件を隠れた変数にしないため。
 
-registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタ(+ Provider entry と既定の要求ティア `tier`、advisor の真偽。model / effort は持たない — 実行設定 参照)にとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。
+registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタ(+ Provider entry と既定の要求ティア `tier`、advisor の真偽。model / effort は持たない — 実行設定 参照)にとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。**generalist の本文は構造的に空である** — 担当範囲は「全部」、盤面全体の好みは Behavior(宛先 全員)の領分で agent 1体の本文に書くとスコープを誤り、制約は profile、手順は skills が持つ。空は ADR 0017 の正規形であって、自由に書くためのキャンバスではない(2026-09-12 の grilling、issue #540 / ADR 0117)。専門 agent の本文(担当範囲・専門固有の手順の初期置き場)の存在価値は未観測。
 
 ## Decision log(判断ログ)
 
@@ -250,7 +250,11 @@ question の登録者は決して human ではない — 人間以外の登録�
 
 ## Default agent(既定エージェント)
 
-assignee 未指定のタスクが解決される先。特別な種類のエージェントではなく、registry の普通のエージェントを指す盤面設定(既定 workspace と同型のポインタ)。「既定」はエージェントの属性ではなく盤面が持つ役割の割当であり、ポインタを差し替えれば未着手の未指定タスクすべてが移行なしで新しい既定に付いてくる。
+assignee 未指定のタスクが解決される先。特別な種類のエージェントではなく、registry の普通のエージェントを指す盤面設定(既定 workspace と同型のポインタ)。「既定」はエージェントの属性ではなく盤面が持つ役割の割当であり、ポインタを差し替えれば未着手の未指定タスクすべてが移行なしで新しい既定に付いてくる。指し先は registry の agent に限る — 既定 agent の authority profile は信頼の成長に応じて広げる編集面であり、盤面の code には畳まない(ADR 0117)。既定名は `tako` 🐙(ADR 0089)。
+
+## 組み込み agent(Built-in agent)
+
+盤面の code が定義(frontmatter 相当)を運び、registry にファイルを持たない agent。名前の解決は registry が先で、無いときだけ組み込みが答える(shadowing) — registry に同名のエントリを作ればそれが勝ち、消せば組み込みに戻る。作成の扉は同名を拒まないが shadow することを告げ、表示は built-in / shadows built-in を機械の解決どおりに映す。組み込みは削除の対象にならない。現時点は Auditor の既定 `fugu` のみ(ADR 0117)。
 
 ## Roster(ロースター)
 
@@ -476,9 +480,9 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 **agent 名は専門性の連続性を担う**(ADR 0019): 定義の編集は洗練(refinement)に限られ、転生(repurposing — 専門性の別物への書き換え)は禁止。専門性を変えるときは新名で作成し、旧名は削除する(削除の余波は agent quarantine が受け止める)。この連続性が「修理・self RCA は現在の定義で走らせてよい」の根拠。
 
-**削除は committed main からエントリを除去することであり、記録は消えない**(2026-08-18 の grilling、issue #205 / ADR 0087)。registry は git リポジトリであり、過去タスクが参照する agent 本文は commit 指定で読まれるので、HEAD から消えても履歴参照は壊れない — 無効化フラグは持たない(Memory の「削除は無く無効化のみ」は DB 内エントリの線)。人間面の削除の扉は事故を作らない門であり、未決着タスクが参照している agent / workspace、いずれかの agent が参照している profile、盤面自身の registry clone、盤面のポインタが指す先(既定 agent / 既定 workspace / Auditor — 列挙ではなく規則、2026-08-25 の triage、issue #376)は消せない。profile の許可先(`assignable_to` / `allowed_workspaces`)に列挙されているだけの資源は消せる — 存在しない名前は許可先が1つ消えるだけで無害。ADR 0019 の「余波は quarantine が受け止める」は帯域外の手作業の安全網であって、扉が意図的に quarantine を作ることの根拠ではない。workspace の削除はエントリだけで、ホスト上の checkout(決着後も残るタスクブランチ = 差分の恒久記録)と GitHub 側のリポジトリは触らない。
+**削除は committed main からエントリを除去することであり、記録は消えない**(2026-08-18 の grilling、issue #205 / ADR 0087)。registry は git リポジトリであり、過去タスクが参照する agent 本文は commit 指定で読まれるので、HEAD から消えても履歴参照は壊れない — 無効化フラグは持たない(Memory の「削除は無く無効化のみ」は DB 内エントリの線)。人間面の削除の扉は事故を作らない門であり、未決着タスクが参照している agent / workspace、いずれかの agent が参照している profile、盤面自身の registry clone、盤面のポインタが指す先(既定 agent / 既定 workspace / Auditor — 列挙ではなく規則、2026-08-25 の triage、issue #376)は消せない。唯一の例外は組み込み agent を shadow している同名エントリで、消えても組み込みに落ちるだけなので消せる(ADR 0117)。profile の許可先(`assignable_to` / `allowed_workspaces`)に列挙されているだけの資源は消せる — 存在しない名前は許可先が1つ消えるだけで無害。ADR 0019 の「余波は quarantine が受け止める」は帯域外の手作業の安全網であって、扉が意図的に quarantine を作ることの根拠ではない。workspace の削除はエントリだけで、ホスト上の checkout(決着後も残るタスクブランチ = 差分の恒久記録)と GitHub 側のリポジトリは触らない。
 
-**種まき(Seed)**: 空のリモートに最初の registry(既定 agent・authority profile・auditor・既定 workspace)を載せる、boot 前の人間の一発コマンド(2026-08-19 の grilling、issue #365 / ADR 0089)。盤面は boot 時に既定 workspace を registry から解決するので空のリモートを指す盤面は起動できず、資源を作る人間面の動詞は WebUI にしかない — 鶏と卵を盤面の外で断つ。盤面が初回起動時に自動で作ることはしない(自動作成は boot 時の push であり、誰の資格情報で押すかを盤面は持たない)。空でないリモートには効かない — 直す道具ではない。
+**種まき(Seed)**: 空のリモートに最初の registry(既定 agent・その authority profile・既定 workspace — auditor は組み込みなので種に無い、ADR 0117)を載せる、boot 前の人間の一発コマンド(2026-08-19 の grilling、issue #365 / ADR 0089)。盤面は boot 時に既定 workspace を registry から解決するので空のリモートを指す盤面は起動できず、資源を作る人間面の動詞は WebUI にしかない — 鶏と卵を盤面の外で断つ。盤面が初回起動時に自動で作ることはしない(自動作成は boot 時の push であり、誰の資格情報で押すかを盤面は持たない)。空でないリモートには効かない — 直す道具ではない。
 
 ## Workspace(ワークスペース)
 
