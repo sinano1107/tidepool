@@ -10,6 +10,7 @@ import {
   attachChild,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   completeViaMcp,
   git,
   HOUR,
@@ -111,6 +112,7 @@ it("push のあとに別タスクの slot 解放が走っても、盤面自身�
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "next.txt", "more\n");
   await completeViaMcp(t, next.id);
+  await completeIntegrationReviews(t, next.id);
 
   // quarantine なら着地そのものが飛ぶ —— 2本目の PR が開いたことが素通りの証拠
   expect(t.github.requests).toHaveLength(2);
@@ -147,6 +149,7 @@ it("squash merge 後に review 子が決着しただけの再発火は、push �
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "v1\n");
   await completeViaMcp(t, work.id);
+  await completeIntegrationReviews(t, work.id);
   const landed = (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
   const review = attachChild(t, work.id, "review already-landed work", undefined, "review");
   await squashTaskIntoOrigin(dirs, workspace, work.id);

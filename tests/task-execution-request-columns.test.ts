@@ -15,6 +15,31 @@ it("新規盤面の tasks は要求2列(tier / priority)を持つ(ADR 0110 決�
   expect(taskColumns(openDb(":memory:"))).toEqual(expect.arrayContaining(["tier", "priority"]));
 });
 
+it("新規盤面の tasks は独立した review_by / review_tier を持つ(ADR 0111)", () => {
+  const db = openDb(":memory:");
+  expect(taskColumns(db)).toEqual(expect.arrayContaining(["review_by", "review_tier"]));
+  db.close();
+});
+
+it("review 設定列を知らない直前の盤面も移行され、既存行は未指定のまま", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tidepool-review-migrate-"));
+  const path = join(dir, "board.sqlite");
+  const legacy = openDb(path);
+  legacy.exec(`
+    ALTER TABLE tasks DROP COLUMN review_by;
+    ALTER TABLE tasks DROP COLUMN review_tier;
+    INSERT INTO tasks (id, type, status, title, purpose, completion_criteria, sort_key, created_at)
+    VALUES ('old-task', 'work', 'done', 't', 'p', 'c', 1, '2026-01-01T00:00:00.000Z');
+  `);
+  legacy.close();
+  const db = openDb(path);
+  expect(db.prepare("SELECT review_by, review_tier FROM tasks WHERE id = 'old-task'").get()).toEqual({
+    review_by: null,
+    review_tier: null,
+  });
+  db.close();
+});
+
 it("要求2列を知らない既存盤面は、再オープン時に同じ2列へ移行される —— 新規盤面と migrate 盤面は drift しない", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-execution-request-migrate-"));
   const dbPath = join(dir, "board.sqlite");
@@ -53,6 +78,10 @@ it("要求2列を知らない既存盤面は、再オープン時に同じ2列�
   expect(db.prepare("SELECT tier, priority FROM tasks WHERE id = 'old-task'").get()).toEqual({
     tier: null,
     priority: null,
+  });
+  expect(db.prepare("SELECT review_by, review_tier FROM tasks WHERE id = 'old-task'").get()).toEqual({
+    review_by: null,
+    review_tier: null,
   });
 });
 

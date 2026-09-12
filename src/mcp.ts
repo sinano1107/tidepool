@@ -459,6 +459,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
                   "No authority check applies — declaring it is never out of scope.",
               ),
             tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
+            review_by: z.array(z.string().min(1)).optional()
+              .describe("Reviewer agent names; one completion review per name. Omit to use the board Auditor."),
+            review_tier: z.string().optional()
+              .describe("Quality tier for completion reviews; overrides each reviewer's tier, then the board default."),
             priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
         ),
@@ -491,9 +495,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         // even runs. `human` is exempt (never a registry agent).
         if (deps.agentRegistered) {
           for (const child of input.children) {
-            if (child.assignee === undefined || child.assignee === HUMAN_WORKER_ID) continue;
-            if (!deps.agentRegistered(child.assignee)) {
-              throw new DomainError(`unknown agent: ${child.assignee}`);
+            for (const name of [child.assignee, ...(child.review_by ?? [])]) {
+              if (name === undefined || name === HUMAN_WORKER_ID) continue;
+              if (!deps.agentRegistered(name)) throw new DomainError(`unknown agent: ${name}`);
             }
           }
         }

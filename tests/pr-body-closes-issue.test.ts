@@ -4,6 +4,7 @@ import { getTask, registerTask } from "../src/tasks.js";
 import {
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   HOUR,
   makeRemoteBackedWorkspace,
   mcpClient,
@@ -51,6 +52,7 @@ async function completeIssueBackedTask(dirs: string[], handoff: Record<string, s
   const { tools } = await client.listTools();
   const res: any = await client.callTool({ name: "complete_task", arguments: { handoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   return { t, task, res, tools };
 }
@@ -119,6 +121,7 @@ it("通常タスク(github_issue_number なし)の complete_task 成立後、PR 
   });
   expect(res.isError ?? false).toBe(false);
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]?.body).not.toContain("Closes");

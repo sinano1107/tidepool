@@ -4,6 +4,7 @@ import { registerTask } from "../src/tasks.js";
 import {
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   HOUR,
   makeRemoteBackedWorkspace,
   mcpClient,
@@ -53,6 +54,7 @@ it("issue参照タスクの complete_task 成立後、PR の title は GitHub �
   });
   expect(res.isError ?? false).toBe(false);
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]?.title).toBe("ログイン画面のバグ");

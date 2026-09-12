@@ -4,6 +4,7 @@ import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js
 import {
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -40,6 +41,7 @@ it("prod workspace のタスクを complete すると、PR は sandbox ではな
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]).toMatchObject({ path: prod.path, branch: `task/${task.id}` });

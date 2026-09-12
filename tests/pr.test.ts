@@ -5,6 +5,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   git,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -46,6 +47,8 @@ it("work タスクの complete_task 成立後、タスクブランチから PR �
   expect(res.isError ?? false).toBe(false);
   await client.close();
 
+  await completeIntegrationReviews(t, task.id);
+
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]).toMatchObject({
     path: ws.path,
@@ -65,6 +68,8 @@ it("PR 本文がハンドオフドキュメントの6項目を反映している
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+
+  await completeIntegrationReviews(t, task.id);
 
   const body = t.github.requests[0]?.body ?? "";
   expect(body).toContain("Outcome vs completion criteria");

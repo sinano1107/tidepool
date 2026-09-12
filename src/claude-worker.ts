@@ -1874,7 +1874,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // provider の綴りもここから1つだけ取る(上の「derived once」の線)。
     // 盤面が選んだ設定があればそれを使う(#544): ここで解決し直すと、除外の文脈を
     // 持たない再解決が scheduler と違う entry —— 温存中の Provider —— を選びうる。
-    const setting = chosen ?? resolveExecutionSetting(this.options.db, agent.definition, task.tier);
+    const setting = chosen ?? resolveExecutionSetting(this.options.db, agent.definition, task);
     if (!setting) {
       // 門(`assertValidAgentDefinition`)が空の entry を拒むので、除外を当てない
       // 解決は必ず1つ返る。ここに来るのは門をすり抜けた定義だけ。

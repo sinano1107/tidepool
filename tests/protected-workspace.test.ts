@@ -5,6 +5,7 @@ import {
   addTaskChange,
   api,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -113,6 +114,7 @@ it("completing a task in a protected workspace under the external merge dial sti
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const mergeQuestion = board.find(
@@ -144,6 +146,7 @@ it("completing a low-risk task in a protected workspace under auto_if_ci_green a
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   // asked right away — never queued for the unattended poll, despite carrying
   // no risk flag of its own

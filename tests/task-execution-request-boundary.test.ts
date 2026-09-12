@@ -76,6 +76,8 @@ it("管理MCP の register_task は要求2列を受け取り、不正値は tool
       completion_criteria: "c",
       tier: "standard",
       priority: "cost",
+      review_by: ["security"],
+      review_tier: "frontier",
     },
   });
   expect(ok.isError ?? false).toBe(false);
@@ -91,6 +93,8 @@ it("管理MCP の register_task は要求2列を受け取り、不正値は tool
   expect(board.find((x: any) => x.title === "triaged work")).toMatchObject({
     tier: "standard",
     priority: "cost",
+    review_by: ["security"],
+    review_tier: "frontier",
   });
 });
 

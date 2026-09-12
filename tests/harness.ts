@@ -89,6 +89,7 @@ export interface BootOptions {
   dir?: string;
   /** Override the scripted WorkerAdapter identity across board restarts. */
   workerId?: string;
+  workerAdapter?: Parameters<typeof startServer>[0]["worker"];
   /** The board's workspace: a real git checkout the tree rule acts on. */
   workspace?: WorkspaceConfig;
   /** ADR 0093 決定5: `TIDEPOOL_GITHUB_TOKEN_FILE` のパス。settings の
@@ -234,10 +235,10 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     credential: options.credential ?? TEST_CREDENTIAL,
     // 本番の adapter と同じく、盤面側 supervisor を factory から受け取る —— root の
     // exit で強制回収を撃つのは adapter の仕事である(ADR 0109 決定4)
-    worker: (deps) => {
+    worker: options.workerAdapter ?? ((deps) => {
       worker.useContainers(deps.containers);
       return worker;
-    },
+    }),
     containerRuntime: containers,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
@@ -597,6 +598,26 @@ export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true
   });
   await client.close();
   return res;
+}
+
+/** Finish only the reviews generated for this integration point, through the
+ *  public worker verbs, so landing fixtures include the mandatory review gate. */
+export async function completeIntegrationReviews(t: Tidepool, taskId: string): Promise<void> {
+  const children = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
+    (task: any) => task.parent_id === taskId && task.type === "review" && ["todo", "in_progress"].includes(task.status),
+  );
+  for (const review of children) {
+    const events = (await api(t.baseUrl, "GET", `/api/tasks/${review.id}/events`)).json;
+    if (!events.some((e: any) => e.kind === "task_registered" && e.payload.integration_review)) continue;
+    if (review.status === "todo") {
+      const moved = await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
+      if (moved.status !== 200) throw new Error(`review pickup failed: ${JSON.stringify(moved.json)}`);
+      // Reordering is separate from Run now: a second move at the head requests pickup.
+      await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
+    }
+    const result = await completeViaMcp(t, review.id, false);
+    if (result.isError) throw new Error(`review completion failed: ${JSON.stringify(result)}`);
+  }
 }
 
 /** The 6-field handoff doc, filled in with placeholder content — shared by

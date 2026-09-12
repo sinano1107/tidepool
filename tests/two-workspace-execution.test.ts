@@ -6,6 +6,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -47,9 +48,10 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     const c1 = await mcpClient(t.mcpBaseUrl, inSandbox.id);
     await c1.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
     await c1.close();
+    await completeIntegrationReviews(t, inSandbox.id);
 
     await t.clock.advance(HOUR);
-    expect(t.worker.started.map((x) => x.id)).toEqual([inSandbox.id, inProd.id]);
+    expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([inSandbox.id, inProd.id]);
     expect(git(prod.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${inProd.id}`);
     // sandbox's own checkout was left clean and untouched by prod's pickup
     expect(git(sandbox.path, "status", "--porcelain")).toBe("");
@@ -72,7 +74,7 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     const runsInSandbox = await registerWork(t, "keeps flowing", "sandbox");
     await t.clock.advance(HOUR);
 
-    expect(t.worker.started.map((x) => x.id)).toEqual([
+    expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([
       inSandbox.id,
       inProd.id,
       runsInSandbox.id,

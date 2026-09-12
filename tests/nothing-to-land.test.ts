@@ -4,6 +4,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   git,
   HOUR,
@@ -34,6 +35,7 @@ it("promotion retry の時点で差分ゼロなら、人間にエラーを返し
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (candidate: any) => candidate.question_pending_pr_promotion_task_id === task.id,
   );
@@ -72,6 +74,7 @@ it("purely-local の root work が差分ゼロで完了すると、merge questio
     arguments: { handoff: FULL_HANDOFF },
   });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(completed.isError ?? false).toBe(false);
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json).not.toContainEqual(
@@ -99,6 +102,7 @@ it("remote-backed の root work が差分ゼロで完了すると、PR を開か
     arguments: { handoff: FULL_HANDOFF },
   });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(completed.isError ?? false).toBe(false);
   expect(t.github.requests).toEqual([]);
@@ -129,6 +133,7 @@ it("同じ内容が squash で保護ブランチへ着地済みなら、履歴�
     arguments: { handoff: FULL_HANDOFF },
   });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(completed.isError ?? false).toBe(false);
   expect(t.github.requests).toEqual([]);

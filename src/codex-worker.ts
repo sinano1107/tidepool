@@ -604,7 +604,7 @@ export class CodexWorker implements WorkerAdapter {
     // ADR 0005 の明示ピン留めは Codex 側でも同じ強さで効く。model と effort の
     // 既定は adapter ごとに書かず、Claude 側と同じ1つの解決関数を通す。盤面が
     // 選んだ設定があればそれを使う(#544 —— spawn 側の再解決は除外の文脈を持たない)。
-    const setting = chosen ?? resolveExecutionSetting(this.options.db, agent.definition, task.tier);
+    const setting = chosen ?? resolveExecutionSetting(this.options.db, agent.definition, task);
     if (!setting) {
       throw new Error(`agent ${agent.name}: no Provider entry to run on (ADR 0110 決定1)`);
     }

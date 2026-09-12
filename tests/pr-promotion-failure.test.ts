@@ -5,6 +5,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -37,6 +38,7 @@ it("a failed PR promotion leaves the work done and asks Tidepool whether to retr
     arguments: { handoff: FULL_HANDOFF },
   });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(completed.isError ?? false).toBe(false);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
@@ -68,6 +70,7 @@ it("human retry maps failure to a visible error, then lands while excluding the 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const first = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.question_pending_pr_promotion_task_id === task.id,
   );
@@ -121,6 +124,7 @@ it("abandoning PR promotion settles the failure question without changing comple
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question",
   );
@@ -156,6 +160,7 @@ it("a settled failure question cannot be re-answered into a retry", async () => 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question",
   );
@@ -188,6 +193,7 @@ it("a typo'd answer is rejected outright instead of silently settling the questi
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question",
   );
@@ -217,6 +223,7 @@ it("a malformed POST (answer count mismatch) to an open promotion-failure questi
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.type === "question",
   );

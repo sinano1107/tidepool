@@ -1,5 +1,6 @@
 import type { Db } from "./db.js";
 import { type AgentDefinition, PROVIDER_VALUES, type Provider } from "./registry.js";
+import type { Task } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」)—— 廉価 / 主力 / 上位。**順序を持つ配列**
  *  であることがこの定数の内容で、advisor の pairing はこの並びの添字だけで判定する
@@ -30,7 +31,7 @@ export const PRIORITY_FIELD_DESCRIPTION =
 /** 解決されたティアが**誰の要求だったか**(ADR 0110 決定3)。events 側の
  *  `worker_spawned.source` と同じ union を2箇所に書くと必ず片方だけ動くので、
  *  綴りはここ1つにして events.ts は型として取り込む。 */
-export type TierSource = "task" | "agent" | "board";
+export type TierSource = "task" | "review_tier" | "agent" | "board";
 
 /** 選ばれた Provider が**なぜその Provider だったか**(ADR 0110 決定3 / 決定5)。
  *  `"only"` は agent が entry を1つしか宣言していなかった、`"rank"` は残った
@@ -105,7 +106,7 @@ export interface ExecutionSetting {
   advisor: string | undefined;
   /** ADR 0110 決定3: 選んだ値だけでなく**なぜその値になったか**を刻む。今は
    *  ティアの出所1つ —— `"task"` は task の要求列、`"agent"` は agent.md の
-   *  `tier`、`"board"` は盤面既定。未指定(列が null)と「既定を選んだ」が
+   *  `tier`、`"review_tier"` はレビュー専用の要求、`"board"` は盤面既定。未指定(列が null)と「既定を選んだ」が
    *  記録上区別されるのはこの1値による。 */
   source: { tier: TierSource; provider: ProviderSource };
 }
@@ -159,6 +160,8 @@ export interface SelectorInput {
   providerRank: readonly Provider[];
   /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
   taskTier: Tier | undefined;
+  /** ADR 0111: review tasks use this request instead of the work tier. */
+  reviewTier?: Tier;
   /** agent.md の `tier`。省略 → 盤面既定。 */
   agentTier: Tier | undefined;
   /** 盤面設定:「上位ティアの行を advisor に使ってよい」。立つまで advisor は
@@ -227,10 +230,11 @@ function executionSettingCandidates(
   request: SelectorInput,
   table: ExecutionSettingTable,
 ): ExecutionSetting[] {
-  const tier = request.taskTier ?? request.agentTier ?? BOARD_DEFAULT_TIER;
+  const tier = request.reviewTier ?? request.taskTier ?? request.agentTier ?? BOARD_DEFAULT_TIER;
   // 解決順のどの段で決まったか。値の一致では畳まない —— agent と同じティアを
   // task が要求しても出所は "task" で、それが学習の文脈変数になる。
   const tierSource: TierSource =
+    request.reviewTier !== undefined ? "review_tier" :
     request.taskTier !== undefined ? "task" : request.agentTier !== undefined ? "agent" : "board";
   const providerSource: ProviderSource = request.entries.length === 1 ? "only" : "rank";
   return [...request.entries]
@@ -318,9 +322,7 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
 function selectorInputFor(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  /** task の要求ティア。`null` は行の綴りのまま受ける —— 呼び手は3つとも
-   *  `task.tier` を持っており、各々で undefined へ直させる理由が無い。 */
-  taskTier: Tier | null | undefined,
+  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
 ): SelectorInput {
   return {
     entries: definition.provider.map((entry) => ({
@@ -328,7 +330,8 @@ function selectorInputFor(
       advisor: entry.advisor,
     })),
     providerRank: PROVIDER_VALUES,
-    taskTier: taskTier ?? undefined,
+    taskTier: task?.type === "review" ? undefined : task?.tier ?? undefined,
+    reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier as Tier | undefined,
     frontierAdvisor: isFrontierAdvisorEnabled(db),
   };
@@ -339,10 +342,10 @@ function selectorInputFor(
 export function executionSettingsFor(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  taskTier: Tier | null | undefined,
+  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
 ): ExecutionSetting[] {
   return executionSettingCandidates(
-    selectorInputFor(db, definition, taskTier),
+    selectorInputFor(db, definition, task),
     loadExecutionSettingTable(db),
   );
 }
@@ -353,10 +356,10 @@ export function executionSettingsFor(
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  taskTier: Tier | null | undefined,
+  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
 ): ExecutionSetting | null {
   return selectExecutionSetting(
-    selectorInputFor(db, definition, taskTier),
+    selectorInputFor(db, definition, task),
     loadExecutionSettingTable(db),
   );
 }

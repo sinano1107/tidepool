@@ -3,6 +3,7 @@ import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
 import {
   api,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
   mcpClient,
@@ -253,6 +254,7 @@ it("a work child of a done parent receives the parent's handoff document", async
   const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await parentClient.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await parentClient.close();
+  await completeIntegrationReviews(t, parent.id);
 
   const db = t.db;
   const repair = registerTask(

@@ -27,6 +27,8 @@ const TASKS_TABLE_DDL = `
       completion_criteria TEXT,
       risk_flag           INTEGER NOT NULL DEFAULT 0,
       review_flag         INTEGER NOT NULL DEFAULT 0,
+      review_by           TEXT,
+      review_tier         TEXT,
       parent_id           TEXT REFERENCES tasks(id),
       -- Immutable provenance: the decision-log event this decomposed child
       -- rests on. Null for tasks outside a decomposition decision.
@@ -563,6 +565,8 @@ export function openDb(path: string): Db {
     // TEXT** —— 片方にだけ CHECK を足せば fresh 盤面と migrate 盤面が drift する。
     "tier",
     "priority",
+    "review_by",
+    "review_tier",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`);
   }

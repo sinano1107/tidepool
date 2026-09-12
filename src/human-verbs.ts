@@ -111,6 +111,7 @@ export function decomposeThroughHumanDoor(
         assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
       }
       assertAssigneeKnown(deps.agentRegistered, child.assignee);
+      for (const reviewer of child.review_by ?? []) assertAssigneeKnown(deps.agentRegistered, reviewer);
     }
     if (input.reason.length === 0) throw new DomainError("a decomposition requires a reason");
     const task = getTask(deps.db, taskId);
@@ -249,6 +250,8 @@ export async function registerThroughHumanDoor(
               workspace: input.workspace,
               risk_flag: input.risk_flag,
               review_flag: input.review_flag,
+              review_by: input.review_by,
+              review_tier: input.review_tier,
               tier: input.tier,
               priority: input.priority,
             },
@@ -274,6 +277,7 @@ export async function registerThroughHumanDoor(
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
     assertAssigneeKnown(deps.agentRegistered, input.assignee);
+    for (const reviewer of input.review_by ?? []) assertAssigneeKnown(deps.agentRegistered, reviewer);
     if (input.github_issue_number !== undefined && input.workspace) {
       assertNoUnsettledIssueRef(deps.db, input.workspace, input.github_issue_number);
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);

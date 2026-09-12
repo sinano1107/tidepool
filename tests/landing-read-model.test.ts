@@ -7,6 +7,7 @@ import {
   attachChild,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   completeViaMcp,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -33,6 +34,7 @@ async function landedQuestion(): Promise<any> {
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   return task;
 }
 
@@ -114,6 +116,7 @@ async function landedPrQuestion(): Promise<any> {
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   return task;
 }
 
