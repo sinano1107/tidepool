@@ -47,10 +47,10 @@ import {
 import { startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
-import { runTeardown, sessionInTeardown } from "./teardown.js";
+import { runTeardown, sessionInTeardown, teardownStep } from "./teardown.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
-import { capInterruptionHandler, failTask, startWatchdog, type WatchdogConfig } from "./watchdog.js";
+import { capInterruptionHandler, failTask, startWatchdog, type Watchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import { type ContainerRuntime, WorkerContainers } from "./worker-container.js";
 import {
@@ -154,7 +154,7 @@ export type WorkerFactory = (deps: {
   containers: WorkerContainers;
   /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
    *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
-  onCapInterrupted: (taskId: string) => void;
+  onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
 }) => WorkerAdapter;
 
 export interface ServerOptions {
@@ -381,7 +381,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // failure-escalation path as a watchdog kill, so the slot never wedges past
   // a restart (#9) — no graceful-drain machinery exists or is needed
   const interrupted = db
-    .prepare("SELECT id FROM tasks WHERE status = 'in_progress'")
+    .prepare("SELECT id FROM tasks WHERE status = 'in_progress' AND teardown_started_at IS NULL")
     .get() as { id: string } | undefined;
   if (interrupted) {
     const task = getTask(db, interrupted.id)!;
@@ -430,11 +430,13 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // adapter が観測するのは 429 と回収済み観測だけで、slot も tree rule もこちら側に
   // ある(ADR 0099 決定1)。watchdog とは独立(slot と resolver しか要らない)なので、
   // 時限を持たない盤面でも中断は回収される。
+  let watchdog: Watchdog | undefined;
   const onCapInterrupted = capInterruptionHandler({
     db,
     clock: options.clock,
     slot,
     resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
+    heldForContainment: (taskId) => watchdog?.heldForContainment(taskId) ?? false,
   });
   const worker = options.worker({ db, clock: options.clock, containers, onCapInterrupted });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
@@ -478,10 +480,10 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // quarantine が pickup を止めており、未了は行に残ったまま次の起動を待つ。
   const unfinishedTeardown = sessionInTeardown(db);
   if (unfinishedTeardown && runtimePreflight.available) {
-    const teardownTask = getTask(db, unfinishedTeardown.taskId);
     // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
     // 走り切るまで pickup は進まない
     slot.occupy(unfinishedTeardown.taskId);
+    slot.enterTeardown();
     void runTeardown(
       {
         db,
@@ -492,7 +494,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         landing,
       },
       unfinishedTeardown.taskId,
-      { completion: teardownTask?.status === "done" },
+      teardownStep(db, unfinishedTeardown.taskId),
     );
   }
   // `harnessContainment` is the one production option. startServer prepends
@@ -537,7 +539,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const stopTriageWatchdog = options.clock.setInterval(() => {
     if (closeStaleTriage(db, options.clock.now())) scheduler.pollNow();
   }, 60 * 1000);
-  const watchdog = options.watchdog
+  watchdog = options.watchdog
     ? startWatchdog({
         db,
         clock: options.clock,

@@ -1,5 +1,6 @@
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
+import { markTeardown } from "../src/teardown.js";
 import { FakeContainerRuntime } from "./fakes.js";
 import {
   api,
@@ -36,6 +37,42 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 const started = () => t.worker.started.map((task) => task.id);
 
 const payload = (result: any) => JSON.parse(result.content[0].text);
+
+it.each([false, true])("restart recovers cap teardown without a failure question (failed preflight first: %s)", async (failPreflight) => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "interrupted by cap");
+  await registerWork(t, "next");
+  await t.clock.advance(HOUR);
+  await writeFile(`${ws.path}/wip.txt`, "unfinished work\n");
+  // Setup the durable state at the instant the adapter observed a 429 exit.
+  markTeardown(t.db, task.id, t.clock.now());
+  await t.stopServer();
+  if (failPreflight) {
+    const runtime = new FakeContainerRuntime();
+    runtime.scriptPreflight("previous session may still be alive");
+    t = await bootTidepool({ dir: t.dir, workspace: ws, containerRuntime: runtime });
+    expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+    expect((await questions(t)).some((q: any) => q.title.includes("interrupted task"))).toBe(false);
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
+    expect(git(ws.path, "status", "--porcelain")).toContain("wip.txt");
+    await t.stopServer();
+  }
+
+  t = await bootTidepool({ dir: t.dir, workspace: ws });
+  await settle();
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("todo");
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  expect(queue.teardown).toBeUndefined();
+  expect(queue.tasks.filter((row: any) => row.type === "work")[0].id).toBe(task.id);
+  expect((await questions(t)).some((q: any) => q.title.includes("interrupted task"))).toBe(false);
+  expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("unfinished work");
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  if (!failPreflight) {
+    await t.clock.advance(HOUR);
+    expect(started()).toEqual([task.id]);
+  }
+});
 
 it("容器が生きている間は次の task が pickup されない —— 進めるのは回収済み観測である", async () => {
   t = await bootTidepool();

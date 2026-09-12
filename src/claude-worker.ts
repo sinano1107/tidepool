@@ -1133,7 +1133,7 @@ export interface ClaudeWorkerOptions {
    *  と同じ機能フィールドなので、`buildWorkerOptions` が literal を所有し
    *  網羅テストが見張る。不在 → 中断を観測しても盤面は動かない(workspaceless な
    *  unit 盤面のための姿)。 */
-  onCapInterrupted?: (taskId: string) => void;
+  onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
@@ -2328,11 +2328,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 立てず、タスクを `todo` の先頭へ戻して slot を解放する。**解放は容器が
       // 空になった観測のあと**(ADR 0099 決定3): exit は root process の話で
       // あって容器が空になった証拠ではない。観測が届かないまま止まった session は
-      // 既存の watchdog(時限 → 強制回収 → 回収 timeout → Containment quarantine)が
-      // 受ける。帰属は 401 と同じく spawn 時の provider —— Claude CLI を喋る他
+      // exit の時点で後始末に入り、watchdog の回収 timeout → Containment quarantine が
+      // 受ける(ADR 0113)。帰属は 401 と同じく spawn 時の provider —— Claude CLI を喋る他
       // Provider も envelope が同じなのでこの1本を通る(決定5)。
       if (capInterrupted) {
-        void this.containers.reclaimed(task.id).then(() => this.options.onCapInterrupted?.(task.id));
+        this.options.onCapInterrupted?.(task.id, this.containers.reclaimed(task.id));
       }
       // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
       // ある —— 行儀よく exit するのを待たずにここで強制回収を撃つ。usage と transcript を

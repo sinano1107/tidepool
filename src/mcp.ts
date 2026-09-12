@@ -27,7 +27,7 @@ import {
   type Task,
   taskHistory,
 } from "./tasks.js";
-import { markTeardown, runTeardown, type TeardownDeps } from "./teardown.js";
+import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { WorkerContainers } from "./worker-container.js";
 import {
   buildWorkspaceResolver,
@@ -267,7 +267,6 @@ function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
   verb: (task: Task, workerId: string, now: Date) => object,
-  completion = false,
   gate?: (task: Task, workspace: WorkspaceConfig) => void,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
@@ -288,7 +287,7 @@ function runReleasingVerb(
       heldForContainment: deps.heldForContainment,
     };
     const reclaimed = deps.containers?.reclaimed(task.id) ?? Promise.resolve();
-    void reclaimed.then(() => runTeardown(teardown, task.id, { completion, workspace }));
+    void reclaimed.then(() => runTeardown(teardown, task.id, { ...teardownStep(deps.db, task.id), workspace }));
     return { ...result, session_over: SESSION_OVER_NOTICE };
   });
 }
@@ -398,7 +397,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
           return { id: done.id, status: done.status };
         },
-        true,
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
       ),
   );

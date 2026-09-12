@@ -1,12 +1,12 @@
-import { rm } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import type { Landing } from "../src/landing.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, getTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, escalateTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown } from "../src/teardown.js";
-import { startWatchdog, type Watchdog } from "../src/watchdog.js";
+import { capInterruptionHandler, startWatchdog, type Watchdog } from "../src/watchdog.js";
 import { WorkerContainers } from "../src/worker-container.js";
 import {
   prepareWorkspaceAtPickup,
@@ -36,6 +36,7 @@ interface Fixture {
   task: Task;
   ws: WorkspaceConfig;
   runtime: FakeContainerRuntime;
+  worker: ScriptedWorker;
   watchdog: Watchdog;
   /** 盤面が持つ着地口 —— MCP 側の後始末も同じものを渡される。 */
   landing: Landing;
@@ -45,7 +46,9 @@ interface Fixture {
 
 /** 最終 verb が着地し、後始末に入ったところで止まっている完了済み session。容器は
  *  `hold` されている = root が exit しても空にならないホスト。 */
-async function sessionInTeardown(): Promise<Fixture> {
+async function sessionInTeardown(
+  route: "complete" | "cap" | "escalate" = "complete",
+): Promise<Fixture> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const ws = await makeWorkspace(dirs, "sandbox");
@@ -65,9 +68,20 @@ async function sessionInTeardown(): Promise<Fixture> {
   runtime.hold(picked.id);
   commitWork(ws.path, "deliverable.txt", "the real work\n");
 
-  const task = completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now());
-  markTeardown(db, task.id, clock.now());
-  slot.enterTeardown();
+  const task =
+    route === "complete"
+      ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now())
+      : picked;
+  if (route === "escalate") {
+    escalateTask(db, picked, {
+      context: "need a decision",
+      questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }],
+    }, "deckhand", clock.now());
+  }
+  if (route !== "cap") {
+    markTeardown(db, task.id, clock.now());
+    slot.enterTeardown();
+  }
 
   const landed: string[] = [];
   const landing: Landing = {
@@ -83,17 +97,22 @@ async function sessionInTeardown(): Promise<Fixture> {
     },
     async tick() {},
   };
+  const worker = new ScriptedWorker(clock);
   const watchdog = startWatchdog({
     db,
     clock,
     slot,
-    worker: new ScriptedWorker(clock),
+    worker,
     containers,
     workspace: ws,
     landing,
     config: { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN },
   });
-  return { db, clock, slot, task, ws, runtime, watchdog, landing, landed };
+  if (route === "cap") {
+    capInterruptionHandler({ db, clock, slot, resolve: () => ws, heldForContainment: watchdog.heldForContainment })(task.id, containers.reclaimed(task.id));
+    containers.forceReclaim(task.id);
+  }
+  return { db, clock, slot, task, ws, runtime, worker, watchdog, landing, landed };
 }
 
 /** 後始末の backstop を超え、回収も観測できないまま梯子の底まで落とす。 */
@@ -105,6 +124,86 @@ async function fallToTheBottom(f: Fixture): Promise<void> {
 }
 
 const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question");
+
+it("cap settlement supersedes an already pending watchdog reclaim callback", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const slot = new Slot();
+  const runtime = new FakeContainerRuntime();
+  const containers = new WorkerContainers(runtime);
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "one", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now());
+  slot.occupy(task.id);
+  containers.open(task.id);
+  runtime.hold(task.id);
+  const watchdog = startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), config: { timeLimits: { work: MIN }, grace: MIN, reclaimTimeout: 5 * MIN } });
+  await clock.advance(2 * MIN);
+  expect(runtime.forceReclaims).toEqual([task.id]);
+  capInterruptionHandler({ db, clock, slot, resolve: undefined, heldForContainment: watchdog.heldForContainment })(task.id, containers.reclaimed(task.id));
+  runtime.fireEmpty(task.id);
+  await settle();
+  expect(questions(db)).toEqual([]);
+  expect(getTask(db, task.id)?.status).toBe("todo");
+  expect(slot.currentTaskId).toBeNull();
+});
+
+it("cap teardown reaches containment in one reclaim timeout without running the task-type ladder", async () => {
+  const f = await sessionInTeardown("cap");
+  await f.clock.advance(4 * MIN);
+  expect(questions(f.db)).toEqual([]);
+  await f.clock.advance(MIN);
+  expect(questions(f.db)).toHaveLength(1);
+  expect(questions(f.db)[0]?.purpose).toContain("usage cap");
+  expect(questions(f.db)[0]?.purpose).toContain("queue head");
+  expect(questions(f.db)[0]?.purpose).toContain("may still be running");
+  expect(f.runtime.forceReclaims).toEqual([f.task.id]);
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  await f.clock.advance(180 * MIN);
+  expect(questions(f.db)).toHaveLength(1);
+  expect(f.runtime.forceReclaims).toEqual([f.task.id]);
+  expect(f.worker.gracefulStops).toEqual([]);
+});
+
+it("cap reclaim arriving after containment waits for acceptance before stashing WIP and returning to the queue head", async () => {
+  const f = await sessionInTeardown("cap");
+  registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now());
+  await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
+  await f.clock.advance(5 * MIN);
+  expect(f.watchdog.pendingReclaim()).toBe(f.task.id);
+  f.watchdog.acceptReclaimed();
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  f.runtime.fireEmpty(f.task.id);
+  await settle();
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(git(f.ws.path, "status", "--porcelain")).toContain("wip.txt");
+
+  f.watchdog.acceptReclaimed();
+  await settle();
+  expect(getTask(f.db, f.task.id)?.status).toBe("todo");
+  expect(nextSlotTask(f.db)?.id).toBe(f.task.id);
+  expect(git(f.ws.path, "show", `task/${f.task.id}:wip.txt`)).toBe("unfinished work");
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
+  expect(f.slot.currentTaskId).toBeNull();
+  expect(f.landed).toEqual([]);
+});
+
+it("acceptance of an escalated session stashes WIP without completion inspection or merge-back", async () => {
+  const f = await sessionInTeardown("escalate");
+  await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
+  await fallToTheBottom(f);
+  f.runtime.fireEmpty(f.task.id);
+  await settle();
+  f.watchdog.acceptReclaimed();
+  await settle();
+  expect(getTask(f.db, f.task.id)?.status).toBe("todo");
+  expect(git(f.ws.path, "show", `task/${f.task.id}:wip.txt`)).toBe("unfinished work");
+  expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(f.slot.currentTaskId).toBeNull();
+  expect(f.landed).toEqual([]);
+});
 
 it("最終 verb 着地後に root が exit しないまま時限を超えると既存の梯子に乗る —— failure question は立たず task は done のまま", async () => {
   const f = await sessionInTeardown();
