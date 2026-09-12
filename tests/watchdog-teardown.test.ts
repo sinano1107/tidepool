@@ -46,7 +46,9 @@ interface Fixture {
 
 /** 最終 verb が着地し、後始末に入ったところで止まっている完了済み session。容器は
  *  `hold` されている = root が exit しても空にならないホスト。 */
-async function sessionInTeardown(cap: boolean | "escalate" = false): Promise<Fixture> {
+async function sessionInTeardown(
+  route: "complete" | "cap" | "escalate" = "complete",
+): Promise<Fixture> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const ws = await makeWorkspace(dirs, "sandbox");
@@ -66,14 +68,17 @@ async function sessionInTeardown(cap: boolean | "escalate" = false): Promise<Fix
   runtime.hold(picked.id);
   commitWork(ws.path, "deliverable.txt", "the real work\n");
 
-  const task = cap ? picked : completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now());
-  if (cap === "escalate") {
+  const task =
+    route === "complete"
+      ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now())
+      : picked;
+  if (route === "escalate") {
     escalateTask(db, picked, {
       context: "need a decision",
       questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }],
     }, "deckhand", clock.now());
   }
-  if (cap !== true) {
+  if (route !== "cap") {
     markTeardown(db, task.id, clock.now());
     slot.enterTeardown();
   }
@@ -103,7 +108,7 @@ async function sessionInTeardown(cap: boolean | "escalate" = false): Promise<Fix
     landing,
     config: { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN },
   });
-  if (cap === true) {
+  if (route === "cap") {
     capInterruptionHandler({ db, clock, slot, resolve: () => ws, heldForContainment: watchdog.heldForContainment })(task.id, containers.reclaimed(task.id));
     containers.forceReclaim(task.id);
   }
@@ -142,7 +147,7 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
 });
 
 it("cap teardown reaches containment in one reclaim timeout without running the task-type ladder", async () => {
-  const f = await sessionInTeardown(true);
+  const f = await sessionInTeardown("cap");
   await f.clock.advance(4 * MIN);
   expect(questions(f.db)).toEqual([]);
   await f.clock.advance(MIN);
@@ -160,7 +165,7 @@ it("cap teardown reaches containment in one reclaim timeout without running the 
 });
 
 it("cap reclaim arriving after containment waits for acceptance before stashing WIP and returning to the queue head", async () => {
-  const f = await sessionInTeardown(true);
+  const f = await sessionInTeardown("cap");
   registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now());
   await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
   await f.clock.advance(5 * MIN);
