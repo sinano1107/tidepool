@@ -42,11 +42,8 @@ it("主キーは (provider, model) —— 同じ Provider × ティアに複数�
 
 it("旧形(価格列なし、主キー (provider, tier))の表を持つ盤面を開くと、表は新形で作り直され種から再 seed される(ADR 0114: 編集された表は無い)", async () => {
   const path = await boardPath("execution-settings-old-shape");
-  const fresh = openDb(path);
-  fresh.close();
   const old = new Database(path);
   old.exec(`
-    DROP TABLE execution_settings;
     CREATE TABLE execution_settings (
       provider TEXT NOT NULL,
       tier     TEXT NOT NULL,

@@ -189,9 +189,7 @@ export function openDb(path: string): Db {
   // 新形で作り直し、種から再 seed する(下の seed-once が空の表に撃つ)。#545 の
   // 設定面はまだ無いので、旧形で編集された表は存在しない。
   const executionSettingCols = db.prepare("PRAGMA table_info(execution_settings)").all() as Array<{ name: string }>;
-  if (executionSettingCols.length > 0 && !executionSettingCols.some((col) => col.name === "price_in")) {
-    db.exec("DROP TABLE execution_settings");
-  }
+  if (!executionSettingCols.some((col) => col.name === "price_in")) db.exec("DROP TABLE IF EXISTS execution_settings");
   db.exec(`
     ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
 
