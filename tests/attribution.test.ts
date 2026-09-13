@@ -11,6 +11,7 @@ import {
   FULL_HANDOFF,
   HOUR,
   loggedEntry,
+  managementMcpClient,
   mcpClient,
   registerWork,
   type Tidepool,
@@ -384,4 +385,35 @@ it("最後の RCA 子を人間が human の扉で完了しても第2回が走る
     ["uncertain", "initial"],
     ["task_ambiguity", "after_rca"],
   ]);
+});
+
+it("ログの HTTP / 管理 MCP 読取は異議の隣に最新の cause を返す", async () => {
+  const s = await objectedAndCommitted("read attribution");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, {
+    cause: "capability",
+    evidence: "RCA found that the implementation skipped an explicit criterion",
+  });
+  await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
+  await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+
+  const httpEntry = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
+    (entry: any) => entry.id === s.entry.id,
+  );
+  expect(httpEntry).toMatchObject({
+    objections: [{ comment: "bring the fixtures back", session_id: expect.any(Number) }],
+    cause: "capability",
+  });
+
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({ name: "read_decision_log", arguments: {} });
+    const log = JSON.parse(result.content[0].text);
+    expect(log.entries.find((entry: any) => entry.id === s.entry.id)).toMatchObject({
+      objections: [{ comment: "bring the fixtures back", session_id: expect.any(Number) }],
+      cause: "capability",
+    });
+  } finally {
+    await client.close();
+  }
 });
