@@ -44,15 +44,17 @@ export interface Episode {
  *  worker の落ち度と帰責された異議(`capability`)と、配分評価の underpowered ×
  *  capability だけ —— `preference` / `requirement_change` / `environment` の異議は
  *  数えず、環境要因を除く配分評価と同じ機構に乗る(ADR 0115 決定5)。負の信号は
- *  受理より強い: 受理された task に capability の異議が残っていれば負である。 */
+ *  受理より強い: 受理された task に capability の異議が残っていれば負である。
+ *  配分評価は reviewer ごとに1件(ADR 0111 決定2)なので session に複数並びうる ——
+ *  1つでも負なら負。 */
 export function episodeOutcome(facts: {
   accepted: boolean;
   causes: readonly Cause[];
-  allocation: { allocation: Allocation; cause: Cause } | null;
+  allocations: readonly { allocation: Allocation; cause: Cause }[];
 }): Episode["outcome"] {
   if (
     facts.causes.includes("capability") ||
-    (facts.allocation?.allocation === "underpowered" && facts.allocation.cause === "capability")
+    facts.allocations.some((a) => a.allocation === "underpowered" && a.cause === "capability")
   ) {
     return "rejected";
   }
@@ -198,13 +200,13 @@ export function loadEpisodes(db: Db): Episode[] {
     const inSession = (entryId: number) => entryId > spawned.id && entryId < endExclusive;
     // 最新の帰責が entry ごとに有効(append-only、attribution.ts と同じ読み方)
     const causes = new Map<number, Cause>();
-    let allocation: { allocation: Allocation; cause: Cause } | null = null;
+    const allocations: { allocation: Allocation; cause: Cause }[] = [];
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;
       const p = e.payload;
       if (p.kind === "objection_attributed" && inSession(p.entry_id)) causes.set(p.entry_id, p.cause);
       if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id && "allocation" in p) {
-        allocation = { allocation: p.allocation, cause: p.cause };
+        allocations.push({ allocation: p.allocation, cause: p.cause });
       }
     }
     const usage = exited?.payload.kind === "worker_exited" ? exited.payload.usage : null;
@@ -223,7 +225,7 @@ export function loadEpisodes(db: Db): Episode[] {
       outcome: episodeOutcome({
         accepted: task.accepted === 1 && nextSpawn === undefined,
         causes: [...causes.values()],
-        allocation,
+        allocations,
       }),
       cost_usd: usage?.estimated_cost_usd ?? null,
       duration_ms: exited ? Date.parse(exited.created_at) - Date.parse(spawned.created_at) : null,

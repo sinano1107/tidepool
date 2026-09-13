@@ -113,14 +113,25 @@ it("受理率が同点のときだけ、cost の要求では観測された sess
 });
 
 it("outcome は受理 = 統合点レビューがすべて完了、負 = capability の帰責か underpowered × capability の配分評価、それ以外は数えない(ADR 0115 決定5)", () => {
-  const facts = { accepted: false, causes: [] as const, allocation: null };
+  const facts = { accepted: false, causes: [] as const, allocations: [] as const };
   expect(episodeOutcome({ ...facts, accepted: true })).toBe("accepted");
   expect(episodeOutcome(facts)).toBe("excluded");
   expect(episodeOutcome({ ...facts, accepted: true, causes: ["capability"] })).toBe("rejected");
   expect(episodeOutcome({ ...facts, causes: ["preference", "requirement_change", "environment", "uncertain"] })).toBe("excluded");
-  expect(episodeOutcome({ ...facts, allocation: { allocation: "underpowered", cause: "capability" } })).toBe("rejected");
-  expect(episodeOutcome({ ...facts, accepted: true, allocation: { allocation: "underpowered", cause: "environment" } })).toBe("accepted");
-  expect(episodeOutcome({ ...facts, accepted: true, allocation: { allocation: "overpowered", cause: "capability" } })).toBe("accepted");
+  expect(episodeOutcome({ ...facts, allocations: [{ allocation: "underpowered", cause: "capability" }] })).toBe("rejected");
+  expect(episodeOutcome({ ...facts, accepted: true, allocations: [{ allocation: "underpowered", cause: "environment" }] })).toBe("accepted");
+  expect(episodeOutcome({ ...facts, accepted: true, allocations: [{ allocation: "overpowered", cause: "capability" }] })).toBe("accepted");
+  // reviewer が複数なら配分評価も session に複数並ぶ(ADR 0111 決定2)—— 1つでも負なら負
+  expect(
+    episodeOutcome({
+      ...facts,
+      accepted: true,
+      allocations: [
+        { allocation: "underpowered", cause: "capability" },
+        { allocation: "appropriate", cause: "uncertain" },
+      ],
+    }),
+  ).toBe("rejected");
 });
 
 it("advisor pin ありの episode は advisor 無しのセルに合流しない —— 相談回数ではなく pin がセルを割る(AC4)", () => {

@@ -35,7 +35,7 @@ try/catch)。review task では学習器を参照しない(ADR 0111 決定3)。�
 
 | 値 | 条件 |
 | --- | --- |
-| `rejected` | その session の窓の中のエントリに `capability` の帰責(最新の `objection_attributed`)がある、または その session を指す `allocation_reviewed` が `underpowered` × `capability` |
+| `rejected` | その session の窓の中のエントリに `capability` の帰責(最新の `objection_attributed`)がある、または その session を指す `allocation_reviewed`(reviewer ごとに1件、複数並びうる)のどれかが `underpowered` × `capability` |
 | `accepted` | task が受理されている(統合点レビューがすべて完了 —— `acceptedSql`、ADR 0111 決定1)かつ task の**最後の** session |
 | `excluded` | それ以外(レビュー保留 / 判定なし / 帰責が `preference` `requirement_change` `environment` `task_ambiguity` `missing_information` `uncertain` の異議のみ) |
 
