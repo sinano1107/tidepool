@@ -404,7 +404,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           // 配分評価(ADR 0111 決定4): 完了の transaction が commit した後、Board call
           // は response の外で走る。失敗は注釈の理由コードに畳まれ(reviewAllocation)、
           // それでも漏れた例外は完了を倒さず process も倒さない
-          if (deps.allocationClient && done.type === "review") {
+          if (deps.allocationClient) {
             void reviewAllocation(deps.db, deps.allocationClient, done, now).catch((err) =>
               console.error(`[allocation-review] ${done.id}: ${String(err)}`),
             );

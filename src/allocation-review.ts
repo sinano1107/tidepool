@@ -87,12 +87,6 @@ export function buildAllocationReviewInput(data: {
  *  撃ったが答えが得られなかった(CLI の失敗・語彙の外の応答)。 */
 export type AllocationUnevaluatedReason = "no_session" | "throttled" | "board_call_failed";
 
-/** 配分評価の Board call が使う Provider / ティア(spec #541「盤面設定」)。**selector
- *  を通らない**(ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。
- *  model / effort は表の行から呼び出しごとに解決するので、#545 の編集が次の
- *  評価から効く。 */
-export const ALLOCATION_REVIEW_BOARD_CALL = { provider: "anthropic", tier: "frontier" } as const;
-
 /** 盤面境界の1本(issue #547): 統合点レビューの完了を契機に入力を組み、Board call
  *  に問い、被レビュー task の episode へ注釈を1件だけ載せる。統合点レビュー以外の
  *  review(人間登録のルート review 等)には何もしない —— 注釈を載せる episode が
@@ -105,8 +99,7 @@ export async function reviewAllocation(
 ): Promise<void> {
   if (review.type !== "review" || review.parent_id === null) return;
   const reviewEvents = listEvents(db, review.id);
-  const registered = reviewEvents.find((e) => e.payload.kind === "task_registered")?.payload;
-  if (registered?.kind !== "task_registered" || !registered.integration_review) return;
+  if (!reviewEvents.some((e) => e.payload.kind === "task_registered" && e.payload.integration_review)) return;
   const reviewed = getTask(db, review.parent_id)!;
   const reviewedEvents = listEvents(db, reviewed.id);
   const spawnedEvent = reviewedEvents.filter((e) => e.payload.kind === "worker_spawned").at(-1);
@@ -129,11 +122,10 @@ export async function reviewAllocation(
     annotate({ unevaluated: "no_session" });
     return;
   }
-  const setting = rowFor(
-    loadExecutionSettingTable(db),
-    ALLOCATION_REVIEW_BOARD_CALL.provider,
-    ALLOCATION_REVIEW_BOARD_CALL.tier,
-  );
+  // Board call の Provider / ティアは盤面設定の固定値で、**selector を通らない**
+  // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。model / effort は
+  // 表の行から呼び出しごとに解決するので、#545 の編集が次の評価から効く
+  const setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
   if (isAnthropicBoardCallBlocked(db, setting.model)) {
     annotate({ unevaluated: "throttled" });
     return;
