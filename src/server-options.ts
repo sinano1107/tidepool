@@ -32,9 +32,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import {
-  type ExecutionSetting,
   executionSettingsFor,
-  IncompleteExecutionSettingTableError,
   resolveExecutionSetting,
 } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
@@ -48,7 +46,6 @@ import {
 } from "./profile-create.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
 import {
-  type AgentDefinition,
   type AuthorityProfile,
   assertValidAgentDefinition,
   canonicalHarness,
@@ -315,27 +312,9 @@ function harnessResolver(
   };
 }
 
-/** この agent の候補(ADR 0110 決定1/3、issue #544)。**spawn 側と同じ1本**
+/** pickup の除外判定と queue の skipped 表示が共有する口。**spawn 側と同じ1本**
  *  (`executionSettingsFor`)を通す —— ここに「agent の model」を別に持てば、
- *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。
- *
- *  表に行が無いときは空の候補に倒す: pickup はそのまま進んで spawn 側の例外が
- *  表の穴を名指しする。ここで投げれば scheduler の tick ごと倒れ、skipped に
- *  落とせば設定漏れが「静かに走らないタスク」になる。 */
-function candidatesOrEmpty(
-  db: Db,
-  definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
-): ExecutionSetting[] {
-  try {
-    return executionSettingsFor(db, definition, task);
-  } catch (error) {
-    if (error instanceof IncompleteExecutionSettingTableError) return [];
-    throw error;
-  }
-}
-
-/** pickup の除外判定と queue の skipped 表示が共有する口。task の要求を必ず渡すのが
+ *  モデル窓の除外は全テスト緑のまま黙って効かなくなる。task の要求を必ず渡すのが
  *  この口の要点である(#543 の申し送り): 渡し忘れれば要求ティアで走る task が
  *  モデル窓をすり抜け、表示と実際の判定がずれる。 */
 function taskExecutionCandidatesResolver(
@@ -347,7 +326,7 @@ function taskExecutionCandidatesResolver(
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
-    return candidatesOrEmpty(db, agent.definition, task);
+    return executionSettingsFor(db, agent.definition, task);
   };
 }
 
@@ -500,7 +479,7 @@ function fableAgentsResolver(board: BoardComposition, db: Db): (() => string[]) 
     Object.values(loadBoardRegistry(board).agents)
       // task 単位ではなく agent 名の集合を答える面なので、要求は undefined ——
       // 「その agent が要求なしで走ればどのモデルか」の判定である(#543)
-      .filter((agent) => candidatesOrEmpty(db, agent, undefined)[0]?.model.toLowerCase().includes("fable"))
+      .filter((agent) => executionSettingsFor(db, agent, undefined)[0]?.model.toLowerCase().includes("fable"))
       .map((agent) => agent.name);
 }
 

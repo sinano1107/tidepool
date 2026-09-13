@@ -78,14 +78,14 @@ export const HOURLY = 60 * 60 * 1000;
 
 /** candidates を引くのに要る task の断面。queue の行(`BoardTask`)からも引けるので、
  *  pickup のゲートと skipped 表示が同じ関数を共有できる。 */
-export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "review_tier">;
+export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "priority" | "review_tier">;
 export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => ExecutionSetting[];
 
 /** この task の entry が**すべて**除外されているか(ADR 0110 決定3 / issue #544)。
  *  scheduler の pickup ゲートも、queue の skipped 表示も、move route の Pickable
  *  head もこの1つの述語を通る —— 「走る」と「skipped と表示する」が退化して
- *  ズレることがない。候補が組めない(表に行が無い)ときは偽: 判定できないものを
- *  skipped とは言わず、spawn 側の例外が表の穴を名指しする。 */
+ *  ズレることがない。要求ティアの行を持たない entry は候補に入らないので、候補が
+ *  空なのも全 entry 除外である(ADR 0114 決定3: 表の穴は Throttle と同じ除外)。 */
 export function allEntriesExcluded(
   task: ExecutionCandidateTarget,
   excluded: ExecutionExclusions,
@@ -97,8 +97,7 @@ export function allEntriesExcluded(
     settings = candidates(task);
   } catch (error) {
     // 定義が成立していない / registry が知らない assignee。**読み口では投げない**
-    // —— 候補が組めないときと同じく偽である(判定できないものを skipped とは
-    // 言わない)。scheduler は同じ例外を自分で捕まえて agent を quarantine し、
+    // —— 偽である(判定できないものを skipped とは言わない)。scheduler は同じ例外を自分で捕まえて agent を quarantine し、
     // その行は quarantine の枝で skipped として現れる。表示側がここで投げると、
     // 1行の定義違反でキュー全体が 500 になる。
     if (error instanceof UnknownAgentError || error instanceof InvalidAgentDefinitionError) {
@@ -106,7 +105,7 @@ export function allEntriesExcluded(
     }
     throw error;
   }
-  return settings.length > 0 && firstSelectable(settings, excluded) === null;
+  return firstSelectable(settings, excluded) === null;
 }
 
 /** 「この行は全 entry が除外されているか」を答える述語を、今の除外集合に対して
@@ -722,10 +721,6 @@ export function startScheduler(deps: {
           head = nextHead();
           continue;
         }
-        // 表に行が無い(候補が組めない)—— 判定できないので pickup はそのまま進め、
-        // spawn 側の例外が表の穴を名指しする。ここで skipped にすると、設定漏れが
-        // 「静かに走らないタスク」として現れてしまう。
-        if (candidates.length === 0) break;
         let setting = firstSelectable(candidates, entryExcluded);
         while (setting) {
           if (

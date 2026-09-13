@@ -347,7 +347,7 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  number this task is a live reference to. Absent for an ordinary task. */
   github_issue_number?: number;
   /** CONTEXT.md「要求」 — the required quality tier and the priority that
-   *  orders tied candidates (ADR 0110 決定2). Typed as open strings, not the
+   *  orders that tier's candidates (ADR 0110 決定2 / ADR 0114). Typed as open strings, not the
    *  enums, because every door keeps its schema permissive and lets this
    *  layer say once which values exist (`assertExecutionRequest`); a narrower
    *  type here would only move that statement into each door's zod schema. */

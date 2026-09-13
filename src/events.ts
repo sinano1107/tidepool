@@ -205,10 +205,11 @@ export type EventPayload =
        *  the second. It is also the only place "the default was chosen" is
        *  distinguished from "nothing was requested" (CONTEXT.md「要求」).
        *
-       *  `provider` は Provider の出所(ADR 0110 決定5 / issue #544): `"only"` は
-       *  agent が entry を1つしか宣言していなかった、`"rank"` は残った候補から
-       *  Provider 順位で選んだ。「温存中の anthropic を避けて openai で走った」が
-       *  事後に読めるのはこの1値による。 */
+       *  `provider` は Provider の出所(ADR 0110 決定5 / issue #544、ADR 0114 決定4):
+       *  `"only"` は agent が entry を1つしか宣言していなかった、`"rank"` は残った
+       *  候補から Provider 順位で選んだ、`"cost"` は task の優先順位が cost で価格が
+       *  選んだ。「温存中の anthropic を避けて openai で走った」が事後に読めるのは
+       *  この1値による。 */
       source: { tier: TierSource; provider: ProviderSource };
       /** ADR 0098: the Harness/version actually selected for this session. */
       harness: "claude-code" | "codex";

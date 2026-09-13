@@ -9,35 +9,33 @@ import type { Task } from "./tasks.js";
 export const TIERS = ["economy", "standard", "frontier"] as const;
 export type Tier = (typeof TIERS)[number];
 
-/** 要求のもう1列: 同点候補の並べ替えの基準(CONTEXT.md「要求」)。**selector は
- *  今これを読まない** —— 盤面の表は `provider × ティア → (model, effort)` しか
- *  持たず、cost / speed の序列の材料が無い。候補集合が複数になった #544 でも
- *  並べ替えは Provider 順位だけで決まり、この列の読み手は #556 である。 */
-export const PRIORITIES = ["quality", "cost", "speed"] as const;
+/** 要求のもう1列: 要求ティアの候補を並べる鍵(CONTEXT.md「要求」/ ADR 0114 決定1)。
+ *  `quality` = Provider 順位 → 価格、`cost` = 価格 → Provider 順位。ティアは床
+ *  なので、どちらも床を下回る許可ではない。`speed` は落とした —— 締め切りは
+ *  ティアの申告で表し、所要時間は学習器の outcome として観測される。 */
+export const PRIORITIES = ["quality", "cost"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
 /** 要求2列を受け取る入口(管理MCP の `register_task`、worker MCP の `decompose`)が
  *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い
- *  ティア名や古い意味を喋り続ける。`priority` の文面が「並べ替える」ではなく
- *  「記録される」なのは実態どおりで、selector は今この列を読まない(上記)——
- *  効きもしない設定をエージェントに書かせない。 */
+ *  ティア名や古い意味を喋り続ける。 */
 export const TIER_FIELD_DESCRIPTION =
   `Required quality tier for this task: ${TIERS.join(" / ")}. ` +
   "Omit to fall back to the agent's own tier, then the board default.";
 export const PRIORITY_FIELD_DESCRIPTION =
-  `Recorded on this task: ${PRIORITIES.join(" / ")}. ` +
-  "Candidates are ordered by the board's Provider rank alone, so this column has no effect on selection yet.";
+  `How the models of the required tier are ordered: ${PRIORITIES.join(" / ")}. ` +
+  "quality (default) picks by the board's Provider rank, then price; cost picks the cheapest model, then Provider rank.";
 
 /** 解決されたティアが**誰の要求だったか**(ADR 0110 決定3)。events 側の
  *  `worker_spawned.source` と同じ union を2箇所に書くと必ず片方だけ動くので、
  *  綴りはここ1つにして events.ts は型として取り込む。 */
 export type TierSource = "task" | "review_tier" | "agent" | "board";
 
-/** 選ばれた Provider が**なぜその Provider だったか**(ADR 0110 決定3 / 決定5)。
- *  `"only"` は agent が entry を1つしか宣言していなかった、`"rank"` は残った
- *  候補から Provider 順位で選んだ。2値なのは、今の盤面が並べ替えに使える材料が
- *  順位しか無いからである(優先順位の列を読む手は #556)。 */
-export type ProviderSource = "only" | "rank";
+/** 選ばれた Provider が**なぜその Provider だったか**(ADR 0110 決定3 / 決定5、
+ *  ADR 0114 決定4)。`"only"` は agent が entry を1つしか宣言していなかった、
+ *  `"rank"` は残った候補から Provider 順位で選んだ、`"cost"` は task の優先順位が
+ *  cost で価格が Provider を決めた。 */
+export type ProviderSource = "only" | "rank" | "cost";
 
 /** task にも agent にも要求が無いときのティア。**配布される既定は最小の床**で
  *  あり、上げるのは運用者の判断である(ADR 0094 の advisor と同じ線 ——「既定は
@@ -50,15 +48,22 @@ export type ProviderSource = "only" | "rank";
  *  定数に手順が1つ増えるだけである。 */
 export const BOARD_DEFAULT_TIER: Tier = "economy";
 
-/** 表の1行: この provider のこのティアの現 champion と、そこで使う effort。
- *  「alias か具体 id か」の判別子は**持たない** —— どちらも CLI に渡す文字列で
- *  あることに変わりはなく、区別が要る場面が盤面には無い(anthropic は alias 行、
- *  openai は具体 id 行という実測の帰結は、値そのものに現れている)。 */
+/** task に優先順位が無いときの鍵(ADR 0114 決定1)。`BOARD_DEFAULT_TIER` と同じ線で、
+ *  #545 が設定面を開くまでは定数。 */
+export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
+
+/** 表の1行 = モデル分類の行(ADR 0114 決定2): この model はこの provider のこの
+ *  ティアの品質を満たす、という分類と、そこで使う effort・価格(USD per MTok)。
+ *  同じ (provider, tier) に複数行あってよい。「alias か具体 id か」の判別子は
+ *  **持たない** —— どちらも CLI に渡す文字列であることに変わりはなく、区別が要る
+ *  場面が盤面には無い。 */
 export interface ExecutionSettingRow {
   provider: Provider;
   tier: Tier;
   model: string;
   effort: string;
+  price_in: number;
+  price_out: number;
 }
 
 /** 盤面設定の表(CONTEXT.md「Selector」)。種の既定から DB へ初期化され、以後は
@@ -78,20 +83,19 @@ export const MOONSHOT_DEFAULT_MODEL = "kimi-k3[1m]";
  *  前進するので手入れが要らない。openai は具体 id 行 —— 2026-09-10 の実測で
  *  Codex の `-m` は `Astra` / `Sol` / `Terra` / `Luna` を alias として受けず
  *  (ChatGPT account では API が 400 を返し `turn.failed` で終わる)、世代交代の
- *  たびに手入れが要る。moonshot は3ティアとも同じ model —— ティアの選択肢が
- *  無いからで、行を欠かすと既定ティアの解決が moonshot agent の spawn を全部
- *  倒す。effort が全行 `high` なのは、fallback の出所が adapter 定数から表へ
- *  移った結果として既定が `medium` から上がったということである。 */
+ *  たびに手入れが要る。moonshot は kimi-k3 を economy に1行 —— 分類は価格帯では
+ *  なく性能で行い(第三者の同一ハーネス測定はすべて Sonnet 5 / Terra の帯)、
+ *  「moonshot に frontier 級は無い」は表の穴として正直に書く(ADR 0114 決定2)。
+ *  effort が全行 `high` なのは、fallback の出所が adapter 定数から表へ移った結果
+ *  として既定が `medium` から上がったということである。価格の根拠と出典は #556。 */
 export const SEED_EXECUTION_SETTINGS: ExecutionSettingTable = [
-  { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high" },
-  { provider: "anthropic", tier: "standard", model: "opus", effort: "high" },
-  { provider: "anthropic", tier: "frontier", model: "fable", effort: "high" },
-  { provider: "moonshot", tier: "economy", model: MOONSHOT_DEFAULT_MODEL, effort: "high" },
-  { provider: "moonshot", tier: "standard", model: MOONSHOT_DEFAULT_MODEL, effort: "high" },
-  { provider: "moonshot", tier: "frontier", model: MOONSHOT_DEFAULT_MODEL, effort: "high" },
-  { provider: "openai", tier: "economy", model: "gpt-5.6-terra", effort: "high" },
-  { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high" },
-  { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high" },
+  { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high", price_in: 2, price_out: 10 },
+  { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 },
+  { provider: "anthropic", tier: "frontier", model: "fable", effort: "high", price_in: 10, price_out: 50 },
+  { provider: "moonshot", tier: "economy", model: MOONSHOT_DEFAULT_MODEL, effort: "high", price_in: 3, price_out: 15 },
+  { provider: "openai", tier: "economy", model: "gpt-5.6-terra", effort: "high", price_in: 2, price_out: 12 },
+  { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 4, price_out: 20 },
+  { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high", price_in: 10, price_out: 50 },
 ];
 
 /** worker session が実際に走る計算資源の組(CONTEXT.md「実行設定」)と、その出所。
@@ -160,6 +164,10 @@ export interface SelectorInput {
   providerRank: readonly Provider[];
   /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
   taskTier: Tier | undefined;
+  /** task の優先順位(CONTEXT.md「要求」/ ADR 0114 決定1)。省略 → 盤面既定。
+   *  review の要求(`reviewTier`)があれば読まない —— review task に優先順位の列は
+   *  無く、`quality` の並べ方で解決する(ADR 0111 決定3)。 */
+  priority: Priority | undefined;
   /** ADR 0111: review tasks use this request instead of the work tier. */
   reviewTier?: Tier;
   /** agent.md の `tier`。省略 → 盤面既定。 */
@@ -169,20 +177,6 @@ export interface SelectorInput {
    *  も盤面からは読めず、不成立なら headless の CLI は exit せず advisor 無しで
    *  黙って起動する(2026-09-10 実測: stream-json は未 attach を通知しない)。 */
   frontierAdvisor: boolean;
-}
-
-/** 要求されたティアの行が表に無い。ADR 0005 の明示ピン留めは「値が無ければ既定へ
- *  倒す」を許すが、**倒す先は表**であって adapter 定数ではなくなった —— 行が無い
- *  まま別のモデルで走らせれば、記録された実行設定が嘘になる。表の穴は運用者の
- *  設定漏れなので、agent の quarantine ではなく spawn の失敗として上げる。 */
-export class IncompleteExecutionSettingTableError extends Error {
-  constructor(provider: Provider, tier: Tier) {
-    super(
-      `the board's execution-setting table has no row for ${provider} / ${tier} — ` +
-        "add it before a task can run there (ADR 0110 決定3)",
-    );
-    this.name = "IncompleteExecutionSettingTableError";
-  }
 }
 
 /** advisor のティアが main 未満。headless の CLI はこの組み合わせを exit ではなく
@@ -209,19 +203,35 @@ export function assertAdvisorPairing(mainTier: Tier, advisorTier: Tier): void {
   }
 }
 
+/** 価格の鍵(ADR 0114 決定4): out 単価、同額なら in 単価。 */
+function byPrice(a: ExecutionSettingRow, b: ExecutionSettingRow): number {
+  return a.price_out - b.price_out || a.price_in - b.price_in;
+}
+
+/** この provider のこのティアの行を安い順に。行が無ければ空 —— 表の穴は設定漏れ
+ *  ではなく事実で(「moonshot に frontier 級は無い」)、selector は entry を除外する
+ *  (ADR 0114 決定3)。 */
+function rowsFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): ExecutionSettingRow[] {
+  return table.filter((row) => row.provider === provider && row.tier === tier).sort(byPrice);
+}
+
+/** Board call(ADR 0111 決定4)のように Provider / ティアが盤面設定の固定値で
+ *  selector を通らない呼び手の口: 最安の行。行が無ければ「撃てなかった」として
+ *  呼び手が畳む。 */
 export function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): ExecutionSettingRow {
-  const row = table.find((entry) => entry.provider === provider && entry.tier === tier);
-  if (!row) throw new IncompleteExecutionSettingTableError(provider, tier);
+  const row = rowsFor(table, provider, tier)[0];
+  if (!row) throw new Error(`the board's execution-setting table has no row for ${provider} / ${tier}`);
   return row;
 }
 
-/** entry 集合を Provider 順位に並べ、それぞれの実行設定を解決する(ADR 0110 決定3)。
- *  **除外は当てない** —— 除外は観測のたびに育つので、盤面境界が候補を1度作り、
- *  除外が増えるたびに `firstSelectable` を引き直す形にしてある。
+/** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /
+ *  ADR 0114 決定3・4)。**除外は当てない** —— 除外は観測のたびに育つので、盤面境界が
+ *  候補を1度作り、除外が増えるたびに `firstSelectable` を引き直す形にしてある。
+ *  要求ティアの行を持たない entry は候補に入らない(Throttle と同じ「除外」)。
  *
- *  advisor の model は agent.md には書かれない: 真のときだけ表から導出し、上位
- *  ティアの行(main が既に上位ならその行そのもの)を採る。main が selector で
- *  動く以上、固定した model 名は書いた時点でしか正しくない。
+ *  advisor の model は agent.md には書かれない: 真のときだけ表から導出し、同
+ *  Provider の frontier 行(複数なら最安、main が既に frontier ならその行そのもの)
+ *  を採る。frontier 行が無ければその entry は除外 —— advisor 無しで黙って走らせない。
  *
  *  kill switch(ADR 0043)はここでは見ない —— 「この session に advisor は無い」
  *  という盤面ホストの運用マスクは registry の宣言とは別の層で、選んだ**後**に
@@ -236,25 +246,34 @@ function executionSettingCandidates(
   const tierSource: TierSource =
     request.reviewTier !== undefined ? "review_tier" :
     request.taskTier !== undefined ? "task" : request.agentTier !== undefined ? "agent" : "board";
-  const providerSource: ProviderSource = request.entries.length === 1 ? "only" : "rank";
-  return [...request.entries]
-    .sort((a, b) => request.providerRank.indexOf(a.provider) - request.providerRank.indexOf(b.provider))
-    .map((entry) => {
-      const main = rowFor(table, entry.provider, tier);
-      let advisor: string | undefined;
-      if (entry.advisor) {
-        const advisorTier: Tier = request.frontierAdvisor ? "frontier" : tier;
-        advisor = rowFor(table, entry.provider, advisorTier).model;
-        assertAdvisorPairing(tier, advisorTier);
-      }
-      return {
-        provider: entry.provider,
-        model: main.model,
-        effort: main.effort,
-        advisor,
-        source: { tier: tierSource, provider: providerSource },
-      };
-    });
+  const priority: Priority =
+    request.reviewTier !== undefined ? "quality" : request.priority ?? BOARD_DEFAULT_PRIORITY;
+  const providerSource: ProviderSource =
+    request.entries.length === 1 ? "only" : priority === "cost" ? "cost" : "rank";
+  const byRank = (a: ExecutionSettingRow, b: ExecutionSettingRow) =>
+    request.providerRank.indexOf(a.provider) - request.providerRank.indexOf(b.provider);
+  const advisorTier: Tier = request.frontierAdvisor ? "frontier" : tier;
+  assertAdvisorPairing(tier, advisorTier);
+  return request.entries
+    .flatMap((entry) => {
+      const frontier = entry.advisor ? rowsFor(table, entry.provider, advisorTier)[0]?.model : undefined;
+      if (entry.advisor && frontier === undefined) return [];
+      // advisor のティアが main と同じなら main の行そのもの —— 同ティアに複数行あっても別の行へ割れない
+      return rowsFor(table, entry.provider, tier).map((main) => ({
+        main,
+        advisor: entry.advisor && advisorTier === tier ? main.model : frontier,
+      }));
+    })
+    .sort((a, b) =>
+      priority === "cost" ? byPrice(a.main, b.main) || byRank(a.main, b.main) : byRank(a.main, b.main) || byPrice(a.main, b.main),
+    )
+    .map(({ main, advisor }) => ({
+      provider: main.provider,
+      model: main.model,
+      effort: main.effort,
+      advisor,
+      source: { tier: tierSource, provider: providerSource },
+    }));
 }
 
 /** 除外を当てて残った先頭を採る —— **除外の式はこの1つ**(issue #544)。scheduler の
@@ -292,11 +311,11 @@ export function selectExecutionSetting(
 }
 
 /** 盤面の表を DB から読む(ADR 0110 決定3: 種から初期化された後は DB が正本)。
- *  表は9行の定数サイズなので pickup ごとに読み直してよく、#545 の編集が次の
+ *  表は数行の定数サイズなので pickup ごとに読み直してよく、#545 の編集が次の
  *  pickup から効くのはそのおかげである。 */
 export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
   return db
-    .prepare("SELECT provider, tier, model, effort FROM execution_settings")
+    .prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings")
     .all() as ExecutionSettingRow[];
 }
 
@@ -308,6 +327,9 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
     | undefined;
   return row?.frontier_advisor === 1;
 }
+
+/** selector が読む task の断面(要求の列と、review か否か)。 */
+type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier">;
 
 /** 盤面境界の1行: この agent の定義から selector の入力を組む。Claude / Codex 両
  *  アダプタと、pickup の除外判定・queue の skipped 表示が**同じこの1本**を通る ——
@@ -322,7 +344,7 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
 function selectorInputFor(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
+  task: SelectorTask | undefined,
 ): SelectorInput {
   return {
     entries: definition.provider.map((entry) => ({
@@ -331,6 +353,7 @@ function selectorInputFor(
     })),
     providerRank: PROVIDER_VALUES,
     taskTier: task?.type === "review" ? undefined : task?.tier ?? undefined,
+    priority: task?.priority ?? undefined,
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier as Tier | undefined,
     frontierAdvisor: isFrontierAdvisorEnabled(db),
@@ -342,7 +365,7 @@ function selectorInputFor(
 export function executionSettingsFor(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
+  task: SelectorTask | undefined,
 ): ExecutionSetting[] {
   return executionSettingCandidates(
     selectorInputFor(db, definition, task),
@@ -356,7 +379,7 @@ export function executionSettingsFor(
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
+  task: SelectorTask | undefined,
 ): ExecutionSetting | null {
   return selectExecutionSetting(
     selectorInputFor(db, definition, task),

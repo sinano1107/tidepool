@@ -29,10 +29,10 @@ it("issue参照 task にも要求を付けられる(spec #541 User Story 3: 起�
   const db = openDb(":memory:");
   const task = registerTask(
     db,
-    { type: "work", workspace: "tidepool", github_issue_number: 543, tier: "standard", priority: "speed" },
+    { type: "work", workspace: "tidepool", github_issue_number: 543, tier: "standard", priority: "cost" },
     new Date(0),
   );
-  expect(getTask(db, task.id)).toMatchObject({ tier: "standard", priority: "speed" });
+  expect(getTask(db, task.id)).toMatchObject({ tier: "standard", priority: "cost" });
 });
 
 it("ティアの不正値は登録を拒否する — 表に無いティアで走る task を作らない", () => {
