@@ -63,3 +63,14 @@ review flag による opt-in は「必須ではない」とだけ記録されて
 
 退けた案: **同ティアの安い行を `overpowered` で上げる**(上記)。**ティアをまたいで下げる** —— ADR 0114 退けた案「優先順位で
 ティアを下回る」で既に却下(申告を濁す)。
+
+## 追記2(2026-09-13 の triage、issue #583)
+
+決定5 の routing meta-review の提案に **registry diff が1種増える: agent.md の既定 `tier` の引き下げ**。根拠は配分評価の `overpowered`
+のうち `worker_spawned.source.tier = agent` の分 —— 床を決めたのが agent の既定ティアだった episode。ADR 0031 の「meta-review が
+registry diff として蒸留する」と同じ形で、適用は表 diff の盤面適用(#549)ではなく authority の変更と同じ registry への diff
+(承認 question 経由、#358 / ADR 0020 の正規経路)に乗る。読み物は `overpowered` を出所と agent で割る。
+
+他の出所は**読み物のみ**: `task` は登録者の申告で、人間なら報告が答え、decompose の親 agent なら Behavior の領分だが入力が異議で
+ない(ADR 0083 決定7)ので #584 の判断を待つ。`board` は既定 = `economy` で下げる先が無く、economy 内の安い行は表 diff か
+`cost` 優先順位の領分。
