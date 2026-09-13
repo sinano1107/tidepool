@@ -7,6 +7,7 @@ import { usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
   managementMcpClient,
@@ -250,9 +251,10 @@ it("Anthropic throttle は legacy board halt を残さず同じ poll と次 poll
   const client = await mcpClient(t.mcpBaseUrl, firstOpenai.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, firstOpenai.id);
   const secondOpenai = await registerWork(t, "OpenAI still flows next poll", undefined, undefined, "codex-agent");
   await t.clock.advance(HOUR);
-  expect(t.worker.started.map((task) => task.id)).toEqual([firstOpenai.id, secondOpenai.id]);
+  expect(t.worker.started.filter((task) => task.type === "work").map((task) => task.id)).toEqual([firstOpenai.id, secondOpenai.id]);
 });
 
 it("model-specific window が外すのは当たった task だけ —— 同じ agent の要求なしタスクは走り続ける(ADR 0110 決定3)", async () => {
@@ -346,7 +348,7 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
       executionSettingsFor(
         t.db,
         task.assignee === "multi-agent" ? entries("anthropic", "openai") : entries("anthropic"),
-        task.tier,
+        task,
       ),
   });
   const frontier = async (title: string, assignee: string) =>
@@ -391,7 +393,7 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
 it("全 entry が除外された行は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / CONTEXT.md「Pickable head」)", async () => {
   t = await bootTidepool({
     taskExecutionCandidates: (task) =>
-      executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task.tier),
+      executionSettingsFor(t.db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, task),
   });
   // 上の行は frontier を要求するので fable 行に解決され、唯一の entry が
   // 温存中の窓に当たる。下の行は要求なし = economy 行なのでその窓に当たらない
@@ -430,7 +432,7 @@ it("候補の解決が定義違反で倒れても queue の読み口は 200 を�
       return executionSettingsFor(
         t.db,
         { provider: [{ name: "anthropic", advisor: false }], tier: undefined },
-        task.tier,
+        task,
       );
     },
   });

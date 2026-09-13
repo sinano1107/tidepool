@@ -6,6 +6,7 @@ import {
   attachChild,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   completeViaMcp,
   git,
   HOUR,
@@ -153,6 +154,7 @@ it("purely-local: 人間が付帯子を cancel しても着地する — cancel 
   const attached = attachChild(t, task.id, "review the feature");
 
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   expect(await questions(t)).toEqual([]);
 
   const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${attached.id}/cancel`, {});
@@ -172,6 +174,7 @@ it("purely-local: 人間が付帯子を complete しても着地する", async (
   const attached = attachChild(t, task.id, "check the feature by hand", "human");
 
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   expect(await questions(t)).toEqual([]);
 
   const completed = await api(t.baseUrl, "POST", `/api/tasks/${attached.id}/complete`, {});
@@ -241,6 +244,7 @@ it("決着済み分解子に付いた異議修理が未決着なら、親の着�
   const repair = attachChild(t, child.id, "repair: implement the child", "human");
   await t.clock.advance(HOUR);
   await completeViaMcp(t, parent.id);
+  await completeIntegrationReviews(t, parent.id);
 
   expect(await questions(t)).toEqual([]);
 
@@ -282,6 +286,7 @@ it("付帯子が abandon で決着した場合も着地する", async () => {
   commitWork(workspace.path, "feature.txt", "finished\n");
   const attached = attachChild(t, task.id, "repair: ship despite the abandoned repair");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   expect(await questions(t)).toEqual([]);
 
   await t.clock.advance(HOUR); // 付帯子が拾われる
@@ -310,6 +315,7 @@ it("付帯子の付帯子(修理に付いたレビュー)も、根の着地を�
 
   await completeViaMcp(t, task.id);
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/complete`, {});
+  await completeIntegrationReviews(t, task.id);
 
   // 修理は決着したが、その成果は根のブランチへ流れ込んでおり、そのレビューが未決着
   expect(await questions(t)).toEqual([]);
@@ -328,6 +334,7 @@ it("着地済みの根の下で自分が着地の根になった付帯子も、�
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   const [landing] = await questions(t);
   await api(t.baseUrl, "POST", `/api/tasks/${landing.id}/answer`, { answers: ["merge"] });
 
@@ -434,6 +441,7 @@ async function landingQuestionThenAttachedChild(): Promise<{ task: any; landing:
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   const [landing] = await questions(t);
   attachChild(t, task.id, "repair: ship the feature", "human");
   return { task, landing, workspace };
@@ -480,6 +488,7 @@ it("open な triage session の未束ねの異議は、着地 question への me
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   const [landing] = await questions(t);
   const entry = await completionEntry(t, task.id);
   await api(t.baseUrl, "POST", "/api/triage/objection", {
@@ -529,6 +538,7 @@ it("分解子の判断への異議も親の着地 question を 409 にし、comm
   await completeViaMcp(t, child.id);
   await t.clock.advance(HOUR);
   await completeViaMcp(t, parent.id);
+  await completeIntegrationReviews(t, parent.id);
   const [landing] = await questions(t);
   const entry = await completionEntry(t, child.id);
   await api(t.baseUrl, "POST", "/api/triage/objection", {
@@ -573,6 +583,7 @@ it("PR の merge question も同じ検証を通る — 未決着の付帯子が�
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   const [merge] = await questions(t);
   attachChild(t, task.id, "repair: ship remotely", "human");
   t.github.scriptCiStatus("success");

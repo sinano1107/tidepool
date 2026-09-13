@@ -6,6 +6,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   completeViaMcp,
   FULL_HANDOFF,
   git,
@@ -227,13 +228,14 @@ it("後始末の途中で盤面を再起動しても、前提検査が通れば�
   // tree rule / merge-back / 休止位置 / slot 解放が完走している
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(ws.path, "show", `task/${task.id}:deliverable.txt`)).toBe("the real work");
-  // 着地も後始末の中で走る —— purely-local な workspace なので人間への merge question
+  // 統合点レビューを終えると着地が再発火する。
+  await completeIntegrationReviews(t, task.id);
   expect((await questions(t)).some((q: any) => q.title.startsWith("land completed task"))).toBe(
     true,
   );
   const next = await registerWork(t, "two");
   await t.clock.advance(HOUR);
-  expect(started()).toEqual([next.id]);
+  expect(t.worker.started.filter((task) => task.type === "work").map((task) => task.id)).toEqual([next.id]);
 });
 
 it("前提検査が通らなければ後始末は走らず、pickup は止まったままになる", async () => {

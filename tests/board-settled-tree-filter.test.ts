@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTaskDirectly, completeTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -53,7 +53,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
     expect(board.find((t) => t.id === parent.id)?.status).toBe("blocked");
   });
 
-  it("子を持たないルートが done になり、ツリー全体が settled になると board から消える", () => {
+  it("ルートと統合点レビューが done になり、ツリー全体が settled になると board から消える", () => {
     const db = openDb(":memory:");
     const root = registerTask(
       db,
@@ -61,6 +61,8 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
       new Date(0),
     );
     completeTask(db, root, HANDOFF, "reef-crab", new Date(1));
+    const review = listBoard(db).find((task) => task.type === "review")!;
+    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2));
 
     const board = listBoard(db);
 
@@ -98,6 +100,8 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
     );
     completeTask(db, root, HANDOFF, "reef-crab", new Date(1));
 
+    const review = listBoard(db).find((task) => task.type === "review")!;
+    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2));
     const queue = listQueue(db);
 
     expect(queue.some((t) => t.id === root.id)).toBe(false);

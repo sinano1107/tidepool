@@ -4,6 +4,7 @@ import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js
 import {
   addTaskChange,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -49,6 +50,7 @@ describe("issue #27: workspace ごとの保護ブランチ設定", () => {
     });
     expect(res.isError ?? false).toBe(false);
     await client.close();
+  await completeIntegrationReviews(t, task.id);
 
     expect(t.github.requests).toHaveLength(1);
     expect(t.github.requests[0]).toMatchObject({

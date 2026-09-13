@@ -4,6 +4,7 @@ import {
   addTaskChange,
   api,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -36,6 +37,7 @@ it("completing a work task under the escalate merge dial registers a merge-decis
   });
   expect(res.isError ?? false).toBe(false);
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(t.github.requests).toHaveLength(1);
 
@@ -62,6 +64,7 @@ it("completing a work task under the external merge dial opens the PR and stops 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(t.github.requests).toHaveLength(1);
   const done = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
@@ -87,6 +90,7 @@ it("completing a work task under a code-built profile carrying no dial opens the
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(t.github.requests).toHaveLength(1);
   const done = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
@@ -103,6 +107,7 @@ async function completeUnderEscalate(t: Tidepool, path: string) {
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board.find((x: any) => x.type === "question");
   return { task, question };
@@ -315,6 +320,7 @@ it("external の PR は open な merge question を残さないので、走査�
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.pr_number).toBe(1);
 
   // PR は盤面の外で merge される — 観測しないことが宣言どおりの姿である
@@ -339,6 +345,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   // no question yet — it's queued for the poll, not asked
   let board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
@@ -374,6 +381,7 @@ it("CI 待ち行の PR が盤面の外で merge されていたら、次の poll
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   t.github.scriptMergedOutside(1);
   t.github.scriptCiStatus("success");
@@ -405,6 +413,7 @@ it("a CI failure during the auto_if_ci_green poll converts the queued auto-merge
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   t.github.scriptCiStatus("failure");
   await t.clock.advance(MINUTE);

@@ -66,5 +66,5 @@ it("非既定 workspace(prod)の quarantine は、ツリーがクリーンな状
   expect(res.json.status).toBe("done");
 
   // pickup resumes at once (no need to advance the clock)
-  expect(t.worker.started.map((x: any) => x.id)).toContain(stuckInProd.id);
+  expect(t.worker.started.at(-1)).toMatchObject({ type: "review", parent_id: inProd.id, workspace: "prod" });
 });

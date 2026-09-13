@@ -6,6 +6,7 @@ import {
   api,
   attachChild,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -49,6 +50,7 @@ it("prod workspace の低リスクタスクの auto_if_ci_green poll は、CI �
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   // no question — queued for the poll
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
@@ -72,6 +74,7 @@ it("PR open 後に付いた未決着の付帯子があれば CI を読まず行�
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const attached = attachChild(t, task.id, "repair before unattended merge", "human");
 
   await runAutoMergeTick();
@@ -96,6 +99,7 @@ it("CI を読んでいる間に付帯子が付いたら merge 直前の門で止
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   const getCiStatus = t.github.getCiStatus.bind(t.github);
   let attachedId: string | undefined;
@@ -127,6 +131,7 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const entry = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.find(
     (event: any) => event.kind === "task_completed",
   );
@@ -142,7 +147,7 @@ it("PR open 後の未束ね異議は CI を読まず行を残し、commit され
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await api(t.baseUrl, "POST", "/api/triage/close");
   const attached = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter(
-    (candidate: any) => candidate.parent_id === task.id,
+    (candidate: any) => candidate.parent_id === task.id && candidate.status !== "done",
   );
   for (const child of attached) {
     const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${child.id}/cancel`);

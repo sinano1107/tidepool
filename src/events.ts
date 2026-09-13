@@ -78,7 +78,7 @@ export interface TokenUsage {
 export type EventPayload =
   // based_on_decision points at the decision-log entry (event id) a decomposed
   // child rests on — stamped at registration so provenance never needs a join
-  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number }
+  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean }
   | { kind: "decision_logged"; line: string }
   | { kind: "task_picked_up" }
   | { kind: "task_moved"; after: string | null }
@@ -195,7 +195,8 @@ export type EventPayload =
       model: string;
       effort: string;
       /** ADR 0110 決定3: **why** it was that setting — `"task"` when the
-       *  task's own request column decided, `"agent"` when the agent's `tier`
+       *  task's own request column decided, `"review_tier"` for its review
+       *  request, `"agent"` when the agent's `tier`
        *  did, `"board"` when the board default did. Recorded beside the values
        *  because "which model" and "who asked for it" are separate facts: the
        *  learner reads the first, a human asking "why was it this model" reads

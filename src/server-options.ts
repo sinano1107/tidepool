@@ -34,7 +34,6 @@ import {
   executionSettingsFor,
   IncompleteExecutionSettingTableError,
   resolveExecutionSetting,
-  type Tier,
 } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -308,7 +307,7 @@ function harnessResolver(
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
-    const setting = resolveExecutionSetting(db, agent.definition, task.tier);
+    const setting = resolveExecutionSetting(db, agent.definition, task);
     if (!setting) throw new InvalidAgentDefinitionError(name, "no Provider entry to run on");
     return canonicalHarness(setting.provider);
   };
@@ -324,17 +323,17 @@ function harnessResolver(
 function candidatesOrEmpty(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  taskTier: Tier | null | undefined,
+  task: Pick<Task, "type" | "tier" | "review_tier"> | undefined,
 ): ExecutionSetting[] {
   try {
-    return executionSettingsFor(db, definition, taskTier);
+    return executionSettingsFor(db, definition, task);
   } catch (error) {
     if (error instanceof IncompleteExecutionSettingTableError) return [];
     throw error;
   }
 }
 
-/** pickup の除外判定と queue の skipped 表示が共有する口。`task.tier` を必ず渡すのが
+/** pickup の除外判定と queue の skipped 表示が共有する口。task の要求を必ず渡すのが
  *  この口の要点である(#543 の申し送り): 渡し忘れれば要求ティアで走る task が
  *  モデル窓をすり抜け、表示と実際の判定がずれる。 */
 function taskExecutionCandidatesResolver(
@@ -346,7 +345,7 @@ function taskExecutionCandidatesResolver(
     const registry = loadBoardRegistry(board);
     const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name);
-    return candidatesOrEmpty(db, agent.definition, task.tier);
+    return candidatesOrEmpty(db, agent.definition, task);
   };
 }
 

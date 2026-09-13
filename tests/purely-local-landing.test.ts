@@ -7,6 +7,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   completeViaMcp,
   FULL_HANDOFF,
   git,
@@ -59,9 +60,11 @@ async function serialPairLanding(
   await board.clock.advance(HOUR);
   commitWork(workspacePath, sharedFile ? "shared.txt" : "one.txt", "from the first task\n");
   await completeViaMcp(board, first.id);
+  await completeIntegrationReviews(board, first.id);
   await board.clock.advance(HOUR);
   commitWork(workspacePath, sharedFile ? "shared.txt" : "two.txt", "from the second task\n");
   await completeViaMcp(board, second.id);
+  await completeIntegrationReviews(board, second.id);
   if (third) await board.clock.advance(HOUR); // 3件目が slot を取り、HEAD は自分のタスクブランチへ移る
   const firstQuestion = await landingQuestionFor(board, first.id);
   expect(
@@ -87,6 +90,7 @@ it("purely-local の root work 完了は PR を試みず、代わりに着地 qu
     arguments: { handoff: FULL_HANDOFF },
   });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   expect(completed.isError ?? false).toBe(false);
   expect(t.github.requests).toEqual([]);
@@ -114,6 +118,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (candidate: any) => candidate.type === "question",
@@ -136,6 +141,7 @@ it("着地 question に merge と答えると保護ブランチを task branch �
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   expect(git(workspace.path, "rev-list", "--count", `main..task/${task.id}`)).toBe("1");
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (candidate: any) => candidate.type === "question",
@@ -209,6 +215,7 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
   // 盤面自身のこの2度の書き込みを違反として読まない
   commitWork(workspace.path, "wip.txt", "the running session's work in progress\n");
   await completeViaMcp(t, third.id);
+  await completeIntegrationReviews(t, third.id);
   expect(await quarantineQuestion(t)).toBeUndefined();
 });
 
@@ -273,6 +280,7 @@ it("保護ブランチが帯域外で進んで fast-forward できないと work
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const landingQuestion = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (candidate: any) => candidate.question_pending_local_merge_task_id === task.id,
   );
@@ -308,6 +316,7 @@ it("保護ブランチが帯域外で巻き戻されると、ff できる位置�
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   const question = await landingQuestionFor(t, task.id);
   // 巻き戻し先はタスクブランチの祖先なので、ff-only の検査だけなら素通りしてしまう位置
   git(workspace.path, "reset", "--hard", rolledBackTo);
@@ -332,6 +341,7 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
   await completeViaMcp(t, task.id);
+  await completeIntegrationReviews(t, task.id);
   const question = await landingQuestionFor(t, task.id);
   // 第2接続で盤面の記録から保護ブランチの行だけを抜く(WAL 下で安全 — harness の
   // registerQuestion と同じ seam)
@@ -371,6 +381,7 @@ it("着地 question に hold と答えると保護ブランチを動かさず決
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (candidate: any) => candidate.question_pending_local_merge_task_id === task.id,
   );

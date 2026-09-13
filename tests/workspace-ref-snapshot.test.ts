@@ -12,6 +12,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -195,6 +196,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
   await t.clock.advance(HOUR);
   commitWork(ws.path, "landed.txt", "finished\n");
   await complete(t, landing.id);
+  await completeIntegrationReviews(t, landing.id);
   const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (x: any) => x.question_pending_local_merge_task_id === landing.id,
   );

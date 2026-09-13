@@ -3,6 +3,7 @@ import { healthyUsageText, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   HOUR,
   mcpClient,
@@ -104,7 +105,9 @@ it("ペース線超過の間も実行中タスクには決して触れない(常
 
   t.worker.scriptUsage(healthyUsageText(t.clock.now()));
   await t.clock.advance(HOUR);
-  expect(t.worker.started.map((x) => x.id)).toEqual([first.id, second.id]);
+  await completeIntegrationReviews(t, first.id);
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([first.id, second.id]);
 });
 
 it("throttled の全体線は行に現れず、キューの envelope の halts が1回で答える(ADR 0068)", async () => {

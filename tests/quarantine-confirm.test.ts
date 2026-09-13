@@ -127,7 +127,7 @@ it("ツリーがクリーンだと確認されれば needs_human が解除され
   expect(res.json.question_answer).toEqual([answerText]);
 
   // pickup が即時再開し、止まっていたタスクが動く(clock を進めなくても良い)
-  expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work", "stalled work"]);
+  expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work", "review: doomed work"]);
 });
 
 // code-review 指摘: 1択緩和を workerId === BOARD_WORKER_ID で判定すると、

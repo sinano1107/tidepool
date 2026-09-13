@@ -6,6 +6,7 @@ import {
   attachChild,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   completeViaMcp,
   HOUR,
   makeWorkspace,
@@ -171,6 +172,7 @@ async function exerciseSettlement(surface: HumanSurface, verb: SettlementVerb) {
   commitWork(workspace.path, `${surface}-${verb}.txt`, "finished\n");
   const attached = attachChild(landingPool, root.id, `${surface} attached child`, "human");
   await completeViaMcp(landingPool, root.id);
+  await completeIntegrationReviews(landingPool, root.id);
   expect(await questions(landingPool)).toEqual([]);
 
   await settleFrom(surface, landingPool, attached.id, verb);

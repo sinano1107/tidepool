@@ -157,6 +157,8 @@ const registerTaskSchema = z.object({
   workspace: z.string().optional(),
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
+  review_by: z.array(z.string().min(1)).optional(),
+  review_tier: z.string().optional(),
   // the execution request (ADR 0110 決定2): open strings here, same
   // permissive-shape posture as the content fields above — which tiers and
   // priorities exist is the domain's to say (registerTask), so a bad value

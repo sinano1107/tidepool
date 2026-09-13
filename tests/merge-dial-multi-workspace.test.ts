@@ -5,6 +5,7 @@ import {
   addTaskChange,
   api,
   bootTidepool,
+  completeIntegrationReviews,
   FULL_HANDOFF,
   HOUR,
   makeRemoteBackedWorkspace,
@@ -42,6 +43,7 @@ it("prod workspace のタスクの merge 回答は、CI チェックと merge �
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
+  await completeIntegrationReviews(t, task.id);
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = board.find((x: any) => x.type === "question");
