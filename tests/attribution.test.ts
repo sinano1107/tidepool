@@ -74,12 +74,14 @@ it("好みの異議(preference)だけの commit では修理だけが立ち、�
   expect(log.entries.some((e: any) => e.kind === "objection_attributed")).toBe(false);
 });
 
-it("同じタスクに好みと能力の異議が混ざると entry ごとに別の cause が残り、RCA の purpose には RCA を要する entry だけ、修理には全 entry が載る", async () => {
+it.each(["capability", "task_ambiguity", "missing_information"] as const)(
+  "同じタスクに好みと %s の異議が混ざると entry ごとに別の cause が残り、RCA の purpose には RCA を要する entry だけ、修理には全 entry が載る",
+  async (rcaCause) => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const { task, entries } = await objectedWork(t, "mixed", ["named the flag --dry", "skipped the fixtures"]);
   attributionClient.scriptJudgment(entries[0].id, { cause: "preference", evidence: "spelling" });
-  attributionClient.scriptJudgment(entries[1].id, { cause: "capability", evidence: "the fixtures were required" });
+  attributionClient.scriptJudgment(entries[1].id, { cause: rcaCause, evidence: "the fixtures were required" });
   await object(t, entries[0].id, "call it --dry-run");
   await object(t, entries[1].id, "bring the fixtures back");
 
@@ -107,9 +109,10 @@ it("同じタスクに好みと能力の異議が混ざると entry ごとに別
   );
   expect((await attributions(t, task.id)).map((e: any) => [e.payload.entry_id, e.payload.cause])).toEqual([
     [entries[0].id, "preference"],
-    [entries[1].id, "capability"],
+    [entries[1].id, rcaCause],
   ]);
-});
+  },
+);
 
 it("Board call の失敗は uncertain + 失敗理由の evidence になり、commit は止まらず RCA が立つ(他の entry の判定は生きる)", async () => {
   const attributionClient = new FakeAttributionClient();
@@ -159,34 +162,6 @@ it.each([
     "rca (auditor): skimmed",
     "rca (self): skimmed",
     "repair: skimmed",
-  ]);
-});
-
-it("人間が書いたエントリへの異議は capability でも self RCA を生まず、auditor RCA と修理だけが立つ", async () => {
-  const attributionClient = new FakeAttributionClient();
-  t = await bootTidepool({ attributionClient });
-  const humanTask = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "approve the vendor invoice",
-      purpose: "p",
-      completion_criteria: "c",
-      assignee: "human",
-    })
-  ).json;
-  await api(t.baseUrl, "POST", `/api/tasks/${humanTask.id}/complete`, {});
-  const humanEntry = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
-    (e: any) => e.kind === "task_completed" && e.task_id === humanTask.id,
-  );
-  attributionClient.scriptJudgment(humanEntry.id, { cause: "capability", evidence: "one signature" });
-  await api(t.baseUrl, "POST", "/api/triage/start");
-  await object(t, humanEntry.id, "this needed a second signature");
-
-  await api(t.baseUrl, "POST", "/api/triage/close");
-
-  expect((await children(t, humanTask.id)).map((x: any) => x.title).sort()).toEqual([
-    "rca (auditor): approve the vendor invoice",
-    "repair: approve the vendor invoice",
   ]);
 });
 

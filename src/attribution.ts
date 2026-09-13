@@ -3,7 +3,7 @@ import type { Db } from "./db.js";
 import { taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, loadExecutionSettingTable, rowFor } from "./execution-setting.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
-import { type LogEntry, listObjectedEntries, objectedEntryText } from "./triage.js";
+import { type DecisionLogEntry, listObjectedEntries, objectedEntryText } from "./triage.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent
@@ -67,7 +67,7 @@ export async function attributeObjections(
         entry_id: o.entry.id,
         entry: objectedEntryText(o.entry),
         steering: o.comments,
-        decision_log: (taskDecisionLog(db, o.entry.task_id) as LogEntry[]).map(objectedEntryText),
+        decision_log: (taskDecisionLog(db, o.entry.task_id) as DecisionLogEntry[]).map(objectedEntryText),
       };
       try {
         judgments.set(o.entry.id, await client.judge(input, setting));

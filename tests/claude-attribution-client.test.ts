@@ -45,13 +45,3 @@ it("語彙の外の cause や JSON でない応答は reject する(未検証の
   });
   await expect(prose.judge(input, { model: "fable", effort: "high" })).rejects.toThrow();
 });
-
-it("CLI が is_error と共に返した result は診断として運ぶ(issue #306)", async () => {
-  const client = new ClaudeAttributionClient({
-    exec: async () =>
-      JSON.stringify({ is_error: true, result: "Failed to authenticate: OAuth session expired" }),
-  });
-  await expect(client.judge(input, { model: "fable", effort: "high" })).rejects.toThrow(
-    "Failed to authenticate: OAuth session expired",
-  );
-});

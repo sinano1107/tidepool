@@ -119,21 +119,21 @@ export function raiseObjection(
   });
 }
 
-export type LogEntry = Omit<EventRow, "payload"> & {
+export type DecisionLogEntry = Omit<EventRow, "payload"> & {
   payload: Extract<EventRow["payload"], { kind: "decision_logged" | "task_completed" }>;
 };
 
 /** One objected log entry with every direction comment raised against it this
  *  session (objection event order) and the ids of those objection events. */
-export interface ObjectionPair {
-  entry: LogEntry;
+interface ObjectionPair {
+  entry: DecisionLogEntry;
   comments: string[];
   objection_event_ids: number[];
 }
 
 /** The text of a log entry as the human read it — a decision's line, or the
  *  completion report — shared by the repair / RCA purposes and the Board call. */
-export function objectedEntryText(entry: LogEntry): string {
+export function objectedEntryText(entry: DecisionLogEntry): string {
   return entry.payload.kind === "decision_logged"
     ? entry.payload.line
     : `completion report: ${entry.payload.result ?? "(no outcome recorded)"}`;
@@ -419,12 +419,12 @@ export function consumePendingDump(db: Db, id: number): void {
 }
 
 /** An event id that must point at a decision-log entry (a human-facing kind). */
-function requireLogEntry(db: Db, entryId: number): LogEntry {
+function requireLogEntry(db: Db, entryId: number): DecisionLogEntry {
   const entry = getEvent(db, entryId);
   if (!entry || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
     throw new TriageError(`event ${entryId} is not a decision-log entry`);
   }
-  return entry as LogEntry;
+  return entry as DecisionLogEntry;
 }
 
 /** Record that these log entries were actually put in front of the human.
