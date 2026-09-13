@@ -10,6 +10,7 @@ import type {
   AttributionJudgment,
 } from "../src/attribution.js";
 import type { Clock } from "../src/clock.js";
+import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import type {
   ChildDraftContext,
   DraftClient,
@@ -694,3 +695,21 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
 export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): WorkerContainers {
   return new WorkerContainers(passthroughContainerRuntime(spawn));
 }
+
+/** 健全な openai の usage probe(ADR 0116 決定4): openai は観測が健全でないと pickup で
+ *  除外されるので、実物の selector を通して openai entry を走らせたいテストが渡す。 */
+export const healthyOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
+  status: "observed",
+  provider: "openai",
+  cliVersion: "codex-cli 0.147.0",
+  plan: "plus",
+  windows: [
+    {
+      name: "primary",
+      model: null,
+      usedPercent: 0,
+      durationMs: 5 * 3_600_000,
+      resetsAt: new Date(now.getTime() + 4 * 3_600_000).toISOString(),
+    },
+  ],
+});

@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
 import { PROVIDER_VALUES } from "../src/registry.js";
+import { healthyOpenai } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -106,18 +106,9 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
   expect(await state()).toEqual(before);
 });
 
-/** 候補は**実物の selector**(盤面の表 + 盤面設定)から。openai は usage の観測が
- *  健全でないと pickup で除外されるので、probe を健全にしておく(ADR 0116 決定4)。 */
+/** 候補は**実物の selector**(盤面の表 + 盤面設定)から。 */
 const boardWith = (entries: string[]): Parameters<typeof bootTidepool>[0] => ({
-  openaiUsage: async (now: Date): Promise<CodexAppServerProbeResult> => ({
-    status: "observed",
-    provider: "openai",
-    cliVersion: "codex-cli 0.147.0",
-    plan: "plus",
-    windows: [
-      { name: "primary", model: null, usedPercent: 0, durationMs: 5 * HOUR, resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString() },
-    ],
-  }),
+  openaiUsage: healthyOpenai,
   taskExecutionCandidates: (task) =>
     executionSettingsFor(t.db, { provider: entries.map((name) => ({ name, advisor: false })), tier: undefined }, task),
 });

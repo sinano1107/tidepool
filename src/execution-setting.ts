@@ -331,7 +331,7 @@ export function selectExecutionSetting(
  *  編集(#545)が次の pickup から効くのはそのおかげである。 */
 export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
   return db
-    .prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings")
+    .prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings ORDER BY provider, model")
     .all() as ExecutionSettingRow[];
 }
 
@@ -347,12 +347,7 @@ export interface ExecutionDefaults {
 /** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定3値を1往復で。
  *  表は (provider, model) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
 export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable } {
-  return {
-    table: db
-      .prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings ORDER BY provider, model")
-      .all() as ExecutionSettingRow[],
-    ...loadExecutionDefaults(db),
-  };
+  return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
 }
 
 /** Provider 順位として書けるのは `PROVIDER_VALUES` の**順列**だけ —— 欠けた Provider は
