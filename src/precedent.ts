@@ -294,25 +294,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     }
   }
 
-  // この spawn を閉じた worker_exited は issue #379 が置いたポインタで引く。
-  // 1タスクに複数の worker session がありうる(retry / 統合復帰 / quarantine
-  // 復帰)ので、以降は spawn ~ exit の窓に入るイベントだけを見る — 窓で切らないと
-  // 同じタスクの前の session の判断がこの Episode に湧く。
-  const exited = input.events.find(
-    (e) =>
-      e.payload.kind === "worker_exited" &&
-      e.payload.worker_spawned_event_id === input.workerSpawnedEventId,
-  );
-  // exit イベントが無い session(盤面が落ちたまま終わった記録)でも窓は閉じる:
-  // 次の `worker_spawned` が来た時点でこの session は終わっている。開けっぱなしに
-  // すると次の session の判断と完了がこの Episode に焼かれる — exit 時の投影には
-  // 常に exited があるので、これが起きるのは backfill 経路だけ。
-  const nextSpawnedId = input.events
-    .filter((e) => e.kind === "worker_spawned" && e.task_id === spawned.task_id && e.id > spawned.id)
-    .reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
-  const endExclusive = exited ? exited.id + 1 : nextSpawnedId;
-  const inSession = (e: EventRow) =>
-    e.task_id === spawned.task_id && e.id > spawned.id && e.id < endExclusive;
+  const { exited, inSession } = sessionWindow(input.events, spawned);
   const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
   const completed = input.events.find((e) => e.kind === "task_completed" && inSession(e));
   markers.push(...decisionMarkers(input.events, inSession, loggedAt));
@@ -339,6 +321,40 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     workerExitedEventId: exited?.id ?? null,
     lines,
     unrecognizedFormat: actions.length === 0 && lines.unknown > 0,
+  };
+}
+
+/** 1つの worker session に属するイベントの窓。Precedent の投影と学習器の episode
+ *  (learner.ts)が同じ規則で session を切る。
+ *
+ *  この spawn を閉じた worker_exited は issue #379 が置いたポインタで引く。
+ *  1タスクに複数の worker session がありうる(retry / 統合復帰 / quarantine
+ *  復帰)ので、spawn ~ exit の窓に入るイベントだけを見る — 窓で切らないと
+ *  同じタスクの前の session の判断がこの Episode に湧く。
+ *
+ *  exit イベントが無い session(盤面が落ちたまま終わった記録)でも窓は閉じる:
+ *  次の `worker_spawned` が来た時点でこの session は終わっている。開けっぱなしに
+ *  すると次の session の判断と完了がこの Episode に焼かれる — exit 時の投影には
+ *  常に exited があるので、これが起きるのは backfill 経路だけ。 */
+export function sessionWindow(
+  events: readonly EventRow[],
+  spawned: EventRow,
+): {
+  exited: EventRow | undefined;
+  hasNextSpawn: boolean;
+  inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean;
+} {
+  const exited = events.find(
+    (e) => e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id === spawned.id,
+  );
+  const nextSpawnedId = events
+    .filter((e) => e.kind === "worker_spawned" && e.task_id === spawned.task_id && e.id > spawned.id)
+    .reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
+  const endExclusive = exited ? exited.id + 1 : nextSpawnedId;
+  return {
+    exited,
+    hasNextSpawn: nextSpawnedId !== Number.POSITIVE_INFINITY,
+    inSession: (e) => e.task_id === spawned.task_id && e.id > spawned.id && e.id < endExclusive,
   };
 }
 

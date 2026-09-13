@@ -2531,8 +2531,8 @@ export function presentTask(db: Db, task: Task): BoardTask {
 
 /** Registration records the generated review set so independent audits and RCA
  *  children cannot change this integration point's acceptance (ADR 0111).
- *  学習器の受理 outcome もこの1本を読む(spec #541: 受理は派生であって status
- *  ではないので、定義を写さない)。
+ *  The learner's acceptance outcome reads this same derivation (spec #541:
+ *  acceptance is derived, not a status, so its definition is not copied).
  *  Reviews generated before #546 have no marker; their registration immediately
  *  followed the parent's completion event with the same provenance and canonical
  *  content, which is enough to recognize them without mutating the append-only log. */

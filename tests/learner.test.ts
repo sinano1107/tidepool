@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
-import { aggregateCells, type Episode, episodeOutcome, recommend } from "../src/learner.js";
+import { aggregateCells, episodeOutcome, type LearnerEpisode, recommend } from "../src/learner.js";
 import {
   bootTidepool,
   completeIntegrationReviews,
@@ -28,7 +28,7 @@ const opus = candidate("anthropic", "opus");
 const sol = candidate("openai", "gpt-5.6-sol");
 
 /** 観測された episode の既定形。テストが言いたい1点だけを上書きする。 */
-function episode(overrides: Partial<Episode> = {}): Episode {
+function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
   return {
     cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: null },
     workspace: "tidepool",
@@ -44,7 +44,7 @@ function episode(overrides: Partial<Episode> = {}): Episode {
 }
 
 /** 盤面全体の episode 列から、この workspace 向けの推薦を1回引く。 */
-function recommendFor(episodes: Episode[], candidates: ExecutionSetting[], workspace = "tidepool", priority: "quality" | "cost" = "quality") {
+function recommendFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], workspace = "tidepool", priority: "quality" | "cost" = "quality") {
   return recommend({
     candidates,
     board: aggregateCells(episodes),
@@ -54,18 +54,18 @@ function recommendFor(episodes: Episode[], candidates: ExecutionSetting[], works
 }
 
 it("データの無いセルでは推薦が表(selector の先頭)と一致し、出所は prior(AC1)", () => {
-  expect(recommendFor([], [opus, sol])).toEqual({ recommended: opus, source: "prior" });
-  expect(recommendFor([], [sol, opus])).toEqual({ recommended: sol, source: "prior" });
+  expect(recommendFor([], [opus, sol])).toEqual({ recommended: opus, basis: "prior" });
+  expect(recommendFor([], [sol, opus])).toEqual({ recommended: sol, basis: "prior" });
 });
 
 it("観測された具体 id は表の alias 行に当たり、受理されなかった行は表の並びより下がる —— 出所は data", () => {
   const rejected = episode({ cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: null }, outcome: "rejected" });
-  expect(recommendFor([rejected], [opus, sol])).toEqual({ recommended: sol, source: "data" });
+  expect(recommendFor([rejected], [opus, sol])).toEqual({ recommended: sol, basis: "data" });
 });
 
 it("受理1件では表の並びを追い越さない —— 表の行は受理1件分の疑似観測で、少データでも表より悪くならない(ADR 0110 決定4)", () => {
   const accepted = episode({ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null } });
-  expect(recommendFor([accepted], [opus, sol])).toEqual({ recommended: opus, source: "data" });
+  expect(recommendFor([accepted], [opus, sol])).toEqual({ recommended: opus, basis: "data" });
   // 表の行に反する観測が積もれば追い越す: opus が 1勝1敗(2/3)、sol は 3勝0敗(4/4)
   const mixed = [
     episode({ outcome: "accepted" }),
@@ -141,8 +141,8 @@ it("advisor pin ありの episode は advisor 無しのセルに合流しない 
     cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: "fable" },
     outcome: "rejected",
   });
-  expect(recommendFor([pinnedRejected], [opus, sol])).toEqual({ recommended: opus, source: "prior" });
-  expect(recommendFor([pinnedRejected], [opusWithAdvisor, sol])).toEqual({ recommended: sol, source: "data" });
+  expect(recommendFor([pinnedRejected], [opus, sol])).toEqual({ recommended: opus, basis: "prior" });
+  expect(recommendFor([pinnedRejected], [opusWithAdvisor, sol])).toEqual({ recommended: sol, basis: "data" });
 });
 
 /* ------------------------------------------------------------------ *
@@ -155,7 +155,7 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 
 const shadowRows = (t: Tidepool) =>
-  t.db.prepare("SELECT task_id, cell_recommended, cell_actual, source FROM learner_shadow ORDER BY id").all();
+  t.db.prepare("SELECT task_id, cell_recommended, cell_actual, source, basis FROM learner_shadow ORDER BY id").all();
 
 it("work task の pickup ごとに shadow 行が1件記録され、selector の選択は変わらない —— review task では学習器を参照せず行も無い", async () => {
   t = await bootTidepool({ taskExecutionCandidates: () => [opus, sol] });
@@ -164,7 +164,9 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
 
   expect(t.worker.startedSettings).toEqual([opus]);
   const cell = JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: null });
-  expect(shadowRows(t)).toEqual([{ task_id: work.id, cell_recommended: cell, cell_actual: cell, source: "prior" }]);
+  expect(shadowRows(t)).toEqual([
+    { task_id: work.id, cell_recommended: cell, cell_actual: cell, source: JSON.stringify(opus.source), basis: "prior" },
+  ]);
 
   // 完了で統合点レビュー(review task)が生まれ、次の poll で pickup される
   await completeViaMcp(t, work.id);
@@ -218,6 +220,71 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
     task_id: later.id,
     cell_recommended: JSON.stringify({ provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }),
     cell_actual: JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: null }),
-    source: "data",
+    source: JSON.stringify(opus.source),
+    basis: "data",
+  });
+});
+
+it("advisor pin ありで相談0回の session は、盤面の記録から読んでも advisor 無しのセルに合流しない —— 観測された具体 id も alias 行に当たる(AC4)", async () => {
+  const opusWithAdvisor = candidate("anthropic", "opus", "fable");
+  t = await bootTidepool({ taskExecutionCandidates: () => [opusWithAdvisor, opus] });
+  const earlier = await registerWork(t, "earlier");
+  await t.clock.advance(HOUR);
+  // ScriptedWorker は spawn しないので、その session の記録(pin あり spawn + 帰責 + 相談0回の exit)を setup として置く
+  const spawnedId = appendEvent(t.db, {
+    taskId: earlier.id,
+    workerId: "fake-worker",
+    origin: "board",
+    at: t.clock.now(),
+    payload: {
+      kind: "worker_spawned",
+      registry_commit: "commit",
+      definition_version: "1",
+      advisor: "fable",
+      provider: "anthropic",
+      model: "opus",
+      effort: "high",
+      source: { tier: "board", provider: "rank" },
+      harness: "claude-code",
+      cli_version: "1",
+    },
+  });
+  const entry = await loggedEntry(t, earlier.id, "took the shortcut");
+  const attributed: EventPayload = {
+    kind: "objection_attributed",
+    entry_id: entry.id,
+    objection_event_ids: [],
+    cause: "capability",
+    evidence: "the shortcut missed the second criterion",
+    round: "initial",
+  };
+  appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+  const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
+  appendEvent(t.db, {
+    taskId: earlier.id,
+    workerId: "fake-worker",
+    origin: "board",
+    at: t.clock.now(),
+    payload: {
+      kind: "worker_exited",
+      exit_code: 0,
+      signal: null,
+      stderr_tail: null,
+      worker_spawned_event_id: spawnedId,
+      usage: { ...tokens, advisor: null, models: { "claude-opus-4-1": tokens } },
+    },
+  });
+  await completeViaMcp(t, earlier.id);
+  await completeIntegrationReviews(t, earlier.id);
+
+  const later = await registerWork(t, "later");
+  await t.clock.advance(HOUR);
+
+  expect(t.worker.startedSettings.at(-1)).toEqual(opusWithAdvisor);
+  expect(shadowRows(t).at(-1)).toMatchObject({
+    task_id: later.id,
+    cell_recommended: JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: null }),
+    cell_actual: JSON.stringify({ provider: "anthropic", model: "opus", effort: "high", advisor: "fable" }),
+    basis: "data",
   });
 });

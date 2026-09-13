@@ -9,6 +9,7 @@ import {
   type Tier,
   windowMatchesModel,
 } from "./execution-setting.js";
+import { sessionWindow } from "./precedent.js";
 import type { Provider } from "./registry.js";
 import { acceptedSql, type Task } from "./tasks.js";
 
@@ -23,11 +24,12 @@ export interface Cell {
   advisor: string | null;
 }
 
-/** 1つの worker session を学習器が読む形。文脈(workspace / agent / 要求)は
+/** 1つの worker session を学習器が読む形(Precedent の `Episode` と同じ session
+ *  単位だが、transcript を持たず outcome だけを持つ)。文脈(workspace / agent / 要求)は
  *  記録として運ぶが、セルを割るのは workspace(プーリングの段)だけ。
  *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」で、
  *  受理率の分母に入らない(ADR 0115 決定5)。 */
-export interface Episode {
+export interface LearnerEpisode {
   cell: Cell;
   workspace: string | null;
   agent: string;
@@ -51,7 +53,7 @@ export function episodeOutcome(facts: {
   accepted: boolean;
   causes: readonly Cause[];
   allocations: readonly { allocation: Allocation; cause: Cause }[];
-}): Episode["outcome"] {
+}): LearnerEpisode["outcome"] {
   if (
     facts.causes.includes("capability") ||
     facts.allocations.some((a) => a.allocation === "underpowered" && a.cause === "capability")
@@ -72,19 +74,30 @@ export interface CellStats {
 
 export interface Recommendation {
   recommended: ExecutionSetting;
-  /** `prior` = 候補のどれにもデータが無く、表(selector の並び)そのまま。 */
-  source: "prior" | "data";
+  /** `prior` = 候補のどれにもデータが無く、表(selector の並び)そのまま。
+   *  「出所」(selector の `source`)とは別物なので別の名前で持つ。 */
+  basis: "prior" | "data";
 }
+
+/** セルの綴りは1つ: 集計の鍵も shadow 行の JSON もこれを通す。 */
+const cellJson = (c: Cell): string =>
+  JSON.stringify({ provider: c.provider, model: c.model, effort: c.effort, advisor: c.advisor });
+const cellOf = (s: ExecutionSetting): Cell => ({
+  provider: s.provider,
+  model: s.model,
+  effort: s.effort,
+  advisor: s.advisor ?? null,
+});
 
 const mean = (values: number[]): number | null =>
   values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length;
 
 /** episode 列 → セルの集計(純関数)。`excluded` は数えない。 */
-export function aggregateCells(episodes: readonly Episode[]): CellStats[] {
-  const byKey = new Map<string, { cell: Cell; episodes: Episode[] }>();
+export function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
+  const byKey = new Map<string, { cell: Cell; episodes: LearnerEpisode[] }>();
   for (const e of episodes) {
     if (e.outcome === "excluded") continue;
-    const key = JSON.stringify([e.cell.provider, e.cell.model, e.cell.effort, e.cell.advisor]);
+    const key = cellJson(e.cell);
     const group = byKey.get(key) ?? { cell: e.cell, episodes: [] };
     group.episodes.push(e);
     byKey.set(key, group);
@@ -154,7 +167,7 @@ export function recommend(input: {
   // 候補が空なら来ない —— 全 entry 除外は selector が先に skipped にしている
   return {
     recommended: ranked[0]!.candidate,
-    source: scored.some((s) => s.total > 1) ? "data" : "prior",
+    basis: scored.some((s) => s.total > 1) ? "data" : "prior",
   };
 }
 
@@ -173,7 +186,8 @@ type Spawned = EventRow & { payload: Extract<EventPayload, { kind: "worker_spawn
  *  ので、events を直に読む)。受理は task の派生なので task の**最後の** session に
  *  だけ付け、前の session は自分の窓の中の負の信号でしか数えない。異議の窓は
  *  Precedent と同じ規則(spawn より後、exit または次の spawn より前)。 */
-export function loadEpisodes(db: Db): Episode[] {
+// ponytail: pickup ごとに work task の全 session を読み直す。表が大きくなったら集計を増分で持つ
+function loadEpisodes(db: Db): LearnerEpisode[] {
   const tasks = db
     .prepare(
       `SELECT id, workspace, tier, priority, ${acceptedSql("tasks.id")} AS accepted FROM tasks
@@ -192,19 +206,14 @@ export function loadEpisodes(db: Db): Episode[] {
   const spawns = events.filter((e): e is Spawned => e.payload.kind === "worker_spawned");
   return spawns.map((spawned) => {
     const task = tasks.find((t) => t.id === spawned.task_id)!;
-    const exited = events.find(
-      (e) => e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id === spawned.id,
-    );
-    const nextSpawn = spawns.find((s) => s.task_id === spawned.task_id && s.id > spawned.id);
-    const endExclusive = exited ? exited.id + 1 : (nextSpawn?.id ?? Number.POSITIVE_INFINITY);
-    const inSession = (entryId: number) => entryId > spawned.id && entryId < endExclusive;
+    const { exited, hasNextSpawn, inSession } = sessionWindow(events, spawned);
     // 最新の帰責が entry ごとに有効(append-only、attribution.ts と同じ読み方)
     const causes = new Map<number, Cause>();
     const allocations: { allocation: Allocation; cause: Cause }[] = [];
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;
       const p = e.payload;
-      if (p.kind === "objection_attributed" && inSession(p.entry_id)) causes.set(p.entry_id, p.cause);
+      if (p.kind === "objection_attributed" && inSession({ id: p.entry_id, task_id: spawned.task_id })) causes.set(p.entry_id, p.cause);
       if (p.kind === "allocation_reviewed" && p.worker_spawned_event_id === spawned.id && "allocation" in p) {
         allocations.push({ allocation: p.allocation, cause: p.cause });
       }
@@ -223,7 +232,7 @@ export function loadEpisodes(db: Db): Episode[] {
       priority: task.priority,
       interview_kind: null,
       outcome: episodeOutcome({
-        accepted: task.accepted === 1 && nextSpawn === undefined,
+        accepted: task.accepted === 1 && !hasNextSpawn,
         causes: [...causes.values()],
         allocations,
       }),
@@ -234,7 +243,7 @@ export function loadEpisodes(db: Db): Episode[] {
 }
 
 /** shadow 行の書き手(盤面境界、spec #541): work task の pickup 直前に、除外を
- *  当てた候補から学習器の推薦を引いて、selector の実際の選択と並べて1行残す。
+ *  当てた候補から学習器の推薦を引いて、selector の実際の選択とその出所に並べて1行残す。
  *  **選択には介入しない** —— 返り値も無く、呼び手は結果を読まない。 */
 export function recordShadow(
   db: Db,
@@ -244,15 +253,20 @@ export function recordShadow(
   now: Date,
 ): void {
   const episodes = loadEpisodes(db);
-  const { recommended, source } = recommend({
+  const { recommended, basis } = recommend({
     candidates,
     board: aggregateCells(episodes),
     workspace: aggregateCells(episodes.filter((e) => e.workspace === task.workspace)),
     priority: task.priority ?? BOARD_DEFAULT_PRIORITY,
   });
-  const cell = (s: ExecutionSetting) =>
-    JSON.stringify({ provider: s.provider, model: s.model, effort: s.effort, advisor: s.advisor ?? null });
   db.prepare(
-    "INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, created_at) VALUES (?, ?, ?, ?, ?)",
-  ).run(task.id, cell(recommended), cell(actual), source, now.toISOString());
+    "INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(
+    task.id,
+    cellJson(cellOf(recommended)),
+    cellJson(cellOf(actual)),
+    JSON.stringify(actual.source),
+    basis,
+    now.toISOString(),
+  );
 }

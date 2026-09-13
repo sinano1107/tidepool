@@ -83,14 +83,15 @@ pool として扱う。
 3. task の優先順位が `cost` のときだけ、同点の間で観測された session 費用の平均(小さい順)が鍵になる。
    **両方に観測があるときに限る**。`quality` では Provider 順位が selector の並びに既に入っている
    ので費用は読まない。
-4. `source` は `data`(候補のどれかに数えた episode が1件以上ある)か `prior`(表そのまま)。
+4. `basis` は `data`(候補のどれかに数えた episode が1件以上ある)か `prior`(表そのまま)。
 
 **乱数は持たない**。spec の「乱数は seed 注入で決定論に」は Thompson sampling を採る場合の条件で、
 事後平均で並べる限り seed は要らない(AC2)。Thompson sampling に切り替えるなら seed を入力に足す。
 
 ## shadow 行
 
-`learner_shadow (id, task_id, cell_recommended, cell_actual, source, created_at)`。セルは
+`learner_shadow (id, task_id, cell_recommended, cell_actual, source, basis, created_at)`。`source` は selector の出所
+`{tier, provider}`(`worker_spawned.source` と同じ綴り、spawn に辿り着かなかった pickup でも読める)。セルは
 `{provider, model, effort, advisor}` の JSON(実行設定の形 —— pickup 時点では具体 id は未観測なので
 表の綴り)。spawn 前に書くので `worker_spawned` の id は持たず、task_id と時刻で session に並ぶ。
 読み手は routing meta-review(spec #541、未実装)。

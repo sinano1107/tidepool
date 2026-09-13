@@ -512,13 +512,16 @@ export function openDb(path: string): Db {
     -- 介入せず、routing meta-review が乖離を読むための記録である。セルは
     -- 実行設定の形 (provider, model, effort, advisor) の JSON —— spawn 前に書く
     -- ので worker_spawned の id は持てず、task_id と時刻で session に並ぶ。
-    -- source: prior = 候補のどれにもデータが無く表そのまま / data = 観測が効いた。
+    -- source: selector の出所 {tier, provider}(worker_spawned.source と同じ綴り ——
+    -- spawn に辿り着かなかった pickup でも読めるようここにも持つ)。
+    -- basis: prior = 候補のどれにもデータが無く表そのまま / data = 観測が効いた。
     CREATE TABLE IF NOT EXISTS learner_shadow (
       id               INTEGER PRIMARY KEY,
       task_id          TEXT NOT NULL REFERENCES tasks(id),
       cell_recommended TEXT NOT NULL,
       cell_actual      TEXT NOT NULL,
-      source           TEXT NOT NULL CHECK (source IN ('prior', 'data')),
+      source           TEXT NOT NULL,
+      basis            TEXT NOT NULL CHECK (basis IN ('prior', 'data')),
       created_at       TEXT NOT NULL
     );
 
