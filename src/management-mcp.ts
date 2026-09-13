@@ -16,7 +16,13 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents, listLog } from "./events.js";
-import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
+import {
+  applyExecutionSettingsChange,
+  executionSettingsChangeSchema,
+  PRIORITY_FIELD_DESCRIPTION,
+  readExecutionSettings,
+  TIER_FIELD_DESCRIPTION,
+} from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
@@ -446,6 +452,34 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       } catch (err) {
         return registryToolError(err);
       }
+    },
+  );
+  // ADR 0110 決定5 / issue #545: the execution settings are the one settings
+  // surface the Management MCP carries — "keep Claude for me this week, prefer
+  // Codex" is a Provider-rank write the human's session makes in their name.
+  server.registerTool(
+    "read_execution_settings",
+    {
+      description:
+        "Read the board's execution settings: the model table (rows of provider, model, tier, effort, price_in / price_out in USD per MTok), " +
+        "whether the frontier row may serve as advisor, the Provider rank, and the default priority (quality / cost).",
+    },
+    async () => toolResult(readExecutionSettings(deps.db)),
+  );
+  server.registerTool(
+    "change_execution_settings",
+    {
+      description:
+        "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
+        "delete one (`row_deleted` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
+        "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred) or the default `priority`. " +
+        "Takes effect at the next pickup.",
+      inputSchema: { change: executionSettingsChangeSchema },
+    },
+    async ({ change }) => {
+      applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now());
+      deps.onQueueHeadChanged();
+      return toolResult(readExecutionSettings(deps.db));
     },
   );
   server.registerTool(

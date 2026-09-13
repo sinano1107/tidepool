@@ -56,6 +56,30 @@ it("初期化の後は DB が正本 — 書き換えた行は再オープンで�
   second.close();
 });
 
+it("execution_defaults の provider_rank(JSON)/ priority 列は NULL = コードの既定で、置けば selector がそれを読む(ADR 0110 決定5 / issue #545)", async () => {
+  const db = openDb(await boardPath("execution-defaults-columns"));
+  const either = { provider: [{ name: "anthropic", advisor: false }, { name: "openai", advisor: false }], tier: undefined };
+  db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 0)").run();
+  expect(resolveExecutionSetting(db, either, undefined)).toMatchObject({ provider: "anthropic", source: { provider: "rank" } });
+
+  db.prepare("UPDATE execution_defaults SET provider_rank = '[\"openai\",\"anthropic\",\"moonshot\"]' WHERE id = 1").run();
+  expect(resolveExecutionSetting(db, either, undefined)).toMatchObject({ provider: "openai", model: "gpt-5.6-terra" });
+
+  db.prepare("UPDATE execution_defaults SET provider_rank = NULL, priority = 'cost' WHERE id = 1").run();
+  expect(resolveExecutionSetting(db, either, undefined)).toMatchObject({ provider: "anthropic", source: { provider: "cost" } });
+  expect(() => db.prepare("UPDATE execution_defaults SET priority = 'speed' WHERE id = 1").run()).toThrow(/CHECK/);
+  db.close();
+});
+
+it("events.task_id は盤面スコープの操作イベントのために NULL を許す(issue #545)", async () => {
+  const db = openDb(await boardPath("events-task-less"));
+  db.prepare(
+    "INSERT INTO events (task_id, worker_id, origin, kind, payload, created_at) VALUES (NULL, 'human', 'mcp', 'execution_settings_changed', '{}', '2026-09-14T00:00:00.000Z')",
+  ).run();
+  expect(db.prepare("SELECT task_id, origin FROM events").all()).toEqual([{ task_id: null, origin: "mcp" }]);
+  db.close();
+});
+
 it("「上位ティアの行を advisor に使える」フラグの既定は false(未設定の盤面は advisor を main と同一に倒す)", async () => {
   const path = await boardPath("frontier-advisor-default");
   const db = openDb(path);

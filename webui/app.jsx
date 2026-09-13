@@ -1793,6 +1793,161 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
   );
 }
 
+// Execution defaults (issue #545 / ADR 0110 決定5) as a record card: Provider
+// rank, the default priority and the frontier-advisor flag. Each differing
+// value is one POST — the API takes one change per request.
+function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
+  const { Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const id = 'board:execution-defaults';
+  const open = edit.isOpen(id);
+  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor };
+  const [draft, setDraft] = React.useState(current);
+  const [busy, setBusy] = React.useState(false);
+  const rankChanged = draft.rank.join() !== current.rank.join();
+  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor;
+  // the API only takes a permutation of every provider (a missing one would
+  // sort first in the selector) — mirror that so Save only enables on a sendable rank
+  const ok = new Set(draft.rank).size === settings.providers.length;
+  useDirtySignal(edit, open, dirty);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const changes = [
+        rankChanged && { setting: 'provider_rank', value: draft.rank },
+        draft.priority !== current.priority && { setting: 'priority', value: draft.priority },
+        draft.advisor !== current.advisor && { setting: 'frontier_advisor', value: draft.advisor },
+      ].filter(Boolean);
+      for (const change of changes) await api('/api/settings/execution', change);
+      say('success', 'execution defaults saved', `${changes.length} setting${changes.length === 1 ? '' : 's'} updated`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'execution defaults save failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div data-testid="execution-defaults">
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(current))}>
+          <span style={settingsCardLabel}>execution defaults</span>
+        </RecordCardHead>
+        {!open && (
+          <React.Fragment>
+            <FieldRow label="provider rank" kind="mono" value={settings.providerRank.join(' › ')} />
+            <FieldRow label="default priority" kind="mono" value={settings.priority} />
+            <FieldRow label="frontier advisor" kind="mono" value={settings.frontierAdvisor ? 'on' : 'off'} />
+          </React.Fragment>
+        )}
+        {open && (
+          <React.Fragment>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+              {draft.rank.map((provider, i) => (
+                <Select key={i} label={`Rank ${i + 1}`} options={settings.providers} value={provider}
+                  onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => (j === i ? e.target.value : p)) })} />
+              ))}
+            </div>
+            <Select label="Default priority" options={settings.priorities} value={draft.priority}
+              onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
+            <Checkbox testId="execution-frontier-advisor" checked={draft.advisor}
+              label="frontier advisor — an advisor may use the frontier row even when the main model is a lower tier"
+              onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
+            <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+              rank orders the providers a task may run on (first = preferred; every provider exactly once).
+              priority is the default for tasks that request none: quality = rank then price, cost = price then rank.
+            </p>
+            <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save execution defaults"
+              onSave={save} onCancel={() => edit.close()} />
+          </React.Fragment>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// The execution-setting table (issue #545 / ADR 0114 決定2) as a record card:
+// model rows keyed by provider + model. Save diffs the draft against the
+// current table — rows gone → row_deleted, rows new or changed → row upsert.
+function ExecutionTableCard({ settings, say, onSaved, edit }) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const id = 'board:execution-table';
+  const open = edit.isOpen(id);
+  const rowKey = (row) => `${row.provider}:${row.model}`;
+  const asDraft = (table) => table.map((row) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
+  const [draft, setDraft] = React.useState(() => asDraft(settings.table));
+  const [busy, setBusy] = React.useState(false);
+  const current = new Map(settings.table.map((row) => [rowKey(row), row]));
+  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const same = (a, b) => a && b && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
+  const upserts = draft.map(toRow).filter((row) => !same(current.get(rowKey(row)), row));
+  const deletes = [...current.values()].filter((row) => !draft.some((d) => rowKey(toRow(d)) === rowKey(row)));
+  const dirty = upserts.length > 0 || deletes.length > 0;
+  const validPrice = (v) => /^\d+(\.\d+)?$/.test(String(v).trim());
+  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out))
+    && new Set(draft.map((d) => rowKey(toRow(d)))).size === draft.length;
+  useDirtySignal(edit, open, dirty);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      for (const row of deletes) await api('/api/settings/execution', { setting: 'row_deleted', provider: row.provider, model: row.model });
+      for (const row of upserts) await api('/api/settings/execution', { setting: 'row', row });
+      say('success', 'execution table saved', `${upserts.length} row${upserts.length === 1 ? '' : 's'} written, ${deletes.length} removed`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'execution table save failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const update = (i, patch) => setDraft(draft.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  const addRow = () => setDraft([...draft, {
+    key: 'new', provider: settings.providers[0].value, tier: settings.tiers[0], model: '', effort: 'high', price_in: '', price_out: '',
+  }]);
+
+  return (
+    <div data-testid="execution-table">
+      <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(asDraft(settings.table)))}>
+          <span style={settingsCardLabel}>execution table</span>
+        </RecordCardHead>
+        {!open && settings.table.map((row) => (
+          <div key={rowKey(row)} style={{ display: 'flex', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
+            <span style={{ color: 'var(--text-muted)', minWidth: 140 }}>{row.provider} · {row.tier}</span>
+            <span>{row.model} · {row.effort} · ${row.price_in} / ${row.price_out}</span>
+          </div>
+        ))}
+        {open && (
+          <React.Fragment>
+            {draft.map((d, i) => (
+              <div key={d.key} data-testid={`execution-row-${d.key}`}
+                style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end', paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
+                <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: e.target.value })} />
+                <Select label="Tier" options={settings.tiers} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
+                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="alias or model id" />
+                <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} placeholder="high" />
+                <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
+                <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
+                <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))}>Remove</Button>
+              </div>
+            ))}
+            {/* ponytail: one unsaved new row at a time (its key is the literal 'new'); key by a counter if adding several per save matters */}
+            <Button variant="ghost" size="sm" onClick={addRow} disabled={draft.some((d) => d.key === 'new')}>Add row</Button>
+            <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+              a row says "this model meets this tier's quality on this provider" — classify by measured capability, not price.
+              prices are USD per MTok. removing every row of a provider × tier just excludes that provider for tasks of that tier.
+            </p>
+            <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save execution table"
+              onSave={save} onCancel={() => edit.close()} />
+          </React.Fragment>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 // The workspace create form (issue #57 phase 3), behind Add on the Workspaces
 // screen (#204 決定7) — it takes the same single edit slot a record card does,
 // and saves and cancels by the same rules.
@@ -2007,6 +2162,13 @@ function SettingsScreen({ say, registerLeaveGuard }) {
     setPaceOffsets(result.offsets);
   };
   React.useEffect(() => { loadPaceOffsets(); }, []);
+
+  // execution settings (issue #545): table + defaults + the option lists, one GET
+  const [executionSettings, setExecutionSettings] = React.useState(null); // null → still loading
+  const loadExecutionSettings = async () => {
+    setExecutionSettings(await api('/api/settings/execution', undefined, 'GET'));
+  };
+  React.useEffect(() => { loadExecutionSettings(); }, []);
 
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
@@ -2279,8 +2441,14 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         {paceOffsets && (
           <PaceOffsetsCard offsets={paceOffsets} say={say} onSaved={loadPaceOffsets} edit={edit} />
         )}
+        {executionSettings && (
+          <React.Fragment>
+            <ExecutionDefaultsCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
+            <ExecutionTableCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
+          </React.Fragment>
+        )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
-        {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets) && (
+        {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>

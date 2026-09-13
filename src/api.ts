@@ -20,6 +20,13 @@ import {
 } from "./display-language.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
+import {
+  applyExecutionSettingsChange,
+  executionSettingsChangeSchema,
+  PRIORITIES,
+  readExecutionSettings,
+  TIERS,
+} from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { githubLoggedIn } from "./github-auth.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
@@ -1596,6 +1603,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     setProviderPaceOffset(db, parsed.data);
     onQueueHeadChanged();
     res.json(parsed.data);
+  });
+
+  // ADR 0110 決定5 / issue #545: 表・frontier advisor・Provider 順位・優先順位の既定。
+  // 選択肢(providers / tiers / priorities)もサーバ供給 —— WebUI が列挙を直書きして
+  // drift しないため(/api/agents の providers と同じ配線)
+  router.get("/settings/execution", (_req, res) => {
+    res.json({ ...readExecutionSettings(db), providers: PROVIDER_OPTIONS, tiers: TIERS, priorities: PRIORITIES });
+  });
+
+  // 1 リクエスト = 1 変更(行の upsert / 削除、frontier advisor、Provider 順位、優先
+  // 順位の既定)。不正値(未知の Provider / ティア / 優先順位、負の価格、順列でない
+  // 順位)はこの入口で弾く。保存後は pace-offsets と同じく即時再評価(issue #296)
+  router.post("/settings/execution", (req, res) => {
+    const parsed = executionSettingsChangeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    applyExecutionSettingsChange(db, parsed.data, "webui", clock.now());
+    onQueueHeadChanged();
+    res.json(readExecutionSettings(db));
   });
 
   router.get("/settings/timezone", (_req, res) => {

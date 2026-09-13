@@ -11,6 +11,7 @@ import {
   type GitHubAuth,
   originRepo,
 } from "./github-auth.js";
+import { PROVIDER_VALUES, type Provider } from "./provider.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -122,12 +123,9 @@ export interface AuthorityProfile {
 export const MERGE_DIAL_VALUES = ["escalate", "auto_if_ci_green", "external"] as const;
 export type MergeDial = (typeof MERGE_DIAL_VALUES)[number];
 
-/** The provider enumeration (ADR 0097 決定1 / issue #444): the closed set of
- *  values an agent definition's `provider` may carry. What each value *means*
- *  (endpoint URL, env names, model spellings) is the adapter's vendor knowledge
- *  (ADR 0005) and never appears here. */
-export const PROVIDER_VALUES = ["anthropic", "moonshot", "openai"] as const;
-export type Provider = (typeof PROVIDER_VALUES)[number];
+/** The provider enumeration lives in provider.ts (a leaf, see there); this is
+ *  the import surface every other module keeps using. */
+export { PROVIDER_VALUES, type Provider } from "./provider.js";
 
 /** 正規化された Provider entry(ADR 0110 決定1): 「この Provider で、advisor は
  *  あり / なし」の1件。advisor が entry 単位なのは、経路依存の能力だからである

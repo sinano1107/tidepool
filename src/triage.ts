@@ -119,7 +119,9 @@ export function raiseObjection(
   });
 }
 
-export type DecisionLogEntry = Omit<EventRow, "payload"> & {
+export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
+  /** decision-log kinds are always task-scoped (only execution_settings_changed is not) */
+  task_id: string;
   payload: Extract<EventRow["payload"], { kind: "decision_logged" | "task_completed" }>;
 };
 

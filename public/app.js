@@ -2055,6 +2055,137 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
     }
   )));
 }
+function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
+  const { Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
+  const id = "board:execution-defaults";
+  const open = edit.isOpen(id);
+  const current = { rank: settings.providerRank, priority: settings.priority, advisor: settings.frontierAdvisor };
+  const [draft, setDraft] = React.useState(current);
+  const [busy, setBusy] = React.useState(false);
+  const rankChanged = draft.rank.join() !== current.rank.join();
+  const dirty = rankChanged || draft.priority !== current.priority || draft.advisor !== current.advisor;
+  const ok = new Set(draft.rank).size === settings.providers.length;
+  useDirtySignal(edit, open, dirty);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const changes = [
+        rankChanged && { setting: "provider_rank", value: draft.rank },
+        draft.priority !== current.priority && { setting: "priority", value: draft.priority },
+        draft.advisor !== current.advisor && { setting: "frontier_advisor", value: draft.advisor }
+      ].filter(Boolean);
+      for (const change of changes) await api("/api/settings/execution", change);
+      say("success", "execution defaults saved", `${changes.length} setting${changes.length === 1 ? "" : "s"} updated`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say("danger", "execution defaults save failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-defaults" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(current)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution defaults")), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "provider rank", kind: "mono", value: settings.providerRank.join(" \u203A ") }), /* @__PURE__ */ React.createElement(FieldRow, { label: "default priority", kind: "mono", value: settings.priority }), /* @__PURE__ */ React.createElement(FieldRow, { label: "frontier advisor", kind: "mono", value: settings.frontierAdvisor ? "on" : "off" })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 } }, draft.rank.map((provider, i) => /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      key: i,
+      label: `Rank ${i + 1}`,
+      options: settings.providers,
+      value: provider,
+      onChange: (e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => j === i ? e.target.value : p) })
+    }
+  ))), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Default priority",
+      options: settings.priorities,
+      value: draft.priority,
+      onChange: (e) => setDraft({ ...draft, priority: e.target.value })
+    }
+  ), /* @__PURE__ */ React.createElement(
+    Checkbox,
+    {
+      testId: "execution-frontier-advisor",
+      checked: draft.advisor,
+      label: "frontier advisor \u2014 an advisor may use the frontier row even when the main model is a lower tier",
+      onChange: () => setDraft({ ...draft, advisor: !draft.advisor })
+    }
+  ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "rank orders the providers a task may run on (first = preferred; every provider exactly once). priority is the default for tasks that request none: quality = rank then price, cost = price then rank."), /* @__PURE__ */ React.createElement(
+    EditActions,
+    {
+      dirty,
+      ok,
+      busy,
+      saveLabel: "Save execution defaults",
+      onSave: save,
+      onCancel: () => edit.close()
+    }
+  ))));
+}
+function ExecutionTableCard({ settings, say, onSaved, edit }) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const id = "board:execution-table";
+  const open = edit.isOpen(id);
+  const rowKey = (row) => `${row.provider}:${row.model}`;
+  const asDraft = (table) => table.map((row) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
+  const [draft, setDraft] = React.useState(() => asDraft(settings.table));
+  const [busy, setBusy] = React.useState(false);
+  const current = new Map(settings.table.map((row) => [rowKey(row), row]));
+  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const same = (a, b) => a && b && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
+  const upserts = draft.map(toRow).filter((row) => !same(current.get(rowKey(row)), row));
+  const deletes = [...current.values()].filter((row) => !draft.some((d) => rowKey(toRow(d)) === rowKey(row)));
+  const dirty = upserts.length > 0 || deletes.length > 0;
+  const validPrice = (v) => /^\d+(\.\d+)?$/.test(String(v).trim());
+  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out)) && new Set(draft.map((d) => rowKey(toRow(d)))).size === draft.length;
+  useDirtySignal(edit, open, dirty);
+  const save = async () => {
+    setBusy(true);
+    try {
+      for (const row of deletes) await api("/api/settings/execution", { setting: "row_deleted", provider: row.provider, model: row.model });
+      for (const row of upserts) await api("/api/settings/execution", { setting: "row", row });
+      say("success", "execution table saved", `${upserts.length} row${upserts.length === 1 ? "" : "s"} written, ${deletes.length} removed`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say("danger", "execution table save failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const update = (i, patch) => setDraft(draft.map((d, j) => j === i ? { ...d, ...patch } : d));
+  const addRow = () => setDraft([...draft, {
+    key: "new",
+    provider: settings.providers[0].value,
+    tier: settings.tiers[0],
+    model: "",
+    effort: "high",
+    price_in: "",
+    price_out: ""
+  }]);
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "execution-table" }, /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(asDraft(settings.table))) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "execution table")), !open && settings.table.map((row) => /* @__PURE__ */ React.createElement("div", { key: rowKey(row), style: { display: "flex", gap: 12, fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" } }, /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)", minWidth: 140 } }, row.provider, " \xB7 ", row.tier), /* @__PURE__ */ React.createElement("span", null, row.model, " \xB7 ", row.effort, " \xB7 $", row.price_in, " / $", row.price_out))), open && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.map((d, i) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: d.key,
+      "data-testid": `execution-row-${d.key}`,
+      style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, alignItems: "end", paddingBottom: 8, borderBottom: "1px solid var(--border-default)" }
+    },
+    /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: settings.providers.map((p) => p.value), value: d.provider, onChange: (e) => update(i, { provider: e.target.value }) }),
+    /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: settings.tiers, value: d.tier, onChange: (e) => update(i, { tier: e.target.value }) }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: d.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "alias or model id" }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Effort", mono: true, value: d.effort, onChange: (e) => update(i, { effort: e.target.value }), placeholder: "high" }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Price in", mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
+    /* @__PURE__ */ React.createElement(Input, { label: "Price out", mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
+    /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft(draft.filter((_, j) => j !== i)) }, "Remove")
+  )), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: addRow, disabled: draft.some((d) => d.key === "new") }, "Add row"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, `a row says "this model meets this tier's quality on this provider" \u2014 classify by measured capability, not price. prices are USD per MTok. removing every row of a provider \xD7 tier just excludes that provider for tasks of that tier.`), /* @__PURE__ */ React.createElement(
+    EditActions,
+    {
+      dirty,
+      ok,
+      busy,
+      saveLabel: "Save execution table",
+      onSave: save,
+      onCancel: () => edit.close()
+    }
+  ))));
+}
 function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const { Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [mode, setMode] = React.useState("clone");
@@ -2281,6 +2412,13 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   };
   React.useEffect(() => {
     loadPaceOffsets();
+  }, []);
+  const [executionSettings, setExecutionSettings] = React.useState(null);
+  const loadExecutionSettings = async () => {
+    setExecutionSettings(await api("/api/settings/execution", void 0, "GET"));
+  };
+  React.useEffect(() => {
+    loadExecutionSettings();
   }, []);
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
   React.useEffect(() => {
@@ -2552,7 +2690,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {

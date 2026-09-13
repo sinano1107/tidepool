@@ -1,7 +1,7 @@
 import type { Allocation, AllocationUnevaluatedReason } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import type { ProviderSource, TierSource } from "./execution-setting.js";
+import type { ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
 import type { Provider } from "./registry.js";
 import type { TaskType } from "./tasks.js";
 
@@ -366,14 +366,20 @@ export type EventPayload =
       cause: Cause;
       evidence: string;
       round: "initial" | "after_rca";
-    };
+    }
+  // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
+  // 行・frontier advisor・Provider 順位・優先順位の既定)を変えた操作イベント。
+  // task を持たない盤面スコープの唯一の kind(task_id は NULL)で、`origin` が
+  // どの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
+  | ({ kind: "execution_settings_changed" } & ExecutionSettingsChange);
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
-  task_id: string;
+  /** null は盤面スコープのイベント(`execution_settings_changed`)。 */
+  task_id: string | null;
   worker_id: string;
   origin: EventOrigin;
   kind: EventKind;
@@ -387,7 +393,8 @@ export interface EventRow {
 export function appendEvent(
   db: Db,
   event: {
-    taskId: string;
+    /** null = 盤面スコープ(task を持たない操作イベント、issue #545)。 */
+    taskId: string | null;
     workerId: string;
     origin: EventOrigin;
     payload: EventPayload;
@@ -426,6 +433,8 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed"] as const
  *  (issue #371). The latest attribution `cause` is joined at read time from
  *  append-only `objection_attributed` events (ADR 0115). */
 export interface LogEntry extends EventRow {
+  /** every HUMAN_FACING_KIND is task-scoped, so the join below never leaves this null */
+  task_id: string;
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
   cause: Cause | null;
@@ -433,9 +442,10 @@ export interface LogEntry extends EventRow {
 
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
-  // an inner join is safe here only because task_id is NOT NULL REFERENCES
-  // tasks(id) and tasks are never deleted (append-only) — no event can end
-  // up orphaned, so this can never silently drop a log entry
+  // an inner join is safe here only because every HUMAN_FACING_KIND is
+  // task-scoped (the sole task-less kind, execution_settings_changed, is not
+  // one) and tasks are never deleted (append-only) — no log entry can end up
+  // orphaned, so this can never silently drop one
   const rows = db
     .prepare(
       `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace
@@ -443,7 +453,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
         WHERE events.kind IN (${placeholders}) ORDER BY events.id`,
     )
     .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS) as Array<
-    Omit<EventRow, "payload"> & { payload: string; workspace: string | null }
+    Omit<EventRow, "payload" | "task_id"> & { task_id: string; payload: string; workspace: string | null }
   >;
   // a second, flat query rather than N+1 per entry — grouped in JS below
   const objectionRows = db
