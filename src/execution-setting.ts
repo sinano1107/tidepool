@@ -276,23 +276,30 @@ function executionSettingCandidates(
     }));
 }
 
-/** 除外を当てて残った先頭を採る —— **除外の式はこの1つ**(issue #544)。scheduler の
- *  ゲートも queue の skipped 表示も Pickable head の判定もここを通るので、「走る」と
- *  「skipped と表示する」が退化してズレることがない。 */
+/** 除外を当てて残った先頭を採る。scheduler のゲートも queue の skipped 表示も
+ *  Pickable head の判定もここを通るので、「走る」と「skipped と表示する」が退化して
+ *  ズレることがない。 */
 export function firstSelectable(
   candidates: readonly ExecutionSetting[],
   excluded: ExecutionExclusions,
 ): ExecutionSetting | null {
-  return (
-    candidates.find(
-      (candidate) =>
-        !excluded.providers.includes(candidate.provider) &&
-        !excluded.models.some(
-          (window) =>
-            window.provider === candidate.provider &&
-            windowMatchesModel(window.model, candidate.model),
-        ),
-    ) ?? null
+  return selectable(candidates, excluded)[0] ?? null;
+}
+
+/** **除外の式はこの1つ**(issue #544)。除外を当てて残った候補を selector の並びの
+ *  まま返す(`firstSelectable` の先頭と、学習器が推薦する母集団 ——
+ *  除外された行は誰にも選べないので、推薦もその外では出さない)。 */
+export function selectable(
+  candidates: readonly ExecutionSetting[],
+  excluded: ExecutionExclusions,
+): ExecutionSetting[] {
+  return candidates.filter(
+    (candidate) =>
+      !excluded.providers.includes(candidate.provider) &&
+      !excluded.models.some(
+        (window) =>
+          window.provider === candidate.provider && windowMatchesModel(window.model, candidate.model),
+      ),
   );
 }
 

@@ -16,6 +16,7 @@ import {
   type ExecutionExclusions,
   type ExecutionSetting,
   firstSelectable,
+  selectable,
   windowMatchesModel,
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
@@ -25,6 +26,7 @@ import {
   harnessContainmentPickupBlocked,
   quarantinedHarnesses,
 } from "./harness-containment.js";
+import { recordShadow } from "./learner.js";
 import { getProviderPaceOffset } from "./pace-offsets.js";
 import {
   canonicalHarness,
@@ -683,6 +685,7 @@ export function startScheduler(deps: {
       const nextHead = () =>
         nextSlotTask(db, workspace?.name, worker.id, auditorName, excluded, excludedTasks);
       let chosen: ExecutionSetting | undefined;
+      let candidates: ExecutionSetting[] = [];
       while (head) {
         const assignee = resolveTaskAgent(head, worker.id, auditorName);
         if (!taskExecutionCandidates) {
@@ -709,7 +712,6 @@ export function startScheduler(deps: {
           }
           break;
         }
-        let candidates: ExecutionSetting[];
         try {
           candidates = taskExecutionCandidates(head);
         } catch (error) {
@@ -788,6 +790,17 @@ export function startScheduler(deps: {
       )
         return;
       if (!(await issuePickupGate(head))) return;
+      // 学習器の shadow 行(ADR 0110 決定4): work task の pickup ごとに、除外を当てた
+      // 候補から「学習器ならこう選ぶ」を引いて selector の選択と並べる。review task は
+      // 学習器を参照しない(ADR 0111 決定3)。legacy 経路(`chosen` 無し)は候補の列を
+      // 持たないので行も無い。記録は選択に介入しない —— 学習器が倒れても pickup は進む
+      if (chosen && head.type === "work") {
+        try {
+          recordShadow(db, head, selectable(candidates, entryExcluded), chosen, clock.now());
+        } catch (err) {
+          console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
+        }
+      }
       await pickup(head, chosen);
     } finally {
       throttleRevalidating = false;
