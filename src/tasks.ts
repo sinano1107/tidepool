@@ -2531,10 +2531,12 @@ export function presentTask(db: Db, task: Task): BoardTask {
 
 /** Registration records the generated review set so independent audits and RCA
  *  children cannot change this integration point's acceptance (ADR 0111).
+ *  学習器の受理 outcome もこの1本を読む(spec #541: 受理は派生であって status
+ *  ではないので、定義を写さない)。
  *  Reviews generated before #546 have no marker; their registration immediately
  *  followed the parent's completion event with the same provenance and canonical
  *  content, which is enough to recognize them without mutating the append-only log. */
-function acceptedSql(taskId: string): string {
+export function acceptedSql(taskId: string): string {
   return `COALESCE((SELECT MIN(review.status = 'done') FROM tasks review
     JOIN events registered ON registered.task_id = review.id AND registered.kind = 'task_registered'
     WHERE review.parent_id = ${taskId} AND (

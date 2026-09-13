@@ -283,16 +283,22 @@ export function firstSelectable(
   candidates: readonly ExecutionSetting[],
   excluded: ExecutionExclusions,
 ): ExecutionSetting | null {
-  return (
-    candidates.find(
-      (candidate) =>
-        !excluded.providers.includes(candidate.provider) &&
-        !excluded.models.some(
-          (window) =>
-            window.provider === candidate.provider &&
-            windowMatchesModel(window.model, candidate.model),
-        ),
-    ) ?? null
+  return selectable(candidates, excluded)[0] ?? null;
+}
+
+/** 除外を当てて残った候補を selector の並びのまま(学習器が推薦する母集団 ——
+ *  除外された行は誰にも選べないので、推薦もその外では出さない)。 */
+export function selectable(
+  candidates: readonly ExecutionSetting[],
+  excluded: ExecutionExclusions,
+): ExecutionSetting[] {
+  return candidates.filter(
+    (candidate) =>
+      !excluded.providers.includes(candidate.provider) &&
+      !excluded.models.some(
+        (window) =>
+          window.provider === candidate.provider && windowMatchesModel(window.model, candidate.model),
+      ),
   );
 }
 

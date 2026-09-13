@@ -507,6 +507,21 @@ export function openDb(path: string): Db {
       PRIMARY KEY (episode_id, seq)
     );
 
+    -- 学習器の shadow 行(ADR 0110 決定4 / spec #541): work task の pickup ごとに
+    -- 「学習器ならこう選ぶ / selector が実際に選んだ / 出所」を1行。選択には
+    -- 介入せず、routing meta-review が乖離を読むための記録である。セルは
+    -- 実行設定の形 (provider, model, effort, advisor) の JSON —— spawn 前に書く
+    -- ので worker_spawned の id は持てず、task_id と時刻で session に並ぶ。
+    -- source: prior = 候補のどれにもデータが無く表そのまま / data = 観測が効いた。
+    CREATE TABLE IF NOT EXISTS learner_shadow (
+      id               INTEGER PRIMARY KEY,
+      task_id          TEXT NOT NULL REFERENCES tasks(id),
+      cell_recommended TEXT NOT NULL,
+      cell_actual      TEXT NOT NULL,
+      source           TEXT NOT NULL CHECK (source IN ('prior', 'data')),
+      created_at       TEXT NOT NULL
+    );
+
     -- append-only is enforced by structure, not convention
     ${EVENTS_APPEND_ONLY_TRIGGERS}
   `);
