@@ -278,9 +278,8 @@ async function settleRca(t: Tidepool, reviewId: string, finding: string, outcome
   await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
   const client = await mcpClient(t.mcpBaseUrl, reviewId);
   await client.callTool({ name: "log_decision", arguments: { line: finding } });
-  const res: any = await client.callTool({ name: "complete_task", arguments: { handoff: { outcome } } });
+  await client.callTool({ name: "complete_task", arguments: { handoff: { outcome } } });
   await client.close();
-  return res;
 }
 
 it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2回が走り、RCA の findings を証拠にした cause が追記される(初回は消えず、1つでも未決着なら走らない)", async () => {

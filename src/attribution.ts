@@ -1,6 +1,6 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { appendEvent, getEvent, listEvents, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventPayload, getEvent, listEvents, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, loadExecutionSettingTable, rowFor } from "./execution-setting.js";
 import { BOARD_WORKER_ID, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
@@ -42,7 +42,9 @@ const uncertain = (evidence: string): AttributionJudgment => ({ cause: "uncertai
 function boardCallSetting(
   db: Db,
   client: AttributionClient | undefined,
-): { setting: Pick<ExecutionSettingRow, "model" | "effort"> } | { unavailable: string } {
+):
+  | { client: AttributionClient; setting: Pick<ExecutionSettingRow, "model" | "effort"> }
+  | { unavailable: string } {
   if (!client) return { unavailable: "not attributed: no attribution client is configured" };
   let setting: Pick<ExecutionSettingRow, "model" | "effort">;
   try {
@@ -53,7 +55,7 @@ function boardCallSetting(
   if (isAnthropicBoardCallBlocked(db, setting.model)) {
     return { unavailable: "Board call not made: the Anthropic window is closed (throttled)" };
   }
-  return { setting };
+  return { client, setting };
 }
 
 /** commit の前半(spec #563「commit の流れ」): open session の異議されたエントリを
@@ -82,7 +84,7 @@ export async function attributeObjections(
         decision_log: decisionLogText(db, o.entry.task_id),
       };
       try {
-        judgments.set(o.entry.id, await client!.judge(input, call.setting));
+        judgments.set(o.entry.id, await call.client.judge(input, call.setting));
       } catch (err) {
         judgments.set(o.entry.id, uncertain(`Board call failed: ${message(err)}`));
       }
@@ -117,27 +119,22 @@ export async function attributeAfterRca(
        WHERE parent_id = ? AND type = 'review' AND title LIKE 'rca (%' ORDER BY id`,
     )
     .all(objectedId) as Array<{ id: string; status: Task["status"] }>;
-  if (!rca.some((r) => r.id === settled.id)) return;
-  if (rca.some((r) => r.status !== "done" && r.status !== "cancelled")) return;
-  // 最新の帰責が entry ごとに有効(spec #563): 初回の uncertain だけが第2回の対象
-  const latest = new Map<number, ReturnType<typeof listEvents>[number]>();
-  for (const e of listEvents(db, objectedId)) {
-    if (e.payload.kind === "objection_attributed") latest.set(e.payload.entry_id, e);
+  if (!rca.some((r) => r.id === settled.id) || rca.some((r) => r.status !== "done" && r.status !== "cancelled")) {
+    return;
   }
-  const pending = [...latest.values()].filter(
-    (e) =>
-      e.payload.kind === "objection_attributed" &&
-      e.payload.cause === "uncertain" &&
-      e.payload.round === "initial",
-  );
+  // 最新の帰責が entry ごとに有効(spec #563): 初回の uncertain だけが第2回の対象
+  const latest = new Map<number, { id: number } & Extract<EventPayload, { kind: "objection_attributed" }>>();
+  for (const e of listEvents(db, objectedId)) {
+    if (e.payload.kind === "objection_attributed") latest.set(e.payload.entry_id, { id: e.id, ...e.payload });
+  }
+  const pending = [...latest.values()].filter((e) => e.cause === "uncertain" && e.round === "initial");
   if (pending.length === 0) return;
   const call = boardCallSetting(db, client);
   if ("unavailable" in call) return;
   const rcaFindings = rca.flatMap((r) => decisionLogText(db, r.id));
   await Promise.all(
     pending.map(async (initial) => {
-      if (initial.payload.kind !== "objection_attributed") return;
-      const { entry_id, objection_event_ids } = initial.payload;
+      const { entry_id, objection_event_ids } = initial;
       const input: AttributionInput = {
         entry_id,
         entry: objectedEntryText(getEvent(db, entry_id) as DecisionLogEntry),
@@ -150,7 +147,7 @@ export async function attributeAfterRca(
         rca_findings: rcaFindings,
       };
       try {
-        const judgment = await client!.judge(input, call.setting);
+        const judgment = await call.client.judge(input, call.setting);
         appendEvent(db, {
           taskId: objectedId,
           workerId: BOARD_WORKER_ID,
