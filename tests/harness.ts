@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AgentAdmin } from "../src/agent-create.js";
+import type { AllocationClient } from "../src/allocation-review.js";
 import {
   bootstrapUrl as authBootstrapUrl,
   generateToken,
@@ -135,6 +136,9 @@ export interface BootOptions {
   /** The display-time translation seam (issue #47). Absent (the default) —
    *  same "unreachable" posture as no draftClient configured. */
   translationClient?: TranslationClient;
+  /** The allocation review's Board call seam (issue #547). Absent (the
+   *  default) — integration reviews complete without an annotation. */
+  allocationClient?: AllocationClient;
   /** The board's Auditor pointer (issue #15 layer 2). Absent → falls back to
    *  `DEFAULT_AUDITOR_NAME` inside `commitTriage` itself. */
   auditorName?: string;
@@ -252,6 +256,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     registryCandidates: normalizeCandidates(options.registryCandidates),
     draftClient: options.draftClient,
     translationClient: options.translationClient,
+    allocationClient: options.allocationClient,
     push,
     auditorName: options.auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,

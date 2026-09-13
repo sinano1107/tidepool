@@ -1,3 +1,5 @@
+import type { Allocation, AllocationUnevaluatedReason } from "./allocation-review.js";
+import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ProviderSource, TierSource } from "./execution-setting.js";
 import type { Provider } from "./registry.js";
@@ -336,7 +338,18 @@ export type EventPayload =
   // returns), so the pair is open — leaving it that way would make a failed
   // spawn indistinguishable in the event log from a session still running.
   // spawn_failed is what closes it.
-  | { kind: "spawn_failed"; error_code: string | null; message: string };
+  | { kind: "spawn_failed"; error_code: string | null; message: string }
+  // ADR 0111 決定4 / issue #547: 配分評価 —— review の verdict が確定した後、盤面が
+  // Board call に問うた「この結果に対する実行設定は適切だったか」。**判断種別**の
+  // 注釈であり、観測(worker_exited.usage / Precedent の行動列)とはこの kind で
+  // 区別される。task_id は被レビュー task、`worker_spawned_event_id` はその最新
+  // session(episode の同一性キー)。null はレビューされた task に session が
+  // 無かった(人間登録の task 等)。`unevaluated` は「判定が得られなかった」の
+  // 理由コードで、`allocation: "uncertain"`(判定が「分からない」)とは別の値。
+  | ({ kind: "allocation_reviewed"; review_task_id: string; worker_spawned_event_id: number | null } & (
+      | { allocation: Allocation; cause: Cause; evidence: string }
+      | { unevaluated: AllocationUnevaluatedReason }
+    ));
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";

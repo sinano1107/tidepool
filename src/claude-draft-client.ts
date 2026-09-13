@@ -192,65 +192,73 @@ export class ClaudeDraftClient implements DraftClient {
     language: string,
     context?: ChildDraftContext,
   ): Promise<TaskDraft> {
-    const result = await this.runDraftPrompt(
-      buildPrompt(dump, language, this.candidates, context),
-    );
-    return taskDraftSchema.parse(extractJson(result)) as TaskDraft;
+    return taskDraftSchema.parse(
+      await this.run(buildPrompt(dump, language, this.candidates, context)),
+    ) as TaskDraft;
   }
 
   async draftHandoff(dump: string, language: string): Promise<HandoffDraft> {
-    const result = await this.runDraftPrompt(buildHandoffPrompt(dump, language));
-    return handoffDraftSchema.parse(extractJson(result));
+    return handoffDraftSchema.parse(await this.run(buildHandoffPrompt(dump, language)));
   }
 
   async inspectIssue(issue: Issue): Promise<IssueInspection> {
-    const result = await this.runDraftPrompt(buildInspectionPrompt(issue));
-    return issueInspectionSchema.parse(extractJson(result));
+    return issueInspectionSchema.parse(await this.run(buildInspectionPrompt(issue)));
   }
 
-  /** The one-shot `claude -p` call both draftTask and draftHandoff share —
-   *  only the prompt differs between them. */
-  private async runDraftPrompt(prompt: string): Promise<string> {
-    let stdout: string;
-    try {
-      stdout = await this.exec(
-        "claude",
-        [
-          "-p",
-          prompt,
-          "--output-format",
-          "json",
-          // a real generation task, not the trivial ping checkUsage()
-          // deliberately downgrades to haiku for
-          ...pinnedModelFlags("sonnet", "medium"),
-          ...emptyToolSurfaceFlags(),
-          // with no tools at all a second turn is structurally impossible; the
-          // flag stays as the explicit statement that a single answer is what
-          // this call is for, so a CLI that ever raises another turn fails loud
-          "--max-turns",
-          "1",
-          // this call runs with the board's own cwd, not a task workspace —
-          // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
-          // from leaking into what must stay a bare JSON answer. Auth/model/
-          // tools/permissions are unaffected (unlike --bare, which would force
-          // API-key-only auth). It does **not** keep an advisor out — measured,
-          // issue #174 — which is what the env below is for.
-          "--safe-mode",
-        ],
-        // a Board call: no advisor, spelled explicitly (ADR 0044). Without it the
-        // host's own advisorModel rode along on every JIT draft poll and burned
-        // opus, unrecorded anywhere.
-        boardCallEnv(),
-      );
-    } catch (err) {
-      rethrowCliAuthExecFailure(err);
-    }
-    const envelope: unknown = JSON.parse(stdout);
-    const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
-    if (typeof result !== "string") {
-      throw new Error("draft CLI response missing a string result field");
-    }
-    if (is_error === true) throw new Error(result);
-    return result;
+  // a real generation task, not the trivial ping checkUsage() deliberately
+  // downgrades to haiku for
+  private run(prompt: string): Promise<unknown> {
+    return runOneShotJsonPrompt(this.exec, prompt, "sonnet", "medium", "draft");
   }
+}
+
+/** The one-shot `claude -p` Board call every drafting call and the allocation
+ *  review (issue #547) share — the prompt, the pinned model / effort and the
+ *  label for errors differ; the reply is the JSON object `extractJson` finds. */
+export async function runOneShotJsonPrompt(
+  exec: ExecFn,
+  prompt: string,
+  model: string,
+  effort: string,
+  label: string,
+): Promise<unknown> {
+  let stdout: string;
+  try {
+    stdout = await exec(
+      "claude",
+      [
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
+        ...pinnedModelFlags(model, effort),
+        ...emptyToolSurfaceFlags(),
+        // with no tools at all a second turn is structurally impossible; the
+        // flag stays as the explicit statement that a single answer is what
+        // this call is for, so a CLI that ever raises another turn fails loud
+        "--max-turns",
+        "1",
+        // this call runs with the board's own cwd, not a task workspace —
+        // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
+        // from leaking into what must stay a bare JSON answer. Auth/model/
+        // tools/permissions are unaffected (unlike --bare, which would force
+        // API-key-only auth). It does **not** keep an advisor out — measured,
+        // issue #174 — which is what the env below is for.
+        "--safe-mode",
+      ],
+      // a Board call: no advisor, spelled explicitly (ADR 0044). Without it the
+      // host's own advisorModel rode along on every JIT draft poll and burned
+      // opus, unrecorded anywhere.
+      boardCallEnv(),
+    );
+  } catch (err) {
+    rethrowCliAuthExecFailure(err);
+  }
+  const envelope: unknown = JSON.parse(stdout);
+  const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
+  if (typeof result !== "string") {
+    throw new Error(`${label} CLI response missing a string result field`);
+  }
+  if (is_error === true) throw new Error(result);
+  return extractJson(result);
 }

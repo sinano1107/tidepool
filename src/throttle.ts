@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import { windowMatchesModel } from "./execution-setting.js";
 import { defaultProviderPaceOffset, getProviderPaceOffset } from "./pace-offsets.js";
 import type { Provider } from "./registry.js";
 import { getSpendDown } from "./spend-down.js";
@@ -249,6 +250,25 @@ export function blockedProviderUsageResources(db: Db): ProviderUsageResource[] {
          ORDER BY provider, model`,
       )
       .all() as ProviderUsageResource[]
+  );
+}
+
+/** Whether an Anthropic Board call should be skipped right now, from the stored
+ *  observation (no live re-observation — Board calls have no usage poll). The
+ *  Provider-wide account window always counts; a model window counts only
+ *  against the model the call would pin (translation pins haiku and passes
+ *  none; the allocation review pins the frontier row, whose fable window is
+ *  exactly the one that matters). The legacy singleton remains the fallback
+ *  for boards not yet wired to Provider resources. */
+export function isAnthropicBoardCallBlocked(db: Db, model?: string): boolean {
+  if (!getProviderUsage(db).some((usage) => usage.provider === "anthropic")) {
+    return getThrottleState(db).throttled;
+  }
+  return blockedProviderUsageResources(db).some(
+    (resource) =>
+      resource.provider === "anthropic" &&
+      (resource.model === null ||
+        (model !== undefined && windowMatchesModel(resource.model, model))),
   );
 }
 

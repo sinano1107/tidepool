@@ -1,4 +1,9 @@
 import { execFileSync } from "node:child_process";
+import type {
+  AllocationClient,
+  AllocationJudgment,
+  AllocationReviewInput,
+} from "../src/allocation-review.js";
 import type { Clock } from "../src/clock.js";
 import type {
   ChildDraftContext,
@@ -7,7 +12,7 @@ import type {
   IssueInspection,
   TaskDraft,
 } from "../src/draft.js";
-import type { ExecutionSetting } from "../src/execution-setting.js";
+import type { ExecutionSetting, ExecutionSettingRow } from "../src/execution-setting.js";
 import type {
   CiStatus,
   CreatePrInput,
@@ -572,6 +577,39 @@ export class FakeTranslationClient implements TranslationClient {
 
   scriptTranslation(text: string | ((source: string) => string)): void {
     this.response = text;
+  }
+
+  scriptFailure(err: Error): void {
+    this.failure = err;
+  }
+}
+
+/** Scripted stand-in at the AllocationClient seam (issue #547): records every
+ *  input and Board call setting it was asked to judge, in call order;
+ *  scriptFailure lets a test simulate a Board call outage. */
+export class FakeAllocationClient implements AllocationClient {
+  readonly calls: Array<{
+    input: AllocationReviewInput;
+    setting: Pick<ExecutionSettingRow, "model" | "effort">;
+  }> = [];
+  private response: AllocationJudgment = {
+    allocation: "appropriate",
+    cause: "uncertain",
+    evidence: "scripted",
+  };
+  private failure: Error | null = null;
+
+  async judge(
+    input: AllocationReviewInput,
+    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+  ): Promise<AllocationJudgment> {
+    this.calls.push({ input, setting });
+    if (this.failure) throw this.failure;
+    return this.response;
+  }
+
+  scriptJudgment(judgment: AllocationJudgment): void {
+    this.response = judgment;
   }
 
   scriptFailure(err: Error): void {
