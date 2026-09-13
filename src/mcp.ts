@@ -401,11 +401,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         attributedTaskId,
         (task, workerId, now) => {
           const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
-          // 配分評価(ADR 0111 決定4): 完了の transaction が commit した後、Board call
-          // は response の外で走る。失敗は注釈の理由コードに畳まれ(reviewAllocation)、
-          // それでも漏れた例外は完了を倒さず process も倒さない
+          // 配分評価(ADR 0111 決定4): 完了の transaction が commit した後に始まり、
+          // Board call の返答は response を待たせない(入力の読み取りと no_session /
+          // throttled の注釈は response より前に同期で済む)。失敗は注釈の理由コードに
+          // 畳まれ(reviewAllocation)、それでも漏れた例外は完了も process も倒さない
           if (deps.allocationClient) {
-            void reviewAllocation(deps.db, deps.allocationClient, done, now).catch((err) =>
+            void reviewAllocation(deps.db, deps.allocationClient, done, deps.clock).catch((err) =>
               console.error(`[allocation-review] ${done.id}: ${String(err)}`),
             );
           }

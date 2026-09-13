@@ -1,4 +1,5 @@
 import type { Cause } from "./cause.js";
+import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, listEvents } from "./events.js";
 import {
@@ -95,17 +96,16 @@ export async function reviewAllocation(
   db: Db,
   client: AllocationClient,
   review: Task,
-  now: Date,
+  clock: Clock,
 ): Promise<void> {
   if (review.type !== "review" || review.parent_id === null) return;
-  const reviewEvents = listEvents(db, review.id);
-  if (!reviewEvents.some((e) => e.payload.kind === "task_registered" && e.payload.integration_review)) return;
+  const reviewEvents = listEvents(db, review.id).map((e) => e.payload);
+  if (!reviewEvents.some((p) => p.kind === "task_registered" && p.integration_review)) return;
   const reviewed = getTask(db, review.parent_id)!;
   const reviewedEvents = listEvents(db, reviewed.id);
   const spawnedEvent = reviewedEvents.filter((e) => e.payload.kind === "worker_spawned").at(-1);
-  const annotate = (
-    outcome: AllocationJudgment | { unevaluated: AllocationUnevaluatedReason },
-  ) =>
+  // 注釈の時刻は判断が書かれた瞬間(Board call の返答後)であって review 完了ではない
+  const annotate = (outcome: AllocationJudgment | { unevaluated: AllocationUnevaluatedReason }) =>
     appendEvent(db, {
       taskId: reviewed.id,
       workerId: BOARD_WORKER_ID,
@@ -116,35 +116,44 @@ export async function reviewAllocation(
         worker_spawned_event_id: spawnedEvent?.id ?? null,
         ...outcome,
       },
-      at: now,
+      at: clock.now(),
     });
-  if (!spawnedEvent || spawnedEvent.payload.kind !== "worker_spawned") {
+  if (spawnedEvent?.payload.kind !== "worker_spawned") {
     annotate({ unevaluated: "no_session" });
     return;
   }
-  // Board call の Provider / ティアは盤面設定の固定値で、**selector を通らない**
-  // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。model / effort は
-  // 表の行から呼び出しごとに解決するので、#545 の編集が次の評価から効く
-  const setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
-  if (isAnthropicBoardCallBlocked(db, setting.model)) {
-    annotate({ unevaluated: "throttled" });
-    return;
-  }
-  const completed = reviewEvents.filter((e) => e.payload.kind === "task_completed").at(-1)?.payload;
-  const exited = reviewedEvents
-    .map((e) => e.payload)
-    .find((p) => p.kind === "worker_exited" && p.worker_spawned_event_id === spawnedEvent.id);
-  const input = buildAllocationReviewInput({
-    verdict: completed?.kind === "task_completed" ? completed.result : null,
-    findings: review.handoff_doc,
-    requestedTier: reviewed.tier,
-    spawned: spawnedEvent.payload,
-    exited: exited?.kind === "worker_exited" ? exited : undefined,
-    markers: episodeMarkerKinds(db, spawnedEvent.id),
-  });
+  const spawned = spawnedEvent.payload;
+  let judgment: AllocationJudgment;
   try {
-    annotate(await client.judge(input, setting));
+    // Board call の Provider / ティアは盤面設定の固定値で、**selector を通らない**
+    // (ADR 0111 決定4)—— 判定者が学習器に選ばれる輪をここで切る。model / effort は
+    // 表の行から呼び出しごとに解決するので、#545 の編集が次の評価から効く。表の行が
+    // 欠けた盤面も「撃てなかった」として理由コードに畳む
+    const setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
+    if (isAnthropicBoardCallBlocked(db, setting.model)) {
+      annotate({ unevaluated: "throttled" });
+      return;
+    }
+    let verdict: string | null = null;
+    for (const p of reviewEvents) if (p.kind === "task_completed") verdict = p.result;
+    const exited = reviewedEvents
+      .map((e) => e.payload)
+      .find(
+        (p): p is Extract<EventPayload, { kind: "worker_exited" }> =>
+          p.kind === "worker_exited" && p.worker_spawned_event_id === spawnedEvent.id,
+      );
+    const input = buildAllocationReviewInput({
+      verdict,
+      findings: review.handoff_doc,
+      requestedTier: reviewed.tier,
+      spawned,
+      exited,
+      markers: episodeMarkerKinds(db, spawnedEvent.id),
+    });
+    judgment = await client.judge(input, setting);
   } catch {
     annotate({ unevaluated: "board_call_failed" });
+    return;
   }
+  annotate(judgment);
 }
