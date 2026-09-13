@@ -32,10 +32,6 @@ function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
   return {
     cell: { provider: "anthropic", model: "claude-opus-4-1", effort: "high", advisor: null },
     workspace: "tidepool",
-    agent: "tako",
-    tier: "standard",
-    priority: null,
-    interview_kind: null,
     outcome: "accepted",
     cost_usd: null,
     duration_ms: null,

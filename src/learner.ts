@@ -6,7 +6,6 @@ import {
   BOARD_DEFAULT_PRIORITY,
   type ExecutionSetting,
   type Priority,
-  type Tier,
   windowMatchesModel,
 } from "./execution-setting.js";
 import { sessionWindow } from "./precedent.js";
@@ -25,17 +24,15 @@ export interface Cell {
 }
 
 /** 1つの worker session を学習器が読む形(Precedent の `Episode` と同じ session
- *  単位だが、transcript を持たず outcome だけを持つ)。文脈(workspace / agent / 要求)は
- *  記録として運ぶが、セルを割るのは workspace(プーリングの段)だけ。
+ *  単位だが、transcript を持たず outcome だけを持つ)。文脈のうち持つのは workspace
+ *  (プーリングの段)だけ —— 要求ティアは候補集合を、優先順位は推薦の呼び手が
+ *  task から渡す。agent / interview 種別はセルを割らず、読み手が生えたら tasks と
+ *  events から引ける。
  *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」で、
  *  受理率の分母に入らない(ADR 0115 決定5)。 */
 export interface LearnerEpisode {
   cell: Cell;
   workspace: string | null;
-  agent: string;
-  tier: Tier | null;
-  priority: Priority | null;
-  interview_kind: null;
   outcome: "accepted" | "rejected" | "excluded";
   cost_usd: number | null;
   duration_ms: number | null;
@@ -190,10 +187,10 @@ type Spawned = EventRow & { payload: Extract<EventPayload, { kind: "worker_spawn
 function loadEpisodes(db: Db): LearnerEpisode[] {
   const tasks = db
     .prepare(
-      `SELECT id, workspace, tier, priority, ${acceptedSql("tasks.id")} AS accepted FROM tasks
+      `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted FROM tasks
         WHERE type = 'work' AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )
-    .all() as Array<Pick<Task, "id" | "workspace" | "tier" | "priority"> & { accepted: number }>;
+    .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number }>;
   const events = (
     db
       .prepare(
@@ -227,10 +224,6 @@ function loadEpisodes(db: Db): LearnerEpisode[] {
         advisor: spawned.payload.advisor,
       },
       workspace: task.workspace,
-      agent: spawned.worker_id,
-      tier: task.tier,
-      priority: task.priority,
-      interview_kind: null,
       outcome: episodeOutcome({
         accepted: task.accepted === 1 && !hasNextSpawn,
         causes: [...causes.values()],

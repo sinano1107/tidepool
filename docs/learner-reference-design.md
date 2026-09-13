@@ -26,8 +26,9 @@ try/catch)。review task では学習器を参照しない(ADR 0111 決定3)。�
   1つの式(issue #544)。advisor も pin どうしを同じ式で照合する。
 
 文脈のうちセルを割るのは **workspace** だけ(プーリングの段)。要求ティアは候補集合を既に絞って
-いる(ティアは床、ADR 0114 決定3)。agent / 優先順位 / interview 種別は episode の記録として運ぶが
-セルを割らない(interview 種別は今は常に null)。
+いる(ティアは床、ADR 0114 決定3)。優先順位は推薦の呼び手が task から
+渡す。agent / interview 種別はセルを割らず episode にも持たない —— 読み手(routing meta-review)が
+生えたら tasks と events から引ける。
 
 ## outcome
 
