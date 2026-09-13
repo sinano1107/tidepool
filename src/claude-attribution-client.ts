@@ -35,10 +35,6 @@ function buildPrompt(input: AttributionInput): string {
   );
 }
 
-export interface ClaudeAttributionClientOptions {
-  exec?: ExecFn;
-}
-
 /** The real AttributionClient (issue #574): a headless one-shot `claude -p`
  *  call through the same runner as the draft and allocation clients; the
  *  model / effort come from the board's execution-setting table row the caller
@@ -46,7 +42,7 @@ export interface ClaudeAttributionClientOptions {
 export class ClaudeAttributionClient implements AttributionClient {
   private readonly exec: ExecFn;
 
-  constructor(options: ClaudeAttributionClientOptions = {}) {
+  constructor(options: { exec?: ExecFn } = {}) {
     this.exec = options.exec ?? defaultExec;
   }
 

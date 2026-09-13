@@ -2,19 +2,19 @@ import { afterEach, expect, it } from "vitest";
 import { reportProviderUsage } from "../src/throttle.js";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
 import { FakeAttributionClient } from "./fakes.js";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  FULL_HANDOFF,
+  HOUR,
+  loggedEntry,
+  mcpClient,
+  registerWork,
+  type Tidepool,
+} from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
-
-/** Put one decision line in the log for the slot task and return its entry. */
-async function loggedEntry(t: Tidepool, taskId: string, line: string) {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  await client.callTool({ name: "log_decision", arguments: { line } });
-  await client.close();
-  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
-  return log.entries.find((e: any) => e.payload.line === line);
-}
 
 async function objectedWork(t: Tidepool, title: string, lines: string[]) {
   const task = await registerWork(t, title);
@@ -136,49 +136,29 @@ it("Board call の失敗は uncertain + 失敗理由の evidence になり、com
   expect(kids.find((x: any) => x.title === "rca (self): flaky").purpose).not.toContain("--dry");
 });
 
-it("流し読みだけで閉じる経路(close_only)は Board call を呼ばず、異議は uncertain のまま従来どおり RCA が立つ", async () => {
+it.each([
+  ["close-only", () => api(t.baseUrl, "POST", "/api/triage/close", { close_only: true })],
+  ["the timeout watchdog", () => t.clock.advance(TRIAGE_TIMEOUT)],
+])("%s で閉じる session は Board call を呼ばず、異議は uncertain のまま従来どおり RCA が立つ", async (path, close) => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient });
   const { task, entries } = await objectedWork(t, "skimmed", ["picked the quick hack"]);
   attributionClient.scriptJudgment(entries[0].id, { cause: "preference", evidence: "would be ignored" });
   await object(t, entries[0].id, "do it properly");
 
-  await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
+  await close();
 
   expect(attributionClient.calls).toEqual([]);
   expect((await attributions(t, task.id)).map((e: any) => e.payload)).toMatchObject([
     {
       cause: "uncertain",
-      evidence: "not attributed: the session was closed by close-only without a Board call",
+      evidence: `not attributed: the session was closed by ${path} without a Board call`,
     },
   ]);
   expect((await children(t, task.id)).map((x: any) => x.title).sort()).toEqual([
     "rca (auditor): skimmed",
     "rca (self): skimmed",
     "repair: skimmed",
-  ]);
-});
-
-it("timeout の watchdog が閉じる session も Board call を呼ばず、異議は uncertain のまま従来どおり RCA が立つ", async () => {
-  const attributionClient = new FakeAttributionClient();
-  t = await bootTidepool({ attributionClient });
-  const { task, entries } = await objectedWork(t, "abandoned", ["skipped the fixtures"]);
-  attributionClient.scriptJudgment(entries[0].id, { cause: "preference", evidence: "would be ignored" });
-  await object(t, entries[0].id, "bring the fixtures back");
-
-  await t.clock.advance(TRIAGE_TIMEOUT);
-
-  expect(attributionClient.calls).toEqual([]);
-  expect((await attributions(t, task.id)).map((e: any) => e.payload)).toMatchObject([
-    {
-      cause: "uncertain",
-      evidence: "not attributed: the session was closed by the timeout watchdog without a Board call",
-    },
-  ]);
-  expect((await children(t, task.id)).map((x: any) => x.title).sort()).toEqual([
-    "rca (auditor): abandoned",
-    "rca (self): abandoned",
-    "repair: abandoned",
   ]);
 });
 
@@ -220,16 +200,7 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   await client.callTool({
     name: "complete_task",
-    arguments: {
-      handoff: {
-        outcome: "shipped plan B",
-        deliverables: "the code",
-        decision_refs: "none",
-        dead_ends: "none",
-        resume_context: "none",
-        known_issues: "none",
-      },
-    },
+    arguments: { handoff: { ...FULL_HANDOFF, outcome: "shipped plan B" } },
   });
   await client.close();
   await api(t.baseUrl, "POST", "/api/triage/start");

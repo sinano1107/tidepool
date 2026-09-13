@@ -520,6 +520,15 @@ export async function registerWork(
   return res.json;
 }
 
+/** Put one decision line in the log for the slot task and return its entry. */
+export async function loggedEntry(t: Tidepool, taskId: string, line: string): Promise<any> {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  await client.callTool({ name: "log_decision", arguments: { line } });
+  await client.close();
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  return log.entries.find((e: any) => e.payload.line === line);
+}
+
 /** A child under `parentId` — which makes the parent `blocked` (unfinished
  *  child), so the parent sits at the raw head while never being pickable. */
 export async function registerChild(t: Tidepool, title: string, parentId: string): Promise<any> {
