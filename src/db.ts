@@ -187,6 +187,11 @@ const EVENTS_APPEND_ONLY_TRIGGERS = `
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
+  // 種の表で初期化するのは表を作ったときだけ —— 空かどうかで判定すると、運用者が
+  // settings から全行を消した表が再オープンで生え直す(#545)
+  const seedExecutionSettings = !db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'execution_settings'")
+    .get();
   db.exec(`
     ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
 
@@ -813,7 +818,7 @@ export function openDb(path: string): Db {
   // provider_pace_offsets の INSERT OR IGNORE と違って行ごとに撃たないのは、
   // 運用者が消した行が再オープンのたびに生え直すのが「正本は DB」と矛盾する
   // ためである。
-  if (!db.prepare("SELECT 1 FROM execution_settings LIMIT 1").get()) {
+  if (seedExecutionSettings) {
     const insert = db.prepare(
       "INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)",
     );

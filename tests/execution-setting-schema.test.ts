@@ -56,18 +56,20 @@ it("初期化の後は DB が正本 — 書き換えた行は再オープンで�
   second.close();
 });
 
-it("execution_defaults の provider_rank(JSON)/ priority 列は NULL = コードの既定で、置けば selector がそれを読む(ADR 0110 決定5 / issue #545)", async () => {
+it("全行を消した表も再オープンで種へ戻らない —— 種で初期化するのは表を作ったときだけ(issue #545)", async () => {
+  const path = await boardPath("execution-settings-emptied");
+  const first = openDb(path);
+  first.prepare("DELETE FROM execution_settings").run();
+  first.close();
+
+  const second = openDb(path);
+  expect(second.prepare("SELECT count(*) AS n FROM execution_settings").get()).toEqual({ n: 0 });
+  second.close();
+});
+
+it("execution_defaults の priority 列は quality / cost 以外を拒む(ADR 0114 決定1 / issue #545)", async () => {
   const db = openDb(await boardPath("execution-defaults-columns"));
-  const either = { provider: [{ name: "anthropic", advisor: false }, { name: "openai", advisor: false }], tier: undefined };
-  db.prepare("INSERT INTO execution_defaults (id, frontier_advisor) VALUES (1, 0)").run();
-  expect(resolveExecutionSetting(db, either, undefined)).toMatchObject({ provider: "anthropic", source: { provider: "rank" } });
-
-  db.prepare("UPDATE execution_defaults SET provider_rank = '[\"openai\",\"anthropic\",\"moonshot\"]' WHERE id = 1").run();
-  expect(resolveExecutionSetting(db, either, undefined)).toMatchObject({ provider: "openai", model: "gpt-5.6-terra" });
-
-  db.prepare("UPDATE execution_defaults SET provider_rank = NULL, priority = 'cost' WHERE id = 1").run();
-  expect(resolveExecutionSetting(db, either, undefined)).toMatchObject({ provider: "anthropic", source: { provider: "cost" } });
-  expect(() => db.prepare("UPDATE execution_defaults SET priority = 'speed' WHERE id = 1").run()).toThrow(/CHECK/);
+  expect(() => db.prepare("INSERT INTO execution_defaults (id, priority) VALUES (1, 'speed')").run()).toThrow(/CHECK/);
   db.close();
 });
 

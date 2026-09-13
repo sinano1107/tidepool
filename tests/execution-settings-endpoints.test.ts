@@ -66,7 +66,7 @@ it("表の行は (provider, model) を鍵に追加・編集(upsert)・削除で�
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: haiku })).status).toBe(200);
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: { ...haiku, effort: "high" } })).status).toBe(200);
   expect(
-    (await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row_deleted", provider: "openai", model: "gpt-6-astra" })).status,
+    (await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "gpt-6-astra" })).status,
   ).toBe(200);
 
   const { table } = await state();
@@ -79,7 +79,7 @@ it("表の行は (provider, model) を鍵に追加・編集(upsert)・削除で�
 
 it("ある provider × tier の行を全部消すことは許される —— その Provider はそのティアの task で除外されるだけ(ADR 0114 決定3)", async () => {
   t = await bootTidepool();
-  const res = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row_deleted", provider: "moonshot", model: "kimi-k3[1m]" });
+  const res = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "moonshot", model: "kimi-k3[1m]" });
   expect(res.status).toBe(200);
   expect((await state()).table.some((row: any) => row.provider === "moonshot")).toBe(false);
 });
@@ -93,7 +93,7 @@ it("不正値(未知の Provider / ティア / 優先順位、負の価格、順
     { setting: "row", row: { ...row, tier: "premium" } },
     { setting: "row", row: { ...row, price_in: -1 } },
     { setting: "row", row: { ...row, price_out: -0.5 } },
-    { setting: "row_deleted", provider: "typo", model: "sonnet" },
+    { setting: "delete_row", provider: "typo", model: "sonnet" },
     { setting: "priority", value: "speed" },
     { setting: "provider_rank", value: ["anthropic", "openai"] }, // moonshot が欠ける → indexOf -1 で先頭に来てしまう
     { setting: "provider_rank", value: ["anthropic", "anthropic", "openai"] },
@@ -138,7 +138,7 @@ it("優先順位の既定を cost にすると、要求の無い task は最安�
   t = await bootTidepool(boardWith(["anthropic", "openai"]));
   // economy の最安は openai の terra(out 12)ではなく anthropic の sonnet(out 10)なので、
   // sonnet の行を消してから cost にする —— 両方の変更が同じ pickup に効くことを1度で言う
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row_deleted", provider: "anthropic", model: "sonnet" });
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "sonnet" });
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
   await registerWork(t, "cheapest economy row that is left");
   await t.clock.advance(HOUR);
@@ -180,6 +180,8 @@ it("管理MCP の read_execution_settings / change_execution_settings は同じ�
 it("変更は操作イベント execution_settings_changed として経路 webui つきで残る(CONTEXT.md「管理MCP」の経路の機械記録)", async () => {
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
+  // 存在しない行の削除は何も変えないので、イベントも残らない
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "openai", model: "no-such-model" });
   // task を持たない盤面イベントには読み口が無い(learner_shadow と同じ)ので行を直に読む
   expect(
     t.db.prepare("SELECT task_id, worker_id, origin, payload FROM events WHERE kind = 'execution_settings_changed'").all(),

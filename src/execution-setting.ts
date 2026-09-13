@@ -338,7 +338,7 @@ export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
 /** 盤面設定の3値(ADR 0110 決定5): 「上位ティアの行を advisor に使ってよい」、
  *  Provider 順位、優先順位の既定。行が無い / 列が NULL = 未設定 = コードの既定
  *  —— display_language と同じ「行が無ければ既定」の形。 */
-export interface ExecutionDefaults {
+interface ExecutionDefaults {
   frontierAdvisor: boolean;
   providerRank: readonly Provider[];
   priority: Priority;
@@ -352,13 +352,13 @@ export function readExecutionSettings(db: Db): ExecutionDefaults & { table: Exec
 
 /** Provider 順位として書けるのは `PROVIDER_VALUES` の**順列**だけ —— 欠けた Provider は
  *  selector の `indexOf` が -1 になって先頭に並び、重複は順位を二重に言う。 */
-export function isProviderRank(rank: readonly string[]): rank is Provider[] {
+function isProviderRank(rank: readonly string[]): rank is Provider[] {
   return rank.length === PROVIDER_VALUES.length && PROVIDER_VALUES.every((provider) => rank.includes(provider));
 }
 
 /** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
  *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
- *  行の鍵は主キー (provider, model): `row` は upsert、`row_deleted` は削除で、model 名の
+ *  行の鍵は主キー (provider, model): `row` は upsert、`delete_row` は削除で、model 名の
  *  変更は「消して足す」。 */
 export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
   z.object({
@@ -372,7 +372,7 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
       price_out: z.number().nonnegative(),
     }),
   }),
-  z.object({ setting: z.literal("row_deleted"), provider: z.enum(PROVIDER_VALUES), model: z.string().min(1) }),
+  z.object({ setting: z.literal("delete_row"), provider: z.enum(PROVIDER_VALUES), model: z.string().min(1) }),
   z.object({ setting: z.literal("frontier_advisor"), value: z.boolean() }),
   z.object({
     setting: z.literal("provider_rank"),
@@ -398,8 +398,9 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
         ).run(provider, tier, model, effort, price_in, price_out);
         break;
       }
-      case "row_deleted":
-        db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ?").run(change.provider, change.model);
+      case "delete_row":
+        // 消す行が無ければ何も変わっていないので、操作イベントも残さない
+        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ?").run(change.provider, change.model).changes === 0) return;
         break;
       default: {
         const column = change.setting;
@@ -421,7 +422,7 @@ export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsCh
   })();
 }
 
-export function loadExecutionDefaults(db: Db): ExecutionDefaults {
+function loadExecutionDefaults(db: Db): ExecutionDefaults {
   const row = db
     .prepare("SELECT frontier_advisor, provider_rank, priority FROM execution_defaults WHERE id = 1")
     .get() as { frontier_advisor: number; provider_rank: string | null; priority: Priority | null } | undefined;

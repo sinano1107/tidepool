@@ -471,7 +471,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Apply one change to the board's execution settings as the human: upsert a table row (`row`, keyed by provider + model), " +
-        "delete one (`row_deleted` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
+        "delete one (`delete_row` — deleting every row of a provider × tier just excludes that provider for tasks of that tier), " +
         "or set `frontier_advisor`, `provider_rank` (every provider exactly once, first = preferred) or the default `priority`. " +
         "Takes effect at the next pickup.",
       inputSchema: { change: executionSettingsChangeSchema },
