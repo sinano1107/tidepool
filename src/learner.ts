@@ -117,17 +117,12 @@ function posterior(
   candidate: ExecutionSetting,
   board: readonly CellStats[],
   workspace: readonly CellStats[],
-): { accepted: number; total: number; observed: number; cost: number | null } {
+): { accepted: number; total: number; cost: number | null } {
   const matched = [...board, ...workspace].filter((s) => cellMatches(candidate, s.cell));
   const accepted = matched.reduce((n, s) => n + s.accepted, 0);
   const rejected = matched.reduce((n, s) => n + s.rejected, 0);
   const costs = matched.flatMap((s) => (s.cost_usd_mean === null ? [] : [s.cost_usd_mean]));
-  return {
-    accepted: 1 + accepted,
-    total: 1 + accepted + rejected,
-    observed: accepted + rejected,
-    cost: mean(costs),
-  };
+  return { accepted: 1 + accepted, total: 1 + accepted + rejected, cost: mean(costs) };
 }
 
 /** 推薦(純関数): 候補を事後平均で並べ、同点は selector の並びのまま。乱数は
@@ -154,12 +149,10 @@ export function recommend(input: {
     }
     return a.order - b.order;
   });
-  const head = ranked[0];
-  // 候補が空なら選ぶものが無い —— 全 entry 除外は selector が先に skipped にしていて、ここへは来ない
-  if (!head) throw new Error("the learner cannot recommend from no candidates");
+  // 候補が空なら来ない —— 全 entry 除外は selector が先に skipped にしている
   return {
-    recommended: head.candidate,
-    source: scored.some((s) => s.observed > 0) ? "data" : "prior",
+    recommended: ranked[0]!.candidate,
+    source: scored.some((s) => s.total > 1) ? "data" : "prior",
   };
 }
 
