@@ -356,7 +356,7 @@ export type EventPayload =
   // 異議されたタスク、`entry_id` は異議されたエントリ、`objection_event_ids` は出所の
   // 異議 event(すべての注釈が記録に遡れる)。同じ entry への2回目以降は新しい event を
   // 追記し最新が有効 —— `round` がそれを言う(`initial` = commit 時、`after_rca` = その
-  // タスクの RCA 子が決着した後に findings を証拠に `uncertain` を確定させた回、#575)。
+  // タスクの RCA 子が決着した後に findings を証拠に `uncertain` を問い直した回、#575)。
   // Board call を撃てなかった / 失敗した entry も `uncertain` + 理由の evidence で残る。
   | {
       kind: "objection_attributed";

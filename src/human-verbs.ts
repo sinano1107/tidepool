@@ -357,8 +357,8 @@ export interface SubmitAnswerDeps {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
   landing: Landing;
-  /** ADR 0115 決定2 / issue #575: an abandon answer cancels the failed task's
-   *  tree — when that is an RCA child, the second attribution round fires here. */
+  /** ADR 0115 決定2 / issue #575: abandon は失敗タスクの木を cancel する —— それが
+   *  RCA 子なら帰責の第2回がここで走る。 */
   attributionClient?: AttributionClient;
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
@@ -467,8 +467,8 @@ export interface CancelThroughHumanDoorDeps {
   db: Db;
   onQueueHeadChanged: () => void;
   landing: Landing;
-  /** ADR 0115 決定2 / issue #575: a cancelled RCA child can be the last one to
-   *  settle, so the cancel door fires the second attribution round too. */
+  /** ADR 0115 決定2 / issue #575: cancel された RCA 子が最後の決着になりうるので、
+   *  cancel の扉も帰責の第2回を撃つ。 */
   attributionClient?: AttributionClient;
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
@@ -488,6 +488,8 @@ export interface CompleteThroughHumanDoorDeps {
   db: Db;
   onQueueHeadChanged: () => void;
   landing: Landing;
+  /** ADR 0115 決定2 / issue #575: 最後に決着した RCA 子が人間の完了でも第2回が走る。 */
+  attributionClient?: AttributionClient;
 }
 
 /** Shared human-surface completion for human-assignee tasks. */
@@ -507,6 +509,10 @@ export async function completeThroughHumanDoor(
       );
     }
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
+    // 帰責の第2回(ADR 0115 決定2): RCA 子は人間登録なので human に振り直して ここで完了できる
+    void attributeAfterRca(deps.db, deps.attributionClient, done, now()).catch((err) =>
+      console.error(`[attribution] ${done.id}: ${String(err)}`),
+    );
     pollIfParentUnblocked(deps.db, done, deps.onQueueHeadChanged);
     await deps.landing.relandAncestors(done);
     return { ok: true, value: done };
@@ -568,12 +574,13 @@ export async function cancelThroughHumanDoor(
       ),
       origin,
     );
-    pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
-    await deps.landing.relandAncestors(task);
-    // 帰責の第2回(ADR 0115 決定2): cancel も決着。fire-and-forget で response を待たせない
+    // 帰責の第2回(ADR 0115 決定2): cancel も決着。書き込みと同じ tick で呼ぶ(await を挟むと
+    // 2つの扉が同時に「RCA 子が揃った」を見る)。fire-and-forget で response を待たせない
     void attributeAfterRca(deps.db, deps.attributionClient, task, now()).catch((err) =>
       console.error(`[attribution] ${task.id}: ${String(err)}`),
     );
+    pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
+    await deps.landing.relandAncestors(task);
     return { ok: true, value: getTask(deps.db, task.id)! };
   } catch (err) {
     if (err instanceof DomainError) {
@@ -826,11 +833,11 @@ export async function submitAnswer(
   if (task.question_cancel_option !== null && answers[0] === task.question_cancel_option) {
     const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
     if (abandoned) {
-      await deps.landing.relandAncestors(abandoned);
       // 帰責の第2回(ADR 0115 決定2): 捨てられたのが RCA 子ならここが最後の決着になりうる
       void attributeAfterRca(deps.db, deps.attributionClient, abandoned, now()).catch((err) =>
         console.error(`[attribution] ${abandoned.id}: ${String(err)}`),
       );
+      await deps.landing.relandAncestors(abandoned);
     }
   }
   // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は

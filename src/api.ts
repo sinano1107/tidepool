@@ -1397,7 +1397,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, onQueueHeadChanged, landing },
+      { db, onQueueHeadChanged, landing, attributionClient },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),
