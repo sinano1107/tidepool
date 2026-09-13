@@ -1,10 +1,13 @@
 import { afterEach, expect, it } from "vitest";
+import type { Cause } from "../src/cause.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
 import { FakeAttributionClient } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  completeIntegrationReviews,
+  completeViaMcp,
   FULL_HANDOFF,
   HOUR,
   loggedEntry,
@@ -243,4 +246,142 @@ it("requirement_change / environment だけの commit でも修理だけが立�
   await api(t.baseUrl, "POST", "/api/triage/close");
 
   expect((await children(t, task.id)).map((x: any) => x.title)).toEqual(["repair: shifted"]);
+});
+
+/** 完了済みの work に異議を打って commit まで進める(`initial` 未指定 = Fake は未スクリプトの
+ *  まま = 初回は uncertain)。完了時に立った統合 review は残る(slot を使う test が片付ける)。 */
+async function objectedAndCommitted(title: string, initial?: { cause: Cause; evidence: string }) {
+  const attributionClient = new FakeAttributionClient();
+  const t = await bootTidepool({ attributionClient });
+  const task = await registerWork(t, title);
+  await t.clock.advance(HOUR);
+  const entry = await loggedEntry(t, task.id, "skipped the fixtures");
+  if (initial) attributionClient.scriptJudgment(entry.id, initial);
+  await completeViaMcp(t, task.id);
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await object(t, entry.id, "bring the fixtures back");
+  await api(t.baseUrl, "POST", "/api/triage/close");
+  const kids = await children(t, task.id);
+  return {
+    t,
+    attributionClient,
+    task,
+    entry,
+    self: kids.find((x: any) => x.title === `rca (self): ${title}`),
+    auditor: kids.find((x: any) => x.title === `rca (auditor): ${title}`),
+  };
+}
+
+/** RCA 子を worker として決着させる: 先頭へ移して pickup、所見を1行 log して完了。 */
+async function settleRca(t: Tidepool, reviewId: string, finding: string, outcome: string) {
+  await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
+  // 先頭での2回目の move が Run now(harness の completeIntegrationReviews と同じ)
+  await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
+  const client = await mcpClient(t.mcpBaseUrl, reviewId);
+  await client.callTool({ name: "log_decision", arguments: { line: finding } });
+  await client.callTool({ name: "complete_task", arguments: { handoff: { outcome } } });
+  await client.close();
+}
+
+it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2回が走り、RCA の findings を証拠にした cause が追記される(初回は消えず、1つでも未決着なら走らない)", async () => {
+  const s = await objectedAndCommitted("uncertain");
+  t = s.t;
+  await completeIntegrationReviews(t, s.task.id);
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([
+    ["uncertain", "initial"],
+  ]);
+  s.attributionClient.scriptJudgment(s.entry.id, {
+    cause: "capability",
+    evidence: "the self RCA found the criteria named the fixtures",
+  });
+
+  await settleRca(t, s.self.id, "the criteria named the fixtures explicitly", "fixtures were required");
+
+  // the auditor RCA is still open: no second round yet
+  expect(s.attributionClient.calls).toHaveLength(1);
+  expect(await attributions(t, s.task.id)).toHaveLength(1);
+
+  const cancelled = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+
+  expect(cancelled.status).toBe(200);
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload)).toEqual([
+    expect.objectContaining({ entry_id: s.entry.id, cause: "uncertain", round: "initial" }),
+    {
+      kind: "objection_attributed",
+      entry_id: s.entry.id,
+      objection_event_ids: [expect.any(Number)],
+      cause: "capability",
+      evidence: "the self RCA found the criteria named the fixtures",
+      round: "after_rca",
+    },
+  ]);
+  expect(s.attributionClient.calls[1]?.input).toEqual({
+    entry_id: s.entry.id,
+    entry: "skipped the fixtures",
+    steering: ["bring the fixtures back"],
+    decision_log: ["skipped the fixtures", "completion report: done as specified"],
+    rca_findings: ["the criteria named the fixtures explicitly", "completion report: fixtures were required"],
+  });
+});
+
+it("初回で uncertain が無いタスクでは RCA 子がすべて決着しても第2回は走らない", async () => {
+  const s = await objectedAndCommitted("decided", { cause: "capability", evidence: "clear" });
+  t = s.t;
+
+  const self = await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
+  const auditor = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+
+  expect([self.json.status, auditor.json.status]).toEqual(["cancelled", "cancelled"]);
+  expect(s.attributionClient.calls).toHaveLength(1);
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
+});
+
+it("第2回の Board call が失敗しても RCA の決着は倒れず cause は uncertain のまま残り、同じタスクに新しい RCA 群が決着しても第3回は走らない", async () => {
+  const s = await objectedAndCommitted("flaky-rca");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, new Error("claude CLI timed out"));
+
+  await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
+  const auditor = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/cancel`, {});
+
+  expect(auditor.status).toBe(200);
+  expect(auditor.json.status).toBe("cancelled");
+  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, []]);
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload)).toMatchObject([
+    { cause: "uncertain", round: "initial" },
+    { cause: "uncertain", round: "after_rca", evidence: "Board call failed: claude CLI timed out" },
+  ]);
+
+  // a fresh objection on the same task stands a new RCA set; its settling asks only the new entry
+  await completeIntegrationReviews(t, s.task.id);
+  const second = (await api(t.baseUrl, "GET", `/api/tasks/${s.task.id}/events`)).json.find(
+    (e: any) => e.kind === "task_completed",
+  );
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await object(t, second.id, "the report should name the fixtures");
+  await api(t.baseUrl, "POST", "/api/triage/close");
+  const fresh = (await children(t, s.task.id)).filter(
+    (x: any) => x.title.startsWith("rca (") && x.status === "todo",
+  );
+  for (const rca of fresh) await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/cancel`, {});
+
+  expect(s.attributionClient.calls.slice(2).map((c) => c.input.entry_id)).toEqual([second.id, second.id]);
+});
+
+it("最後の RCA 子を人間が human の扉で完了しても第2回が走る", async () => {
+  const s = await objectedAndCommitted("human-rca");
+  t = s.t;
+  s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "criteria were silent" });
+  await api(t.baseUrl, "POST", `/api/tasks/${s.self.id}/cancel`, {});
+  await api(t.baseUrl, "PATCH", `/api/tasks/${s.auditor.id}`, { assignee: "human" });
+
+  const done = await api(t.baseUrl, "POST", `/api/tasks/${s.auditor.id}/complete`, {
+    handoff: { outcome: "the criteria never mentioned fixtures" },
+  });
+
+  expect(done.status).toBe(200);
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([
+    ["uncertain", "initial"],
+    ["task_ambiguity", "after_rca"],
+  ]);
 });

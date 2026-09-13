@@ -622,6 +622,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     isProtectedWorkspace: options.isProtectedWorkspace,
     listAgents: options.listAgents,
     allocationClient: options.allocationClient,
+    attributionClient: options.attributionClient,
   };
   app.use(
     "/api",
@@ -676,6 +677,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       github: options.github,
       landing,
       draftClient: options.draftClient,
+      attributionClient: options.attributionClient,
       defaultAgentName: worker.id,
       auditorName,
       agentRegistered: options.agentRegistered,

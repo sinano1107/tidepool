@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
 import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
+import { type AttributionClient, attributeAfterRca } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
@@ -136,6 +137,9 @@ export interface McpDeps {
    *  asked after an integration review completes. Absent → no annotation is
    *  written (a board with no Board call configured, same as translation). */
   allocationClient?: AllocationClient;
+  /** The attribution's Board call seam (ADR 0115 決定2 / issue #575), asked
+   *  once a task's last RCA child completes. Absent → `uncertain` stays. */
+  attributionClient?: AttributionClient;
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's
@@ -410,6 +414,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
               console.error(`[allocation-review] ${done.id}: ${String(err)}`),
             );
           }
+          // 帰責の第2回(ADR 0115 決定2): 同じ位置・同じ fire-and-forget。決着したのが
+          // 異議されたタスクの最後の RCA 子だったときだけ中で撃つ
+          void attributeAfterRca(deps.db, deps.attributionClient, done, now).catch((err) =>
+            console.error(`[attribution] ${done.id}: ${String(err)}`),
+          );
           return { id: done.id, status: done.status };
         },
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),

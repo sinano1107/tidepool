@@ -7,6 +7,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
+import type { AttributionClient } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
 import type { CliAuthCheck } from "./cli-auth.js";
@@ -81,6 +82,9 @@ export interface ManagementMcpDeps {
   github?: GitHubClient;
   landing: Landing;
   draftClient?: DraftClient;
+  /** ADR 0115 決定2 / issue #575: threaded to the cancel / answer doors, the
+   *  same seam the WebUI router carries. */
+  attributionClient?: AttributionClient;
   onQueueHeadChanged: () => void;
   defaultAgentName?: string;
   auditorName?: string;
@@ -635,6 +639,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               cliAuth: deps.cliAuth,
               providerCliAuth: deps.providerCliAuth,
               boardState: deps.boardState,
+              attributionClient: deps.attributionClient,
             },
             task,
             answers,
