@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
+import type { AttributionClient } from "../src/attribution.js";
 import {
   bootstrapUrl as authBootstrapUrl,
   generateToken,
@@ -139,6 +140,9 @@ export interface BootOptions {
   /** The allocation review's Board call seam (issue #547). Absent (the
    *  default) — integration reviews complete without an annotation. */
   allocationClient?: AllocationClient;
+  /** The attribution's Board call seam (issue #574). Absent (the default) —
+   *  every objection bundles as `uncertain`, the pre-#574 shape. */
+  attributionClient?: AttributionClient;
   /** The board's Auditor pointer (issue #15 layer 2). Absent → falls back to
    *  `DEFAULT_AUDITOR_NAME` inside `commitTriage` itself. */
   auditorName?: string;
@@ -257,6 +261,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     draftClient: options.draftClient,
     translationClient: options.translationClient,
     allocationClient: options.allocationClient,
+    attributionClient: options.attributionClient,
     push,
     auditorName: options.auditorName,
     isProtectedWorkspace: options.isProtectedWorkspace,
@@ -513,6 +518,15 @@ export async function registerWork(
     ...(assignee !== undefined && { assignee }),
   });
   return res.json;
+}
+
+/** Put one decision line in the log for the slot task and return its entry. */
+export async function loggedEntry(t: Tidepool, taskId: string, line: string): Promise<any> {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  await client.callTool({ name: "log_decision", arguments: { line } });
+  await client.close();
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  return log.entries.find((e: any) => e.payload.line === line);
 }
 
 /** A child under `parentId` — which makes the parent `blocked` (unfinished

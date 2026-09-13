@@ -349,7 +349,22 @@ export type EventPayload =
   | ({ kind: "allocation_reviewed"; review_task_id: string; worker_spawned_event_id: number | null } & (
       | { allocation: Allocation; cause: Cause; evidence: string }
       | { unevaluated: AllocationUnevaluatedReason }
-    ));
+    ))
+  // ADR 0115 / issue #574: 帰責 —— 異議が束ねられる commit 時、盤面が Board call に
+  // 問うた「この異議は誰の落ち度か」。配分評価と同じく**判断種別**の注釈で、観測
+  // (objection_raised)とはこの kind で区別され、決定 log には現れない。task_id は
+  // 異議されたタスク、`entry_id` は異議されたエントリ、`objection_event_ids` は出所の
+  // 異議 event(すべての注釈が記録に遡れる)。同じ entry への2回目以降は新しい event を
+  // 追記し最新が有効 —— `round` がそれを言う(`initial` = commit 時、RCA 後の回は #575)。
+  // Board call を撃てなかった / 失敗した entry も `uncertain` + 理由の evidence で残る。
+  | {
+      kind: "objection_attributed";
+      entry_id: number;
+      objection_event_ids: number[];
+      cause: Cause;
+      evidence: string;
+      round: "initial";
+    };
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";

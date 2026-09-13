@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, loggedEntry, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -114,15 +114,6 @@ async function completeVia(t: Tidepool, taskId: string) {
     },
   });
   await client.close();
-}
-
-/** Put one decision line in the log for `title` and return its entry. */
-async function loggedEntry(t: Tidepool, taskId: string, line: string) {
-  const client = await mcpClient(t.mcpBaseUrl, taskId);
-  await client.callTool({ name: "log_decision", arguments: { line } });
-  await client.close();
-  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
-  return log.entries.find((e: any) => e.payload.line === line);
 }
 
 it("Decision log は human のエントリを保持するが未読には数えない", async () => {

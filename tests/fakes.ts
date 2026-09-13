@@ -4,6 +4,11 @@ import type {
   AllocationJudgment,
   AllocationReviewInput,
 } from "../src/allocation-review.js";
+import type {
+  AttributionClient,
+  AttributionInput,
+  AttributionJudgment,
+} from "../src/attribution.js";
 import type { Clock } from "../src/clock.js";
 import type {
   ChildDraftContext,
@@ -614,6 +619,32 @@ export class FakeAllocationClient implements AllocationClient {
 
   scriptFailure(err: Error): void {
     this.failure = err;
+  }
+}
+
+/** Scripted stand-in at the AttributionClient seam (issue #574): records every
+ *  input it was asked to judge; the answer is scripted **per objected entry**
+ *  (a judgment, or an Error to throw for that entry alone), and an entry
+ *  nothing was scripted for answers `uncertain`. */
+export class FakeAttributionClient implements AttributionClient {
+  readonly calls: Array<{
+    input: AttributionInput;
+    setting: Pick<ExecutionSettingRow, "model" | "effort">;
+  }> = [];
+  private readonly scripted = new Map<number, AttributionJudgment | Error>();
+
+  async judge(
+    input: AttributionInput,
+    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+  ): Promise<AttributionJudgment> {
+    this.calls.push({ input, setting });
+    const answer = this.scripted.get(input.entry_id) ?? { cause: "uncertain", evidence: "scripted" };
+    if (answer instanceof Error) throw answer;
+    return answer;
+  }
+
+  scriptJudgment(entryId: number, judgment: AttributionJudgment | Error): void {
+    this.scripted.set(entryId, judgment);
   }
 }
 
