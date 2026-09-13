@@ -185,6 +185,13 @@ const EVENTS_APPEND_ONLY_TRIGGERS = `
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
+  // ADR 0114: 旧形の表(provider × ティアに champion 1つ、価格列なし)は drop して
+  // 新形で作り直し、種から再 seed する(下の seed-once が空の表に撃つ)。#545 の
+  // 設定面はまだ無いので、旧形で編集された表は存在しない。
+  const executionSettingCols = db.prepare("PRAGMA table_info(execution_settings)").all() as Array<{ name: string }>;
+  if (executionSettingCols.length > 0 && !executionSettingCols.some((col) => col.name === "price_in")) {
+    db.exec("DROP TABLE execution_settings");
+  }
   db.exec(`
     ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
 
@@ -303,18 +310,21 @@ export function openDb(path: string): Db {
       resumes_at     TEXT,
       PRIMARY KEY (provider, window, model)
     );
-    -- ADR 0110 決定3: 実行設定の表 —— provider × ティア → そのティアの現
-    -- champion と既定 effort。配布物の種(execution-setting.ts の
+    -- ADR 0110 決定3 / ADR 0114 決定2: 実行設定の表 —— モデル分類の行(この model は
+    -- この provider のこのティアの品質を満たす)と、既定 effort・価格(USD per MTok)。
+    -- 同じ provider × ティアに複数行を許す。配布物の種(execution-setting.ts の
     -- SEED_EXECUTION_SETTINGS)から**一度だけ**初期化し、以後は DB が正本で、
     -- 消した行も再オープンで戻らない(#545 が settings タブと管理MCP から
     -- 編集できるようにする)。model が alias(anthropic)か具体 id(openai)か
     -- の判別子は持たない —— どちらも CLI に渡す文字列である。
     CREATE TABLE IF NOT EXISTS execution_settings (
-      provider TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
-      tier     TEXT NOT NULL CHECK (tier IN ('economy', 'standard', 'frontier')),
-      model    TEXT NOT NULL,
-      effort   TEXT NOT NULL,
-      PRIMARY KEY (provider, tier)
+      provider  TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
+      model     TEXT NOT NULL,
+      tier      TEXT NOT NULL CHECK (tier IN ('economy', 'standard', 'frontier')),
+      effort    TEXT NOT NULL,
+      price_in  REAL NOT NULL CHECK (price_in >= 0),
+      price_out REAL NOT NULL CHECK (price_out >= 0),
+      PRIMARY KEY (provider, model)
     );
 
     -- ADR 0110 決定3 の盤面設定側: 「上位ティアの行を advisor に使ってよい」。
@@ -787,9 +797,11 @@ export function openDb(path: string): Db {
   // ためである。
   if (!db.prepare("SELECT 1 FROM execution_settings LIMIT 1").get()) {
     const insert = db.prepare(
-      "INSERT INTO execution_settings (provider, tier, model, effort) VALUES (?, ?, ?, ?)",
+      "INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)",
     );
-    for (const row of SEED_EXECUTION_SETTINGS) insert.run(row.provider, row.tier, row.model, row.effort);
+    for (const row of SEED_EXECUTION_SETTINGS) {
+      insert.run(row.provider, row.tier, row.model, row.effort, row.price_in, row.price_out);
+    }
   }
   db.exec(`
     INSERT OR IGNORE INTO provider_pace_offsets (provider, window, offset)

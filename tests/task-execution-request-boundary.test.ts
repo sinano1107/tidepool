@@ -37,25 +37,18 @@ it("人間の Register(JSON API)は要求2列を受け取る", async () => {
     purpose: "readings",
     completion_criteria: "a live number",
     tier: "frontier",
-    priority: "quality",
+    priority: "cost",
   });
   expect(res.status).toBe(201);
-  expect(res.json).toMatchObject({ tier: "frontier", priority: "quality" });
+  expect(res.json).toMatchObject({ tier: "frontier", priority: "cost" });
 });
 
-it("JSON API の不正な要求は 400 —— ドメインの拒否が人間面の失敗に写る", async () => {
+it("JSON API の不正な要求は 400 —— ドメインの拒否が人間面の失敗に写る(退役した speed も不正値)", async () => {
   t = await bootTidepool();
-  expect(
-    (
-      await api(t.baseUrl, "POST", "/api/tasks", {
-        type: "work",
-        title: "t",
-        purpose: "p",
-        completion_criteria: "c",
-        tier: "platinum",
-      })
-    ).status,
-  ).toBe(400);
+  const register = async (request: Record<string, string>) =>
+    (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", title: "t", purpose: "p", completion_criteria: "c", ...request })).status;
+  expect(await register({ tier: "platinum" })).toBe(400);
+  expect(await register({ priority: "speed" })).toBe(400);
 });
 
 it("編集面は要求2列を受け取らない(#543 の範囲外 —— 未知キーは 400)", async () => {
@@ -84,7 +77,7 @@ it("管理MCP の register_task は要求2列を受け取り、不正値は tool
 
   const bad: any = await client.callTool({
     name: "register_task",
-    arguments: { type: "work", title: "t", purpose: "p", completion_criteria: "c", priority: "cheap" },
+    arguments: { type: "work", title: "t", purpose: "p", completion_criteria: "c", priority: "speed" },
   });
   expect(bad.isError).toBe(true);
   await client.close();
@@ -113,27 +106,29 @@ it("decompose の ChildSpec は要求2列を受け取り、不正値は toolErro
           purpose: "p",
           completion_criteria: "c",
           tier: "frontier",
-          priority: "quality",
+          priority: "cost",
         },
       ],
     },
   });
   expect(ok.isError ?? false).toBe(false);
 
-  const bad: any = await client.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "another split",
-      children: [{ title: "x", purpose: "p", completion_criteria: "c", tier: "platinum" }],
-    },
-  });
-  expect(bad.isError).toBe(true);
+  for (const child of [{ tier: "platinum" }, { priority: "speed" }]) {
+    const bad: any = await client.callTool({
+      name: "decompose",
+      arguments: {
+        reason: "another split",
+        children: [{ title: "x", purpose: "p", completion_criteria: "c", ...child }],
+      },
+    });
+    expect(bad.isError).toBe(true);
+  }
   await client.close();
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board.find((x: any) => x.title === "the hard half")).toMatchObject({
     tier: "frontier",
-    priority: "quality",
+    priority: "cost",
   });
   expect(board.find((x: any) => x.title === "x")).toBeUndefined();
 });

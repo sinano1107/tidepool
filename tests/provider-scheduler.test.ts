@@ -454,3 +454,78 @@ it("候補の解決が定義違反で倒れても queue の読み口は 200 を�
     await mcp.close();
   }
 });
+
+/* ------------------------------------------------------------------ *
+ * 表の穴は除外、優先順位は候補を並べる鍵(ADR 0114、issue #562)
+ * ------------------------------------------------------------------ */
+
+/** 候補は**実物の selector**(盤面の表 + Provider 順位)から、agent の entry は
+ *  assignee 名で引く。 */
+function boardWithEntries(agents: Record<string, string[]>): Parameters<typeof bootTidepool>[0] {
+  return {
+    openaiUsage: healthyOpenai,
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(
+        t.db,
+        { provider: (agents[task.assignee ?? ""] ?? ["anthropic"]).map((name) => ({ name, advisor: false })), tier: undefined },
+        task,
+      ),
+  };
+}
+
+const requested = async (title: string, assignee: string, request: Record<string, string>) =>
+  (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "work",
+      title,
+      purpose: "p",
+      completion_criteria: "c",
+      assignee,
+      ...request,
+    })
+  ).json;
+
+it("要求ティアの行を持たない Provider しか entry に無い agent の task は queue で skipped、pickup で spawn されない —— 表の穴は spawn 失敗ではなく除外(ADR 0114 決定3)", async () => {
+  t = await bootTidepool(boardWithEntries({ "kimi-agent": ["moonshot"] }));
+  const holed = await requested("moonshot に frontier 級は無い", "kimi-agent", { tier: "frontier" });
+  const plain = await registerWork(t, "盤面既定の economy なら kimi-k3 で走る", undefined, undefined, "kimi-agent");
+
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((task) => task.id)).toEqual([plain.id]);
+  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "moonshot", model: "kimi-k3[1m]" });
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  expect(queue.find((task) => task.id === holed.id)?.status).toBe("skipped");
+});
+
+it("entry が複数で片方の Provider に行が無ければ、もう片方の entry で走る —— 表の穴は他の候補を巻き込まない", async () => {
+  t = await bootTidepool(boardWithEntries({ "kimi-or-codex": ["moonshot", "openai"] }));
+  const task = await requested("frontier は openai の行で", "kimi-or-codex", { tier: "frontier" });
+
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((started) => started.id)).toEqual([task.id]);
+  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "openai", model: "gpt-6-astra" });
+});
+
+it("cost の task は要求ティアの最安の行で spawn され、Provider の出所は cost —— quality(既定)なら同じ agent でも Provider 順位の行(ADR 0114 決定4)", async () => {
+  t = await bootTidepool(boardWithEntries({ "either-agent": ["anthropic", "openai"] }));
+  const cheap = await requested("standard を最安で", "either-agent", { tier: "standard", priority: "cost" });
+  const ranked = await requested("standard を順位で", "either-agent", { tier: "standard" });
+
+  await t.clock.advance(HOUR);
+  expect(t.worker.startedSettings[0]).toMatchObject({
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    source: { tier: "task", provider: "cost" },
+  });
+  const client = await mcpClient(t.mcpBaseUrl, cheap.id);
+  await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  await client.close();
+  await completeIntegrationReviews(t, cheap.id);
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.filter((task) => task.type === "work").map((task) => task.id)).toEqual([cheap.id, ranked.id]);
+  expect(t.worker.startedSettings.at(-1)).toMatchObject({
+    provider: "anthropic",
+    model: "opus",
+    source: { tier: "task", provider: "rank" },
+  });
+});

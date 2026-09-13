@@ -3156,7 +3156,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     worker.start("task-kimi-default", null, "kipper");
     const flag = (args: string[]) => args[args.indexOf("--model") + 1];
     // ホストのモデル設定を漏らさないための値も provider の表記で(ADR 0005)。
-    // moonshot は3ティアとも同じ行なので、既定ティアでもこの1つに解決する。
+    // moonshot は economy の1行(ADR 0114)なので、既定ティア(economy)はこの1つに解決する。
     expect(flag(worker.calls[0]!.args)).toBe("kimi-k3[1m]");
     expect(worker.calls[0]!.env.ANTHROPIC_MODEL).toBe("kimi-k3[1m]");
   });

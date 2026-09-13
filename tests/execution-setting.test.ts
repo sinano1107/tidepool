@@ -2,10 +2,10 @@ import { expect, it } from "vitest";
 import {
   AdvisorPairingError,
   assertAdvisorPairing,
+  BOARD_DEFAULT_PRIORITY,
   BOARD_DEFAULT_TIER,
   type ExecutionSetting,
   type ExecutionSettingTable,
-  IncompleteExecutionSettingTableError,
   PRIORITIES,
   SEED_EXECUTION_SETTINGS,
   type SelectorInput,
@@ -22,6 +22,7 @@ function input(overrides: Partial<SelectorInput> = {}): SelectorInput {
     entries: [{ provider: "anthropic", advisor: false }],
     providerRank: PROVIDER_VALUES,
     taskTier: undefined,
+    priority: undefined,
     agentTier: undefined,
     frontierAdvisor: false,
     ...overrides,
@@ -41,17 +42,15 @@ it("ティアは廉価 / 主力 / 上位の3段で、盤面既定は廉価 —�
   expect(BOARD_DEFAULT_TIER).toBe("economy");
 });
 
-it("種の表は `/implementation-delegation` の表と同じ内容を持つ — anthropic は alias 行、openai は具体 id 行(実測: Codex の -m は Astra / Sol / Terra を alias として受けない)", () => {
+it("種の表は `/implementation-delegation` の表と同じ7行 — anthropic は alias 行、openai は具体 id 行、moonshot は kimi-k3 を economy に1行(ADR 0114: 価格は USD per MTok)", () => {
   expect(SEED_EXECUTION_SETTINGS).toEqual([
-    { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high" },
-    { provider: "anthropic", tier: "standard", model: "opus", effort: "high" },
-    { provider: "anthropic", tier: "frontier", model: "fable", effort: "high" },
-    { provider: "moonshot", tier: "economy", model: "kimi-k3[1m]", effort: "high" },
-    { provider: "moonshot", tier: "standard", model: "kimi-k3[1m]", effort: "high" },
-    { provider: "moonshot", tier: "frontier", model: "kimi-k3[1m]", effort: "high" },
-    { provider: "openai", tier: "economy", model: "gpt-5.6-terra", effort: "high" },
-    { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high" },
-    { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high" },
+    { provider: "anthropic", tier: "economy", model: "sonnet", effort: "high", price_in: 2, price_out: 10 },
+    { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 },
+    { provider: "anthropic", tier: "frontier", model: "fable", effort: "high", price_in: 10, price_out: 50 },
+    { provider: "moonshot", tier: "economy", model: "kimi-k3[1m]", effort: "high", price_in: 3, price_out: 15 },
+    { provider: "openai", tier: "economy", model: "gpt-5.6-terra", effort: "high", price_in: 2, price_out: 12 },
+    { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 4, price_out: 20 },
+    { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high", price_in: 10, price_out: 50 },
   ]);
 });
 
@@ -113,18 +112,34 @@ it("フラグが立てば advisor は上位ティアの champion、main が既�
   expect(frontier.advisor).toBe(frontier.model);
 });
 
-it("要求されたティアの行が表に無ければ spawn を拒否する — 表が不完全なまま別のモデルへ黙って倒れない", () => {
-  const partial: ExecutionSettingTable = table.filter((row) => row.tier !== "economy");
-  expect(() =>
-    select(input({ entries: [{ provider: "anthropic", advisor: false }], taskTier: undefined, agentTier: "economy", frontierAdvisor: false }), partial),
-  ).toThrow(new IncompleteExecutionSettingTableError("anthropic", "economy"));
+it("要求ティアの行を持たない Provider の entry は候補から落ち、それしか無ければ null —— 表の穴は設定漏れではなく事実で、全 entry 除外と同じ枝(ADR 0114 決定3)", () => {
+  expect(
+    selectExecutionSetting(input({ entries: [{ provider: "moonshot", advisor: false }], agentTier: "frontier" }), table),
+  ).toBeNull();
 });
 
-it("advisor の導出先(上位ティア)の行が無い場合も、advisor 無しで走らせず拒否する", () => {
+it("entry が複数で片方の Provider に行が無ければ、もう片方で走る —— 表の穴は他の候補を巻き込まない", () => {
+  expect(
+    select(
+      input({
+        entries: [
+          { provider: "moonshot", advisor: false },
+          { provider: "openai", advisor: false },
+        ],
+        taskTier: "frontier",
+      }),
+    ),
+  ).toMatchObject({ provider: "openai", model: "gpt-6-astra" });
+});
+
+it("advisor が真で frontier 行を持たない Provider の entry は除外される —— advisor 無しで黙って走らせない", () => {
   const partial: ExecutionSettingTable = table.filter((row) => row.tier !== "frontier");
-  expect(() =>
-    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", frontierAdvisor: true }), partial),
-  ).toThrow(new IncompleteExecutionSettingTableError("anthropic", "frontier"));
+  expect(
+    selectExecutionSetting(
+      input({ entries: [{ provider: "anthropic", advisor: true }], agentTier: "standard", frontierAdvisor: true }),
+      partial,
+    ),
+  ).toBeNull();
 });
 
 it("pairing はティアの水準だけで判定する — advisor が main 未満なら拒否、同位・上位なら通る(ADR 0042: 盤面は alias の解決先を judge しない)", () => {
@@ -136,8 +151,9 @@ it("pairing はティアの水準だけで判定する — advisor が main 未�
   expect(() => assertAdvisorPairing("economy", "frontier")).not.toThrow();
 });
 
-it("優先順位は quality / cost / speed の3値(CONTEXT.md「要求」)", () => {
-  expect(PRIORITIES).toEqual(["quality", "cost", "speed"]);
+it("優先順位は quality / cost の2値で、既定は quality(CONTEXT.md「要求」/ ADR 0114 決定1: speed は落とした)", () => {
+  expect(PRIORITIES).toEqual(["quality", "cost"]);
+  expect(BOARD_DEFAULT_PRIORITY).toBe("quality");
 });
 
 it("task の要求ティアは agent の tier より優先され、出所は task(ADR 0110 決定2)", () => {
@@ -306,4 +322,65 @@ it("advisor は entry ごとの宣言 —— 同じ agent でも経路が違え�
       { providers: ["anthropic"], models: [] },
     ),
   ).toMatchObject({ provider: "openai", advisor: undefined });
+});
+
+/* ------------------------------------------------------------------ *
+ * 優先順位は要求ティアの候補を並べる鍵(ADR 0114、issue #562)
+ * ------------------------------------------------------------------ */
+
+const both = [
+  { provider: "anthropic" as const, advisor: false },
+  { provider: "openai" as const, advisor: false },
+];
+
+it("quality(既定)は Provider 順位で並べる —— standard では順位が先の opus が価格の安い sol に勝ち、出所は rank", () => {
+  expect(select(input({ entries: both, taskTier: "standard" }))).toMatchObject({
+    provider: "anthropic",
+    model: "opus",
+    source: { tier: "task", provider: "rank" },
+  });
+});
+
+it("cost は価格で並べる —— standard では順位が後の sol(4 / 20)が opus(5 / 25)に勝ち、出所は cost", () => {
+  expect(select(input({ entries: both, taskTier: "standard", priority: "cost" }))).toMatchObject({
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    source: { tier: "task", provider: "cost" },
+  });
+});
+
+/** 同じ (provider, tier) に複数行、かつ Provider をまたいで同額の行がある表。 */
+const crowded: ExecutionSettingTable = [
+  { provider: "anthropic", tier: "standard", model: "opus", effort: "high", price_in: 5, price_out: 25 },
+  { provider: "anthropic", tier: "standard", model: "opus-mini", effort: "high", price_in: 3, price_out: 20 },
+  { provider: "anthropic", tier: "frontier", model: "fable", effort: "high", price_in: 10, price_out: 50 },
+  { provider: "anthropic", tier: "frontier", model: "fable-lite", effort: "high", price_in: 6, price_out: 30 },
+  { provider: "openai", tier: "standard", model: "gpt-5.6-sol", effort: "high", price_in: 4, price_out: 20 },
+];
+
+it("同じ Provider × ティアに複数行あれば、quality でも順位が同じ行の間は価格で決まる", () => {
+  expect(select(input({ entries: both, taskTier: "standard" }), crowded)).toMatchObject({
+    provider: "anthropic",
+    model: "opus-mini",
+  });
+});
+
+it("cost で out 単価が同額なら in 単価、それも同額なら Provider 順位で決まる", () => {
+  // opus-mini(3 / 20)と sol(4 / 20)は out が同額 —— in の安い opus-mini が先
+  expect(select(input({ entries: both, taskTier: "standard", priority: "cost" }), crowded).model).toBe("opus-mini");
+  // 完全に同額なら順位 —— openai を先にすると sol
+  const tied = crowded.map((row) => (row.model === "opus-mini" ? { ...row, price_in: 4 } : row));
+  expect(
+    select(input({ entries: both, taskTier: "standard", priority: "cost", providerRank: ["openai", "anthropic", "moonshot"] }), tied).model,
+  ).toBe("gpt-5.6-sol");
+});
+
+it("advisor は同 Provider の frontier 行、複数なら最安 —— 複数行でも advisor の行は一意に決まる", () => {
+  expect(
+    select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "standard", frontierAdvisor: true }), crowded).advisor,
+  ).toBe("fable-lite");
+});
+
+it("review の要求は priority を持たず quality の並べ方で解決される(ADR 0111 決定3)", () => {
+  expect(select(input({ entries: both, reviewTier: "standard", priority: "cost" })).model).toBe("opus");
 });

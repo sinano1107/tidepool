@@ -1642,9 +1642,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const agent = resolveExecutionAgent(registry, this.options.agent, null);
     // 表から解決した値を検査する(ADR 0110 決定3): 既定 agent が走るティアの行の
     // effort が閉じた5値の外なら、盤面は最初のタスクで詰まる前に起動を拒む。
-    // 起動時検査なので task は無い —— 既定 agent の既定ティアの行を見る
-    // 空の entry 配列は門が拒むので、除外を当てない解決は必ず1つ返る
-    assertKnownEffort(resolveExecutionSetting(this.options.db, agent.definition, undefined)!.effort);
+    // 起動時検査なので task は無い —— 既定 agent の既定ティアの行を見る。行が無い
+    // Provider しか持たない agent は候補が空(ADR 0114 決定3: その task は skipped)
+    // で、検査する effort も無い
+    const setting = resolveExecutionSetting(this.options.db, agent.definition, undefined);
+    if (setting) assertKnownEffort(setting.effort);
   }
 
   /** ADR 0020 part 4: a party review (self RCA) is a review task with a
@@ -1876,8 +1878,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // 持たない再解決が scheduler と違う entry —— 温存中の Provider —— を選びうる。
     const setting = chosen ?? resolveExecutionSetting(this.options.db, agent.definition, task);
     if (!setting) {
-      // 門(`assertValidAgentDefinition`)が空の entry を拒むので、除外を当てない
-      // 解決は必ず1つ返る。ここに来るのは門をすり抜けた定義だけ。
+      // 盤面は候補が空の task を pickup しない(ADR 0114 決定3)。ここに来るのは
+      // 設定を渡さずに start した呼び手だけ。
       throw new Error(`agent ${agent.name}: no Provider entry to run on (ADR 0110 決定1)`);
     }
     if (setting.provider === "openai") {
