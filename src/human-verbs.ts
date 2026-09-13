@@ -1,4 +1,5 @@
 import { verifyAgentRepaired } from "./agent.js";
+import { type AttributionClient, attributeAfterRca } from "./attribution.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure, quarantinedAuthProviders } from "./cli-auth.js";
 import type { ContainmentCheck } from "./containment.js";
@@ -356,6 +357,9 @@ export interface SubmitAnswerDeps {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
   landing: Landing;
+  /** ADR 0115 決定2 / issue #575: an abandon answer cancels the failed task's
+   *  tree — when that is an RCA child, the second attribution round fires here. */
+  attributionClient?: AttributionClient;
   agentRegistered?: (name: string) => boolean;
   containment?: ContainmentCheck;
   /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
@@ -463,6 +467,9 @@ export interface CancelThroughHumanDoorDeps {
   db: Db;
   onQueueHeadChanged: () => void;
   landing: Landing;
+  /** ADR 0115 決定2 / issue #575: a cancelled RCA child can be the last one to
+   *  settle, so the cancel door fires the second attribution round too. */
+  attributionClient?: AttributionClient;
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
@@ -563,6 +570,10 @@ export async function cancelThroughHumanDoor(
     );
     pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
     await deps.landing.relandAncestors(task);
+    // 帰責の第2回(ADR 0115 決定2): cancel も決着。fire-and-forget で response を待たせない
+    void attributeAfterRca(deps.db, deps.attributionClient, task, now()).catch((err) =>
+      console.error(`[attribution] ${task.id}: ${String(err)}`),
+    );
     return { ok: true, value: getTask(deps.db, task.id)! };
   } catch (err) {
     if (err instanceof DomainError) {
@@ -814,7 +825,13 @@ export async function submitAnswer(
   // いた祖先の着地はここで起きる(ADR 0092 決定3: cancel も決着)
   if (task.question_cancel_option !== null && answers[0] === task.question_cancel_option) {
     const abandoned = task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
-    if (abandoned) await deps.landing.relandAncestors(abandoned);
+    if (abandoned) {
+      await deps.landing.relandAncestors(abandoned);
+      // 帰責の第2回(ADR 0115 決定2): 捨てられたのが RCA 子ならここが最後の決着になりうる
+      void attributeAfterRca(deps.db, deps.attributionClient, abandoned, now()).catch((err) =>
+        console.error(`[attribution] ${abandoned.id}: ${String(err)}`),
+      );
+    }
   }
   // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
   // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの

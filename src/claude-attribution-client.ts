@@ -30,7 +30,10 @@ function buildPrompt(input: AttributionInput): string {
     "network or sandbox trouble outside the worker; preference is the human's taste where the " +
     "worker's choice was equally valid; requirement_change is a requirement the human changed " +
     "or introduced after the fact; use uncertain when the evidence does not decide it), and " +
-    '"evidence" (string — the concrete observations your judgment rests on).\n\n' +
+    '"evidence" (string — the concrete observations your judgment rests on). When the input ' +
+    "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
+    "have since settled: those are their decision logs and completion reports, read them as " +
+    "evidence.\n\n" +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }

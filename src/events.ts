@@ -355,7 +355,8 @@ export type EventPayload =
   // (objection_raised)とはこの kind で区別され、決定 log には現れない。task_id は
   // 異議されたタスク、`entry_id` は異議されたエントリ、`objection_event_ids` は出所の
   // 異議 event(すべての注釈が記録に遡れる)。同じ entry への2回目以降は新しい event を
-  // 追記し最新が有効 —— `round` がそれを言う(`initial` = commit 時、RCA 後の回は #575)。
+  // 追記し最新が有効 —— `round` がそれを言う(`initial` = commit 時、`after_rca` = その
+  // タスクの RCA 子が決着した後に findings を証拠に `uncertain` を確定させた回、#575)。
   // Board call を撃てなかった / 失敗した entry も `uncertain` + 理由の evidence で残る。
   | {
       kind: "objection_attributed";
@@ -363,7 +364,7 @@ export type EventPayload =
       objection_event_ids: number[];
       cause: Cause;
       evidence: string;
-      round: "initial";
+      round: "initial" | "after_rca";
     };
 
 export type EventKind = EventPayload["kind"];
