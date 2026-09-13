@@ -438,7 +438,7 @@ _Avoid_: Router、Allocation Policy
 
 ## 学習器(Learner)
 
-selector の候補として **shadow** で走る統計層。pickup ごとに「自分ならこう選ぶ」を記録だけし、routing meta-review の判断 + 承認 question で昇格して selector になる(製品の形であり実験用ではない — Memory の candidate → approved と同型)。事前分布は表(観測1件分の重み)、盤面全体の事後分布が各 workspace の事前分布。受理率は pin で条件づけ(相談の有無で割らない)、費用は session 合計、相談回数は費用の3値帰属(0回 / advisor ≠ main の内訳 / 分離不能)と配分評価にのみ使う。昇格後もデータの無いセルでは表と一致する。
+selector の候補として **shadow** で走る統計層。pickup ごとに「自分ならこう選ぶ」を記録だけし、routing meta-review の判断 + 承認 question で昇格して selector になる(製品の形であり実験用ではない — Memory の candidate → approved と同型)。事前分布は表(観測1件分の重み)、盤面全体の事後分布が各 workspace の事前分布。受理率は pin で条件づけ(相談の有無で割らない)、費用は session 合計、相談回数は費用の3値帰属(0回 / advisor ≠ main の内訳 / 分離不能)と配分評価にのみ使う。昇格後もデータの無いセルでは表と一致する。配分評価の `overpowered` は推薦に入らない —— 反実仮想であって観測ではなく、候補が要求ティアの行に限られる以上効かせる場所も無い。その episode は受理として数え、下方向の信号は routing meta-review が「要求ティアの申告が高すぎた」の材料として読む(ADR 0111 追記、issue #582)。
 _Avoid_: bandit、optimizer
 
 ## 配分評価(Allocation review)
