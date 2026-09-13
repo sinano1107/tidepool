@@ -103,6 +103,8 @@ export async function attributeObjections(
  *  タスクの統合 review が決着しても撃たない)、そして entry の最新の注釈が `initial` で
  *  あること。撃てない・失敗した entry も初回と同じく `uncertain` + 理由の evidence で
  *  after_rca を追記するので、後日の新しい RCA 群の決着でも門は開かない(第3回は無い)。
+ *  祖先の cancel / abandon に巻き込まれて RCA 子が決着した場合は撃たない(扉には根が渡る)
+ *  —— 何も調べずに取り消された RCA の findings は空で、問い直す証拠が無いため。
  *  settlement の書き込みと同じ tick で呼ぶ: Board call の await より前はすべて同期なので、
  *  2つの扉が同時に「全部揃った」を見ることは無い。 */
 export async function attributeAfterRca(
