@@ -185,11 +185,6 @@ const EVENTS_APPEND_ONLY_TRIGGERS = `
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
-  // ADR 0114: 旧形の表(provider × ティアに champion 1つ、価格列なし)は drop して
-  // 新形で作り直し、種から再 seed する(下の seed-once が空の表に撃つ)。#545 の
-  // 設定面はまだ無いので、旧形で編集された表は存在しない。
-  const executionSettingCols = db.prepare("PRAGMA table_info(execution_settings)").all() as Array<{ name: string }>;
-  if (!executionSettingCols.some((col) => col.name === "price_in")) db.exec("DROP TABLE IF EXISTS execution_settings");
   db.exec(`
     ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
 

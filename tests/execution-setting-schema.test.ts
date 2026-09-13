@@ -1,7 +1,6 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { resolveExecutionSetting, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
@@ -38,27 +37,6 @@ it("主キーは (provider, model) —— 同じ Provider × ティアに複数�
   expect(() => insert.run("anthropic", "standard", "haiku", "high", 1, 5)).toThrow(/UNIQUE|PRIMARY KEY/);
   expect(() => insert.run("anthropic", "economy", "free", "high", -1, 0)).toThrow(/CHECK/);
   db.close();
-});
-
-it("旧形(価格列なし、主キー (provider, tier))の表を持つ盤面を開くと、表は新形で作り直され種から再 seed される(ADR 0114: 編集された表は無い)", async () => {
-  const path = await boardPath("execution-settings-old-shape");
-  const old = new Database(path);
-  old.exec(`
-    CREATE TABLE execution_settings (
-      provider TEXT NOT NULL,
-      tier     TEXT NOT NULL,
-      model    TEXT NOT NULL,
-      effort   TEXT NOT NULL,
-      PRIMARY KEY (provider, tier)
-    );
-    INSERT INTO execution_settings VALUES ('moonshot', 'frontier', 'kimi-k3[1m]', 'high');
-  `);
-  old.close();
-
-  const migrated = openDb(path);
-  expect(migrated.prepare("SELECT count(*) AS n FROM execution_settings").get()).toEqual({ n: 7 });
-  expect(migrated.prepare("SELECT tier FROM execution_settings WHERE provider = 'moonshot'").all()).toEqual([{ tier: "economy" }]);
-  migrated.close();
 });
 
 it("初期化の後は DB が正本 — 書き換えた行は再オープンで種へ戻らない", async () => {
