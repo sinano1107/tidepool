@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import type { AgentAdmin } from "./agent-create.js";
+import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
@@ -307,6 +308,9 @@ export interface ServerOptions {
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
+  /** The allocation review's Board call seam (ADR 0111 決定4 / issue #547).
+   *  Absent → integration reviews complete without an allocation annotation. */
+  allocationClient?: AllocationClient;
   /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)と、boot
    *  時に一斉検査する登録済み workspace の列挙。Absent → 守る状態パスを持たない
    *  盤面(実プロセスの env を持たないテスト盤面の既定形)。main.ts は常に渡す。
@@ -613,6 +617,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     agentRegistered: options.agentRegistered,
     isProtectedWorkspace: options.isProtectedWorkspace,
     listAgents: options.listAgents,
+    allocationClient: options.allocationClient,
   };
   app.use(
     "/api",

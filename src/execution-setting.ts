@@ -209,7 +209,7 @@ export function assertAdvisorPairing(mainTier: Tier, advisorTier: Tier): void {
   }
 }
 
-function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): ExecutionSettingRow {
+export function rowFor(table: ExecutionSettingTable, provider: Provider, tier: Tier): ExecutionSettingRow {
   const row = table.find((entry) => entry.provider === provider && entry.tier === tier);
   if (!row) throw new IncompleteExecutionSettingTableError(provider, tier);
   return row;
@@ -294,7 +294,7 @@ export function selectExecutionSetting(
 /** 盤面の表を DB から読む(ADR 0110 決定3: 種から初期化された後は DB が正本)。
  *  表は9行の定数サイズなので pickup ごとに読み直してよく、#545 の編集が次の
  *  pickup から効くのはそのおかげである。 */
-function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
+export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
   return db
     .prepare("SELECT provider, tier, model, effort FROM execution_settings")
     .all() as ExecutionSettingRow[];

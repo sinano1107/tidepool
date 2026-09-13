@@ -1,11 +1,7 @@
 import type { Db } from "./db.js";
 import { getEvent } from "./events.js";
 import { getTask, splitHandoffMarkdown } from "./tasks.js";
-import {
-  blockedProviderUsageResources,
-  getProviderUsage,
-  getThrottleState,
-} from "./throttle.js";
+import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import { getCachedTranslation, hashSource, saveTranslation } from "./translation-cache.js";
 
@@ -23,11 +19,9 @@ export type TranslationOutcome =
 
 /** Resolves one translation, cache-first (issue #47): a cache hit never
  *  touches the client or the throttle gate (an already-paid-for translation
- *  costs nothing to show again, even while throttled). A cache miss checks the
- *  stored Anthropic Provider observation — not a live re-observation, since
- *  this path has no usage poll — and skips only this Anthropic Board call while
- *  that Provider is unavailable. The legacy singleton remains the fallback
- *  for boards not yet wired to Provider resources. */
+ *  costs nothing to show again, even while throttled). A cache miss skips
+ *  only this Anthropic Board call while that Provider is unavailable
+ *  (`isAnthropicBoardCallBlocked`). */
 export async function translateSource(
   db: Db,
   client: TranslationClient,
@@ -38,13 +32,7 @@ export async function translateSource(
   const hash = hashSource(source);
   const cached = getCachedTranslation(db, hash, language);
   if (cached) return { status: "translated", text: cached.translated, cached: true };
-  const hasProviderUsage = getProviderUsage(db).some((usage) => usage.provider === "anthropic");
-  const anthropicBlocked = blockedProviderUsageResources(db).some(
-    (resource) => resource.provider === "anthropic" && resource.model === null,
-  );
-  if (hasProviderUsage ? anthropicBlocked : getThrottleState(db).throttled) {
-    return { status: "throttled" };
-  }
+  if (isAnthropicBoardCallBlocked(db)) return { status: "throttled" };
   const result = await client.translate(source, language);
   saveTranslation(db, hash, language, result.text, result.usage, now);
   return { status: "translated", text: result.text, cached: false };

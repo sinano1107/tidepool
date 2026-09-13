@@ -158,7 +158,7 @@ function buildInspectionPrompt(issue: Issue): string {
  *  parsing the trimmed text as-is when no fence/braces are found, so a
  *  genuinely malformed response still throws (draftTask rejects → #12's 503
  *  fallback), not silently drafts garbage. */
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   const candidate = fenced ? fenced[1]! : trimmed;

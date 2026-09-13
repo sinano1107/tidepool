@@ -572,6 +572,21 @@ export function listEpisodes(
   }));
 }
 
+/** 1 session の行動列マーカーの種別だけを順に返す(配分評価の入力、ADR 0111
+ *  決定4)。episode 行が無ければ null —— transcript を投影しない Harness(codex)
+ *  や投影前の session を「マーカーが1つも無かった」と混ぜない。 */
+export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): MarkerKind[] | null {
+  const episode = db
+    .prepare("SELECT id FROM episodes WHERE worker_spawned_event_id = ? AND extractor_version = ?")
+    .get(workerSpawnedEventId, EXTRACTOR_VERSION) as { id: number } | undefined;
+  if (!episode) return null;
+  return (
+    db
+      .prepare("SELECT kind FROM episode_markers WHERE episode_id = ? ORDER BY seq")
+      .all(episode.id) as { kind: MarkerKind }[]
+  ).map((m) => m.kind);
+}
+
 /** decision 以外のマーカー、および events から何も見つからなかった decision の
  *  outcome。`objections` は積まれるので、共有せず毎回新しく作る。 */
 const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [] });

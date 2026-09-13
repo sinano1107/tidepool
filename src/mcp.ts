@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
+import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
@@ -131,6 +132,10 @@ export interface McpDeps {
    *  definition). Absent → no registry configured, so `list_agents` reports
    *  only the fixed `human` line. */
   listAgents?: () => RosterAgent[];
+  /** The allocation review's Board call seam (ADR 0111 決定4 / issue #547),
+   *  asked after an integration review completes. Absent → no annotation is
+   *  written (a board with no Board call configured, same as translation). */
+  allocationClient?: AllocationClient;
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's
@@ -396,6 +401,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         attributedTaskId,
         (task, workerId, now) => {
           const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
+          // 配分評価(ADR 0111 決定4): 完了の transaction が commit した後、Board call
+          // は response の外で走る。失敗は注釈の理由コードに畳まれ(reviewAllocation)、
+          // それでも漏れた例外は完了を倒さず process も倒さない
+          if (deps.allocationClient && done.type === "review") {
+            void reviewAllocation(deps.db, deps.allocationClient, done, now).catch((err) =>
+              console.error(`[allocation-review] ${done.id}: ${String(err)}`),
+            );
+          }
           return { id: done.id, status: done.status };
         },
         (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
