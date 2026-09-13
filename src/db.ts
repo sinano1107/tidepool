@@ -114,7 +114,7 @@ const TASKS_TABLE_DDL = `
       -- reference for such a task.
       github_issue_number INTEGER,
       -- the task's execution request (ADR 0110 決定2, CONTEXT.md「要求」): the
-      -- required quality tier and the priority that orders tied candidates,
+      -- required quality tier and the priority that orders that tier's candidates (ADR 0114),
       -- either null for "unstated". Null is the *absence* of a request, and
       -- is distinguished in the record from "the board default was chosen" —
       -- the latter shows up as worker_spawned.source.tier, never here.

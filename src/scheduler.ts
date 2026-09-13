@@ -97,8 +97,7 @@ export function allEntriesExcluded(
     settings = candidates(task);
   } catch (error) {
     // 定義が成立していない / registry が知らない assignee。**読み口では投げない**
-    // —— 候補が組めないときと同じく偽である(判定できないものを skipped とは
-    // 言わない)。scheduler は同じ例外を自分で捕まえて agent を quarantine し、
+    // —— 偽である(判定できないものを skipped とは言わない)。scheduler は同じ例外を自分で捕まえて agent を quarantine し、
     // その行は quarantine の枝で skipped として現れる。表示側がここで投げると、
     // 1行の定義違反でキュー全体が 500 になる。
     if (error instanceof UnknownAgentError || error instanceof InvalidAgentDefinitionError) {

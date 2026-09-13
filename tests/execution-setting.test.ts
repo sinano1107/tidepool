@@ -100,7 +100,7 @@ it("advisor が真でも「Fable を advisor に使える」フラグが立つ�
   ).toBe("opus");
 });
 
-it("フラグが立てば advisor は上位ティアの champion、main が既に上位なら main と同一", () => {
+it("フラグが立てば advisor は同 Provider の上位ティアの行、main が既に上位なら main と同一", () => {
   expect(
     select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: undefined, agentTier: "standard", frontierAdvisor: true }), table)
       .advisor,
@@ -379,6 +379,17 @@ it("advisor は同 Provider の frontier 行、複数なら最安 —— 複数�
   expect(
     select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "standard", frontierAdvisor: true }), crowded).advisor,
   ).toBe("fable-lite");
+});
+
+it("advisor のティアが main と同じなら main の行そのもの —— 同ティアに複数行あっても advisor が別の行へ割れない", () => {
+  const frontierTask = input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "frontier", frontierAdvisor: true });
+  const lite = selectExecutionSetting(frontierTask, crowded, { providers: [], models: [{ provider: "anthropic", model: "fable-lite" }] });
+  expect(lite).toMatchObject({ model: "fable", advisor: "fable" });
+  // フラグが立つ前は main と同一に倒れる
+  expect(select(input({ entries: [{ provider: "anthropic", advisor: true }], taskTier: "standard" }), crowded)).toMatchObject({
+    model: "opus-mini",
+    advisor: "opus-mini",
+  });
 });
 
 it("review の要求は priority を持たず quality の並べ方で解決される(ADR 0111 決定3)", () => {

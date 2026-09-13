@@ -256,9 +256,13 @@ function executionSettingCandidates(
   assertAdvisorPairing(tier, advisorTier);
   return request.entries
     .flatMap((entry) => {
-      const advisor = entry.advisor ? rowsFor(table, entry.provider, advisorTier)[0]?.model : undefined;
-      if (entry.advisor && advisor === undefined) return [];
-      return rowsFor(table, entry.provider, tier).map((main) => ({ main, advisor }));
+      const frontier = entry.advisor ? rowsFor(table, entry.provider, advisorTier)[0]?.model : undefined;
+      if (entry.advisor && frontier === undefined) return [];
+      // advisor のティアが main と同じなら main の行そのもの —— 同ティアに複数行あっても別の行へ割れない
+      return rowsFor(table, entry.provider, tier).map((main) => ({
+        main,
+        advisor: entry.advisor && advisorTier === tier ? main.model : frontier,
+      }));
     })
     .sort((a, b) =>
       priority === "cost" ? byPrice(a.main, b.main) || byRank(a.main, b.main) : byRank(a.main, b.main) || byPrice(a.main, b.main),
@@ -324,6 +328,9 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
   return row?.frontier_advisor === 1;
 }
 
+/** selector が読む task の断面(要求の列と、review か否か)。 */
+type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier">;
+
 /** 盤面境界の1行: この agent の定義から selector の入力を組む。Claude / Codex 両
  *  アダプタと、pickup の除外判定・queue の skipped 表示が**同じこの1本**を通る ——
  *  「その agent は何のモデルで走るのか」の答えが2つあってはならない(モデル窓の
@@ -337,7 +344,7 @@ function isFrontierAdvisorEnabled(db: Db): boolean {
 function selectorInputFor(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: Pick<Task, "type" | "tier" | "priority" | "review_tier"> | undefined,
+  task: SelectorTask | undefined,
 ): SelectorInput {
   return {
     entries: definition.provider.map((entry) => ({
@@ -346,7 +353,7 @@ function selectorInputFor(
     })),
     providerRank: PROVIDER_VALUES,
     taskTier: task?.type === "review" ? undefined : task?.tier ?? undefined,
-    priority: task?.type === "review" ? undefined : task?.priority ?? undefined,
+    priority: task?.priority ?? undefined,
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier as Tier | undefined,
     frontierAdvisor: isFrontierAdvisorEnabled(db),
@@ -358,7 +365,7 @@ function selectorInputFor(
 export function executionSettingsFor(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: Pick<Task, "type" | "tier" | "priority" | "review_tier"> | undefined,
+  task: SelectorTask | undefined,
 ): ExecutionSetting[] {
   return executionSettingCandidates(
     selectorInputFor(db, definition, task),
@@ -372,7 +379,7 @@ export function executionSettingsFor(
 export function resolveExecutionSetting(
   db: Db,
   definition: Pick<AgentDefinition, "provider" | "tier">,
-  task: Pick<Task, "type" | "tier" | "priority" | "review_tier"> | undefined,
+  task: SelectorTask | undefined,
 ): ExecutionSetting | null {
   return selectExecutionSetting(
     selectorInputFor(db, definition, task),
