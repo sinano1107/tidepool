@@ -1,6 +1,9 @@
+import { z } from "zod";
 import type { Db } from "./db.js";
-import { type AgentDefinition, PROVIDER_VALUES, type Provider } from "./registry.js";
-import type { Task } from "./tasks.js";
+import { appendEvent, type EventOrigin } from "./events.js";
+import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import type { AgentDefinition } from "./registry.js";
+import { HUMAN_WORKER_ID, type Task } from "./tasks.js";
 
 /** 必要品質のティア(CONTEXT.md「要求」)—— 廉価 / 主力 / 上位。**順序を持つ配列**
  *  であることがこの定数の内容で、advisor の pairing はこの並びの添字だけで判定する
@@ -44,12 +47,14 @@ export type ProviderSource = "only" | "rank" | "cost";
  *  ときの好みであって、盤面が全 workspace の全 agent に配る床の根拠ではない。
  *  この値のおかげで、ADR 0110 が動かしたのは fallback の**出所**(adapter 定数 →
  *  盤面の表)であって model そのものではない、という決定文どおりになる。
- *  #545 が設定面を開くまでは盤面設定に出さない —— 動かす口が無い値を DB に置いても、
- *  定数に手順が1つ増えるだけである。 */
+ *  **盤面設定ではない**(#545 は Provider 順位と優先順位の既定を設定面に出したが、
+ *  ティアの既定は出していない)—— 動かす口が無い値を DB に置いても、定数に手順が
+ *  1つ増えるだけである。 */
 export const BOARD_DEFAULT_TIER: Tier = "economy";
 
-/** task に優先順位が無いときの鍵(ADR 0114 決定1)。`BOARD_DEFAULT_TIER` と同じ線で、
- *  #545 が設定面を開くまでは定数。 */
+/** 優先順位の既定の、さらに既定(ADR 0114 決定1): 盤面設定 `execution_defaults.priority`
+ *  が未設定のときの値。task の優先順位 → 盤面設定 → この定数の順に倒れる
+ *  (`selectorInputFor` / `loadExecutionDefaults`)。 */
 export const BOARD_DEFAULT_PRIORITY: Priority = "quality";
 
 /** 表の1行 = モデル分類の行(ADR 0114 決定2): この model はこの provider のこの
@@ -158,13 +163,17 @@ export interface SelectorInput {
   /** この agent が走ってよい Provider entry(ADR 0110 決定1)。長さ1なら今日の
    *  単一 Provider の agent で、選択は「それしか無かった」になる。 */
   entries: readonly { provider: Provider; advisor: boolean }[];
-  /** Provider 順位(盤面設定、既定 = 資格情報の宣言順 `PROVIDER_VALUES`)。
-   *  **入力であって定数ではない** —— 盤面境界の薄いラッパが渡す。#545 が設定面を
-   *  開くまで DB 列は作らない(`BOARD_DEFAULT_TIER` と同じ線)。 */
+  /** Provider 順位(盤面設定 `execution_defaults.provider_rank`、未設定 = 資格情報の
+   *  宣言順 `PROVIDER_VALUES`)。**入力であって定数ではない** —— 盤面境界の薄い
+   *  ラッパ(`selectorInputFor`)が DB から読んで渡す。`PROVIDER_VALUES` の順列で
+   *  あること(`isProviderRank`)は書く口が保証する —— 欠けた Provider は
+   *  `indexOf` が -1 になって**先頭**に並んでしまう。 */
   providerRank: readonly Provider[];
   /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
   taskTier: Tier | undefined;
-  /** task の優先順位(CONTEXT.md「要求」/ ADR 0114 決定1)。省略 → 盤面既定。
+  /** task の優先順位(CONTEXT.md「要求」/ ADR 0114 決定1)。省略 → 盤面既定
+   *  (`selectorInputFor` が盤面設定の値を埋める。selector 自身の倒れ先
+   *  `BOARD_DEFAULT_PRIORITY` は、それを通らない呼び手のためだけにある)。
    *  review の要求(`reviewTier`)があれば読まない —— review task に優先順位の列は
    *  無く、`quality` の並べ方で解決する(ADR 0111 決定3)。 */
   priority: Priority | undefined;
@@ -318,21 +327,110 @@ export function selectExecutionSetting(
 }
 
 /** 盤面の表を DB から読む(ADR 0110 決定3: 種から初期化された後は DB が正本)。
- *  表は数行の定数サイズなので pickup ごとに読み直してよく、#545 の編集が次の
- *  pickup から効くのはそのおかげである。 */
+ *  表は数行の定数サイズなので pickup ごとに読み直してよく、settings タブ / 管理MCP の
+ *  編集(#545)が次の pickup から効くのはそのおかげである。 */
 export function loadExecutionSettingTable(db: Db): ExecutionSettingTable {
   return db
-    .prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings")
+    .prepare("SELECT provider, tier, model, effort, price_in, price_out FROM execution_settings ORDER BY provider, model")
     .all() as ExecutionSettingRow[];
 }
 
-/** 「上位ティアの行を advisor に使ってよい」(SelectorInput.frontierAdvisor)。
- *  行が無い = 未設定 = false —— display_language と同じ「行が無ければ既定」の形。 */
-function isFrontierAdvisorEnabled(db: Db): boolean {
-  const row = db.prepare("SELECT frontier_advisor FROM execution_defaults WHERE id = 1").get() as
-    | { frontier_advisor: number }
-    | undefined;
-  return row?.frontier_advisor === 1;
+/** 盤面設定の3値(ADR 0110 決定5): 「上位ティアの行を advisor に使ってよい」、
+ *  Provider 順位、優先順位の既定。行が無い / 列が NULL = 未設定 = コードの既定
+ *  —— display_language と同じ「行が無ければ既定」の形。 */
+interface ExecutionDefaults {
+  frontierAdvisor: boolean;
+  providerRank: readonly Provider[];
+  priority: Priority;
+}
+
+/** settings タブ / 管理MCP の読み口(ADR 0110 決定5): 表と盤面設定3値を1往復で。
+ *  表は (provider, model) 順 —— 主キーの順で、UI も MCP も同じ並びを見る。 */
+export function readExecutionSettings(db: Db): ExecutionDefaults & { table: ExecutionSettingTable } {
+  return { table: loadExecutionSettingTable(db), ...loadExecutionDefaults(db) };
+}
+
+/** Provider 順位として書けるのは `PROVIDER_VALUES` の**順列**だけ —— 欠けた Provider は
+ *  selector の `indexOf` が -1 になって先頭に並び、重複は順位を二重に言う。 */
+function isProviderRank(rank: readonly string[]): rank is Provider[] {
+  return rank.length === PROVIDER_VALUES.length && PROVIDER_VALUES.every((provider) => rank.includes(provider));
+}
+
+/** settings タブ / 管理MCP が撃つ1つの変更(ADR 0110 決定5)。**綴りは1つ** —— /api と
+ *  MCP tool が同じ schema を通り、同じ関数が書き、同じ payload が操作イベントになる。
+ *  行の鍵は主キー (provider, model): `row` は upsert、`delete_row` は削除で、model 名の
+ *  変更は「消して足す」。 */
+export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
+  z.object({
+    setting: z.literal("row"),
+    row: z.object({
+      provider: z.enum(PROVIDER_VALUES),
+      tier: z.enum(TIERS),
+      model: z.string().min(1),
+      effort: z.string().min(1),
+      price_in: z.number().nonnegative(),
+      price_out: z.number().nonnegative(),
+    }),
+  }),
+  z.object({ setting: z.literal("delete_row"), provider: z.enum(PROVIDER_VALUES), model: z.string().min(1) }),
+  z.object({ setting: z.literal("frontier_advisor"), value: z.boolean() }),
+  z.object({
+    setting: z.literal("provider_rank"),
+    value: z.array(z.enum(PROVIDER_VALUES)).refine(isProviderRank, {
+      message: `provider rank must list every provider exactly once (${PROVIDER_VALUES.join(" / ")})`,
+    }),
+  }),
+  z.object({ setting: z.literal("priority"), value: z.enum(PRIORITIES) }),
+]);
+export type ExecutionSettingsChange = z.infer<typeof executionSettingsChangeSchema>;
+
+/** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を
+ *  持たない盤面イベントなので task_id は NULL、帰属は人間。 */
+export function applyExecutionSettingsChange(db: Db, change: ExecutionSettingsChange, origin: EventOrigin, at: Date): void {
+  db.transaction(() => {
+    switch (change.setting) {
+      case "row": {
+        const { provider, tier, model, effort, price_in, price_out } = change.row;
+        db.prepare(
+          `INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(provider, model) DO UPDATE SET tier = excluded.tier, effort = excluded.effort,
+             price_in = excluded.price_in, price_out = excluded.price_out`,
+        ).run(provider, tier, model, effort, price_in, price_out);
+        break;
+      }
+      case "delete_row":
+        // 消す行が無ければ何も変わっていないので、操作イベントも残さない
+        if (db.prepare("DELETE FROM execution_settings WHERE provider = ? AND model = ?").run(change.provider, change.model).changes === 0) return;
+        break;
+      default: {
+        const column = change.setting;
+        const value =
+          change.setting === "frontier_advisor" ? Number(change.value)
+          : change.setting === "provider_rank" ? JSON.stringify(change.value) : change.value;
+        db.prepare(
+          `INSERT INTO execution_defaults (id, ${column}) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET ${column} = excluded.${column}`,
+        ).run(value);
+      }
+    }
+    appendEvent(db, {
+      taskId: null,
+      workerId: HUMAN_WORKER_ID,
+      origin,
+      payload: { kind: "execution_settings_changed", ...change },
+      at,
+    });
+  })();
+}
+
+function loadExecutionDefaults(db: Db): ExecutionDefaults {
+  const row = db
+    .prepare("SELECT frontier_advisor, provider_rank, priority FROM execution_defaults WHERE id = 1")
+    .get() as { frontier_advisor: number; provider_rank: string | null; priority: Priority | null } | undefined;
+  return {
+    frontierAdvisor: row?.frontier_advisor === 1,
+    providerRank: row?.provider_rank ? (JSON.parse(row.provider_rank) as Provider[]) : PROVIDER_VALUES,
+    priority: row?.priority ?? BOARD_DEFAULT_PRIORITY,
+  };
 }
 
 /** selector が読む task の断面(要求の列と、review か否か)。 */
@@ -343,8 +441,9 @@ type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier">;
  *  「その agent は何のモデルで走るのか」の答えが2つあってはならない(モデル窓の
  *  除外は、答えがずれた瞬間に全テスト緑のまま黙って効かなくなる面である)。
  *
- *  Provider 順位は `PROVIDER_VALUES`(資格情報の宣言順)。#545 が設定面を開くまで
- *  盤面設定には出さない —— 動かす口が無い値を DB に置いても手順が1つ増えるだけ。
+ *  Provider 順位・優先順位の既定・frontier advisor は盤面設定(`execution_defaults`、
+ *  settings タブと管理MCP が書く —— ADR 0110 決定5)。pickup ごとに読み直すので、
+ *  書いた値は次の pickup / skipped 表示から効く。
  *
  *  `provider` / `tier` の文字列が列挙に収まっていることは、定義を受け入れる門
  *  (`assertValidAgentDefinition`)が既に保証している。 */
@@ -353,17 +452,18 @@ function selectorInputFor(
   definition: Pick<AgentDefinition, "provider" | "tier">,
   task: SelectorTask | undefined,
 ): SelectorInput {
+  const defaults = loadExecutionDefaults(db);
   return {
     entries: definition.provider.map((entry) => ({
       provider: entry.name as Provider,
       advisor: entry.advisor,
     })),
-    providerRank: PROVIDER_VALUES,
+    providerRank: defaults.providerRank,
     taskTier: task?.type === "review" ? undefined : task?.tier ?? undefined,
-    priority: task?.priority ?? undefined,
+    priority: task?.priority ?? defaults.priority,
     reviewTier: task?.type === "review" ? task.review_tier ?? undefined : undefined,
     agentTier: definition.tier as Tier | undefined,
-    frontierAdvisor: isFrontierAdvisorEnabled(db),
+    frontierAdvisor: defaults.frontierAdvisor,
   };
 }
 

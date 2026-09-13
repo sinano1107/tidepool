@@ -178,7 +178,7 @@ function countUnknown(lines: EpisodeLineStats, key: string): void {
  *  組めることが受け入れの中心(issue #356)。 */
 export function projectEpisode(input: ProjectEpisodeInput): Episode {
   const spawned = input.events.find((e) => e.id === input.workerSpawnedEventId);
-  if (!spawned || spawned.payload.kind !== "worker_spawned") {
+  if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) {
     throw new Error(`no worker_spawned event ${input.workerSpawnedEventId}`);
   }
   const actions: EpisodeAction[] = [];
@@ -412,7 +412,7 @@ export function projectAndPersist(
   opts: { workerSpawnedEventId: number; transcriptPath: string },
 ): number | null {
   const spawned = getEvent(db, opts.workerSpawnedEventId);
-  if (!spawned || spawned.payload.kind !== "worker_spawned") return null;
+  if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) return null;
   const episode = projectEpisode({
     transcriptLines: readFileSync(opts.transcriptPath, "utf8").split("\n"),
     // 投影器の入力は既存の task 単位の read API そのまま(issue #356 の

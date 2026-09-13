@@ -56,6 +56,32 @@ it("初期化の後は DB が正本 — 書き換えた行は再オープンで�
   second.close();
 });
 
+it("全行を消した表も再オープンで種へ戻らない —— 種で初期化するのは表を作ったときだけ(issue #545)", async () => {
+  const path = await boardPath("execution-settings-emptied");
+  const first = openDb(path);
+  first.prepare("DELETE FROM execution_settings").run();
+  first.close();
+
+  const second = openDb(path);
+  expect(second.prepare("SELECT count(*) AS n FROM execution_settings").get()).toEqual({ n: 0 });
+  second.close();
+});
+
+it("execution_defaults の priority 列は quality / cost 以外を拒む(ADR 0114 決定1 / issue #545)", async () => {
+  const db = openDb(await boardPath("execution-defaults-columns"));
+  expect(() => db.prepare("INSERT INTO execution_defaults (id, priority) VALUES (1, 'speed')").run()).toThrow(/CHECK/);
+  db.close();
+});
+
+it("events.task_id は盤面スコープの操作イベントのために NULL を許す(issue #545)", async () => {
+  const db = openDb(await boardPath("events-task-less"));
+  db.prepare(
+    "INSERT INTO events (task_id, worker_id, origin, kind, payload, created_at) VALUES (NULL, 'human', 'mcp', 'execution_settings_changed', '{}', '2026-09-14T00:00:00.000Z')",
+  ).run();
+  expect(db.prepare("SELECT task_id, origin FROM events").all()).toEqual([{ task_id: null, origin: "mcp" }]);
+  db.close();
+});
+
 it("「上位ティアの行を advisor に使える」フラグの既定は false(未設定の盤面は advisor を main と同一に倒す)", async () => {
   const path = await boardPath("frontier-advisor-default");
   const db = openDb(path);

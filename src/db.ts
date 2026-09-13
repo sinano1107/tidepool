@@ -165,10 +165,12 @@ const SPEND_DOWN_STATE_TABLE_DDL = `
 // Shared between the fresh-board CREATE and #190's event-table rebuild. The
 // database is the audit record's final backstop, so its route vocabulary is
 // constrained here as well as by EventOrigin in TypeScript.
+// task_id is NULL for board-scoped operation events (execution_settings_changed,
+// issue #545) — a settings change belongs to no task but still carries its route.
 const EVENTS_TABLE_DDL = `
     CREATE TABLE events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id    TEXT NOT NULL REFERENCES tasks(id),
+      task_id    TEXT REFERENCES tasks(id),
       worker_id  TEXT NOT NULL,
       origin     TEXT NOT NULL DEFAULT 'webui' CHECK (origin IN ('webui', 'mcp', 'worker', 'board')),
       kind       TEXT NOT NULL,
@@ -185,6 +187,11 @@ const EVENTS_APPEND_ONLY_TRIGGERS = `
 export function openDb(path: string): Db {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
+  // 種の表で初期化するのは表を作ったときだけ —— 空かどうかで判定すると、運用者が
+  // settings から全行を消した表が再オープンで生え直す(#545)
+  const seedExecutionSettings = !db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'execution_settings'")
+    .get();
   db.exec(`
     ${TASKS_TABLE_DDL.replace("CREATE TABLE tasks", "CREATE TABLE IF NOT EXISTS tasks")};
 
@@ -307,8 +314,8 @@ export function openDb(path: string): Db {
     -- この provider のこのティアの品質を満たす)と、既定 effort・価格(USD per MTok)。
     -- 同じ provider × ティアに複数行を許す。配布物の種(execution-setting.ts の
     -- SEED_EXECUTION_SETTINGS)から**一度だけ**初期化し、以後は DB が正本で、
-    -- 消した行も再オープンで戻らない(#545 が settings タブと管理MCP から
-    -- 編集できるようにする)。model が alias(anthropic)か具体 id(openai)か
+    -- 消した行も再オープンで戻らない(settings タブと管理MCP が編集する、#545)。
+    -- model が alias(anthropic)か具体 id(openai)か
     -- の判別子は持たない —— どちらも CLI に渡す文字列である。
     CREATE TABLE IF NOT EXISTS execution_settings (
       provider  TEXT NOT NULL CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
@@ -320,12 +327,17 @@ export function openDb(path: string): Db {
       PRIMARY KEY (provider, model)
     );
 
-    -- ADR 0110 決定3 の盤面設定側: 「上位ティアの行を advisor に使ってよい」。
-    -- Fable の usage-credits 同意も org の availableModels も盤面からは読めない
-    -- ので、立つまでは advisor を main と同一に倒す。行が無い = 未設定 = false。
+    -- ADR 0110 決定3 / 決定5 の盤面設定側(1行): 「上位ティアの行を advisor に
+    -- 使ってよい」(Fable の usage-credits 同意も org の availableModels も盤面
+    -- からは読めないので、立つまでは advisor を main と同一に倒す)、Provider
+    -- 順位(JSON 配列、PROVIDER_VALUES の順列)、優先順位の既定(ADR 0114 決定1)。
+    -- 行が無い / 列が NULL = 未設定 = コードの既定(false / 宣言順 / quality)。
+    -- settings タブと管理MCP が書く(#545)。
     CREATE TABLE IF NOT EXISTS execution_defaults (
       id               INTEGER PRIMARY KEY CHECK (id = 1),
-      frontier_advisor INTEGER NOT NULL DEFAULT 0
+      frontier_advisor INTEGER NOT NULL DEFAULT 0,
+      provider_rank    TEXT,
+      priority         TEXT CHECK (priority IN ('quality', 'cost'))
     );
 
     CREATE TABLE IF NOT EXISTS provider_pace_offsets (
@@ -806,7 +818,7 @@ export function openDb(path: string): Db {
   // provider_pace_offsets の INSERT OR IGNORE と違って行ごとに撃たないのは、
   // 運用者が消した行が再オープンのたびに生え直すのが「正本は DB」と矛盾する
   // ためである。
-  if (!db.prepare("SELECT 1 FROM execution_settings LIMIT 1").get()) {
+  if (seedExecutionSettings) {
     const insert = db.prepare(
       "INSERT INTO execution_settings (provider, tier, model, effort, price_in, price_out) VALUES (?, ?, ?, ?, ?, ?)",
     );

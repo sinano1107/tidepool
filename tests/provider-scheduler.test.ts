@@ -3,7 +3,7 @@ import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { InvalidAgentDefinitionError, type Provider } from "../src/registry.js";
-import { usagePanelText } from "./fakes.js";
+import { healthyOpenai, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -318,22 +318,6 @@ function fableOverPace(now: Date): string {
     fable: { percent: 84, resetsAt: new Date(now.getTime() + 12 * HOUR) },
   });
 }
-
-const healthyOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
-  status: "observed",
-  provider: "openai",
-  cliVersion: "codex-cli 0.147.0",
-  plan: "plus",
-  windows: [
-    {
-      name: "primary",
-      model: null,
-      usedPercent: 0,
-      durationMs: 5 * HOUR,
-      resetsAt: new Date(now.getTime() + 4 * HOUR).toISOString(),
-    },
-  ],
-});
 
 it("anthropic を温存中でも openai entry を持つ agent の task は走り、単一 entry の task だけが skipped —— queue 表示と pickup の判定は同じ式(#543 申し送り / ADR 0110 決定5)", async () => {
   // 候補は**実物の selector**(盤面の表 + Provider 順位)から作る —— fake が
