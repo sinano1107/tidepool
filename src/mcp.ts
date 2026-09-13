@@ -6,6 +6,7 @@ import type { Db } from "./db.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
+import { assertReviewerKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
@@ -492,13 +493,19 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         // #36): an explicitly named child assignee must exist in the
         // registry — the registering agent's own mistake, not an authority
         // question, so it's rejected outright before the assignable_to check
-        // even runs. `human` is exempt (never a registry agent).
-        if (deps.agentRegistered) {
-          for (const child of input.children) {
-            for (const name of [child.assignee, ...(child.review_by ?? [])]) {
-              if (name === undefined || name === HUMAN_WORKER_ID) continue;
-              if (!deps.agentRegistered(name)) throw new DomainError(`unknown agent: ${name}`);
+        // even runs. `human` is valid only as a work assignee, never a reviewer.
+        for (const child of input.children) {
+          if (deps.agentRegistered) {
+            if (
+              child.assignee !== undefined &&
+              child.assignee !== HUMAN_WORKER_ID &&
+              !deps.agentRegistered(child.assignee)
+            ) {
+              throw new DomainError(`unknown agent: ${child.assignee}`);
             }
+          }
+          for (const reviewer of child.review_by ?? []) {
+            assertReviewerKnown(deps.agentRegistered, reviewer);
           }
         }
         const children = decomposeTask(

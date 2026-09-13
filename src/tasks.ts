@@ -499,7 +499,8 @@ export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber
 }
 
 /** ADR 0087 決定2 の参照検査が数えるもの: この名前を `assignee` / `workspace` に
- *  持つ未決着(done/cancelled でない)タスクの件数。削除の扉はこの件数を人間に
+ *  持つ未決着(done/cancelled でない)タスクの件数。agent の場合は将来の review
+ *  assignee を予約する `review_by` も同じ参照として数える。削除の扉はこの件数を人間に
  *  返す —— 先に cancel か再割当をするのが筋だからである。列名はリテラル合併なので
  *  そのまま埋め込んでよい(`settledTreeSql` と同じ流儀)。 */
 export function countUnsettledTasksReferencing(
@@ -507,12 +508,16 @@ export function countUnsettledTasksReferencing(
   column: "assignee" | "workspace",
   name: string,
 ): number {
+  const reference =
+    column === "assignee"
+      ? `(assignee = ? OR EXISTS (SELECT 1 FROM json_each(tasks.review_by) WHERE value = ?))`
+      : "workspace = ?";
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE ${column} = ? AND status NOT IN ('done', 'cancelled')`,
+       WHERE ${reference} AND status NOT IN ('done', 'cancelled')`,
     )
-    .get(name) as { n: number };
+    .get(...(column === "assignee" ? [name, name] : [name])) as { n: number };
   return row.n;
 }
 
@@ -2525,11 +2530,30 @@ export function presentTask(db: Db, task: Task): BoardTask {
 }
 
 /** Registration records the generated review set so independent audits and RCA
- *  children cannot change this integration point's acceptance (ADR 0111). */
+ *  children cannot change this integration point's acceptance (ADR 0111).
+ *  Reviews generated before #546 have no marker; their registration immediately
+ *  followed the parent's completion event with the same provenance and canonical
+ *  content, which is enough to recognize them without mutating the append-only log. */
 function acceptedSql(taskId: string): string {
   return `COALESCE((SELECT MIN(review.status = 'done') FROM tasks review
     JOIN events registered ON registered.task_id = review.id AND registered.kind = 'task_registered'
-    WHERE review.parent_id = ${taskId} AND json_extract(registered.payload, '$.integration_review') = 1), 0)`;
+    WHERE review.parent_id = ${taskId} AND (
+      json_extract(registered.payload, '$.integration_review') = 1 OR (
+        json_type(registered.payload, '$.integration_review') IS NULL
+        AND review.title LIKE 'review: %'
+        AND review.purpose = 'read-only review of "' || substr(review.title, 9) || '"''s deliverable against its completion criteria'
+        AND review.completion_criteria = 'findings are read-only — issues land as repair tasks for the original assignee'
+        AND EXISTS (
+          SELECT 1 FROM events completed
+          WHERE completed.id = registered.id - 1
+            AND completed.task_id = ${taskId}
+            AND completed.kind = 'task_completed'
+            AND completed.worker_id = registered.worker_id
+            AND completed.origin = registered.origin
+            AND completed.created_at = registered.created_at
+        )
+      )
+    )), 0)`;
 }
 
 /** The shared shape behind `listBoard`/`listQueue`: the same CTE and the same

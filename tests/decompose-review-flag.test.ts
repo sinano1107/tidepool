@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
+import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
+import { registerTask } from "../src/tasks.js";
 import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
   api,
@@ -308,8 +310,11 @@ it("review_by の指名は assignable_to で検査され、承認後も指名と
   });
 });
 
-it("登録時に存在しない reviewer の指名は拒否する", async () => {
-  t = await bootTidepool({ agentRegistered: (name) => name === "known" });
+it.each([
+  { reviewer: "missing", agentRegistered: (name: string) => name === "known" },
+  { reviewer: "human", agentRegistered: undefined },
+])("登録時に agent でない reviewer $reviewer の指名は拒否する", async ({ reviewer, agentRegistered }) => {
+  t = await bootTidepool({ agentRegistered });
   expect(
     (
       await api(t.baseUrl, "POST", "/api/tasks", {
@@ -317,10 +322,48 @@ it("登録時に存在しない reviewer の指名は拒否する", async () => 
         title: "subject",
         purpose: "p",
         completion_criteria: "c",
-        review_by: ["missing"],
+        review_by: [reviewer],
       })
     ).status,
   ).toBe(400);
+});
+
+it("更新前に生成済みの完了時 review も、完了後は受理に数える", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "legacy-integration-review-"));
+  const db = openDb(join(dir, "board.sqlite"));
+  const subject = registerTask(
+    db,
+    { type: "work", title: "legacy work", purpose: "p", completion_criteria: "c", review_flag: true },
+    new Date(0),
+  );
+  const completedAt = new Date(1);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(subject.id);
+  appendEvent(db, {
+    taskId: subject.id,
+    workerId: "reef-crab",
+    origin: "worker",
+    payload: { kind: "task_completed", handoff_present: true, result: "done" },
+    at: completedAt,
+  });
+  const review = registerTask(
+    db,
+    {
+      type: "review",
+      parent_id: subject.id,
+      title: "review: legacy work",
+      purpose: 'read-only review of "legacy work"\'s deliverable against its completion criteria',
+      completion_criteria:
+        "findings are read-only — issues land as repair tasks for the original assignee",
+    },
+    completedAt,
+    "reef-crab",
+    "worker",
+  );
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(review.id);
+  db.close();
+
+  t = await bootTidepool({ dir });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${subject.id}`)).json.accepted).toBe(true);
 });
 
 it.each([

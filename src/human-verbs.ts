@@ -111,7 +111,7 @@ export function decomposeThroughHumanDoor(
         assertWorkspaceKnown(child.workspace, deps.resolveWorkspace, deps.workspace);
       }
       assertAssigneeKnown(deps.agentRegistered, child.assignee);
-      for (const reviewer of child.review_by ?? []) assertAssigneeKnown(deps.agentRegistered, reviewer);
+      for (const reviewer of child.review_by ?? []) assertReviewerKnown(deps.agentRegistered, reviewer);
     }
     if (input.reason.length === 0) throw new DomainError("a decomposition requires a reason");
     const task = getTask(deps.db, taskId);
@@ -202,6 +202,17 @@ export function assertAssigneeKnown(
   }
 }
 
+/** A reviewer is always an agent (ADR 0111); unlike an assignee, `human` is
+ * not a built-in escape from registry resolution. */
+export function assertReviewerKnown(
+  agentRegistered: ((name: string) => boolean) | undefined,
+  reviewer: string,
+): void {
+  if (reviewer === HUMAN_WORKER_ID || (agentRegistered && !agentRegistered(reviewer))) {
+    throw new DomainError(`unknown agent: ${reviewer}`);
+  }
+}
+
 export function assertWorkspaceKnown(
   workspaceName: string,
   resolveWorkspace: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
@@ -277,7 +288,7 @@ export async function registerThroughHumanDoor(
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
     assertAssigneeKnown(deps.agentRegistered, input.assignee);
-    for (const reviewer of input.review_by ?? []) assertAssigneeKnown(deps.agentRegistered, reviewer);
+    for (const reviewer of input.review_by ?? []) assertReviewerKnown(deps.agentRegistered, reviewer);
     if (input.github_issue_number !== undefined && input.workspace) {
       assertNoUnsettledIssueRef(deps.db, input.workspace, input.github_issue_number);
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);

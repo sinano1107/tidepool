@@ -43,10 +43,17 @@ it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名�
   });
   await registerWork(t, "unsettled one", undefined, undefined, "fugu");
   await registerWork(t, "unsettled two", undefined, undefined, "fugu");
+  await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work",
+    title: "reviewed later",
+    purpose: "p",
+    completion_criteria: "c",
+    review_by: ["fugu"],
+  });
 
   await api(t.baseUrl, "DELETE", "/api/agents/fugu", { confirm: true });
 
-  expect(refs).toEqual([{ unsettledTaskCount: 2, defaultAgentName: "tako", auditorName: "fugu" }]);
+  expect(refs).toEqual([{ unsettledTaskCount: 3, defaultAgentName: "tako", auditorName: "fugu" }]);
 });
 
 it("DELETE /api/agents/:name は確認なしの拒否を 409 confirm_required に写す", async () => {
