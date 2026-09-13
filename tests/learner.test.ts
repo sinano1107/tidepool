@@ -284,3 +284,67 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
     basis: "data",
   });
 });
+
+it("セルの model は観測された具体 id —— pin が alias でも、人間が足した具体 id の行に観測が当たる", async () => {
+  const opus41 = candidate("anthropic", "claude-opus-4-1");
+  t = await bootTidepool({ taskExecutionCandidates: () => [opus41, sol] });
+  const earlier = await registerWork(t, "earlier");
+  await t.clock.advance(HOUR);
+  // pin は alias の opus、CLI が報告した具体 id は claude-opus-4-1(ScriptedWorker は spawn しないので setup として置く)
+  const spawnedId = appendEvent(t.db, {
+    taskId: earlier.id,
+    workerId: "fake-worker",
+    origin: "board",
+    at: t.clock.now(),
+    payload: {
+      kind: "worker_spawned",
+      registry_commit: "commit",
+      definition_version: "1",
+      advisor: null,
+      provider: "anthropic",
+      model: "opus",
+      effort: "high",
+      source: { tier: "board", provider: "rank" },
+      harness: "claude-code",
+      cli_version: "1",
+    },
+  });
+  const entry = await loggedEntry(t, earlier.id, "took the shortcut");
+  const attributed: EventPayload = {
+    kind: "objection_attributed",
+    entry_id: entry.id,
+    objection_event_ids: [],
+    cause: "capability",
+    evidence: "the shortcut missed the second criterion",
+    round: "initial",
+  };
+  appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
+  const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
+  appendEvent(t.db, {
+    taskId: earlier.id,
+    workerId: "fake-worker",
+    origin: "board",
+    at: t.clock.now(),
+    payload: {
+      kind: "worker_exited",
+      exit_code: 0,
+      signal: null,
+      stderr_tail: null,
+      worker_spawned_event_id: spawnedId,
+      usage: { ...tokens, advisor: null, models: { "claude-opus-4-1": tokens } },
+    },
+  });
+  await completeViaMcp(t, earlier.id);
+  await completeIntegrationReviews(t, earlier.id);
+
+  const later = await registerWork(t, "later");
+  await t.clock.advance(HOUR);
+
+  // pin の綴り(opus)のままなら claude-opus-4-1 の行に当たらず、推薦は表の先頭のまま
+  expect(t.worker.startedSettings.at(-1)).toEqual(opus41);
+  expect(shadowRows(t).at(-1)).toMatchObject({
+    task_id: later.id,
+    cell_recommended: JSON.stringify({ provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }),
+    basis: "data",
+  });
+});
