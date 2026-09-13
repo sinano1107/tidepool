@@ -8,9 +8,10 @@ const kindColors = {
 };
 
 export function LogEntry({ entry = {}, onObject, onExpand, active = false, style }) {
-  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, unread = false } = entry;
+  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, cause, unread = false } = entry;
   const completion = kind === 'completion';
   const clickable = !!onObject;
+  const causeText = cause === 'uncertain' ? 'cause: not yet determined (uncertain)' : cause ? `cause: ${cause}` : null;
   return (
     <div
       className="tp-log-entry"
@@ -41,14 +42,18 @@ export function LogEntry({ entry = {}, onObject, onExpand, active = false, style
             {text}
           </div>
           {objection && (
-            <div style={{ marginTop: 6, padding: '6px 10px', background: 'var(--coral-1)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--coral-4)', whiteSpace: 'pre-wrap' }}>
-              objection: {objection}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, padding: '6px 10px', background: 'var(--coral-1)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--coral-4)', whiteSpace: 'pre-wrap' }}>
+              <span style={{ flex: 1 }}>objection: {objection}</span>
+              {causeText && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{causeText}</span>}
             </div>
           )}
           {bundledObjection && (
-            <div style={{ marginTop: 6, padding: '6px 10px', background: 'var(--surface-recessed)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 6 }}>bundled</span>
-              {bundledObjection}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 6, padding: '6px 10px', background: 'var(--surface-recessed)', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>
+              <span style={{ flex: 1 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', textTransform: 'uppercase', letterSpacing: '0.06em', marginRight: 6 }}>bundled</span>
+                {bundledObjection}
+              </span>
+              {!objection && causeText && <span style={{ flexShrink: 0 }}>{causeText}</span>}
             </div>
           )}
         </div>

@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventRow, getEvent, listEvents } from "./events.js";
 import { isAdvisorBlock, parseStreamLine, readInitVersion } from "./stream-json.js";
@@ -385,7 +386,7 @@ function readLoggedEventId(tool: string, content: unknown): number | null {
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
-export const EXTRACTOR_VERSION = "1";
+export const EXTRACTOR_VERSION = "2";
 
 /** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
  *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
@@ -470,13 +471,14 @@ export function projectAndPersist(
 /** 読み出し時に結ぶ outcome を持つマーカー。表示済み・異議は投影のあとに届く
  *  ので派生表には焼かない(ADR 0083 決定7: 正の信号は「表示済み・異議なし」から
  *  機械導出する — 分母は Displayed)。 */
-type DecisionOutcome = Pick<StoredMarker, "line" | "displayed" | "objections">;
+type DecisionOutcome = Pick<StoredMarker, "line" | "displayed" | "objections" | "cause">;
 
 export interface StoredMarker extends EpisodeMarker {
   /** decision の文言。transcript と events が正本なので、読み出し時に引く。 */
   line: string | null;
   displayed: boolean;
   objections: string[];
+  cause: Cause | null;
 }
 
 export interface StoredEpisode extends Omit<Episode, "markers"> {
@@ -589,7 +591,7 @@ export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): Marker
 
 /** decision 以外のマーカー、および events から何も見つからなかった decision の
  *  outcome。`objections` は積まれるので、共有せず毎回新しく作る。 */
-const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [] });
+const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [], cause: null });
 
 /** decision マーカーの outcome — 表示済み(異議の分母)と異議の本文。`listLog` と
  *  同じ形で `entry_id` で引く: エントリを指す id であって task_id ではないので、
@@ -609,17 +611,19 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
   for (const row of db
     .prepare(
       `SELECT kind, json_extract(payload, '$.entry_id') AS entry_id,
-              json_extract(payload, '$.comment') AS comment
+              json_extract(payload, '$.comment') AS comment,
+              json_extract(payload, '$.cause') AS cause
          FROM events
-        WHERE kind IN ('objection_raised', 'log_entry_displayed')
+        WHERE kind IN ('objection_raised', 'log_entry_displayed', 'objection_attributed')
           AND json_extract(payload, '$.entry_id') IN (${placeholders})
         ORDER BY id`,
     )
-    .all(...ids) as Array<{ kind: string; entry_id: number; comment: string | null }>) {
+    .all(...ids) as Array<{ kind: string; entry_id: number; comment: string | null; cause: Cause | null }>) {
     const entry = out.get(row.entry_id);
     if (!entry) continue;
     if (row.kind === "log_entry_displayed") entry.displayed = true;
-    else if (row.comment !== null) entry.objections.push(row.comment);
+    else if (row.kind === "objection_raised" && row.comment !== null) entry.objections.push(row.comment);
+    else if (row.cause !== null) entry.cause = row.cause;
   }
   return out;
 }

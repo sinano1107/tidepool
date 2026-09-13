@@ -422,10 +422,12 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed"] as const
  *  objections both ride along. `session_id` is the sole fact the read model
  *  hands the caller for telling the two apart (against the current open
  *  session, if any); `at` and who raised it are deliberately left out
- *  (issue #371). */
+ *  (issue #371). The latest attribution `cause` is joined at read time from
+ *  append-only `objection_attributed` events (ADR 0115). */
 export interface LogEntry extends EventRow {
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
+  cause: Cause | null;
 }
 
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
@@ -457,10 +459,21 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     list.push({ comment: o.comment, session_id: o.session_id });
     objectionsByEntry.set(o.entry_id, list);
   }
+  const causesByEntry = new Map<number, Cause>();
+  for (const row of db
+    .prepare(
+      `SELECT json_extract(payload, '$.entry_id') AS entry_id,
+              json_extract(payload, '$.cause') AS cause
+         FROM events WHERE kind = 'objection_attributed' ORDER BY id`,
+    )
+    .all() as Array<{ entry_id: number; cause: Cause }>) {
+    causesByEntry.set(row.entry_id, row.cause);
+  }
   return rows.map((r) => ({
     ...r,
     payload: JSON.parse(r.payload) as EventPayload,
     objections: objectionsByEntry.get(r.id) ?? [],
+    cause: causesByEntry.get(r.id) ?? null,
   }));
 }
 

@@ -183,6 +183,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     unread: e.unread,
     handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
+    cause: e.cause ?? null,
     pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
     bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
   }));

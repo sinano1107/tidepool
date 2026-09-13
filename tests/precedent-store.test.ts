@@ -141,11 +141,39 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
       at,
     });
   }
-  appendEvent(db, {
+  const objectionId = appendEvent(db, {
     taskId: FIXTURE_TASK,
     workerId: "human",
     origin: "webui",
     payload: { kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 },
+    at,
+  });
+  appendEvent(db, {
+    taskId: FIXTURE_TASK,
+    workerId: "tidepool",
+    origin: "board",
+    payload: {
+      kind: "objection_attributed",
+      entry_id: 7,
+      objection_event_ids: [objectionId],
+      cause: "uncertain",
+      evidence: "RCA is needed",
+      round: "initial",
+    },
+    at,
+  });
+  appendEvent(db, {
+    taskId: FIXTURE_TASK,
+    workerId: "tidepool",
+    origin: "board",
+    payload: {
+      kind: "objection_attributed",
+      entry_id: 7,
+      objection_event_ids: [objectionId],
+      cause: "preference",
+      evidence: "RCA found a naming preference",
+      round: "after_rca",
+    },
     at,
   });
   appendEvent(db, {
@@ -158,10 +186,11 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
 
   const [episode] = listEpisodes(db, { workspace: "sandbox", agent: "tako" });
   const decisions = episode!.markers.filter((m) => m.kind === "decision");
-  expect(decisions.map((m) => [m.eventId, m.line, m.displayed, m.objections])).toEqual([
-    [6, "kept the note to three bullets", true, []],
-    [7, "kept the note to three bullets", true, ["2回目は要らない"]],
-    [8, "subagent reported notes.md word count as 62", true, []],
+  expect(episode!.extractorVersion).toBe("2");
+  expect(decisions.map((m) => [m.eventId, m.line, m.displayed, m.objections, m.cause])).toEqual([
+    [6, "kept the note to three bullets", true, [], null],
+    [7, "kept the note to three bullets", true, ["2回目は要らない"], "preference"],
+    [8, "subagent reported notes.md word count as 62", true, [], null],
   ]);
   expect(episode!.prMerged).toBe(42);
   expect(episode!.completed).toEqual({

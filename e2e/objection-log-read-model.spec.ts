@@ -1,4 +1,5 @@
-import { api, HOUR, mcpClient, registerWork } from "../tests/harness.js";
+import { FakeAttributionClient } from "../tests/fakes.js";
+import { api, HOUR, loggedEntry, mcpClient, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 // issue #371: 異議バッジは triage 画面のローカル state だけで描かれており、
@@ -63,4 +64,37 @@ test("異議を打ったセッションが commit で閉じた後にリロード
   await page.getByRole("button", { name: "Queue check" }).click();
   await page.getByRole("button", { name: "Wrap up" }).click();
   await expect(page.getByText(/objections? bundle into repair tasks at commit/)).not.toBeVisible();
+});
+
+test("異議注釈の横に最新の cause が読み取り専用で並び uncertain は未確定と分かる(issue #576)", async ({
+  boot,
+  page,
+}) => {
+  const attributionClient = new FakeAttributionClient();
+  const t = await boot({ attributionClient });
+  const work = await registerWork(t, "帰責表示 e2e");
+  await t.clock.advance(HOUR);
+  const decided = await loggedEntry(t, work.id, "明示された条件を落とした判断");
+  const uncertain = await loggedEntry(t, work.id, "証拠だけでは決められない判断");
+  attributionClient.scriptJudgment(decided.id, { cause: "capability", evidence: "criterion was explicit" });
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: decided.id,
+    comment: "明示条件を満たしてください",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/objection", {
+    entry_id: uncertain.id,
+    comment: "RCA で原因を確かめてください",
+  });
+  await api(t.baseUrl, "POST", "/api/triage/close");
+
+  await page.goto(t.baseUrl);
+
+  const decidedRow = page.locator(".tp-log-entry").filter({ hasText: "明示された条件を落とした判断" });
+  const uncertainRow = page.locator(".tp-log-entry").filter({ hasText: "証拠だけでは決められない判断" });
+  const decidedCause = decidedRow.getByText("cause: capability", { exact: true });
+  const uncertainCause = uncertainRow.getByText("cause: not yet determined (uncertain)", { exact: true });
+  await expect(decidedCause).toBeVisible();
+  await expect(uncertainCause).toBeVisible();
+  await expect(decidedCause).toHaveJSProperty("tagName", "SPAN");
+  await expect(uncertainCause).toHaveJSProperty("tagName", "SPAN");
 });

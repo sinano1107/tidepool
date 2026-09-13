@@ -19,6 +19,9 @@ export interface LogEntryProps {
      *  as a dimmed annotation with a "bundled" label (ADR 0085). Renders
      *  after `objection` when both are present. */
     bundledObjection?: string;
+    /** Latest attribution beside the objection annotation. `uncertain` is
+     *  rendered as explicitly not yet determined. Read-only. */
+    cause?: 'capability' | 'task_ambiguity' | 'missing_information' | 'environment' | 'preference' | 'requirement_change' | 'uncertain';
     /** Teal unread bar (entries since last skim). */
     unread?: boolean;
   };
