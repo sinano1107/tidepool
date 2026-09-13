@@ -6,6 +6,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
+import { type AttributionClient, attributeObjections } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -113,6 +114,7 @@ import {
   raiseObjection,
   recordDisplayedEntries,
   startTriage,
+  type TriageCommitResult,
   TriageError,
   triagePreview,
 } from "./triage.js";
@@ -597,6 +599,10 @@ export interface ApiRouterDeps {
    *  POST /api/translate reports the LLM as unreachable, same 503 posture as
    *  no draftClient configured. */
   translationClient?: TranslationClient;
+  /** The attribution's Board call seam (ADR 0115 / issue #574), awaited by the
+   *  commit half of POST /triage/close. Absent → every objection bundles as
+   *  `uncertain`, so the RCAs stand as they did before attribution existed. */
+  attributionClient?: AttributionClient;
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), threaded straight to human decompose's
    *  own call into decomposeTask (issue #129) — same resource-side invariant
@@ -659,6 +665,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     hostSkills,
     githubTokenFile,
     translationClient,
+    attributionClient,
     fableAgents,
     agentsSpeakingProviders,
     agentsUsingHarnesses,
@@ -1768,16 +1775,25 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // The server's half of Commit (ADR 0065 decision 2): apply scratchpad
   // dispositions and close an open session. The read cursor is the other
   // half — the client advances it separately via /log/cursor, never here.
-  router.post("/triage/close", (req, res) => {
+  router.post("/triage/close", async (req, res) => {
     const parsed = closeSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: z.treeifyError(parsed.error) });
       return;
     }
     try {
-      const result = parsed.data.close_only
-        ? closeTriageSessionOnly(db, clock.now())
-        : commitTriage(db, clock.now(), parsed.data.scratchpad);
+      let result: TriageCommitResult;
+      if (parsed.data.close_only) {
+        result = closeTriageSessionOnly(db, clock.now());
+      } else {
+        // ADR 0115 決定2: the commit asks the Board call for every objected
+        // entry's attribution first (in parallel, outside any transaction —
+        // the same await the draft endpoint does), then enters the one
+        // transaction that bundles and registers with the judgments in hand
+        const open = activeTriageSession(db);
+        const judgments = open && (await attributeObjections(db, attributionClient, open.id));
+        result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
+      }
       // Only closing an open session re-opens pickup. A sessionless triage
       // never stopped it, so its terminal commit is not a "run now" trigger.
       if (result.outcome === "closed_now") onQueueHeadChanged();

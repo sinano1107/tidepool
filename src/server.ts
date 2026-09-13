@@ -5,6 +5,7 @@ import express from "express";
 import type { AgentAdmin } from "./agent-create.js";
 import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
+import type { AttributionClient } from "./attribution.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
 import {
@@ -311,6 +312,9 @@ export interface ServerOptions {
   /** The allocation review's Board call seam (ADR 0111 決定4 / issue #547).
    *  Absent → integration reviews complete without an allocation annotation. */
   allocationClient?: AllocationClient;
+  /** The attribution's Board call seam (ADR 0115 / issue #574). Absent → a
+   *  commit bundles every objection as `uncertain` (RCA stands as before). */
+  attributionClient?: AttributionClient;
   /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)と、boot
    *  時に一斉検査する登録済み workspace の列挙。Absent → 守る状態パスを持たない
    *  盤面(実プロセスの env を持たないテスト盤面の既定形)。main.ts は常に渡す。
@@ -650,6 +654,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       hostSkills: options.hostSkills,
       githubTokenFile: options.githubTokenFile,
       translationClient: options.translationClient,
+      attributionClient: options.attributionClient,
       fableAgents: options.fableAgents,
       agentsSpeakingProviders: options.agentsSpeakingProviders,
       agentsUsingHarnesses: options.agentsUsingHarnesses,

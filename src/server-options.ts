@@ -12,6 +12,7 @@ import type { HumanCredential } from "./auth.js";
 import type { BoardStatePath } from "./board-state.js";
 import { containerRuntimeFor } from "./cgroup-container.js";
 import { ClaudeAllocationClient } from "./claude-allocation-client.js";
+import { ClaudeAttributionClient } from "./claude-attribution-client.js";
 import { createClaudeCliAuthCheck, createMoonshotCliAuthCheck } from "./claude-cli-auth.js";
 import { ClaudeDraftClient } from "./claude-draft-client.js";
 import {
@@ -739,6 +740,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // ADR 0111 決定4: 配分評価の Board call。registry にも CONTEXT.md にも依らず
     // `claude` CLI だけで組めるので、翻訳と同じく常に配線する
     allocationClient: new ClaudeAllocationClient(),
+    // ADR 0115 決定2: 帰責の Board call。同じ理由で常に配線する
+    attributionClient: new ClaudeAttributionClient(),
     // issue #14: 3点セットが揃わなければ push は off。公開鍵も同じ1つから導く
     // ので、「送れないのに購読だけできる」状態が構造的に作れない。
     push: board.vapid && new WebPushClient(board.vapid),

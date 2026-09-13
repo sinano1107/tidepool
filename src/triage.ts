@@ -1,6 +1,9 @@
+import type { AttributionJudgment } from "./attribution.js";
+import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventRow, getEvent, HUMAN_FACING_KINDS } from "./events.js";
 import {
+  BOARD_WORKER_ID,
   type BoardTask,
   getTask,
   HUMAN_WORKER_ID,
@@ -116,13 +119,24 @@ export function raiseObjection(
   });
 }
 
-type LogEntry = Omit<EventRow, "payload"> & {
+export type LogEntry = Omit<EventRow, "payload"> & {
   payload: Extract<EventRow["payload"], { kind: "decision_logged" | "task_completed" }>;
 };
 
-interface ObjectionPair {
+/** One objected log entry with every direction comment raised against it this
+ *  session (objection event order) and the ids of those objection events. */
+export interface ObjectionPair {
   entry: LogEntry;
   comments: string[];
+  objection_event_ids: number[];
+}
+
+/** The text of a log entry as the human read it — a decision's line, or the
+ *  completion report — shared by the repair / RCA purposes and the Board call. */
+export function objectedEntryText(entry: LogEntry): string {
+  return entry.payload.kind === "decision_logged"
+    ? entry.payload.line
+    : `completion report: ${entry.payload.result ?? "(no outcome recorded)"}`;
 }
 
 /** Render the entry/comment pairs shared by repair and RCA tasks. Entries are
@@ -133,26 +147,44 @@ function renderObjectionPairs(purposeIntro: string, pairs: ObjectionPair[]): str
     pairs
       .slice()
       .sort((a: ObjectionPair, b: ObjectionPair) => a.entry.id - b.entry.id)
-      .map((pair) => {
-        const entryText =
-          pair.entry.payload.kind === "decision_logged"
-            ? pair.entry.payload.line
-            : `completion report: ${pair.entry.payload.result ?? "(no outcome recorded)"}`;
-        return `> ${entryText}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}`;
-      })
+      .map(
+        (pair) =>
+          `> ${objectedEntryText(pair.entry)}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}`,
+      )
       .join("\n\n")
   );
 }
 
-function addObjectionComment(
-  pairs: Map<number, ObjectionPair>,
-  entry: LogEntry,
-  comment: string,
-): void {
-  const pair = pairs.get(entry.id) ?? { entry, comments: [] };
-  pair.comments.push(comment);
-  pairs.set(entry.id, pair);
+/** Every entry objected to in one session, grouped per entry in objection
+ *  order — the one collection both the Board call (before the transaction)
+ *  and the bundling (inside it) read. */
+export function listObjectedEntries(db: Db, sessionId: number): ObjectionPair[] {
+  const rows = db
+    .prepare(
+      `SELECT id, payload FROM events
+       WHERE kind = 'objection_raised' AND json_extract(payload, '$.session_id') = ?
+       ORDER BY id`,
+    )
+    .all(sessionId) as Array<{ id: number; payload: string }>;
+  const pairs = new Map<number, ObjectionPair>();
+  for (const row of rows) {
+    const { comment, entry_id } = JSON.parse(row.payload) as { comment: string; entry_id: number };
+    const pair = pairs.get(entry_id) ?? {
+      entry: requireLogEntry(db, entry_id),
+      comments: [],
+      objection_event_ids: [],
+    };
+    pair.comments.push(comment);
+    pair.objection_event_ids.push(row.id);
+    pairs.set(entry_id, pair);
+  }
+  return [...pairs.values()];
 }
+
+/** RCA を要する cause(ADR 0115 決定3): worker か登録者に落ち度がありうる側と、まだ
+ *  判定できていない側。`preference` / `requirement_change` / `environment` では
+ *  self RCA の問い「なぜ自分はそう判断したか」が空である。 */
+const RCA_CAUSES: readonly Cause[] = ["capability", "task_ambiguity", "missing_information", "uncertain"];
 
 /** One RCA review, always a child of `objected` sharing its workspace
  *  (CONTEXT.md: children inherit workspace), with the shared RCA discipline
@@ -186,19 +218,28 @@ function registerRcaReview(
 /** One repair task per objected task: every direction comment raised against a
  *  task's log entries this session lands in a single work task's purpose.
  *
+ *  Before anything is registered, every objected entry gets its attribution
+ *  written as an `objection_attributed` event (ADR 0115 決定1〜2): the Board
+ *  call's judgment when the commit path asked for one, otherwise `uncertain`
+ *  with the reason (`unattributed`) as evidence — close-only / timeout closes
+ *  never ask, and an entry the Board call returned nothing for falls the same
+ *  way. The set of causes then decides what stands beside the repair (決定3):
+ *  only the entries whose cause needs an RCA (`RCA_CAUSES`) feed the two RCA
+ *  reviews below, and a task with none of them gets the repair alone.
+ *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
  *  are generated as children of the objected task, same shape as layer 1's
  *  completion review (workspace inheritance included):
  *
- *  - **self**, one per distinct worker who wrote an objected entry
+ *  - **self**, one per distinct worker who wrote an RCA-needing objected entry
  *    (CONTEXT.md's Review — 当事者レビュー: "why did I make that call" only
  *    the worker who actually wrote the entry can answer). `assignee` is
  *    baked to that worker's id as a historical fact, not a live pointer
  *    (CONTEXT.md's Review: "確定値であり、ポインタへの参照ではない") — a
  *    human-written entry never spawns one (the final auditor cannot audit
  *    itself).
- *  - **auditor**, always exactly one per objected task regardless of who
- *    wrote the objected entries — its distance from the original judgment is
+ *  - **auditor**, exactly one per objected task with an RCA-needing entry,
+ *    regardless of who wrote it — its distance from the original judgment is
  *    the value (CONTEXT.md's Review: 独立レビュー), so it fires even when
  *    every entry was human-written. `assignee` is left unset, a live
  *    reference to the board's Auditor pointer resolved fresh at pickup —
@@ -209,37 +250,41 @@ function registerRcaReview(
  *    attribution all being type-aware — a `review` task's unset `assignee`
  *    falls back to the Auditor pointer, never `defaultAgentName` (issue #42).
  */
-function bundleObjections(db: Db, sessionId: number, now: Date): void {
-  const rows = db
-    .prepare(
-      `SELECT task_id, payload FROM events
-       WHERE kind = 'objection_raised' AND json_extract(payload, '$.session_id') = ?
-       ORDER BY id`,
-    )
-    .all(sessionId) as Array<{ task_id: string; payload: string }>;
-  const byTask = new Map<string, Map<number, ObjectionPair>>();
-  const byTaskWorker = new Map<string, Map<string, Map<number, ObjectionPair>>>();
-  for (const row of rows) {
-    const { comment, entry_id } = JSON.parse(row.payload) as {
-      comment: string;
-      entry_id: number;
-    };
-    const entry = requireLogEntry(db, entry_id);
-    const pairs = byTask.get(row.task_id) ?? new Map<number, ObjectionPair>();
-    addObjectionComment(pairs, entry, comment);
-    byTask.set(row.task_id, pairs);
-    if (entry.worker_id === HUMAN_WORKER_ID) continue;
-    const byWorker =
-      byTaskWorker.get(row.task_id) ?? new Map<string, Map<number, ObjectionPair>>();
-    const workerPairs = byWorker.get(entry.worker_id) ?? new Map<number, ObjectionPair>();
-    addObjectionComment(workerPairs, entry, comment);
-    byWorker.set(entry.worker_id, workerPairs);
-    byTaskWorker.set(row.task_id, byWorker);
+function bundleObjections(
+  db: Db,
+  sessionId: number,
+  now: Date,
+  judgments: Map<number, AttributionJudgment>,
+  unattributed: string,
+): void {
+  const byTask = new Map<string, ObjectionPair[]>();
+  for (const pair of listObjectedEntries(db, sessionId)) {
+    byTask.set(pair.entry.task_id, [...(byTask.get(pair.entry.task_id) ?? []), pair]);
   }
-  for (const [taskId, pairMap] of byTask) {
+  for (const [taskId, pairs] of byTask) {
     const objected = getTask(db, taskId);
     if (!objected) continue;
-    const pairs = [...pairMap.values()];
+    const rcaPairs: ObjectionPair[] = [];
+    for (const pair of pairs) {
+      const judgment = judgments.get(pair.entry.id) ?? {
+        cause: "uncertain",
+        evidence: `not attributed: ${unattributed}`,
+      };
+      appendEvent(db, {
+        taskId,
+        workerId: BOARD_WORKER_ID,
+        origin: "board",
+        payload: {
+          kind: "objection_attributed",
+          entry_id: pair.entry.id,
+          objection_event_ids: pair.objection_event_ids,
+          ...judgment,
+          round: "initial",
+        },
+        at: now,
+      });
+      if (RCA_CAUSES.includes(judgment.cause)) rcaPairs.push(pair);
+    }
     registerTask(
       db,
       {
@@ -255,7 +300,13 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
       },
       now,
     );
-    for (const [workerId, workerPairMap] of byTaskWorker.get(taskId) ?? []) {
+    if (rcaPairs.length === 0) continue;
+    const byWorker = new Map<string, ObjectionPair[]>();
+    for (const pair of rcaPairs) {
+      if (pair.entry.worker_id === HUMAN_WORKER_ID) continue;
+      byWorker.set(pair.entry.worker_id, [...(byWorker.get(pair.entry.worker_id) ?? []), pair]);
+    }
+    for (const [workerId, workerPairs] of byWorker) {
       registerRcaReview(
         db,
         objected,
@@ -263,7 +314,7 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
         {
           title: `rca (self): ${objected.title}`,
           purposeIntro: `objections raised against decisions ${workerId} made on "${objected.title}"`,
-          pairs: [...workerPairMap.values()],
+          pairs: workerPairs,
           assignee: workerId,
         },
         now,
@@ -276,7 +327,7 @@ function bundleObjections(db: Db, sessionId: number, now: Date): void {
       {
         title: `rca (auditor): ${objected.title}`,
         purposeIntro: `objections raised against decisions of "${objected.title}"`,
-        pairs,
+        pairs: rcaPairs,
       },
       now,
     );
@@ -434,14 +485,19 @@ export function triagePreview(
 }
 
 /** Apply the steering held by one session and record who closed it.
- *  Callers own the transaction so Commit can include scratchpad dispositions. */
+ *  Callers own the transaction so Commit can include scratchpad dispositions.
+ *  `judgments` is what the Board call answered per objected entry (gathered
+ *  before this transaction); `unattributed` is the evidence an entry without
+ *  one is bundled `uncertain` with. */
 function closeTriageSession(
   db: Db,
   open: TriageSession,
   now: Date,
   closedBy: "commit" | "timeout",
+  judgments: Map<number, AttributionJudgment>,
+  unattributed: string,
 ): void {
-  bundleObjections(db, open.id, now);
+  bundleObjections(db, open.id, now, judgments, unattributed);
   // apply in reverse staging order so the first-staged task ends up on top
   for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
     const task = getTask(db, taskId);
@@ -454,7 +510,10 @@ function closeTriageSession(
   );
 }
 
-/** Close a live session without performing the rest of the Triage terminal. */
+/** Close a live session without performing the rest of the Triage terminal —
+ *  the close-only door and the timeout watchdog. Neither asks the Board call
+ *  (spec #563): their objections are bundled `uncertain`, evidence naming the
+ *  path, and the RCAs stand as before. */
 export function closeTriageSessionOnly(
   db: Db,
   now: Date,
@@ -462,15 +521,29 @@ export function closeTriageSessionOnly(
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) return { outcome: "no_open_session", closed_at: null };
-  db.transaction(() => closeTriageSession(db, open, now, closedBy))();
+  const path = closedBy === "timeout" ? "the timeout watchdog" : "close-only";
+  db.transaction(() =>
+    closeTriageSession(
+      db,
+      open,
+      now,
+      closedBy,
+      new Map(),
+      `the session was closed by ${path} without a Board call`,
+    ),
+  )();
   return { outcome: "closed_now", closed_at: now.toISOString() };
 }
 
-/** End the Triage: apply scratchpad dispositions and close a live session. */
+/** End the Triage: apply scratchpad dispositions and close a live session.
+ *  `judgments` is what the Board call answered per objected entry (gathered by
+ *  the caller before this transaction, `attributeObjections`); absent when no
+ *  session was open to ask about. */
 export function commitTriage(
   db: Db,
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
+  judgments: Map<number, AttributionJudgment> = new Map(),
 ): TriageCommitResult {
   const open = activeTriageSession(db);
   if (!open) {
@@ -494,7 +567,14 @@ export function commitTriage(
   }
   db.transaction(() => {
     applyScratchpad(db, scratchpad, now);
-    closeTriageSession(db, open, now, "commit");
+    closeTriageSession(
+      db,
+      open,
+      now,
+      "commit",
+      judgments,
+      "the Board call returned no judgment for this entry",
+    );
   })();
   return { outcome: "closed_now", closed_at: now.toISOString() };
 }

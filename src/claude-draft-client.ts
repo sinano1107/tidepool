@@ -212,8 +212,8 @@ export class ClaudeDraftClient implements DraftClient {
   }
 }
 
-/** The one-shot `claude -p` Board call every drafting call and the allocation
- *  review (issue #547) share — the prompt, the pinned model / effort and the
+/** The one-shot `claude -p` Board call every drafting call, the allocation
+ *  review (issue #547) and the attribution (issue #574) share — the prompt, the pinned model / effort and the
  *  label for errors differ; the reply is the JSON object `extractJson` finds. */
 export async function runOneShotJsonPrompt(
   exec: ExecFn,
