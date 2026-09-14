@@ -27,8 +27,8 @@ export interface MemoryEntryFields {
   title: string;
   /** 英語の正文 —— 注入・索引・pull はこれだけを読む。 */
   text: string;
-  /** 人間由来のみ: 原文と言語名(ADR 0015 四度目の精密化)。agent 由来は null。 */
-  original: { text: string; language: string } | null;
+  /** 人間由来のみ: 原文の title と text の揃いと言語名(ADR 0015 四度目・五度目の精密化)。agent 由来は null。 */
+  original: { title: string; text: string; language: string } | null;
   /** Behavior のみ: agent 名 or null = 全員。Knowledge は常に null。 */
   addressee: string | null;
   /** definition と人間が書くエントリは null —— 出所は自身の作成 event(ADR 0083 追記4・追記5)で、
@@ -89,9 +89,9 @@ function versionOf(state: MemoryEntryFields["state"], createdEventId: number): n
 function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
   const source = sourceOf(entry, id);
   db.prepare(
-    `INSERT INTO memory_entries (id, kind, state, scope, path, title, text, original_text, original_language,
+    `INSERT INTO memory_entries (id, kind, state, scope, path, title, text, original_title, original_text, original_language,
        addressee, source_kind, source_ref, author_activity, author, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     entry.kind,
@@ -100,6 +100,7 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
     entry.path,
     entry.title,
     entry.text,
+    entry.original?.title ?? null,
     entry.original?.text ?? null,
     entry.original?.language ?? null,
     entry.addressee,
@@ -114,7 +115,7 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
     bigram(entry.text),
     bigram(entry.title),
     bigram(entry.path),
-    bigram(entry.original?.text ?? ""),
+    `${bigram(entry.original?.title ?? "")} ${bigram(entry.original?.text ?? "")}`,
   );
 }
 
@@ -173,14 +174,14 @@ export function defineMemoryBranch(
 }
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
- *  original は人間の原文で言語は盤面の表示言語。出所欄は無い(ADR 0083 追記5)。 */
+ *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は無い(ADR 0083 追記5)。 */
 const humanEntryFields = {
   workspace: z.string().min(1).nullable(),
   path: z.string(),
   text: z.string(),
-  original: z.string().optional(),
+  original_text: z.string().optional(),
 };
-export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string() });
+export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string(), original_title: z.string().optional() });
 export const humanDefinitionSchema = z.object({ ...humanEntryFields, supersedes: z.number().int().positive().optional() });
 export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS), successor_id: z.number().int().positive().optional() });
 
@@ -191,11 +192,18 @@ export const memoryListFilterSchema = z.object({
   state: z.enum(["candidate", "approved", "invalidated"]).optional(),
 });
 
-export function humanEntryInput<T extends { workspace: string | null; original?: string }>(db: Db, { workspace, original, ...rest }: T) {
+/** 原文は title と text の揃いで持つか持たないか。英語の title を持たない Definition は、英語側と
+ *  同じく原文も title = text(ADR 0015 五度目の精密化)。 */
+export function humanEntryInput<T extends { workspace: string | null; original_title?: string; original_text?: string }>(
+  db: Db,
+  { workspace, original_title, original_text, ...rest }: T,
+) {
+  const originalTitle = "title" in rest ? original_title : original_text;
+  if (!originalTitle?.trim() !== !original_text?.trim()) throw new DomainError("an original needs both its title and its text");
   return {
     ...rest,
     scope: workspace,
-    original: original ? { text: original, language: getDisplayLanguage(db) } : null,
+    original: originalTitle?.trim() && original_text?.trim() ? { title: originalTitle, text: original_text, language: getDisplayLanguage(db) } : null,
     author: { activity: "human" as const, name: HUMAN_WORKER_ID },
   };
 }
@@ -267,6 +275,7 @@ interface EntryRow {
   path: string;
   title: string;
   text: string;
+  original_title: string | null;
   original_text: string | null;
   original_language: string | null;
   addressee: string | null;
@@ -288,7 +297,7 @@ function rowToEntry(row: EntryRow): MemoryEntry {
     path: row.path,
     title: row.title,
     text: row.text,
-    original: row.original_text === null ? null : { text: row.original_text, language: row.original_language! },
+    original: row.original_text === null ? null : { title: row.original_title!, text: row.original_text, language: row.original_language! },
     addressee: row.addressee,
     source:
       row.source_kind === "commit"

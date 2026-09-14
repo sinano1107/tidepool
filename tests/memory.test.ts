@@ -6,6 +6,7 @@ import {
   createBehaviorCandidate,
   defineMemoryBranch,
   ensureMemoryIndex,
+  humanEntryInput,
   invalidateMemoryEntry,
   listMemoryEntries,
   readMemory,
@@ -324,19 +325,35 @@ it("watermark 再生と rebuild は定義を含めて表と同じ集合に戻す
 });
 
 const human = { activity: "human" as const, name: "human" };
-const original = { text: "テストは Node 22 が要る", language: "Japanese" };
+const original = { title: "Node 22 が要る", text: "テストは Node 22 が要る", language: "Japanese" };
+const humanKnowledge = { workspace: "tidepool", path: "build/tests", title: knowledge.title, text: knowledge.text };
 
-it("人間が書く Knowledge は原文を持ち、出所は自身の作成 event(種別 = 事実)—— watermark 再生と rebuild でも同じ", () => {
+it("人間が書く Knowledge は原文の title / text / 言語を持ち、memory_entry_created にも載り、出所は自身の作成 event(種別 = 事実)—— watermark 再生と rebuild でも同じ", () => {
   const { db } = board();
-  const { entry_id } = recordKnowledge(db, { ...knowledge, original, author: human }, "webui", at);
+  const { entry_id } = recordKnowledge(
+    db,
+    humanEntryInput(db, { ...humanKnowledge, original_title: original.title, original_text: original.text }),
+    "webui",
+    at,
+  );
 
   const current = approvedMemoryEntries(db);
   expect(current).toMatchObject([{ id: entry_id, original, source: { kind: "event", ref: entry_id }, author: human }]);
+  expect(getEvent(db, entry_id)).toMatchObject({ payload: { entry: { original } } });
   expect(approvedMemoryEntries(db, entry_id)).toEqual(current);
   // setup のみ: 版の古い店を模して rebuild を走らせる
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
   ensureMemoryIndex(db, at);
   expect(approvedMemoryEntries(db)).toEqual(current);
+});
+
+it("人間が書く Knowledge の原文は title と text の揃い —— 片方だけは domain error、どちらも無ければ original は null", () => {
+  const { db } = board();
+  expect(() => recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_title: original.title }), "webui", at)).toThrow(DomainError);
+  expect(() => recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_text: original.text }), "webui", at)).toThrow(DomainError);
+  expect(() => recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_title: "  ", original_text: original.text }), "webui", at)).toThrow(DomainError);
+  recordKnowledge(db, humanEntryInput(db, humanKnowledge), "webui", at);
+  expect(approvedMemoryEntries(db)).toMatchObject([{ original: null, author: human }]);
 });
 
 it("人間が書く Knowledge に出所を渡すと domain error —— 出所は自身の作成 event", () => {
@@ -345,10 +362,12 @@ it("人間が書く Knowledge に出所を渡すと domain error —— 出所�
   expect(approvedMemoryEntries(db)).toEqual([]);
 });
 
-it("人間が書く定義は原文を持つ", () => {
+it("人間が書く定義の原文は title = text で持つ", () => {
   const { db } = board();
-  defineMemoryBranch(db, { ...definition, original: { text: "ビルドとテストの手順", language: "Japanese" }, author: human }, "webui", at);
-  expect(approvedMemoryEntries(db)).toMatchObject([{ kind: "definition", original: { text: "ビルドとテストの手順", language: "Japanese" } }]);
+  defineMemoryBranch(db, humanEntryInput(db, { workspace: "tidepool", path: "build", text: definition.text, original_text: "ビルドとテストの手順" }), "webui", at);
+  expect(approvedMemoryEntries(db)).toMatchObject([
+    { kind: "definition", original: { title: "ビルドとテストの手順", text: "ビルドとテストの手順", language: "Japanese" } },
+  ]);
 });
 
 it("一覧は candidate と無効化済み(理由コード・後継 id つき)と影になった盤面全体の定義も出し、スコープ・種別・状態で絞れる", () => {

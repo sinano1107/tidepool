@@ -7,6 +7,7 @@ import {
   createBehaviorCandidate,
   defineMemoryBranch,
   ensureMemoryIndex,
+  humanEntryInput,
   invalidateMemoryEntry,
   readMemory,
   recordKnowledge,
@@ -59,6 +60,13 @@ it("長音符 ー を含むカタカナ語も、それ単独の query で当た�
   const { db, reader, record } = board();
   record({ title: "boundary", text: "サーバ境界で応答形を言う" });
   expect(searchMemory(db, reader, { query: "サーバ" }, at).results.map((r) => r.title)).toEqual(["boundary"]);
+});
+
+it("人間が書いた原文の title にだけある語でも当たる", () => {
+  const { db, reader } = board();
+  const input = { workspace: "tidepool", path: "notes", title: "Toolchain", text: "Use Node 22.", original_title: "道具立て", original_text: "Node 22 を使う" };
+  recordKnowledge(db, humanEntryInput(db, input), "webui", at);
+  expect(searchMemory(db, reader, { query: "道具" }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
 });
 
 it("INDEX は prefix 直下の子だけ —— sub-prefix の名前と定義(未定義は null)、その path に置かれた leaf の id + title", () => {

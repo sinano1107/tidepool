@@ -530,8 +530,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     }
   };
   const writtenAs =
-    "Written as the human, approved at once. text is the English canonical text; original, when given, is the human's own " +
-    "wording, recorded in the board's display language. workspace null = the whole board.";
+    "Written as the human, approved at once. The original_* fields, when given, are the human's own wording, recorded in the " +
+    "board's display language. workspace null = the whole board.";
   server.registerTool(
     "list_memory_entries",
     {
@@ -547,7 +547,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "record_knowledge",
     {
-      description: `Record a Knowledge entry: a fact filed under path (a "/"-separated hierarchy such as build/tests). ${writtenAs}`,
+      description: `Record a Knowledge entry: a fact filed under path (a "/"-separated hierarchy such as build/tests). title and text are the ` +
+        `English canonical wording; original_title and original_text go together (both or neither). ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
     async (input) => memoryVerb(() => recordKnowledge(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
@@ -557,7 +558,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Define a memory branch: one line at the branch's path declaring what is filed under it. To revise a branch's " +
-        `definition, pass the current one's id as supersedes. ${writtenAs}`,
+        `definition, pass the current one's id as supersedes. text is the English canonical line; original_text is optional. ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
     async (input) => memoryVerb(() => defineMemoryBranch(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
