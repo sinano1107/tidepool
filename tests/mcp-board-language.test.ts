@@ -21,7 +21,7 @@ it("盤面に書く6 verb の description だけが英語ルールを運び、�
     const { tools } = await client.listTools();
     const byName = new Map(tools.map((tool) => [tool.name, tool.description ?? ""]));
 
-    for (const verb of ["log_decision", "complete_task", "decompose", "escalate", "record_knowledge", "define_memory_branch"]) {
+    for (const verb of ["log_decision", "complete_task", "decompose", "escalate", "record_knowledge", "define_memory_branch", "propose_from_objection"]) {
       expect(byName.get(verb)).toContain(BOARD_WRITE_LANGUAGE_RULE);
     }
     for (const verb of ["get_current_task", "list_agents"]) {
