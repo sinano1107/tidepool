@@ -138,8 +138,8 @@ it("学習に向かない cause・人間登録の task_ambiguity / missing_infor
     [{ entry_id: uncertain }, "the entry's cause is uncertain: nothing to learn from it"],
     [{ entry_id: requirementChange }, "the entry's cause is requirement_change: nothing to learn from it"],
     [{ entry_id: environment }, "the entry's cause is environment: nothing to learn from it"],
-    [{ entry_id: taskAmbiguity }, "the task was registered by a human: there is no agent to address a behavior to"],
-    [{ entry_id: missingInformation, as: "behavior" }, "the task was registered by a human: there is no agent to address a behavior to"],
+    [{ entry_id: taskAmbiguity }, "the task was not registered by an agent: there is no agent to address a behavior to"],
+    [{ entry_id: missingInformation, as: "behavior" }, "the task was not registered by an agent: there is no agent to address a behavior to"],
     [{ entry_id: missingInformation }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],
     [{ entry_id: capability, as: "behavior" }, 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it'],
     [{ entry_id: completion }, `entry ${completion} carries no attributed objection`],
@@ -168,11 +168,12 @@ it("人間が書いた異議エントリは auditor RCA から拒否され、par
   expect(await memoryEntries()).toEqual([]);
 });
 
-it("agent 登録の task では task_ambiguity と missing_information の Behavior が登録者宛て、missing_information の Knowledge は宛先なしで即 approved、preference は worker 宛てになり、settings の一覧(HTTP / 管理MCP)が author の活動と出所の cause を運ぶ", async () => {
+it("agent 登録の task では(盤面の登録は除く)task_ambiguity と missing_information の Behavior が登録者宛て、missing_information の Knowledge は宛先なしで即 approved、preference は worker 宛てになり、settings の一覧(HTTP / 管理MCP)が author の活動と出所の cause を運ぶ", async () => {
   const attributionClient = new FakeAttributionClient();
   t = await bootTidepool({ attributionClient, auditorName: "shako" });
-  const [{ task, entries, kids }]: any[] = await objectedTasks(attributionClient, [
+  const [{ task, entries, kids }, board]: any[] = await objectedTasks(attributionClient, [
     { title: "delegated", causes: ["task_ambiguity", "missing_information", "preference"], registrant: "tako" },
+    { title: "by the board", causes: ["task_ambiguity"], registrant: "tidepool" },
   ]);
   const [taskAmbiguity, missingInformation, preference] = entries.map((e: any) => e.id);
   const auditor = kids.find((x: any) => x.title === "rca (auditor): delegated");
@@ -189,6 +190,13 @@ it("agent 登録の task では task_ambiguity と missing_information の Behav
     expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
     ids.push(body(result).entry_id);
   }
+
+  // 盤面(tidepool)の登録は agent の登録ではない
+  const boardAuditor = board.kids.find((x: any) => x.title === "rca (auditor): by the board");
+  await runNow(boardAuditor.id);
+  expect((await propose(boardAuditor.id, { entry_id: board.entries[0].id })).content[0].text).toBe(
+    "the task was not registered by an agent: there is no agent to address a behavior to",
+  );
 
   const source = async (entryId: number) => ({ kind: "event", ref: await attributionId(task.id, entryId) });
   const author = { activity: "rca", name: "shako" };

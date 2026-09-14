@@ -180,14 +180,15 @@ function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINI
 }
 
 /** entry への最新の帰責(同じ entry への追記は最新が有効 —— spec #563)。無ければ undefined。 */
-export function latestAttribution(db: Db, entryId: number): ({ id: number } & Extract<EventPayload, { kind: "objection_attributed" }>) | undefined {
-  const row = db
-    .prepare(
-      `SELECT id, payload FROM events
-        WHERE kind = 'objection_attributed' AND json_extract(payload, '$.entry_id') = ? ORDER BY id DESC LIMIT 1`,
-    )
-    .get(entryId) as { id: number; payload: string } | undefined;
-  return row && { id: row.id, ...JSON.parse(row.payload) };
+export function latestAttribution(
+  db: Db,
+  entry: { id: number; task_id: string },
+): ({ id: number } & Extract<EventPayload, { kind: "objection_attributed" }>) | undefined {
+  let latest: ReturnType<typeof latestAttribution>;
+  for (const e of listEvents(db, entry.task_id)) {
+    if (e.payload.kind === "objection_attributed" && e.payload.entry_id === entry.id) latest = { id: e.id, ...e.payload };
+  }
+  return latest;
 }
 
 /** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
@@ -201,11 +202,16 @@ export function learningTarget(
   registrant: string,
   as?: "behavior" | "knowledge",
 ): { kind: "behavior"; addressee: string } | { kind: "knowledge" } {
+  const learns = cause === "capability" || cause === "preference" || cause === "task_ambiguity" || cause === "missing_information";
+  if (!learns) throw new DomainError(`the entry's cause is ${cause}: nothing to learn from it`);
   if ((cause === "missing_information") !== (as !== undefined)) {
     throw new DomainError('as ("behavior" or "knowledge") is required for a missing_information entry and only for it');
   }
   const toRegistrant = () => {
-    if (registrant === HUMAN_WORKER_ID) throw new DomainError("the task was registered by a human: there is no agent to address a behavior to");
+    // 盤面(BOARD_WORKER_ID)も agent ではない —— 宛先にしても注入はどこにも一致しない
+    if (registrant === HUMAN_WORKER_ID || registrant === BOARD_WORKER_ID) {
+      throw new DomainError("the task was not registered by an agent: there is no agent to address a behavior to");
+    }
     return { kind: "behavior" as const, addressee: registrant };
   };
   switch (cause) {

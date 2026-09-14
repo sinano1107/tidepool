@@ -617,9 +617,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "propose_from_objection",
     {
       description:
-        "Review only: turn your finding about an objected entry into memory — objected entries of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause; " +
-        "a behavior is a candidate a human approves later. as (behavior or knowledge) is required only when the cause " +
-        "is missing_information. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
+        "Review only: turn your finding about an objected entry into memory — objected entries of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause, " +
+        "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
+        "A behavior is a candidate a human approves later. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         entry_id: z.number().int(),
@@ -639,14 +639,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         if (entry?.task_id !== task.parent_id || (entry.kind !== "decision_logged" && entry.kind !== "task_completed")) {
           throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
         }
-        const attribution = latestAttribution(deps.db, entry_id);
+        const attribution = latestAttribution(deps.db, { id: entry_id, task_id: task.parent_id });
         if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
         if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
         const registrant = listEvents(deps.db, entry.task_id).find((e) => e.kind === "task_registered")!.worker_id;
         const target = learningTarget(attribution.cause, entry.worker_id, registrant, as);
         const input = {
           ...fields,
-          scope: memoryScope(deps, getTask(deps.db, entry.task_id)!),
+          scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),
           source: { event_id: attribution.id },
           author: { activity: "rca" as const, name: attributedWorkerId(deps, task) },
         };
