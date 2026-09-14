@@ -108,12 +108,13 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 盤面の記録(イベント履歴と worker transcript)から派生した索引(ADR 0083)。新しい知識源ではなく、記録に無いことは記憶にも無い — 「生きた記憶は存在しない」(ADR 0045)は破られない。worker が引くのは過去の記録であって過去のセッションではない。存在理由は、人間が指示文を書き直さずに agent が育つこと(prompt engineering を非技術者に課さない)。
 
 - **種別**: **Knowledge**(事実。承認不要、出所必須)と **Behavior**(振る舞い。承認必須)。**Precedent** は過去の判断 + outcome + 機械観測された行動列の投影であり、Behavior を起草する材料。その単位は **Episode** = worker session 1回で、中身は tool 呼び出し1回を最小粒度とする行動列と、その中に位置を持つ decision のマーカー、outcome(decision 単位の表示済み・異議、session 単位の完了・PR merge・exit)、当時の agent 定義の版(2026-08-18 の grilling、issue #356)。decision は軸ではなくマーカーであり、「ある判断までに何をしたか」は読み出し時のスライスである。
-- **状態**: `candidate` / `approved`。worker に注入・retrieval されるのは approved のみ。承認は文言に対して行い、統合で書き換えたら再承認。「振る舞いの変更は人間承認」の線は、記憶がどのファイルに住むかではなく、この状態に引かれる。
+- **状態**: `candidate` / `approved`。worker に注入・retrieval されるのは approved のみ。承認は文言に対して行い、統合で書き換えたら再承認。「振る舞いの変更は人間承認」の線は、記憶がどのファイルに住むかではなく、この状態に引かれる。Knowledge は承認不要なので書いた瞬間に approved であり、candidate に留まることは無い(2026-09-14 の spec #586)。出所の種別(commit / event id への参照 = 事実、decision への参照 = 推論)は注入時に見せる。
+- **言語**: 正文(`text`)は英語で、注入・索引・pull はこれだけを読む。人間が書いたエントリは原文を一次資料として併せ持ち、英語文は人間が逆翻訳を見て確認してから保存する(ADR 0015 四度目の精密化)— ペイロードの「原語のみ」の線の、Memory に閉じた例外。
 - **不変条件**: 削除は無く無効化のみ。すべてのエントリはイベント id か commit に遡れる。記憶は決裁権を広げない — 位置づけは Advisor と同じで、変わるのは権限内判断の質だけ。
 - **スコープ**: workspace(+盤面全体の少数)。agent ごとに隔離した記憶は作らない。Precedent は (workspace, agent) で引け、各 episode に当時の agent 定義の版を刻む。**Behavior は宛先**(agent 名 or 全員)を持つ — 全員が読めるが注入は宛先で絞る。隔離ではなく宛先で「agent ごとの記憶」が成立する(ADR 0083 追記3)。Knowledge に宛先は無い。
 - **階層**: エントリは `path` を持ち、INDEX は保存物ではなく派生の純粋目次(prefix の子の title を並べたもの)。spawn 時は最上位 INDEX + 関連 leaf、MCP pull で枝を降りる。合成要約は観測されてから。user memory(外部ストア)は Memory の外 — tool の話。
 - **書き手**: Precedent は盤面が投影し agent は書かない。Knowledge は worker の明示 tool と人間。Behavior の candidate は fix-forward RCA(review layer 2)、approved 提案は meta-review(layer 3)が起草し、承認 question を経て確定する。ただし candidate を書くのは帰責が学習に向く異議だけで、行き先(Behavior / Knowledge / なし)と宛先は cause から導出する(ADR 0115、帰責 参照)。`preference` の candidate は RCA ではなく Board call が steering の文言から起草する。
-- **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)。session 記録には当時のストアの snapshot 識別子と注入した entry・token 量も乗る — 実行設定の評価で知識条件を隠れた変数にしないため。
+- **読み手**: spawn 時に approved を関連度で注入(トークン上限は盤面設定)し、worker は MCP tool で pull もできる。引いた記憶とそれに従った事実は機械記録される(自己申告に依らない)— pull は盤面の event になり、その id が tool 結果に写って Episode の**マーカー**(advisor 相談と同型)になるので、「ある判断の前にどの記憶を読んだか」は読み出し時のスライスである(spec #586)。session 記録には当時のストアの snapshot 識別子(memory 系 event の watermark)と注入した entry・token 量も乗る — 実行設定の評価で知識条件を隠れた変数にしないため。
 
 registry の agent.md は担当範囲・判断の優先順位・制約・従うワークフロー skill へのポインタ(+ Provider entry と既定の要求ティア `tier`、advisor の真偽。model / effort は持たない — 実行設定 参照)にとどまり、repo 固有の事実(Knowledge)や「前に失敗したから」の類(Behavior)や手順(skills)は載せない。ペルソナは書かない。**generalist の本文は構造的に空である** — 担当範囲は「全部」、盤面全体の好みは Behavior(宛先 全員)の領分で agent 1体の本文に書くとスコープを誤り、制約は profile、手順は skills が持つ。空は ADR 0017 の正規形であって、自由に書くためのキャンバスではない(2026-09-12 の grilling、issue #540 / ADR 0117)。専門 agent の本文(担当範囲・専門固有の手順の初期置き場)の存在価値は未観測。
 
@@ -559,7 +560,7 @@ Swell = 外部からの周期的なタスク流入・処理サイクル。Conden
 
 ## ペイロード(Payload)
 
-人間が書いたテキスト — 登録した title / purpose / 完了基準、question への自由記述回答、異議の steering、scratchpad。書かれた言語のまま保存し、翻訳も英訳正規化もしない — 人間の意図の一次資料を機械翻訳に置き換えないため(ADR 0015)。エージェントが引用するときも原語のまま。対の概念は[地の文](#地の文scaffolding)。
+人間が書いたテキスト — 登録した title / purpose / 完了基準、question への自由記述回答、異議の steering、scratchpad。書かれた言語のまま保存し、翻訳も英訳正規化もしない — 人間の意図の一次資料を機械翻訳に置き換えないため(ADR 0015)。エージェントが引用するときも原語のまま。例外は Memory エントリだけで、そこでは原文を残したうえで人間が確認した英語文を正文にする(Memory 参照、ADR 0015 四度目の精密化)。対の概念は[地の文](#地の文scaffolding)。
 
 ## Timezone(盤面タイムゾーン)
 
