@@ -77,7 +77,13 @@ it.each([
   ["The settings tab is narrow.", "narrow.)"],
   ["The chart reads tides.csv.", "tides.csv"],
   ["The chart reads data (see tides.csv.)", "tides.csv"],
-])("語の先頭・末尾の . - _ は隣が空白・文字列の端・括弧や引用符でも索引と query の両方で落とすので、text %j の leaf は query %j で当たる", (text, query) => {
+  ["東京.csv を読む", "csv"],
+  ["データ-v2", "v2"],
+  ["src/設定.ts", "ts"],
+  ["src/設定.ts", "src/設定.ts"],
+  ["src/設定.ts", "設定.ts"],
+  ["設定 画面", "設定_画面"],
+])("語の先頭・末尾の . - _ は隣が空白・文字列の端・括弧や引用符・CJK でも索引と query の両方で落とすので、text %j の leaf は query %j で当たる", (text, query) => {
   const { db, reader, record } = board();
   record({ title: "hit", text });
   record({ title: "other", text: "Unrelated note." });
@@ -301,7 +307,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-4" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-5" },
   });
 });
 
