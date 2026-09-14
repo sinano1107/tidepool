@@ -504,7 +504,7 @@ function pullsBefore(
   episode: Pick<Episode, "markers">,
   events: readonly EventRow[],
   decisionEventId: number,
-): Array<{ verb: string; returned_ids: number[] }> | null {
+) {
   const decision = episode.markers.find((m) => m.kind === "decision" && m.eventId === decisionEventId);
   if (decision?.position == null) return null;
   const pulls = new Set(
