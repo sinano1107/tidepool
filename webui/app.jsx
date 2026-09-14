@@ -27,7 +27,8 @@ async function api(path, body, method = 'POST') {
 }
 
 // ADR 0063 決定1: the caller-side pacer. All 3 toggle sites (question card,
-// log skim, handoff) route through this one `translateTarget` definition, so
+// log skim, handoff) and the memory entries card route through this one
+// `translateTarget` definition, so
 // wrapping it here — not in the kit's `runTranslate` — is what makes "every
 // switch passes through the same gate" true without touching the kit. The
 // kit still fires N calls; this queues them to MAX_CONCURRENT_TRANSLATIONS.
@@ -1890,9 +1891,9 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   const translate = async () => {
     setBusy(true);
     try {
-      const english = await api('/api/translate', { type: 'to_english', text: draft.original });
+      const english = await translateTarget({ type: 'to_english', text: draft.original });
       if (english.status !== 'translated') throw new Error('translation is throttled right now');
-      const back = await api('/api/translate', { type: 'back_translation', text: english.text });
+      const back = await translateTarget({ type: 'back_translation', text: english.text });
       setDraft({ ...draft, text: english.text, back: back.status === 'translated' ? back.text : '' });
     } catch (err) {
       say('danger', 'translate failed', String(err.message || err));

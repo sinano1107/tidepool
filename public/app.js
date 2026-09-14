@@ -2130,9 +2130,9 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   const translate = async () => {
     setBusy(true);
     try {
-      const english = await api("/api/translate", { type: "to_english", text: draft.original });
+      const english = await translateTarget({ type: "to_english", text: draft.original });
       if (english.status !== "translated") throw new Error("translation is throttled right now");
-      const back = await api("/api/translate", { type: "back_translation", text: english.text });
+      const back = await translateTarget({ type: "back_translation", text: english.text });
       setDraft({ ...draft, text: english.text, back: back.status === "translated" ? back.text : "" });
     } catch (err) {
       say("danger", "translate failed", String(err.message || err));
