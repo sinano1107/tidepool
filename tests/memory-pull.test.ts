@@ -70,27 +70,29 @@ it("人間が書いた原文の title にだけある語でも当たる", () => 
 });
 
 it.each([
-  ["narrow", "layout"],
-  ["tides.csv", "chart"],
-])("文末の句読点つきの語も、語の先頭・末尾の . - _ を索引と query の両方で落とすので query %s で当たる", (query, title) => {
+  ["The settings tab is narrow.", "narrow"],
+  ["The settings tab is narrow.", "narrow."],
+  ["The settings tab is narrow.)", "narrow"],
+  ['The tab was called "narrow." by the user', "narrow"],
+  ["The settings tab is narrow.", "narrow.)"],
+  ["The chart reads tides.csv.", "tides.csv"],
+  ["The chart reads data (see tides.csv.)", "tides.csv"],
+])("語の先頭・末尾の . - _ は隣が空白・文字列の端・括弧や引用符でも索引と query の両方で落とすので、text %j の leaf は query %j で当たる", (text, query) => {
   const { db, reader, record } = board();
-  record({ title: "layout", text: "The settings tab is narrow." });
-  record({ title: "chart", text: "The chart reads tides.csv." });
-  expect(searchMemory(db, reader, { query: `${query}.` }, at).results.map((r) => r.title)).toEqual([title]);
-  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual([title]);
+  record({ title: "hit", text });
+  record({ title: "other", text: "Unrelated note." });
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual(["hit"]);
 });
 
 it.each([
-  ["narrow", ["closing", "quoted"]],
-  ["narrow.)", ["closing", "quoted"]],
-  ["tides.csv", ["chart"]],
-  ["csv", []],
-])("括弧や引用符の内側の文末でも語の先頭・末尾の . - _ を落とし、語中は残すので query %s の当たりは %j", (query, titles) => {
+  ["The chart reads tides.csv.", "csv"],
+  ["Use foo__bar here", "foobar"],
+  ["Pin v1..2 now", "v12"],
+  ["Visit the cafe\u0301.x page", "cafe\u0301x"],
+])("語中の . - _ は連なりでも結合文字の隣でも残るので、text %j の leaf は query %j では当たらない", (text, query) => {
   const { db, reader, record } = board();
-  record({ title: "closing", text: "The settings tab is narrow.)" });
-  record({ title: "quoted", text: 'The tab was called "narrow." by the user' });
-  record({ title: "chart", text: "The chart reads data (see tides.csv.)" });
-  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title).sort()).toEqual(titles);
+  record({ title: "leaf", text });
+  expect(searchMemory(db, reader, { query }, at).results).toEqual([]);
 });
 
 it("search は英語の stopword を query から落として AND で当て、stopword と記号だけの query は memory_pulled を残さず DomainError になる", () => {

@@ -360,13 +360,13 @@ export function listMemoryEntries(
     .map((row) => ({ ...rowToEntry(row), invalidation_reason: row.invalidation_reason, successor_id: row.successor_id }));
 }
 
-/** 索引と query の共通の前処理(spec #586 B / #606 / #608)。. - _ の連なりを、隣が unicode61 の token に
- *  ならない文字(空白・文字列の端・`)` `"` などの記号)のとき落とし(tokenchars なので文末の `narrow.)` が
- *  `narrow` に当たらない。語中は残す)、CJK の連なりを
- *  重なりつきの2文字語に割る(LWC 式)。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。
+/** 索引と query の共通の前処理(spec #586 B / #606 / #608)。. - _ の連なりを、連なりの外側の隣が unicode61 の
+ *  token にならない文字(空白・文字列の端・`)` `"` などの記号)のとき連なりごと落とし(tokenchars なので文末の
+ *  `narrow.)` が `narrow` に当たらない。語中は `foo__bar` のような連なりも残す。unicode61 は結合文字 Mn を
+ *  token に含め、Mc / Me では切る)、CJK の連なりを重なりつきの2文字語に割る(LWC 式)。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。
  *  長音符 ー は Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。 */
 function ftsText(value: string): string {
-  return value.replace(/(?<![\p{L}\p{N}\p{Co}])[._-]+|[._-]+(?![\p{L}\p{N}\p{Co}])/gu, "").replace(/[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+/gu, (run) => {
+  return value.replace(/(?<![\p{L}\p{N}\p{Mn}\p{Co}._-])[._-]+|[._-]+(?![\p{L}\p{N}\p{Mn}\p{Co}._-])/gu, "").replace(/[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+/gu, (run) => {
     const chars = [...run];
     const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
     return ` ${grams.join(" ")} `;
