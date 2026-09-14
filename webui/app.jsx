@@ -1875,26 +1875,32 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   };
   React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
 
-  const pick = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
+  const setFilterField = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
 
   // the write form: one edit slot, like every settings card
   const writeId = 'board:memory-write';
   const writing = edit.isOpen(writeId);
-  const blank = { kind: 'knowledge', workspace: '', path: '', title: '', original: '', text: '', back: '', supersedes: '' };
+  const blank = { kind: 'knowledge', workspace: '', path: '', title: '', original: '', text: '', backTranslation: '', supersedes: '' };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const set = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'text' ? { back: '' } : {}) });
+  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'text' ? { backTranslation: '' } : {}) });
   useDirtySignal(edit, writing, draft.original.trim() !== '' || draft.text.trim() !== '');
   const translatable = language !== 'English';
 
-  const translate = async () => {
+  // Translate fills English from the original; Back-translate re-checks English the human edited by hand
+  // (ADR 0015: the English is saved after the human reads its back-translation)
+  const runTranslation = async (toEnglish) => {
     setBusy(true);
     try {
-      const english = await translateTarget({ type: 'to_english', text: draft.original });
-      if (english.status !== 'translated') throw new Error('translation is throttled right now');
-      const back = await translateTarget({ type: 'back_translation', text: english.text });
-      setDraft({ ...draft, text: english.text, back: back.status === 'translated' ? back.text : '' });
+      let english = draft.text;
+      if (toEnglish) {
+        const out = await translateTarget({ type: 'to_english', text: draft.original });
+        if (out.status !== 'translated') throw new Error('translation is throttled right now');
+        english = out.text;
+      }
+      const back = await translateTarget({ type: 'back_translation', text: english });
+      setDraft({ ...draft, text: english, backTranslation: back.status === 'translated' ? back.text : '' });
     } catch (err) {
       say('danger', 'translate failed', String(err.message || err));
     }
@@ -1947,34 +1953,37 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       </div>
       {writing && (
         <React.Fragment>
-          <Select label="Kind" value={draft.kind} onChange={set('kind')}
+          <Select label="Kind" value={draft.kind} onChange={setDraftField('kind')}
             options={['knowledge', 'definition']} />
-          <Select label="Workspace" value={draft.workspace} onChange={set('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
-          <Input label={draft.kind === 'knowledge' ? 'Path' : 'Branch path'} mono value={draft.path} onChange={set('path')} placeholder="build/tests" />
-          {draft.kind === 'knowledge' && <Input label="Title (English)" value={draft.title} onChange={set('title')} />}
+          <Select label="Workspace" value={draft.workspace} onChange={setDraftField('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
+          <Input label={draft.kind === 'knowledge' ? 'Path' : 'Branch path'} mono value={draft.path} onChange={setDraftField('path')} placeholder="build/tests" />
+          {draft.kind === 'knowledge' && <Input label="Title (English)" value={draft.title} onChange={setDraftField('title')} />}
           {draft.kind === 'definition' && (
-            <Input label="Supersedes (entry id, to revise the branch's current definition)" mono value={draft.supersedes} onChange={set('supersedes')} />
+            <Input label="Supersedes (entry id, to revise the branch's current definition)" mono value={draft.supersedes} onChange={setDraftField('supersedes')} />
           )}
           {translatable && (
             <React.Fragment>
-              <Input label={`Original (${language})`} multiline rows={3} value={draft.original} onChange={set('original')} />
-              <Button variant="secondary" size="sm" disabled={busy || !draft.original.trim()} onClick={translate}>Translate</Button>
+              <Input label={`Original (${language})`} multiline rows={3} value={draft.original} onChange={setDraftField('original')} />
+              <Button variant="secondary" size="sm" disabled={busy || !draft.original.trim()} onClick={() => runTranslation(true)}>Translate</Button>
             </React.Fragment>
           )}
-          <Input label="English (saved as the canonical text)" multiline rows={3} value={draft.text} onChange={set('text')} />
-          {draft.back && (
-            <p style={muted} data-testid="memory-back-translation">back in {language}: {draft.back}</p>
+          <Input label="English (saved as the canonical text)" multiline rows={3} value={draft.text} onChange={setDraftField('text')} />
+          {translatable && (
+            <Button variant="secondary" size="sm" disabled={busy || !draft.text.trim()} onClick={() => runTranslation(false)}>Back-translate</Button>
+          )}
+          {draft.backTranslation && (
+            <p style={muted} data-testid="memory-back-translation">back in {language}: {draft.backTranslation}</p>
           )}
           <EditActions ok={draft.text.trim() !== ''} busy={busy} saveLabel={`Save ${draft.kind}`}
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Select label="Workspace" value={filter.workspace} onChange={pick('workspace')} style={{ flex: '1 1 120px' }}
+        <Select label="Workspace" value={filter.workspace} onChange={setFilterField('workspace')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, { value: '(board)', label: 'board-wide' }, ...workspaceNames]} />
-        <Select label="Kind" value={filter.kind} onChange={pick('kind')} style={{ flex: '1 1 120px' }}
+        <Select label="Kind" value={filter.kind} onChange={setFilterField('kind')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, 'knowledge', 'behavior', 'definition']} />
-        <Select label="State" value={filter.state} onChange={pick('state')} style={{ flex: '1 1 120px' }}
+        <Select label="State" value={filter.state} onChange={setFilterField('state')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, 'approved', 'candidate', 'invalidated']} />
       </div>
       {entries === null && <p style={muted}>loading…</p>}

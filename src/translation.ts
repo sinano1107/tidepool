@@ -1,5 +1,6 @@
 import type { Db } from "./db.js";
 import { getEvent } from "./events.js";
+import { listMemoryEntries } from "./memory.js";
 import { getTask, splitHandoffMarkdown } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
@@ -65,6 +66,20 @@ export async function translateLogEntry(
 ): Promise<TranslationOutcome> {
   const source = resolveLogEntrySource(db, eventId);
   return translateSource(db, client, source, language, now);
+}
+
+/** 記憶のエントリ1件の text を表示言語へ(issue #593、settings の一覧で原文の無い agent 由来を読む)。 */
+export async function translateMemoryEntry(
+  db: Db,
+  client: TranslationClient,
+  entryId: number,
+  language: string,
+  now: Date,
+): Promise<TranslationOutcome> {
+  // ponytail: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
+  const entry = listMemoryEntries(db, {}).find((e) => e.id === entryId);
+  if (!entry) throw new TranslationTargetError(`no memory entry ${entryId}`);
+  return translateSource(db, client, entry.text, language, now);
 }
 
 /** Internal short-circuit for a multi-fragment translation (a handoff's

@@ -121,6 +121,7 @@ import {
   TranslationTargetError,
   translateHandoff,
   translateLogEntry,
+  translateMemoryEntry,
   translateQuestion,
   translateSource,
 } from "./translation.js";
@@ -1505,10 +1506,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (target.type === "log_entry") {
         outcome = await translateLogEntry(db, translationClient, target.event_id, language, clock.now());
       } else if (target.type === "memory_entry") {
-        // ponytail: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
-        const entry = listMemoryEntries(db, {}).find((e) => e.id === target.entry_id);
-        if (!entry) throw new TranslationTargetError(`no memory entry ${target.entry_id}`);
-        outcome = await translateSource(db, translationClient, entry.text, language, clock.now());
+        outcome = await translateMemoryEntry(db, translationClient, target.entry_id, language, clock.now());
       } else if (target.type === "to_english") {
         outcome = await translateSource(db, translationClient, target.text, "English", clock.now());
       } else if (target.type === "back_translation") {

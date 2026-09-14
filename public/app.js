@@ -2117,23 +2117,27 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   React.useEffect(() => {
     load();
   }, [filter.workspace, filter.kind, filter.state]);
-  const pick = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
+  const setFilterField = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
   const writing = edit.isOpen(writeId);
-  const blank = { kind: "knowledge", workspace: "", path: "", title: "", original: "", text: "", back: "", supersedes: "" };
+  const blank = { kind: "knowledge", workspace: "", path: "", title: "", original: "", text: "", backTranslation: "", supersedes: "" };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const set = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "text" ? { back: "" } : {} });
+  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "text" ? { backTranslation: "" } : {} });
   useDirtySignal(edit, writing, draft.original.trim() !== "" || draft.text.trim() !== "");
   const translatable = language !== "English";
-  const translate = async () => {
+  const runTranslation = async (toEnglish) => {
     setBusy(true);
     try {
-      const english = await translateTarget({ type: "to_english", text: draft.original });
-      if (english.status !== "translated") throw new Error("translation is throttled right now");
-      const back = await translateTarget({ type: "back_translation", text: english.text });
-      setDraft({ ...draft, text: english.text, back: back.status === "translated" ? back.text : "" });
+      let english = draft.text;
+      if (toEnglish) {
+        const out = await translateTarget({ type: "to_english", text: draft.original });
+        if (out.status !== "translated") throw new Error("translation is throttled right now");
+        english = out.text;
+      }
+      const back = await translateTarget({ type: "back_translation", text: english });
+      setDraft({ ...draft, text: english, backTranslation: back.status === "translated" ? back.text : "" });
     } catch (err) {
       say("danger", "translate failed", String(err.message || err));
     }
@@ -2179,10 +2183,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     {
       label: "Kind",
       value: draft.kind,
-      onChange: set("kind"),
+      onChange: setDraftField("kind"),
       options: ["knowledge", "definition"]
     }
-  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: set("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: set("path"), placeholder: "build/tests" }), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: set("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.original, onChange: set("original") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.original.trim(), onClick: translate }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), draft.back && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", draft.back), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.original, onChange: setDraftField("original") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.original.trim(), onClick: () => runTranslation(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.text.trim(), onClick: () => runTranslation(false) }, "Back-translate"), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", draft.backTranslation), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       ok: draft.text.trim() !== "",
@@ -2196,7 +2200,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     {
       label: "Workspace",
       value: filter.workspace,
-      onChange: pick("workspace"),
+      onChange: setFilterField("workspace"),
       style: { flex: "1 1 120px" },
       options: [{ value: "", label: "all" }, { value: "(board)", label: "board-wide" }, ...workspaceNames]
     }
@@ -2205,7 +2209,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     {
       label: "Kind",
       value: filter.kind,
-      onChange: pick("kind"),
+      onChange: setFilterField("kind"),
       style: { flex: "1 1 120px" },
       options: [{ value: "", label: "all" }, "knowledge", "behavior", "definition"]
     }
@@ -2214,7 +2218,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     {
       label: "State",
       value: filter.state,
-      onChange: pick("state"),
+      onChange: setFilterField("state"),
       style: { flex: "1 1 120px" },
       options: [{ value: "", label: "all" }, "approved", "candidate", "invalidated"]
     }
