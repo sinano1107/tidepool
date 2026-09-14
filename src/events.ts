@@ -451,8 +451,9 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   // an inner join is safe here only because every HUMAN_FACING_KIND is
   // task-scoped (the task-less kinds — execution_settings_changed and the
-  // memory_entry_* pair — are not among them) and tasks are never deleted (append-only) — no log entry can end up
-  // orphaned, so this can never silently drop one
+  // memory_entry_* pair — are not among them) and tasks are never deleted
+  // (append-only) — no log entry can end up orphaned, so this can never
+  // silently drop one
   const rows = db
     .prepare(
       `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace

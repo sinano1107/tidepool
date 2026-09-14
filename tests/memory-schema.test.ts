@@ -3,7 +3,7 @@ import { openDb } from "../src/db.js";
 
 /** Memory のエントリ表(spec #586 A / issue #590)。表は events の投影なので、ここで
  *  言うのは CHECK が値域の外を拒むことだけ —— 読み書きの挙動はドメイン層が言う。 */
-const insert = (overrides: Record<string, unknown> = {}) => {
+const insert = (db: ReturnType<typeof openDb>, overrides: Record<string, unknown> = {}) => {
   const row = {
     id: 1,
     kind: "knowledge",
@@ -20,15 +20,14 @@ const insert = (overrides: Record<string, unknown> = {}) => {
     ...overrides,
   };
   const columns = Object.keys(row);
-  return (db: ReturnType<typeof openDb>) =>
-    db
-      .prepare(`INSERT INTO memory_entries (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
-      .run(...Object.values(row));
+  return db
+    .prepare(`INSERT INTO memory_entries (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
+    .run(...Object.values(row));
 };
 
 it("fresh 盤面に memory のエントリ表があり、値域どおりの行は入る", () => {
   const db = openDb(":memory:");
-  insert()(db);
+  insert(db);
   expect(db.prepare("SELECT kind, state, source_kind FROM memory_entries").all()).toEqual([
     { kind: "knowledge", state: "approved", source_kind: "commit" },
   ]);
@@ -43,6 +42,6 @@ it.each([
   ["無効化の理由コード", { invalidation_reason: "preference" }],
 ])("エントリ表の CHECK は値域の外の%sを拒む", (_, overrides) => {
   const db = openDb(":memory:");
-  expect(() => insert(overrides)(db)).toThrow(/CHECK/);
+  expect(() => insert(db, overrides)).toThrow(/CHECK/);
   db.close();
 });

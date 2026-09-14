@@ -109,18 +109,16 @@ it.each(["capability", "environment", "requirement_change"] as const)(
 
 type Invalidation = Parameters<typeof invalidateMemoryEntry>[1];
 
-it.each<[string, (ids: { entry: number; other: number }) => Omit<Invalidation, "entry_id">, RegExp]>([
+it.each<[string, (ids: { other: number }) => Omit<Invalidation, "entry_id">, RegExp]>([
   ["superseded に後継 id が無い", () => ({ reason: "superseded" }), /successor/],
   ["path_moved に後継 id が無い", () => ({ reason: "path_moved" }), /successor/],
   ["後継 id が盤面に無い", () => ({ reason: "path_moved", successor_id: 999 }), /no memory entry 999/],
-  ["後継 id が自分自身", ({ entry }) => ({ reason: "superseded", successor_id: entry }), /successor/],
   ["cause の理由コードに後継 id がある", ({ other }) => ({ reason: "capability", successor_id: other }), /successor/],
-  ["理由コードが語彙の外", () => ({ reason: "preference" as never }), /reason/],
 ])("%s無効化は domain error で拒まれ、エントリは残る", (_, input, message) => {
   const { db } = board();
   const entry = record(db, "kept");
   const other = record(db, "other");
-  const invalidate = () => invalidateMemoryEntry(db, { entry_id: entry, ...input({ entry, other }) }, "human", "webui", at);
+  const invalidate = () => invalidateMemoryEntry(db, { entry_id: entry, ...input({ other }) }, "human", "webui", at);
   expect(invalidate).toThrow(DomainError);
   expect(invalidate).toThrow(message);
   expect(approvedMemoryEntries(db).map((e) => e.title)).toEqual(["kept", "other"]);

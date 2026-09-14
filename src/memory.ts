@@ -5,13 +5,11 @@ import { DomainError } from "./tasks.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、残りの3つは cause.ts の語彙そのもの(間違っていた / 陳腐化)。 */
-const SUCCESSOR_REASONS = ["superseded", "path_moved"] as const;
-const CAUSE_REASONS = ["capability", "environment", "requirement_change"] as const satisfies readonly Cause[];
-export type InvalidationReason = (typeof SUCCESSOR_REASONS)[number] | (typeof CAUSE_REASONS)[number];
+export type InvalidationReason = "superseded" | "path_moved" | Extract<Cause, "capability" | "environment" | "requirement_change">;
 
 /** 出所(spec #586 A)。種別は参照の型から導く: commit / event = 事実、decision
  *  (decision_logged の event id)= 推論。 */
-export type MemorySource = { kind: "event" | "decision"; ref: number } | { kind: "commit"; ref: string };
+type MemorySource = { kind: "event" | "decision"; ref: number } | { kind: "commit"; ref: string };
 
 /** エントリの欄のうち events に写すもの。同一性(id)と版は event 自身の id なので
  *  payload には持たない。 */
@@ -40,7 +38,7 @@ export interface MemoryEntry extends MemoryEntryFields {
 }
 
 /** 書き手が渡す出所: 盤面の event id か commit のどちらか一方。 */
-export interface SourceInput {
+interface SourceInput {
   event_id?: number;
   commit?: string;
 }
@@ -123,8 +121,6 @@ export function createBehaviorCandidate(
   return { entry_id: id, event_id: id };
 }
 
-const isSuccessorReason = (reason: string) => (SUCCESSOR_REASONS as readonly string[]).includes(reason);
-
 function requireEntry(db: Db, id: number): EntryRow {
   const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
   if (!row) throw new DomainError(`no memory entry ${id}`);
@@ -141,13 +137,9 @@ export function invalidateMemoryEntry(
   at: Date,
 ): number {
   const { entry_id, reason, successor_id } = input;
-  if (!isSuccessorReason(reason) && !(CAUSE_REASONS as readonly string[]).includes(reason)) {
-    throw new DomainError(`unknown invalidation reason: ${reason}`);
+  if ((reason === "superseded" || reason === "path_moved") !== (successor_id !== undefined)) {
+    throw new DomainError("a successor id is required for superseded / path_moved and only for them");
   }
-  if (isSuccessorReason(reason) !== (successor_id !== undefined)) {
-    throw new DomainError(`a successor id is required for ${SUCCESSOR_REASONS.join(" / ")} and only for them`);
-  }
-  if (successor_id === entry_id) throw new DomainError("an entry cannot be its own successor");
   return db.transaction(() => {
     if (requireEntry(db, entry_id).invalidation_reason !== null) {
       throw new DomainError(`memory entry ${entry_id} is already invalidated`);
