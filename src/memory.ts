@@ -476,7 +476,8 @@ export function buildMemoryInjection(
     const watermark = memoryWatermark(db);
     const visible = visibleEntries(db, { scope, agent });
     if (visible.length === 0) return { section: null, watermark, entries: [], tokens: 0 };
-    const index = indexChildren(visible, "").map((child) => (typeof child === "string" ? `- ${child}/` : `- #${child.id} ${child.title}`));
+    // path は空にならないので、最上位の子は sub-prefix の名前だけ
+    const index = (indexChildren(visible, "") as string[]).map((prefix) => `- ${prefix}/`);
     // 語が無ければ関連 leaf は無い(ftsQuery の拒否で spawn を落とさない)
     const query = `${task.title} ${task.purpose} ${task.completion_criteria}`;
     let leaves = query.trim() === "" ? [] : rankedEntries(db, ftsQuery(query, " OR "), scope).filter((row) => dropReason(row, { agent }) === null);
