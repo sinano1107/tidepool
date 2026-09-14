@@ -13,7 +13,7 @@ import {
   recordKnowledge,
   searchMemory,
 } from "../src/memory.js";
-import { logDecision, registerTask } from "../src/tasks.js";
+import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -67,6 +67,29 @@ it("人間が書いた原文の title にだけある語でも当たる", () => 
   const input = { workspace: "tidepool", path: "notes", title: "Toolchain", text: "Use Node 22.", original_title: "道具立て", original_text: "Node 22 を使う" };
   recordKnowledge(db, humanEntryInput(db, input), "webui", at);
   expect(searchMemory(db, reader, { query: "道具" }, at).results.map((r) => r.title)).toEqual(["Toolchain"]);
+});
+
+it.each([
+  ["narrow", "layout"],
+  ["tides.csv", "chart"],
+])("文末の句読点つきの語も、語の先頭・末尾の . - _ を索引と query の両方で落とすので query %s で当たる", (query, title) => {
+  const { db, reader, record } = board();
+  record({ title: "layout", text: "The settings tab is narrow." });
+  record({ title: "chart", text: "The chart reads tides.csv." });
+  expect(searchMemory(db, reader, { query: `${query}.` }, at).results.map((r) => r.title)).toEqual([title]);
+  expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual([title]);
+});
+
+it("search は英語の stopword を query から落として AND で当て、stopword と記号だけの query は memory_pulled を残さず DomainError になる", () => {
+  const { db, reader, record } = board();
+  record({ title: "Settings tab is the admin surface", text: "Admin settings live in one tab." });
+  record({ title: "Deploy to the Pi", text: "Run deploy-pi on the Pi." });
+  const before = searchMemory(db, reader, { query: "settings" }, at).event_id;
+
+  expect(() => searchMemory(db, reader, { query: "The, —" }, at)).toThrow(DomainError);
+  const hit = searchMemory(db, reader, { query: "the settings tab" }, at);
+  expect(hit.results.map((r) => r.title)).toEqual(["Settings tab is the admin surface"]);
+  expect(hit.event_id).toBe(before + 1);
 });
 
 it("INDEX は prefix 直下の子だけ —— sub-prefix の名前と定義(未定義は null)、その path に置かれた leaf の id + title", () => {
@@ -263,7 +286,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-2" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-3" },
   });
 });
 
