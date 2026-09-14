@@ -141,10 +141,11 @@ export function recordKnowledge(db: Db, input: EntryInput, origin: EventOrigin, 
 }
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
- *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけで、改訂は無効化の後。 */
+ *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 同じ枝の改訂は
+ *  `supersedes` に旧定義を渡し、書くのと superseded + 後継の無効化を1つの transaction で行う。 */
 export function defineMemoryBranch(
   db: Db,
-  input: Omit<EntryInput, "title">,
+  input: Omit<EntryInput, "title"> & { supersedes?: number },
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
@@ -157,8 +158,12 @@ export function defineMemoryBranch(
           AND path = ? AND scope IS ?`,
       )
       .get(input.path, input.scope) as { id: number } | undefined;
-    if (defined) throw new DomainError(`branch ${input.path} is already defined in this scope by entry ${defined.id}; invalidate it first`);
-    const id = createEntry(db, { ...input, title: input.text, kind: "definition", state: "approved", original: null, addressee: null }, origin, at);
+    if (defined && defined.id !== input.supersedes) throw new DomainError(`branch ${input.path} is already defined in this scope by entry ${defined.id}; revise it with supersedes`);
+    const { supersedes, ...fields } = input;
+    const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: null, addressee: null }, origin, at);
+    if (supersedes !== undefined) {
+      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at);
+    }
     return { entry_id: id, event_id: id };
   })();
 }

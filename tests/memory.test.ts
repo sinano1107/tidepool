@@ -289,7 +289,15 @@ it("同じ枝・同じスコープに approved の定義があれば domain erro
   expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([boardWide, revised]);
 });
 
-it("定義は既存の無効化で直る —— 枝の改名は path_moved + 後継、置換は superseded + 後継", () => {
+it("同じ枝の定義は supersedes で書き直し、旧定義は superseded + 後継で無効化される —— 1つの枝に approved は1つのまま", () => {
+  const { db } = board();
+  const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: old }, "webui", at).entry_id;
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id: revised, path: "build", text: "Another line." }]);
+  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: old }, "webui", at)).toThrow(/already defined/);
+});
+
+it("定義は別の枝への付け替えにも既存の無効化で直る —— 枝の改名は path_moved + 後継、別の枝への統合は superseded + 後継", () => {
   const { db } = board();
   const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
   const renamed = defineMemoryBranch(db, { ...definition, path: "toolchain" }, "worker", at).entry_id;
