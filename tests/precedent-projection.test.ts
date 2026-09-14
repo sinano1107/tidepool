@@ -304,3 +304,30 @@ it("memory verb の tool 結果に写った memory_pulled の event id は、dec
   ]);
   expect(entriesReadBefore(episode, events, 7)).toEqual([1, 2]);
 });
+
+it("「D の前に読んだ記憶」は、その session(worker_spawned の event id で結ぶ)の memory_injected の entry も含む —— 別 session の注入は含まない(spec #586 C / issue #592)", () => {
+  const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
+  const at = "2026-08-20T06:30:00.000Z";
+  const injected = (id: number, spawned: number, entryIds: number[]): EventRow => ({
+    id, task_id: task, worker_id: "tako", origin: "board", kind: "memory_injected",
+    payload: { kind: "memory_injected", worker_spawned_event_id: spawned, watermark: 3, entries: entryIds.map((e) => ({ id: e, version: e })), tokens: 10, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0" },
+    created_at: at,
+  });
+  const events: EventRow[] = [
+    ...fixtureEvents().filter((e) => e.id === 5),
+    injected(6, 5, [3, 1]),
+    injected(7, 99, [8]),
+    { id: 8, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [2, 3], watermark: 3 }, created_at: at },
+    { id: 9, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
+  ];
+  const toolCall = (n: number, name: string, eventId: number) => [
+    `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
+    `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
+  ];
+  const episode = project({
+    events,
+    transcriptLines: [...toolCall(1, "mcp__tidepool__read_memory", 8), ...toolCall(2, "mcp__tidepool__log_decision", 9)],
+  });
+
+  expect(entriesReadBefore(episode, events, 9)).toEqual([1, 2, 3]);
+});

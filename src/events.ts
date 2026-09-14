@@ -392,14 +392,27 @@ export type EventPayload =
     }
   // spec #586 G: エントリ表と FTS を events から作り直した(盤面スコープ、task_id NULL)。
   // 刻んだ索引の版を持つ。
-  | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string };
+  | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
+  // spec #586 C: 人間が settings タブ / 管理MCP から注入上限を変えた(盤面スコープ、task_id NULL)。
+  | { kind: "memory_settings_changed"; injection_token_cap: number }
+  // spec #586 C: spawn 時の注入(task 帰属、worker_spawned の直後)。注入した entry の id と版、
+  // 組んだ時点の watermark、計数したトークン数と計数器。注入ゼロでも entries 空で残す。
+  | {
+      kind: "memory_injected";
+      worker_spawned_event_id: number;
+      watermark: number;
+      entries: Array<{ id: number; version: number }>;
+      tokens: number;
+      tokenizer: string;
+      tokenizer_version: string;
+    };
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
-  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*` / `memory_index_rebuilt`)。 */
+  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*` / `memory_index_rebuilt` / `memory_settings_changed`)。 */
   task_id: string | null;
   worker_id: string;
   origin: EventOrigin;
@@ -465,7 +478,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   // an inner join is safe here only because every HUMAN_FACING_KIND is
   // task-scoped (the task-less kinds — execution_settings_changed, the
-  // memory_entry_* pair and memory_index_rebuilt — are not among them) and tasks are never deleted
+  // memory_entry_* pair, memory_index_rebuilt and memory_settings_changed — are not among them) and tasks are never deleted
   // (append-only) — no log entry can end up orphaned, so this can never
   // silently drop one
   const rows = db

@@ -18,6 +18,7 @@ import {
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
+import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { listEpisodes } from "../src/precedent.js";
 import { refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
@@ -608,6 +609,36 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(systemPrompt).not.toContain("## Roster");
+  });
+
+  it.each(["work", "review"] as const)("見える approved の記憶があれば、%s task でも注入節を system prompt の連結の末尾に置き、worker_spawned の直後に memory_injected を書く(spec #586 C / issue #592)", async (type) => {
+    const { start, calls, db } = await makeWorker();
+    recordKnowledge(
+      db,
+      { scope: "tidepool", path: "faucet", title: "Faucet valve", text: "The faucet valve is in the attic.", source: { commit: "0a46a46" }, author: { activity: "human", name: "human" } },
+      "webui",
+      new FakeClock().now(),
+    );
+    const task = start("task-memory", null, "deckhand", type);
+
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const { section } = buildMemoryInjection(db, task, "tidepool", "deckhand");
+    expect(systemPrompt.endsWith(`\n\n${section}`)).toBe(true);
+    const events = listEvents(db, task.id);
+    const spawned = events.findIndex((e) => e.kind === "worker_spawned");
+    expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
+  });
+
+  it("見える approved の記憶が無ければ注入節を置かず、memory_injected は entries 空で残る(issue #592)", async () => {
+    const { start, calls, db } = await makeWorker();
+    const task = start("task-no-memory");
+
+    const args = calls[0]!.args;
+    expect(args[args.indexOf("--append-system-prompt") + 1]).not.toContain("## Memory");
+    const events = listEvents(db, task.id);
+    const spawned = events.findIndex((e) => e.kind === "worker_spawned");
+    expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id, entries: [] });
   });
 
   it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {

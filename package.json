@@ -33,6 +33,7 @@
     "@xterm/headless": "^6.0.0",
     "better-sqlite3": "^12.11.1",
     "express": "^5.2.1",
+    "gpt-tokenizer": "^4.0.0",
     "node-pty": "^1.1.0",
     "web-push": "^3.6.7",
     "yaml": "^2.9.0",

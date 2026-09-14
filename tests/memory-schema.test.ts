@@ -71,3 +71,11 @@ it("episode_markers.kind の CHECK は memory マーカーを受ける(issue #59
   expect(() => insert.run(1, "injection")).toThrow(/CHECK/);
   db.close();
 });
+
+it("fresh 盤面に注入上限の1行表があり、正でない上限は CHECK が拒む(issue #592)", () => {
+  const db = openDb(":memory:");
+  db.prepare("INSERT INTO memory_defaults (id, injection_token_cap) VALUES (1, 500)").run();
+  expect(db.prepare("SELECT injection_token_cap FROM memory_defaults").all()).toEqual([{ injection_token_cap: 500 }]);
+  expect(() => db.prepare("UPDATE memory_defaults SET injection_token_cap = 0").run()).toThrow(/CHECK/);
+  db.close();
+});

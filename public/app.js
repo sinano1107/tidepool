@@ -2055,6 +2055,40 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
     }
   )));
 }
+function MemorySettingsCard({ settings, say, onSaved, edit }) {
+  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+  const id = "board:memory";
+  const open = edit.isOpen(id);
+  const cap = String(settings.injection_token_cap);
+  const [draft, setDraft] = React.useState(cap);
+  const [busy, setBusy] = React.useState(false);
+  const dirty = draft.trim() !== cap;
+  const ok = /^[1-9]\d*$/.test(draft.trim());
+  useDirtySignal(edit, open, dirty);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const saved = await api("/api/settings/memory", { injection_token_cap: Number(draft.trim()) });
+      say("success", "memory cap saved", `${saved.injection_token_cap} tokens`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say("danger", "memory cap save failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(cap)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then fewer entries."), /* @__PURE__ */ React.createElement(
+    EditActions,
+    {
+      dirty,
+      ok,
+      busy,
+      saveLabel: "Save memory cap",
+      onSave: save,
+      onCancel: () => edit.close()
+    }
+  )));
+}
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const { Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-defaults";
@@ -2420,6 +2454,13 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   React.useEffect(() => {
     loadExecutionSettings();
   }, []);
+  const [memorySettings, setMemorySettings] = React.useState(null);
+  const loadMemorySettings = async () => {
+    setMemorySettings(await api("/api/settings/memory", void 0, "GET"));
+  };
+  React.useEffect(() => {
+    loadMemorySettings();
+  }, []);
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
   React.useEffect(() => {
     api("/api/settings/github", void 0, "GET").then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn)).catch(() => setGithubLoggedIn(null));
@@ -2690,7 +2731,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {

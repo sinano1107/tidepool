@@ -1793,6 +1793,53 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
   );
 }
 
+// Memory (issue #592 / spec #586 C) as a record card: the token cap on the
+// memory section injected into a worker at spawn.
+function MemorySettingsCard({ settings, say, onSaved, edit }) {
+  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+  const id = 'board:memory';
+  const open = edit.isOpen(id);
+  const cap = String(settings.injection_token_cap);
+  const [draft, setDraft] = React.useState(cap);
+  const [busy, setBusy] = React.useState(false);
+  const dirty = draft.trim() !== cap;
+  // the API takes a positive integer only — mirror it so Save enables on a sendable value
+  const ok = /^[1-9]\d*$/.test(draft.trim());
+  useDirtySignal(edit, open, dirty);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const saved = await api('/api/settings/memory', { injection_token_cap: Number(draft.trim()) });
+      say('success', 'memory cap saved', `${saved.injection_token_cap} tokens`);
+      edit.close();
+      await onSaved();
+    } catch (err) {
+      say('danger', 'memory cap save failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(cap))}>
+        <span style={settingsCardLabel}>memory</span>
+      </RecordCardHead>
+      {!open && <FieldRow label="injection cap" kind="mono" value={`${cap} tokens`} />}
+      {open && (
+        <React.Fragment>
+          <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={cap} />
+          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then fewer entries.
+          </p>
+          <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save memory cap"
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
+      )}
+    </Card>
+  );
+}
+
 // Execution defaults (issue #545 / ADR 0110 決定5) as a record card: Provider
 // rank, the default priority and the frontier-advisor flag. Each differing
 // value is one POST — the API takes one change per request.
@@ -2170,6 +2217,12 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   };
   React.useEffect(() => { loadExecutionSettings(); }, []);
 
+  const [memorySettings, setMemorySettings] = React.useState(null); // null → still loading
+  const loadMemorySettings = async () => {
+    setMemorySettings(await api('/api/settings/memory', undefined, 'GET'));
+  };
+  React.useEffect(() => { loadMemorySettings(); }, []);
+
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
@@ -2447,8 +2500,11 @@ function SettingsScreen({ say, registerLeaveGuard }) {
             <ExecutionTableCard settings={executionSettings} say={say} onSaved={loadExecutionSettings} edit={edit} />
           </React.Fragment>
         )}
+        {memorySettings && (
+          <MemorySettingsCard settings={memorySettings} say={say} onSaved={loadMemorySettings} edit={edit} />
+        )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
-        {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings) && (
+        {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
         <p style={settingsFootnote}>applies to every task the board picks up</p>

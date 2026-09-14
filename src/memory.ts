@@ -1,7 +1,10 @@
+import { createRequire } from "node:module";
+import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
+import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent } from "./events.js";
-import { BOARD_WORKER_ID, DomainError } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type Task } from "./tasks.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、残りの3つは cause.ts の語彙そのもの(間違っていた / 陳腐化)。 */
@@ -315,11 +318,24 @@ function recordPull<T>(
   return { ...result, event_id };
 }
 
-/** query を語ごとに引用符で囲む(識別子の / . - を FTS の構文として読ませない)。 */
-function ftsQuery(query: string): string {
+/** query を語ごとに引用符で囲む(識別子の / . - を FTS の構文として読ませない)。語は既定で
+ *  AND、注入は OR で繋ぐ。 */
+function ftsQuery(query: string, join: " " | " OR " = " "): string {
   const terms = query.split(/\s+/).filter(Boolean);
   if (terms.length === 0) throw new DomainError("query must be non-empty");
-  return terms.map((term) => `"${bigram(term).trim().replaceAll('"', '""')}"`).join(" ");
+  return terms.map((term) => `"${bigram(term).trim().replaceAll('"', '""')}"`).join(join);
+}
+
+/** FTS に当たったスコープ内の approved(順位順)。宛先と無効化はここで落とさない —— search は
+ *  それを候補の落ちた理由として残す。 */
+function rankedEntries(db: Db, match: string, scope: string | null): EntryRow[] {
+  return db
+    .prepare(
+      `SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.rowid
+        WHERE memory_fts MATCH ? AND e.state = 'approved' AND (e.scope IS NULL OR e.scope = ?)
+        ORDER BY memory_fts.rank, e.id`,
+    )
+    .all(match, scope) as EntryRow[];
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。
@@ -333,13 +349,7 @@ export function searchMemory(
 ): { results: Array<{ id: number; title: string; path: string }>; truncated: boolean; event_id: number } {
   const page = input.page ?? 1;
   return db.transaction(() => {
-    const hits = db
-      .prepare(
-        `SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.rowid
-          WHERE memory_fts MATCH ? AND e.state = 'approved' AND (e.scope IS NULL OR e.scope = ?)
-          ORDER BY memory_fts.rank, e.id`,
-      )
-      .all(ftsQuery(input.query), reader.scope) as EntryRow[];
+    const hits = rankedEntries(db, ftsQuery(input.query), reader.scope);
     const visible = hits.filter((row) => dropReason(row, reader) === null);
     const shown = visible.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
     const candidates = hits.map((row) => ({
@@ -359,7 +369,7 @@ export function searchMemory(
   })();
 }
 
-function dropReason(row: EntryRow, reader: MemoryReader): MemoryDropReason | null {
+function dropReason(row: EntryRow, reader: Pick<MemoryReader, "agent">): MemoryDropReason | null {
   if (row.invalidation_reason !== null) return "invalidated";
   if (row.addressee !== null && row.addressee !== reader.agent) return "addressee";
   return null;
@@ -367,7 +377,7 @@ function dropReason(row: EntryRow, reader: MemoryReader): MemoryDropReason | nul
 
 /** search / INDEX / read に共通のフィルタ(spec #586 B): approved、未無効化、スコープ(task の
  *  workspace or 盤面全体)、宛先(agent 名一致 or 全員)。 */
-function visibleEntries(db: Db, reader: MemoryReader): EntryRow[] {
+function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[] {
   return db
     .prepare(
       `SELECT * FROM memory_entries
@@ -379,7 +389,16 @@ function visibleEntries(db: Db, reader: MemoryReader): EntryRow[] {
 }
 
 /** 派生の INDEX(ADR 0083 追記3): prefix の直下の子 —— 1段深い sub-prefix と、path が
- *  prefix そのものの leaf。prefix 無し = 最上位(深さ1)。保存しない。 */
+ *  prefix そのものの leaf。prefix 無し = 最上位(深さ1)。保存しない。browse と注入が共有する。 */
+function indexChildren(entries: EntryRow[], prefix: string): Array<string | EntryRow> {
+  const below = prefix === "" ? entries : entries.filter((e) => e.path.startsWith(`${prefix}/`));
+  const depth = prefix === "" ? 1 : prefix.split("/").length + 1;
+  return [
+    ...[...new Set(below.map((e) => e.path.split("/").slice(0, depth).join("/")))].filter((p) => p !== prefix).sort(),
+    ...entries.filter((e) => e.path === prefix),
+  ];
+}
+
 export function browseMemory(
   db: Db,
   reader: MemoryReader,
@@ -389,13 +408,7 @@ export function browseMemory(
   const prefix = input.prefix ?? "";
   const page = input.page ?? 1;
   return db.transaction(() => {
-    const entries = visibleEntries(db, reader);
-    const below = prefix === "" ? entries : entries.filter((e) => e.path.startsWith(`${prefix}/`));
-    const depth = prefix === "" ? 1 : prefix.split("/").length + 1;
-    const children: Array<string | EntryRow> = [
-      ...[...new Set(below.map((e) => e.path.split("/").slice(0, depth).join("/")))].filter((p) => p !== prefix).sort(),
-      ...entries.filter((e) => e.path === prefix),
-    ];
+    const children = indexChildren(visibleEntries(db, reader), prefix);
     const shown = children.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
     const leaves = shown.filter((child): child is EntryRow => typeof child !== "string");
     return recordPull(
@@ -431,6 +444,131 @@ export function readMemory(
       .map(rowToEntry)
       .map(({ id, title, path, text, source }) => ({ id, title, path, text, source, source_kind: SOURCE_KIND[source.kind] }));
     return recordPull(db, reader, { verb: "read_memory", input, returned_ids: entries.map((e) => e.id) }, { entries }, at);
+  })();
+}
+
+export const TOKENIZER = { id: "gpt-tokenizer/o200k_base", version: (createRequire(import.meta.url)("gpt-tokenizer/package.json") as { version: string }).version };
+
+const INJECTION_PREAMBLE =
+  "Approved board memory for this workspace. Browse deeper with browse_memory, find more with search_memory, " +
+  "and read an entry's full text with read_memory. A fact source is a commit or board event; an inference " +
+  "source is an agent's decision — weigh it.";
+
+type MemoryInjection = {
+  /** null = 見える approved が無い(節を出さない)。 */
+  section: string | null;
+  watermark: number;
+  entries: Array<{ id: number; version: number }>;
+  tokens: number;
+};
+
+/** spawn 注入の節(spec #586 C、provider 非依存): 最上位 INDEX + 関連 leaf を上限内に組む。
+ *  関連度の query は task の title + purpose + completion criteria の語の OR で、順位は search と
+ *  同じ FTS の rank。削り順は固定 —— leaf 本文を落とす → 関連 leaf の件数を半分にし続ける。
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝の名前が無いと pull で降りられない)。 */
+export function buildMemoryInjection(
+  db: Db,
+  task: Pick<Task, "title" | "purpose" | "completion_criteria">,
+  scope: string | null,
+  agent: string,
+): MemoryInjection {
+  return db.transaction(() => {
+    const watermark = memoryWatermark(db);
+    const visible = visibleEntries(db, { scope, agent });
+    if (visible.length === 0) return { section: null, watermark, entries: [], tokens: 0 };
+    // path は空にならないので、最上位の子は sub-prefix の名前だけ
+    const index = (indexChildren(visible, "") as string[]).map((prefix) => `- ${prefix}/`);
+    // 語が無ければ関連 leaf は無い(ftsQuery の拒否で spawn を落とさない)
+    const query = `${task.title} ${task.purpose} ${task.completion_criteria}`;
+    let leaves = query.trim() === "" ? [] : rankedEntries(db, ftsQuery(query, " OR "), scope).filter((row) => dropReason(row, { agent }) === null);
+    let withText = true;
+    const render = (shown: EntryRow[], bodies: boolean) =>
+      [
+        "## Memory",
+        "",
+        INJECTION_PREAMBLE,
+        "",
+        "### Index",
+        "",
+        ...index,
+        ...(shown.length === 0
+          ? []
+          : [
+              "",
+              "### Relevant entries",
+              "",
+              ...shown.flatMap((row) => [
+                `- #${row.id} ${row.title} (path: ${row.path}, source: ${SOURCE_KIND[row.source_kind]})`,
+                ...(bodies ? [`  ${row.text.replaceAll("\n", "\n  ")}`] : []),
+              ]),
+            ]),
+      ].join("\n");
+    const cap = readMemorySettings(db).injection_token_cap;
+    let section = render(leaves, withText);
+    let tokens = countTokens(section);
+    while (tokens > cap && (withText || leaves.length > 0)) {
+      if (withText) withText = false;
+      else leaves = leaves.slice(0, Math.floor(leaves.length / 2));
+      section = render(leaves, withText);
+      tokens = countTokens(section);
+    }
+    return { section, watermark, entries: leaves.map((row) => ({ id: row.id, version: row.version! })), tokens };
+  })();
+}
+
+/** spawn 直後の注入記録(task 帰属、worker_spawned の直後に両 adapter が書く)。 */
+export function recordMemoryInjection(
+  db: Db,
+  taskId: string,
+  agent: string,
+  workerSpawnedEventId: number,
+  injection: MemoryInjection,
+  at: Date,
+): number {
+  const { section: _, ...recorded } = injection;
+  return appendEvent(db, {
+    taskId,
+    workerId: agent,
+    origin: "board",
+    payload: {
+      kind: "memory_injected",
+      worker_spawned_event_id: workerSpawnedEventId,
+      ...recorded,
+      tokenizer: TOKENIZER.id,
+      tokenizer_version: TOKENIZER.version,
+    },
+    at,
+  });
+}
+
+/** 注入上限の既定(spec #586 C)。上限は ADR 0083 決定10 が置いた唯一のノブ。 */
+const DEFAULT_INJECTION_TOKEN_CAP = 2000;
+
+export const memorySettingsChangeSchema = z.object({ injection_token_cap: z.number().int().positive() });
+type MemorySettings = z.infer<typeof memorySettingsChangeSchema>;
+
+export function readMemorySettings(db: Db): MemorySettings {
+  const row = db.prepare("SELECT injection_token_cap FROM memory_defaults WHERE id = 1").get() as
+    | { injection_token_cap: number | null }
+    | undefined;
+  return { injection_token_cap: row?.injection_token_cap ?? DEFAULT_INJECTION_TOKEN_CAP };
+}
+
+/** 上限を書き、盤面スコープの操作イベントとして経路つきで残す(applyExecutionSettingsChange と
+ *  同じ形)。返り値は memory_settings_changed の event id。 */
+export function changeMemorySettings(db: Db, change: MemorySettings, origin: EventOrigin, at: Date): number {
+  return db.transaction(() => {
+    db.prepare(
+      `INSERT INTO memory_defaults (id, injection_token_cap) VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET injection_token_cap = excluded.injection_token_cap`,
+    ).run(change.injection_token_cap);
+    return appendEvent(db, {
+      taskId: null,
+      workerId: HUMAN_WORKER_ID,
+      origin,
+      payload: { kind: "memory_settings_changed", ...change },
+      at,
+    });
   })();
 }
 

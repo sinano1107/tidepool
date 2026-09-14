@@ -35,6 +35,8 @@ it("issue参照タスクの展開が一時的に失敗したら、そのサイ�
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "b", comments: [] });
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.id)).toEqual([task.id]);
+  // spawn は展開の使用時点: worker(と記憶の注入の関連度)には "#49" ではなく issue の中身が渡る
+  expect(t.worker.started[0]).toMatchObject({ title: "ログイン画面のバグ", purpose: "b" });
 });
 
 it("issue参照の確定的失敗(not found / close 済み)では retry/abandon の failure question が生まれ、worker は起動しない(issue #49 設計点5)", async () => {

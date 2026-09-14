@@ -36,6 +36,7 @@ import {
 } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import { toolError, toolResult } from "./mcp.js";
+import { changeMemorySettings, memorySettingsChangeSchema, readMemorySettings, TOKENIZER } from "./memory.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
   type Harness,
@@ -480,6 +481,25 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now());
       deps.onQueueHeadChanged();
       return toolResult(readExecutionSettings(deps.db));
+    },
+  );
+  server.registerTool(
+    "read_memory_settings",
+    {
+      description: "Read the board's memory settings: injection_token_cap, the token cap on the memory section injected into a worker at spawn.",
+    },
+    async () => toolResult(readMemorySettings(deps.db)),
+  );
+  server.registerTool(
+    "change_memory_settings",
+    {
+      description:
+        `Set the board's memory injection token cap as the human (a positive integer, counted with ${TOKENIZER.id}). Takes effect at the next spawn.`,
+      inputSchema: memorySettingsChangeSchema.shape,
+    },
+    async (change) => {
+      changeMemorySettings(deps.db, change, "mcp", deps.clock.now());
+      return toolResult(readMemorySettings(deps.db));
     },
   );
   server.registerTool(

@@ -9,6 +9,7 @@ import { quarantinedAuthProviders } from "../src/cli-auth.js";
 import { type CodexSpawnFn, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, passthroughContainers } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -153,6 +154,38 @@ describe("CodexWorker (ADR 0098)", () => {
       harness: "codex",
       cli_version: CLI_VERSION,
     });
+  });
+
+  it("見える approved の記憶があれば work / review task とも注入節を taskPrompt の先頭に置き、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
+    const f = await fixture();
+    const bare = task(f.db, "codex-no-memory");
+    f.worker.start(bare);
+    expect(f.process.calls[0]!.args.at(-1)).not.toContain("## Memory");
+
+    recordKnowledge(
+      f.db,
+      { scope: "work", path: "board", title: "Board correctness", text: "Tests guard the board.", source: { commit: "0a46a46" }, author: { activity: "human", name: "human" } },
+      "webui",
+      new Date("2026-08-24T00:00:00.000Z"),
+    );
+    const work = task(f.db, "codex-memory");
+    const review = registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "keep the board correct", completion_criteria: "reviewed" },
+      new Date("2026-08-24T00:00:00.000Z"),
+    );
+    for (const [i, value] of [work, review].entries()) {
+      f.worker.start(value);
+      const { section } = buildMemoryInjection(f.db, value, "work", "codex-agent");
+      expect(f.process.calls[i + 1]!.args.at(-1)!.startsWith(`${section}\n\n`)).toBe(true);
+    }
+
+    for (const value of [bare, work, review]) {
+      const events = listEvents(f.db, value.id);
+      const spawned = events.findIndex((e) => e.kind === "worker_spawned");
+      expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id });
+    }
+    expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
   });
 
   it("盤面が順位で選んだ openai の設定を渡されれば、anthropic を先頭に持つ agent でも codex で走る(#544 の demo —— spawn 側の再解決は順位1位の anthropic を返して拒否になる)", async () => {
