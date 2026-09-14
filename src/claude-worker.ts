@@ -21,6 +21,7 @@ import {
   resolveExecutionSetting,
 } from "./execution-setting.js";
 import { REVIEWER_AUTHORITY_PROFILE } from "./mcp.js";
+import { buildMemoryInjection, recordMemoryInjection } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
 import {
   type AgentDefinition,
@@ -2050,6 +2051,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
     // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
     // reclaimed の相手が居ない session は生まれない。
+    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
     const child = this.containers.open(task.id).spawn(
       "claude",
       [
@@ -2144,9 +2146,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // who the agent is (registry definition body) and what this task type's
         // authority sounds like (ADR 0056: review overrides the registry profile),
         // stitched at spawn time. A party review (self RCA) additionally carries
-        // the 当時版 definition as evidence (ADR 0020 part 4), appended last.
+        // the 当時版 definition as evidence (ADR 0020 part 4); the memory section
+        // (spec #586 C) comes last.
         "--append-system-prompt",
-        `${definition.systemPrompt}${authoritySection(authorityProfile.guidance)}${rosterSection(buildRoster(registry, rosterAssignableTo))}\n\n${BOARD_DOCTRINE}\n\n${workerProtocol(workspace.allowed_domains)}${this.historicalDefinitionSection(task)}`,
+        `${definition.systemPrompt}${authoritySection(authorityProfile.guidance)}${rosterSection(buildRoster(registry, rosterAssignableTo))}\n\n${BOARD_DOCTRINE}\n\n${workerProtocol(workspace.allowed_domains)}${this.historicalDefinitionSection(task)}${memory.section ? `\n\n${memory.section}` : ""}`,
       ],
       // the agent's own commits are stamped with the agent's identity (issue
       // #53), merged over the inherited env — never a token (ADR 0024). The
@@ -2204,6 +2207,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       },
       at: this.options.clock.now(),
     });
+    recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
     const transcriptPath = join(this.logDir, `${task.id}.${spawnedEventId}.stream.jsonl`);

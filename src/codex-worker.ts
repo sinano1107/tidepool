@@ -24,6 +24,7 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import { type ExecutionSetting, resolveExecutionSetting } from "./execution-setting.js";
+import { buildMemoryInjection, recordMemoryInjection } from "./memory.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
 import type { WorkerAdapter } from "./worker.js";
@@ -633,6 +634,7 @@ export class CodexWorker implements WorkerAdapter {
       `hooks.SubagentStart=[{hooks=[{type="command",command=${toml(hook)}}]}]`,
       `hooks.PreToolUse=[{matcher="mcp__tidepool__.*",hooks=[{type="command",command=${toml(hook)}}]}]`,
     ];
+    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
     const child = this.containers.open(task.id).spawn(
       this.options.executable,
       [
@@ -642,7 +644,7 @@ export class CodexWorker implements WorkerAdapter {
         "-C", workspace.path,
         "-m", setting.model,
         ...config.flatMap((entry) => ["-c", entry]),
-        taskPrompt(task, agent.definition.systemPrompt, agent.profile.guidance),
+        `${memory.section ? `${memory.section}\n\n` : ""}${taskPrompt(task, agent.definition.systemPrompt, agent.profile.guidance)}`,
       ],
       {
         cwd: workspace.path,
@@ -675,6 +677,7 @@ export class CodexWorker implements WorkerAdapter {
       },
       at: this.options.clock.now(),
     });
+    recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
     const transcript = join(this.logDir, `${task.id}.${spawned}.stream.jsonl`);
     const stderrPath = join(this.logDir, `${task.id}.${spawned}.stderr.log`);
     writeFileSync(transcript, "");

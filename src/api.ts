@@ -41,6 +41,7 @@ import {
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
 import { type Landing, landingAnnotation } from "./landing.js";
+import { changeMemorySettings, memorySettingsChangeSchema, readMemorySettings } from "./memory.js";
 import {
   getPaceOffsets,
   isValidOffset,
@@ -1624,6 +1625,21 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     applyExecutionSettingsChange(db, parsed.data, "webui", clock.now());
     onQueueHeadChanged();
     res.json(readExecutionSettings(db));
+  });
+
+  // spec #586 C / issue #592: spawn 注入のトークン上限。次の spawn から効くので再評価は無い
+  router.get("/settings/memory", (_req, res) => {
+    res.json(readMemorySettings(db));
+  });
+
+  router.post("/settings/memory", (req, res) => {
+    const parsed = memorySettingsChangeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    changeMemorySettings(db, parsed.data, "webui", clock.now());
+    res.json(readMemorySettings(db));
   });
 
   router.get("/settings/timezone", (_req, res) => {

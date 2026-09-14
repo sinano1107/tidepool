@@ -499,11 +499,11 @@ export function projectAndPersist(
 }
 
 /** 「decision D より前に読んだ記憶」(spec #586 D / ADR 0083 決定10): D より前に位置を
- *  持つ memory マーカーが指す pull の返した id の和集合(昇順)。自己申告の列は持たない。
- *  D がこの Episode で位置を持たなければ null(「何も読まなかった」と混ぜない)。
- *  注入分(`memory_injected`)は #592 がここに足す。 */
+ *  持つ memory マーカーが指す pull の返した id と、この session の spawn 注入
+ *  (`memory_injected`、worker_spawned の event id で結ぶ)の id の和集合(昇順)。自己申告の
+ *  列は持たない。D がこの Episode で位置を持たなければ null(「何も読まなかった」と混ぜない)。 */
 export function entriesReadBefore(
-  episode: Pick<Episode, "markers">,
+  episode: Pick<Episode, "markers" | "workerSpawnedEventId">,
   events: readonly EventRow[],
   decisionEventId: number,
 ): number[] | null {
@@ -515,7 +515,10 @@ export function entriesReadBefore(
       .map((m) => m.eventId),
   );
   const ids = events.flatMap((e) =>
-    e.payload.kind === "memory_pulled" && pulls.has(e.id) ? e.payload.returned_ids : [],
+    e.payload.kind === "memory_pulled" && pulls.has(e.id) ? e.payload.returned_ids
+    : e.payload.kind === "memory_injected" && e.payload.worker_spawned_event_id === episode.workerSpawnedEventId
+      ? e.payload.entries.map((entry) => entry.id)
+    : [],
   );
   return [...new Set(ids)].sort((a, b) => a - b);
 }
