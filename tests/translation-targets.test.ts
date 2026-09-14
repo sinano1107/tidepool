@@ -263,6 +263,7 @@ it("work タスク(question ではない)の翻訳は TranslationTargetError を
 
 it("記憶のエントリは title と text の両方を翻訳する(ADR 0015 五度目の精密化)", async () => {
   const db = await freshDb();
+  // setup のみ: agent 由来の出所 event_id: 1 を実在させる
   registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW);
   const { entry_id } = recordKnowledge(
     db,

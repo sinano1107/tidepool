@@ -198,12 +198,12 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
   db: Db,
   { workspace, original_title, original_text, ...rest }: T,
 ) {
-  const title = "title" in rest ? original_title : original_text;
-  if (!title !== !original_text) throw new DomainError("an original needs both its title and its text");
+  const originalTitle = "title" in rest ? original_title : original_text;
+  if (!originalTitle?.trim() !== !original_text?.trim()) throw new DomainError("an original needs both its title and its text");
   return {
     ...rest,
     scope: workspace,
-    original: title && original_text ? { title, text: original_text, language: getDisplayLanguage(db) } : null,
+    original: originalTitle?.trim() && original_text?.trim() ? { title: originalTitle, text: original_text, language: getDisplayLanguage(db) } : null,
     author: { activity: "human" as const, name: HUMAN_WORKER_ID },
   };
 }

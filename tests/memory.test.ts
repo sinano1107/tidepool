@@ -351,6 +351,7 @@ it("人間が書く Knowledge の原文は title と text の揃い —— 片�
   const { db } = board();
   expect(() => recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_title: original.title }), "webui", at)).toThrow(DomainError);
   expect(() => recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_text: original.text }), "webui", at)).toThrow(DomainError);
+  expect(() => recordKnowledge(db, humanEntryInput(db, { ...humanKnowledge, original_title: "  ", original_text: original.text }), "webui", at)).toThrow(DomainError);
   recordKnowledge(db, humanEntryInput(db, humanKnowledge), "webui", at);
   expect(approvedMemoryEntries(db)).toMatchObject([{ original: null, author: human }]);
 });

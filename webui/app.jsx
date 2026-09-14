@@ -1881,10 +1881,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   // the write form: one edit slot, like every settings card
   const writeId = 'board:memory-write';
   const writing = edit.isOpen(writeId);
-  const blank = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', back: null, supersedes: '' };
+  const blank = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '' };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { back: null } : {}) });
+  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}) });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ''));
   const translatable = language !== 'English';
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
@@ -1906,9 +1906,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
           english[key] = out.text;
         }
         const out = await translateTarget({ type: 'back_translation', text: english[key] });
-        back[key] = out.status === 'translated' ? out.text : '';
+        if (out.status !== 'translated') throw new Error('translation is throttled right now');
+        back[key] = out.text;
       }
-      setDraft({ ...draft, ...english, back });
+      setDraft({ ...draft, ...english, backTranslation: back });
     } catch (err) {
       say('danger', 'translate failed', String(err.message || err));
     }
@@ -1983,8 +1984,8 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
           {translatable && (
             <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !draft[key].trim())} onClick={() => runTranslation(false)}>Back-translate</Button>
           )}
-          {draft.back && (
-            <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.back[key]).join(' — ')}</p>
+          {draft.backTranslation && (
+            <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation[key]).join(' — ')}</p>
           )}
           <EditActions ok={fields.every((key) => draft[key].trim() !== '')} busy={busy} saveLabel={`Save ${draft.kind}`}
             onSave={save} onCancel={() => edit.close()} />
@@ -2000,7 +2001,9 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       </div>
       {entries === null && <p style={muted}>loading…</p>}
       {entries?.length === 0 && <p style={muted}>no entries</p>}
-      {entries?.map((entry) => (
+      {entries?.map((entry) => {
+        const shown = entry.original ?? translations[entry.id];
+        return (
         <div key={entry.id} data-testid={`memory-entry-${entry.id}`}
           style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
@@ -2010,10 +2013,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{entry.text}</p>
-          {[entry.original ?? translations[entry.id]].filter(Boolean).map((shown) => (
+          {shown && (
             // a definition's title is its text, so the Set shows it once
-            <p key="shown" style={muted}>{entry.original ? 'original' : 'translation'}: {[...new Set([shown.title, shown.text])].join(' — ')}</p>
-          ))}
+            <p style={muted}>{entry.original ? 'original' : 'translation'}: {[...new Set([shown.title, shown.text])].join(' — ')}</p>
+          )}
           {!entry.invalidation_reason && invalidating?.id !== entry.id && (
             <div><Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button></div>
           )}
@@ -2035,7 +2038,8 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
             </React.Fragment>
           )}
         </div>
-      ))}
+        );
+      })}
     </Card>
   );
 }

@@ -2121,10 +2121,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
   const writing = edit.isOpen(writeId);
-  const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", back: null, supersedes: "" };
+  const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", backTranslation: null, supersedes: "" };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { back: null } : {} });
+  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { backTranslation: null } : {} });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ""));
   const translatable = language !== "English";
   const fields = draft.kind === "knowledge" ? ["title", "text"] : ["text"];
@@ -2142,9 +2142,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
           english[key] = out2.text;
         }
         const out = await translateTarget({ type: "back_translation", text: english[key] });
-        back[key] = out.status === "translated" ? out.text : "";
+        if (out.status !== "translated") throw new Error("translation is throttled right now");
+        back[key] = out.text;
       }
-      setDraft({ ...draft, ...english, back });
+      setDraft({ ...draft, ...english, backTranslation: back });
     } catch (err) {
       say("danger", "translate failed", String(err.message || err));
     }
@@ -2189,7 +2190,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       onChange: setDraftField("kind"),
       options: ["knowledge", "definition"]
     }
-  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate"), draft.back && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.back[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate"), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.backTranslation[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       ok: fields.every((key) => draft[key].trim() !== ""),
@@ -2225,49 +2226,50 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       style: { flex: "1 1 120px" },
       options: [{ value: "", label: "all" }, "approved", "candidate", "invalidated"]
     }
-  )), entries === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), entries?.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no entries"), entries?.map((entry) => /* @__PURE__ */ React.createElement(
-    "div",
-    {
-      key: entry.id,
-      "data-testid": `memory-entry-${entry.id}`,
-      style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
-    },
-    /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path),
-    entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
-    /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
-    [entry.original ?? translations[entry.id]].filter(Boolean).map((shown) => (
-      // a definition's title is its text, so the Set shows it once
-      /* @__PURE__ */ React.createElement("p", { key: "shown", style: muted }, entry.original ? "original" : "translation", ": ", [.../* @__PURE__ */ new Set([shown.title, shown.text])].join(" \u2014 "))
-    )),
-    !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
-    invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
-      Select,
+  )), entries === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), entries?.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no entries"), entries?.map((entry) => {
+    const shown = entry.original ?? translations[entry.id];
+    return /* @__PURE__ */ React.createElement(
+      "div",
       {
-        label: "Reason",
-        value: invalidating.reason,
-        options: MEMORY_INVALIDATION_REASONS,
-        onChange: (e) => setInvalidating({ ...invalidating, reason: e.target.value })
-      }
-    ), needsSuccessor(invalidating.reason) && /* @__PURE__ */ React.createElement(
-      Input,
-      {
-        label: "Successor (entry id)",
-        mono: true,
-        value: invalidating.successor,
-        onChange: (e) => setInvalidating({ ...invalidating, successor: e.target.value })
-      }
-    ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
-      Button,
-      {
-        variant: "danger",
-        size: "sm",
-        onClick: invalidate,
-        disabled: busy || needsSuccessor(invalidating.reason) && !/^[1-9]\d*$/.test(invalidating.successor)
+        key: entry.id,
+        "data-testid": `memory-entry-${entry.id}`,
+        style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
       },
-      "Invalidate #",
-      entry.id
-    ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setInvalidating(null) }, "Cancel")))
-  )));
+      /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path),
+      entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
+      /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
+      shown && // a definition's title is its text, so the Set shows it once
+      /* @__PURE__ */ React.createElement("p", { style: muted }, entry.original ? "original" : "translation", ": ", [.../* @__PURE__ */ new Set([shown.title, shown.text])].join(" \u2014 ")),
+      !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
+      invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+        Select,
+        {
+          label: "Reason",
+          value: invalidating.reason,
+          options: MEMORY_INVALIDATION_REASONS,
+          onChange: (e) => setInvalidating({ ...invalidating, reason: e.target.value })
+        }
+      ), needsSuccessor(invalidating.reason) && /* @__PURE__ */ React.createElement(
+        Input,
+        {
+          label: "Successor (entry id)",
+          mono: true,
+          value: invalidating.successor,
+          onChange: (e) => setInvalidating({ ...invalidating, successor: e.target.value })
+        }
+      ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+        Button,
+        {
+          variant: "danger",
+          size: "sm",
+          onClick: invalidate,
+          disabled: busy || needsSuccessor(invalidating.reason) && !/^[1-9]\d*$/.test(invalidating.successor)
+        },
+        "Invalidate #",
+        entry.id
+      ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setInvalidating(null) }, "Cancel")))
+    );
+  }));
 }
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
   const { Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
