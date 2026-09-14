@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { cancelTaskDirectly, completeTask, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
+import {
+  BOARD_WORKER_ID,
+  cancelTaskDirectly,
+  completeTask,
+  getTask,
+  HUMAN_WORKER_ID,
+  listBoard,
+  pickupTask,
+  presentTask,
+  registerTask,
+} from "../src/tasks.js";
 
 describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)", () => {
   it("全ステータス・type・親子関係が揃い、blocked は導出値、skipped は現れない", () => {
@@ -115,5 +125,41 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
     expect(board.find((t) => t.id === byAgent.id)?.registrant).toBe("reef-crab");
     expect(board.find((t) => t.id === byHuman.id)?.registrant).toBe("human");
     expect(board.find((t) => t.id === byBoard.id)?.registrant).toBe("tidepool");
+  });
+
+  it("単一 task の表示形も status にかかわらず登録者を持つ(issue #262)", () => {
+    const db = openDb(":memory:");
+
+    const byAgent = registerTask(
+      db,
+      { type: "work", title: "survey the tide pool", purpose: "p", completion_criteria: "c" },
+      new Date(0),
+      "reef-crab",
+    );
+    const byHuman = registerTask(
+      db,
+      { type: "work", title: "log the low tide", purpose: "p", completion_criteria: "c" },
+      new Date(1),
+      HUMAN_WORKER_ID,
+    );
+    const byBoard = registerTask(
+      db,
+      {
+        type: "question",
+        title: "PR promotion failed",
+        purpose: "p",
+        completion_criteria: "c",
+        question: [{ title: "retry?", options: ["retry", "abandon"], recommendation: "retry" }],
+      },
+      new Date(2),
+      BOARD_WORKER_ID,
+    );
+    const running = pickupTask(db, byAgent, "reef-crab", new Date(3));
+
+    expect(presentTask(db, byAgent).registrant).toBe("reef-crab");
+    expect(presentTask(db, byHuman).registrant).toBe(HUMAN_WORKER_ID);
+    expect(presentTask(db, byBoard).registrant).toBe(BOARD_WORKER_ID);
+    expect(running.status).toBe("in_progress");
+    expect(presentTask(db, running).registrant).toBe("reef-crab");
   });
 });

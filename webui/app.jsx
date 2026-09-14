@@ -122,6 +122,27 @@ function liveTitle(t) {
   return t.title;
 }
 
+// Maps one raw question task into TpQuestionCard's shape — shared by the board's
+// question list (mapData) and the push deep-link's single-question view.
+function toQuestionCardShape(q, icons) {
+  // who issued the question — the board itself (issue #261) or an agent
+  // (never human: a question only ever comes from a non-human registrant)
+  const isBoard = q.registrant === 'tidepool';
+  return {
+    id: q.id, parent: q.parent_id,
+    agent: q.registrant,
+    agentIcon: isBoard ? undefined : icons[q.registrant],
+    board: isBoard,
+    context: q.purpose,
+    // 1-4 items, each with its own title/detail/options (issue #30) — a
+    // single-item bundle is the degenerate, most common case
+    items: (q.question_items ?? []).map((item) => ({
+      title: item.title, detail: item.detail,
+      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
+    })),
+  };
+}
+
 // Map the server board + decision log into the shape the kit screens consume.
 // `icons` is the registry's assignee name → icon map (issue #52's
 // GET /api/registry/candidates); a name absent from it renders with
@@ -147,28 +168,13 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   };
   const questions = board
     .filter((t) => t.status === 'todo' && t.type === 'question')
-    .map((q) => {
-      // who issued the question — the board itself (issue #261) or an agent
-      // (never human: a question only ever comes from a non-human registrant)
-      const isBoard = q.registrant === 'tidepool';
-      return {
-        id: q.id, parent: q.parent_id,
-        agent: q.registrant,
-        agentIcon: isBoard ? undefined : icons[q.registrant],
-        board: isBoard,
-        context: q.purpose,
-        // 着地 question(purely-local の land question / PR の merge question)は
-        // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
-        // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
-        landing: q.landing ?? null,
-        // 1-4 items, each with its own title/detail/options (issue #30) — a
-        // single-item bundle is the degenerate, most common case
-        items: (q.question_items ?? []).map((item) => ({
-          title: item.title, detail: item.detail,
-          options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
-        })),
-      };
-    });
+    .map((q) => ({
+      ...toQuestionCardShape(q, icons),
+      // 着地 question(purely-local の land question / PR の merge question)は
+      // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
+      // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
+      landing: q.landing ?? null,
+    }));
   // newest first for the skim; unread is the server's cursor + authorship
   // decision. workspace grouping/fold (issue #44) is pure view derivation the
   // kit does itself from this flat, order-independent list — see triage-screen.jsx.
@@ -2808,20 +2814,6 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   );
 }
 
-// Maps one raw task + its optional parent into TpQuestionCard's shape —
-// the single-task equivalent of mapData()'s `questions` mapping above.
-function toQuestionCardShape(task, parentTask) {
-  return {
-    id: task.id, parent: task.parent_id,
-    agent: parentTask?.assignee ?? '—',
-    context: task.purpose,
-    items: (task.question_items ?? []).map((item) => ({
-      title: item.title, detail: item.detail,
-      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
-    })),
-  };
-}
-
 // A push notification tapped outside quiet hours deep-links straight here
 // (?question=<id>, issue #14) — TpSingleQuestion (design-synced,
 // single-question-view.jsx) is the same screen the kit demo simulates a push
@@ -2837,18 +2829,17 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await fetch(`/api/tasks/${questionId}`);
-      const task = res.ok ? await res.json() : null;
+      const [task, candidates] = await Promise.all([
+        fetch(`/api/tasks/${questionId}`).then((r) => (r.ok ? r.json() : null)),
+        fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
+      ]);
       if (!task || task.type !== 'question' || task.status !== 'todo') {
         if (!cancelled) setQ(null);
         return;
       }
-      const parentTask = task.parent_id
-        ? await fetch(`/api/tasks/${task.parent_id}`).then((r) => (r.ok ? r.json() : null))
-        : null;
       if (cancelled) return;
       setRawTask(task);
-      setQ(toQuestionCardShape(task, parentTask));
+      setQ(toQuestionCardShape(task, candidates.icons));
     })().catch(() => { if (!cancelled) setQ(null); });
     return () => { cancelled = true; };
   }, [questionId]);
