@@ -361,16 +361,11 @@ export function listMemoryEntries(
 }
 
 /** 索引と query の共通の前処理(spec #586 B / #606)。空白区切りの語の先頭・末尾の . - _ を落とし
- *  (tokenchars なので文末の `narrow.` が `narrow` に当たらない。語中は残す)、CJK bigram を通す。 */
+ *  (tokenchars なので文末の `narrow.` が `narrow` に当たらない。語中は残す)、CJK の連なりを
+ *  重なりつきの2文字語に割る(LWC 式)。unicode61 は CJK を語に切らない。1文字の連なりはそのまま。
+ *  長音符 ー は Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。 */
 function ftsText(value: string): string {
-  return bigram(value.replace(/(?<!\S)[._-]+|[._-]+(?!\S)/g, ""));
-}
-
-/** CJK の連なりを重なりつきの2文字語に割る(spec #586 B、LWC 式)。unicode61 は CJK を
- *  語に切らないので、索引と query の両方にこれを通す。1文字の連なりはそのまま。長音符 ー は
- *  Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。 */
-function bigram(value: string): string {
-  return value.replace(/[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+/gu, (run) => {
+  return value.replace(/(?<!\S)[._-]+|[._-]+(?!\S)/g, "").replace(/[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+/gu, (run) => {
     const chars = [...run];
     const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
     return ` ${grams.join(" ")} `;
