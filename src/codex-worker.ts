@@ -43,6 +43,9 @@ const BOARD_VERBS = [
   "decompose",
   "escalate",
   "record_knowledge",
+  "browse_memory",
+  "search_memory",
+  "read_memory",
 ] as const;
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;

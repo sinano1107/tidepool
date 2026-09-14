@@ -162,11 +162,18 @@ const SPEND_DOWN_STATE_TABLE_DDL = `
       activated_at TEXT NOT NULL
     )`;
 
+/** Memory の FTS5 tokenizer と、TS 側の CJK bigram 前処理の版(spec #586 B、実測は #357)。
+ *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。 */
+export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
+export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-2";
+// Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
+export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
+
 // Shared between the fresh-board CREATE and #190's event-table rebuild. The
 // database is the audit record's final backstop, so its route vocabulary is
 // constrained here as well as by EventOrigin in TypeScript.
 // task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
-// memory_entry_created / memory_entry_invalidated, issue #590) — a settings change
+// memory_entry_created / memory_entry_invalidated, issue #590; memory_index_rebuilt, issue #591) — a settings change
 // or a memory entry belongs to no task but still carries its route.
 const EVENTS_TABLE_DDL = `
     CREATE TABLE events (
@@ -507,12 +514,13 @@ export function openDb(path: string): Db {
     );
 
     -- 行動列の中に位置を持つ注釈。decision は軸ではなくマーカーで(ADR 0083 追記)、
-    -- 構造マーカーは compaction / commit / advisor の3つ(追記 2 決定5)。
+    -- 構造マーカーは compaction / commit / advisor の3つ(追記 2 決定5)。memory は
+    -- pull event の id を完全一致で結ぶ記憶の機械記録(決定10 / spec #586 D)。
     -- position が null = 結べなかった decision — 消さずに欠測理由を持って残る。
     CREATE TABLE IF NOT EXISTS episode_markers (
       episode_id      INTEGER NOT NULL REFERENCES episodes(id),
       seq             INTEGER NOT NULL,
-      kind            TEXT NOT NULL CHECK (kind IN ('decision', 'compaction', 'commit', 'advisor')),
+      kind            TEXT NOT NULL CHECK (kind IN ('decision', 'compaction', 'commit', 'advisor', 'memory')),
       position        INTEGER,
       event_id        INTEGER,
       missing_reason  TEXT CHECK (missing_reason IN ('no_event_id', 'unmatched')),
@@ -563,6 +571,21 @@ export function openDb(path: string): Db {
       invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
       successor_id        INTEGER REFERENCES memory_entries(id)
     );
+
+    -- Memory の全文索引(spec #586 B)。rowid = エントリ id。CJK bigram の前処理を
+    -- 通した文字列を持つので external-content にはできず、エントリ表と同じ
+    -- transaction で書く投影(memory.ts)。
+    ${MEMORY_FTS_DDL.replace("CREATE VIRTUAL TABLE", "CREATE VIRTUAL TABLE IF NOT EXISTS")};
+
+    -- 索引の版(tokenizer id + 前処理の版)。1行。boot で今の版と照合し、違えば
+    -- events から索引を作り直す(memory.ts の ensureMemoryIndex)。
+    CREATE TABLE IF NOT EXISTS memory_index_version (
+      id                 INTEGER PRIMARY KEY CHECK (id = 1),
+      tokenizer          TEXT NOT NULL,
+      preprocess_version TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO memory_index_version (id, tokenizer, preprocess_version)
+      VALUES (1, '${MEMORY_FTS_TOKENIZER.replaceAll("'", "''")}', '${MEMORY_PREPROCESS_VERSION}');
 
     -- append-only is enforced by structure, not convention
     ${EVENTS_APPEND_ONLY_TRIGGERS}

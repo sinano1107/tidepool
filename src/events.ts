@@ -2,7 +2,7 @@ import type { Allocation, AllocationUnevaluatedReason } from "./allocation-revie
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
-import type { InvalidationReason, MemoryEntryFields } from "./memory.js";
+import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
 import type { TaskType } from "./tasks.js";
 
@@ -378,14 +378,28 @@ export type EventPayload =
   // 戻せる。どちらも task 非依存(task_id NULL)で、決定 log には現れない。
   // created の event id がそのままエントリの id(Knowledge は版も)。
   | { kind: "memory_entry_created"; entry: MemoryEntryFields }
-  | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null };
+  | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null }
+  // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
+  // 候補ごとの落ちた理由(null = 返した)。event id は tool 結果に載り、Precedent の
+  // memory マーカーになる。
+  | {
+      kind: "memory_pulled";
+      verb: "browse_memory" | "search_memory" | "read_memory";
+      input: { prefix?: string; query?: string; page?: number; ids?: number[] };
+      returned_ids: number[];
+      watermark: number;
+      candidates?: Array<{ id: number; dropped: MemoryDropReason | null }>;
+    }
+  // spec #586 G: エントリ表と FTS を events から作り直した(盤面スコープ、task_id NULL)。
+  // 刻んだ索引の版を持つ。
+  | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string };
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
-  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*`)。 */
+  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*` / `memory_index_rebuilt`)。 */
   task_id: string | null;
   worker_id: string;
   origin: EventOrigin;
@@ -450,8 +464,8 @@ export interface LogEntry extends EventRow {
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   // an inner join is safe here only because every HUMAN_FACING_KIND is
-  // task-scoped (the task-less kinds — execution_settings_changed and the
-  // memory_entry_* pair — are not among them) and tasks are never deleted
+  // task-scoped (the task-less kinds — execution_settings_changed, the
+  // memory_entry_* pair and memory_index_rebuilt — are not among them) and tasks are never deleted
   // (append-only) — no log entry can end up orphaned, so this can never
   // silently drop one
   const rows = db

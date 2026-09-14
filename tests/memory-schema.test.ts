@@ -45,3 +45,29 @@ it.each([
   expect(() => insert(db, overrides)).toThrow(/CHECK/);
   db.close();
 });
+
+it("fresh 盤面に Memory の FTS 仮想表と、tokenizer id + 前処理の版の1行がある(spec #586 B / issue #591)", () => {
+  const db = openDb(":memory:");
+  expect(db.prepare("SELECT sql FROM sqlite_master WHERE name = 'memory_fts'").get()).toEqual({
+    sql: expect.stringMatching(/fts5\(text, title, path, original, tokenize = "unicode61 tokenchars '_-\.'"\)/),
+  });
+  expect(db.prepare("SELECT tokenizer, preprocess_version FROM memory_index_version").all()).toEqual([
+    { tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-2" },
+  ]);
+  db.close();
+});
+
+it("episode_markers.kind の CHECK は memory マーカーを受ける(issue #591)", () => {
+  const db = openDb(":memory:");
+  db.prepare(
+    "INSERT INTO tasks (id, type, status, title, purpose, completion_criteria, sort_key, created_at) VALUES ('t1', 'work', 'todo', 't', 'p', 'c', 1, '2026-09-14T00:00:00.000Z')",
+  ).run();
+  db.prepare(
+    "INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (1, 1, '3', 't1', 'tako', '{}')",
+  ).run();
+  const insert = db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (1, ?, ?, 0, 9)");
+  insert.run(0, "memory");
+  expect(db.prepare("SELECT kind FROM episode_markers").all()).toEqual([{ kind: "memory" }]);
+  expect(() => insert.run(1, "injection")).toThrow(/CHECK/);
+  db.close();
+});

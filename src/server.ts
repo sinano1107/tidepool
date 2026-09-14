@@ -33,6 +33,7 @@ import {
 import { createLanding } from "./landing.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter } from "./mcp.js";
+import { ensureMemoryIndex } from "./memory.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import type { Harness } from "./registry.js";
@@ -350,6 +351,8 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // 読み直される — ここは containment ゲートを持たない盤面のための boot 時の1回。
   // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
   // platform-scoped の停止は無く、この盤面が走るホストは1つである。
+  // spec #586 B: 索引の版(tokenizer id + 前処理の版)が今の版と違えば events から作り直す
+  ensureMemoryIndex(db, options.clock.now());
   const runtimePreflight = containers.preflight();
   if (!runtimePreflight.available && !options.harnessContainment) {
     quarantineContainment(db, runtimePreflight.reason, options.clock.now());

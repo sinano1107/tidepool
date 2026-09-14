@@ -10,7 +10,7 @@ import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertReviewerKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
-import { recordKnowledge } from "./memory.js";
+import { browseMemory, readMemory, recordKnowledge, searchMemory } from "./memory.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -602,9 +602,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           deps.db,
           {
             ...input,
-            // listLog と同じ解決: null の workspace は盤面の既定を継ぐ(null のまま = 盤面全体、ではない)。
-            // resolveTaskWorkspace は quarantine の副作用を持つので使わない
-            scope: task.workspace ?? deps.workspace?.name ?? null,
+            scope: memoryScope(deps, task),
             author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
           },
           "worker",
@@ -613,7 +611,55 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       ),
   );
 
+  // spec #586 D: 記憶の pull。各 pull は memory_pulled を書き、その event id を返す
+  // (Precedent の memory マーカーの結合キー)。
+  const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedWorkerId(deps, task) });
+  const page = z.number().int().min(1).optional();
+
+  server.registerTool(
+    "browse_memory",
+    {
+      description:
+        "Browse the board's memory index for this workspace: the direct children of a path " +
+        "prefix — deeper prefixes you can browse next, and entries (id + title) filed at that " +
+        "path. Omit prefix for the top level. Read an entry's text with read_memory.",
+      inputSchema: { prefix: z.string().optional(), page },
+    },
+    async (input) => runVerb(deps, attributedTaskId, (task) => browseMemory(deps.db, reader(task), input, deps.clock.now())),
+  );
+
+  server.registerTool(
+    "search_memory",
+    {
+      description:
+        "Search the board's memory for this workspace by full-text query; results are " +
+        "{id, title, path} in rank order, and truncated says a next page exists. Read an " +
+        "entry's text with read_memory.",
+      inputSchema: { query: z.string().min(1), page },
+    },
+    async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),
+  );
+
+  server.registerTool(
+    "read_memory",
+    {
+      description:
+        "Read memory entries by id: text, path, and source. source_kind is fact (backed by " +
+        "a commit or board event) or inference (backed by an agent's decision) — weigh it. " +
+        "Ids you cannot see are omitted.",
+      inputSchema: { ids: z.array(z.number().int()).min(1) },
+    },
+    async (input) => runVerb(deps, attributedTaskId, (task) => readMemory(deps.db, reader(task), input, deps.clock.now())),
+  );
+
   return server;
+}
+
+/** Memory のスコープ = task の workspace。listLog と同じ解決で、null の workspace は盤面の
+ *  既定を継ぐ(null のまま = 盤面全体、ではない)。resolveTaskWorkspace は quarantine の
+ *  副作用を持つので使わない。 */
+function memoryScope(deps: McpDeps, task: Task): string | null {
+  return task.workspace ?? deps.workspace?.name ?? null;
 }
 
 export function createMcpRouter(deps: McpDeps): Router {
