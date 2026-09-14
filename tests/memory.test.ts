@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { getEvent, listLog } from "../src/events.js";
+import { getEvent, listEvents, listLog } from "../src/events.js";
 import { approvedMemoryEntries, createBehaviorCandidate, invalidateMemoryEntry, recordKnowledge } from "../src/memory.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 
@@ -53,7 +53,7 @@ it("Knowledge は書いた瞬間に approved で載り、エントリ全欄を�
 it("出所の種別は参照の型から導く —— decision_logged の event id は decision(推論)、それ以外の event は event(事実)", () => {
   const { db, task } = board();
   const decision = logDecision(db, task, "kept the note short", "deckhand", at);
-  const registered = decision - 1;
+  const registered = listEvents(db, task.id)[0]!.id;
   recordKnowledge(db, { ...knowledge, source: { event_id: decision } }, "worker", at);
   recordKnowledge(db, { ...knowledge, source: { event_id: registered } }, "worker", at);
   expect(approvedMemoryEntries(db).map((e) => e.source)).toEqual([
@@ -70,12 +70,21 @@ it.each([
   ["path が空", { path: "", source: { commit: "0a46a46" } }, /path/],
   ["path に空の段", { path: "build//tests", source: { commit: "0a46a46" } }, /path/],
   ["path が / で始まる", { path: "/build", source: { commit: "0a46a46" } }, /path/],
+  ["path の段の前後に空白", { path: " build/tests", source: { commit: "0a46a46" } }, /path/],
+  ["title が空白だけ", { title: " ", source: { commit: "0a46a46" } }, /title and text/],
+  ["text が空", { text: "", source: { commit: "0a46a46" } }, /title and text/],
 ])("%s Knowledge は domain error で拒まれ、何も載らない", (_, overrides, message) => {
   const { db } = board();
   const record = () => recordKnowledge(db, { ...knowledge, ...overrides }, "worker", at);
   expect(record).toThrow(DomainError);
   expect(record).toThrow(message);
   expect(approvedMemoryEntries(db)).toEqual([]);
+});
+
+it("commit は大文字の hex も受け、小文字に揃えて載せる", () => {
+  const { db } = board();
+  recordKnowledge(db, { ...knowledge, source: { commit: "0A46A46" } }, "worker", at);
+  expect(approvedMemoryEntries(db).map((e) => e.source)).toEqual([{ kind: "commit", ref: "0a46a46" }]);
 });
 
 const record = (db: ReturnType<typeof openDb>, title: string) =>
@@ -113,6 +122,7 @@ it.each<[string, (ids: { entry: number; other: number }) => Omit<Invalidation, "
   ["superseded に後継 id が無い", () => ({ reason: "superseded" }), /successor/],
   ["path_moved に後継 id が無い", () => ({ reason: "path_moved" }), /successor/],
   ["後継 id が盤面に無い", () => ({ reason: "path_moved", successor_id: 999 }), /no memory entry 999/],
+  ["理由コードが語彙に無い", () => ({ reason: "wrong" as never }), /unknown invalidation reason/],
   ["後継 id が自分自身", ({ entry }) => ({ reason: "superseded", successor_id: entry }), /own successor/],
   ["cause の理由コードに後継 id がある", ({ other }) => ({ reason: "capability", successor_id: other }), /successor/],
 ])("%s無効化は domain error で拒まれ、エントリは残る", (_, input, message) => {
@@ -123,6 +133,25 @@ it.each<[string, (ids: { entry: number; other: number }) => Omit<Invalidation, "
   expect(invalidate).toThrow(DomainError);
   expect(invalidate).toThrow(message);
   expect(approvedMemoryEntries(db).map((e) => e.title)).toEqual(["kept", "other"]);
+});
+
+it("後継が無効化済み・candidate のエントリなら置換は domain error —— 置換の連鎖を行き止まりにしない", () => {
+  const { db } = board();
+  const entry = record(db, "kept");
+  const dead = record(db, "dead");
+  invalidateMemoryEntry(db, { entry_id: dead, reason: "environment" }, "human", "webui", at);
+  const { entry_id: candidate } = createBehaviorCandidate(
+    db,
+    { ...knowledge, addressee: null, source: { commit: "0a46a46" } },
+    "board",
+    at,
+  );
+  for (const successor_id of [dead, candidate]) {
+    expect(() => invalidateMemoryEntry(db, { entry_id: entry, reason: "superseded", successor_id }, "human", "webui", at)).toThrow(
+      /must be an approved, non-invalidated entry/,
+    );
+  }
+  expect(approvedMemoryEntries(db).map((e) => e.title)).toEqual(["kept"]);
 });
 
 it("無効化済み・存在しないエントリの無効化は domain error", () => {

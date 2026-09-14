@@ -6,6 +6,7 @@ import { DomainError } from "./tasks.js";
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、残りの3つは cause.ts の語彙そのもの(間違っていた / 陳腐化)。 */
 export type InvalidationReason = "superseded" | "path_moved" | Extract<Cause, "capability" | "environment" | "requirement_change">;
+const INVALIDATION_REASONS: readonly InvalidationReason[] = ["superseded", "path_moved", "capability", "environment", "requirement_change"];
 
 /** 出所(spec #586 A)。種別は参照の型から導く: commit / event = 事実、decision
  *  (decision_logged の event id)= 推論。 */
@@ -30,7 +31,7 @@ export interface MemoryEntryFields {
   author: { activity: "worker_verb" | "human" | "rca" | "meta_review"; name: string };
 }
 
-export interface MemoryEntry extends MemoryEntryFields {
+interface MemoryEntry extends MemoryEntryFields {
   /** = memory_entry_created の event id。 */
   id: number;
   /** = 承認 event の id(Knowledge は作成 event の id)。candidate は null。 */
@@ -57,18 +58,25 @@ function resolveSource(db: Db, source: SourceInput | undefined): MemorySource {
     throw new DomainError("source must be exactly one of event_id or commit");
   }
   if (source.commit !== undefined) {
-    if (!/^[0-9a-f]{7,64}$/.test(source.commit)) throw new DomainError(`not a commit hash: ${source.commit}`);
-    return { kind: "commit", ref: source.commit };
+    const commit = source.commit.toLowerCase();
+    if (!/^[0-9a-f]{7,64}$/.test(commit)) throw new DomainError(`not a commit hash: ${source.commit}`);
+    return { kind: "commit", ref: commit };
   }
   const event = getEvent(db, source.event_id!);
   if (!event) throw new DomainError(`no event ${source.event_id} on this board`);
   return { kind: event.kind === "decision_logged" ? "decision" : "event", ref: event.id };
 }
 
+/** 版 = 承認 event の id。表の投影と watermark 再生が同じ1つを読む。 */
+function versionOf(state: MemoryEntryFields["state"], createdEventId: number): number | null {
+  return state === "approved" ? createdEventId : null;
+}
+
 function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { source?: SourceInput }, origin: EventOrigin, at: Date): number {
-  if (fields.path.split("/").some((segment) => segment.trim() === "")) {
-    throw new DomainError(`path must be "/"-separated non-empty segments: ${JSON.stringify(fields.path)}`);
+  if (fields.path.split("/").some((segment) => segment === "" || segment.trim() !== segment)) {
+    throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(fields.path)}`);
   }
+  if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
   return db.transaction(() => {
     const entry: MemoryEntryFields = { ...fields, source: resolveSource(db, fields.source) };
     const id = appendEvent(db, {
@@ -97,7 +105,7 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
       String(entry.source.ref),
       entry.author.activity,
       entry.author.name,
-      entry.state === "approved" ? id : null,
+      versionOf(entry.state, id),
     );
     return id;
   })();
@@ -137,6 +145,7 @@ export function invalidateMemoryEntry(
   at: Date,
 ): number {
   const { entry_id, reason, successor_id } = input;
+  if (!INVALIDATION_REASONS.includes(reason)) throw new DomainError(`unknown invalidation reason: ${reason}`);
   if ((reason === "superseded" || reason === "path_moved") !== (successor_id !== undefined)) {
     throw new DomainError("a successor id is required for superseded / path_moved and only for them");
   }
@@ -145,7 +154,13 @@ export function invalidateMemoryEntry(
     if (requireEntry(db, entry_id).invalidation_reason !== null) {
       throw new DomainError(`memory entry ${entry_id} is already invalidated`);
     }
-    if (successor_id !== undefined) requireEntry(db, successor_id);
+    if (successor_id !== undefined) {
+      // 後継は注入に届く側でなければ置換の連鎖が行き止まる
+      const successor = requireEntry(db, successor_id);
+      if (successor.state !== "approved" || successor.invalidation_reason !== null) {
+        throw new DomainError(`successor ${successor_id} must be an approved, non-invalidated entry`);
+      }
+    }
     db.prepare("UPDATE memory_entries SET invalidation_reason = ?, successor_id = ? WHERE id = ?").run(
       reason,
       successor_id ?? null,
@@ -213,7 +228,7 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
       .all(watermark) as Array<{ id: number; payload: string }>) {
       const event = JSON.parse(payload) as Extract<EventPayload, { kind: `memory_entry_${string}` }>;
       if (event.kind === "memory_entry_created") {
-        entries.set(id, { ...event.entry, id, version: event.entry.state === "approved" ? id : null });
+        entries.set(id, { ...event.entry, id, version: versionOf(event.entry.state, id) });
       } else {
         entries.delete(event.entry_id);
       }
