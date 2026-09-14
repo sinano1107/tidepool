@@ -1,7 +1,14 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { getEvent, listEvents, listLog } from "../src/events.js";
-import { approvedMemoryEntries, createBehaviorCandidate, invalidateMemoryEntry, recordKnowledge } from "../src/memory.js";
+import {
+  approvedMemoryEntries,
+  createBehaviorCandidate,
+  invalidateMemoryEntry,
+  readMemory,
+  rebuildMemoryIndex,
+  recordKnowledge,
+} from "../src/memory.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -216,6 +223,8 @@ it("memory 系の event は決定 log の人間向け種別に入らない", () 
   const { db, task } = board();
   const entry = record(db, "not for the human log");
   invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, "human", "webui", at);
+  readMemory(db, { taskId: task.id, scope: "tidepool", agent: "deckhand" }, { ids: [entry] }, at);
+  rebuildMemoryIndex(db, "human", "mcp", at);
   logDecision(db, task, "a decision", "deckhand", at);
   expect(listLog(db).map((e) => e.kind)).toEqual(["decision_logged"]);
 });

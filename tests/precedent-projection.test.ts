@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { EventRow } from "../src/events.js";
-import { projectEpisode } from "../src/precedent.js";
+import { entriesReadBefore, projectEpisode } from "../src/precedent.js";
 
 /** #386 が取った実物の worker session — 2.1.237 の CLI が書いた transcript と、
  *  その session を挟む盤面のイベント。Precedent の投影は決定論的なので、期待値は
@@ -264,4 +264,43 @@ it("worker_exited が無いまま終わった session の窓は、次の worker_
   // 13 は次の session のもの — 窓を開けっぱなしにすると unmatched として湧く
   expect(episode.markers.filter((m) => m.kind === "decision").map((m) => m.eventId)).toEqual([6, 7, 8]);
   expect(episode.workerExitedEventId).toBeNull();
+});
+
+it("memory verb の tool 結果に写った memory_pulled の event id は、decision と同じ完全一致で位置つきの memory マーカーになり、「D の前に読んだ記憶」はその返した id の和集合(spec #586 D)", () => {
+  const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
+  const at = "2026-08-20T06:30:00.000Z";
+  const pulled = (id: number, verb: "search_memory" | "read_memory", returned_ids: number[]): EventRow => ({
+    id, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled",
+    payload: { kind: "memory_pulled", verb, input: {}, returned_ids, watermark: 3 }, created_at: at,
+  });
+  const events: EventRow[] = [
+    ...fixtureEvents().filter((e) => e.id === 5),
+    pulled(6, "search_memory", [1, 2]),
+    { id: 7, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
+    pulled(8, "read_memory", [2, 3]),
+    // tool 結果に写っていない pull —— 位置を持たず、D の前の読み口は拾わない
+    pulled(9, "read_memory", [4]),
+  ];
+  const toolCall = (n: number, name: string, eventId: number | null) => [
+    `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
+    `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
+  ];
+  const episode = project({
+    events,
+    transcriptLines: [
+      ...toolCall(1, "mcp__tidepool__search_memory", 6),
+      // memory verb 以外の応答に写った id は memory マーカーにしない
+      ...toolCall(2, "Bash", 9),
+      ...toolCall(3, "mcp__tidepool__log_decision", 7),
+      ...toolCall(4, "mcp__tidepool__read_memory", 8),
+    ],
+  });
+
+  expect(episode.markers).toEqual([
+    { kind: "memory", position: 0, eventId: 6, missingReason: null, transcriptUuid: "r1" },
+    { kind: "decision", position: 2, eventId: 7, missingReason: null, transcriptUuid: "r3" },
+    { kind: "memory", position: 3, eventId: 8, missingReason: null, transcriptUuid: "r4" },
+    { kind: "memory", position: null, eventId: 9, missingReason: "unmatched", transcriptUuid: null },
+  ]);
+  expect(entriesReadBefore(episode, events, 7)).toEqual([1, 2]);
 });

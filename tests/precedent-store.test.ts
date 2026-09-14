@@ -186,7 +186,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
 
   const [episode] = listEpisodes(db, { workspace: "sandbox", agent: "tako" });
   const decisions = episode!.markers.filter((m) => m.kind === "decision");
-  expect(episode!.extractorVersion).toBe("2");
+  expect(episode!.extractorVersion).toBe("3");
   expect(decisions.map((m) => [m.eventId, m.line, m.displayed, m.objections, m.cause])).toEqual([
     [6, "kept the note to three bullets", true, [], null],
     [7, "kept the note to three bullets", true, ["2回目は要らない"], "preference"],

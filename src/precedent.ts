@@ -83,10 +83,11 @@ export interface SubagentUsage {
 /** 構造マーカーは3つだけ(ADR 0083 追記 2 決定5)。subagent の lifecycle は
  *  行動行の `subagent` フラグで既に表現されるので重ねない。advisor 相談は
  *  マーカーだけ — 結果は暗号化されていて抽出するものが無く、行動行にも載せると
- *  二重になる。`decision` は構造ではなく判断のマーカー。 */
-export type MarkerKind = "decision" | "compaction" | "commit" | "advisor";
+ *  二重になる。`decision` は構造ではなく判断のマーカー。`memory` は記憶の pull
+ *  (`memory_pulled`)で、decision と同じ event id の完全一致で結ぶ(spec #586 D)。 */
+export type MarkerKind = "decision" | "compaction" | "commit" | "advisor" | "memory";
 
-/** transcript に結べなかった `decision_logged` が持つ欠測理由。「空 = 何も
+/** transcript に結べなかった `decision_logged` / `memory_pulled` が持つ欠測理由。「空 = 何も
  *  しなかった」と区別するために理由コードで明示する(ADR 0083 追記 2)。
  *  ヒューリスティック結合は作らないので、結合は完全一致の1種類しかない。 */
 export type DecisionMissingReason =
@@ -100,9 +101,9 @@ export interface EpisodeMarker {
   kind: MarkerKind;
   /** 行動列内の位置 = そのマーカーより前にあった行動の数。
    *  `actions.slice(0, position)` が「ここまでにやったこと」。
-   *  null は結べなかった decision(位置を持たない)。 */
+   *  null は結べなかった decision / memory(位置を持たない)。 */
   position: number | null;
-  /** `decision` マーカーが指す `decision_logged` の event id。他の種別では null。 */
+  /** `decision` / `memory` マーカーが指す `decision_logged` / `memory_pulled` の event id。他の種別では null。 */
   eventId: number | null;
   missingReason: DecisionMissingReason | null;
   /** 根拠になった transcript 行。decision では event id を写した tool_result の行。 */
@@ -184,8 +185,9 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
   const actions: EpisodeAction[] = [];
   const markers: EpisodeMarker[] = [];
   const byToolUseId = new Map<string, EpisodeAction>();
-  /** tool_result に写った event id → その `log_decision` 行動の位置。 */
+  /** tool_result に写った event id → その `log_decision` / memory verb 行動の位置。 */
   const loggedAt = new Map<number, { position: number; transcriptUuid: string }>();
+  const pulledAt = new Map<number, { position: number; transcriptUuid: string }>();
   const lines: EpisodeLineStats = {
     total: 0,
     interpreted: 0,
@@ -286,9 +288,16 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
         const action = byToolUseId.get(tool_use_id);
         if (!action) continue;
         action.failed = is_error === true;
-        const eventId = readLoggedEventId(action.tool, (block as Record<string, unknown>).content);
-        if (eventId !== null) {
-          loggedAt.set(eventId, { position: action.index, transcriptUuid: uuid });
+        // tool 名で絞るのは、他の verb の応答に `event_id` が生えたときに黙って
+        // decision / memory として結ばれないようにするため
+        const boundAt = /__log_decision$/.test(action.tool)
+          ? loggedAt
+          : /__(browse|search|read)_memory$/.test(action.tool)
+            ? pulledAt
+            : null;
+        const eventId = boundAt && readEventId((block as Record<string, unknown>).content);
+        if (boundAt && eventId !== null) {
+          boundAt.set(eventId, { position: action.index, transcriptUuid: uuid });
         }
       }
     }
@@ -297,7 +306,10 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
   const { exited, inSession } = sessionWindow(input.events, spawned);
   const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
   const completed = input.events.find((e) => e.kind === "task_completed" && inSession(e));
-  markers.push(...decisionMarkers(input.events, inSession, loggedAt));
+  markers.push(
+    ...boundMarkers("decision", input.events, inSession, loggedAt),
+    ...boundMarkers("memory", input.events, inSession, pulledAt),
+  );
   // 位置順。結べなかった decision(position null)は末尾に残る — 消さないことが
   // 「空 = 何もしなかった」との区別そのもの。
   markers.sort(
@@ -358,20 +370,23 @@ export function sessionWindow(
   };
 }
 
-/** この session の `decision_logged` を、盤面が発行した event id の**完全一致**で
- *  行動列に結ぶ(ADR 0083 追記 2 — ヒューリスティック結合は作らない)。出現順や
- *  文言では結ばない: フィクスチャの events 6 と 7 は文言が完全に同一である。 */
-function decisionMarkers(
+/** この session の `decision_logged`(decision)/ `memory_pulled`(memory)を、盤面が
+ *  発行した event id の**完全一致**で行動列に結ぶ(ADR 0083 追記 2 — ヒューリスティック
+ *  結合は作らない)。出現順や文言では結ばない: フィクスチャの events 6 と 7 は文言が
+ *  完全に同一である。 */
+function boundMarkers(
+  kind: "decision" | "memory",
   events: EventRow[],
   inSession: (e: EventRow) => boolean,
   loggedAt: Map<number, { position: number; transcriptUuid: string }>,
 ): EpisodeMarker[] {
+  const eventKind = kind === "decision" ? "decision_logged" : "memory_pulled";
   return events
-    .filter((e) => e.kind === "decision_logged" && inSession(e))
+    .filter((e) => e.kind === eventKind && inSession(e))
     .map((e) => {
       const hit = loggedAt.get(e.id);
       return {
-        kind: "decision" as const,
+        kind,
         position: hit?.position ?? null,
         eventId: e.id,
         missingReason: hit ? null : loggedAt.size === 0 ? "no_event_id" : "unmatched",
@@ -380,12 +395,11 @@ function decisionMarkers(
     });
 }
 
-/** `log_decision` の tool_result に写った盤面発行の event id(スライス A / #384)。
- *  応答は text ブロックの中の JSON 文字列という二重の包みで届くので、そこまで
- *  剥がす。tool 名で絞るのは、他の verb の応答に `event_id` が生えたときに
- *  黙って decision として結ばれないようにするため。 */
-function readLoggedEventId(tool: string, content: unknown): number | null {
-  if (!/__log_decision$/.test(tool) || !Array.isArray(content)) return null;
+/** `log_decision` / memory verb の tool_result に写った盤面発行の event id(スライス A /
+ *  #384、spec #586 D)。応答は text ブロックの中の JSON 文字列という二重の包みで届くので、
+ *  そこまで剥がす。 */
+function readEventId(content: unknown): number | null {
+  if (!Array.isArray(content)) return null;
   for (const block of content) {
     if (typeof block !== "object" || block === null) continue;
     const { type, text } = block as Record<string, unknown>;
@@ -402,7 +416,7 @@ function readLoggedEventId(tool: string, content: unknown): number | null {
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
-export const EXTRACTOR_VERSION = "2";
+export const EXTRACTOR_VERSION = "3";
 
 /** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
  *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
@@ -482,6 +496,28 @@ export function projectAndPersist(
     });
     return episodeId;
   })();
+}
+
+/** 「decision D より前に読んだ記憶」(spec #586 D / ADR 0083 決定10): D より前に位置を
+ *  持つ memory マーカーが指す pull の返した id の和集合(昇順)。自己申告の列は持たない。
+ *  D がこの Episode で位置を持たなければ null(「何も読まなかった」と混ぜない)。
+ *  注入分(`memory_injected`)は #592 がここに足す。 */
+export function entriesReadBefore(
+  episode: Pick<Episode, "markers">,
+  events: readonly EventRow[],
+  decisionEventId: number,
+): number[] | null {
+  const decision = episode.markers.find((m) => m.kind === "decision" && m.eventId === decisionEventId);
+  if (decision?.position == null) return null;
+  const pulls = new Set(
+    episode.markers
+      .filter((m) => m.kind === "memory" && m.position !== null && m.position < decision.position!)
+      .map((m) => m.eventId),
+  );
+  const ids = events.flatMap((e) =>
+    e.payload.kind === "memory_pulled" && pulls.has(e.id) ? e.payload.returned_ids : [],
+  );
+  return [...new Set(ids)].sort((a, b) => a - b);
 }
 
 /** 読み出し時に結ぶ outcome を持つマーカー。表示済み・異議は投影のあとに届く
