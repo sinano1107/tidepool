@@ -74,7 +74,7 @@ function versionOf(state: MemoryEntryFields["state"], createdEventId: number): n
 
 /** エントリ表と FTS への投影(作成と rebuild の再生が共有する)。 */
 function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
-    db.prepare(
+  db.prepare(
     `INSERT INTO memory_entries (id, kind, state, scope, path, title, text, original_text, original_language,
        addressee, source_kind, source_ref, author_activity, author, version)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -230,15 +230,19 @@ function rowToEntry(row: EntryRow): MemoryEntry {
 /** approved かつ無効化されていないエントリ(id 順)。`watermark`(memory 系 event の id)を
  *  渡すと、その時点までの events を再生して当時の集合を返す —— 表は投影なので、指定が
  *  無ければ表を読む。 */
+/** 店を変える memory 系 events(id 順)。watermark の再生と rebuild が同じ列を読む。 */
+function storeEvents(db: Db, watermark = Number.MAX_SAFE_INTEGER) {
+  return (
+    db
+      .prepare("SELECT id, payload FROM events WHERE kind IN ('memory_entry_created', 'memory_entry_invalidated') AND id <= ? ORDER BY id")
+      .all(watermark) as Array<{ id: number; payload: string }>
+  ).map(({ id, payload }) => ({ id, event: JSON.parse(payload) as Extract<EventPayload, { kind: `memory_entry_${string}` }> }));
+}
+
 export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[] {
   if (watermark !== undefined) {
     const entries = new Map<number, MemoryEntry>();
-    for (const { id, payload } of db
-      .prepare(
-        "SELECT id, payload FROM events WHERE kind IN ('memory_entry_created', 'memory_entry_invalidated') AND id <= ? ORDER BY id",
-      )
-      .all(watermark) as Array<{ id: number; payload: string }>) {
-      const event = JSON.parse(payload) as Extract<EventPayload, { kind: `memory_entry_${string}` }>;
+    for (const { id, event } of storeEvents(db, watermark)) {
       if (event.kind === "memory_entry_created") {
         entries.set(id, { ...event.entry, id, version: versionOf(event.entry.state, id) });
       } else {
@@ -378,7 +382,7 @@ export function browseMemory(
   input: { prefix?: string; page?: number },
   at: Date,
 ): { prefixes: string[]; entries: Array<{ id: number; title: string }>; truncated: boolean; event_id: number } {
-  const prefix = (input.prefix ?? "").replace(/\/+$/, "");
+  const prefix = input.prefix ?? "";
   const page = input.page ?? 1;
   return db.transaction(() => {
     const entries = visibleEntries(db, reader);
@@ -431,10 +435,7 @@ export function readMemory(
 export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     db.exec(`DELETE FROM memory_entries; DROP TABLE memory_fts; ${MEMORY_FTS_DDL};`);
-    for (const { id, payload } of db
-      .prepare("SELECT id, payload FROM events WHERE kind IN ('memory_entry_created', 'memory_entry_invalidated') ORDER BY id")
-      .all() as Array<{ id: number; payload: string }>) {
-      const event = JSON.parse(payload) as Extract<EventPayload, { kind: `memory_entry_${string}` }>;
+    for (const { id, event } of storeEvents(db)) {
       if (event.kind === "memory_entry_created") insertEntry(db, id, event.entry);
       else markInvalidated(db, event.entry_id, event.reason, event.successor_id);
     }
