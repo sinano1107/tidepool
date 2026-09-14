@@ -68,18 +68,26 @@ export async function translateLogEntry(
   return translateSource(db, client, source, language, now);
 }
 
-/** 記憶のエントリ1件の text を表示言語へ(issue #593、settings の一覧で原文の無い agent 由来を読む)。 */
+/** 記憶のエントリ1件の title と text を表示言語へ(issue #593 / #603、settings の一覧で原文の無い agent 由来を読む)。 */
 export async function translateMemoryEntry(
   db: Db,
   client: TranslationClient,
   entryId: number,
   language: string,
   now: Date,
-): Promise<TranslationOutcome> {
+): Promise<{ status: "translated"; title: string; text: string; cached: boolean } | { status: "throttled" }> {
   // ponytail: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
   const entry = listMemoryEntries(db, {}).find((e) => e.id === entryId);
   if (!entry) throw new TranslationTargetError(`no memory entry ${entryId}`);
-  return translateSource(db, client, entry.text, language, now);
+  const tracker = { allCached: true };
+  try {
+    const title = await translateTracked(db, client, entry.title, language, now, tracker);
+    const text = await translateTracked(db, client, entry.text, language, now, tracker);
+    return { status: "translated", title, text, cached: tracker.allCached };
+  } catch (err) {
+    if (err instanceof ThrottledSignal) return { status: "throttled" };
+    throw err;
+  }
 }
 
 /** Internal short-circuit for a multi-fragment translation (a handoff's

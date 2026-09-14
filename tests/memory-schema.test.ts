@@ -31,9 +31,9 @@ const insert = (db: ReturnType<typeof openDb>, overrides: Record<string, unknown
 
 it("fresh 盤面に memory のエントリ表があり、値域どおりの行は入る", () => {
   const db = openDb(":memory:");
-  insert(db);
-  expect(db.prepare("SELECT kind, state, source_kind FROM memory_entries").all()).toEqual([
-    { kind: "knowledge", state: "approved", source_kind: "commit" },
+  insert(db, { original_title: "テスト", original_text: "Node 22", original_language: "Japanese" });
+  expect(db.prepare("SELECT kind, state, source_kind, original_title FROM memory_entries").all()).toEqual([
+    { kind: "knowledge", state: "approved", source_kind: "commit", original_title: "テスト" },
   ]);
   db.close();
 });
@@ -88,6 +88,7 @@ it("definition を受けない旧いエントリ表は、再オープンで kind
       path                TEXT NOT NULL,
       title               TEXT NOT NULL,
       text                TEXT NOT NULL,
+      original_title      TEXT,
       original_text       TEXT,
       original_language   TEXT,
       addressee           TEXT,

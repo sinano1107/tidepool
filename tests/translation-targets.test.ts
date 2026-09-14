@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { recordKnowledge } from "../src/memory.js";
 import {
   completeTask,
   logDecision,
@@ -14,6 +15,7 @@ import {
   TranslationTargetError,
   translateHandoff,
   translateLogEntry,
+  translateMemoryEntry,
   translateQuestion,
 } from "../src/translation.js";
 import { FakeTranslationClient } from "./fakes.js";
@@ -257,4 +259,22 @@ it("work タスク(question ではない)の翻訳は TranslationTargetError を
   await expect(translateQuestion(db, client, task.id, "Japanese", NOW)).rejects.toThrow(
     TranslationTargetError,
   );
+});
+
+it("記憶のエントリは title と text の両方を翻訳する(ADR 0015 五度目の精密化)", async () => {
+  const db = await freshDb();
+  registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW);
+  const { entry_id } = recordKnowledge(
+    db,
+    { scope: null, path: "build", title: "Use Node 22", text: "Run tests on Node 22.", source: { event_id: 1 }, author: { activity: "worker_verb", name: "deckhand" } },
+    "worker",
+    NOW,
+  );
+
+  expect(await translateMemoryEntry(db, new FakeTranslationClient(), entry_id, "Japanese", NOW)).toEqual({
+    status: "translated",
+    title: "[translated] Use Node 22",
+    text: "[translated] Run tests on Node 22.",
+    cached: false,
+  });
 });

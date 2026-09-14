@@ -2107,7 +2107,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       setEntries(loaded);
       if (language === "English") return;
       for (const entry of loaded.filter((e) => e.original === null)) {
-        translateTarget({ type: "memory_entry", entry_id: entry.id }).then((out) => out.status === "translated" && setTranslations((t) => ({ ...t, [entry.id]: out.text }))).catch(() => {
+        translateTarget({ type: "memory_entry", entry_id: entry.id }).then((out) => out.status === "translated" && setTranslations((t) => ({ ...t, [entry.id]: out }))).catch(() => {
         });
       }
     } catch (err) {
@@ -2121,23 +2121,30 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
   const writing = edit.isOpen(writeId);
-  const blank = { kind: "knowledge", workspace: "", path: "", title: "", original: "", text: "", backTranslation: "", supersedes: "" };
+  const blank = { kind: "knowledge", workspace: "", path: "", originalTitle: "", originalText: "", title: "", text: "", back: null, supersedes: "" };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "text" ? { backTranslation: "" } : {} });
-  useDirtySignal(edit, writing, draft.original.trim() !== "" || draft.text.trim() !== "");
+  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "title" || key === "text" ? { back: null } : {} });
+  useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ""));
   const translatable = language !== "English";
+  const fields = draft.kind === "knowledge" ? ["title", "text"] : ["text"];
+  const originalOf = { title: draft.originalTitle, text: draft.originalText };
   const runTranslation = async (toEnglish) => {
     setBusy(true);
     try {
-      let english = draft.text;
-      if (toEnglish) {
-        const out = await translateTarget({ type: "to_english", text: draft.original });
-        if (out.status !== "translated") throw new Error("translation is throttled right now");
-        english = out.text;
+      const english = {};
+      const back = {};
+      for (const key of fields) {
+        english[key] = draft[key];
+        if (toEnglish) {
+          const out2 = await translateTarget({ type: "to_english", text: originalOf[key] });
+          if (out2.status !== "translated") throw new Error("translation is throttled right now");
+          english[key] = out2.text;
+        }
+        const out = await translateTarget({ type: "back_translation", text: english[key] });
+        back[key] = out.status === "translated" ? out.text : "";
       }
-      const back = await translateTarget({ type: "back_translation", text: english });
-      setDraft({ ...draft, text: english, backTranslation: back.status === "translated" ? back.text : "" });
+      setDraft({ ...draft, ...english, back });
     } catch (err) {
       say("danger", "translate failed", String(err.message || err));
     }
@@ -2146,12 +2153,8 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   const save = async () => {
     setBusy(true);
     try {
-      const body = {
-        workspace: draft.workspace || null,
-        path: draft.path.trim(),
-        text: draft.text.trim(),
-        ...draft.original.trim() ? { original: draft.original.trim() } : {}
-      };
+      const originals = fields.map((key) => [`original_${key}`, originalOf[key].trim()]).filter(([, v]) => v);
+      const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(), ...Object.fromEntries(originals) };
       if (draft.kind === "knowledge") await api("/api/settings/memory/knowledge", { ...body, title: draft.title.trim() });
       else await api("/api/settings/memory/definitions", { ...body, ...draft.supersedes ? { supersedes: Number(draft.supersedes) } : {} });
       say("success", `${draft.kind} saved`, body.path);
@@ -2186,10 +2189,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       onChange: setDraftField("kind"),
       options: ["knowledge", "definition"]
     }
-  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.original, onChange: setDraftField("original") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.original.trim(), onClick: () => runTranslation(true) }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.text.trim(), onClick: () => runTranslation(false) }, "Back-translate"), draft.backTranslation && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", draft.backTranslation), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: setDraftField("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: setDraftField("path"), placeholder: "build/tests" }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: setDraftField("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: `Original title (${language})`, value: draft.originalTitle, onChange: setDraftField("originalTitle") }), /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.originalText, onChange: setDraftField("originalText") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !originalOf[key].trim()), onClick: () => runTranslation(true) }, "Translate")), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: setDraftField("title") }), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: setDraftField("text") }), translatable && /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || fields.some((key) => !draft[key].trim()), onClick: () => runTranslation(false) }, "Back-translate"), draft.back && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", fields.map((key) => draft.back[key]).join(" \u2014 ")), /* @__PURE__ */ React.createElement(
     EditActions,
     {
-      ok: draft.text.trim() !== "",
+      ok: fields.every((key) => draft[key].trim() !== ""),
       busy,
       saveLabel: `Save ${draft.kind}`,
       onSave: save,
@@ -2232,7 +2235,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path),
     entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
     /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
-    (entry.original || translations[entry.id]) && /* @__PURE__ */ React.createElement("p", { style: muted }, entry.original ? `original: ${entry.original.text}` : `translation: ${translations[entry.id]}`),
+    (entry.original ?? translations[entry.id]) && /* @__PURE__ */ React.createElement("p", { style: muted }, entry.original ? "original" : "translation", ": ", [
+      entry.kind !== "definition" && (entry.original ?? translations[entry.id]).title,
+      (entry.original ?? translations[entry.id]).text
+    ].filter(Boolean).join(" \u2014 ")),
     !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
     invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
       Select,

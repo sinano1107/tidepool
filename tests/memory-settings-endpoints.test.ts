@@ -53,7 +53,7 @@ it("GET /api/settings/memory/entries は絞り込みを受け、原文の無い 
     workspace: null,
     path: "build",
     text: "How things are built.",
-    original: "ビルドの仕方",
+    original_text: "ビルドの仕方",
   });
   expect(written.status).toBe(200);
 
@@ -67,10 +67,10 @@ it("GET /api/settings/memory/entries は絞り込みを受け、原文の無い 
 
   expect((await api(t.baseUrl, "POST", "/api/translate", { type: "memory_entry", entry_id: agent })).json).toEqual({
     status: "translated",
+    title: "[translated] Tests need Node 22",
     text: "[translated] Tests need Node 22.",
     cached: false,
   });
-  expect(translationClient.calls).toEqual([{ source: "Tests need Node 22.", language: "Japanese" }]);
   expect((await api(t.baseUrl, "POST", "/api/translate", { type: "memory_entry", entry_id: 999 })).status).toBe(404);
 
   await t.stop();
@@ -85,9 +85,12 @@ it("翻訳 client が無くても Knowledge の書き込みは原文つき・書
     path: "build/tests",
     title: "Use Node 22",
     text: "Run the suite on Node 22.",
-    original: "スイートは Node 22 で走らせる",
+    original_title: "Node 22 を使う",
+    original_text: "スイートは Node 22 で走らせる",
   });
   expect(written.status).toBe(200);
+  const partial = { workspace: null, path: "a", title: "t", text: "x", original_title: "原文の title だけ" };
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory/knowledge", partial)).status).toBe(400);
   expect((await api(t.baseUrl, "POST", "/api/settings/memory/knowledge", { workspace: null, path: "a", title: "t", text: "" })).status).toBe(400);
   expect((await api(t.baseUrl, "POST", "/api/settings/memory/knowledge", { workspace: null, path: "a//b", title: "t", text: "x" })).status).toBe(400);
 
@@ -97,7 +100,7 @@ it("翻訳 client が無くても Knowledge の書き込みは原文つき・書
       kind: "knowledge",
       scope: "tidepool",
       text: "Run the suite on Node 22.",
-      original: { text: "スイートは Node 22 で走らせる", language: "Japanese" },
+      original: { title: "Node 22 を使う", text: "スイートは Node 22 で走らせる", language: "Japanese" },
       author: { activity: "human", name: "human" },
     },
   ]);
@@ -145,15 +148,17 @@ it("管理MCP で Knowledge を書き、枝を定義し、一覧で読み、無�
       path: "build/tests",
       title: "Use Node 22",
       text: "Run the suite on Node 22.",
-      original: "スイートは Node 22 で走らせる",
+      original_title: "Node 22 を使う",
+      original_text: "スイートは Node 22 で走らせる",
     });
+    expect((await call("record_knowledge", { workspace: null, path: "a", title: "t", text: "x", original_text: "原文の text だけ" })).isError).toBe(true);
     const branch = await call("define_memory_branch", { workspace: null, path: "build", text: "How things are built." });
     expect((await call("define_memory_branch", { workspace: null, path: "build", text: "Again." })).isError).toBe(true);
 
     expect((await call("list_memory_entries", { kind: "knowledge" })).json).toMatchObject([
       {
         id: knowledge.json.entry_id,
-        original: { text: "スイートは Node 22 で走らせる", language: "Japanese" },
+        original: { title: "Node 22 を使う", text: "スイートは Node 22 で走らせる", language: "Japanese" },
         author: { activity: "human", name: "human" },
       },
     ]);

@@ -179,6 +179,7 @@ const MEMORY_ENTRIES_TABLE_DDL = `
       path                TEXT NOT NULL,
       title               TEXT NOT NULL,
       text                TEXT NOT NULL,
+      original_title      TEXT,
       original_text       TEXT,
       original_language   TEXT,
       addressee           TEXT,
