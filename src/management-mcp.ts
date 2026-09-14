@@ -36,7 +36,21 @@ import {
 } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import { toolError, toolResult } from "./mcp.js";
-import { changeMemorySettings, memorySettingsChangeSchema, readMemorySettings, TOKENIZER } from "./memory.js";
+import {
+  changeMemorySettings,
+  defineHumanMemoryBranch,
+  humanDefinitionSchema,
+  humanKnowledgeSchema,
+  invalidateMemoryEntry,
+  invalidationSchema,
+  listMemoryEntries,
+  memoryListFilterSchema,
+  memorySettingsChangeSchema,
+  readMemorySettings,
+  rebuildMemoryIndex,
+  recordHumanKnowledge,
+  TOKENIZER,
+} from "./memory.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
   type Harness,
@@ -59,8 +73,10 @@ import {
 } from "./scheduler.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
+  DomainError,
   getTask,
   HANDOFF_FIELDS,
+  HUMAN_WORKER_ID,
   listBoard,
   listQueue,
   listYourTasks,
@@ -501,6 +517,64 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       changeMemorySettings(deps.db, change, "mcp", deps.clock.now());
       return toolResult(readMemorySettings(deps.db));
     },
+  );
+  // spec #586 F / issue #593: the human's memory surface. No approve verb — approval
+  // only goes through a question (#358). Domain errors come back as tool errors.
+  const memoryVerb = (write: () => unknown) => {
+    try {
+      return toolResult(write());
+    } catch (err) {
+      if (err instanceof DomainError) return toolError(err.message);
+      throw err;
+    }
+  };
+  const writtenAs =
+    "Written as the human, approved at once. text is the English canonical text; original, when given, is the human's own " +
+    "wording, recorded in the board's display language. workspace null = the whole board.";
+  server.registerTool(
+    "list_memory_entries",
+    {
+      description:
+        "List the board's memory entries, including candidates, invalidated ones (with invalidation_reason and successor_id) " +
+        "and board-wide definitions a workspace definition shadows. workspace matches exactly; board_wide lists only board-wide entries; " +
+        "state invalidated lists invalidated entries, approved / candidate the rest.",
+      inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional() }).shape,
+    },
+    async ({ workspace, board_wide, ...filter }) =>
+      toolResult(listMemoryEntries(deps.db, { ...filter, scope: board_wide ? null : workspace })),
+  );
+  server.registerTool(
+    "record_knowledge",
+    {
+      description: `Record a Knowledge entry: a fact filed under path (a "/"-separated hierarchy such as build/tests). ${writtenAs}`,
+      inputSchema: humanKnowledgeSchema.shape,
+    },
+    async (input) => memoryVerb(() => recordHumanKnowledge(deps.db, input, "mcp", deps.clock.now())),
+  );
+  server.registerTool(
+    "define_memory_branch",
+    {
+      description:
+        "Define a memory branch: one line at the branch's path declaring what is filed under it. To revise a branch's " +
+        `definition, pass the current one's id as supersedes. ${writtenAs}`,
+      inputSchema: humanDefinitionSchema.shape,
+    },
+    async (input) => memoryVerb(() => defineHumanMemoryBranch(deps.db, input, "mcp", deps.clock.now())),
+  );
+  server.registerTool(
+    "invalidate_memory_entry",
+    {
+      description:
+        "Invalidate a memory entry so it is no longer injected or pulled (nothing is deleted). reason is superseded or path_moved " +
+        "(both require successor_id), capability (it was wrong), or environment / requirement_change (it went stale).",
+      inputSchema: invalidationSchema.extend({ entry_id: z.number().int().positive() }).shape,
+    },
+    async (input) => memoryVerb(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
+  );
+  server.registerTool(
+    "rebuild_memory_index",
+    { description: "Rebuild the memory entry table and its search index by replaying the board's memory events." },
+    async () => toolResult({ event_id: rebuildMemoryIndex(deps.db, HUMAN_WORKER_ID, "mcp", deps.clock.now()) }),
   );
   server.registerTool(
     "cancel_task",

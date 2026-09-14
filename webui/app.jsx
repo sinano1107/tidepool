@@ -1830,12 +1830,190 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
         <React.Fragment>
           <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={cap} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then fewer entries.
+            the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom.
           </p>
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save memory cap"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
       )}
+    </Card>
+  );
+}
+
+// Memory entries (spec #586 F / issue #593): the human reads, writes and
+// invalidates board memory here. Entries without an original are agent-written
+// and get a display-language translation through the shared translate pacer;
+// a failed or throttled one just stays untranslated. There is no approve action —
+// approval only goes through a question.
+const MEMORY_INVALIDATION_REASONS = ['superseded', 'path_moved', 'capability', 'environment', 'requirement_change'];
+const needsSuccessor = (reason) => reason === 'superseded' || reason === 'path_moved';
+
+function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [filter, setFilter] = React.useState({ workspace: '', kind: '', state: '' });
+  const [entries, setEntries] = React.useState(null); // null → still loading
+  const [translations, setTranslations] = React.useState({});
+  const load = async () => {
+    const query = new URLSearchParams();
+    if (filter.workspace === '(board)') query.set('board_wide', 'true');
+    else if (filter.workspace) query.set('workspace', filter.workspace);
+    if (filter.kind) query.set('kind', filter.kind);
+    if (filter.state) query.set('state', filter.state);
+    try {
+      const loaded = (await api(`/api/settings/memory/entries?${query}`, undefined, 'GET')).entries;
+      setEntries(loaded);
+      if (language === 'English') return;
+      for (const entry of loaded.filter((e) => e.original === null)) {
+        translateTarget({ type: 'memory_entry', entry_id: entry.id })
+          .then((out) => out.status === 'translated' && setTranslations((t) => ({ ...t, [entry.id]: out.text })))
+          .catch(() => {});
+      }
+    } catch (err) {
+      say('danger', 'memory entries load failed', String(err.message || err));
+    }
+  };
+  React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
+
+  const scopeOptions = [{ value: '', label: 'board-wide' }, ...workspaceNames.map((n) => ({ value: n, label: n }))];
+  const pick = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
+  const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
+
+  // the write form: one edit slot, like every settings card
+  const writeId = 'board:memory-write';
+  const writing = edit.isOpen(writeId);
+  const blank = { kind: 'knowledge', workspace: '', path: '', title: '', original: '', text: '', back: '', supersedes: '' };
+  const [draft, setDraft] = React.useState(blank);
+  const [busy, setBusy] = React.useState(false);
+  const set = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'text' ? { back: '' } : {}) });
+  useDirtySignal(edit, writing, draft.original.trim() !== '' || draft.text.trim() !== '');
+  const translatable = language !== 'English';
+
+  const translate = async () => {
+    setBusy(true);
+    try {
+      const english = await api('/api/translate', { type: 'to_english', text: draft.original });
+      if (english.status !== 'translated') throw new Error('translation is throttled right now');
+      const back = await api('/api/translate', { type: 'back_translation', text: english.text });
+      setDraft({ ...draft, text: english.text, back: back.status === 'translated' ? back.text : '' });
+    } catch (err) {
+      say('danger', 'translate failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body = { workspace: draft.workspace || null, path: draft.path.trim(), text: draft.text.trim(),
+        ...(draft.original.trim() ? { original: draft.original.trim() } : {}) };
+      if (draft.kind === 'knowledge') await api('/api/settings/memory/knowledge', { ...body, title: draft.title.trim() });
+      else await api('/api/settings/memory/definitions', { ...body, ...(draft.supersedes ? { supersedes: Number(draft.supersedes) } : {}) });
+      say('success', `${draft.kind} saved`, body.path);
+      edit.close();
+      await load();
+    } catch (err) {
+      say('danger', `${draft.kind} save failed`, String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  // invalidation: one entry at a time, reason + successor when the reason needs one
+  const [invalidating, setInvalidating] = React.useState(null); // { id, reason, successor }
+  const invalidate = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/settings/memory/entries/${invalidating.id}/invalidate`, {
+        reason: invalidating.reason,
+        ...(needsSuccessor(invalidating.reason) ? { successor_id: Number(invalidating.successor) } : {}),
+      });
+      say('success', 'entry invalidated', `#${invalidating.id} · ${invalidating.reason}`);
+      setInvalidating(null);
+      await load();
+    } catch (err) {
+      say('danger', 'invalidate failed', String(err.message || err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 26 }}>
+        <span style={settingsCardLabel}>memory entries</span>
+        {!writing && (
+          <div style={{ marginLeft: 'auto' }}>
+            <Button variant="ghost" size="sm" onClick={() => edit.open(writeId, () => setDraft(blank))}>Write</Button>
+          </div>
+        )}
+      </div>
+      {writing && (
+        <React.Fragment>
+          <Select label="Kind" value={draft.kind} onChange={set('kind')}
+            options={[{ value: 'knowledge', label: 'knowledge' }, { value: 'definition', label: 'definition (one line for a branch)' }]} />
+          <Select label="Workspace" value={draft.workspace} onChange={set('workspace')} options={scopeOptions} />
+          <Input label={draft.kind === 'knowledge' ? 'Path' : 'Branch path'} mono value={draft.path} onChange={set('path')} placeholder="build/tests" />
+          {draft.kind === 'knowledge' && <Input label="Title (English)" value={draft.title} onChange={set('title')} />}
+          {draft.kind === 'definition' && (
+            <Input label="Supersedes (entry id, to revise the branch's current definition)" mono value={draft.supersedes} onChange={set('supersedes')} />
+          )}
+          {translatable && (
+            <React.Fragment>
+              <Input label={`Original (${language})`} multiline rows={3} value={draft.original} onChange={set('original')} />
+              <Button variant="secondary" size="sm" disabled={busy || !draft.original.trim()} onClick={translate}>Translate</Button>
+            </React.Fragment>
+          )}
+          <Input label="English (saved as the canonical text)" multiline rows={3} value={draft.text} onChange={set('text')} />
+          {draft.back && (
+            <p style={muted} data-testid="memory-back-translation">back in {language}: {draft.back}</p>
+          )}
+          <EditActions ok={draft.text.trim() !== ''} busy={busy} saveLabel={`Save ${draft.kind}`}
+            onSave={save} onCancel={() => edit.close()} />
+        </React.Fragment>
+      )}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Select label="Workspace" value={filter.workspace} onChange={pick('workspace')} style={{ flex: '1 1 120px' }}
+          options={[{ value: '', label: 'all' }, { value: '(board)', label: 'board-wide' }, ...workspaceNames.map((n) => ({ value: n, label: n }))]} />
+        <Select label="Kind" value={filter.kind} onChange={pick('kind')} style={{ flex: '1 1 120px' }}
+          options={[{ value: '', label: 'all' }, 'knowledge', 'behavior', 'definition']} />
+        <Select label="State" value={filter.state} onChange={pick('state')} style={{ flex: '1 1 120px' }}
+          options={[{ value: '', label: 'all' }, 'approved', 'candidate', 'invalidated']} />
+      </div>
+      {entries === null && <p style={muted}>loading…</p>}
+      {entries?.length === 0 && <p style={muted}>no entries</p>}
+      {entries?.map((entry) => (
+        <div key={entry.id} data-testid={`memory-entry-${entry.id}`}
+          style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
+          <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
+            #{entry.id} · {entry.kind} · {entry.invalidation_reason
+              ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}`
+              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}
+          </p>
+          {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
+          <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{entry.text}</p>
+          {(entry.original || translations[entry.id]) && (
+            <p style={muted}>{entry.original ? `original: ${entry.original.text}` : `translation: ${translations[entry.id]}`}</p>
+          )}
+          {!entry.invalidation_reason && invalidating?.id !== entry.id && (
+            <div><Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button></div>
+          )}
+          {invalidating?.id === entry.id && (
+            <React.Fragment>
+              <Select label="Reason" value={invalidating.reason} options={MEMORY_INVALIDATION_REASONS}
+                onChange={(e) => setInvalidating({ ...invalidating, reason: e.target.value })} />
+              {needsSuccessor(invalidating.reason) && (
+                <Input label="Successor (entry id)" mono value={invalidating.successor}
+                  onChange={(e) => setInvalidating({ ...invalidating, successor: e.target.value })} />
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button variant="danger" size="sm" onClick={invalidate}
+                  disabled={busy || (needsSuccessor(invalidating.reason) && !/^[1-9]\d*$/.test(invalidating.successor))}>
+                  Invalidate #{entry.id}
+                </Button>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => setInvalidating(null)}>Cancel</Button>
+              </div>
+            </React.Fragment>
+          )}
+        </div>
+      ))}
     </Card>
   );
 }
@@ -2502,6 +2680,9 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         )}
         {memorySettings && (
           <MemorySettingsCard settings={memorySettings} say={say} onSaved={loadMemorySettings} edit={edit} />
+        )}
+        {displayLanguageLoaded && (
+          <MemoryEntriesCard workspaceNames={workspaceNames} language={displayLanguage} say={say} edit={edit} />
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
         {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && (

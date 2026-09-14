@@ -3,13 +3,14 @@ import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
+import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent } from "./events.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type Task } from "./tasks.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、残りの3つは cause.ts の語彙そのもの(間違っていた / 陳腐化)。 */
 export type InvalidationReason = "superseded" | "path_moved" | Extract<Cause, "capability" | "environment" | "requirement_change">;
-const INVALIDATION_REASONS: readonly InvalidationReason[] = ["superseded", "path_moved", "capability", "environment", "requirement_change"];
+const INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change"] as const satisfies readonly InvalidationReason[];
 
 /** 出所(spec #586 A)。種別は参照の型から導く: commit / event = 事実、decision
  *  (decision_logged の event id)= 推論。 */
@@ -30,8 +31,8 @@ export interface MemoryEntryFields {
   original: { text: string; language: string } | null;
   /** Behavior のみ: agent 名 or null = 全員。Knowledge は常に null。 */
   addressee: string | null;
-  /** definition は null —— 出所は自身の作成 event で、id は event を書くまで決まらないので
-   *  投影と再生が id から導く(sourceOf)。 */
+  /** definition と人間が書くエントリは null —— 出所は自身の作成 event(ADR 0083 追記4・追記5)で、
+   *  id は event を書くまで決まらないので投影と再生が id から導く(sourceOf)。 */
   source: MemorySource | null;
   author: { activity: "worker_verb" | "human" | "rca" | "meta_review"; name: string };
 }
@@ -55,6 +56,8 @@ interface EntryInput {
   path: string;
   title: string;
   text: string;
+  /** 人間が書くエントリのみ。 */
+  original?: MemoryEntryFields["original"];
   source?: SourceInput;
   author: MemoryEntryFields["author"];
 }
@@ -120,8 +123,10 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
     throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(fields.path)}`);
   }
   if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
+  const ownSource = fields.kind === "definition" || fields.author.activity === "human";
+  if (ownSource && fields.source !== undefined) throw new DomainError("a definition or a human-written entry has no source: it is the writer's own declaration");
   return db.transaction(() => {
-    const entry: MemoryEntryFields = { ...fields, source: fields.kind === "definition" ? null : resolveSource(db, fields.source) };
+    const entry: MemoryEntryFields = { ...fields, source: ownSource ? null : resolveSource(db, fields.source) };
     const id = appendEvent(db, {
       taskId: null,
       workerId: entry.author.name,
@@ -136,7 +141,7 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
 
 /** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
 export function recordKnowledge(db: Db, input: EntryInput, origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
-  const id = createEntry(db, { ...input, kind: "knowledge", state: "approved", original: null, addressee: null }, origin, at);
+  const id = createEntry(db, { ...input, kind: "knowledge", state: "approved", original: input.original ?? null, addressee: null }, origin, at);
   return { entry_id: id, event_id: id };
 }
 
@@ -149,7 +154,6 @@ export function defineMemoryBranch(
   origin: EventOrigin,
   at: Date,
 ): { entry_id: number; event_id: number } {
-  if (input.source !== undefined) throw new DomainError("a definition has no source: it is the writer's own declaration");
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   return db.transaction(() => {
     const defined = db
@@ -160,12 +164,48 @@ export function defineMemoryBranch(
       .get(input.path, input.scope) as { id: number } | undefined;
     if (defined && defined.id !== input.supersedes) throw new DomainError(`branch ${input.path} is already defined in this scope by entry ${defined.id}; revise it with supersedes`);
     const { supersedes, ...fields } = input;
-    const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: null, addressee: null }, origin, at);
+    const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: fields.original ?? null, addressee: null }, origin, at);
     if (supersedes !== undefined) {
       invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at);
     }
     return { entry_id: id, event_id: id };
   })();
+}
+
+/** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
+ *  original は人間の原文で言語は盤面の表示言語。出所欄は無い(ADR 0083 追記5)。 */
+const humanEntryFields = {
+  workspace: z.string().min(1).nullable(),
+  path: z.string(),
+  text: z.string(),
+  original: z.string().optional(),
+};
+export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string() });
+export const humanDefinitionSchema = z.object({ ...humanEntryFields, supersedes: z.number().int().positive().optional() });
+export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS), successor_id: z.number().int().positive().optional() });
+
+/** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
+export const memoryListFilterSchema = z.object({
+  workspace: z.string().min(1).optional(),
+  kind: z.enum(["knowledge", "behavior", "definition"]).optional(),
+  state: z.enum(["candidate", "approved", "invalidated"]).optional(),
+});
+
+function humanEntryInput<T extends { workspace: string | null; original?: string }>(db: Db, { workspace, original, ...rest }: T) {
+  return {
+    ...rest,
+    scope: workspace,
+    original: original ? { text: original, language: getDisplayLanguage(db) } : null,
+    author: { activity: "human" as const, name: HUMAN_WORKER_ID },
+  };
+}
+
+export function recordHumanKnowledge(db: Db, input: z.infer<typeof humanKnowledgeSchema>, origin: EventOrigin, at: Date) {
+  return recordKnowledge(db, humanEntryInput(db, input), origin, at);
+}
+
+export function defineHumanMemoryBranch(db: Db, input: z.infer<typeof humanDefinitionSchema>, origin: EventOrigin, at: Date) {
+  return defineMemoryBranch(db, humanEntryInput(db, input), origin, at);
 }
 
 /** Behavior の candidate(spec #586 G の #358 向け seam)。宛先は agent 名 or null = 全員。
@@ -244,6 +284,7 @@ interface EntryRow {
   author: string;
   version: number | null;
   invalidation_reason: InvalidationReason | null;
+  successor_id: number | null;
 }
 
 function rowToEntry(row: EntryRow): MemoryEntry {
@@ -298,6 +339,24 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
       .prepare("SELECT * FROM memory_entries WHERE state = 'approved' AND invalidation_reason IS NULL ORDER BY id")
       .all() as EntryRow[]
   ).map(rowToEntry);
+}
+
+/** 人間の面の一覧(spec #586 F): candidate・無効化済み・影になった盤面全体の定義も出す(id 順)。
+ *  scope は完全一致(null = 盤面全体、省略 = すべて)、state の invalidated は無効化済み、
+ *  approved / candidate は無効化されていないもの。 */
+export function listMemoryEntries(
+  db: Db,
+  filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated" },
+): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null }> {
+  const { scope, kind, state } = filter;
+  return (db.prepare("SELECT * FROM memory_entries ORDER BY id").all() as EntryRow[])
+    .filter(
+      (row) =>
+        (scope === undefined || row.scope === scope) &&
+        (kind === undefined || row.kind === kind) &&
+        (state === undefined || (state === "invalidated" ? row.invalidation_reason !== null : row.invalidation_reason === null && row.state === state)),
+    )
+    .map((row) => ({ ...rowToEntry(row), invalidation_reason: row.invalidation_reason, successor_id: row.successor_id }));
 }
 
 /** CJK の連なりを重なりつきの2文字語に割る(spec #586 B、LWC 式)。unicode61 は CJK を
@@ -664,7 +723,7 @@ export function changeMemorySettings(db: Db, change: MemorySettings, origin: Eve
 
 /** rebuild(spec #586 G): エントリ表と FTS を消し、memory 系 events を再生して作り直し、
  *  索引の版を今の版に刻む。無効化済みの行(理由コード・後継 id)も再生で戻る。 */
-function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin, at: Date): number {
+export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     db.exec(`DELETE FROM memory_entries; DROP TABLE memory_fts; ${MEMORY_FTS_DDL};`);
     for (const { id, event } of storeEvents(db)) {

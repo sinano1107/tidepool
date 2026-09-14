@@ -7,7 +7,9 @@ import {
   defineMemoryBranch,
   ensureMemoryIndex,
   invalidateMemoryEntry,
+  listMemoryEntries,
   readMemory,
+  rebuildMemoryIndex,
   recordKnowledge,
 } from "../src/memory.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
@@ -319,4 +321,68 @@ it("watermark 再生と rebuild は定義を含めて表と同じ集合に戻す
   db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
   ensureMemoryIndex(db, at);
   expect(approvedMemoryEntries(db)).toEqual(current);
+});
+
+const human = { activity: "human" as const, name: "human" };
+const original = { text: "テストは Node 22 が要る", language: "Japanese" };
+
+it("人間が書く Knowledge は原文を持ち、出所は自身の作成 event(種別 = 事実)—— watermark 再生と rebuild でも同じ", () => {
+  const { db } = board();
+  const { entry_id } = recordKnowledge(db, { ...knowledge, original, author: human }, "webui", at);
+
+  const current = approvedMemoryEntries(db);
+  expect(current).toMatchObject([{ id: entry_id, original, source: { kind: "event", ref: entry_id }, author: human }]);
+  expect(approvedMemoryEntries(db, entry_id)).toEqual(current);
+  // setup のみ: 版の古い店を模して rebuild を走らせる
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  ensureMemoryIndex(db, at);
+  expect(approvedMemoryEntries(db)).toEqual(current);
+});
+
+it("人間が書く Knowledge に出所を渡すと domain error —— 出所は自身の作成 event", () => {
+  const { db } = board();
+  expect(() => recordKnowledge(db, { ...knowledge, author: human, source: { commit: "0a46a46" } }, "webui", at)).toThrow(/no source/);
+  expect(approvedMemoryEntries(db)).toEqual([]);
+});
+
+it("人間が書く定義は原文を持つ", () => {
+  const { db } = board();
+  defineMemoryBranch(db, { ...definition, original: { text: "ビルドとテストの手順", language: "Japanese" }, author: human }, "webui", at);
+  expect(approvedMemoryEntries(db)).toMatchObject([{ kind: "definition", original: { text: "ビルドとテストの手順", language: "Japanese" } }]);
+});
+
+it("一覧は candidate と無効化済み(理由コード・後継 id つき)と影になった盤面全体の定義も出し、スコープ・種別・状態で絞れる", () => {
+  const { db } = board();
+  const boardWide = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
+  const workspace = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  const old = record(db, "old");
+  const successor = record(db, "new");
+  invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: successor }, "human", "webui", at);
+  const candidate = createBehaviorCandidate(db, { ...knowledge, scope: null, addressee: null, source: { commit: "0a46a46" } }, "board", at).entry_id;
+
+  const ids = (filter: Parameters<typeof listMemoryEntries>[1]) => listMemoryEntries(db, filter).map((e) => e.id);
+  expect(ids({})).toEqual([boardWide, workspace, old, successor, candidate]);
+  expect(listMemoryEntries(db, {}).find((e) => e.id === old)).toMatchObject({ invalidation_reason: "superseded", successor_id: successor });
+  expect(listMemoryEntries(db, {}).find((e) => e.id === successor)).toMatchObject({ invalidation_reason: null, successor_id: null });
+  expect(ids({ scope: null })).toEqual([boardWide, candidate]);
+  expect(ids({ scope: "tidepool" })).toEqual([workspace, old, successor]);
+  expect(ids({ kind: "definition" })).toEqual([boardWide, workspace]);
+  expect(ids({ kind: "behavior" })).toEqual([candidate]);
+  expect(ids({ state: "approved" })).toEqual([boardWide, workspace, successor]);
+  expect(ids({ state: "candidate" })).toEqual([candidate]);
+  expect(ids({ state: "invalidated" })).toEqual([old]);
+  expect(ids({ scope: "tidepool", kind: "knowledge", state: "approved" })).toEqual([successor]);
+});
+
+it("rebuild は一覧を無効化の理由コード・後継 id ごと同じに戻し、memory_index_rebuilt の event id を返す", () => {
+  const { db } = board();
+  const old = record(db, "old");
+  const successor = record(db, "new");
+  invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: successor }, "human", "webui", at);
+  const before = listMemoryEntries(db, {});
+
+  const eventId = rebuildMemoryIndex(db, "human", "mcp", at);
+
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(getEvent(db, eventId)).toMatchObject({ kind: "memory_index_rebuilt", worker_id: "human", origin: "mcp" });
 });

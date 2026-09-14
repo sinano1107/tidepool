@@ -2077,7 +2077,7 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(cap)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then fewer entries."), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(cap)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -2087,6 +2087,177 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
       onSave: save,
       onCancel: () => edit.close()
     }
+  )));
+}
+const MEMORY_INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change"];
+const needsSuccessor = (reason) => reason === "superseded" || reason === "path_moved";
+function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
+  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [filter, setFilter] = React.useState({ workspace: "", kind: "", state: "" });
+  const [entries, setEntries] = React.useState(null);
+  const [translations, setTranslations] = React.useState({});
+  const load = async () => {
+    const query = new URLSearchParams();
+    if (filter.workspace === "(board)") query.set("board_wide", "true");
+    else if (filter.workspace) query.set("workspace", filter.workspace);
+    if (filter.kind) query.set("kind", filter.kind);
+    if (filter.state) query.set("state", filter.state);
+    try {
+      const loaded = (await api(`/api/settings/memory/entries?${query}`, void 0, "GET")).entries;
+      setEntries(loaded);
+      if (language === "English") return;
+      for (const entry of loaded.filter((e) => e.original === null)) {
+        translateTarget({ type: "memory_entry", entry_id: entry.id }).then((out) => out.status === "translated" && setTranslations((t) => ({ ...t, [entry.id]: out.text }))).catch(() => {
+        });
+      }
+    } catch (err) {
+      say("danger", "memory entries load failed", String(err.message || err));
+    }
+  };
+  React.useEffect(() => {
+    load();
+  }, [filter.workspace, filter.kind, filter.state]);
+  const scopeOptions = [{ value: "", label: "board-wide" }, ...workspaceNames.map((n) => ({ value: n, label: n }))];
+  const pick = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
+  const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
+  const writeId = "board:memory-write";
+  const writing = edit.isOpen(writeId);
+  const blank = { kind: "knowledge", workspace: "", path: "", title: "", original: "", text: "", back: "", supersedes: "" };
+  const [draft, setDraft] = React.useState(blank);
+  const [busy, setBusy] = React.useState(false);
+  const set = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...key === "text" ? { back: "" } : {} });
+  useDirtySignal(edit, writing, draft.original.trim() !== "" || draft.text.trim() !== "");
+  const translatable = language !== "English";
+  const translate = async () => {
+    setBusy(true);
+    try {
+      const english = await api("/api/translate", { type: "to_english", text: draft.original });
+      if (english.status !== "translated") throw new Error("translation is throttled right now");
+      const back = await api("/api/translate", { type: "back_translation", text: english.text });
+      setDraft({ ...draft, text: english.text, back: back.status === "translated" ? back.text : "" });
+    } catch (err) {
+      say("danger", "translate failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const save = async () => {
+    setBusy(true);
+    try {
+      const body = {
+        workspace: draft.workspace || null,
+        path: draft.path.trim(),
+        text: draft.text.trim(),
+        ...draft.original.trim() ? { original: draft.original.trim() } : {}
+      };
+      if (draft.kind === "knowledge") await api("/api/settings/memory/knowledge", { ...body, title: draft.title.trim() });
+      else await api("/api/settings/memory/definitions", { ...body, ...draft.supersedes ? { supersedes: Number(draft.supersedes) } : {} });
+      say("success", `${draft.kind} saved`, body.path);
+      edit.close();
+      await load();
+    } catch (err) {
+      say("danger", `${draft.kind} save failed`, String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const [invalidating, setInvalidating] = React.useState(null);
+  const invalidate = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/settings/memory/entries/${invalidating.id}/invalidate`, {
+        reason: invalidating.reason,
+        ...needsSuccessor(invalidating.reason) ? { successor_id: Number(invalidating.successor) } : {}
+      });
+      say("success", "entry invalidated", `#${invalidating.id} \xB7 ${invalidating.reason}`);
+      setInvalidating(null);
+      await load();
+    } catch (err) {
+      say("danger", "invalidate failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory entries"), !writing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => edit.open(writeId, () => setDraft(blank)) }, "Write"))), writing && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Kind",
+      value: draft.kind,
+      onChange: set("kind"),
+      options: [{ value: "knowledge", label: "knowledge" }, { value: "definition", label: "definition (one line for a branch)" }]
+    }
+  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: set("workspace"), options: scopeOptions }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: set("path"), placeholder: "build/tests" }), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: set("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.original, onChange: set("original") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.original.trim(), onClick: translate }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), draft.back && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", draft.back), /* @__PURE__ */ React.createElement(
+    EditActions,
+    {
+      ok: draft.text.trim() !== "",
+      busy,
+      saveLabel: `Save ${draft.kind}`,
+      onSave: save,
+      onCancel: () => edit.close()
+    }
+  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Workspace",
+      value: filter.workspace,
+      onChange: pick("workspace"),
+      style: { flex: "1 1 120px" },
+      options: [{ value: "", label: "all" }, { value: "(board)", label: "board-wide" }, ...workspaceNames.map((n) => ({ value: n, label: n }))]
+    }
+  ), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Kind",
+      value: filter.kind,
+      onChange: pick("kind"),
+      style: { flex: "1 1 120px" },
+      options: [{ value: "", label: "all" }, "knowledge", "behavior", "definition"]
+    }
+  ), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "State",
+      value: filter.state,
+      onChange: pick("state"),
+      style: { flex: "1 1 120px" },
+      options: [{ value: "", label: "all" }, "approved", "candidate", "invalidated"]
+    }
+  )), entries === null && /* @__PURE__ */ React.createElement("p", { style: muted }, "loading\u2026"), entries?.length === 0 && /* @__PURE__ */ React.createElement("p", { style: muted }, "no entries"), entries?.map((entry) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: entry.id,
+      "data-testid": `memory-entry-${entry.id}`,
+      style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 }
+    },
+    /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path),
+    entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
+    /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
+    (entry.original || translations[entry.id]) && /* @__PURE__ */ React.createElement("p", { style: muted }, entry.original ? `original: ${entry.original.text}` : `translation: ${translations[entry.id]}`),
+    !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
+    invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+      Select,
+      {
+        label: "Reason",
+        value: invalidating.reason,
+        options: MEMORY_INVALIDATION_REASONS,
+        onChange: (e) => setInvalidating({ ...invalidating, reason: e.target.value })
+      }
+    ), needsSuccessor(invalidating.reason) && /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        label: "Successor (entry id)",
+        mono: true,
+        value: invalidating.successor,
+        onChange: (e) => setInvalidating({ ...invalidating, successor: e.target.value })
+      }
+    ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+      Button,
+      {
+        variant: "danger",
+        size: "sm",
+        onClick: invalidate,
+        disabled: busy || needsSuccessor(invalidating.reason) && !/^[1-9]\d*$/.test(invalidating.successor)
+      },
+      "Invalidate #",
+      entry.id
+    ), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", disabled: busy, onClick: () => setInvalidating(null) }, "Cancel")))
   )));
 }
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
@@ -2731,7 +2902,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {

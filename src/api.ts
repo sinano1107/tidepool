@@ -1,4 +1,4 @@
-import { json, type Response, Router } from "express";
+import { json, type RequestHandler, type Response, Router } from "express";
 import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
 import {
@@ -41,7 +41,19 @@ import {
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
 import { type Landing, landingAnnotation } from "./landing.js";
-import { changeMemorySettings, memorySettingsChangeSchema, readMemorySettings } from "./memory.js";
+import {
+  changeMemorySettings,
+  defineHumanMemoryBranch,
+  humanDefinitionSchema,
+  humanKnowledgeSchema,
+  invalidateMemoryEntry,
+  invalidationSchema,
+  listMemoryEntries,
+  memoryListFilterSchema,
+  memorySettingsChangeSchema,
+  readMemorySettings,
+  recordHumanKnowledge,
+} from "./memory.js";
 import {
   getPaceOffsets,
   isValidOffset,
@@ -109,6 +121,7 @@ import {
   translateHandoff,
   translateLogEntry,
   translateQuestion,
+  translateSource,
 } from "./translation.js";
 import { listTranslationUsage } from "./translation-cache.js";
 import {
@@ -419,12 +432,19 @@ const displayLanguageSchema = z.object({
 // display-time translation (issue #47 / ADR 0015): a discriminated union over
 // the 3 UX surfaces (CONTEXT.md's toggles) — triage log skim (log_entry,
 // covering both a decision-log line and a completion report by event id),
-// question card, handoff expansion. Option labels and task title are never a
-// target (out of scope by design, not merely unimplemented).
+// question card, handoff expansion — plus memory (issue #593): an agent-written
+// entry's text for the settings list, and the write form's free text (a
+// human's original into English, and that English back into the display
+// language). Neither free-text result is stored on the entry.
+// Option labels and task title are never a target (out of scope by design,
+// not merely unimplemented).
 const translateRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("log_entry"), event_id: z.number().int() }),
   z.object({ type: z.literal("question"), task_id: z.string().min(1) }),
   z.object({ type: z.literal("handoff"), task_id: z.string().min(1) }),
+  z.object({ type: z.literal("memory_entry"), entry_id: z.number().int() }),
+  z.object({ type: z.literal("to_english"), text: z.string().min(1) }),
+  z.object({ type: z.literal("back_translation"), text: z.string().min(1) }),
 ]);
 
 /** IANA name existence check: an unknown zone throws inside the
@@ -1483,6 +1503,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       let outcome;
       if (target.type === "log_entry") {
         outcome = await translateLogEntry(db, translationClient, target.event_id, language, clock.now());
+      } else if (target.type === "memory_entry") {
+        const entry = listMemoryEntries(db, {}).find((e) => e.id === target.entry_id);
+        if (!entry) throw new TranslationTargetError(`no memory entry ${target.entry_id}`);
+        outcome = await translateSource(db, translationClient, entry.text, language, clock.now());
+      } else if (target.type === "to_english") {
+        outcome = await translateSource(db, translationClient, target.text, "English", clock.now());
+      } else if (target.type === "back_translation") {
+        outcome = await translateSource(db, translationClient, target.text, language, clock.now());
       } else if (target.type === "question") {
         outcome = await translateQuestion(db, translationClient, target.task_id, language, clock.now());
       } else {
@@ -1641,6 +1669,44 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     changeMemorySettings(db, parsed.data, "webui", clock.now());
     res.json(readMemorySettings(db));
   });
+
+  // spec #586 F / issue #593: 記憶の一覧(candidate・無効化済み・影の定義も)。GET は盤面を変異させない
+  // (ADR 0036)ので、原文の無い agent 由来の表示翻訳は他の面と同じく POST /translate の memory_entry
+  const memoryListQuery = memoryListFilterSchema.extend({ board_wide: z.literal("true").optional() });
+  router.get("/settings/memory/entries", (req, res) => {
+    const parsed = memoryListQuery.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: z.treeifyError(parsed.error) });
+      return;
+    }
+    const { workspace, board_wide, ...filter } = parsed.data;
+    res.json({ entries: listMemoryEntries(db, { ...filter, scope: board_wide ? null : workspace }) });
+  });
+
+  // 人間の書き込み(書き手 human、原文の言語は表示言語)と無効化。保存は翻訳 client に依存しない
+  const memoryWrite =
+    <T>(schema: z.ZodType<T>, write: (input: T) => unknown): RequestHandler =>
+    (req, res) => {
+      const parsed = schema.safeParse({ ...req.body, ...req.params });
+      if (!parsed.success) {
+        res.status(400).json({ error: z.treeifyError(parsed.error) });
+        return;
+      }
+      try {
+        res.json(write(parsed.data));
+      } catch (err) {
+        if (!(err instanceof DomainError)) throw err;
+        res.status(400).json({ error: err.message });
+      }
+    };
+  router.post("/settings/memory/knowledge", memoryWrite(humanKnowledgeSchema, (input) => recordHumanKnowledge(db, input, "webui", clock.now())));
+  router.post("/settings/memory/definitions", memoryWrite(humanDefinitionSchema, (input) => defineHumanMemoryBranch(db, input, "webui", clock.now())));
+  router.post(
+    "/settings/memory/entries/:entry_id/invalidate",
+    memoryWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({
+      event_id: invalidateMemoryEntry(db, input, HUMAN_WORKER_ID, "webui", clock.now()),
+    })),
+  );
 
   router.get("/settings/timezone", (_req, res) => {
     res.json({ tz: getQuietHours(db).tz });
