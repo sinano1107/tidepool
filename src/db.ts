@@ -165,7 +165,7 @@ const SPEND_DOWN_STATE_TABLE_DDL = `
 /** Memory の FTS5 tokenizer と、TS 側の CJK bigram 前処理の版(spec #586 B、実測は #357)。
  *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。 */
 export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
-export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-1";
+export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-2";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
 

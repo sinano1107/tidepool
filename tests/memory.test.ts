@@ -4,9 +4,9 @@ import { getEvent, listEvents, listLog } from "../src/events.js";
 import {
   approvedMemoryEntries,
   createBehaviorCandidate,
+  ensureMemoryIndex,
   invalidateMemoryEntry,
   readMemory,
-  rebuildMemoryIndex,
   recordKnowledge,
 } from "../src/memory.js";
 import { DomainError, logDecision, registerTask } from "../src/tasks.js";
@@ -224,7 +224,9 @@ it("memory 系の event は決定 log の人間向け種別に入らない", () 
   const entry = record(db, "not for the human log");
   invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, "human", "webui", at);
   readMemory(db, { taskId: task.id, scope: "tidepool", agent: "deckhand" }, { ids: [entry] }, at);
-  rebuildMemoryIndex(db, "human", "mcp", at);
+  // setup のみ: 版の古い店を模して rebuild を走らせる
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  ensureMemoryIndex(db, at);
   logDecision(db, task, "a decision", "deckhand", at);
   expect(listLog(db).map((e) => e.kind)).toEqual(["decision_logged"]);
 });

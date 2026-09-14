@@ -52,7 +52,7 @@ it("fresh 盤面に Memory の FTS 仮想表と、tokenizer id + 前処理の版
     sql: expect.stringMatching(/fts5\(text, title, path, original, tokenize = "unicode61 tokenchars '_-\.'"\)/),
   });
   expect(db.prepare("SELECT tokenizer, preprocess_version FROM memory_index_version").all()).toEqual([
-    { tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-1" },
+    { tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-2" },
   ]);
   db.close();
 });

@@ -90,11 +90,11 @@ export type MarkerKind = "decision" | "compaction" | "commit" | "advisor" | "mem
 /** transcript に結べなかった `decision_logged` / `memory_pulled` が持つ欠測理由。「空 = 何も
  *  しなかった」と区別するために理由コードで明示する(ADR 0083 追記 2)。
  *  ヒューリスティック結合は作らないので、結合は完全一致の1種類しかない。 */
-export type DecisionMissingReason =
-  /** transcript の `log_decision` の tool_result が event id を1つも写して
-   *  いない = スライス A(#384)より前の盤面が書いた記録。 */
+export type MarkerMissingReason =
+  /** transcript のその verb(`log_decision` / memory verb)の tool_result が event id を
+   *  1つも写していない = スライス A(#384)より前の盤面が書いた記録。 */
   | "no_event_id"
-  /** event id は写っているが、この decision の id はその中に無い。 */
+  /** event id は写っているが、このマーカーの event の id はその中に無い。 */
   | "unmatched";
 
 export interface EpisodeMarker {
@@ -105,7 +105,7 @@ export interface EpisodeMarker {
   position: number | null;
   /** `decision` / `memory` マーカーが指す `decision_logged` / `memory_pulled` の event id。他の種別では null。 */
   eventId: number | null;
-  missingReason: DecisionMissingReason | null;
+  missingReason: MarkerMissingReason | null;
   /** 根拠になった transcript 行。decision では event id を写した tool_result の行。 */
   transcriptUuid: string | null;
 }
@@ -378,18 +378,18 @@ function boundMarkers(
   kind: "decision" | "memory",
   events: EventRow[],
   inSession: (e: EventRow) => boolean,
-  loggedAt: Map<number, { position: number; transcriptUuid: string }>,
+  boundAt: Map<number, { position: number; transcriptUuid: string }>,
 ): EpisodeMarker[] {
   const eventKind = kind === "decision" ? "decision_logged" : "memory_pulled";
   return events
     .filter((e) => e.kind === eventKind && inSession(e))
     .map((e) => {
-      const hit = loggedAt.get(e.id);
+      const hit = boundAt.get(e.id);
       return {
         kind,
         position: hit?.position ?? null,
         eventId: e.id,
-        missingReason: hit ? null : loggedAt.size === 0 ? "no_event_id" : "unmatched",
+        missingReason: hit ? null : boundAt.size === 0 ? "no_event_id" : "unmatched",
         transcriptUuid: hit?.transcriptUuid ?? null,
       };
     });
@@ -731,7 +731,7 @@ interface MarkerRow {
   kind: MarkerKind;
   position: number | null;
   event_id: number | null;
-  missing_reason: DecisionMissingReason | null;
+  missing_reason: MarkerMissingReason | null;
   transcript_uuid: string | null;
 }
 

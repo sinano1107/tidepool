@@ -227,18 +227,21 @@ function rowToEntry(row: EntryRow): MemoryEntry {
   };
 }
 
-/** approved かつ無効化されていないエントリ(id 順)。`watermark`(memory 系 event の id)を
- *  渡すと、その時点までの events を再生して当時の集合を返す —— 表は投影なので、指定が
- *  無ければ表を読む。 */
+/** 店を変える memory 系 event の種別。watermark(snapshot 識別子)と再生が同じ列を読む。 */
+const STORE_EVENT_KINDS = "('memory_entry_created', 'memory_entry_invalidated')";
+
 /** 店を変える memory 系 events(id 順)。watermark の再生と rebuild が同じ列を読む。 */
 function storeEvents(db: Db, watermark = Number.MAX_SAFE_INTEGER) {
   return (
     db
-      .prepare("SELECT id, payload FROM events WHERE kind IN ('memory_entry_created', 'memory_entry_invalidated') AND id <= ? ORDER BY id")
+      .prepare(`SELECT id, payload FROM events WHERE kind IN ${STORE_EVENT_KINDS} AND id <= ? ORDER BY id`)
       .all(watermark) as Array<{ id: number; payload: string }>
   ).map(({ id, payload }) => ({ id, event: JSON.parse(payload) as Extract<EventPayload, { kind: `memory_entry_${string}` }> }));
 }
 
+/** approved かつ無効化されていないエントリ(id 順)。`watermark`(memory 系 event の id)を
+ *  渡すと、その時点までの events を再生して当時の集合を返す —— 表は投影なので、指定が
+ *  無ければ表を読む。 */
 export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[] {
   if (watermark !== undefined) {
     const entries = new Map<number, MemoryEntry>();
@@ -259,9 +262,10 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
 }
 
 /** CJK の連なりを重なりつきの2文字語に割る(spec #586 B、LWC 式)。unicode61 は CJK を
- *  語に切らないので、索引と query の両方にこれを通す。1文字の連なりはそのまま。 */
+ *  語に切らないので、索引と query の両方にこれを通す。1文字の連なりはそのまま。長音符 ー は
+ *  Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。 */
 function bigram(value: string): string {
-  return value.replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu, (run) => {
+  return value.replace(/[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]+/gu, (run) => {
     const chars = [...run];
     const grams = chars.length === 1 ? chars : chars.slice(1).map((char, i) => chars[i] + char);
     return ` ${grams.join(" ")} `;
@@ -287,7 +291,7 @@ export type MemoryDropReason = "addressee" | "invalidated" | "page_limit";
 function memoryWatermark(db: Db): number {
   return (
     db
-      .prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE kind IN ('memory_entry_created', 'memory_entry_invalidated')")
+      .prepare(`SELECT COALESCE(MAX(id), 0) AS id FROM events WHERE kind IN ${STORE_EVENT_KINDS}`)
       .get() as { id: number }
   ).id;
 }
@@ -432,7 +436,7 @@ export function readMemory(
 
 /** rebuild(spec #586 G): エントリ表と FTS を消し、memory 系 events を再生して作り直し、
  *  索引の版を今の版に刻む。無効化済みの行(理由コード・後継 id)も再生で戻る。 */
-export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin, at: Date): number {
+function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     db.exec(`DELETE FROM memory_entries; DROP TABLE memory_fts; ${MEMORY_FTS_DDL};`);
     for (const { id, event } of storeEvents(db)) {

@@ -8,7 +8,6 @@ import {
   ensureMemoryIndex,
   invalidateMemoryEntry,
   readMemory,
-  rebuildMemoryIndex,
   recordKnowledge,
   searchMemory,
 } from "../src/memory.js";
@@ -51,6 +50,12 @@ it.each([
   record({ title: "tasks", text: "tasks テーブルへの直接 SQL は src/tasks.ts に残す" });
   record({ title: "landing", text: "The landing runs after merge-back (ADR 0109)" });
   expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual([title]);
+});
+
+it("長音符 ー を含むカタカナ語も、それ単独の query で当たる", () => {
+  const { db, reader, record } = board();
+  record({ title: "boundary", text: "サーバ境界で応答形を言う" });
+  expect(searchMemory(db, reader, { query: "サーバ" }, at).results.map((r) => r.title)).toEqual(["boundary"]);
 });
 
 it("INDEX は prefix 直下の子だけ —— sub-prefix の名前と、その path に置かれた leaf の id + title", () => {
@@ -195,16 +200,16 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   invalidateMemoryEntry(db, { entry_id: old, reason: "superseded", successor_id: successor }, "human", "webui", at);
   const before = storeView(db, reader);
 
-  const eventId = rebuildMemoryIndex(db, "human", "mcp", at);
+  // setup のみ: 前処理の版が古い店を模して、rebuild の唯一の入口(boot の照合)を通す
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  const eventId = ensureMemoryIndex(db, at);
 
   expect(storeView(db, reader)).toEqual(before);
   expect(before.candidates).toMatchObject({ candidates: expect.arrayContaining([{ id: old, dropped: "invalidated" }]) });
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
-  expect(getEvent(db, eventId)).toMatchObject({
+  expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,
-    worker_id: "human",
-    origin: "mcp",
-    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-1" },
+    payload: { kind: "memory_index_rebuilt", tokenizer: "unicode61 tokenchars '_-.'", preprocess_version: "cjk-bigram-2" },
   });
 });
 
