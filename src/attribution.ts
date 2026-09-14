@@ -2,7 +2,7 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, loadExecutionSettingTable, rowFor } from "./execution-setting.js";
-import { BOARD_WORKER_ID, listChildren, type Task } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import { type DecisionLogEntry, listObjectedEntries, objectedEntryText } from "./triage.js";
 
@@ -177,6 +177,48 @@ function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINI
   return (taskDecisionLog(db, taskId) as DecisionLogEntry[])
     .filter((e) => e.id < before)
     .map(objectedEntryText);
+}
+
+/** entry への最新の帰責(同じ entry への追記は最新が有効 —— spec #563)。無ければ undefined。 */
+export function latestAttribution(db: Db, entryId: number): ({ id: number } & Extract<EventPayload, { kind: "objection_attributed" }>) | undefined {
+  const row = db
+    .prepare(
+      `SELECT id, payload FROM events
+        WHERE kind = 'objection_attributed' AND json_extract(payload, '$.entry_id') = ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(entryId) as { id: number; payload: string } | undefined;
+  return row && { id: row.id, ...JSON.parse(row.payload) };
+}
+
+/** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
+export const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
+
+/** 学習の行き先を cause から導出する(ADR 0115 決定4)。`as` は `missing_information` だけが
+ *  要り、Knowledge は宛先を持たない。Behavior の宛先が agent に落ちなければ DomainError。 */
+export function learningTarget(
+  cause: Cause,
+  entryWorker: string,
+  registrant: string,
+  as?: "behavior" | "knowledge",
+): { kind: "behavior"; addressee: string } | { kind: "knowledge" } {
+  if ((cause === "missing_information") !== (as !== undefined)) {
+    throw new DomainError('as ("behavior" or "knowledge") is required for a missing_information entry and only for it');
+  }
+  const toRegistrant = () => {
+    if (registrant === HUMAN_WORKER_ID) throw new DomainError("the task was registered by a human: there is no agent to address a behavior to");
+    return { kind: "behavior" as const, addressee: registrant };
+  };
+  switch (cause) {
+    case "capability":
+    case "preference":
+      return { kind: "behavior", addressee: entryWorker };
+    case "task_ambiguity":
+      return toRegistrant();
+    case "missing_information":
+      return as === "knowledge" ? { kind: "knowledge" } : toRegistrant();
+    default:
+      throw new DomainError(`the entry's cause is ${cause}: nothing to learn from it`);
+  }
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));

@@ -348,16 +348,25 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
 export function listMemoryEntries(
   db: Db,
   filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated" },
-): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null }> {
+): Array<MemoryEntry & { invalidation_reason: InvalidationReason | null; successor_id: number | null; cause: Cause | null }> {
   const { scope, kind, state } = filter;
-  return (db.prepare("SELECT * FROM memory_entries ORDER BY id").all() as EntryRow[])
+  // cause = 出所 event が帰責(objection_attributed)のときのその cause(spec #615 G)
+  return (
+    db
+      .prepare(
+        `SELECT m.*, json_extract(e.payload, '$.cause') AS cause FROM memory_entries m
+           LEFT JOIN events e ON m.source_kind = 'event' AND e.id = CAST(m.source_ref AS INTEGER) AND e.kind = 'objection_attributed'
+          ORDER BY m.id`,
+      )
+      .all() as Array<EntryRow & { cause: Cause | null }>
+  )
     .filter(
       (row) =>
         (scope === undefined || row.scope === scope) &&
         (kind === undefined || row.kind === kind) &&
         (state === undefined || (state === "invalidated" ? row.invalidation_reason !== null : row.invalidation_reason === null && row.state === state)),
     )
-    .map((row) => ({ ...rowToEntry(row), invalidation_reason: row.invalidation_reason, successor_id: row.successor_id }));
+    .map((row) => ({ ...rowToEntry(row), invalidation_reason: row.invalidation_reason, successor_id: row.successor_id, cause: row.cause }));
 }
 
 /** 索引と query の共通の前処理(spec #586 B / #606 / #608 / #610)。まず CJK の連なりを重なりつきの2文字語に割り(LWC 式)

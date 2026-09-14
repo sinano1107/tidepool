@@ -2,15 +2,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
 import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
-import { type AttributionClient, attributeAfterRca } from "./attribution.js";
+import { type AttributionClient, attributeAfterRca, isHumanEntry, latestAttribution, learningTarget } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { getEvent, listEvents } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertReviewerKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
-import { browseMemory, defineMemoryBranch, readMemory, recordKnowledge, searchMemory } from "./memory.js";
+import { browseMemory, createBehaviorCandidate, defineMemoryBranch, readMemory, recordKnowledge, searchMemory } from "./memory.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -610,6 +611,50 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           deps.clock.now(),
         ),
       ),
+  );
+
+  server.registerTool(
+    "propose_from_objection",
+    {
+      description:
+        "Review only: turn your finding about an objected entry of your parent task into memory — objected entries " +
+        "of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause; " +
+        "a behavior is a candidate a human approves later. as (behavior or knowledge) is required only when the cause " +
+        "is missing_information. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: {
+        entry_id: z.number().int(),
+        path: z.string(),
+        title: z.string().min(1),
+        text: z.string().min(1),
+        as: z.enum(["behavior", "knowledge"]).optional(),
+      },
+    },
+    async ({ entry_id, as, ...fields }) =>
+      runVerb(deps, attributedTaskId, (task) => {
+        // 門は列を足さず構造で引く(ADR 0120 決定1(a))
+        if (task.type !== "review" || task.parent_id === null) {
+          throw new DomainError("propose_from_objection is only for a review of an objected task");
+        }
+        const entry = getEvent(deps.db, entry_id);
+        if (entry?.task_id !== task.parent_id || (entry.kind !== "decision_logged" && entry.kind !== "task_completed")) {
+          throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
+        }
+        const attribution = latestAttribution(deps.db, entry_id);
+        if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
+        if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
+        const registrant = listEvents(deps.db, entry.task_id).find((e) => e.kind === "task_registered")!.worker_id;
+        const target = learningTarget(attribution.cause, entry.worker_id, registrant, as);
+        const input = {
+          ...fields,
+          scope: memoryScope(deps, getTask(deps.db, entry.task_id)!),
+          source: { event_id: attribution.id },
+          author: { activity: "rca" as const, name: attributedWorkerId(deps, task) },
+        };
+        return target.kind === "knowledge"
+          ? recordKnowledge(deps.db, input, "worker", deps.clock.now())
+          : createBehaviorCandidate(deps.db, { ...input, addressee: target.addressee }, "worker", deps.clock.now());
+      }),
   );
 
   server.registerTool(
