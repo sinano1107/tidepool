@@ -208,3 +208,11 @@ leaf / 枝を跨ぐ重複 / 子が1つの枝・深すぎる枝 / workspace と�
 
 `docs/memory-reference-design.md` §6「索引の行は id + title(+ path)だけ」と「件数を半分」は本追記で改訂される(研究記録なので
 本文は直さない)。実装の測定と walk-through は #597 のコメントに置く。
+
+## 追記 5(2026-09-14、issue #593 の実装着手時)
+
+**人間が settings / 管理MCP から書く Knowledge の出所は、自身の作成 event。** 決定2 の「出所必須」は agent の書き込みに
+対する検証であり、人間の書き込みには参照すべき盤面の event も commit も無いことが多い — spec #586 F と #593 の書き込み欄は
+原文 + 英語の2欄だけで、出所欄を足すと人間に「どの記録の事実か」を書かせることになる。人間の宣言はそれ自体が盤面の記録
+(`memory_entry_created`、書き手 human)なので、Definition(追記4)と同じく出所 = 自身の作成 event、種別 = 事実とする。
+worker の `record_knowledge` の「出所ちょうど1つ」は変えない。

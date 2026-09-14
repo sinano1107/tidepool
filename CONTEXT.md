@@ -107,7 +107,7 @@ worker がタスクの途中で上位モデルに判断の相談をするオプ�
 
 盤面の記録(イベント履歴と worker transcript)から派生した索引(ADR 0083)。新しい知識源ではなく、記録に無いことは記憶にも無い — 「生きた記憶は存在しない」(ADR 0045)は破られない。worker が引くのは過去の記録であって過去のセッションではない。存在理由は、人間が指示文を書き直さずに agent が育つこと(prompt engineering を非技術者に課さない)。
 
-- **種別**: **Knowledge**(事実。承認不要、出所必須)と **Behavior**(振る舞い。承認必須)と **Definition**(枝の定義。承認不要、出所は書き手の宣言そのもの — 階層 参照)。**Precedent** は過去の判断 + outcome + 機械観測された行動列の投影であり、Behavior を起草する材料。その単位は **Episode** = worker session 1回で、中身は tool 呼び出し1回を最小粒度とする行動列と、その中に位置を持つ decision のマーカー、outcome(decision 単位の表示済み・異議、session 単位の完了・PR merge・exit)、当時の agent 定義の版(2026-08-18 の grilling、issue #356)。decision は軸ではなくマーカーであり、「ある判断までに何をしたか」は読み出し時のスライスである。
+- **種別**: **Knowledge**(事実。承認不要、出所必須 — 人間が書いたものは自身の作成 event が出所、ADR 0083 追記5)と **Behavior**(振る舞い。承認必須)と **Definition**(枝の定義。承認不要、出所は書き手の宣言そのもの — 階層 参照)。**Precedent** は過去の判断 + outcome + 機械観測された行動列の投影であり、Behavior を起草する材料。その単位は **Episode** = worker session 1回で、中身は tool 呼び出し1回を最小粒度とする行動列と、その中に位置を持つ decision のマーカー、outcome(decision 単位の表示済み・異議、session 単位の完了・PR merge・exit)、当時の agent 定義の版(2026-08-18 の grilling、issue #356)。decision は軸ではなくマーカーであり、「ある判断までに何をしたか」は読み出し時のスライスである。
 - **状態**: `candidate` / `approved`。worker に注入・retrieval されるのは approved のみ。承認は文言に対して行い、統合で書き換えたら再承認。「振る舞いの変更は人間承認」の線は、記憶がどのファイルに住むかではなく、この状態に引かれる。Knowledge は承認不要なので書いた瞬間に approved であり、candidate に留まることは無い(2026-09-14 の spec #586)。出所の種別(commit / event id への参照 = 事実、decision への参照 = 推論)は注入時に見せる。
 - **言語**: 正文(`text`)は英語で、注入・索引・pull はこれだけを読む。人間が書いたエントリは原文を一次資料として併せ持ち、英語文は人間が逆翻訳を見て確認してから保存する(ADR 0015 四度目の精密化)— ペイロードの「原語のみ」の線の、Memory に閉じた例外。
 - **不変条件**: 削除は無く無効化のみ。すべてのエントリはイベント id か commit に遡れる。記憶は決裁権を広げない — 位置づけは Advisor と同じで、変わるのは権限内判断の質だけ。
