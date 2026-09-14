@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { EventRow } from "../src/events.js";
-import { entriesReadBefore, projectEpisode } from "../src/precedent.js";
+import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 
 /** #386 が取った実物の worker session — 2.1.237 の CLI が書いた transcript と、
  *  その session を挟む盤面のイベント。Precedent の投影は決定論的なので、期待値は
@@ -266,7 +266,7 @@ it("worker_exited が無いまま終わった session の窓は、次の worker_
   expect(episode.workerExitedEventId).toBeNull();
 });
 
-it("memory verb の tool 結果に写った memory_pulled の event id は、decision と同じ完全一致で位置つきの memory マーカーになり、「D の前に読んだ記憶」はその返した id の和集合(spec #586 D)", () => {
+it("memory verb の tool 結果に写った memory_pulled の event id は、decision と同じ完全一致で位置つきの memory マーカーになり、D の前の pull が返した id は seen に入り、browse / search だけでは read に入らない(spec #586 D / issue #604)", () => {
   const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
   const at = "2026-08-20T06:30:00.000Z";
   const pulled = (id: number, verb: "search_memory" | "read_memory", returned_ids: number[]): EventRow => ({
@@ -302,10 +302,14 @@ it("memory verb の tool 結果に写った memory_pulled の event id は、dec
     { kind: "memory", position: 3, eventId: 8, missingReason: null, transcriptUuid: "r4" },
     { kind: "memory", position: null, eventId: 9, missingReason: "unmatched", transcriptUuid: null },
   ]);
-  expect(entriesReadBefore(episode, events, 7)).toEqual([1, 2]);
+  expect(entriesReadBefore(episode, events, 7)).toEqual([]);
+  expect(entriesSeenBefore(episode, events, 7)).toEqual([1, 2]);
+  // D がこの Episode で位置を持たなければ、どちらも「何も見なかった」と混ぜない
+  expect(entriesReadBefore(episode, events, 999)).toBeNull();
+  expect(entriesSeenBefore(episode, events, 999)).toBeNull();
 });
 
-it("「D の前に読んだ記憶」は、その session(worker_spawned の event id で結ぶ)の memory_injected の entry も含む —— 別 session の注入は含まない(spec #586 C / issue #592)", () => {
+it("「D の前に読んだ記憶」(read)は read_memory が返した id だけで、seen はそれに その session(worker_spawned の event id で結ぶ)の memory_injected の entry を足す —— 別 session の注入は含まない(spec #586 C / issue #592 / issue #604)", () => {
   const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
   const at = "2026-08-20T06:30:00.000Z";
   const injected = (id: number, spawned: number, entryIds: number[]): EventRow => ({
@@ -329,5 +333,6 @@ it("「D の前に読んだ記憶」は、その session(worker_spawned の even
     transcriptLines: [...toolCall(1, "mcp__tidepool__read_memory", 8), ...toolCall(2, "mcp__tidepool__log_decision", 9)],
   });
 
-  expect(entriesReadBefore(episode, events, 9)).toEqual([1, 2, 3]);
+  expect(entriesReadBefore(episode, events, 9)).toEqual([2, 3]);
+  expect(entriesSeenBefore(episode, events, 9)).toEqual([1, 2, 3]);
 });

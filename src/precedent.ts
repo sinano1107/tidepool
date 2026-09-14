@@ -498,15 +498,13 @@ export function projectAndPersist(
   })();
 }
 
-/** 「decision D より前に読んだ記憶」(spec #586 D / ADR 0083 決定10): D より前に位置を
- *  持つ memory マーカーが指す pull の返した id と、この session の spawn 注入
- *  (`memory_injected`、worker_spawned の event id で結ぶ)の id の和集合(昇順)。自己申告の
- *  列は持たない。D がこの Episode で位置を持たなければ null(「何も読まなかった」と混ぜない)。 */
-export function entriesReadBefore(
-  episode: Pick<Episode, "markers" | "workerSpawnedEventId">,
+/** D より前に位置を持つ memory マーカーが指す pull(spec #586 D)。D がこの Episode で位置を
+ *  持たなければ null。 */
+function pullsBefore(
+  episode: Pick<Episode, "markers">,
   events: readonly EventRow[],
   decisionEventId: number,
-): number[] | null {
+): Array<{ verb: string; returned_ids: number[] }> | null {
   const decision = episode.markers.find((m) => m.kind === "decision" && m.eventId === decisionEventId);
   if (decision?.position == null) return null;
   const pulls = new Set(
@@ -514,13 +512,40 @@ export function entriesReadBefore(
       .filter((m) => m.kind === "memory" && m.position !== null && m.position < decision.position!)
       .map((m) => m.eventId),
   );
-  const ids = events.flatMap((e) =>
-    e.payload.kind === "memory_pulled" && pulls.has(e.id) ? e.payload.returned_ids
-    : e.payload.kind === "memory_injected" && e.payload.worker_spawned_event_id === episode.workerSpawnedEventId
+  return events.flatMap((e) => (e.payload.kind === "memory_pulled" && pulls.has(e.id) ? [e.payload] : []));
+}
+
+const sortedIds = (ids: number[]) => [...new Set(ids)].sort((a, b) => a - b);
+
+/** 「decision D より前に読んだ記憶」= read(spec #586 D / ADR 0083 決定10・追記6): D より前の
+ *  `read_memory` の pull が返した id(昇順)。本文を読む経路は read_memory だけなので、注入や
+ *  browse / search で見ただけの id は含まない(それは seen)。自己申告の列は持たない。D がこの
+ *  Episode で位置を持たなければ null(「何も読まなかった」と混ぜない)。 */
+export function entriesReadBefore(
+  episode: Pick<Episode, "markers" | "workerSpawnedEventId">,
+  events: readonly EventRow[],
+  decisionEventId: number,
+): number[] | null {
+  const pulls = pullsBefore(episode, events, decisionEventId);
+  return pulls && sortedIds(pulls.filter((p) => p.verb === "read_memory").flatMap((p) => p.returned_ids));
+}
+
+/** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
+ *  (`memory_injected`、worker_spawned の event id で結ぶ)の id と、D より前の全 verb の pull が返した
+ *  id の和集合(昇順)。D がこの Episode で位置を持たなければ null。 */
+export function entriesSeenBefore(
+  episode: Pick<Episode, "markers" | "workerSpawnedEventId">,
+  events: readonly EventRow[],
+  decisionEventId: number,
+): number[] | null {
+  const pulls = pullsBefore(episode, events, decisionEventId);
+  if (pulls === null) return null;
+  const injected = events.flatMap((e) =>
+    e.payload.kind === "memory_injected" && e.payload.worker_spawned_event_id === episode.workerSpawnedEventId
       ? e.payload.entries.map((entry) => entry.id)
-    : [],
+      : [],
   );
-  return [...new Set(ids)].sort((a, b) => a - b);
+  return sortedIds([...injected, ...pulls.flatMap((p) => p.returned_ids)]);
 }
 
 /** 読み出し時に結ぶ outcome を持つマーカー。表示済み・異議は投影のあとに届く
