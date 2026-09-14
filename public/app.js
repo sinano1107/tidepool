@@ -2117,7 +2117,6 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   React.useEffect(() => {
     load();
   }, [filter.workspace, filter.kind, filter.state]);
-  const scopeOptions = [{ value: "", label: "board-wide" }, ...workspaceNames.map((n) => ({ value: n, label: n }))];
   const pick = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   const writeId = "board:memory-write";
@@ -2183,7 +2182,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       onChange: set("kind"),
       options: [{ value: "knowledge", label: "knowledge" }, { value: "definition", label: "definition (one line for a branch)" }]
     }
-  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: set("workspace"), options: scopeOptions }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: set("path"), placeholder: "build/tests" }), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: set("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.original, onChange: set("original") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.original.trim(), onClick: translate }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), draft.back && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", draft.back), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Select, { label: "Workspace", value: draft.workspace, onChange: set("workspace"), options: [{ value: "", label: "board-wide" }, ...workspaceNames] }), /* @__PURE__ */ React.createElement(Input, { label: draft.kind === "knowledge" ? "Path" : "Branch path", mono: true, value: draft.path, onChange: set("path"), placeholder: "build/tests" }), draft.kind === "knowledge" && /* @__PURE__ */ React.createElement(Input, { label: "Title (English)", value: draft.title, onChange: set("title") }), draft.kind === "definition" && /* @__PURE__ */ React.createElement(Input, { label: "Supersedes (entry id, to revise the branch's current definition)", mono: true, value: draft.supersedes, onChange: set("supersedes") }), translatable && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: `Original (${language})`, multiline: true, rows: 3, value: draft.original, onChange: set("original") }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || !draft.original.trim(), onClick: translate }, "Translate")), /* @__PURE__ */ React.createElement(Input, { label: "English (saved as the canonical text)", multiline: true, rows: 3, value: draft.text, onChange: set("text") }), draft.back && /* @__PURE__ */ React.createElement("p", { style: muted, "data-testid": "memory-back-translation" }, "back in ", language, ": ", draft.back), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       ok: draft.text.trim() !== "",
@@ -2199,7 +2198,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       value: filter.workspace,
       onChange: pick("workspace"),
       style: { flex: "1 1 120px" },
-      options: [{ value: "", label: "all" }, { value: "(board)", label: "board-wide" }, ...workspaceNames.map((n) => ({ value: n, label: n }))]
+      options: [{ value: "", label: "all" }, { value: "(board)", label: "board-wide" }, ...workspaceNames]
     }
   ), /* @__PURE__ */ React.createElement(
     Select,

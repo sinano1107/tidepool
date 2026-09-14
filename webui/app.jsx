@@ -1874,7 +1874,6 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
   };
   React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
 
-  const scopeOptions = [{ value: '', label: 'board-wide' }, ...workspaceNames.map((n) => ({ value: n, label: n }))];
   const pick = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
 
@@ -1949,7 +1948,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
         <React.Fragment>
           <Select label="Kind" value={draft.kind} onChange={set('kind')}
             options={[{ value: 'knowledge', label: 'knowledge' }, { value: 'definition', label: 'definition (one line for a branch)' }]} />
-          <Select label="Workspace" value={draft.workspace} onChange={set('workspace')} options={scopeOptions} />
+          <Select label="Workspace" value={draft.workspace} onChange={set('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
           <Input label={draft.kind === 'knowledge' ? 'Path' : 'Branch path'} mono value={draft.path} onChange={set('path')} placeholder="build/tests" />
           {draft.kind === 'knowledge' && <Input label="Title (English)" value={draft.title} onChange={set('title')} />}
           {draft.kind === 'definition' && (
@@ -1971,7 +1970,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Select label="Workspace" value={filter.workspace} onChange={pick('workspace')} style={{ flex: '1 1 120px' }}
-          options={[{ value: '', label: 'all' }, { value: '(board)', label: 'board-wide' }, ...workspaceNames.map((n) => ({ value: n, label: n }))]} />
+          options={[{ value: '', label: 'all' }, { value: '(board)', label: 'board-wide' }, ...workspaceNames]} />
         <Select label="Kind" value={filter.kind} onChange={pick('kind')} style={{ flex: '1 1 120px' }}
           options={[{ value: '', label: 'all' }, 'knowledge', 'behavior', 'definition']} />
         <Select label="State" value={filter.state} onChange={pick('state')} style={{ flex: '1 1 120px' }}
