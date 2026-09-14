@@ -49,6 +49,7 @@ import {
   pickupTask,
   resolveTaskAgent,
   type Task,
+  type TaskContent,
 } from "./tasks.js";
 import {
   blockedProviderUsageResources,
@@ -428,7 +429,7 @@ export function startScheduler(deps: {
   /** `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  adapter へそのまま運ぶ —— spawn 側で解決し直すと、除外の文脈を持たない再解決が
    *  scheduler と違う entry を選びうる(温存中の Provider で走る)。 */
-  async function pickup(task: Task, setting?: ExecutionSetting): Promise<void> {
+  async function pickup(task: Task, setting: ExecutionSetting | undefined, content: Partial<TaskContent>): Promise<void> {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor pointer,
@@ -471,14 +472,14 @@ export function startScheduler(deps: {
         return;
       }
       try {
-        worker.start(picked, setting);
+        worker.start({ ...picked, ...content }, setting);
       } catch (err) {
         console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
       }
       return;
     }
     try {
-      worker.start(picked, setting);
+      worker.start({ ...picked, ...content }, setting);
     } catch (err) {
       // a failed start may not crash the board. The task keeps the slot — the
       // same deliberate wedge as a restart-interrupted task — until the
@@ -492,19 +493,21 @@ export function startScheduler(deps: {
    *  reference never wedges an in_progress task. A 一時的失敗 (network,
    *  GitHub outage) skips this pickup cycle — the same fail-closed
    *  environmental posture as the throttle, no human is called, the next
-   *  poll retries. Ordinary tasks pass straight through. Returns whether the
-   *  pickup may proceed — a false from the gone-branch has already registered
-   *  the failure question as its side effect. */
-  async function issuePickupGate(head: Task): Promise<boolean> {
-    if (head.github_issue_number == null || !github) return true;
+   *  poll retries. Ordinary tasks pass straight through. Returns the expanded
+   *  content the spawn carries (spawn is a use-moment of contentSourceFor —
+   *  the "#N" placeholder never reaches the worker or its memory injection),
+   *  `{}` for an ordinary task, or null when the pickup may not proceed — a
+   *  null from the gone-branch has already registered the failure question as
+   *  its side effect. */
+  async function issuePickupGate(head: Task): Promise<Partial<TaskContent> | null> {
+    if (head.github_issue_number == null || !github) return {};
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     // board-driven async workspace use: registry drift quarantines the name
     // (ADR 0009) and its own pickup gate skips this task from the next poll
     const resolved = resolve && resolveOrQuarantine(db, resolve, head.workspace, clock.now());
-    if (resolve && !resolved) return false;
+    if (resolve && !resolved) return null;
     try {
-      await contentSourceFor(head, github, () => resolved?.path).expand();
-      return true;
+      return await contentSourceFor(head, github, () => resolved?.path).expand();
     } catch (err) {
       if (err instanceof IssueGoneError) {
         // 確定的失敗 (ADR 0016): the reference is dead for good, not this
@@ -536,11 +539,11 @@ export function startScheduler(deps: {
           clock.now(),
           "board",
         );
-        return false;
+        return null;
       }
       // 一時的失敗: fail-closed, no human — the next poll retries
       console.error(`[scheduler] issue expansion failed for ${head.id}, skipping this cycle:`, err);
-      return false;
+      return null;
     }
   }
 
@@ -789,7 +792,8 @@ export function startScheduler(deps: {
         (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))
       )
         return;
-      if (!(await issuePickupGate(head))) return;
+      const content = await issuePickupGate(head);
+      if (!content) return;
       // 学習器の shadow 行(ADR 0110 決定4): work task の pickup ごとに、除外を当てた
       // 候補から「学習器ならこう選ぶ」を引いて selector の選択と並べる。review task は
       // 学習器を参照しない(ADR 0111 決定3)。legacy 経路(`chosen` 無し)は候補の列を
@@ -801,7 +805,7 @@ export function startScheduler(deps: {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }
       }
-      await pickup(head, chosen);
+      await pickup(head, chosen, content);
     } finally {
       throttleRevalidating = false;
       inFlight = false;

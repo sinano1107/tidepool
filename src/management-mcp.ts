@@ -36,7 +36,7 @@ import {
 } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import { toolError, toolResult } from "./mcp.js";
-import { changeMemorySettings, memorySettingsChangeSchema, readMemorySettings } from "./memory.js";
+import { changeMemorySettings, memorySettingsChangeSchema, readMemorySettings, TOKENIZER } from "./memory.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import {
   type Harness,
@@ -494,7 +494,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "change_memory_settings",
     {
       description:
-        "Set the board's memory injection token cap as the human (a positive integer, counted with o200k). Takes effect at the next spawn.",
+        `Set the board's memory injection token cap as the human (a positive integer, counted with ${TOKENIZER.id}). Takes effect at the next spawn.`,
       inputSchema: memorySettingsChangeSchema.shape,
     },
     async (change) => {

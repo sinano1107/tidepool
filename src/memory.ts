@@ -447,7 +447,7 @@ export function readMemory(
   })();
 }
 
-const TOKENIZER = { id: "gpt-tokenizer/o200k_base", version: (createRequire(import.meta.url)("gpt-tokenizer/package.json") as { version: string }).version };
+export const TOKENIZER = { id: "gpt-tokenizer/o200k_base", version: (createRequire(import.meta.url)("gpt-tokenizer/package.json") as { version: string }).version };
 
 const INJECTION_PREAMBLE =
   "Approved board memory for this workspace. Browse deeper with browse_memory, find more with search_memory, " +
@@ -482,7 +482,7 @@ export function buildMemoryInjection(
     const query = `${task.title} ${task.purpose} ${task.completion_criteria}`;
     let leaves = query.trim() === "" ? [] : rankedEntries(db, ftsQuery(query, " OR "), scope).filter((row) => dropReason(row, { agent }) === null);
     let withText = true;
-    const render = () =>
+    const render = (shown: EntryRow[], bodies: boolean) =>
       [
         "## Memory",
         "",
@@ -491,25 +491,25 @@ export function buildMemoryInjection(
         "### Index",
         "",
         ...index,
-        ...(leaves.length === 0
+        ...(shown.length === 0
           ? []
           : [
               "",
               "### Relevant entries",
               "",
-              ...leaves.flatMap((row) => [
+              ...shown.flatMap((row) => [
                 `- #${row.id} ${row.title} (path: ${row.path}, source: ${SOURCE_KIND[row.source_kind]})`,
-                ...(withText ? [`  ${row.text.replaceAll("\n", "\n  ")}`] : []),
+                ...(bodies ? [`  ${row.text.replaceAll("\n", "\n  ")}`] : []),
               ]),
             ]),
       ].join("\n");
     const cap = readMemorySettings(db).injection_token_cap;
-    let section = render();
+    let section = render(leaves, withText);
     let tokens = countTokens(section);
     while (tokens > cap && (withText || leaves.length > 0)) {
       if (withText) withText = false;
       else leaves = leaves.slice(0, Math.floor(leaves.length / 2));
-      section = render();
+      section = render(leaves, withText);
       tokens = countTokens(section);
     }
     return { section, watermark, entries: leaves.map((row) => ({ id: row.id, version: row.version! })), tokens };
