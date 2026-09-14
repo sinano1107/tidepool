@@ -165,8 +165,9 @@ const SPEND_DOWN_STATE_TABLE_DDL = `
 // Shared between the fresh-board CREATE and #190's event-table rebuild. The
 // database is the audit record's final backstop, so its route vocabulary is
 // constrained here as well as by EventOrigin in TypeScript.
-// task_id is NULL for board-scoped operation events (execution_settings_changed,
-// issue #545) — a settings change belongs to no task but still carries its route.
+// task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
+// memory_entry_created / memory_entry_invalidated, issue #590) — a settings change
+// or a memory entry belongs to no task but still carries its route.
 const EVENTS_TABLE_DDL = `
     CREATE TABLE events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -535,6 +536,32 @@ export function openDb(path: string): Db {
       source           TEXT NOT NULL,
       basis            TEXT NOT NULL CHECK (basis IN ('prior', 'data')),
       created_at       TEXT NOT NULL
+    );
+
+    -- Memory のエントリ(ADR 0083 / spec #586 A)。正本は memory_entry_created /
+    -- memory_entry_invalidated の events で、この表はそれと同じ transaction で
+    -- 維持する投影(memory.ts)。id = 作成 event の id。削除は無く、無効化は
+    -- 理由コード(cause.ts の語彙の3つ + superseded / path_moved)と後継 id の列。
+    -- version = 承認 event の id(Knowledge は作成 event の id、candidate は NULL)。
+    -- 時刻・回数・重みの列は持たない(時刻は events)。
+    CREATE TABLE IF NOT EXISTS memory_entries (
+      id                  INTEGER PRIMARY KEY,
+      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior')),
+      state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
+      scope               TEXT,
+      path                TEXT NOT NULL,
+      title               TEXT NOT NULL,
+      text                TEXT NOT NULL,
+      original_text       TEXT,
+      original_language   TEXT,
+      addressee           TEXT,
+      source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
+      source_ref          TEXT NOT NULL,
+      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review')),
+      author              TEXT NOT NULL,
+      version             INTEGER,
+      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
+      successor_id        INTEGER REFERENCES memory_entries(id)
     );
 
     -- append-only is enforced by structure, not convention

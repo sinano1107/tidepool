@@ -42,6 +42,7 @@ const BOARD_VERBS = [
   "log_decision",
   "decompose",
   "escalate",
+  "record_knowledge",
 ] as const;
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;

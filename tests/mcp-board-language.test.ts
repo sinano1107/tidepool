@@ -5,7 +5,7 @@ import { api, bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("盤面に書く4 verb の description だけが英語ルールを運び、読取 verb には載らない(ADR 0015 2026-08-21 追補 / issue #415)", async () => {
+it("盤面に書く5 verb の description だけが英語ルールを運び、読取 verb には載らない(ADR 0015 2026-08-21 追補 / issue #415)", async () => {
   t = await bootTidepool();
   const task = (
     await api(t.baseUrl, "POST", "/api/tasks", {
@@ -21,7 +21,7 @@ it("盤面に書く4 verb の description だけが英語ルールを運び、�
     const { tools } = await client.listTools();
     const byName = new Map(tools.map((tool) => [tool.name, tool.description ?? ""]));
 
-    for (const verb of ["log_decision", "complete_task", "decompose", "escalate"]) {
+    for (const verb of ["log_decision", "complete_task", "decompose", "escalate", "record_knowledge"]) {
       expect(byName.get(verb)).toContain(BOARD_WRITE_LANGUAGE_RULE);
     }
     for (const verb of ["get_current_task", "list_agents"]) {

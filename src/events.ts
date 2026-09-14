@@ -2,6 +2,7 @@ import type { Allocation, AllocationUnevaluatedReason } from "./allocation-revie
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
+import type { InvalidationReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
 import type { TaskType } from "./tasks.js";
 
@@ -369,16 +370,22 @@ export type EventPayload =
     }
   // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
   // 行・frontier advisor・Provider 順位・優先順位の既定)を変えた操作イベント。
-  // task を持たない盤面スコープの唯一の kind(task_id は NULL)で、`origin` が
+  // task を持たない盤面スコープの kind(task_id は NULL)で、`origin` が
   // どの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
-  | ({ kind: "execution_settings_changed" } & ExecutionSettingsChange);
+  | ({ kind: "execution_settings_changed" } & ExecutionSettingsChange)
+  // ADR 0083 / spec #586 A: Memory の正本。エントリ表(memory_entries)は同じ
+  // transaction で維持する投影で、この2つの再生で任意 watermark の approved 集合に
+  // 戻せる。どちらも task 非依存(task_id NULL)で、決定 log には現れない。
+  // created の event id がそのままエントリの id(Knowledge は版も)。
+  | { kind: "memory_entry_created"; entry: MemoryEntryFields }
+  | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null };
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
-  /** null は盤面スコープのイベント(`execution_settings_changed`)。 */
+  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*`)。 */
   task_id: string | null;
   worker_id: string;
   origin: EventOrigin;
@@ -443,8 +450,8 @@ export interface LogEntry extends EventRow {
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   // an inner join is safe here only because every HUMAN_FACING_KIND is
-  // task-scoped (the sole task-less kind, execution_settings_changed, is not
-  // one) and tasks are never deleted (append-only) — no log entry can end up
+  // task-scoped (the task-less kinds — execution_settings_changed and the
+  // memory_entry_* pair — are not among them) and tasks are never deleted (append-only) — no log entry can end up
   // orphaned, so this can never silently drop one
   const rows = db
     .prepare(
