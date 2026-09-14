@@ -522,12 +522,13 @@ const sortedIds = (ids: number[]) => [...new Set(ids)].sort((a, b) => a - b);
  *  browse / search で見ただけの id は含まない(それは seen)。自己申告の列は持たない。D がこの
  *  Episode で位置を持たなければ null(「何も読まなかった」と混ぜない)。 */
 export function entriesReadBefore(
-  episode: Pick<Episode, "markers" | "workerSpawnedEventId">,
+  episode: Pick<Episode, "markers">,
   events: readonly EventRow[],
   decisionEventId: number,
 ): number[] | null {
   const pulls = pullsBefore(episode, events, decisionEventId);
-  return pulls && sortedIds(pulls.filter((p) => p.verb === "read_memory").flatMap((p) => p.returned_ids));
+  if (pulls === null) return null;
+  return sortedIds(pulls.filter((p) => p.verb === "read_memory").flatMap((p) => p.returned_ids));
 }
 
 /** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
