@@ -728,10 +728,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
 }
 
 /** Memory のスコープ = task の workspace。listLog と同じ解決で、null の workspace は盤面の
- *  既定を継ぐ(null のまま = 盤面全体、ではない)。resolveTaskWorkspace は quarantine の
- *  副作用を持つので使わない。 */
-function memoryScope(deps: McpDeps, task: Task): string | null {
-  return task.workspace ?? deps.workspace?.name ?? null;
+ *  既定を継ぐ。null は盤面全体で、それを書けるのは meta-review の統合だけ —— worker の verb
+ *  (read verb も同じ helper を通るので込みで)は null に解決されるなら拒否する(issue #623)。
+ *  resolveTaskWorkspace は quarantine の副作用を持つので使わない。 */
+function memoryScope(deps: McpDeps, task: Task): string {
+  const scope = task.workspace ?? deps.workspace?.name ?? null;
+  if (scope === null) throw new DomainError("memory verbs need a task workspace — this board has none configured");
+  return scope;
 }
 
 export function createMcpRouter(deps: McpDeps): Router {

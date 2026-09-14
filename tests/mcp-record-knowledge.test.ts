@@ -43,7 +43,7 @@ it("record_knowledge は attributed task の workspace をスコープ、worker 
 
 it("record_knowledge の拒否は protocol error ではなく domain error の tool error で返る —— 出所の欠落も schema で弾かない", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "index the tide charts");
+  const task = await registerWork(t, "index the tide charts", "charts");
   await t.clock.advance(HOUR);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
@@ -54,6 +54,30 @@ it("record_knowledge の拒否は protocol error ではなく domain error の t
     });
     expect(missing.isError).toBe(true);
     expect(text(missing)).toContain("exactly one of event_id or commit");
+    expect(approvedMemoryEntries(t.db)).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("registry の無い盤面で workspace を指定しないタスクからの record_knowledge は、scope が盤面全体に解決されるので拒否され、記憶は書かれない(issue #623)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index the tide charts");
+  await t.clock.advance(HOUR);
+
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const result = await client.callTool({
+      name: "record_knowledge",
+      arguments: {
+        path: "build/tests",
+        title: "Tests need Node 22",
+        text: "npm test fails on Node 24.",
+        source: { commit: "0a46a46" },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("memory verbs need a task workspace");
     expect(approvedMemoryEntries(t.db)).toEqual([]);
   } finally {
     await client.close();
