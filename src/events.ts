@@ -400,7 +400,7 @@ export interface EventRow {
 export function appendEvent(
   db: Db,
   event: {
-    /** null = 盤面スコープ(task を持たない操作イベント、issue #545)。 */
+    /** null = 盤面スコープ(task を持たないイベント、issue #545 / #590)。 */
     taskId: string | null;
     workerId: string;
     origin: EventOrigin;

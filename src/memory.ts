@@ -140,6 +140,7 @@ export function invalidateMemoryEntry(
   if ((reason === "superseded" || reason === "path_moved") !== (successor_id !== undefined)) {
     throw new DomainError("a successor id is required for superseded / path_moved and only for them");
   }
+  if (successor_id === entry_id) throw new DomainError("an entry cannot be its own successor");
   return db.transaction(() => {
     if (requireEntry(db, entry_id).invalidation_reason !== null) {
       throw new DomainError(`memory entry ${entry_id} is already invalidated`);
