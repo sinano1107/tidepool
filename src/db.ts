@@ -162,8 +162,8 @@ const SPEND_DOWN_STATE_TABLE_DDL = `
       activated_at TEXT NOT NULL
     )`;
 
-/** Memory の FTS5 tokenizer と、TS 側の前処理(語の先頭・末尾の . - _ 落とし + CJK bigram)の版
- *  (spec #586 B、実測は #357 / #606)。
+/** Memory の FTS5 tokenizer と、TS 側の前処理(CJK bigram + 語の先頭・末尾の . - _ 落とし)の版
+ *  (spec #586 B、実測は #357 / #606、順序は #610)。
  *  どちらかを変えたら、boot の ensureMemoryIndex が索引を作り直す。 */
 export const MEMORY_FTS_TOKENIZER = "unicode61 tokenchars '_-.'";
 export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-5";
