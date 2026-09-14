@@ -10,6 +10,7 @@ import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertReviewerKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
+import { recordKnowledge } from "./memory.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -574,6 +575,42 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const question = escalateTask(deps.db, task, input, workerId, now, "worker");
         return { question_id: question.id, parent_status: "blocked" };
       }),
+  );
+
+  server.registerTool(
+    "record_knowledge",
+    {
+      description:
+        "Record a fact you established about this workspace so later sessions can read it " +
+        "instead of rediscovering it. It is kept as-is (no approval step); you cannot edit or " +
+        "withdraw it. path is a \"/\"-separated hierarchy (e.g. build/tests). source is exactly " +
+        "one of {event_id} (a board event id, such as one log_decision returned) or {commit} " +
+        "(a commit hash). " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      // the schema stays permissive: the exactly-one-source invariant is
+      // enforced inside the verb so callers get a domain error
+      inputSchema: {
+        path: z.string(),
+        title: z.string().min(1),
+        text: z.string().min(1),
+        source: z.object({ event_id: z.number().int().optional(), commit: z.string().optional() }).optional(),
+      },
+    },
+    async (input) =>
+      runVerb(deps, attributedTaskId, (task) =>
+        recordKnowledge(
+          deps.db,
+          {
+            ...input,
+            // listLog と同じ解決: null の workspace は盤面の既定を継ぐ(null のまま = 盤面全体、ではない)。
+            // resolveTaskWorkspace は quarantine の副作用を持つので使わない
+            scope: task.workspace ?? deps.workspace?.name ?? null,
+            author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
+          },
+          "worker",
+          deps.clock.now(),
+        ),
+      ),
   );
 
   return server;

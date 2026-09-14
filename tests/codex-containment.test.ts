@@ -20,7 +20,7 @@ afterEach(() => t?.stop());
 
 const VALID: CodexCapabilityObservation = {
   cliVersion: CODEX_CLI_VERSION,
-  mcpTools: ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate"],
+  mcpTools: ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "record_knowledge"],
   skills: [],
   hooks: ["SubagentStart", "PreToolUse"],
   permissions: ["tidepool-work", "tidepool-review"],
