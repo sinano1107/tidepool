@@ -2988,11 +2988,8 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
         fetch(`/api/tasks/${questionId}`).then((r) => r.ok ? r.json() : null),
         fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} }))
       ]);
-      if (!task || task.type !== "question" || task.status !== "todo") {
-        if (!cancelled) setQ(null);
-        return;
-      }
       if (cancelled) return;
+      if (!task || task.type !== "question" || task.status !== "todo") return setQ(null);
       setRawTask(task);
       setQ(toQuestionCardShape(task, candidates.icons));
     })().catch(() => {

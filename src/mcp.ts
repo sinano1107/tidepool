@@ -643,8 +643,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const attribution = latestAttribution(deps.db, { id: entry_id, task_id: task.parent_id });
         if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
         if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-        const registrant = getRegistrant(deps.db, entry.task_id);
-        const target = learningTarget(attribution.cause, entry.worker_id, registrant, as);
+        const target = learningTarget(attribution.cause, entry.worker_id, getRegistrant(deps.db, entry.task_id), as);
         const input = {
           ...fields,
           scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),

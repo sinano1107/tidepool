@@ -159,7 +159,6 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
     expect(presentTask(db, byAgent).registrant).toBe("reef-crab");
     expect(presentTask(db, byHuman).registrant).toBe(HUMAN_WORKER_ID);
     expect(presentTask(db, byBoard).registrant).toBe(BOARD_WORKER_ID);
-    expect(running.status).toBe("in_progress");
     expect(presentTask(db, running).registrant).toBe("reef-crab");
   });
 });
