@@ -40,7 +40,7 @@ function board(task = { title: "fix tide chart", purpose: "chart drifts", comple
   return { db, task: registered, record, define };
 }
 
-it("注入節は全階層の INDEX(枝の名前 + 定義、未定義は (undefined)、深さ優先で深さごとに字下げ)と、task の title / purpose / completion criteria のどれかの語に当たる関連 leaf(title・path・出所の種別・text)を英語で並べる", () => {
+it("注入節は全階層の INDEX(枝の名前 + 定義、未定義は (undefined)、深さ優先で深さごとに字下げ)と、task の title / purpose / completion criteria のどれかの語に当たる関連 leaf を本文なしのポインタ(title・path・出所の種別)として英語で並べる", () => {
   const { db, task, record, define } = board();
   const tide = define("tide", "Tide charts and the data that feeds them.");
   const chart = record({ path: "tide", title: "Chart source", text: "The chart reads tides.csv." });
@@ -54,11 +54,12 @@ it("注入節は全階層の INDEX(枝の名前 + 定義、未定義は (undefin
     [
       "## Memory",
       "",
-      "Approved board memory for this workspace. Browse deeper with browse_memory, find more with search_memory, " +
-        "and read an entry's full text with read_memory. A fact source is a commit or board event; an inference " +
-        "source is an agent's decision — weigh it. Each index line is a branch and its definition — what is filed " +
-        "under it, or (undefined) — and a closing line, when present, counts the relevant entries omitted and the " +
-        "depth the index is shown to; browse or search for the rest.",
+      "Approved board memory for this workspace. Browse deeper with browse_memory and find more with search_memory. " +
+        "A fact source is a commit or board event; an inference source is an agent's decision — weigh it. Each index " +
+        "line is a branch and its definition — what is filed under it, or (undefined) — and a closing line, when " +
+        "present, counts the relevant entries omitted and the depth the index is shown to; browse or search for the " +
+        "rest. Relevant entries are pointers ranked by relevance, without their text: read the ones that bear on " +
+        "your task with read_memory before acting.",
       "",
       "### Index",
       "",
@@ -69,9 +70,7 @@ it("注入節は全階層の INDEX(枝の名前 + 定義、未定義は (undefin
       "### Relevant entries",
       "",
       `- #${chart} Chart source (path: tide, source: fact)`,
-      "  The chart reads tides.csv.",
       `- #${drift} Drift cause (path: tide/drift, source: inference)`,
-      "  Clock skew causes drift.",
     ].join("\n"),
   );
   expect(injection).toMatchObject({ index_depth: 2, index_max_depth: 2, omitted: 0 });
@@ -151,7 +150,7 @@ it("approved が1つも見えなければ節を出さず、entries は空", () =
   });
 });
 
-it("上限を超えると 本文 → INDEX を深い階層から1段ずつ → 関連 leaf を順位の下から1件ずつ の順に削り、最上位 INDEX は上限を超えても残る。印は削ったときだけ末尾に出る", () => {
+it("上限を超えると 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ の順に削り、最上位 INDEX は上限を超えても残る。印は削ったときだけ末尾に出る", () => {
   const { db, task, record, define } = board({ title: "tide", purpose: "p", completion_criteria: "c" });
   const long = (name: string) => `${name} ${"holds one kind of note ".repeat(10)}`;
   const top = define("tide", long("tide"));
@@ -170,31 +169,27 @@ it("上限を超えると 本文 → INDEX を深い階層から1段ずつ → �
   const leaves = full.entries.slice(3);
   expect(leaves).toHaveLength(3);
   expect(full).toMatchObject({ index_depth: 3, index_max_depth: 3, omitted: 0, entries: [...definitions(top, middle, deepest), ...leaves] });
-  expect(full.section).toContain("filler");
+  expect(full.section).not.toContain("filler");
   expect(full.section).not.toMatch(/(omitted|depth \d of \d)$/);
 
-  const bodiesDropped = next(full);
-  expect(bodiesDropped).toMatchObject({ index_depth: 3, omitted: 0, entries: full.entries });
-  expect(bodiesDropped.section).not.toContain("filler");
-  expect(bodiesDropped.section).not.toMatch(/(omitted|depth \d of \d)$/);
-
-  const depth2 = next(bodiesDropped);
-  expect(depth2).toMatchObject({ index_depth: 2, index_max_depth: 3, omitted: 0, entries: [...definitions(top, middle), ...leaves] });
-  expect(depth2.section).toMatch(/\n\nindex shown to depth 2 of 3$/);
-
-  const depth1 = next(depth2);
-  expect(depth1).toMatchObject({ index_depth: 1, omitted: 0, entries: [...definitions(top), ...leaves] });
-  expect(depth1.section).toMatch(/\n\nindex shown to depth 1 of 3$/);
-
-  const oneDropped = next(depth1);
-  expect(oneDropped).toMatchObject({ index_depth: 1, omitted: 1, entries: [...definitions(top), ...leaves.slice(0, 2)] });
-  expect(oneDropped.section).toMatch(/\n\n1 relevant entry omitted; index shown to depth 1 of 3$/);
+  const oneDropped = next(full);
+  expect(oneDropped).toMatchObject({ index_depth: 3, omitted: 1, entries: [...definitions(top, middle, deepest), ...leaves.slice(0, 2)] });
+  expect(oneDropped.section).toMatch(/\n\n1 relevant entry omitted$/);
 
   const twoDropped = next(oneDropped);
-  expect(twoDropped).toMatchObject({ omitted: 2, entries: [...definitions(top), ...leaves.slice(0, 1)] });
-  expect(twoDropped.section).toMatch(/\n\n2 relevant entries omitted; index shown to depth 1 of 3$/);
+  expect(twoDropped).toMatchObject({ index_depth: 3, omitted: 2, entries: [...definitions(top, middle, deepest), ...leaves.slice(0, 1)] });
+  expect(twoDropped.section).toMatch(/\n\n2 relevant entries omitted$/);
 
-  for (const indexOnly of [next(twoDropped), inject(1)]) {
+  const allDropped = next(twoDropped);
+  expect(allDropped).toMatchObject({ index_depth: 3, omitted: 3, entries: definitions(top, middle, deepest) });
+  expect(allDropped.section).not.toContain("### Relevant entries");
+  expect(allDropped.section).toMatch(/\n\n3 relevant entries omitted$/);
+
+  const depth2 = next(allDropped);
+  expect(depth2).toMatchObject({ index_depth: 2, index_max_depth: 3, omitted: 3, entries: definitions(top, middle) });
+  expect(depth2.section).toMatch(/\n\n3 relevant entries omitted; index shown to depth 2 of 3$/);
+
+  for (const indexOnly of [next(depth2), inject(1)]) {
     expect(indexOnly).toMatchObject({ index_depth: 1, omitted: 3, entries: definitions(top) });
     expect(indexOnly.tokens).toBeGreaterThan(1);
     expect(indexOnly.section).toMatch(/### Index\n\n- tide\/ — .*\n\n3 relevant entries omitted; index shown to depth 1 of 3$/);

@@ -590,11 +590,12 @@ export function readMemory(
 export const TOKENIZER = { id: "gpt-tokenizer/o200k_base", version: (createRequire(import.meta.url)("gpt-tokenizer/package.json") as { version: string }).version };
 
 const INJECTION_PREAMBLE =
-  "Approved board memory for this workspace. Browse deeper with browse_memory, find more with search_memory, " +
-  "and read an entry's full text with read_memory. A fact source is a commit or board event; an inference " +
-  "source is an agent's decision — weigh it. Each index line is a branch and its definition — what is filed " +
-  "under it, or (undefined) — and a closing line, when present, counts the relevant entries omitted and the " +
-  "depth the index is shown to; browse or search for the rest.";
+  "Approved board memory for this workspace. Browse deeper with browse_memory and find more with search_memory. " +
+  "A fact source is a commit or board event; an inference source is an agent's decision — weigh it. Each index " +
+  "line is a branch and its definition — what is filed under it, or (undefined) — and a closing line, when " +
+  "present, counts the relevant entries omitted and the depth the index is shown to; browse or search for the " +
+  "rest. Relevant entries are pointers ranked by relevance, without their text: read the ones that bear on " +
+  "your task with read_memory before acting.";
 
 type MemoryInjection = {
   /** null = 見える approved が無い(節を出さない)。 */
@@ -610,10 +611,11 @@ type MemoryInjection = {
   omitted: number;
 };
 
-/** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf を
- *  上限内に組む。関連度の query は task の title + purpose + completion criteria の語の OR で、順位は
- *  search と同じ FTS の rank。削り順は固定 —— leaf 本文 → INDEX を深い階層から1段ずつ → 関連 leaf を
- *  順位の下から1件ずつ。最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。 */
+/** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf の
+ *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
+ *  組む。関連度の query は task の title + purpose + completion criteria の語の OR で、順位は search と
+ *  同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。 */
 export function buildMemoryInjection(
   db: Db,
   task: Pick<Task, "title" | "purpose" | "completion_criteria">,
@@ -636,7 +638,7 @@ export function buildMemoryInjection(
       match === null
         ? []
         : rankedEntries(db, match, scope).filter((row) => row.kind !== "definition" && dropReason(row, { agent }) === null);
-    const render = (shown: EntryRow[], bodies: boolean, depth: number) => {
+    const render = (shown: EntryRow[], depth: number) => {
       const omitted = relevant.length - shown.length;
       const omissionNote = [
         ...(omitted > 0 ? [`${omitted} relevant ${omitted === 1 ? "entry" : "entries"} omitted`] : []),
@@ -658,25 +660,20 @@ export function buildMemoryInjection(
               "",
               "### Relevant entries",
               "",
-              ...shown.flatMap((row) => [
-                `- #${row.id} ${row.title} (path: ${row.path}, source: ${SOURCE_KIND[row.source_kind]})`,
-                ...(bodies ? [`  ${row.text.replaceAll("\n", "\n  ")}`] : []),
-              ]),
+              ...shown.map((row) => `- #${row.id} ${row.title} (path: ${row.path}, source: ${SOURCE_KIND[row.source_kind]})`),
             ]),
         ...(omissionNote === "" ? [] : ["", omissionNote]),
       ].join("\n");
     };
     const cap = readMemorySettings(db).injection_token_cap;
     let leaves = relevant;
-    let bodies = true;
     let depth = maxDepth;
-    let section = render(leaves, bodies, depth);
+    let section = render(leaves, depth);
     let tokens = countTokens(section);
-    while (tokens > cap && (bodies || depth > 1 || leaves.length > 0)) {
-      if (bodies) bodies = false;
-      else if (depth > 1) depth--;
-      else leaves = leaves.slice(0, -1);
-      section = render(leaves, bodies, depth);
+    while (tokens > cap && (leaves.length > 0 || depth > 1)) {
+      if (leaves.length > 0) leaves = leaves.slice(0, -1);
+      else depth--;
+      section = render(leaves, depth);
       tokens = countTokens(section);
     }
     const definitions = branches.flatMap((b) => (b.depth <= depth && b.definition ? [b.definition] : []));
