@@ -108,7 +108,7 @@ it("他 agent 宛の Behavior・他 workspace・candidate・無効化済みは�
 it("英語の自然文の task では、stopword しか共有しない leaf は関連 leaf に入らない(#606 の実測: 4枝 10 leaf → 2件)", () => {
   const { db, task, record } = board({
     title: "Fix the settings tab layout on narrow screens",
-    purpose: "The tab is cramped when the window is small and it should be usable",
+    purpose: "The tab is cramped when the window is small, so nobody can use it, and it should be usable",
     completion_criteria: "It renders without overflow at 400px",
   });
   const admin = record({ path: "webui", title: "Settings tab is the admin surface", text: "Admin controls are sections of one tab." });

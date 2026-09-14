@@ -416,16 +416,16 @@ function recordPull<T>(
 }
 
 /** query から落とす英語の stopword(#606、大文字小文字を区別しない)。落とすのは query 側だけで、
- *  索引には残す。日本語は bigram で語に割れないので対象外。 */
+ *  索引には残す。日本語は bigram で語に割れないので対象外。not / no は AND の意味を変えるので入れない。 */
 const STOPWORDS = new Set(
-  (
-    "a an the " +
-    "about above after at before below by down for from in into of off on onto out over through to under up with without " +
-    "am are be been being is was were " +
-    "and but if nor or so than that then " +
-    "he her him his i it its me my our she their them they this those these us we what which who you your " +
-    "as can do does did has have had not no will would should could may might must"
-  ).split(" "),
+  `a an the
+   about above after at before below by down for from in into of off on onto out over through to under up with without
+   am are be been being is was were
+   and but if nor or so than that then
+   he her him his i it its me my our she their them they this those these us we what which who you your
+   as can do does did has have had will would should could may might must`
+    .trim()
+    .split(/\s+/),
 );
 
 /** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
@@ -434,7 +434,11 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   const terms = query
     .split(/\s+/)
     .map((word) => ftsText(word).trim())
-    .filter((term) => term !== "" && !STOPWORDS.has(term.toLowerCase()));
+    // 語の端の記号を除いて見る(`it,` も FTS には `it` として届く。記号だけの語は消える)
+    .filter((term) => {
+      const word = term.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+      return word !== "" && !STOPWORDS.has(word);
+    });
   return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }
 

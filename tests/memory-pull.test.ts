@@ -80,16 +80,16 @@ it.each([
   expect(searchMemory(db, reader, { query }, at).results.map((r) => r.title)).toEqual([title]);
 });
 
-it("search は英語の stopword を query から落として AND で当て、stopword だけの query は memory_pulled を残さず DomainError になる", () => {
+it("search は英語の stopword を query から落として AND で当て、stopword と記号だけの query は memory_pulled を残さず DomainError になる", () => {
   const { db, reader, record } = board();
   record({ title: "Settings tab is the admin surface", text: "Admin settings live in one tab." });
   record({ title: "Deploy to the Pi", text: "Run deploy-pi on the Pi." });
-  const pulls = () => db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'memory_pulled'").get();
-  const before = pulls();
+  const before = searchMemory(db, reader, { query: "settings" }, at).event_id;
 
-  expect(() => searchMemory(db, reader, { query: "The" }, at)).toThrow(DomainError);
-  expect(pulls()).toEqual(before);
-  expect(searchMemory(db, reader, { query: "the settings tab" }, at).results.map((r) => r.title)).toEqual(["Settings tab is the admin surface"]);
+  expect(() => searchMemory(db, reader, { query: "The, —" }, at)).toThrow(DomainError);
+  const hit = searchMemory(db, reader, { query: "the settings tab" }, at);
+  expect(hit.results.map((r) => r.title)).toEqual(["Settings tab is the admin surface"]);
+  expect(hit.event_id).toBe(before + 1);
 });
 
 it("INDEX は prefix 直下の子だけ —— sub-prefix の名前と定義(未定義は null)、その path に置かれた leaf の id + title", () => {
