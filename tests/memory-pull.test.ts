@@ -5,6 +5,7 @@ import {
   approvedMemoryEntries,
   browseMemory,
   createBehaviorCandidate,
+  defineMemoryBranch,
   ensureMemoryIndex,
   invalidateMemoryEntry,
   readMemory,
@@ -34,7 +35,9 @@ function board() {
       "worker",
       at,
     ).entry_id;
-  return { db, task, reader, record };
+  const define = (path: string, text: string, scope: string | null = "tidepool") =>
+    defineMemoryBranch(db, { scope, path, text, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+  return { db, task, reader, record, define };
 }
 
 it.each([
@@ -58,20 +61,63 @@ it("長音符 ー を含むカタカナ語も、それ単独の query で当た�
   expect(searchMemory(db, reader, { query: "サーバ" }, at).results.map((r) => r.title)).toEqual(["boundary"]);
 });
 
-it("INDEX は prefix 直下の子だけ —— sub-prefix の名前と、その path に置かれた leaf の id + title", () => {
-  const { db, reader, record } = board();
+it("INDEX は prefix 直下の子だけ —— sub-prefix の名前と定義(未定義は null)、その path に置かれた leaf の id + title", () => {
+  const { db, reader, record, define } = board();
+  define("build/tests", "How the test suite runs.");
   const node = record({ path: "build", title: "Build uses tsc" });
   record({ path: "build/tests", title: "Tests need Node 22" });
   record({ path: "build/tests/e2e", title: "E2E uses Playwright" });
   record({ path: "build/lint", title: "Lint is biome" });
   record({ path: "deploy", title: "Deploy to the Pi" });
 
-  expect(browseMemory(db, reader, {}, at)).toMatchObject({ prefixes: ["build", "deploy"], entries: [], truncated: false });
+  expect(browseMemory(db, reader, {}, at)).toMatchObject({
+    children: [
+      { name: "build", definition: null },
+      { name: "deploy", definition: null },
+    ],
+    entries: [],
+    truncated: false,
+  });
   expect(browseMemory(db, reader, { prefix: "build" }, at)).toMatchObject({
-    prefixes: ["build/lint", "build/tests"],
+    children: [
+      { name: "build/lint", definition: null },
+      { name: "build/tests", definition: "How the test suite runs." },
+    ],
     entries: [{ id: node, title: "Build uses tsc" }],
     truncated: false,
   });
+});
+
+it("定義だけの枝も子として出て、定義は親の子一覧でもその枝自身でも leaf に数えられない", () => {
+  const { db, reader, define } = board();
+  define("runbooks", "Step-by-step procedures for operating the board.");
+  define("runbooks/deploy", "How a release reaches the Pi.");
+
+  expect(browseMemory(db, reader, {}, at)).toMatchObject({
+    children: [{ name: "runbooks", definition: "Step-by-step procedures for operating the board." }],
+    entries: [],
+  });
+  expect(browseMemory(db, reader, { prefix: "runbooks" }, at)).toMatchObject({
+    children: [{ name: "runbooks/deploy", definition: "How a release reaches the Pi." }],
+    entries: [],
+  });
+  expect(browseMemory(db, reader, { prefix: "runbooks/deploy" }, at)).toMatchObject({ children: [], entries: [] });
+});
+
+it("同じ枝に workspace と盤面全体の定義があれば workspace が勝ち、影の盤面全体の定義は browse に出ないが read / search では見える", () => {
+  const { db, reader, define } = board();
+  const shadowed = define("build", "Board-wide build conventions.", null);
+  define("build", "How this workspace is built.");
+  define("deploy", "Board-wide deploy conventions.", null);
+
+  expect(browseMemory(db, reader, {}, at)).toMatchObject({
+    children: [
+      { name: "build", definition: "How this workspace is built." },
+      { name: "deploy", definition: "Board-wide deploy conventions." },
+    ],
+  });
+  expect(readMemory(db, reader, { ids: [shadowed] }, at).entries.map((e) => e.text)).toEqual(["Board-wide build conventions."]);
+  expect(searchMemory(db, reader, { query: "build" }, at).results.map((r) => r.id)).toContain(shadowed);
 });
 
 it("read は本文・path・出所の参照と、参照の型から導いた出所の種別(commit / event = fact、decision = inference)を返す", () => {

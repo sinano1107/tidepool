@@ -44,6 +44,7 @@ const BOARD_VERBS = [
   "decompose",
   "escalate",
   "record_knowledge",
+  "define_memory_branch",
   "browse_memory",
   "search_memory",
   "read_memory",

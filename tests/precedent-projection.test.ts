@@ -310,7 +310,7 @@ it("「D の前に読んだ記憶」は、その session(worker_spawned の even
   const at = "2026-08-20T06:30:00.000Z";
   const injected = (id: number, spawned: number, entryIds: number[]): EventRow => ({
     id, task_id: task, worker_id: "tako", origin: "board", kind: "memory_injected",
-    payload: { kind: "memory_injected", worker_spawned_event_id: spawned, watermark: 3, entries: entryIds.map((e) => ({ id: e, version: e })), tokens: 10, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0" },
+    payload: { kind: "memory_injected", worker_spawned_event_id: spawned, watermark: 3, entries: entryIds.map((e) => ({ id: e, version: e })), tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0" },
     created_at: at,
   });
   const events: EventRow[] = [

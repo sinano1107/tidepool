@@ -18,7 +18,7 @@ type MemorySource = { kind: "event" | "decision"; ref: number } | { kind: "commi
 /** エントリの欄のうち events に写すもの。同一性(id)と版は event 自身の id なので
  *  payload には持たない。 */
 export interface MemoryEntryFields {
-  kind: "knowledge" | "behavior";
+  kind: "knowledge" | "behavior" | "definition";
   state: "candidate" | "approved";
   /** workspace 名。null = 盤面全体。 */
   scope: string | null;
@@ -30,11 +30,14 @@ export interface MemoryEntryFields {
   original: { text: string; language: string } | null;
   /** Behavior のみ: agent 名 or null = 全員。Knowledge は常に null。 */
   addressee: string | null;
-  source: MemorySource;
+  /** definition は null —— 出所は自身の作成 event で、id は event を書くまで決まらないので
+   *  投影と再生が id から導く(sourceOf)。 */
+  source: MemorySource | null;
   author: { activity: "worker_verb" | "human" | "rca" | "meta_review"; name: string };
 }
 
-interface MemoryEntry extends MemoryEntryFields {
+interface MemoryEntry extends Omit<MemoryEntryFields, "source"> {
+  source: MemorySource;
   /** = memory_entry_created の event id。 */
   id: number;
   /** = 承認 event の id(Knowledge は作成 event の id)。candidate は null。 */
@@ -70,6 +73,10 @@ function resolveSource(db: Db, source: SourceInput | undefined): MemorySource {
   return { kind: event.kind === "decision_logged" ? "decision" : "event", ref: event.id };
 }
 
+function sourceOf(entry: MemoryEntryFields, id: number): MemorySource {
+  return entry.source ?? { kind: "event", ref: id };
+}
+
 /** 版 = 承認 event の id。表の投影と watermark 再生が同じ1つを読む。 */
 function versionOf(state: MemoryEntryFields["state"], createdEventId: number): number | null {
   return state === "approved" ? createdEventId : null;
@@ -77,6 +84,7 @@ function versionOf(state: MemoryEntryFields["state"], createdEventId: number): n
 
 /** エントリ表と FTS への投影(作成と rebuild の再生が共有する)。 */
 function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
+  const source = sourceOf(entry, id);
   db.prepare(
     `INSERT INTO memory_entries (id, kind, state, scope, path, title, text, original_text, original_language,
        addressee, source_kind, source_ref, author_activity, author, version)
@@ -92,8 +100,8 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
     entry.original?.text ?? null,
     entry.original?.language ?? null,
     entry.addressee,
-    entry.source.kind,
-    String(entry.source.ref),
+    source.kind,
+    String(source.ref),
     entry.author.activity,
     entry.author.name,
     versionOf(entry.state, id),
@@ -113,7 +121,7 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
   }
   if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
   return db.transaction(() => {
-    const entry: MemoryEntryFields = { ...fields, source: resolveSource(db, fields.source) };
+    const entry: MemoryEntryFields = { ...fields, source: fields.kind === "definition" ? null : resolveSource(db, fields.source) };
     const id = appendEvent(db, {
       taskId: null,
       workerId: entry.author.name,
@@ -130,6 +138,34 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
 export function recordKnowledge(db: Db, input: EntryInput, origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
   const id = createEntry(db, { ...input, kind: "knowledge", state: "approved", original: null, addressee: null }, origin, at);
   return { entry_id: id, event_id: id };
+}
+
+/** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
+ *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 同じ枝の改訂は
+ *  `supersedes` に旧定義を渡し、書くのと superseded + 後継の無効化を1つの transaction で行う。 */
+export function defineMemoryBranch(
+  db: Db,
+  input: Omit<EntryInput, "title"> & { supersedes?: number },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  if (input.source !== undefined) throw new DomainError("a definition has no source: it is the writer's own declaration");
+  if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
+  return db.transaction(() => {
+    const defined = db
+      .prepare(
+        `SELECT id FROM memory_entries WHERE kind = 'definition' AND state = 'approved' AND invalidation_reason IS NULL
+          AND path = ? AND scope IS ?`,
+      )
+      .get(input.path, input.scope) as { id: number } | undefined;
+    if (defined && defined.id !== input.supersedes) throw new DomainError(`branch ${input.path} is already defined in this scope by entry ${defined.id}; revise it with supersedes`);
+    const { supersedes, ...fields } = input;
+    const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: null, addressee: null }, origin, at);
+    if (supersedes !== undefined) {
+      invalidateMemoryEntry(db, { entry_id: supersedes, reason: "superseded", successor_id: id }, fields.author.name, origin, at);
+    }
+    return { entry_id: id, event_id: id };
+  })();
 }
 
 /** Behavior の candidate(spec #586 G の #358 向け seam)。宛先は agent 名 or null = 全員。
@@ -250,7 +286,7 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
     const entries = new Map<number, MemoryEntry>();
     for (const { id, event } of storeEvents(db, watermark)) {
       if (event.kind === "memory_entry_created") {
-        entries.set(id, { ...event.entry, id, version: versionOf(event.entry.state, id) });
+        entries.set(id, { ...event.entry, id, source: sourceOf(event.entry, id), version: versionOf(event.entry.state, id) });
       } else {
         entries.delete(event.entry_id);
       }
@@ -388,35 +424,53 @@ function visibleEntries(db: Db, reader: Omit<MemoryReader, "taskId">): EntryRow[
     .all(reader.scope, reader.agent) as EntryRow[];
 }
 
-/** 派生の INDEX(ADR 0083 追記3): prefix の直下の子 —— 1段深い sub-prefix と、path が
- *  prefix そのものの leaf。prefix 無し = 最上位(深さ1)。保存しない。browse と注入が共有する。 */
-function indexChildren(entries: EntryRow[], prefix: string): Array<string | EntryRow> {
+/** INDEX の枝: prefix の path と、その path に置かれた定義(workspace が盤面全体に勝つ —— 見える
+ *  スコープは task の workspace と盤面全体の2つだけ)。null = 未定義。 */
+interface IndexBranch {
+  name: string;
+  definition: EntryRow | null;
+}
+
+/** 派生の INDEX(ADR 0083 追記3・追記4): prefix の直下の子 —— 1段深い sub-prefix(定義の path
+ *  自身も枝を作る)と、path が prefix そのものの leaf(定義は leaf に数えない)。prefix 無し =
+ *  最上位(深さ1)。保存しない。browse と注入が共有する。 */
+function indexChildren(entries: EntryRow[], prefix: string): Array<IndexBranch | EntryRow> {
   const below = prefix === "" ? entries : entries.filter((e) => e.path.startsWith(`${prefix}/`));
   const depth = prefix === "" ? 1 : prefix.split("/").length + 1;
   return [
-    ...[...new Set(below.map((e) => e.path.split("/").slice(0, depth).join("/")))].filter((p) => p !== prefix).sort(),
-    ...entries.filter((e) => e.path === prefix),
+    ...[...new Set(below.map((e) => e.path.split("/").slice(0, depth).join("/")))].sort().map((name) => {
+      const own = entries.filter((e) => e.kind === "definition" && e.path === name);
+      return { name, definition: own.find((e) => e.scope !== null) ?? own[0] ?? null };
+    }),
+    ...entries.filter((e) => e.path === prefix && e.kind !== "definition"),
   ];
 }
+
+const isBranch = (child: IndexBranch | EntryRow): child is IndexBranch => "name" in child;
 
 export function browseMemory(
   db: Db,
   reader: MemoryReader,
   input: { prefix?: string; page?: number },
   at: Date,
-): { prefixes: string[]; entries: Array<{ id: number; title: string }>; truncated: boolean; event_id: number } {
+): {
+  children: Array<{ name: string; definition: string | null }>;
+  entries: Array<{ id: number; title: string }>;
+  truncated: boolean;
+  event_id: number;
+} {
   const prefix = input.prefix ?? "";
   const page = input.page ?? 1;
   return db.transaction(() => {
     const children = indexChildren(visibleEntries(db, reader), prefix);
     const shown = children.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
-    const leaves = shown.filter((child): child is EntryRow => typeof child !== "string");
+    const leaves = shown.filter((child): child is EntryRow => !isBranch(child));
     return recordPull(
       db,
       reader,
       { verb: "browse_memory", input, returned_ids: leaves.map((e) => e.id) },
       {
-        prefixes: shown.filter((child): child is string => typeof child === "string"),
+        children: shown.filter(isBranch).map(({ name, definition }) => ({ name, definition: definition?.text ?? null })),
         entries: leaves.map(({ id, title }) => ({ id, title })),
         truncated: children.length > page * PAGE_LENGTH,
       },
@@ -452,20 +506,28 @@ export const TOKENIZER = { id: "gpt-tokenizer/o200k_base", version: (createRequi
 const INJECTION_PREAMBLE =
   "Approved board memory for this workspace. Browse deeper with browse_memory, find more with search_memory, " +
   "and read an entry's full text with read_memory. A fact source is a commit or board event; an inference " +
-  "source is an agent's decision — weigh it.";
+  "source is an agent's decision — weigh it. Each index line is a branch and its definition — what is filed " +
+  "under it, or (undefined) — and a closing line, when present, counts the relevant entries omitted and the " +
+  "depth the index is shown to; browse or search for the rest.";
 
 type MemoryInjection = {
   /** null = 見える approved が無い(節を出さない)。 */
   section: string | null;
   watermark: number;
+  /** 出した定義(INDEX の順)と関連 leaf(順位順)。 */
   entries: Array<{ id: number; version: number }>;
   tokens: number;
+  /** 出した INDEX の深さと木の全深さ(最上位 = 1、節が無ければ 0)。 */
+  index_depth: number;
+  index_max_depth: number;
+  /** 上限で落とした関連 leaf の件数(印と同じ数)。 */
+  omitted: number;
 };
 
-/** spawn 注入の節(spec #586 C、provider 非依存): 最上位 INDEX + 関連 leaf を上限内に組む。
- *  関連度の query は task の title + purpose + completion criteria の語の OR で、順位は search と
- *  同じ FTS の rank。削り順は固定 —— leaf 本文を落とす → 関連 leaf の件数を半分にし続ける。
- *  最上位 INDEX はそれだけで上限を超えても残す(枝の名前が無いと pull で降りられない)。 */
+/** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf を
+ *  上限内に組む。関連度の query は task の title + purpose + completion criteria の語の OR で、順位は
+ *  search と同じ FTS の rank。削り順は固定 —— leaf 本文 → INDEX を深い階層から1段ずつ → 関連 leaf を
+ *  順位の下から1件ずつ。最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。 */
 export function buildMemoryInjection(
   db: Db,
   task: Pick<Task, "title" | "purpose" | "completion_criteria">,
@@ -475,22 +537,35 @@ export function buildMemoryInjection(
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
     const visible = visibleEntries(db, { scope, agent });
-    if (visible.length === 0) return { section: null, watermark, entries: [], tokens: 0 };
-    // path は空にならないので、最上位の子は sub-prefix の名前だけ
-    const index = (indexChildren(visible, "") as string[]).map((prefix) => `- ${prefix}/`);
+    if (visible.length === 0) return { section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
+    const tree = (prefix: string, depth: number): Array<IndexBranch & { depth: number }> =>
+      indexChildren(visible, prefix)
+        .filter(isBranch)
+        .flatMap((branch) => [{ ...branch, depth }, ...tree(branch.name, depth + 1)]);
+    const branches = tree("", 1);
+    const maxDepth = Math.max(...branches.map((b) => b.depth));
     // 語が無ければ関連 leaf は無い(ftsQuery の拒否で spawn を落とさない)
     const query = `${task.title} ${task.purpose} ${task.completion_criteria}`;
-    let leaves = query.trim() === "" ? [] : rankedEntries(db, ftsQuery(query, " OR "), scope).filter((row) => dropReason(row, { agent }) === null);
-    let withText = true;
-    const render = (shown: EntryRow[], bodies: boolean) =>
-      [
+    const relevant =
+      query.trim() === ""
+        ? []
+        : rankedEntries(db, ftsQuery(query, " OR "), scope).filter((row) => row.kind !== "definition" && dropReason(row, { agent }) === null);
+    const render = (shown: EntryRow[], bodies: boolean, depth: number) => {
+      const omitted = relevant.length - shown.length;
+      const omissionNote = [
+        ...(omitted > 0 ? [`${omitted} relevant ${omitted === 1 ? "entry" : "entries"} omitted`] : []),
+        ...(depth < maxDepth ? [`index shown to depth ${depth} of ${maxDepth}`] : []),
+      ].join("; ");
+      return [
         "## Memory",
         "",
         INJECTION_PREAMBLE,
         "",
         "### Index",
         "",
-        ...index,
+        ...branches
+          .filter((b) => b.depth <= depth)
+          .map((b) => `${"  ".repeat(b.depth - 1)}- ${b.name.split("/").at(-1)}/ — ${b.definition?.text ?? "(undefined)"}`),
         ...(shown.length === 0
           ? []
           : [
@@ -502,17 +577,32 @@ export function buildMemoryInjection(
                 ...(bodies ? [`  ${row.text.replaceAll("\n", "\n  ")}`] : []),
               ]),
             ]),
+        ...(omissionNote === "" ? [] : ["", omissionNote]),
       ].join("\n");
+    };
     const cap = readMemorySettings(db).injection_token_cap;
-    let section = render(leaves, withText);
+    let leaves = relevant;
+    let bodies = true;
+    let depth = maxDepth;
+    let section = render(leaves, bodies, depth);
     let tokens = countTokens(section);
-    while (tokens > cap && (withText || leaves.length > 0)) {
-      if (withText) withText = false;
-      else leaves = leaves.slice(0, Math.floor(leaves.length / 2));
-      section = render(leaves, withText);
+    while (tokens > cap && (bodies || depth > 1 || leaves.length > 0)) {
+      if (bodies) bodies = false;
+      else if (depth > 1) depth--;
+      else leaves = leaves.slice(0, -1);
+      section = render(leaves, bodies, depth);
       tokens = countTokens(section);
     }
-    return { section, watermark, entries: leaves.map((row) => ({ id: row.id, version: row.version! })), tokens };
+    const definitions = branches.flatMap((b) => (b.depth <= depth && b.definition ? [b.definition] : []));
+    return {
+      section,
+      watermark,
+      entries: [...definitions, ...leaves].map((row) => ({ id: row.id, version: row.version! })),
+      tokens,
+      index_depth: depth,
+      index_max_depth: maxDepth,
+      omitted: relevant.length - leaves.length,
+    };
   })();
 }
 

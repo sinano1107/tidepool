@@ -5,6 +5,7 @@ import {
   buildMemoryInjection,
   changeMemorySettings,
   createBehaviorCandidate,
+  defineMemoryBranch,
   invalidateMemoryEntry,
   readMemorySettings,
   recordKnowledge,
@@ -34,11 +35,14 @@ function board(task = { title: "fix tide chart", purpose: "chart drifts", comple
       at,
     ).entry_id;
   };
-  return { db, task: registered, record };
+  const define = (path: string, text: string) =>
+    defineMemoryBranch(db, { scope: "tidepool", path, text, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+  return { db, task: registered, record, define };
 }
 
-it("注入節は最上位 INDEX と、task の title / purpose / completion criteria のどれかの語に当たる関連 leaf(title・path・出所の種別・text)を英語で並べる", () => {
-  const { db, task, record } = board();
+it("注入節は全階層の INDEX(枝の名前 + 定義、未定義は (undefined)、深さ優先で深さごとに字下げ)と、task の title / purpose / completion criteria のどれかの語に当たる関連 leaf(title・path・出所の種別・text)を英語で並べる", () => {
+  const { db, task, record, define } = board();
+  const tide = define("tide", "Tide charts and the data that feeds them.");
   const chart = record({ path: "tide", title: "Chart source", text: "The chart reads tides.csv." });
   const decision = logDecision(db, task, "chose csv", "deckhand", at);
   const drift = record({ path: "tide/drift", title: "Drift cause", text: "Clock skew causes drift.", event_id: decision });
@@ -52,12 +56,15 @@ it("注入節は最上位 INDEX と、task の title / purpose / completion crit
       "",
       "Approved board memory for this workspace. Browse deeper with browse_memory, find more with search_memory, " +
         "and read an entry's full text with read_memory. A fact source is a commit or board event; an inference " +
-        "source is an agent's decision — weigh it.",
+        "source is an agent's decision — weigh it. Each index line is a branch and its definition — what is filed " +
+        "under it, or (undefined) — and a closing line, when present, counts the relevant entries omitted and the " +
+        "depth the index is shown to; browse or search for the rest.",
       "",
       "### Index",
       "",
-      "- deploy/",
-      "- tide/",
+      "- deploy/ — (undefined)",
+      "- tide/ — Tide charts and the data that feeds them.",
+      "  - drift/ — (undefined)",
       "",
       "### Relevant entries",
       "",
@@ -67,7 +74,9 @@ it("注入節は最上位 INDEX と、task の title / purpose / completion crit
       "  Clock skew causes drift.",
     ].join("\n"),
   );
-  expect(injection.entries.map((e) => e.id).sort()).toEqual([chart, drift].sort());
+  expect(injection).toMatchObject({ index_depth: 2, index_max_depth: 2, omitted: 0 });
+  expect(injection.entries[0]).toEqual({ id: tide, version: tide });
+  expect(injection.entries.slice(1).map((e) => e.id).sort()).toEqual([chart, drift].sort());
 });
 
 it("他 agent 宛の Behavior・他 workspace・candidate・無効化済みは、関連語に当たっても注入されず INDEX にも出ない", () => {
@@ -93,44 +102,82 @@ it("他 agent 宛の Behavior・他 workspace・candidate・無効化済みは�
   const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
 
   expect(injection.entries.map((e) => e.id).sort()).toEqual([shown, boardWide, addressed].sort());
-  expect(injection.section).toContain("### Index\n\n- tide/\n\n###");
+  expect(injection.section).toContain("### Index\n\n- tide/ — (undefined)\n\n###");
 });
 
 it("approved が1つも見えなければ節を出さず、entries は空", () => {
   const { db, task, record } = board();
   record({ path: "tide", title: "tide elsewhere", scope: "sandbox" });
-  expect(buildMemoryInjection(db, task, "tidepool", "deckhand")).toMatchObject({ section: null, entries: [], tokens: 0 });
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand")).toMatchObject({
+    section: null,
+    entries: [],
+    tokens: 0,
+    index_depth: 0,
+    index_max_depth: 0,
+    omitted: 0,
+  });
 });
 
-it("上限を超えると、まず leaf 本文を落として title + path だけにし、それでも超えれば関連 leaf を順位の上から半分ずつに減らす。最上位 INDEX は上限を超えても残る", () => {
-  const { db, task, record } = board({ title: "tide", purpose: "p", completion_criteria: "c" });
-  for (let i = 0; i < 8; i++) record({ path: `tide/n${i}`, title: `Tide note number ${i}`, text: `tide ${"filler ".repeat(100)}` });
-  const at = (cap: number) => {
-    changeMemorySettings(db, { injection_token_cap: cap }, "webui", new Date("2026-09-14T00:00:00.000Z"));
+it("上限を超えると 本文 → INDEX を深い階層から1段ずつ → 関連 leaf を順位の下から1件ずつ の順に削り、最上位 INDEX は上限を超えても残る。印は削ったときだけ末尾に出る", () => {
+  const { db, task, record, define } = board({ title: "tide", purpose: "p", completion_criteria: "c" });
+  const long = (name: string) => `${name} ${"holds one kind of note ".repeat(10)}`;
+  const top = define("tide", long("tide"));
+  const middle = define("tide/a", long("a"));
+  const deepest = define("tide/a/b", long("b"));
+  for (let i = 0; i < 3; i++) record({ path: "tide/a/b", title: `Tide note number ${i}`, text: `tide ${"filler ".repeat(100)}` });
+  const inject = (cap: number) => {
+    changeMemorySettings(db, { injection_token_cap: cap }, "webui", at);
     return buildMemoryInjection(db, task, "tidepool", "deckhand");
   };
+  // 上限を直前のトークン数の1つ下にすると、ちょうど1段だけ削れる
+  const next = (previous: { tokens: number }) => inject(previous.tokens - 1);
+  const definitions = (...ids: number[]) => ids.map((id) => ({ id, version: id }));
 
-  const full = at(2000);
-  expect(full.entries).toHaveLength(8);
+  const full = inject(2000);
+  const leaves = full.entries.slice(3);
+  expect(leaves).toHaveLength(3);
+  expect(full).toMatchObject({ index_depth: 3, index_max_depth: 3, omitted: 0, entries: [...definitions(top, middle, deepest), ...leaves] });
   expect(full.section).toContain("filler");
+  expect(full.section).not.toMatch(/(omitted|depth \d of \d)$/);
 
-  const titlesOnly = at(300);
-  expect(titlesOnly.tokens).toBeLessThanOrEqual(300);
-  expect(titlesOnly.entries).toEqual(full.entries);
-  expect(titlesOnly.section).not.toContain("filler");
+  const bodiesDropped = next(full);
+  expect(bodiesDropped).toMatchObject({ index_depth: 3, omitted: 0, entries: full.entries });
+  expect(bodiesDropped.section).not.toContain("filler");
+  expect(bodiesDropped.section).not.toMatch(/(omitted|depth \d of \d)$/);
 
-  const halved = at(150);
-  expect(halved.tokens).toBeLessThanOrEqual(150);
-  expect(halved.entries).toEqual(full.entries.slice(0, 4));
-  expect(halved.section).not.toContain("filler");
+  const depth2 = next(bodiesDropped);
+  expect(depth2).toMatchObject({ index_depth: 2, index_max_depth: 3, omitted: 0, entries: [...definitions(top, middle), ...leaves] });
+  expect(depth2.section).toMatch(/\n\nindex shown to depth 2 of 3$/);
 
-  const indexOnly = at(1);
-  expect(indexOnly.entries).toEqual([]);
-  expect(indexOnly.tokens).toBeGreaterThan(1);
-  expect(indexOnly.section).toMatch(/### Index\n\n- tide\/$/);
+  const depth1 = next(depth2);
+  expect(depth1).toMatchObject({ index_depth: 1, omitted: 0, entries: [...definitions(top), ...leaves] });
+  expect(depth1.section).toMatch(/\n\nindex shown to depth 1 of 3$/);
+
+  const oneDropped = next(depth1);
+  expect(oneDropped).toMatchObject({ index_depth: 1, omitted: 1, entries: [...definitions(top), ...leaves.slice(0, 2)] });
+  expect(oneDropped.section).toMatch(/\n\n1 relevant entry omitted; index shown to depth 1 of 3$/);
+
+  const twoDropped = next(oneDropped);
+  expect(twoDropped).toMatchObject({ omitted: 2, entries: [...definitions(top), ...leaves.slice(0, 1)] });
+  expect(twoDropped.section).toMatch(/\n\n2 relevant entries omitted; index shown to depth 1 of 3$/);
+
+  for (const indexOnly of [next(twoDropped), inject(1)]) {
+    expect(indexOnly).toMatchObject({ index_depth: 1, omitted: 3, entries: definitions(top) });
+    expect(indexOnly.tokens).toBeGreaterThan(1);
+    expect(indexOnly.section).toMatch(/### Index\n\n- tide\/ — .*\n\n3 relevant entries omitted; index shown to depth 1 of 3$/);
+  }
 });
 
-it("注入の記録は task 帰属・agent 名義の memory_injected で、worker_spawned の event id・組んだ時点の watermark・entry の id と版・トークン数・計数器の id と版を持つ", () => {
+it("INDEX を浅くせずに関連 leaf だけ落としたときは、印は件数だけ", () => {
+  const { db, task, record } = board({ title: "tide", purpose: "p", completion_criteria: "c" });
+  for (let i = 0; i < 2; i++) record({ path: "tide", title: `Tide note number ${i}` });
+  changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
+  const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
+  expect(injection).toMatchObject({ index_depth: 1, index_max_depth: 1, omitted: 2 });
+  expect(injection.section).toMatch(/- tide\/ — \(undefined\)\n\n2 relevant entries omitted$/);
+});
+
+it("注入の記録は task 帰属・agent 名義の memory_injected で、worker_spawned の event id・組んだ時点の watermark・entry の id と版・トークン数・INDEX の深さと全深さ・落とした件数・計数器の id と版を持つ", () => {
   const { db, task, record } = board();
   const chart = record({ path: "tide", title: "Chart source", text: "The chart reads tides.csv." });
   const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
@@ -147,6 +194,9 @@ it("注入の記録は task 帰属・agent 名義の memory_injected で、worke
       watermark: chart,
       entries: [{ id: chart, version: chart }],
       tokens: injection.tokens,
+      index_depth: 1,
+      index_max_depth: 1,
+      omitted: 0,
       tokenizer: "gpt-tokenizer/o200k_base",
       tokenizer_version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
     },

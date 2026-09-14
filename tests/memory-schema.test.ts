@@ -1,3 +1,7 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import Database from "better-sqlite3";
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 
@@ -69,6 +73,47 @@ it("episode_markers.kind の CHECK は memory マーカーを受ける(issue #59
   insert.run(0, "memory");
   expect(db.prepare("SELECT kind FROM episode_markers").all()).toEqual([{ kind: "memory" }]);
   expect(() => insert.run(1, "injection")).toThrow(/CHECK/);
+  db.close();
+});
+
+it("definition を受けない旧いエントリ表は、再オープンで kind の CHECK が definition まで広がり、既存行は残る(issue #600)", async () => {
+  const dbPath = join(await mkdtemp(join(tmpdir(), "tidepool-db-migrate-memory-kind-")), "board.sqlite");
+  const legacy = new Database(dbPath);
+  legacy.exec(`
+    CREATE TABLE memory_entries (
+      id                  INTEGER PRIMARY KEY,
+      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior')),
+      state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
+      scope               TEXT,
+      path                TEXT NOT NULL,
+      title               TEXT NOT NULL,
+      text                TEXT NOT NULL,
+      original_text       TEXT,
+      original_language   TEXT,
+      addressee           TEXT,
+      source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
+      source_ref          TEXT NOT NULL,
+      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review')),
+      author              TEXT NOT NULL,
+      version             INTEGER,
+      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
+      successor_id        INTEGER REFERENCES memory_entries(id)
+    );
+  `);
+  insert(legacy, { id: 1 });
+  insert(legacy, { id: 3 });
+  insert(legacy, { id: 2, invalidation_reason: "superseded", successor_id: 3 });
+  expect(() => insert(legacy, { id: 4, kind: "definition" })).toThrow(/CHECK/);
+  legacy.close();
+
+  const db = openDb(dbPath);
+  insert(db, { id: 4, kind: "definition" });
+  expect(db.prepare("SELECT id, kind, successor_id FROM memory_entries ORDER BY id").all()).toEqual([
+    { id: 1, kind: "knowledge", successor_id: null },
+    { id: 2, kind: "knowledge", successor_id: 3 },
+    { id: 3, kind: "knowledge", successor_id: null },
+    { id: 4, kind: "definition", successor_id: null },
+  ]);
   db.close();
 });
 

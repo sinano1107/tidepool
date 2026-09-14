@@ -4,6 +4,7 @@ import { getEvent, listEvents, listLog } from "../src/events.js";
 import {
   approvedMemoryEntries,
   createBehaviorCandidate,
+  defineMemoryBranch,
   ensureMemoryIndex,
   invalidateMemoryEntry,
   readMemory,
@@ -229,4 +230,93 @@ it("memory 系の event は決定 log の人間向け種別に入らない", () 
   ensureMemoryIndex(db, at);
   logDecision(db, task, "a decision", "deckhand", at);
   expect(listLog(db).map((e) => e.kind)).toEqual(["decision_logged"]);
+});
+
+const definition = {
+  scope: "tidepool",
+  path: "build",
+  text: "How this workspace is built and tested.",
+  author: { activity: "worker_verb" as const, name: "deckhand" },
+};
+
+it("枝の定義は種別 definition の approved エントリで、title = text、出所は自身の作成 event(版 = 作成 event の id)。作成 event の kind は definition", () => {
+  const { db } = board();
+  const { entry_id, event_id } = defineMemoryBranch(db, definition, "worker", at);
+
+  expect(entry_id).toBe(event_id);
+  expect(approvedMemoryEntries(db)).toEqual([
+    {
+      id: entry_id,
+      kind: "definition",
+      state: "approved",
+      scope: "tidepool",
+      path: "build",
+      title: "How this workspace is built and tested.",
+      text: "How this workspace is built and tested.",
+      original: null,
+      addressee: null,
+      source: { kind: "event", ref: entry_id },
+      author: { activity: "worker_verb", name: "deckhand" },
+      version: event_id,
+    },
+  ]);
+  expect(getEvent(db, event_id)).toMatchObject({ kind: "memory_entry_created", payload: { entry: { kind: "definition" } } });
+});
+
+it.each([
+  ["改行を含む", { text: "Builds.\nAnd tests." }, /one line/],
+  ["CR を含む", { text: "Builds.\rAnd tests." }, /one line/],
+  ["出所を渡した", { source: { commit: "0a46a46" } }, /no source/],
+  ["path に空の段", { path: "build//tests" }, /path/],
+  ["text が空白だけ", { text: " " }, /title and text/],
+])("%s定義は domain error で拒まれ、何も載らない", (_, overrides, message) => {
+  const { db } = board();
+  const define = () => defineMemoryBranch(db, { ...definition, ...overrides }, "worker", at);
+  expect(define).toThrow(DomainError);
+  expect(define).toThrow(message);
+  expect(approvedMemoryEntries(db)).toEqual([]);
+});
+
+it("同じ枝・同じスコープに approved の定義があれば domain error —— スコープが違えば共存し、無効化の後なら書ける", () => {
+  const { db } = board();
+  const workspace = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  const boardWide = defineMemoryBranch(db, { ...definition, scope: null }, "worker", at).entry_id;
+  expect(() => defineMemoryBranch(db, { ...definition, text: "Another line." }, "worker", at)).toThrow(/already defined/);
+  expect(() => defineMemoryBranch(db, { ...definition, scope: null, text: "Another line." }, "worker", at)).toThrow(/already defined/);
+
+  invalidateMemoryEntry(db, { entry_id: workspace, reason: "requirement_change" }, "human", "webui", at);
+  const revised = defineMemoryBranch(db, { ...definition, text: "Another line." }, "worker", at).entry_id;
+  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([boardWide, revised]);
+});
+
+it("同じ枝の定義は supersedes で書き直し、旧定義は superseded + 後継で無効化される —— 1つの枝に approved は1つのまま", () => {
+  const { db } = board();
+  const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  const revised = defineMemoryBranch(db, { ...definition, text: "Another line.", supersedes: old }, "webui", at).entry_id;
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id: revised, path: "build", text: "Another line." }]);
+  expect(() => defineMemoryBranch(db, { ...definition, text: "Third line.", supersedes: old }, "webui", at)).toThrow(/already defined/);
+});
+
+it("定義は別の枝への付け替えにも既存の無効化で直る —— 枝の改名は path_moved + 後継、別の枝への統合は superseded + 後継", () => {
+  const { db } = board();
+  const old = defineMemoryBranch(db, definition, "worker", at).entry_id;
+  const renamed = defineMemoryBranch(db, { ...definition, path: "toolchain" }, "worker", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: old, reason: "path_moved", successor_id: renamed }, "human", "webui", at);
+  const merged = defineMemoryBranch(db, { ...definition, path: "ci" }, "worker", at).entry_id;
+  invalidateMemoryEntry(db, { entry_id: renamed, reason: "superseded", successor_id: merged }, "human", "webui", at);
+  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([merged]);
+});
+
+it("watermark 再生と rebuild は定義を含めて表と同じ集合に戻す(自身の作成 event の出所も)", () => {
+  const { db } = board();
+  const define = defineMemoryBranch(db, definition, "worker", at).event_id;
+  const fact = record(db, "fact");
+  const current = approvedMemoryEntries(db);
+
+  expect(approvedMemoryEntries(db, fact)).toEqual(current);
+  expect(approvedMemoryEntries(db, define).map((e) => e.kind)).toEqual(["definition"]);
+  // setup のみ: 版の古い店を模して rebuild を走らせる
+  db.prepare("UPDATE memory_index_version SET preprocess_version = 'cjk-bigram-0'").run();
+  ensureMemoryIndex(db, at);
+  expect(approvedMemoryEntries(db)).toEqual(current);
 });

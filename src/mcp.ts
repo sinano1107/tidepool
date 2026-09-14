@@ -10,7 +10,7 @@ import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertReviewerKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
-import { browseMemory, readMemory, recordKnowledge, searchMemory } from "./memory.js";
+import { browseMemory, defineMemoryBranch, readMemory, recordKnowledge, searchMemory } from "./memory.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -583,7 +583,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       description:
         "Record a fact you established about this workspace so later sessions can read it " +
         "instead of rediscovering it. It is kept as-is (no approval step); you cannot edit or " +
-        "withdraw it. path is a \"/\"-separated hierarchy (e.g. build/tests). source is exactly " +
+        "withdraw it. path is a \"/\"-separated hierarchy (e.g. build/tests). When you open a new branch, " +
+        "define it first with define_memory_branch. source is exactly " +
         "one of {event_id} (a board event id, such as one log_decision returned) or {commit} " +
         "(a commit hash). " +
         BOARD_WRITE_LANGUAGE_RULE,
@@ -611,6 +612,32 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       ),
   );
 
+  server.registerTool(
+    "define_memory_branch",
+    {
+      description:
+        "Define a memory branch (a path prefix such as build/tests) for this workspace: one line declaring " +
+        "what is filed under it — not a summary of what is there now, but a sentence that stays true as " +
+        "entries come and go. It is kept as-is (no approval step). " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: { prefix: z.string(), definition: z.string() },
+    },
+    async (input) =>
+      runVerb(deps, attributedTaskId, (task) =>
+        defineMemoryBranch(
+          deps.db,
+          {
+            scope: memoryScope(deps, task),
+            path: input.prefix,
+            text: input.definition,
+            author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
+          },
+          "worker",
+          deps.clock.now(),
+        ),
+      ),
+  );
+
   // spec #586 D: 記憶の pull。各 pull は memory_pulled を書き、その event id を返す
   // (Precedent の memory マーカーの結合キー)。
   const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedWorkerId(deps, task) });
@@ -621,7 +648,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     {
       description:
         "Browse the board's memory index for this workspace: the direct children of a path " +
-        "prefix — deeper prefixes you can browse next, and entries (id + title) filed at that " +
+        "prefix — children (a deeper prefix you can browse next, with its one-line definition of what is " +
+        "filed under it, or null if undefined), and entries (id + title) filed at that " +
         "path. Omit prefix for the top level. Read an entry's text with read_memory.",
       inputSchema: { prefix: z.string().optional(), page },
     },
