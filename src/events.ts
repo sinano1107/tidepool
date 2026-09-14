@@ -395,14 +395,19 @@ export type EventPayload =
   | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
   // spec #586 C: 人間が settings タブ / 管理MCP から注入上限を変えた(盤面スコープ、task_id NULL)。
   | { kind: "memory_settings_changed"; injection_token_cap: number }
-  // spec #586 C: spawn 時の注入(task 帰属、worker_spawned の直後)。注入した entry の id と版、
-  // 組んだ時点の watermark、計数したトークン数と計数器。注入ゼロでも entries 空で残す。
+  // spec #586 C: spawn 時の注入(task 帰属、worker_spawned の直後)。注入した entry(定義を含む)の
+  // id と版、組んだ時点の watermark、計数したトークン数と計数器、出した INDEX の深さ・木の全深さ・
+  // 落とした関連 leaf の件数(#600 D。再生できない event なので消費者の着地を待たずに持つ)。
+  // 注入ゼロでも entries 空で残す。
   | {
       kind: "memory_injected";
       worker_spawned_event_id: number;
       watermark: number;
       entries: Array<{ id: number; version: number }>;
       tokens: number;
+      index_depth: number;
+      index_max_depth: number;
+      omitted: number;
       tokenizer: string;
       tokenizer_version: string;
     };

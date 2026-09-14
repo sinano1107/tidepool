@@ -169,6 +169,28 @@ export const MEMORY_PREPROCESS_VERSION = "cjk-bigram-2";
 // Shared between the fresh-board CREATE and the memory index rebuild (memory.ts).
 export const MEMORY_FTS_DDL = `CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, path, original, tokenize = "${MEMORY_FTS_TOKENIZER}")`;
 
+// Shared between the fresh-board CREATE and #600's kind-CHECK rebuild below.
+const MEMORY_ENTRIES_TABLE_DDL = `
+    CREATE TABLE memory_entries (
+      id                  INTEGER PRIMARY KEY,
+      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior', 'definition')),
+      state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
+      scope               TEXT,
+      path                TEXT NOT NULL,
+      title               TEXT NOT NULL,
+      text                TEXT NOT NULL,
+      original_text       TEXT,
+      original_language   TEXT,
+      addressee           TEXT,
+      source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
+      source_ref          TEXT NOT NULL,
+      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review')),
+      author              TEXT NOT NULL,
+      version             INTEGER,
+      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
+      successor_id        INTEGER REFERENCES memory_entries(id)
+    )`;
+
 // Shared between the fresh-board CREATE and #190's event-table rebuild. The
 // database is the audit record's final backstop, so its route vocabulary is
 // constrained here as well as by EventOrigin in TypeScript.
@@ -552,25 +574,7 @@ export function openDb(path: string): Db {
     -- 理由コード(cause.ts の語彙の3つ + superseded / path_moved)と後継 id の列。
     -- version = 承認 event の id(Knowledge は作成 event の id、candidate は NULL)。
     -- 時刻・回数・重みの列は持たない(時刻は events)。
-    CREATE TABLE IF NOT EXISTS memory_entries (
-      id                  INTEGER PRIMARY KEY,
-      kind                TEXT NOT NULL CHECK (kind IN ('knowledge', 'behavior')),
-      state               TEXT NOT NULL CHECK (state IN ('candidate', 'approved')),
-      scope               TEXT,
-      path                TEXT NOT NULL,
-      title               TEXT NOT NULL,
-      text                TEXT NOT NULL,
-      original_text       TEXT,
-      original_language   TEXT,
-      addressee           TEXT,
-      source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
-      source_ref          TEXT NOT NULL,
-      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review')),
-      author              TEXT NOT NULL,
-      version             INTEGER,
-      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
-      successor_id        INTEGER REFERENCES memory_entries(id)
-    );
+    ${MEMORY_ENTRIES_TABLE_DDL.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")};
 
     -- Memory の全文索引(spec #586 B)。rowid = エントリ id。CJK bigram の前処理を
     -- 通した文字列を持つので external-content にはできず、エントリ表と同じ
@@ -695,6 +699,27 @@ export function openDb(path: string): Db {
       `);
     })();
     db.exec(EVENTS_APPEND_ONLY_TRIGGERS);
+  }
+  // issue #600: 種別 definition を受けるよう kind の CHECK を広げる(ALTER では変えられない)。
+  // 自己参照の successor_id があるので、DROP の暗黙 DELETE を FK が拒まないよう tasks の
+  // rebuild と同じく pragma を外で切る。
+  const memorySchema = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memory_entries'")
+    .get() as { sql: string };
+  if (!memorySchema.sql.includes("'definition'")) {
+    db.pragma("foreign_keys = OFF");
+    try {
+      db.transaction(() => {
+        db.exec(MEMORY_ENTRIES_TABLE_DDL.replace("CREATE TABLE memory_entries", "CREATE TABLE memory_entries_post_issue_600"));
+        db.exec(`
+          INSERT INTO memory_entries_post_issue_600 SELECT * FROM memory_entries;
+          DROP TABLE memory_entries;
+          ALTER TABLE memory_entries_post_issue_600 RENAME TO memory_entries;
+        `);
+      })();
+    } finally {
+      db.pragma("foreign_keys = ON");
+    }
   }
   if (!cols.includes("based_on_decision")) {
     db.exec(`ALTER TABLE tasks ADD COLUMN based_on_decision INTEGER`);
