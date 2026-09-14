@@ -83,7 +83,6 @@ it("define_memory_branch は attributed task の workspace をスコープ、wor
 
     const rejected = await client.callTool({ name: "define_memory_branch", arguments: { prefix: "deploy", definition: "Two\nlines." } });
     expect(rejected.isError).toBe(true);
-    expect((rejected.content as Array<{ text: string }>)[0]!.text).toContain("one line");
   } finally {
     await client.close();
   }

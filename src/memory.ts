@@ -547,7 +547,7 @@ export function buildMemoryInjection(
         : rankedEntries(db, ftsQuery(query, " OR "), scope).filter((row) => row.kind !== "definition" && dropReason(row, { agent }) === null);
     const render = (shown: EntryRow[], bodies: boolean, depth: number) => {
       const omitted = relevant.length - shown.length;
-      const mark = [
+      const omissionNote = [
         ...(omitted > 0 ? [`${omitted} relevant ${omitted === 1 ? "entry" : "entries"} omitted`] : []),
         ...(depth < maxDepth ? [`index shown to depth ${depth} of ${maxDepth}`] : []),
       ].join("; ");
@@ -572,7 +572,7 @@ export function buildMemoryInjection(
                 ...(bodies ? [`  ${row.text.replaceAll("\n", "\n  ")}`] : []),
               ]),
             ]),
-        ...(mark === "" ? [] : ["", mark]),
+        ...(omissionNote === "" ? [] : ["", omissionNote]),
       ].join("\n");
     };
     const cap = readMemorySettings(db).injection_token_cap;
