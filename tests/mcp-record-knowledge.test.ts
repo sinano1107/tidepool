@@ -77,6 +77,7 @@ it("registry の無い盤面で workspace を指定しないタスクからの r
       },
     });
     expect(result.isError).toBe(true);
+    expect(text(result)).toContain("memory verbs need a task workspace");
     expect(approvedMemoryEntries(t.db)).toEqual([]);
   } finally {
     await client.close();
