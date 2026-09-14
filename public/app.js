@@ -2235,10 +2235,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
     /* @__PURE__ */ React.createElement("p", { style: { ...muted, fontFamily: "var(--font-mono)" } }, "#", entry.id, " \xB7 ", entry.kind, " \xB7 ", entry.invalidation_reason ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` \u2192 #${entry.successor_id}` : ""}` : entry.state, " \xB7 ", entry.scope ?? "board-wide", " \xB7 ", entry.path),
     entry.kind !== "definition" && /* @__PURE__ */ React.createElement("strong", { style: { fontSize: "var(--text-sm)" } }, entry.title),
     /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, entry.text),
-    (entry.original ?? translations[entry.id]) && /* @__PURE__ */ React.createElement("p", { style: muted }, entry.original ? "original" : "translation", ": ", [
-      entry.kind !== "definition" && (entry.original ?? translations[entry.id]).title,
-      (entry.original ?? translations[entry.id]).text
-    ].filter(Boolean).join(" \u2014 ")),
+    [entry.original ?? translations[entry.id]].filter(Boolean).map((shown) => (
+      // a definition's title is its text, so the Set shows it once
+      /* @__PURE__ */ React.createElement("p", { key: "shown", style: muted }, entry.original ? "original" : "translation", ": ", [.../* @__PURE__ */ new Set([shown.title, shown.text])].join(" \u2014 "))
+    )),
     !entry.invalidation_reason && invalidating?.id !== entry.id && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setInvalidating({ id: entry.id, reason: "capability", successor: "" }) }, "Invalidate")),
     invalidating?.id === entry.id && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
       Select,

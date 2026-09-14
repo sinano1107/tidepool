@@ -2010,12 +2010,10 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}
           <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{entry.text}</p>
-          {(entry.original ?? translations[entry.id]) && (
-            <p style={muted}>
-              {entry.original ? 'original' : 'translation'}: {[entry.kind !== 'definition' && (entry.original ?? translations[entry.id]).title,
-                (entry.original ?? translations[entry.id]).text].filter(Boolean).join(' — ')}
-            </p>
-          )}
+          {[entry.original ?? translations[entry.id]].filter(Boolean).map((shown) => (
+            // a definition's title is its text, so the Set shows it once
+            <p key="shown" style={muted}>{entry.original ? 'original' : 'translation'}: {[...new Set([shown.title, shown.text])].join(' — ')}</p>
+          ))}
           {!entry.invalidation_reason && invalidating?.id !== entry.id && (
             <div><Button variant="ghost" size="sm" onClick={() => setInvalidating({ id: entry.id, reason: 'capability', successor: '' })}>Invalidate</Button></div>
           )}
