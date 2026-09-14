@@ -212,3 +212,22 @@ it("GET /api/translate/usage で生成済み翻訳のトークン消費を観測
     createdAt: expect.any(String),
   });
 });
+
+it("人間の原文は type: to_english で英語へ、英語は type: back_translation で表示言語へ訳す —— client 不在なら 503(issue #593)", async () => {
+  const translationClient = new FakeTranslationClient();
+  t = await bootTidepool({ translationClient });
+
+  const toEnglish = await api(t.baseUrl, "POST", "/api/translate", { type: "to_english", text: "テストは Node 22 が要る" });
+  const back = await api(t.baseUrl, "POST", "/api/translate", { type: "back_translation", text: "Tests need Node 22." });
+
+  expect(toEnglish.json).toEqual({ status: "translated", text: "[translated] テストは Node 22 が要る", cached: false });
+  expect(back.json).toEqual({ status: "translated", text: "[translated] Tests need Node 22.", cached: false });
+  expect(translationClient.calls).toEqual([
+    { source: "テストは Node 22 が要る", language: "English" },
+    { source: "Tests need Node 22.", language: "Japanese" },
+  ]);
+
+  await t.stop();
+  t = await bootTidepool();
+  expect((await api(t.baseUrl, "POST", "/api/translate", { type: "to_english", text: "原文" })).status).toBe(503);
+});

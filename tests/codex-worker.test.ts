@@ -164,7 +164,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     recordKnowledge(
       f.db,
-      { scope: "work", path: "board", title: "Board correctness", text: "Tests guard the board.", source: { commit: "0a46a46" }, author: { activity: "human", name: "human" } },
+      { scope: "work", path: "board", title: "Board correctness", text: "Tests guard the board.", author: { activity: "human", name: "human" } },
       "webui",
       new Date("2026-08-24T00:00:00.000Z"),
     );

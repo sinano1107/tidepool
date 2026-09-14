@@ -19,7 +19,9 @@ export interface TranslationResult {
 export interface TranslationClient {
   /** source: the fragment of agent prose being translated (a decision-log
    *  line, a completion report, a question's purpose/item text, or one
-   *  section of a handoff doc). language: the board's display language
-   *  (issue #46), read fresh by the caller at each use. */
+   *  section of a handoff doc), or a human's own memory text (issue #593).
+   *  language: the target — the board's display language (issue #46), read
+   *  fresh by the caller at each use, or "English" when a human's original
+   *  becomes the canonical text. */
   translate(source: string, language: string): Promise<TranslationResult>;
 }

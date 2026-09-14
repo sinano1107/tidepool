@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { createApiRouter } from "../src/api.js";
 import type { Db } from "../src/db.js";
-import { FakeClock, unusedLanding } from "./fakes.js";
+import { FakeClock, FakeTranslationClient, unusedLanding } from "./fakes.js";
 import {
   AUTH_HEADERS,
   bootTidepool,
@@ -55,6 +55,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
     agentAdmin: { list: () => [], authorityProfiles: () => [] },
     profileAdmin: { list: () => [] },
     hostSkills: async () => ["review"],
+    translationClient: new FakeTranslationClient(),
   });
 
   // :id 系ルートが 404 の早期 return で終わらず本物の表示経路を走るよう、
@@ -71,7 +72,7 @@ it("人間面の全 GET エンドポイントは盤面 DB を1行も変異させ
   // 弾く番犬。総数は下限ではなく実数で固定する — 下限だと1本消えても気づけず、
   // ルートが増減したときに人間がこの数字を意図して更新することに意味がある
   expect(routes).toContain("/tasks/:id");
-  expect(routes.length).toBe(25);
+  expect(routes.length).toBe(26);
 
   const paths = [
     ...STATIC_GET_PATHS,

@@ -615,7 +615,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls, db } = await makeWorker();
     recordKnowledge(
       db,
-      { scope: "tidepool", path: "faucet", title: "Faucet valve", text: "The faucet valve is in the attic.", source: { commit: "0a46a46" }, author: { activity: "human", name: "human" } },
+      { scope: "tidepool", path: "faucet", title: "Faucet valve", text: "The faucet valve is in the attic.", author: { activity: "human", name: "human" } },
       "webui",
       new FakeClock().now(),
     );
