@@ -38,8 +38,9 @@ import type { Landing } from "./landing.js";
 import { toolError, toolResult } from "./mcp.js";
 import {
   changeMemorySettings,
-  defineHumanMemoryBranch,
+  defineMemoryBranch,
   humanDefinitionSchema,
+  humanEntryInput,
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
@@ -48,7 +49,7 @@ import {
   memorySettingsChangeSchema,
   readMemorySettings,
   rebuildMemoryIndex,
-  recordHumanKnowledge,
+  recordKnowledge,
   TOKENIZER,
 } from "./memory.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
@@ -549,7 +550,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description: `Record a Knowledge entry: a fact filed under path (a "/"-separated hierarchy such as build/tests). ${writtenAs}`,
       inputSchema: humanKnowledgeSchema.shape,
     },
-    async (input) => memoryVerb(() => recordHumanKnowledge(deps.db, input, "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => recordKnowledge(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "define_memory_branch",
@@ -559,7 +560,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         `definition, pass the current one's id as supersedes. ${writtenAs}`,
       inputSchema: humanDefinitionSchema.shape,
     },
-    async (input) => memoryVerb(() => defineHumanMemoryBranch(deps.db, input, "mcp", deps.clock.now())),
+    async (input) => memoryVerb(() => defineMemoryBranch(deps.db, humanEntryInput(deps.db, input), "mcp", deps.clock.now())),
   );
   server.registerTool(
     "invalidate_memory_entry",

@@ -1947,7 +1947,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       {writing && (
         <React.Fragment>
           <Select label="Kind" value={draft.kind} onChange={set('kind')}
-            options={[{ value: 'knowledge', label: 'knowledge' }, { value: 'definition', label: 'definition (one line for a branch)' }]} />
+            options={['knowledge', 'definition']} />
           <Select label="Workspace" value={draft.workspace} onChange={set('workspace')} options={[{ value: '', label: 'board-wide' }, ...workspaceNames]} />
           <Input label={draft.kind === 'knowledge' ? 'Path' : 'Branch path'} mono value={draft.path} onChange={set('path')} placeholder="build/tests" />
           {draft.kind === 'knowledge' && <Input label="Title (English)" value={draft.title} onChange={set('title')} />}

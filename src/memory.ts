@@ -191,21 +191,13 @@ export const memoryListFilterSchema = z.object({
   state: z.enum(["candidate", "approved", "invalidated"]).optional(),
 });
 
-function humanEntryInput<T extends { workspace: string | null; original?: string }>(db: Db, { workspace, original, ...rest }: T) {
+export function humanEntryInput<T extends { workspace: string | null; original?: string }>(db: Db, { workspace, original, ...rest }: T) {
   return {
     ...rest,
     scope: workspace,
     original: original ? { text: original, language: getDisplayLanguage(db) } : null,
     author: { activity: "human" as const, name: HUMAN_WORKER_ID },
   };
-}
-
-export function recordHumanKnowledge(db: Db, input: z.infer<typeof humanKnowledgeSchema>, origin: EventOrigin, at: Date) {
-  return recordKnowledge(db, humanEntryInput(db, input), origin, at);
-}
-
-export function defineHumanMemoryBranch(db: Db, input: z.infer<typeof humanDefinitionSchema>, origin: EventOrigin, at: Date) {
-  return defineMemoryBranch(db, humanEntryInput(db, input), origin, at);
 }
 
 /** Behavior の candidate(spec #586 G の #358 向け seam)。宛先は agent 名 or null = 全員。

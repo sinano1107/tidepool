@@ -43,8 +43,9 @@ import { IssueContentCache, type Live } from "./issue-view.js";
 import { type Landing, landingAnnotation } from "./landing.js";
 import {
   changeMemorySettings,
-  defineHumanMemoryBranch,
+  defineMemoryBranch,
   humanDefinitionSchema,
+  humanEntryInput,
   humanKnowledgeSchema,
   invalidateMemoryEntry,
   invalidationSchema,
@@ -52,7 +53,7 @@ import {
   memoryListFilterSchema,
   memorySettingsChangeSchema,
   readMemorySettings,
-  recordHumanKnowledge,
+  recordKnowledge,
 } from "./memory.js";
 import {
   getPaceOffsets,
@@ -1504,6 +1505,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       if (target.type === "log_entry") {
         outcome = await translateLogEntry(db, translationClient, target.event_id, language, clock.now());
       } else if (target.type === "memory_entry") {
+        // ponytail: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
         const entry = listMemoryEntries(db, {}).find((e) => e.id === target.entry_id);
         if (!entry) throw new TranslationTargetError(`no memory entry ${target.entry_id}`);
         outcome = await translateSource(db, translationClient, entry.text, language, clock.now());
@@ -1699,8 +1701,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         res.status(400).json({ error: err.message });
       }
     };
-  router.post("/settings/memory/knowledge", memoryWrite(humanKnowledgeSchema, (input) => recordHumanKnowledge(db, input, "webui", clock.now())));
-  router.post("/settings/memory/definitions", memoryWrite(humanDefinitionSchema, (input) => defineHumanMemoryBranch(db, input, "webui", clock.now())));
+  router.post("/settings/memory/knowledge", memoryWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
+  router.post("/settings/memory/definitions", memoryWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post(
     "/settings/memory/entries/:entry_id/invalidate",
     memoryWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({
