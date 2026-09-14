@@ -432,10 +432,9 @@ interface IndexBranch {
 function indexChildren(entries: EntryRow[], prefix: string): Array<IndexBranch | EntryRow> {
   const below = prefix === "" ? entries : entries.filter((e) => e.path.startsWith(`${prefix}/`));
   const depth = prefix === "" ? 1 : prefix.split("/").length + 1;
-  const definitions = entries.filter((e) => e.kind === "definition");
   return [
     ...[...new Set(below.map((e) => e.path.split("/").slice(0, depth).join("/")))].sort().map((name) => {
-      const own = definitions.filter((e) => e.path === name);
+      const own = entries.filter((e) => e.kind === "definition" && e.path === name);
       return { name, definition: own.find((e) => e.scope !== null) ?? own[0] ?? null };
     }),
     ...entries.filter((e) => e.path === prefix && e.kind !== "definition"),
