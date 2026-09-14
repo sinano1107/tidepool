@@ -105,6 +105,39 @@ it("他 agent 宛の Behavior・他 workspace・candidate・無効化済みは�
   expect(injection.section).toContain("### Index\n\n- tide/ — (undefined)\n\n###");
 });
 
+it("英語の自然文の task では、stopword しか共有しない leaf は関連 leaf に入らない(#606 の実測: 4枝 10 leaf → 2件)", () => {
+  const { db, task, record } = board({
+    title: "Fix the settings tab layout on narrow screens",
+    purpose: "The tab is cramped when the window is small and it should be usable",
+    completion_criteria: "It renders without overflow at 400px",
+  });
+  const admin = record({ path: "webui", title: "Settings tab is the admin surface", text: "Admin controls are sections of one tab." });
+  const breakpoints = record({ path: "webui", title: "Mobile breakpoints", text: "Below 600px the board column is narrow." });
+  record({ path: "webui", title: "Episodes open in a drawer", text: "The drawer is on the right of the board." });
+  record({ path: "deploy", title: "Deploy to the Pi", text: "Run deploy-pi from the Mac and it restarts the service." });
+  record({ path: "deploy", title: "Funnel is public", text: "The vault is behind Auth0 and it is exposed by Funnel." });
+  record({ path: "deploy/vm", title: "Tests run in the VM", text: "The Lima VM is where the suite runs." });
+  record({ path: "copy", title: "Japanese copy quality bar", text: "A translated tone is not accepted for the UI." });
+  record({ path: "copy", title: "Agent-facing text is English", text: "Prompts and tool descriptions are in English." });
+  record({ path: "build", title: "Build uses tsc", text: "The build is tsc with no bundler." });
+  record({ path: "build", title: "The landing runs after merge-back", text: "It is on the main branch." });
+
+  const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
+
+  expect(injection.entries.map((e) => e.id).sort()).toEqual([admin, breakpoints].sort());
+});
+
+it("title / purpose / completion criteria が stopword だけの task は、関連 leaf なし・INDEX ありの節を組む", () => {
+  const { db, task, record } = board({ title: "The", purpose: "it is", completion_criteria: "a" });
+  record({ path: "deploy", title: "Deploy to the Pi", text: "It is on the Pi." });
+
+  const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
+
+  expect(injection.entries).toEqual([]);
+  expect(injection.section).toContain("### Index\n\n- deploy/ — (undefined)");
+  expect(injection.section).not.toContain("### Relevant entries");
+});
+
 it("approved が1つも見えなければ節を出さず、entries は空", () => {
   const { db, task, record } = board();
   record({ path: "tide", title: "tide elsewhere", scope: "sandbox" });

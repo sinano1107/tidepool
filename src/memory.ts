@@ -112,10 +112,10 @@ function insertEntry(db: Db, id: number, entry: MemoryEntryFields): void {
   );
   db.prepare("INSERT INTO memory_fts (rowid, text, title, path, original) VALUES (?, ?, ?, ?, ?)").run(
     id,
-    bigram(entry.text),
-    bigram(entry.title),
-    bigram(entry.path),
-    `${bigram(entry.original?.title ?? "")} ${bigram(entry.original?.text ?? "")}`,
+    ftsText(entry.text),
+    ftsText(entry.title),
+    ftsText(entry.path),
+    `${ftsText(entry.original?.title ?? "")} ${ftsText(entry.original?.text ?? "")}`,
   );
 }
 
@@ -360,6 +360,12 @@ export function listMemoryEntries(
     .map((row) => ({ ...rowToEntry(row), invalidation_reason: row.invalidation_reason, successor_id: row.successor_id }));
 }
 
+/** 索引と query の共通の前処理(spec #586 B / #606)。空白区切りの語の先頭・末尾の . - _ を落とし
+ *  (tokenchars なので文末の `narrow.` が `narrow` に当たらない。語中は残す)、CJK bigram を通す。 */
+function ftsText(value: string): string {
+  return bigram(value.replace(/(?<!\S)[._-]+|[._-]+(?!\S)/g, ""));
+}
+
 /** CJK の連なりを重なりつきの2文字語に割る(spec #586 B、LWC 式)。unicode61 は CJK を
  *  語に切らないので、索引と query の両方にこれを通す。1文字の連なりはそのまま。長音符 ー は
  *  Script=Common なので Script_Extensions で拾う(拾わないと「サーバ」が割れて当たらない)。 */
@@ -414,12 +420,27 @@ function recordPull<T>(
   return { ...result, event_id };
 }
 
-/** query を語ごとに引用符で囲む(識別子の / . - を FTS の構文として読ませない)。語は既定で
- *  AND、注入は OR で繋ぐ。 */
-function ftsQuery(query: string, join: " " | " OR " = " "): string {
-  const terms = query.split(/\s+/).filter(Boolean);
-  if (terms.length === 0) throw new DomainError("query must be non-empty");
-  return terms.map((term) => `"${bigram(term).trim().replaceAll('"', '""')}"`).join(join);
+/** query から落とす英語の stopword(#606、大文字小文字を区別しない)。落とすのは query 側だけで、
+ *  索引には残す。日本語は bigram で語に割れないので対象外。 */
+const STOPWORDS = new Set(
+  (
+    "a an the " +
+    "about above after at before below by down for from in into of off on onto out over through to under up with without " +
+    "am are be been being is was were " +
+    "and but if nor or so than that then " +
+    "he her him his i it its me my our she their them they this those these us we what which who you your " +
+    "as can do does did has have had not no will would should could may might must"
+  ).split(" "),
+);
+
+/** query を前処理して stopword を落とし、語ごとに引用符で囲む(識別子の / . - を FTS の構文として
+ *  読ませない)。語は既定で AND、注入は OR で繋ぐ。残る語が無ければ null。 */
+function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
+  const terms = query
+    .split(/\s+/)
+    .map((word) => ftsText(word).trim())
+    .filter((term) => term !== "" && !STOPWORDS.has(term.toLowerCase()));
+  return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }
 
 /** FTS に当たったスコープ内の approved(順位順)。宛先と無効化はここで落とさない —— search は
@@ -445,7 +466,9 @@ export function searchMemory(
 ): { results: Array<{ id: number; title: string; path: string }>; truncated: boolean; event_id: number } {
   const page = input.page ?? 1;
   return db.transaction(() => {
-    const hits = rankedEntries(db, ftsQuery(input.query), reader.scope);
+    const match = ftsQuery(input.query);
+    if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
+    const hits = rankedEntries(db, match, reader.scope);
     const visible = hits.filter((row) => dropReason(row, reader) === null);
     const shown = visible.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
     const candidates = hits.map((row) => ({
@@ -604,12 +627,12 @@ export function buildMemoryInjection(
         .flatMap((branch) => [{ ...branch, depth }, ...tree(branch.name, depth + 1)]);
     const branches = tree("", 1);
     const maxDepth = Math.max(...branches.map((b) => b.depth));
-    // 語が無ければ関連 leaf は無い(ftsQuery の拒否で spawn を落とさない)
-    const query = `${task.title} ${task.purpose} ${task.completion_criteria}`;
+    // 語が残らなければ(空 / stopword だけ)関連 leaf は無い。spawn は落とさない
+    const match = ftsQuery(`${task.title} ${task.purpose} ${task.completion_criteria}`, " OR ");
     const relevant =
-      query.trim() === ""
+      match === null
         ? []
-        : rankedEntries(db, ftsQuery(query, " OR "), scope).filter((row) => row.kind !== "definition" && dropReason(row, { agent }) === null);
+        : rankedEntries(db, match, scope).filter((row) => row.kind !== "definition" && dropReason(row, { agent }) === null);
     const render = (shown: EntryRow[], bodies: boolean, depth: number) => {
       const omitted = relevant.length - shown.length;
       const omissionNote = [
