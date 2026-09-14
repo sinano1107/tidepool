@@ -617,8 +617,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "propose_from_objection",
     {
       description:
-        "Review only: turn your finding about an objected entry of your parent task into memory — objected entries " +
-        "of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause; " +
+        "Review only: turn your finding about an objected entry into memory — objected entries of your parent task only. The board derives the entry kind and addressee from the entry's attributed cause; " +
         "a behavior is a candidate a human approves later. as (behavior or knowledge) is required only when the cause " +
         "is missing_information. path is a \"/\"-separated hierarchy (e.g. build/tests). " +
         BOARD_WRITE_LANGUAGE_RULE,

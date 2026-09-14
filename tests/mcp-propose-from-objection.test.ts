@@ -36,9 +36,8 @@ interface Objected {
 async function objectedTasks(attributionClient: FakeAttributionClient, specs: Objected[]): Promise<any[]> {
   const made = [];
   for (const spec of specs) {
-    const content = { title: spec.title, purpose: `purpose of ${spec.title}`, completion_criteria: `criteria of ${spec.title}` };
     const task = spec.registrant
-      ? registerTask(t.db, { type: "work", ...content, workspace: "charts" }, t.clock.now(), spec.registrant, "worker")
+      ? registerTask(t.db, { type: "work", title: spec.title, purpose: "p", completion_criteria: "c", workspace: "charts" }, t.clock.now(), spec.registrant, "worker")
       : await registerWork(t, spec.title, "charts", undefined, spec.human && "human");
     const entries: any[] = [];
     if (spec.human) {
