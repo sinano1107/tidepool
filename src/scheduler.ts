@@ -441,7 +441,11 @@ export function startScheduler(deps: {
 
   /** `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  adapter へそのまま運ぶ —— spawn 側で解決し直すと、除外の文脈を持たない再解決が
-   *  scheduler と違う entry を選びうる(温存中の Provider で走る)。 */
+   *  scheduler と違う entry を選びうる(温存中の Provider で走る)。
+   *
+   *  戻り値は `start` が同期で投げたときの後始末の一撃で、呼び手が poll の外で撃つ。
+   *  pickup の中で slot を解放してはならない —— 解放が撃つ pickup の契機は `inFlight` の間
+   *  捨てられる(ADR 0119 決定5)。 */
   async function pickup(
     task: Task,
     setting: ExecutionSetting | undefined,
@@ -490,18 +494,16 @@ export function startScheduler(deps: {
     } catch (err) {
       // ADR 0118: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす
-      const message = err instanceof Error ? err.message : String(err);
+      const failure = { error_code: null, message: err instanceof Error ? err.message : String(err) };
       console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
       appendEvent(db, {
         taskId: picked.id,
         workerId: agent,
         origin: "board",
-        payload: { kind: "spawn_failed", error_code: null, message },
+        payload: { kind: "spawn_failed", ...failure },
         at: clock.now(),
       });
-      // 後始末は slot を解放して pickup の契機を撃つので、poll の外(`inFlight` を降ろした後)で
-      // 撃つ —— poll の中で解放すれば、その契機は捨てられる(ADR 0119 決定5)
-      return () => onSpawnFailed(picked.id, { error_code: null, message });
+      return () => onSpawnFailed(picked.id, failure);
     }
   }
 

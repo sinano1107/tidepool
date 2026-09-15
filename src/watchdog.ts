@@ -162,8 +162,8 @@ export function spawnFailureHandler(
       deps.db,
       task,
       `worker never started for task: ${task.title}`,
-      `the worker for task "${task.title}" (${task.id}) never ran: the board caught this ` +
-        `exception while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
+      `the worker for task "${task.title}" (${task.id}) never ran: the board observed this ` +
+        `error while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
         failure.message,
       now,
     );

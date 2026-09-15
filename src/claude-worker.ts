@@ -2296,18 +2296,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       this.running.delete(task.id);
       console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
+      const failure = { error_code: errno.code ?? null, message: err.message };
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,
         origin: "board",
-        payload: {
-          kind: "spawn_failed",
-          error_code: errno.code ?? null,
-          message: err.message,
-        },
+        payload: { kind: "spawn_failed", ...failure },
         at: this.options.clock.now(),
       });
-      this.options.onSpawnFailed?.(task.id, { error_code: errno.code ?? null, message: err.message });
+      this.options.onSpawnFailed?.(task.id, failure);
     });
     // usage is settled at process exit — after task_completed via MCP, not
     // before (issue #32) — so kill/crash sessions still get a worker_exited

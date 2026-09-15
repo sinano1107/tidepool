@@ -6,6 +6,7 @@ import {
   git,
   HOUR,
   makeWorkspace,
+  managementMcpClient,
   questions,
   queueWork,
   type Tidepool,
@@ -88,6 +89,14 @@ it("空を観測できない容器では、読み口が後始末中を報せ、�
   expect(t.containers.forceReclaims).toContain(task.id);
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.teardown.taskId).toBe(task.id);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({ name: "list_queue", arguments: {} });
+    const queue = JSON.parse(result.content[0].text);
+    expect(queue.teardown.taskId).toBe(task.id);
+  } finally {
+    await client.close();
+  }
   expect(await status(task.id)).toBe("blocked");
 
   await t.clock.advance(10 * MIN);
@@ -120,7 +129,7 @@ it("後始末の途中で再起動しても failure question は残り、cap と
   expect(started()).toEqual([]);
 });
 
-it("adapter が観測した非同期の spawn 失敗も同じ question を立て、同じ pickup に2枚目は立たない", async () => {
+it("adapter が観測した非同期の spawn 失敗も同じ question を立て、同じ pickup に2枚目は立たず、retry で次の pickup が再び spawn を試みる", async () => {
   t = await bootTidepool({ watchdog: WATCHDOG });
   const task = queueWork(t, "never runs");
   await t.clock.advance(HOUR);
@@ -135,6 +144,10 @@ it("adapter が観測した非同期の spawn 失敗も同じ question を立て
   expect(question.purpose).toContain("ENOENT");
   expect(question.purpose).toContain("spawn claude ENOENT");
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
+  await t.clock.advance(HOUR);
+  expect(started()).toEqual([task.id, task.id]);
 });
 
 it("既に別の session が slot に入っているときに遅れて届いた spawn 失敗の観測は、その slot を解放しない", async () => {

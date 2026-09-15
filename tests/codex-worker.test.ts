@@ -356,7 +356,7 @@ describe("CodexWorker (ADR 0098)", () => {
     }
   });
 
-  it("spawn 自体の失敗(syscall が \"spawn\" で始まる)は盤面側の一撃を呼び、spawn 族でない error は呼ばない(ADR 0118)", async () => {
+  it("spawn 自体の失敗(syscall が \"spawn\" で始まる)は盤面側の一撃を呼び、spawn 族でない error は呼ばず spawn_failed も書かない(ADR 0118)", async () => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
     const f = await fixture((taskId, failure) => calls.push([taskId, failure]));
     const value = task(f.db, "codex-spawn-enoent");
@@ -364,6 +364,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     f.process.error(Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }));
     expect(calls).toEqual([]);
+    expect(listEvents(f.db, value.id).some((e) => e.kind === "spawn_failed")).toBe(false);
     f.process.error(Object.assign(new Error("spawn codex ENOENT"), { code: "ENOENT", syscall: "spawn codex" }));
     expect(calls).toEqual([[value.id, { error_code: "ENOENT", message: "spawn codex ENOENT" }]]);
   });

@@ -50,7 +50,7 @@ import {
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
-import { runTeardown, sessionInTeardown, teardownStep } from "./teardown.js";
+import { runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { capInterruptionHandler, failTask, spawnFailureHandler, startWatchdog, type Watchdog, type WatchdogConfig } from "./watchdog.js";
@@ -456,12 +456,12 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // 含む)は捨ててよい: 起動完了の poll が同じ盤面を読む。
   let startedScheduler: Scheduler | undefined;
   const pollNow = () => startedScheduler?.pollNow();
-  const sessionTeardown = {
+  const sessionTeardown: TeardownDeps = {
     db,
     clock: options.clock,
     slot,
     resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
-    heldForContainment: (taskId: string) => watchdog?.heldForContainment(taskId) ?? false,
+    heldForContainment: (taskId) => watchdog?.heldForContainment(taskId) ?? false,
     pollNow,
   };
   const onCapInterrupted = capInterruptionHandler(sessionTeardown);

@@ -719,8 +719,14 @@ export class CodexWorker implements WorkerAdapter {
     });
     this.running.set(task.id, child);
     child.on("error", (error) => {
-      this.running.delete(task.id);
       const errno = error as NodeJS.ErrnoException;
+      // "error" は spawn 専用ではない(kill の失敗も撃つ)—— 走っている session を落とさず、
+      // worker が1度も走らなかった事実も書かない(Claude adapter と同じ、ADR 0118)
+      if (!errno.syscall?.startsWith("spawn")) {
+        console.error(`[codex-worker] error on task ${task.id}:`, error);
+        return;
+      }
+      this.running.delete(task.id);
       const failure = { error_code: errno.code ?? null, message: error.message };
       appendEvent(this.options.db, {
         taskId: task.id,
@@ -729,10 +735,7 @@ export class CodexWorker implements WorkerAdapter {
         payload: { kind: "spawn_failed", ...failure },
         at: this.options.clock.now(),
       });
-      // "error" は spawn 専用ではない(kill の失敗も撃つ)—— 走っている session を落とさない
-      if (errno.syscall?.startsWith("spawn")) {
-        this.options.onSpawnFailed?.(task.id, failure);
-      }
+      this.options.onSpawnFailed?.(task.id, failure);
     });
     child.on("exit", (code, signal) => {
       this.running.delete(task.id);
