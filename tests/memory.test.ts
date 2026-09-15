@@ -4,7 +4,6 @@ import { getEvent, listEvents, listLog } from "../src/events.js";
 import {
   approvedMemoryEntries,
   approveMemoryProposal,
-  rejectMemoryProposal,
   buildMemoryInjection,
   createBehaviorCandidate,
   defineMemoryBranch,
@@ -15,6 +14,7 @@ import {
   readMemory,
   rebuildMemoryIndex,
   recordKnowledge,
+  rejectMemoryProposal,
 } from "../src/memory.js";
 import { countUnsettledAttachedChildren, DomainError, logDecision, registerTask } from "../src/tasks.js";
 
