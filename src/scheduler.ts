@@ -555,15 +555,17 @@ export function startScheduler(deps: {
   async function observeProviderUsage(provider: Provider): Promise<ProviderUsageObservation> {
     const now = clock.now();
     // 不在は question を立てず、observed 以外の除外にそのまま畳まれる(ADR 0116 決定4)。
-    // openai では probe より手前 —— 未ログインの盤面で App Server を起動しない
+    // openai では probe より手前 —— 未ログインの盤面で App Server を起動しない。
+    // moonshot は存否のほかに観測するものが無い。どちらも保存する —— queue の skipped
+    // 表示は保存された観測を読むので、鍵が置かれたら absent を上書きしなければならない
     const absence = credentialAbsence?.[provider]?.();
-    if (absence !== undefined) {
+    if (absence !== undefined || provider === "moonshot") {
       const observation: ProviderUsageObservation = {
         provider,
-        status: "absent",
+        status: absence === undefined ? "observed" : "absent",
         plan: null,
         cliVersion: null,
-        reason: absence,
+        ...(absence !== undefined && { reason: absence }),
         observedAt: now,
         windows: [],
       };
@@ -611,20 +613,6 @@ export function startScheduler(deps: {
         now,
       );
     }
-    if (provider === "moonshot") {
-      // 保存された absent を上書きする —— queue の skipped 表示は保存された観測を読む
-      const observation: ProviderUsageObservation = {
-        provider,
-        status: "observed",
-        plan: null,
-        cliVersion: null,
-        observedAt: now,
-        windows: [],
-      };
-      reportProviderUsage(db, observation);
-      return observation;
-    }
-
     const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth, false);
     const definitions = [
       ["session", null, snapshot.session, decision.windows.session, 5 * HOURLY],

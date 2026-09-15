@@ -154,13 +154,9 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
 function normalizedDefinition(
   input: CreateAgentInput,
 ): Omit<AgentDefinition, "version" | "retiredFields"> {
-  const { advisor, ...fields } = input;
   return {
-    ...fields,
-    provider: normalizeProviderEntries(input.provider, input.skills).map((entry) => ({
-      ...entry,
-      advisor: advisor === true,
-    })),
+    ...input,
+    provider: normalizeProviderEntries(input.provider, input.skills).map((entry) => ({ ...entry, advisor: input.advisor === true })),
   };
 }
 
