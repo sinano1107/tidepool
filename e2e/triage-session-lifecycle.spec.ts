@@ -3,6 +3,7 @@ import {
   api,
   HOUR,
   mcpClient,
+  queueWork,
   registerQuestion,
   registerWork,
   type Tidepool,
@@ -43,7 +44,7 @@ test("未読のある Triage を描画しても pickup は止まらない(issue 
 }) => {
   const t = await boot();
   const skimmed = await completeAgentReview(t, "skimmed agent work");
-  await registerWork(t, "still pickable after a skim");
+  queueWork(t, "still pickable after a skim");
   const startsBeforeSkim = t.worker.started.length;
 
   await page.goto(t.baseUrl);
@@ -68,7 +69,7 @@ test("流し読みだけの Triage も queue を確認して commit でき、既
 }) => {
   const t = await boot();
   await completeAgentReview(t, "skim this completion");
-  await registerWork(t, "live queue row");
+  queueWork(t, "live queue row");
 
   await page.goto(t.baseUrl);
   await expect(page.getByText("1 decisions made overnight.")).toBeVisible();
@@ -242,7 +243,7 @@ test("Triage の最初の回答でセッションが開き pickup が止まる(i
   page,
 }) => {
   const t = await boot();
-  const work = await registerWork(t, "blocked once steering starts");
+  const work = queueWork(t, "blocked once steering starts");
   const question = registerQuestion(t, {
     title: "which way?",
     purpose: "choose a direction",
@@ -271,7 +272,7 @@ test("開いている triage session 中に queue の ↑ を押すと、停止�
 }) => {
   const t = await boot();
   await completeAgentReview(t, "unread agent completion");
-  await registerWork(t, "blocked by the active triage");
+  queueWork(t, "blocked by the active triage");
   await api(t.baseUrl, "POST", "/api/triage/start");
   const cursorBeforeClose = (await api(t.baseUrl, "GET", "/api/log")).json.cursor;
 

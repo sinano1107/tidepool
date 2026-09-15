@@ -1,39 +1,33 @@
 import { afterEach, expect, it } from "vitest";
+import { getTask, humanDecomposeTask, registerTask, type Task } from "../src/tasks.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-async function registerRoot(t: Tidepool, title: string, riskFlag: boolean): Promise<any> {
-  return (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title,
-      purpose: `purpose of ${title}`,
-      completion_criteria: `criteria of ${title}`,
-      risk_flag: riskFlag,
-    })
-  ).json;
+// 行は扉を通さずに置く —— 扉の登録は pickup の契機で(ADR 0119 決定2)、pickup された行は編集できない
+function registerRoot(t: Tidepool, title: string, riskFlag: boolean): Task {
+  return registerTask(
+    t.db,
+    { type: "work", title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}`, risk_flag: riskFlag },
+    t.clock.now(),
+  );
 }
 
-async function addChild(t: Tidepool, parentId: string, title: string, riskFlag: boolean): Promise<any> {
-  return (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title,
-      purpose: "p",
-      completion_criteria: "c",
-      parent_id: parentId,
-      decompose_reason: `split ${title}`,
-      risk_flag: riskFlag,
-    })
-  ).json;
+function addChild(t: Tidepool, parentId: string, title: string, riskFlag: boolean): Task {
+  const [child] = humanDecomposeTask(
+    t.db,
+    getTask(t.db, parentId)!,
+    { reason: `split ${title}`, children: [{ title, purpose: "p", completion_criteria: "c", risk_flag: riskFlag }] },
+    t.clock.now(),
+  );
+  return child!;
 }
 
 it("risk あり親から risk なしへの降格編集は、未決着の risk ありの子がある間 拒否される", async () => {
   t = await bootTidepool();
-  const parent = await registerRoot(t, "risky parent", true);
-  const child = await addChild(t, parent.id, "risky child", true);
+  const parent = registerRoot(t, "risky parent", true);
+  const child = addChild(t, parent.id, "risky child", true);
   // parent has risk, so a risk child registers directly (no escalation) —
   // an unsettled, approved risk-bearing child
   expect(child.risk_flag).toBe(1);
@@ -47,11 +41,11 @@ it("risk あり親から risk なしへの降格編集は、未決着の risk �
 
 it("risk あり親の risk ありの子が決着すれば、親を risk なしへ降格できる", async () => {
   t = await bootTidepool();
-  const parent = await registerRoot(t, "risky parent", true);
-  const risky = await addChild(t, parent.id, "risky child", true);
+  const parent = registerRoot(t, "risky parent", true);
+  const risky = addChild(t, parent.id, "risky child", true);
   // a second, non-risk child keeps the parent blocked after the risk child
   // settles, so it isn't auto-picked-up (which would make it uneditable)
-  await addChild(t, parent.id, "plain child", false);
+  addChild(t, parent.id, "plain child", false);
 
   // cancel the risk child directly (settles it) — the invariant no longer binds
   await api(t.baseUrl, "POST", `/api/tasks/${risky.id}/cancel`, {});
@@ -63,8 +57,8 @@ it("risk あり親の risk ありの子が決着すれば、親を risk なし�
 
 it("子を risk ありへ昇格する編集は許可される(仕様が機械拒否と名指すのは降格のみ — 宣言 risk は注意配分の副次入力)", async () => {
   t = await bootTidepool();
-  const parent = await registerRoot(t, "plain parent", false);
-  const child = await addChild(t, parent.id, "plain child", false);
+  const parent = registerRoot(t, "plain parent", false);
+  const child = addChild(t, parent.id, "plain child", false);
   expect(child.risk_flag).toBe(0);
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${child.id}`, { risk_flag: true });
@@ -75,7 +69,7 @@ it("子を risk ありへ昇格する編集は許可される(仕様が機械拒
 
 it("不変条件を壊さない risk 編集は許可され、旧値がイベントに残る", async () => {
   t = await bootTidepool();
-  const root = await registerRoot(t, "lonely root", false);
+  const root = registerRoot(t, "lonely root", false);
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${root.id}`, { risk_flag: true });
   expect(res.status).toBe(200);

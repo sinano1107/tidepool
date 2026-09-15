@@ -38,11 +38,12 @@ it("decompose queues the children at the tail, blocks the parent, and releases t
   ]);
   const children = board.filter((x: any) => x.parent_id === parent.id);
   expect(children).toHaveLength(2);
-  expect(children.every((x: any) => x.status === "todo" && x.type === "work")).toBe(true);
+  expect(children.every((x: any) => x.type === "work")).toBe(true);
 
-  // the parent is blocked (derived), so the freed slot goes to the first child
+  // the parent is blocked (derived), so the freed slot goes to the first child —
+  // without a tick: the decompose teardown freeing the slot is a pickup trigger (ADR 0119 決定3)
   expect(board[0].status).toBe("blocked");
-  await t.clock.advance(HOUR);
+  expect(children.map((x: any) => x.status)).toEqual(["in_progress", "todo"]);
   expect(t.worker.started.map((x) => x.title)).toEqual([
     "build the toolchain",
     "build the lexer",

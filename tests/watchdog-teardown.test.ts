@@ -106,10 +106,11 @@ async function sessionInTeardown(
     containers,
     workspace: ws,
     landing,
+    pollNow: () => {},
     config: { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN },
   });
   if (route === "cap") {
-    capInterruptionHandler({ db, clock, slot, resolve: () => ws, heldForContainment: watchdog.heldForContainment })(task.id, containers.reclaimed(task.id));
+    capInterruptionHandler({ db, clock, slot, resolve: () => ws, heldForContainment: watchdog.heldForContainment, pollNow: () => {} })(task.id, containers.reclaimed(task.id));
     containers.forceReclaim(task.id);
   }
   return { db, clock, slot, task, ws, runtime, worker, watchdog, landing, landed };
@@ -135,10 +136,10 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
   slot.occupy(task.id);
   containers.open(task.id);
   runtime.hold(task.id);
-  const watchdog = startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), config: { timeLimits: { work: MIN }, grace: MIN, reclaimTimeout: 5 * MIN } });
+  const watchdog = startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), pollNow: () => {}, config: { timeLimits: { work: MIN }, grace: MIN, reclaimTimeout: 5 * MIN } });
   await clock.advance(2 * MIN);
   expect(runtime.forceReclaims).toEqual([task.id]);
-  capInterruptionHandler({ db, clock, slot, resolve: undefined, heldForContainment: watchdog.heldForContainment })(task.id, containers.reclaimed(task.id));
+  capInterruptionHandler({ db, clock, slot, resolve: undefined, heldForContainment: watchdog.heldForContainment, pollNow: () => {} })(task.id, containers.reclaimed(task.id));
   runtime.fireEmpty(task.id);
   await settle();
   expect(questions(db)).toEqual([]);
@@ -256,6 +257,7 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
     resolve: () => f.ws,
     landing: f.landing,
     heldForContainment: f.watchdog.heldForContainment,
+    pollNow: () => {},
   };
   await runTeardown(teardownDeps, f.task.id, { completion: true, workspace: f.ws });
 

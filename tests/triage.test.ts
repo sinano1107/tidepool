@@ -1,13 +1,13 @@
 import { afterEach, expect, it } from "vitest";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
-import { api, bootTidepool, HOUR, loggedEntry, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, loggedEntry, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
 it("starting a triage session pauses task pickup", async () => {
   t = await bootTidepool();
-  await registerWork(t, "queued work");
+  queueWork(t, "queued work");
   const res = await api(t.baseUrl, "POST", "/api/triage/start");
   expect(res.status).toBe(201);
 
@@ -22,7 +22,7 @@ it("starting a triage session pauses task pickup", async () => {
 
 it("commit closes the session and fires an immediate poll", async () => {
   t = await bootTidepool();
-  await registerWork(t, "queued work");
+  queueWork(t, "queued work");
   await api(t.baseUrl, "POST", "/api/triage/start");
   expect(t.worker.started).toEqual([]);
 
@@ -35,26 +35,28 @@ it("commit closes the session and fires an immediate poll", async () => {
   expect(t.worker.started.map((x) => x.title)).toEqual(["queued work"]);
 });
 
-it("セッションが開いていない commit は成功し、即時 poll を発火しない", async () => {
+it("セッションが開いていない commit は成功し、振り分けがタスクを作らなければ即時 poll を発火しない", async () => {
   t = await bootTidepool();
-  await registerWork(t, "queued work");
+  queueWork(t, "queued work");
 
   const res = await api(t.baseUrl, "POST", "/api/triage/close");
 
   expect(res).toMatchObject({
     status: 200,
-    json: { outcome: "no_open_session", closed_at: null },
+    json: { outcome: "no_open_session", closed_at: null, created_tasks: 0 },
   });
   expect(t.worker.started).toEqual([]);
 });
 
 /** Park `parent` behind an escalated question: parent into the slot, a human
- *  places `other work` on top, then the escalation frees the slot. */
+ *  places `other work` on top, then the escalation frees the slot. The triage
+ *  session is already open when it does, so the freed slot — itself a pickup
+ *  trigger (ADR 0119 決定3) — stays empty until commit. */
 async function escalatedBoard(t: Tidepool) {
-  const parent = await registerWork(t, "parent work");
-  await t.clock.advance(HOUR); // parent into the slot
+  const parent = await registerWork(t, "parent work"); // parent into the slot
   const other = await registerWork(t, "other work");
   await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
+  await api(t.baseUrl, "POST", "/api/triage/start");
   const client = await mcpClient(t.mcpBaseUrl, parent.id);
   await client.callTool({
     name: "escalate",
@@ -239,7 +241,7 @@ it("タイムアウトで閉じたセッションを次の commit が一度だ�
     Date.parse(started.json.started_at) + TRIAGE_TIMEOUT,
   ).toISOString();
   await t.clock.advance(TRIAGE_TIMEOUT);
-  await registerWork(t, "natural poll を待つ work");
+  queueWork(t, "natural poll を待つ work");
 
   const closeOnly = await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
   const first = await api(t.baseUrl, "POST", "/api/triage/close");
@@ -262,7 +264,7 @@ it("タイムアウトで閉じたセッションを次の commit が一度だ�
 
 it("activity keeps an open session alive past the timeout window", async () => {
   t = await bootTidepool();
-  await registerWork(t, "queued work");
+  queueWork(t, "queued work");
   await api(t.baseUrl, "POST", "/api/triage/start");
 
   // halfway to the timeout the human is still typing on the pad
@@ -277,7 +279,7 @@ it("activity keeps an open session alive past the timeout window", async () => {
 
 it("scratchpad はセッションを開かず、持ち越し行とライブ queue を返す", async () => {
   t = await bootTidepool();
-  await registerWork(t, "live queued work");
+  queueWork(t, "live queued work");
 
   const added = await api(t.baseUrl, "POST", "/api/triage/scratchpad", {
     line: "持ち越す苛立ち",
@@ -294,7 +296,7 @@ it("scratchpad はセッションを開かず、持ち越し行とライブ queu
   ]);
 });
 
-it("セッション不在の commit でも scratchpad の振り分けを適用する", async () => {
+it("セッション不在の commit でも scratchpad の振り分けを適用し、タスクを作ったなら tick を進めずに pickup される", async () => {
   t = await bootTidepool();
   const line = (
     await api(t.baseUrl, "POST", "/api/triage/scratchpad", { line: "独立した振り分け" })
@@ -307,10 +309,11 @@ it("セッション不在の commit でも scratchpad の振り分けを適用�
 
   expect(committed).toMatchObject({
     status: 200,
-    json: { outcome: "no_open_session", closed_at: null },
+    json: { outcome: "no_open_session", closed_at: null, created_tasks: 1 },
   });
   expect(board.some((task: any) => task.title === "独立した振り分け")).toBe(true);
-  expect(t.worker.started).toEqual([]);
+  // ADR 0119 決定2: 振り分けも登録である —— 候補が増えたので撃つ
+  expect(t.worker.started.map((x) => x.title)).toEqual(["独立した振り分け"]);
 });
 
 it("scratchpad 行はセッションを開かず共有され、commit で振り分けられる", async () => {

@@ -43,6 +43,9 @@ it("slot 解放で checkout が保護ブランチへ戻る", async () => {
   const task = await registerWork(t, "leaves work behind");
   await t.clock.advance(HOUR);
   commitWork(ws.path, "notes.txt", "half-finished work\n");
+  // 解放は pickup の契機(ADR 0119 決定3)—— 統合点レビューが空いた checkout を動かす前の
+  // 休止位置を見るため、次の pickup を止めておく
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
 
   await complete(t, task.id);
 
@@ -62,6 +65,8 @@ it("remote 正本を宣言した workspace では、休止位置がリモート�
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "runs while the remote moves");
   await t.clock.advance(HOUR);
+  // 解放が撃つ pickup(ADR 0119 決定3)に休止位置を動かさせない
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await complete(t, task.id);
 
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");

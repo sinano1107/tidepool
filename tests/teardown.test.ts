@@ -62,15 +62,18 @@ it.each([false, true])("restart recovers cap teardown without a failure question
 
   t = await bootTidepool({ dir: t.dir, workspace: ws });
   await settle();
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("todo");
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
   expect(queue.teardown).toBeUndefined();
-  expect(queue.tasks.filter((row: any) => row.type === "work")[0].id).toBe(task.id);
   expect((await questions(t)).some((q: any) => q.title.includes("interrupted task"))).toBe(false);
   expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("unfinished work");
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-  if (!failPreflight) {
-    await t.clock.advance(HOUR);
+  if (failPreflight) {
+    // 前提検査が一度落ちた盤面では、その Containment quarantine の確認 question が pickup を止めている
+    expect(started()).toEqual([]);
+    expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("todo");
+    expect(queue.tasks.filter((row: any) => row.type === "work")[0].id).toBe(task.id);
+    expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  } else {
+    // ADR 0119 決定4: 復旧の完走で todo に戻ったタスクは、tick を進めずに起動完了の poll で拾われる
     expect(started()).toEqual([task.id]);
   }
 });
@@ -220,7 +223,9 @@ it("後始末の途中で盤面を再起動しても、前提検査が通れば�
   await completeViaMcp(t, task.id);
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
 
-  // in-memory の callback は盤面の crash を越えない
+  // in-memory の callback は盤面の crash を越えない。起動完了の poll(ADR 0119 決定4)が
+  // 空いた checkout を動かす前の休止位置を見るため、pickup を止めておく(Pause は再起動を跨ぐ)
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await t.stopServer();
   t = await bootTidepool({ dir: t.dir, workspace: ws });
   await settle();
@@ -228,6 +233,9 @@ it("後始末の途中で盤面を再起動しても、前提検査が通れば�
   // tree rule / merge-back / 休止位置 / slot 解放が完走している
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(ws.path, "show", `task/${task.id}:deliverable.txt`)).toBe("the real work");
+  // Pause の解除で、空いた枠に統合点レビューが入る
+  await api(t.baseUrl, "POST", "/api/pause", { paused: false });
+  expect(t.worker.started.map((x) => [x.type, x.parent_id])).toEqual([["review", task.id]]);
   // 統合点レビューを終えると着地が再発火する。
   await completeIntegrationReviews(t, task.id);
   expect((await questions(t)).some((q: any) => q.title.startsWith("land completed task"))).toBe(

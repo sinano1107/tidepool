@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -6,14 +7,17 @@ afterEach(() => t?.stop());
 
 it("a blocked parent is skipped and get_current_task exposes the parent context", async () => {
   t = await bootTidepool();
-  const parent = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
+  // 扉を通さずに置く —— 扉の登録は pickup の契機で(ADR 0119 決定2)、親が子を持つ前に走り出す
+  const parent = registerTask(
+    t.db,
+    {
       type: "work",
       title: "ship the moon-phase widget",
       purpose: "surf forecast needs moon phase",
       completion_criteria: "widget renders on the dashboard",
-    })
-  ).json;
+    },
+    t.clock.now(),
+  );
   const child = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "work",

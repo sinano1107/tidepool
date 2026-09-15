@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { usagePanelText } from "./fakes.js";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(async () => {
@@ -73,7 +73,7 @@ it("session / week 以外の window と boolean でない active は入口で弾
 
 it("ペース線超過で skip された盤面は、spend-down(session) の有効化で(hourly tick を待たず)即時 pickup が走る", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "burn the rest");
+  const task = queueWork(t, "burn the rest");
 
   // t=1h 時点: resets まで30分 → 経過90%、線70 — 85 は超過で skip
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
@@ -88,7 +88,7 @@ it("ペース線超過で skip された盤面は、spend-down(session) の有�
 
 it("100% キャップで止まった spend-down はリセット時刻に再評価され、リセットを跨いだ観測で自動失効して通常ペース判定に戻る", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "after reset");
+  const task = queueWork(t, "after reset");
   const t0 = t.clock.now();
 
   // session 100% — spend-down 中でもキャップが止める。再開見込みはリセット時刻(t=1.5h)
@@ -125,7 +125,7 @@ it("100% キャップで止まった spend-down はリセット時刻に再評�
 
 it("両方有効なとき session のリセットを poll が観測すると session だけ失効し week は残る", async () => {
   t = await bootTidepool();
-  await registerWork(t, "waits for the session reset");
+  queueWork(t, "waits for the session reset");
   const t0 = t.clock.now();
   const sessionResetsAt = new Date(t0.getTime() + 90 * MIN);
   const weekResetsAt = new Date(t0.getTime() + 24 * HOUR);
@@ -154,7 +154,7 @@ it("両方有効なとき session のリセットを poll が観測すると ses
 
 it("spend-down(week) は fable のタスク単位 skip も解除する — 同じ瞬間に失効する予算(ADR 0030)", async () => {
   t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
-  const fableTask = await registerWork(t, "fable work", undefined, undefined, "fable-artisan");
+  const fableTask = queueWork(t, "fable work", undefined, undefined, "fable-artisan");
 
   // fable 線だけ超過している観測(throttle.test.ts の fableOverPace と同じ数字)
   const now = t.clock.now();
@@ -174,7 +174,7 @@ it("spend-down(week) は fable のタスク単位 skip も解除する — 同�
 
 it("Pause が勝つ — pause 中は spend-down を有効化しても pickup せず、resume で spend-down が効いた状態で流れる", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "waits behind pause");
+  const task = queueWork(t, "waits behind pause");
 
   // ペース判定なら絞られる観測(t=1h 時点で経過40%・線20、85 は超過)
   t.worker.scriptUsage(sessionOverPace(new Date(t.clock.now().getTime() + 4 * HOUR)));
@@ -190,7 +190,7 @@ it("Pause が勝つ — pause 中は spend-down を有効化しても pickup せ
 
 it("手動取り消しも再評価を発火する — 取り消し後の観測が通るなら hourly tick を待たず pickup し、throttle_state も最新化される", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "runs after cancel");
+  const task = queueWork(t, "runs after cancel");
 
   // session 100% — キャップが止めるので spend-down 有効化の poll でも pickup しない
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);

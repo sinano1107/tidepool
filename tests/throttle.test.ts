@@ -7,7 +7,7 @@ import {
   FULL_HANDOFF as fullHandoff,
   HOUR,
   mcpClient,
-  registerWork,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -31,7 +31,7 @@ function overPace(resetsAt: Date): string {
 
 it("ペース線超過は catch-up 時刻(経過 = 使用率 + オフセット)で再開し、リセット時刻まで待たない(ADR 0030 の急所)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   // 40% used, resets 4時間後 → ウィンドウ開始は1時間前。hourly tick(t=1h)の時点で
   // 経過40%、オフセット20で線は20 — 40は超過。catch-up は経過60%の瞬間 = t=2h。
@@ -56,7 +56,7 @@ it("ペース線超過は catch-up 時刻(経過 = 使用率 + オフセット)�
 
 it("使用率+オフセットが100%を超えると catch-up はリセット時刻にクランプされ、到達で(hourly tick を待たず)再開する", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
   t.worker.scriptUsage(overPace(resetsAt));
@@ -73,7 +73,7 @@ it("使用率+オフセットが100%を超えると catch-up はリセット時�
 
 it("パース不能(観測不能)は fail-closed で pickup を skip し、次の hourly tick で再試行する", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   t.worker.scriptUsage(null); // simulates a checkUsage failure
   await t.clock.advance(HOUR);
@@ -86,7 +86,7 @@ it("パース不能(観測不能)は fail-closed で pickup を skip し、次�
 
 it("ペース線超過の間も実行中タスクには決して触れない(常に完走する)", async () => {
   t = await bootTidepool();
-  const first = await registerWork(t, "long haul");
+  const first = queueWork(t, "long haul");
   await t.clock.advance(HOUR); // first picked up while usage is still fine
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
@@ -99,7 +99,7 @@ it("ペース線超過の間も実行中タスクには決して触れない(常
   await client.close();
   expect(t.worker.gracefulStops).toEqual([]);
 
-  const second = await registerWork(t, "long haul");
+  const second = queueWork(t, "long haul");
   await t.clock.advance(HOUR); // slot free, but usage is still over the pace line
   expect(t.worker.started.map((x) => x.id)).toEqual([first.id]);
 
@@ -112,7 +112,7 @@ it("ペース線超過の間も実行中タスクには決して触れない(常
 
 it("throttled の全体線は行に現れず、キューの envelope の halts が1回で答える(ADR 0068)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
   t.worker.scriptUsage(overPace(resetsAt));
@@ -156,8 +156,8 @@ function fableOverPace(now: Date): string {
 
 it("fable 線の超過は fable モデルのタスクだけを skip し、他のタスクは流れ続ける — 盤面全体は止まらない(ADR 0030)", async () => {
   t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
-  const fableTask = await registerWork(t, "fable work", undefined, undefined, "fable-artisan");
-  const normalTask = await registerWork(t, "normal work");
+  const fableTask = queueWork(t, "fable work", undefined, undefined, "fable-artisan");
+  const normalTask = queueWork(t, "normal work");
 
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
   await t.clock.advance(HOUR);
@@ -176,7 +176,7 @@ it("fable 線の超過は fable モデルのタスクだけを skip し、他の
 
 it("fable タスクしか無いキューは fable の catch-up 時刻で(hourly tick を待たず)再開する", async () => {
   t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
-  const fableTask = await registerWork(t, "fable work", undefined, undefined, "fable-artisan");
+  const fableTask = queueWork(t, "fable work", undefined, undefined, "fable-artisan");
 
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
 
@@ -191,7 +191,7 @@ it("fable タスクしか無いキューは fable の catch-up 時刻で(hourly 
 
 it("盤面設定のオフセットが判定に効く: session オフセットを 0(予約なし)にすると、既定 20pt では絞られていた使用率が通る", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   // 40% used, resets 4時間後 → t=1h 時点で経過40%。既定オフセット20なら線は20で
   // 40 は超過(冒頭の catch-up テストと同じ数字)。オフセット0なら線は40 —
@@ -211,7 +211,7 @@ it("盤面設定のオフセットが判定に効く: session オフセットを
 
 it("throttled 中は GET /api/pause が throttle 状態(再開見込み時刻とウィンドウ別内訳)を運ぶ(issue #82 / ADR 0030)", async () => {
   t = await bootTidepool();
-  await registerWork(t, "long haul");
+  queueWork(t, "long haul");
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
   t.worker.scriptUsage(overPace(resetsAt));
@@ -232,7 +232,7 @@ it("throttled 中は GET /api/pause が throttle 状態(再開見込み時刻と
 
 it("usage 再評価を待たず GET /api/pause は revalidating=true を返し、観測完了後に false へ戻る(ADR 0058)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "waits for the usage observation");
+  const task = queueWork(t, "waits for the usage observation");
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -268,7 +268,7 @@ it("pickup gate の実 await 中も GET /api/pause は revalidating=true を返�
       return { available: false, reason: "tool surface is unavailable" };
     },
   });
-  const task = await registerWork(t, "waits for the pickup gate");
+  const task = queueWork(t, "waits for the pickup gate");
 
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
   await gateEntered;
@@ -296,7 +296,7 @@ it("usage 観測後の registry 検査中は GET /api/pause が revalidating=fal
       return { available: true };
     },
   });
-  const task = await registerWork(t, "waits for the registry observation");
+  const task = queueWork(t, "waits for the registry observation");
 
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
   await registryEntered;
@@ -308,7 +308,7 @@ it("usage 観測後の registry 検査中は GET /api/pause が revalidating=fal
 
 it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・resumesAt=null・内訳なしを運ぶ — fail-closed の可視化(issue #82)", async () => {
   t = await bootTidepool();
-  await registerWork(t, "long haul");
+  queueWork(t, "long haul");
 
   t.worker.scriptUsage(null); // simulates a checkUsage failure
   await t.clock.advance(HOUR);

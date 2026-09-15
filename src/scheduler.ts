@@ -274,7 +274,7 @@ function createResumeTimers(clock: Clock, onFire: () => void) {
 
 export interface Scheduler {
   stop: () => void;
-  /** Immediate poll, fired by human-input-originated queue-head changes.
+  /** Immediate poll, fired by every pickup trigger (CONTEXT.md「Pickup trigger」/ ADR 0119).
    *  Same poll as the hourly tick: a no-op while the slot is occupied. */
   pollNow: () => void;
   /** Whether the just-in-time usage observation is currently running. */
@@ -384,6 +384,10 @@ export function startScheduler(deps: {
   if (taskExecutionCandidates) db.prepare("DELETE FROM throttle_state").run();
 
   async function pickupBlocked(): Promise<boolean> {
+    // **順序の不変条件(ADR 0119 決定5)**: slot は最初の await より前に読み、候補(`nextSlotTask`)
+    // は await の後に読む。poll 中に届いた契機は `inFlight` で捨てるが、これで取りこぼさない ——
+    // poll が slot を通過した時点で slot は空いているので解放は poll 中に起きず、登録は後ろの
+    // 候補の読み取りに間に合う。順序を入れ替えると tests/scheduler-poll-order.test.ts が赤くなる。
     if (slot.currentTaskId !== null) return true;
     // ADR 0068 決定5: 同期の短絡は列挙から導出する — triage セッション (issue #6)・
     // Pause (issue #34)・封じ込め能力とレジストリ到達性の**開いている確認

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, queueChild, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -11,7 +11,7 @@ async function events(t: Tidepool, id: string): Promise<any[]> {
 
 it("人間登録タスクの title / purpose / completion criteria を編集でき、旧値がイベント履歴に残る", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "before");
+  const task = queueWork(t, "before");
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, {
     title: "after",
@@ -36,7 +36,7 @@ it("人間登録タスクの title / purpose / completion criteria を編集で�
 
 it("値が変わらないフィールドを送っても no-op で、task_edited イベントは残らない", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "same");
+  const task = queueWork(t, "same");
 
   await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { title: "same" });
 
@@ -46,7 +46,7 @@ it("値が変わらないフィールドを送っても no-op で、task_edited 
 
 it("assignee を編集でき、登録時と同じ registry 解決の検査が再実行される(未知の agent は拒否)", async () => {
   t = await bootTidepool({ agentRegistered: (name) => name === "coder" });
-  const task = await registerWork(t, "assign me");
+  const task = queueWork(t, "assign me");
 
   const ok = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { assignee: "coder" });
   expect(ok.status).toBe(200);
@@ -75,7 +75,7 @@ it("通常タスクの workspace を編集でき、未知の workspace 名は拒
       return { name, path: `/fake/${name}` };
     },
   });
-  const task = await registerWork(t, "move me", "home");
+  const task = queueWork(t, "move me", "home");
 
   const ok = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { workspace: "other" });
   expect(ok.status).toBe(200);
@@ -87,7 +87,7 @@ it("通常タスクの workspace を編集でき、未知の workspace 名は拒
 
 it("review flag を編集でき、旧値がイベントに残る(人間登録タスクでは flag は未消費の間 可変)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "opt in", undefined, false);
+  const task = queueWork(t, "opt in", undefined, false);
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { review_flag: true });
   expect(res.status).toBe(200);
@@ -103,17 +103,8 @@ it("review flag を編集でき、旧値がイベントに残る(人間登録タ
 
 it("人間 decompose で足した子タスク(人間登録)も編集できる", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  const child = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "child",
-      purpose: "p",
-      completion_criteria: "c",
-      parent_id: parent.id,
-      decompose_reason: "split the child work",
-    })
-  ).json;
+  const parent = queueWork(t, "parent");
+  const child = queueChild(t, "child", parent.id);
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${child.id}`, { title: "renamed child" });
   expect(res.status).toBe(200);

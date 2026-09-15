@@ -12,7 +12,7 @@ import {
   HOUR,
   makeWorkspace,
   mcpClient,
-  registerWork,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -39,8 +39,7 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
 
     // AC1: workspace が異なる2つのタスクが、それぞれの registry workspace
     // の checkout で実行される
-    const inSandbox = await registerWork(t, "runs in sandbox");
-    const inProd = await registerWork(t, "runs in prod", "prod");
+    const inSandbox = queueWork(t, "runs in sandbox");
     await t.clock.advance(HOUR);
     expect(t.worker.started.map((x) => x.id)).toEqual([inSandbox.id]);
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${inSandbox.id}`);
@@ -49,6 +48,9 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     await c1.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
     await c1.close();
     await completeIntegrationReviews(t, inSandbox.id);
+    // prod のタスクは統合点レビューの後に置く —— 先に置くと、完了の後始末の poll(ADR 0119 決定3)が
+    // レビューより先にそれを拾い、レビューを slot へ入れられない
+    const inProd = queueWork(t, "runs in prod", "prod");
 
     await t.clock.advance(HOUR);
     expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([inSandbox.id, inProd.id]);
@@ -70,8 +72,8 @@ describe("issue #26: 実行側の複数 workspace 対応", () => {
     expect(quarantineQuestion).toBeDefined();
 
     // AC2: prod のタスクだけ pickup が止まり、sandbox のタスクは流れ続ける
-    const stuckInProd = await registerWork(t, "stuck", "prod");
-    const runsInSandbox = await registerWork(t, "keeps flowing", "sandbox");
+    const stuckInProd = queueWork(t, "stuck", "prod");
+    const runsInSandbox = queueWork(t, "keeps flowing", "sandbox");
     await t.clock.advance(HOUR);
 
     expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([

@@ -509,7 +509,7 @@ const closeSchema = z.object({
 export interface ApiRouterDeps {
   db: Db;
   clock: Clock;
-  onQueueHeadChanged: () => void;
+  pollNow: () => void;
   /** Just-in-time usage observation in flight; absent for API-only tests. */
   throttleRevalidating?: () => boolean;
   /** The board's workspace path — where `gh` runs for the merge dial's live
@@ -674,7 +674,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   const {
     db,
     clock,
-    onQueueHeadChanged,
+    pollNow,
     throttleRevalidating = () => false,
     workspace,
     resolveWorkspace,
@@ -745,6 +745,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         draftClient,
         agentRegistered,
         isProtectedWorkspace,
+        pollNow,
       },
       parsed.data,
       () => clock.now(),
@@ -1306,12 +1307,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // the head again — an explicit immediate-poll trigger (issue #82
     // follow-up). Promoting a *different* task to the head is pure
     // reordering: it never itself forces a pickup attempt, waiting instead
-    // for the next natural trigger (the running task finishing, or the hourly
-    // tick) — otherwise every reorder, drag included, would silently double
-    // as a pickup request. No pickable candidate at all → nothing to match,
+    // for the next natural trigger (the running task's teardown freeing the
+    // slot, or the hourly tick — ADR 0119) — otherwise every reorder, drag
+    // included, would silently double as a pickup request. No pickable candidate at all → nothing to match,
     // so nothing fires.
     if (after === null && moved.status === "todo" && headBefore === task.id) {
-      onQueueHeadChanged();
+      pollNow();
     }
     res.json(moved);
   });
@@ -1350,7 +1351,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const result = await cancelThroughHumanDoor(
       {
         db,
-        onQueueHeadChanged,
+        pollNow,
         workspace,
         defaultAgentName,
         auditorName,
@@ -1392,7 +1393,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const question = await submitAnswer(
         {
           db,
-          onQueueHeadChanged,
+          pollNow,
           workspace,
           resolveWorkspace,
           github,
@@ -1433,7 +1434,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, onQueueHeadChanged, landing, attributionClient, behaviorDraftClient, workspace },
+      { db, pollNow, landing, attributionClient, behaviorDraftClient, workspace },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),
@@ -1621,7 +1622,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // どの window を変えたか・値が実際に変わったかによらず、保存成功後は即時再評価
     // する。古い offset で立った throttle_state を tick 待ちにすると、緩和後も最大
     // 1時間 pickup と表示が止まり続ける(issue #296)。
-    onQueueHeadChanged();
+    pollNow();
     res.json(getPaceOffsets(db));
   });
 
@@ -1636,7 +1637,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     setProviderPaceOffset(db, parsed.data);
-    onQueueHeadChanged();
+    pollNow();
     res.json(parsed.data);
   });
 
@@ -1657,7 +1658,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     applyExecutionSettingsChange(db, parsed.data, "webui", clock.now());
-    onQueueHeadChanged();
+    pollNow();
     res.json(readExecutionSettings(db));
   });
 
@@ -1803,7 +1804,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // 有効化(今すぐ残りを燃やせ)も取り消しも即時再評価 — 取り消し側を tick 待ち
     // にすると、spend-down 時代の throttle_state が最大1時間 UI に残る
     // (ADR 0028「fail-closed は可視化とセット」の可視化の延長)
-    onQueueHeadChanged();
+    pollNow();
     res.json({ spendDown: spendDownJson() });
   });
 
@@ -1817,7 +1818,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // (CONTEXT.md's Pause) — pausing itself fires nothing
     const resuming = isPaused(db) && !parsed.data.paused;
     setPaused(db, parsed.data.paused);
-    if (resuming) onQueueHeadChanged();
+    if (resuming) pollNow();
     res.json({ paused: parsed.data.paused });
   });
 
@@ -1912,9 +1913,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // ADR 0120 決定1(b): 帰責の transaction の後に起草を fire-and-forget(応答を待たせない)
         draftAfterCommit(db, { behaviorDraftClient, workspace }, since, clock.now());
       }
-      // Only closing an open session re-opens pickup. A sessionless triage
-      // never stopped it, so its terminal commit is not a "run now" trigger.
-      if (result.outcome === "closed_now") onQueueHeadChanged();
+      // Closing an open session re-opens pickup. A sessionless triage never
+      // stopped it, so its terminal commit is not a "run now" trigger — but a
+      // disposition that created a task is a registration (ADR 0119 決定2).
+      if (result.outcome === "closed_now" || result.created_tasks > 0) pollNow();
       res.json(result);
     } catch (err) {
       if (err instanceof TriageError) {

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { usagePanelText } from "./fakes.js";
-import { api, bootTidepool, HOUR, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -26,7 +26,7 @@ it("POST /api/settings/pace-offsets で設定を変更でき、GET に反映さ�
 
 it("throttle 中に pace offsets を緩めると hourly tick を待たず新しい判定で pickup される(issue #296)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "runs after a relaxed pace offset");
+  const task = queueWork(t, "runs after a relaxed pace offset");
   const resetsAt = new Date(t.clock.now().getTime() + 4 * HOUR);
   t.worker.scriptUsage(
     usagePanelText({
@@ -51,7 +51,7 @@ it("throttle 中に pace offsets を緩めると hourly tick を待たず新し�
 
 it("不正な pace offsets の POST は即時再評価を発火しない(issue #296)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "waits for the next hourly tick");
+  const task = queueWork(t, "waits for the next hourly tick");
   const resetsAt = new Date(t.clock.now().getTime() + 4 * HOUR);
   t.worker.scriptUsage(
     usagePanelText({

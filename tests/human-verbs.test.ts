@@ -40,7 +40,7 @@ it("人間の登録 door は通常タスクを登録して返す", async () => {
   db = openDb(":memory:");
 
   const result = await registerThroughHumanDoor(
-    { db },
+    { db, pollNow: () => {} },
     {
       type: "work",
       title: "ship the feature",
@@ -64,7 +64,7 @@ it("人間の登録 door は未知の assignee を GateFailure として返す",
   db = openDb(":memory:");
 
   const result = await registerThroughHumanDoor(
-    { db, agentRegistered: (name) => name === "deckhand" },
+    { db, pollNow: () => {}, agentRegistered: (name) => name === "deckhand" },
     {
       type: "work",
       title: "delegate the work",
@@ -88,6 +88,7 @@ it("人間の登録 door は未知の workspace を GateFailure として返す"
   const result = await registerThroughHumanDoor(
     {
       db,
+      pollNow: () => {},
       resolveWorkspace: (name) => {
         if (name !== "product") throw new UnknownWorkspaceError(name ?? "product");
         return { name, path: "/workspaces/product" };
@@ -116,6 +117,7 @@ it("人間の登録 door は workspace を assignee より先に検査する", a
   const result = await registerThroughHumanDoor(
     {
       db,
+      pollNow: () => {},
       agentRegistered: () => false,
       resolveWorkspace: (name) => {
         throw new UnknownWorkspaceError(name ?? "default");
@@ -150,6 +152,7 @@ it("人間の登録 door は issue-backed task の生存を確認してから登
   const result = await registerThroughHumanDoor(
     {
       db,
+      pollNow: () => {},
       github,
       workspace: { name: "tidepool", path: "/workspaces/tidepool" },
     },
@@ -178,6 +181,7 @@ it("人間の登録 door は外部検査後の時刻で task を登録する", a
   const result = await registerThroughHumanDoor(
     {
       db,
+      pollNow: () => {},
       github,
       workspace: { name: "tidepool", path: "/workspaces/tidepool" },
     },
@@ -199,6 +203,7 @@ it("人間の登録 door は一時的な issue 取得失敗を retryable な Gat
   const result = await registerThroughHumanDoor(
     {
       db,
+      pollNow: () => {},
       github,
       workspace: { name: "tidepool", path: "/workspaces/tidepool" },
     },
@@ -231,6 +236,7 @@ it("人間の登録 door は LLM 検査の不合格をサジェスト付き Gate
   const result = await registerThroughHumanDoor(
     {
       db,
+      pollNow: () => {},
       github,
       draftClient,
       workspace: { name: "tidepool", path: "/workspaces/tidepool" },
@@ -264,6 +270,7 @@ it("人間の登録 door は envelope の完全な LLM 診断をログに残し�
   const result = await registerThroughHumanDoor(
     {
       db,
+      pollNow: () => {},
       github,
       draftClient,
       workspace: { name: "tidepool", path: "/workspaces/tidepool" },
@@ -292,7 +299,7 @@ it("人間の登録 door は exec が投げた完全な LLM 診断もログに�
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
   const result = await registerThroughHumanDoor(
-    { db, github, draftClient, workspace: { name: "tidepool", path: "/workspaces/tidepool" } },
+    { db, pollNow: () => {}, github, draftClient, workspace: { name: "tidepool", path: "/workspaces/tidepool" } },
     { type: "work", github_issue_number: 189, workspace: "tidepool" },
     () => NOW,
   );
@@ -318,7 +325,7 @@ it("人間の登録 door は work child を人間 decompose として登録す�
   );
 
   const result = await registerThroughHumanDoor(
-    { db },
+    { db, pollNow: () => {} },
     {
       type: "work",
       title: "child work",
@@ -345,7 +352,7 @@ it("人間の登録 door は存在しない decompose 親を not_found として
   db = openDb(":memory:");
 
   const result = await registerThroughHumanDoor(
-    { db },
+    { db, pollNow: () => {} },
     {
       type: "work",
       title: "orphan child",
@@ -367,7 +374,7 @@ it("人間の登録 door は decompose reason を parent の存在より先に�
   db = openDb(":memory:");
 
   const result = await registerThroughHumanDoor(
-    { db },
+    { db, pollNow: () => {} },
     {
       type: "work",
       title: "orphan child",
@@ -398,7 +405,7 @@ it("人間の登録 door は issue-backed decompose child を登録しない", a
   );
 
   const result = await registerThroughHumanDoor(
-    { db },
+    { db, pollNow: () => {} },
     {
       type: "work",
       parent_id: parent.id,
@@ -436,7 +443,7 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
     await submitAnswer(
       {
         db,
-        onQueueHeadChanged: () => {},
+        pollNow: () => {},
         landing: {
           ...unusedLanding,
           async land() {
@@ -477,7 +484,7 @@ it("PR promotion の abandon を decision log に残す", async () => {
   const question = onlyQuestion(db);
 
   const answered = await submitAnswer(
-    { db, onQueueHeadChanged: () => {}, landing: unusedLanding },
+    { db, pollNow: () => {}, landing: unusedLanding },
     question,
     ["abandon promotion"],
     undefined,
@@ -530,7 +537,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
   const answered = await submitAnswer(
     {
       db,
-      onQueueHeadChanged: () => {},
+      pollNow: () => {},
       github,
       resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
       landing: unusedLanding,
@@ -569,7 +576,7 @@ it("workspace quarantine の回答は tree が clean と確認できるまで拒
     await submitAnswer(
       {
         db,
-        onQueueHeadChanged: () => {},
+        pollNow: () => {},
         resolveWorkspace: (name) => ({ name: name!, path: "/workspace/does-not-exist" }),
         landing: unusedLanding,
       },
@@ -609,7 +616,7 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
     await submitAnswer(
       {
         db,
-        onQueueHeadChanged: () => {},
+        pollNow: () => {},
         agentRegistered: () => false,
         landing: unusedLanding,
       },
@@ -638,7 +645,7 @@ it("containment quarantine の回答は host 能力の再検査が通るまで�
     await submitAnswer(
       {
         db,
-        onQueueHeadChanged: () => {},
+        pollNow: () => {},
         containment: async () => ({ available: false, reason: "sandbox remains unavailable" }),
         landing: unusedLanding,
       },
@@ -696,7 +703,7 @@ it("triage 中の回答は親の先頭復帰を staging し immediate poll を�
   let polls = 0;
 
   const answered = await submitAnswer(
-    { db, onQueueHeadChanged: () => polls++, landing: unusedLanding },
+    { db, pollNow: () => polls++, landing: unusedLanding },
     question,
     ["left"],
     undefined,
@@ -742,7 +749,7 @@ it("回答で親が unblock したら queue head の再評価を即時通知す�
   let polls = 0;
 
   const answered = await submitAnswer(
-    { db, onQueueHeadChanged: () => polls++, landing: unusedLanding },
+    { db, pollNow: () => polls++, landing: unusedLanding },
     question,
     ["left"],
     undefined,

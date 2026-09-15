@@ -253,7 +253,7 @@ async function makeWorker(
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
     containers: passthroughContainers(recorder.spawn),
-    onCapInterrupted: capInterruptionHandler({ db, clock, slot, resolve: resolveWorkspace }),
+    onCapInterrupted: capInterruptionHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => {} }),
     ...extraOptions,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */

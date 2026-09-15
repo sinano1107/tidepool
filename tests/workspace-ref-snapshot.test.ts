@@ -213,7 +213,8 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
 
   await complete(t, running.id);
 
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  const qq = await quarantineQuestion(t); if (qq) console.log("QQ", qq.title, qq.purpose);
+  expect(qq).toBeUndefined();
   expect(git(ws.path, "show", `task/${running.id}:in-flight.txt`)).toBe("still working");
 });
 
@@ -252,7 +253,8 @@ it("セッション中の registry 書き込みで、registry clone の workspac
 
   await complete(t, task.id);
 
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  const qq = await quarantineQuestion(t); if (qq) console.log("QQ", qq.title, qq.purpose);
+  expect(qq).toBeUndefined();
 });
 
 // ADR 0064 決定2: 違反メッセージは**動いた ref を名指しする**。quarantine の確認
@@ -319,7 +321,8 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
 
   await complete(t, task.id);
 
-  expect(await quarantineQuestion(t)).toBeUndefined();
+  const qq = await quarantineQuestion(t); if (qq) console.log("QQ", qq.title, qq.purpose);
+  expect(qq).toBeUndefined();
 });
 
 // ADR 0081: symref 自身の可動部は不変条件に残る —— 状態は解決値ではなく**指し先**で
@@ -446,6 +449,10 @@ it("セッション中に publish しても、そのセッションは quarantin
     (await api(t.baseUrl, "POST", "/api/workspaces/sandbox/publish", { repo: dest })).status,
   ).toBe(200);
   expect(git(ws.path, "rev-parse", "refs/remotes/origin/main")).toBe(git(ws.path, "rev-parse", "main"));
+  // 後始末の完走は pickup の契機である(ADR 0119 決定3)。この盤面の workspace 設定は boot 時の
+  // 静的な値(repo 宣言なし)なので、次の pickup(統合点レビュー)が publish 後の origin との
+  // 食い違いを別の quarantine として立てる —— 見たいのは解放時の判定だけなので pickup を止めておく
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
 
   await complete(t, task.id);
 

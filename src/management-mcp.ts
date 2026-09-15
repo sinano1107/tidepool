@@ -110,7 +110,7 @@ export interface ManagementMcpDeps {
    *  same seam the WebUI router carries. */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
-  onQueueHeadChanged: () => void;
+  pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
   agentRegistered?: (name: string) => boolean;
@@ -497,7 +497,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async ({ change }) => {
       applyExecutionSettingsChange(deps.db, change, "mcp", deps.clock.now());
-      deps.onQueueHeadChanged();
+      deps.pollNow();
       return toolResult(readExecutionSettings(deps.db));
     },
   );
@@ -734,6 +734,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           draftClient: deps.draftClient,
           agentRegistered: deps.agentRegistered,
           isProtectedWorkspace: deps.isProtectedWorkspace,
+          pollNow: deps.pollNow,
         },
         input as import("./human-verbs.js").HumanRegisterInput,
         () => deps.clock.now(),
@@ -760,7 +761,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           await submitAnswer(
             {
               db: deps.db,
-              onQueueHeadChanged: deps.onQueueHeadChanged,
+              pollNow: deps.pollNow,
               workspace: deps.workspace,
               resolveWorkspace: deps.resolveWorkspace,
               github: deps.github,

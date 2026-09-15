@@ -95,6 +95,7 @@ it("a child sees every sibling in registration-event order under its decision, i
   const parent = await registerWork(t, "survey the harbor");
   await t.clock.advance(HOUR);
 
+  t.containers.hold(parent.id);
   const parentClient = await mcpClient(t.mcpBaseUrl, parent.id);
   await parentClient.callTool({
     name: "decompose",
@@ -116,12 +117,16 @@ it("a child sees every sibling in registration-event order under its decision, i
   });
   await parentClient.close();
 
+  // 後始末の完走は pickup の契機なので(ADR 0119 決定3)、親の容器を空にする前に並べ替えておく ——
+  // さもないと先頭の子が拾われ、「you」が兄弟の先頭と区別できなくなる
   const current = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.title === "measure current",
   );
   await api(t.baseUrl, "POST", `/api/tasks/${current.id}/move`, { after: null });
-  await t.clock.advance(HOUR);
+  t.containers.fireEmpty(parent.id);
+  await new Promise((resolve) => setImmediate(resolve));
   const clientTask = t.worker.started.at(-1)!;
+  expect(clientTask.title).toBe("measure current");
   const client = await mcpClient(t.mcpBaseUrl, clientTask.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });

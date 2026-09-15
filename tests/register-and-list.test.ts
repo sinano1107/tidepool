@@ -27,7 +27,8 @@ it("a registered task joins the queue tail and can be listed", async () => {
   const list = await api(t.baseUrl, "GET", "/api/tasks");
   expect(list.status).toBe(200);
   expect(list.json.map((x: any) => x.id)).toEqual([first.json.id, second.json.id]);
-  expect(list.json.map((x: any) => x.status)).toEqual(["todo", "todo"]);
+  // ADR 0119 決定2: 登録は pickup の契機 —— 空の slot に1件目が即座に入り、2件目は後ろで待つ
+  expect(list.json.map((x: any) => x.status)).toEqual(["in_progress", "todo"]);
 
   const got = await api(t.baseUrl, "GET", `/api/tasks/${first.json.id}`);
   expect(got.status).toBe(200);

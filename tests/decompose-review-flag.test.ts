@@ -55,15 +55,12 @@ it.each([false, true])(
   "非ルート非 flag の子は risk=%s のときだけ個別レビューされる",
   async (risk) => {
     t = await bootTidepool();
-    const parent = (
-      await api(t.baseUrl, "POST", "/api/tasks", {
-        type: "work",
-        title: "parent",
-        purpose: "p",
-        completion_criteria: "c",
-        risk_flag: true,
-      })
-    ).json;
+    // 親は扉を通さずに置く —— 扉の登録は pickup の契機で(ADR 0119 決定2)、走行中の親には子を足せない
+    const parent = registerTask(
+      t.db,
+      { type: "work", title: "parent", purpose: "p", completion_criteria: "c", risk_flag: true },
+      t.clock.now(),
+    );
     const child = (
       await api(t.baseUrl, "POST", "/api/tasks", {
         type: "work",

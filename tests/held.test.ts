@@ -4,8 +4,8 @@ import {
   bootTidepool,
   HOUR,
   holdChildren,
-  registerChild,
-  registerWork,
+  queueChild,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -14,8 +14,8 @@ afterEach(() => t?.stop());
 
 it("祖先の未回答 question に held されたタスクは、回答されるまで slot に入らない", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  const child = await registerChild(t, "child", parent.id);
+  const parent = queueWork(t, "parent");
+  const child = queueChild(t, "child", parent.id);
   const question = holdChildren(t, parent.id);
 
   // child has no unfinished children of its own — it would be plain 'todo'

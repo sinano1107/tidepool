@@ -34,6 +34,11 @@ export interface TeardownDeps {
    *  前提検査)で開いた quarantine が完了の後始末を黙って no-op にすると、誰も再起動しない
    *  まま枠が刺さるからである。Absent → watchdog を持たない盤面(梯子そのものが無い)。 */
   heldForContainment?: (taskId: string) => boolean;
+  /** pickup の契機(ADR 0119 決定3)。解放の後、landing まで終えてから1回撃つ ——
+   *  解放の瞬間に撃てば次の pickup の fetch / checkout が前タスクの push と並走する。
+   *  **必須**にしてあるのは、構築箇所の配線漏れを型に捕まえさせるためである(#536 の
+   *  欠落は optional な配線の漏れそのものだった)。 */
+  pollNow: () => void;
 }
 
 /** 経路ごとに違うのはここに挙げたものだけである。 */
@@ -144,11 +149,16 @@ async function teardown(deps: TeardownDeps, taskId: string, step: TeardownStep):
   step.transition?.(task, now);
   clearTeardown(db, taskId);
   slot.release();
-  // 着地は枠を空けた後に撃つ(従来 `complete_task` が解放の後に撃っていたのと同じ位置)
-  if (step.completion && deps.landing && task.status === "done") {
-    await deps.landing.land(task);
-    // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
-    await deps.landing.relandAncestors(task);
+  // 早期 return はすべてこの手前にある —— ここを越えた後始末だけが pickup の契機を撃つ
+  try {
+    // 着地は枠を空けた後に撃つ(従来 `complete_task` が解放の後に撃っていたのと同じ位置)
+    if (step.completion && deps.landing && task.status === "done") {
+      await deps.landing.land(task);
+      // 完了したのが付帯子なら、待っていた祖先の着地がここで起きる(ADR 0092 決定3)
+      await deps.landing.relandAncestors(task);
+    }
+  } finally {
+    deps.pollNow();
   }
 }
 

@@ -4,6 +4,7 @@ import {
   bootTidepool,
   HOUR,
   mcpClient,
+  queueWork,
   registerQuestion,
   registerWork,
   type Tidepool,
@@ -126,7 +127,7 @@ it("answering unblocks the parent to the queue head and picks it up at once when
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);
   const question = await escalateFrom(t, parent.id);
-  const other = await registerWork(t, "other"); // joins the tail, ahead of nobody
+  const other = queueWork(t, "other"); // joins the tail, ahead of nobody
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["clerk"],

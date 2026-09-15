@@ -54,6 +54,7 @@ describe("mcp の releasing verb が task.workspace を解決する", () => {
         landing: createLanding({ db, clock, workspace: sandbox, resolveWorkspace, github: null }),
         workspace: sandbox,
         resolveWorkspace,
+        pollNow: () => {},
       }),
     );
     const listener = await new Promise<import("node:http").Server>((resolve) => {

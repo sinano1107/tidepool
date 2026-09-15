@@ -58,5 +58,5 @@ docs/experiments/fugu-body-ab/run.sh B docs/experiments/fugu-body-ab/five-lines.
 ```
 
 結果は `$FUGU_AB_DIR`(既定 `/tmp/fugu-ab`)の `<variant>/` に、`results/` と同じ形の jsonl と盤面 DB が残る。
-worker 終了は poll を起こさない(hourly tick のみ)ので、スクリプトは slot が空くたびに `POST /api/spend-down` で
-`onQueueHeadChanged` を踏んで即 poll させている。
+実験当時は worker 終了が poll を起こさなかった(hourly tick のみ。#536 で後始末の完走が契機になった)ので、スクリプトは
+slot が空くたびに `POST /api/spend-down` で `pollNow` を踏んで即 poll させている。

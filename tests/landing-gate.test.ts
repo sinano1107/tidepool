@@ -151,7 +151,8 @@ it("purely-local: 人間が付帯子を cancel しても着地する — cancel 
   const task = await registerWork(t, "ship despite the cancelled review");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
-  const attached = attachChild(t, task.id, "review the feature");
+  // human 宛て: slot に入らない付帯子。agent 宛てだと完了の後始末の poll が統合点レビューより先に拾う(ADR 0119 決定3)
+  const attached = attachChild(t, task.id, "review the feature", "human");
 
   await completeViaMcp(t, task.id);
   await completeIntegrationReviews(t, task.id);
@@ -284,12 +285,15 @@ it("付帯子が abandon で決着した場合も着地する", async () => {
   const task = await registerWork(t, "ship despite the abandoned repair");
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "feature.txt", "finished\n");
-  const attached = attachChild(t, task.id, "repair: ship despite the abandoned repair");
   await completeViaMcp(t, task.id);
+  // 完了の後始末が空けた slot には、tick を待たずに統合点レビューが入る(ADR 0119 決定3)。付帯子はその後に
+  // 付ける —— 先に付けると、その poll がレビューより先に付帯子を拾う
+  await new Promise((resolve) => setImmediate(resolve));
+  const attached = attachChild(t, task.id, "repair: ship despite the abandoned repair");
   await completeIntegrationReviews(t, task.id);
   expect(await questions(t)).toEqual([]);
 
-  await t.clock.advance(HOUR); // 付帯子が拾われる
+  // レビューの後始末の完走で付帯子が拾われている(ADR 0119 決定3)
   await t.clock.advance(90 * 60 * 1000); // SIGTERM
   await t.clock.advance(grace); // SIGKILL — failure question が立つ
   const failure = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(

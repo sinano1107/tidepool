@@ -131,7 +131,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
   await expect(submitAnswer(
     {
       db,
-      onQueueHeadChanged() {},
+      pollNow() {},
       harnessContainment: async () => check(),
       landing: unusedLanding,
     },
@@ -146,7 +146,7 @@ it("a Harness quarantine answer is accepted only after the same live check recov
   await submitAnswer(
     {
       db,
-      onQueueHeadChanged() {},
+      pollNow() {},
       harnessContainment: async () => check(),
       landing: unusedLanding,
     },

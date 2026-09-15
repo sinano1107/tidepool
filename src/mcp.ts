@@ -96,6 +96,7 @@ export interface McpDeps {
    *  **回収済み観測**の後ろでしか走らない(ADR 0109 決定1)。Absent → 容器を
    *  持たない盤面なので、観測は即座に解決したものとして扱う。 */
   containers?: WorkerContainers;
+  pollNow: () => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task releases against
@@ -321,6 +322,7 @@ function runReleasingVerb(
       githubAuth: deps.githubAuth,
       landing: deps.landing,
       heldForContainment: deps.heldForContainment,
+      pollNow: deps.pollNow,
     };
     const reclaimed = deps.containers?.reclaimed(task.id) ?? Promise.resolve();
     void reclaimed.then(() => runTeardown(teardown, task.id, { ...teardownStep(deps.db, task.id), workspace }));

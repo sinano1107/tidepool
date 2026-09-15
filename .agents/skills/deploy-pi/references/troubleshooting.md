@@ -72,11 +72,11 @@ cd /opt/tidepool && node --import tsx _ts.mjs; rm -f /opt/tidepool/_ts.mjs'
 
 `raw null? true` → the scrape itself failed (modal / marker / timeout — one of the first three causes); inspect the printed raw to see which. `raw` non-null but `parseUsage` returns nulls → a renderer or format-drift problem (last two causes). It must run in `/opt/tidepool` (the trusted, service cwd) — the `cd` above handles that.
 
-To recover once the code is fixed and deployed: nothing extra needed, the very next pickup attempt (task registration + `POST /tasks/:id/move {"after":null}` to force it — see below) runs `checkThrottle` fresh and updates `throttle_state`.
+To recover once the code is fixed and deployed: nothing extra needed, the very next pickup attempt (registering a task triggers one — see below) runs `checkThrottle` fresh and updates `throttle_state`.
 
-## Task registration alone does not trigger pickup
+## A registered task is not picked up
 
-The scheduler polls hourly (`HOURLY` in `src/scheduler.ts`) via `setInterval` — which does **not** fire immediately on startup. `POST /api/tasks` does not call `onQueueHeadChanged`. The only things that trigger an immediate poll are: a triage-session auto-commit, and `POST /api/tasks/:id/move` with a body that changes the queue head (including `{"after": null}` on a task that's already at the head — that specific case is special-cased to still fire, per the comment in `api.ts`'s move handler). For manual verification, always follow registration with a move-to-front call (this is what `scripts/smoke-test.sh` does).
+Registration, a worker session's teardown freeing the slot, and boot completion each trigger an immediate poll (CONTEXT.md "Pickup trigger"); the hourly tick is only the floor. A task that stays `todo` on a free slot is therefore held by a gate, not waiting for a trigger: read `GET /api/queue` — its halts (pause, triage session, throttle, open quarantine question) and each row's `skipped` status say which.
 
 ## Board crashes at boot with a ZodError from `registry.ts`
 

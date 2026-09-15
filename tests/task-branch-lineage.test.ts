@@ -13,6 +13,7 @@ import {
   makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
+  queueWork,
   registerWork,
   squashTaskIntoOrigin,
   type Tidepool,
@@ -21,6 +22,9 @@ import {
 let t: Tidepool;
 const dirs: string[] = [];
 const MINUTE = 60 * 1000;
+
+/** 後始末は回収済み観測の後ろ = microtask の先にある。 */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 afterEach(async () => {
   await t?.stop();
@@ -97,7 +101,11 @@ it("decompose の子は親ブランチから切られ、完了すると親ブラ
       (task: any) => task.type === "question",
     ),
   ).toEqual([]);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  // 子の後始末の完走が契機になり(ADR 0119 決定3)、unblock された親が tick を待たずに
+  // 自ブランチへ戻る —— 休止位置の main はその pickup が動かす
+  await settle();
+  expect(t.worker.started.map((task) => task.id)).toEqual([parent.id, child.id, parent.id]);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${parent.id}`);
 });
 
 it("完了時 review は元 PR が merge 済みでも被レビュータスクの恒久ブランチから切られる", async () => {
@@ -189,13 +197,17 @@ it("review の修理は元 PR が merge 済みなら保護ブランチから切�
   const reviewed = await registerWork(t, "ship merged work", undefined, true);
   await t.clock.advance(HOUR);
   commitWork(workspace.path, "reviewed.txt", "merged work\n");
+  // 外での merge は review の session の外で起こす —— 後始末の完走は pickup の契機なので
+  // (ADR 0119 決定3)、止めておかないと review が先に枠へ入り、この push を session 中の ref の
+  // 変化として quarantine に落とす
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await complete(reviewed.id);
   git(workspace.path, "push", "origin", `task/${reviewed.id}:main`);
 
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.type === "review" && task.parent_id === reviewed.id,
   );
-  await t.clock.advance(HOUR);
+  await api(t.baseUrl, "POST", "/api/pause", { paused: false });
   await decompose(review.id, "repair merged work");
   const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.parent_id === review.id,
@@ -375,16 +387,19 @@ it("decompose 子の review 修理は、着地済みの子ブランチを飛ば�
   );
   await t.clock.advance(HOUR);
   writeFileSync(join(workspace.path, "parent-progress.txt"), "new parent work\n");
-  await decompose(parent.id, "second integration child");
+  // 解放系 verb の後始末の完走は pickup の契機(ADR 0119 決定3)なので、次に枠へ入れたい行は
+  // verb の前に先頭へ置き、verb の後に作られる行は pause の間に先頭へ置いてから再開する
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
+  await decompose(parent.id, "second integration child");
   await t.clock.advance(HOUR);
+  await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   await decompose(review.id, "repair the reviewed child");
 
   const repair = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.parent_id === review.id && task.type === "work",
   );
   await api(t.baseUrl, "POST", `/api/tasks/${repair.id}/move`, { after: null });
-  await t.clock.advance(HOUR);
+  await api(t.baseUrl, "POST", "/api/pause", { paused: false });
 
   expect(git(workspace.path, "rev-parse", `task/${repair.id}`)).toBe(
     git(workspace.path, "rev-parse", `task/${parent.id}`),
@@ -564,13 +579,15 @@ it("watchdog の slot 解放は WIP を子ブランチに残し、親へ merge b
     workspace,
     watchdog: { timeLimits: { work: MINUTE }, grace: MINUTE },
   });
-  const parent = await registerWork(t, "parent for failed child");
+  const parent = queueWork(t, "parent for failed child");
   await t.clock.advance(HOUR);
   await decompose(parent.id, "child that times out");
   const child = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
     (task: any) => task.parent_id === parent.id && task.type === "work",
   );
-  await t.clock.advance(HOUR);
+  // 分解の後始末の完走が契機になり、子は tick を待たずに枠へ入る(ADR 0119 決定3)
+  await settle();
+  expect(t.worker.started.map((task) => task.id)).toEqual([parent.id, child.id]);
   writeFileSync(join(workspace.path, "timed-out.txt"), "unfinished child work\n");
 
   await t.clock.advance(MINUTE);

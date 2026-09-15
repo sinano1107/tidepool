@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, type Tidepool } from "./harness.js";
+import { api, bootTidepool, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -47,14 +47,8 @@ it("GET /api/your-tasks の各行は塞いでいる親を blocking で運ぶ(iss
       assignee: "human",
     })
   ).json;
-  const parent = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "parent work",
-      purpose: "p",
-      completion_criteria: "c",
-    })
-  ).json;
+  // 扉を通らない登録: 扉の登録は pickup の契機で(ADR 0119 決定2)、走行中の親には人間の子を足せない
+  const parent = queueWork(t, "parent work");
   const child = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "work",

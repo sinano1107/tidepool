@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { quarantineWorkspace } from "../src/workspace.js";
 import {
   api,
@@ -9,8 +10,9 @@ import {
   holdChildren,
   makeWorkspace,
   mcpClient,
-  registerChild,
-  registerWork,
+  quarantineAgentRow,
+  queueChild,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -31,7 +33,7 @@ function queueIds(list: any[]): string[] {
 /** Park a filler task in the slot so reordering below never triggers a pickup:
  *  a queue-head change while the slot is free immediately executes the new head. */
 async function occupySlot(t: Tidepool) {
-  const filler = await registerWork(t, "occupies the slot");
+  const filler = queueWork(t, "occupies the slot");
   await t.clock.advance(HOUR);
   return filler;
 }
@@ -39,27 +41,30 @@ async function occupySlot(t: Tidepool) {
 it("moving a task to the head (after: null) reorders the queue, surviving a restart", async () => {
   t = await bootTidepool();
   await occupySlot(t);
-  const a = await registerWork(t, "a");
-  const b = await registerWork(t, "b");
-  const c = await registerWork(t, "c");
+  const a = queueWork(t, "a");
+  const b = queueWork(t, "b");
+  const c = queueWork(t, "c");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${c.id}/move`, { after: null });
   expect(res.status).toBe(200);
 
   expect(queueIds((await api(t.baseUrl, "GET", "/api/tasks")).json)).toEqual([c.id, a.id, b.id]);
 
-  // the order is a fact on the board, not in the process
+  // the order is a fact on the board, not in the process: after a restart the
+  // boot poll (ADR 0119 決定4) takes the moved head into the freed slot
   await t.stopServer();
   t = await bootTidepool({ dir: t.dir });
-  expect(queueIds((await api(t.baseUrl, "GET", "/api/tasks")).json)).toEqual([c.id, a.id, b.id]);
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(t.worker.started.map((x) => x.id)).toEqual([c.id]);
+  expect(queueIds((await api(t.baseUrl, "GET", "/api/tasks")).json)).toEqual([a.id, b.id]);
 });
 
 it("moving a task after another slots it between that task and its next neighbour", async () => {
   t = await bootTidepool();
   await occupySlot(t);
-  const a = await registerWork(t, "a");
-  const b = await registerWork(t, "b");
-  const c = await registerWork(t, "c");
+  const a = queueWork(t, "a");
+  const b = queueWork(t, "b");
+  const c = queueWork(t, "c");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${c.id}/move`, { after: a.id });
   expect(res.status).toBe(200);
@@ -70,11 +75,11 @@ it("moving a task after another slots it between that task and its next neighbou
 it("a task registered after manual reordering still joins the queue tail", async () => {
   t = await bootTidepool();
   await occupySlot(t);
-  const a = await registerWork(t, "a");
-  const b = await registerWork(t, "b");
+  const a = queueWork(t, "a");
+  const b = queueWork(t, "b");
   await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null });
 
-  const c = await registerWork(t, "c");
+  const c = queueWork(t, "c");
 
   expect(queueIds((await api(t.baseUrl, "GET", "/api/tasks")).json)).toEqual([b.id, a.id, c.id]);
 });
@@ -82,8 +87,8 @@ it("a task registered after manual reordering still joins the queue tail", async
 it("a move is appended to the task's event log, attributed to the human worker", async () => {
   t = await bootTidepool();
   await occupySlot(t);
-  await registerWork(t, "a");
-  const b = await registerWork(t, "b");
+  queueWork(t, "a");
+  const b = queueWork(t, "b");
   await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null });
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${b.id}/events`)).json;
@@ -105,8 +110,8 @@ it("reordering is a human steering channel: no MCP tool exposes it", async () =>
 
 it("promoting a non-head task to the head reorders it without firing an immediate poll", async () => {
   t = await bootTidepool();
-  await registerWork(t, "a");
-  const b = await registerWork(t, "b");
+  queueWork(t, "a");
+  const b = queueWork(t, "b");
 
   // slot is free, but promoting b is pure reordering — it wasn't already at
   // the head, so this isn't "run now" (issue #82 follow-up)
@@ -119,8 +124,8 @@ it("promoting a non-head task to the head reorders it without firing an immediat
 
 it("a promoted task can then be run now once it is the head", async () => {
   t = await bootTidepool();
-  await registerWork(t, "a");
-  const b = await registerWork(t, "b");
+  queueWork(t, "a");
+  const b = queueWork(t, "b");
 
   await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null }); // promote only
   expect(t.worker.started).toEqual([]);
@@ -132,8 +137,8 @@ it("a promoted task can then be run now once it is the head", async () => {
 
 it("a task under a blocked parent at the raw head is the pickable head: one ↑ runs it now", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  const child = await registerChild(t, "child", parent.id);
+  const parent = queueWork(t, "parent");
+  const child = queueChild(t, "child", parent.id);
 
   // the raw todo head is the parent, but it has an unfinished child, so the
   // slot could never take it — the child is what a pickup would actually run
@@ -152,10 +157,10 @@ it("a task under a blocked parent at the raw head is the pickable head: one ↑ 
 
 it("a held row at the raw head does not swallow the ↑ of the task below it", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  const child = await registerChild(t, "child", parent.id);
+  const parent = queueWork(t, "parent");
+  const child = queueChild(t, "child", parent.id);
   holdChildren(t, parent.id);
-  const other = await registerWork(t, "other");
+  const other = queueWork(t, "other");
 
   // park the held child at the raw head — it is `todo` in the table (so the
   // old raw-head query saw it), but the unanswered question holds it out of
@@ -172,10 +177,10 @@ it("a skipped row at the raw head does not swallow the ↑ of the task below it"
   // only the board's own workspace needs a real checkout — the stuck task's
   // "prod" is never picked up, so it exists as a name in workspace_state alone
   t = await bootTidepool({ workspace: await makeWorkspace(dirs, "sandbox") });
-  const stuck = await registerWork(t, "stuck in prod", "prod");
+  const stuck = queueWork(t, "stuck in prod", "prod");
   const db = t.db;
   quarantineWorkspace(db, "prod", new Error("tree rule failed"), t.clock.now());
-  const runnable = await registerWork(t, "keeps flowing in sandbox", "sandbox");
+  const runnable = queueWork(t, "keeps flowing in sandbox", "sandbox");
 
   // the raw todo head is the quarantined-workspace task; the slot skips it
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks;
@@ -187,8 +192,8 @@ it("a skipped row at the raw head does not swallow the ↑ of the task below it"
 
 it("a blocked parent is never the pickable head: ↑ on it fires nothing, however often", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  await registerChild(t, "child", parent.id);
+  const parent = queueWork(t, "parent");
+  queueChild(t, "child", parent.id);
 
   await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/move`, { after: null });
   await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/move`, { after: null });
@@ -197,8 +202,8 @@ it("a blocked parent is never the pickable head: ↑ on it fires nothing, howeve
 
 it("with no pickable candidate at all, ↑ fires nothing — there is nothing to match", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
-  const child = await registerChild(t, "child", parent.id);
+  const parent = queueWork(t, "parent");
+  const child = queueChild(t, "child", parent.id);
   holdChildren(t, parent.id);
 
   // every row is out of the slot: the parent is blocked, its only child held
@@ -209,9 +214,9 @@ it("with no pickable candidate at all, ↑ fires nothing — there is nothing to
 
 it("a reorder that leaves the queue head unchanged does not fire an immediate poll", async () => {
   t = await bootTidepool();
-  const a = await registerWork(t, "a");
-  await registerWork(t, "b");
-  const c = await registerWork(t, "c");
+  const a = queueWork(t, "a");
+  queueWork(t, "b");
+  const c = queueWork(t, "c");
 
   // a stays at the head: no human said "run now", so the slot stays idle
   await api(t.baseUrl, "POST", `/api/tasks/${c.id}/move`, { after: a.id });
@@ -223,7 +228,7 @@ it("a reorder that leaves the queue head unchanged does not fire an immediate po
 
 it("run-now on the task already at the head still fires the immediate poll", async () => {
   t = await bootTidepool();
-  const a = await registerWork(t, "a");
+  const a = queueWork(t, "a");
 
   // the head's front button is the human's immediate-poll trigger
   await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, { after: null });
@@ -232,8 +237,8 @@ it("run-now on the task already at the head still fires the immediate poll", asy
 
 it("moving the head task down does not fire an immediate poll for the new head", async () => {
   t = await bootTidepool();
-  const a = await registerWork(t, "a");
-  const b = await registerWork(t, "b");
+  const a = queueWork(t, "a");
+  const b = queueWork(t, "b");
 
   await api(t.baseUrl, "POST", `/api/tasks/${a.id}/move`, { after: b.id });
   expect(t.worker.started).toEqual([]);
@@ -248,8 +253,8 @@ it("a non-todo task can be moved — board order is global — without firing a 
   // review child starts todo) — issue #35's board otherwise retreats a
   // standalone done task the instant its whole tree settles, which would
   // make it disappear from the list this test inspects
-  const a = await registerWork(t, "a", undefined, true);
-  const b = await registerWork(t, "b");
+  const a = queueWork(t, "a", undefined, true);
+  quarantineAgentRow(t.db, DEFAULT_AUDITOR_NAME);
   await t.clock.advance(HOUR); // a picked up
   const client = await mcpClient(t.mcpBaseUrl, a.id);
   const done: any = await client.callTool({
@@ -258,6 +263,11 @@ it("a non-todo task can be moved — board order is global — without firing a 
   });
   expect(done.isError ?? false).toBe(false);
   await client.close();
+  // a's teardown is itself a pickup trigger (ADR 0119 決定3): let it fire while
+  // nothing is pickable — the review child's Auditor is quarantined, and b is
+  // queued only afterwards, behind the door
+  await new Promise((resolve) => setImmediate(resolve));
+  const b = queueWork(t, "b");
 
   // slot is free and b heads the queue, but surfacing a done task on the
   // board is a display move, not a "run now"
@@ -276,8 +286,8 @@ it("a non-todo task can be moved — board order is global — without firing a 
 it("a todo task can be placed after a non-todo task", async () => {
   t = await bootTidepool();
   const filler = await occupySlot(t);
-  const a = await registerWork(t, "a");
-  const b = await registerWork(t, "b");
+  const a = queueWork(t, "a");
+  const b = queueWork(t, "b");
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: filler.id });
   expect(res.status).toBe(200);

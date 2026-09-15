@@ -1,4 +1,4 @@
-import { registerQuestion, registerWork } from "../tests/harness.js";
+import { queueWork, registerQuestion } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 test("triage の読み取り専用 preview はドラッグ可能に見せず、Queue は見せる(issue #226)", async ({
@@ -6,7 +6,7 @@ test("triage の読み取り専用 preview はドラッグ可能に見せず、Q
   page,
 }) => {
   const t = await boot();
-  await registerWork(t, "a queue row");
+  queueWork(t, "a queue row");
   registerQuestion(t, {
     title: "choose a direction",
     purpose: "enter triage",
