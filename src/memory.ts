@@ -320,7 +320,7 @@ export function invalidateMemoryEntry(
     // answerQuestion が先に done にしているので、reject や承認の superseded が自分自身を決着させることは無い
     const stale = db
       .prepare(
-        `SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'
+        `SELECT id FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'
            AND (json_extract(question_proposal, '$.candidate_id') = @entry_id
              OR EXISTS (SELECT 1 FROM json_each(question_proposal, '$.replaces') WHERE json_extract(value, '$.id') = @entry_id))`,
       )
@@ -357,14 +357,15 @@ function markApproved(db: Db, id: number, version: number): void {
 export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questionId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     const candidate = requireEntry(db, proposal.candidate_id);
-    const stale = [
-      ...(candidate.kind === "behavior" && candidate.state === "candidate" && candidate.invalidation_reason === null ? [] : [candidate.id]),
-      ...proposal.replaces.filter(({ id, version }) => {
+    const fresh =
+      candidate.kind === "behavior" &&
+      candidate.state === "candidate" &&
+      candidate.invalidation_reason === null &&
+      proposal.replaces.every(({ id, version }) => {
         const row = requireEntry(db, id);
-        return row.version !== version || row.invalidation_reason !== null;
-      }).map(({ id }) => id),
-    ];
-    if (stale.length > 0) throw new DomainError(`this proposal is stale: memory ${stale.join(", ")} changed since it was proposed`);
+        return row.version === version && row.invalidation_reason === null;
+      });
+    if (!fresh) throw new DomainError("this proposal is stale: a memory entry it names changed since it was proposed");
     const eventId = appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,
@@ -384,7 +385,7 @@ export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questi
  *  今は op approve だけ(consolidate / invalidate は #621)。 */
 export function proposeMemoryChange(
   db: Db,
-  metaReview: Pick<Task, "id">,
+  metaReviewId: string,
   input: { op: "approve"; candidate_id: number; rationale: string },
   workerId: string,
   now: Date,
@@ -402,15 +403,16 @@ export function proposeMemoryChange(
     "New text:",
     row.text,
   ].join("\n");
+  const title = `Approve memory: ${row.title}`;
   const question = registerTask(
     db,
     {
       type: "question",
-      title: `Approve memory: ${row.title}`,
+      title,
       purpose: input.rationale,
       completion_criteria: "a human answer is recorded",
-      parent_id: metaReview.id,
-      question: [{ title: `Approve memory: ${row.title}`, detail, options: ["approve", "reject"], recommendation: "approve" }],
+      parent_id: metaReviewId,
+      question: [{ title, detail, options: ["approve", "reject"], recommendation: "approve" }],
       proposal: { kind: "memory", op: input.op, candidate_id: row.id, replaces: [] },
     },
     now,
@@ -418,14 +420,6 @@ export function proposeMemoryChange(
     "worker",
   );
   return { question_id: question.id };
-}
-
-/** 提案 question への回答の適用(spec #615 F)。submitAnswer が answerQuestion と同じ transaction で呼ぶ ——
- *  approve は承認の export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は candidate を `rejected` で無効化。 */
-export function applyMemoryProposalAnswer(db: Db, question: Pick<Task, "id" | "question_proposal">, answer: string, origin: EventOrigin, at: Date): void {
-  const proposal = question.question_proposal!;
-  if (answer === "approve") approveMemoryProposal(db, proposal, question.id, origin, at);
-  else invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at);
 }
 
 function markInvalidated(db: Db, id: number, reason: InvalidationReason, successorId: number | null): void {

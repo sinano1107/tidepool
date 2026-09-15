@@ -899,7 +899,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
         "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id.",
       inputSchema: { op: z.literal("approve"), candidate_id: z.number().int(), rationale: z.string().min(1) },
     },
-    async (input) => run((reader, now) => proposeMemoryChange(deps.db, { id: reader.taskId }, input, reader.agent, now)),
+    async (input) => run((reader, now) => proposeMemoryChange(deps.db, reader.taskId, input, reader.agent, now)),
   );
 }
 
