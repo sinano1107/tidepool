@@ -12,6 +12,7 @@ import {
   containmentPickupBlocked,
 } from "./containment.js";
 import type { Db } from "./db.js";
+import { appendEvent } from "./events.js";
 import {
   type ExecutionExclusions,
   type ExecutionSetting,
@@ -290,6 +291,8 @@ export function startScheduler(deps: {
   worker: WorkerAdapter;
   /** 盤面側 supervisor(ADR 0099 決定2): pickup が worker session の容器を作る。 */
   containers: WorkerContainers;
+  /** ADR 0118: `start` が同期で投げた pickup の記録と後始末(`spawnFailureHandler` 製)。 */
+  onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task runs in the
@@ -360,6 +363,7 @@ export function startScheduler(deps: {
     slot,
     worker,
     containers,
+    onSpawnFailed,
     workspace,
     resolveWorkspace,
     auditorName = DEFAULT_AUDITOR_NAME,
@@ -438,18 +442,18 @@ export function startScheduler(deps: {
   /** `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  adapter へそのまま運ぶ —— spawn 側で解決し直すと、除外の文脈を持たない再解決が
    *  scheduler と違う entry を選びうる(温存中の Provider で走る)。 */
-  async function pickup(task: Task, setting: ExecutionSetting | undefined, content: Partial<TaskContent>): Promise<void> {
+  async function pickup(
+    task: Task,
+    setting: ExecutionSetting | undefined,
+    content: Partial<TaskContent>,
+  ): Promise<(() => void) | undefined> {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor pointer,
     // and unspecified work to the board's default agent. Questions never enter
     // the execution slot.
-    const picked = pickupTask(
-      db,
-      task,
-      resolveTaskAgent(task, worker.id, auditorName ?? worker.id),
-      clock.now(),
-    );
+    const agent = resolveTaskAgent(task, worker.id, auditorName ?? worker.id);
+    const picked = pickupTask(db, task, agent, clock.now());
     slot.occupy(picked.id);
     // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
     // かった pickup でも、force / reclaimed の相手はもう存在している。
@@ -460,9 +464,9 @@ export function startScheduler(deps: {
     if (resolve) {
       const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now());
       // an unknown workspace name (registry drift) quarantines in place of a
-      // thrown error — the task stays wedged in the slot, same deliberate
-      // posture as a failed start below, until the watchdog or a human acts
-      if (!resolved) return;
+      // thrown error — the task stays wedged in the slot until the watchdog or
+      // a human acts
+      if (!resolved) return undefined;
       // a branch discipline gap (issue #27: the workspace's configured
       // branch doesn't exist in this checkout) is a resource problem, same
       // as registry drift above — this task still stays wedged in the slot
@@ -478,23 +482,28 @@ export function startScheduler(deps: {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
       } catch (err) {
         await quarantineWithRepoAccessGuidance(resolved, err);
-        return;
+        return undefined;
       }
-      try {
-        worker.start({ ...picked, ...content }, setting);
-      } catch (err) {
-        console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
-      }
-      return;
     }
     try {
       worker.start({ ...picked, ...content }, setting);
     } catch (err) {
-      // a failed start may not crash the board. The task keeps the slot — the
-      // same deliberate wedge as a restart-interrupted task — until the
-      // watchdog slice (#9) brings the escalation path.
+      // ADR 0118: worker が1度も走らなかった pickup。観測点がこの event を書き、
+      // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす
+      const message = err instanceof Error ? err.message : String(err);
       console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
+      appendEvent(db, {
+        taskId: picked.id,
+        workerId: agent,
+        origin: "board",
+        payload: { kind: "spawn_failed", error_code: null, message },
+        at: clock.now(),
+      });
+      // 後始末は slot を解放して pickup の契機を撃つので、poll の外(`inFlight` を降ろした後)で
+      // 撃つ —— poll の中で解放すれば、その契機は捨てられる(ADR 0119 決定5)
+      return () => onSpawnFailed(picked.id, { error_code: null, message });
     }
+    return undefined;
   }
 
   /** The issue-backed pickup gate (issue #49 §5 / ADR 0016): an issue-backed
@@ -658,6 +667,7 @@ export function startScheduler(deps: {
     // できた — 後で立てると、hourly tick と `POST /tasks/:id/move` が同時に
     // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
+    let afterPoll: (() => void) | undefined;
     // **`throttleRevalidating` も `pickupBlocked` より手前で立てる。** 同じ gate が
     // 実 HTTP を待つ間、最後の throttle 観測値は stale でありうる。新しい観測へ
     // 向かっている事実を `GET /pause` が先に出せなければ、古い throttle を現在の
@@ -825,11 +835,12 @@ export function startScheduler(deps: {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }
       }
-      await pickup(head, chosen, content);
+      afterPoll = await pickup(head, chosen, content);
     } finally {
       throttleRevalidating = false;
       inFlight = false;
     }
+    afterPoll?.();
   }
 
   function pollNow(): void {

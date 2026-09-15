@@ -20,6 +20,7 @@ it("poll が封じ込め検査の await に居る間に登録されたタスク�
     slot: new Slot(),
     worker,
     containers: fakeContainers(),
+    onSpawnFailed: () => {},
     containment: () => new Promise((resolve) => (release = resolve)),
   });
 

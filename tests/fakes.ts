@@ -180,6 +180,9 @@ export class ScriptedWorker implements WorkerAdapter {
   readonly gracefulStops: string[] = [];
   readonly exits: string[] = [];
   private containers: WorkerContainers | undefined;
+  private startFailure: Error | undefined;
+  /** 盤面が factory で渡す「worker が1度も走らなかった」の一撃(ADR 0118)。 */
+  onSpawnFailed: ((taskId: string, failure: { error_code: string | null; message: string }) => void) | undefined;
   /** undefined = 未スクリプト(checkUsage 時点の now から健全 text を生成)。
    *  null はスクリプトされた観測失敗(fail-closed)。 */
   private usageText: string | null | undefined = undefined;
@@ -193,6 +196,19 @@ export class ScriptedWorker implements WorkerAdapter {
   start(task: Task, setting?: ExecutionSetting): void {
     this.started.push(task);
     this.startedSettings.push(setting);
+    const failure = this.startFailure;
+    this.startFailure = undefined;
+    if (failure) throw failure;
+  }
+
+  /** 次の `start` 1回だけを同期で投げさせる(ADR 0118 の同期側の観測点)。 */
+  scriptStartFailure(error: Error): void {
+    this.startFailure = error;
+  }
+
+  /** Node の `spawn()` が非同期に失敗した、の観測(ADR 0118 の adapter 側の観測点)。 */
+  failSpawn(taskId: string, error_code: string, message: string): void {
+    this.onSpawnFailed?.(taskId, { error_code, message });
   }
 
   gracefulStop(taskId: string): void {

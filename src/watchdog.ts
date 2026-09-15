@@ -141,6 +141,39 @@ export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, rec
   };
 }
 
+/** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃。観測点は2つ ——
+ *  scheduler が捕まえる `start` の同期 throw と、adapter が捕まえる `spawn()` の非同期
+ *  失敗 —— で、`spawn_failed` event はそれぞれの観測点が書く。
+ *
+ *  上限到達による中断と違い、記録(failure question)を回収済み観測の**前**に置く ——
+ *  escalate verb と同じ順で、後始末中の status が `todo` になるので経路は
+ *  エスカレーションの step に読まれる(ADR 0113 決定3)。process を1つも持たない session
+ *  なので、容器は空のまま強制回収を撃つ。 */
+export function spawnFailureHandler(
+  deps: TeardownDeps,
+  containers: WorkerContainers,
+): (taskId: string, failure: { error_code: string | null; message: string }) => void {
+  return (taskId, failure) => {
+    if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
+    const task = getTask(deps.db, taskId);
+    if (task?.status !== "in_progress") return;
+    const now = deps.clock.now();
+    registerFailureQuestion(
+      deps.db,
+      task,
+      `worker never started for task: ${task.title}`,
+      `the worker for task "${task.title}" (${task.id}) never ran: the board caught this ` +
+        `exception while starting it${failure.error_code ? ` (${failure.error_code})` : ""}:\n\n` +
+        failure.message,
+      now,
+    );
+    markTeardown(deps.db, taskId, now);
+    deps.slot.enterTeardown();
+    containers.forceReclaim(taskId);
+    void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
+  };
+}
+
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
  *  slot task, checked against the injected clock so overruns are
  *  deterministic in tests. 畳み込み停止 at the limit, 強制回収 after grace —
@@ -270,8 +303,9 @@ export function startWatchdog(deps: {
     }
   }
 
-  /** 完了済み session が梯子の底まで落ちたとき。**failure question は立てない** ——
-   *  タスクの決着は host 側の事情で覆らない(ADR 0109 決定4)。 */
+  /** 決着済みの session(完了・escalate / decompose・worker が1度も走らなかった pickup)が
+   *  梯子の底まで落ちたとき。**failure question は立てない** —— タスクの決着は host 側の
+   *  事情で覆らない(ADR 0109 決定4)。 */
   function onTeardownReclaimTimeout(task: Task): void {
     const taskId = task.id;
     settled.add(taskId);
@@ -280,7 +314,7 @@ export function startWatchdog(deps: {
       db,
       (task.status === "in_progress"
         ? `the worker session for task ${taskId} was interrupted by the Provider usage cap and will return to the queue head after teardown, but its `
-        : `the worker session for task ${taskId} finished its work and reported it, but its `) +
+        : `the worker session for task ${taskId} is settled — teardown has already decided the task's status — but its `) +
         "processes may still be running on this host: the board force-reclaimed the container and " +
         `could not observe it going empty within ${reclaimTimeout}ms. The task itself stays ` +
         `${task.status} — what is still held is this host's workspaces and the execution slot, until ` +

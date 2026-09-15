@@ -1151,6 +1151,9 @@ export interface ClaudeWorkerOptions {
    *  網羅テストが見張る。不在 → 中断を観測しても盤面は動かない(workspaceless な
    *  unit 盤面のための姿)。 */
   onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
+  /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
+   *  `onCapInterrupted` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
+  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
@@ -2304,6 +2307,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         },
         at: this.options.clock.now(),
       });
+      this.options.onSpawnFailed?.(task.id, { error_code: errno.code ?? null, message: err.message });
     });
     // usage is settled at process exit — after task_completed via MCP, not
     // before (issue #32) — so kill/crash sessions still get a worker_exited
