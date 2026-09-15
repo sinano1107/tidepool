@@ -388,13 +388,12 @@ function applyScratchpad(
       );
       continue;
     }
+    created++;
     if (disposition === "meta_review") {
       // ADR 0120 決定2: 主題 memory の手動登録(周期の due は通らない)
       registerMetaReview(db, "memory", now);
-      created++;
       continue;
     }
-    created++;
     registerTask(
       db,
       { type: "work", title: line.line, purpose: "raised on the triage scratchpad", completion_criteria: "the line above is resolved" },
