@@ -128,14 +128,14 @@ it("pin が古い提案への回答は approve も reject も拒否され何も�
   }
 });
 
-it("reject の回答で candidate は後継なしの rejected で無効化され、答えた question 自身は陳腐化で決着しない", async () => {
+it("reject の回答は reject の export に届き(candidate が rejected)、答えた question 自身は陳腐化で決着しない", async () => {
   const { ids, client, propose } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
 
     expect((await answer(questionId, "reject")).status).toBe(200);
 
-    expect(await entry(ids[0]!)).toMatchObject({ state: "candidate", invalidation_reason: "rejected", successor_id: null });
+    expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: "rejected" });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
   } finally {
     await client.close();
