@@ -2589,7 +2589,7 @@ describe("ClaudeCodeWorker", () => {
  *  worker_exited に残るか。実 CLI は使わず、既存の ContainerSpawn seam に fake stream を
  *  流す(ADR 0027 / ADR 0041 §4)。 */
 describe("advisor capability (issue #33)", () => {
-  const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nadvisor: true\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
+  const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider:\n  - name: anthropic\n    advisor: true\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
   const withAdvisor = { "agents/deckhand.md": ADVISOR_MD };
 
   /** `--advisor` に渡された値(フラグごと無ければ undefined)。 */

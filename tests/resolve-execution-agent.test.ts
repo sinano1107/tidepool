@@ -12,7 +12,6 @@ function makeRegistry(
     provider?: string;
     providers?: string[];
     entries?: { name: string; advisor?: boolean }[];
-    advisor?: boolean;
     tier?: string;
     skills?: string[];
     retiredFields?: string[];
@@ -28,10 +27,7 @@ function makeRegistry(
           version: "0.0.1",
           authority: a.authority,
           description: `${name} agent`,
-          provider: normalizeProviderEntries(
-            a.entries ?? a.providers ?? a.provider ?? "anthropic",
-            a.advisor === true,
-          ),
+          provider: normalizeProviderEntries(a.entries ?? a.providers ?? a.provider ?? "anthropic", a.skills ?? ["*"]),
           tier: a.tier,
           retiredFields: a.retiredFields ?? [],
           skills: a.skills ?? ["*"],
@@ -111,7 +107,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
 
   it("advisor を持つ定義に advisor を提供しない provider(moonshot)の組み合わせは InvalidAgentDefinitionError(ADR 0097 決定3)", () => {
     const registry = makeRegistry({
-      deckhand: { authority: "standard", provider: "moonshot", advisor: true },
+      deckhand: { authority: "standard", entries: [{ name: "moonshot", advisor: true }] },
     });
     expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
       InvalidAgentDefinitionError,
@@ -123,7 +119,14 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
   // 増えても「掛かっている entry のどれかが不成立なら拒否」として残る。
   it("advisor を提供しない経路の entry が混じる定義は、advisor を持つ entry が他にあっても拒否される(ADR 0110 決定1)", () => {
     const registry = makeRegistry({
-      deckhand: { authority: "standard", providers: ["anthropic", "openai"], advisor: true, skills: [] },
+      deckhand: {
+        authority: "standard",
+        entries: [
+          { name: "anthropic", advisor: true },
+          { name: "openai", advisor: true },
+        ],
+        skills: [],
+      },
     });
     expect(() => resolveExecutionAgent(registry, "deckhand", null)).toThrow(
       InvalidAgentDefinitionError,
@@ -166,7 +169,7 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
 
   it("anthropic で advisor を持つ定義は従来どおり解決される", () => {
     const registry = makeRegistry({
-      deckhand: { authority: "standard", provider: "anthropic", advisor: true },
+      deckhand: { authority: "standard", entries: [{ name: "anthropic", advisor: true }] },
     });
     expect(resolveExecutionAgent(registry, "deckhand", null).definition.provider).toEqual([
       { name: "anthropic", advisor: true },

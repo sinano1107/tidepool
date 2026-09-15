@@ -149,11 +149,18 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
 
 /** フォームの入力を registry の正規形へ(ADR 0110 決定1)。フォームは単一
  *  provider + advisor チェックボックスのまま = 長さ1の entry で、綴りを畳むのは
- *  parse と共有する1本(`normalizeProviderEntries`)である。 */
+ *  parse と共有する1本(`normalizeProviderEntries`)である。チェックボックスは
+ *  書かれた entry にだけ畳む —— 省略の展開は常に advisor なし(ADR 0116 決定1/2)。 */
 function normalizedDefinition(
   input: CreateAgentInput,
 ): Omit<AgentDefinition, "version" | "retiredFields"> {
-  return { ...input, provider: normalizeProviderEntries(input.provider, input.advisor === true) };
+  return {
+    ...input,
+    provider: normalizeProviderEntries(
+      input.advisor === true ? [{ name: input.provider, advisor: true }] : input.provider,
+      input.skills,
+    ),
+  };
 }
 
 /** version 以外の全フィールド(編集フォームが送るもの)の一致。systemPrompt
@@ -323,10 +330,10 @@ function serializeAgentFile(definition: AgentDefinition): string {
     version: definition.version,
     authority: definition.authority,
     description: definition.description,
-    // 長さ1の entry は今日の綴りで書き戻す(ADR 0110 決定1)—— 配布される種の
-    // agent 定義と手元 registry がそのままの形で残り、移行が要らない
+    // advisor なしの長さ1の entry は単一文字列の綴りで書き戻す(ADR 0110 決定1)。
+    // advisor は entry にだけ書く(ADR 0116 決定2)
     provider:
-      definition.provider.length === 1
+      definition.provider.length === 1 && !definition.provider[0]!.advisor
         ? definition.provider[0]!.name
         : definition.provider.map((entry) =>
             entry.advisor ? { name: entry.name, advisor: true } : entry.name,
@@ -337,10 +344,6 @@ function serializeAgentFile(definition: AgentDefinition): string {
   };
   if (definition.icon !== undefined) meta.icon = definition.icon;
   if (definition.tier !== undefined) meta.tier = definition.tier;
-  // 偽は「advisor を持たない」の既定なので書かない(不在 = 無効、CONTEXT.md の
-  // Advisor)。真のときだけ1行増える —— 長さ1の entry の advisor はトップレベルの
-  // 綴りへ戻る(全 entry に掛かる、ADR 0110 決定1)。
-  if (definition.provider.length === 1 && definition.provider[0]!.advisor) meta.advisor = true;
   // 外側の空白は trim して書く: parseAgentFile が body.trim() で読む以上、
   // 保存できるのは trim 済みの正規形だけ — 書き込み側も同じ正規形に揃える
   // ことでラウンドトリップと no-change 判定(sameEffectiveFields)が一致する

@@ -1,3 +1,7 @@
+import { writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
@@ -512,4 +516,39 @@ it("cost の task は要求ティアの最安の行で spawn され、Provider �
     model: "opus",
     source: { tier: "task", provider: "rank" },
   });
+});
+
+/* ------------------------------------------------------------------ *
+ * 資格情報の不在は pickup の除外(ADR 0116 決定3/4、issue #566)
+ * ------------------------------------------------------------------ */
+
+it("anthropic 温存中に moonshot の鍵ファイルが無ければ task は queue で skipped、question も立たず absent が見え、鍵を置けば次の poll で moonshot で走る(ADR 0116 決定4)", async () => {
+  const keyFile = join(await mkdtemp(join(tmpdir(), "tidepool-moonshot-key-")), "moonshot-api-key");
+  t = await bootTidepool({
+    ...boardWithEntries({ "either-agent": ["anthropic", "moonshot"] }),
+    moonshotApiKeyFile: keyFile,
+  });
+  t.worker.scriptUsage(usagePanelText({
+    session: { percent: 50, resetsAt: new Date(5 * HOUR) },
+    week: { percent: 0, resetsAt: new Date(7 * 24 * HOUR) },
+  }));
+  const task = await registerWork(t, "鍵が置かれるまで待つ", undefined, undefined, "either-agent");
+
+  await t.clock.advance(HOUR);
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[];
+  const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
+  const moonshot = (await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage.find(
+    (usage: any) => usage.provider === "moonshot",
+  );
+  expect({
+    started: t.worker.started,
+    status: queue.find((row) => row.id === task.id)?.status,
+    questions: tasks.filter((row) => row.type === "question"),
+    moonshot: { status: moonshot?.status, namesKeyFile: moonshot?.reason?.includes(keyFile) },
+  }).toEqual({ started: [], status: "skipped", questions: [], moonshot: { status: "absent", namesKeyFile: true } });
+
+  writeFileSync(keyFile, "sk-test\n");
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((started) => started.id)).toEqual([task.id]);
+  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "moonshot" });
 });

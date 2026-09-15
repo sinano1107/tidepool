@@ -20,10 +20,11 @@ import {
   ClaudeCodeWorker,
   type ClaudeWorkerOptions,
   enumerateHostSkills,
+  moonshotKeyAbsence,
   probeToolSurfaceCapability,
 } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
-import { createCodexAppServerProbe } from "./codex-app-server.js";
+import { codexLoginAbsence, createCodexAppServerProbe } from "./codex-app-server.js";
 import {
   CODEX_CLI_VERSION,
   CodexWorker,
@@ -735,6 +736,10 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     fableAgents: fableAgentsResolver(board, db),
     agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
     openaiUsage,
+    credentialAbsence: {
+      moonshot: () => moonshotKeyAbsence(board.moonshotApiKeyFile),
+      openai: () => codexLoginAbsence(board.codexHome),
+    },
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
     agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board, db),

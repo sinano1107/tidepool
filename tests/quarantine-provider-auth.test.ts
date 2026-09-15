@@ -1,3 +1,7 @@
+import { writeFileSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -180,4 +184,42 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
   await client.close();
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([claude.id, codex.id]);
+});
+
+it("codexHome に auth.json が無い openai は probe を撃たずに absent で除外され question も立たず、置かれて probe が unauthorized なら従来どおり確認が立つ(ADR 0116 決定4)", async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), "tidepool-codex-home-"));
+  let probes = 0;
+  t = await bootTidepool({
+    codexHome,
+    openaiUsage: async () => {
+      probes += 1;
+      return {
+        status: "unauthorized",
+        provider: "openai",
+        cliVersion: "codex-cli 0.147.0",
+        reason: "Codex reports that OpenAI authentication is required",
+      };
+    },
+    taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
+  });
+  await registerWork(t, "Codex login を待つ", undefined, undefined, "codex-agent");
+
+  await t.clock.advance(HOUR);
+  const authQuestions = async () =>
+    ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter(
+      (task) => task.question_quarantine_provider_auth === "openai",
+    );
+  const openai = (await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage.find(
+    (usage: any) => usage.provider === "openai",
+  );
+  expect({ probes, started: t.worker.started, questions: await authQuestions(), status: openai?.status }).toEqual({
+    probes: 0,
+    started: [],
+    questions: [],
+    status: "absent",
+  });
+
+  writeFileSync(join(codexHome, "auth.json"), "{}");
+  await t.clock.advance(HOUR);
+  expect({ probes, questions: (await authQuestions()).length }).toEqual({ probes: 1, questions: 1 });
 });

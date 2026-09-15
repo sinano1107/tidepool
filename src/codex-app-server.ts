@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -124,6 +124,13 @@ const defaultCommand: CodexCliCommand = (executable, args, options) =>
     child.on("exit", (code) => finish(code));
     child.stdin.end(options.input);
   });
+
+/** openai の資格情報の不在(ADR 0116 決定4): Codex の login 未実施 = codexHome 配下に
+ *  `auth.json` が無い。存否だけを読み、中身は読まない(ADR 0098 決定5)。 */
+export function codexLoginAbsence(codexHome: string): string | undefined {
+  const path = join(codexHome, "auth.json");
+  return existsSync(path) ? undefined : `no Codex login: ${path} is absent`;
+}
 
 function probeEnv(codexHome: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };

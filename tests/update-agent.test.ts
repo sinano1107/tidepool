@@ -137,7 +137,7 @@ describe("updateAgent: checkout の位置に依存しない書き込み(ADR 0052
 describe("updateAgent: no-change 編集(issue #70 — workspace-create の porcelain チェックの agent 版)", () => {
   it("advisor を外すと frontmatter から消し、実効構成の変更として version を進める(issue #175)", async () => {
     const registryDir = await makeMainRegistry({
-      "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\nadvisor: true\n---\np\n",
+      "agents/crab.md": "---\nversion: 3\nauthority: standard\nprovider:\n  - name: anthropic\n    advisor: true\nskills:\n  - '*'\ndescription: d\n---\np\n",
     });
 
     await updateAgent(

@@ -318,6 +318,9 @@ export function startScheduler(deps: {
   agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   /** ADR 0098 / issue #454: structured OpenAI subscription observation. */
   openaiUsage?: CodexAppServerProbe;
+  /** ADR 0116 決定4: Provider → 資格情報の不在の理由(置かれていれば undefined)。
+   *  path の知識は adapter 側にある。載っていない Provider(anthropic)に不在は無い。 */
+  credentialAbsence?: Partial<Record<Provider, () => string | undefined>>;
   /** この task が走りうる実行設定を Provider 順位で並べたもの(ADR 0110 決定1/3、
    *  issue #544)。除外は**当てずに**返す —— 除外は同じ poll の中で観測のたびに
    *  育つので、育つたびに selector を引き直すのはこの scheduler の仕事である。
@@ -365,6 +368,7 @@ export function startScheduler(deps: {
     agentsSpeakingProviders,
     agentsUsingHarnesses,
     openaiUsage,
+    credentialAbsence,
     taskExecutionCandidates,
     resolveHarness,
     harnessContainment,
@@ -550,6 +554,24 @@ export function startScheduler(deps: {
 
   async function observeProviderUsage(provider: Provider): Promise<ProviderUsageObservation> {
     const now = clock.now();
+    // 不在は question を立てず、observed 以外の除外にそのまま畳まれる(ADR 0116 決定4)。
+    // openai では probe より手前 —— 未ログインの盤面で App Server を起動しない。
+    // moonshot は存否のほかに観測するものが無い。どちらも保存する —— queue の skipped
+    // 表示は保存された観測を読むので、鍵が置かれたら absent を上書きしなければならない
+    const absence = credentialAbsence?.[provider]?.();
+    if (absence !== undefined || provider === "moonshot") {
+      const observation: ProviderUsageObservation = {
+        provider,
+        status: absence === undefined ? "observed" : "absent",
+        plan: null,
+        cliVersion: null,
+        ...(absence !== undefined && { reason: absence }),
+        observedAt: now,
+        windows: [],
+      };
+      reportProviderUsage(db, observation);
+      return observation;
+    }
     if (provider === "openai") {
       const result: CodexAppServerProbeResult = openaiUsage
         ? await openaiUsage(now)
@@ -591,17 +613,6 @@ export function startScheduler(deps: {
         now,
       );
     }
-    if (provider === "moonshot") {
-      return {
-        provider,
-        status: "observed",
-        plan: null,
-        cliVersion: null,
-        observedAt: now,
-        windows: [],
-      };
-    }
-
     const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth, false);
     const definitions = [
       ["session", null, snapshot.session, decision.windows.session, 5 * HOURLY],
