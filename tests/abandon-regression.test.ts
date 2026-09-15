@@ -119,6 +119,8 @@ it("cancel_option を持たない question に「abandon」という文字列を
   // no cancel_option was declared on this question, so "abandon" is just an
   // ordinary answer — the escalating task unblocks normally, nothing cancels
   expect(board1.some((x: any) => x.status === "cancelled")).toBe(false);
-  expect(board1.find((x: any) => x.id === escalating.id).status).toBe("in_progress");
-  expect(board1.find((x: any) => x.id === sibling.id).status).toBe("todo");
+  // escalate の後始末が空けた slot は、tick を待たずに sibling が取っている(ADR 0119 決定3)。
+  // unblock した escalating は cancel されずに todo へ戻り、その後ろで待つ
+  expect(board1.find((x: any) => x.id === escalating.id).status).toBe("todo");
+  expect(board1.find((x: any) => x.id === sibling.id).status).toBe("in_progress");
 });

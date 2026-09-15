@@ -52,20 +52,21 @@ async function serialPairLanding(
   workspacePath: string,
   { sharedFile = false, occupySlot = false } = {},
 ): Promise<{ first: any; second: any; third: any; question: any }> {
+  // 登録と解放はどちらも pickup の契機(ADR 0119 決定2・3)なので、後続は前のタスクの統合点
+  // レビューが済んでから登録する —— 先に積むと、解放が撃つ poll がレビューより先に後続を
+  // slot へ入れる。どちらも1件目の着地(下の回答)より前の保護ブランチから fork するのは同じ
   const first = await registerWork(board, "first of the serial pair");
-  const second = await registerWork(board, "second of the serial pair");
-  const third = occupySlot
-    ? await registerWork(board, "occupies the slot while the landing arrives")
-    : undefined;
-  await board.clock.advance(HOUR);
   commitWork(workspacePath, sharedFile ? "shared.txt" : "one.txt", "from the first task\n");
   await completeViaMcp(board, first.id);
   await completeIntegrationReviews(board, first.id);
-  await board.clock.advance(HOUR);
+  const second = await registerWork(board, "second of the serial pair");
   commitWork(workspacePath, sharedFile ? "shared.txt" : "two.txt", "from the second task\n");
   await completeViaMcp(board, second.id);
   await completeIntegrationReviews(board, second.id);
-  if (third) await board.clock.advance(HOUR); // 3件目が slot を取り、HEAD は自分のタスクブランチへ移る
+  // 3件目が登録と同時に slot を取り、HEAD は自分のタスクブランチへ移る
+  const third = occupySlot
+    ? await registerWork(board, "occupies the slot while the landing arrives")
+    : undefined;
   const firstQuestion = await landingQuestionFor(board, first.id);
   expect(
     (

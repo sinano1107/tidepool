@@ -519,7 +519,7 @@ UUID=68A9-671B /mnt/ssd exfat defaults,nofail,uid=1000,gid=1000,fmask=0022,dmask
 
 6. **decision log の翻訳表示は切らなくてよい** —— #224 は ADR 0062 / 0063(#270 / #271)で決着し、流量制御・進行表示・キャンセルが入った。むしろ点けて挙動を見るほうがよい。
 
-7. **ペースのオフセットを変えても、そのままでは効かない**(#296)。`throttle_state` は古い判定を `resets_at` まで保持し続けるので、盤面は最大1時間**変更前のオフセットの判定に縛られる**。`onQueueHeadChanged()` を撃つ操作(queue の ↑ / spend-down の入切 / pause 解除 / triage close)を1つやって再評価させること。
+7. **ペースのオフセットを変えても、そのままでは効かない**(#296)。`throttle_state` は古い判定を `resets_at` まで保持し続けるので、盤面は最大1時間**変更前のオフセットの判定に縛られる**。`pollNow()` を撃つ操作(queue の ↑ / spend-down の入切 / pause 解除 / triage close)を1つやって再評価させること。
 
 8. **再評価中は古い halt が「失敗」として見える**(#297)。↑ を押した直後の黄色い `moved to front — pickup blocked` は、再評価が終わる前の古い `throttle_state` を読んだものである。数秒待って queue を見直すこと。
 

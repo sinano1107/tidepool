@@ -6,6 +6,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviews,
   FULL_HANDOFF as fullHandoff,
   git,
   HOUR,
@@ -172,13 +173,16 @@ it("エスカレーション解放でも WIP が退避され、再開は自ブ�
   const c2 = await mcpClient(t.mcpBaseUrl, other.id);
   await c2.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
   await c2.close();
+  // その後始末の完走が契機になり(ADR 0119 決定3)、other の統合点レビューが tick を待たずに枠へ入る
+  await completeIntegrationReviews(t, other.id);
+  await new Promise((r) => setImmediate(r));
 
   // 回答 → 親が先頭復帰して即 pickup。再開は自ブランチの checkout だけで、
   // WIP がそのまま作業ツリーに戻っている
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   const question = list.find((x: any) => x.type === "question");
   await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["a"] });
-  expect(t.worker.started.map((x) => x.id)).toEqual([task.id, other.id, task.id]);
+  expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([task.id, other.id, task.id]);
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
   expect(readFileSync(join(ws.path, "draft.txt"), "utf8")).toBe("work in flight\n");
 });

@@ -5,7 +5,7 @@ import {
   FULL_HANDOFF,
   HOUR,
   mcpClient,
-  registerWork,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -54,7 +54,8 @@ it("review タスクの get_current_task に、親(レビュー対象)の histor
 
 it("review でない子にも親の history / handoff doc が同じ形で含まれる", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent 3");
+  // 扉を通すと登録の契機(ADR 0119 決定2)で親が slot に入り、人間 decompose できなくなる
+  const parent = queueWork(t, "parent 3");
   const child = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "work",
@@ -65,7 +66,7 @@ it("review でない子にも親の history / handoff doc が同じ形で含ま�
       decompose_reason: "split the context child",
     })
   ).json;
-  await t.clock.advance(HOUR); // child picked up (parent blocked)
+  await t.clock.advance(HOUR); // child picked up (parent blocked) — 登録の契機で既に入っている
 
   const client = await mcpClient(t.mcpBaseUrl, child.id);
   try {

@@ -6,7 +6,7 @@ import {
   FULL_HANDOFF,
   HOUR,
   mcpClient,
-  registerWork,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -15,7 +15,7 @@ afterEach(() => t?.stop());
 
 it("pause 中は scheduler の poll が新規 pickup をしない", async () => {
   t = await bootTidepool();
-  await registerWork(t, "waits for resume");
+  queueWork(t, "waits for resume");
 
   const res = await api(t.baseUrl, "POST", "/api/pause", { paused: true });
   expect(res.status).toBe(200);
@@ -27,8 +27,8 @@ it("pause 中は scheduler の poll が新規 pickup をしない", async () => 
 
 it("pause 中も実行中タスクは完走し、resume で即時 pickup が発火して先頭から走る", async () => {
   t = await bootTidepool();
-  const running = await registerWork(t, "already running");
-  const next = await registerWork(t, "waits behind it");
+  const running = queueWork(t, "already running");
+  const next = queueWork(t, "waits behind it");
   await t.clock.advance(HOUR); // "already running" picked up
 
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
@@ -49,8 +49,8 @@ it("pause 中も実行中タスクは完走し、resume で即時 pickup が発�
 it("pause 中に todo を先頭へ move しても pickup が発火せず、resume 時に先頭から走る", async () => {
   t = await bootTidepool();
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
-  await registerWork(t, "a");
-  const b = await registerWork(t, "b");
+  queueWork(t, "a");
+  const b = queueWork(t, "b");
 
   await api(t.baseUrl, "POST", `/api/tasks/${b.id}/move`, { after: null });
   await t.clock.advance(HOUR);
@@ -62,8 +62,8 @@ it("pause 中に todo を先頭へ move しても pickup が発火せず、resum
 
 it("pause 中もキューの行は todo のまま — 停止は envelope の halts が1回で答える(ADR 0068)", async () => {
   t = await bootTidepool();
-  const running = await registerWork(t, "keeps the slot busy");
-  const task = await registerWork(t, "waits for resume");
+  const running = queueWork(t, "keeps the slot busy");
+  const task = queueWork(t, "waits for resume");
   await t.clock.advance(HOUR); // "keeps the slot busy" picked up, slot stays occupied throughout
 
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
@@ -92,7 +92,7 @@ it("pause は人間の操舵チャネル: MCP には一切公開されない", a
 
 it("pause 状態はサーバー再起動を跨いで維持される", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "stays paused across a restart");
+  const task = queueWork(t, "stays paused across a restart");
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
 
   await t.stopServer();
@@ -120,7 +120,7 @@ it("pause 状態はサーバー再起動を跨いで維持される", async () =
 
 it("pause は triage session と直交する: pause 中のコミットは pickup を再開しない", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "waits behind both gates");
+  const task = queueWork(t, "waits behind both gates");
   await api(t.baseUrl, "POST", "/api/pause", { paused: true });
 
   await api(t.baseUrl, "POST", "/api/triage/start");
@@ -154,7 +154,7 @@ it("GET /api/pause は registry 到達性の不成立を盤面全体の停止と
   t = await bootTidepool({
     registryReachability: async () => ({ available: false, reason: "origin is unreachable" }),
   });
-  await registerWork(t, "waits for the registry");
+  queueWork(t, "waits for the registry");
   await t.clock.advance(HOUR);
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([

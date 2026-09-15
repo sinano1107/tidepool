@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, queueWork, type Tidepool } from "./harness.js";
 
 const ANTHROPIC_AUTH_QUESTION_TITLE =
   "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
@@ -19,7 +19,7 @@ it("checkUsage がnullでも追加probeで401が確定したときだけcliAuth 
     },
   });
   t.worker.scriptUsage(null);
-  const task = await registerWork(t, "waits after usage becomes unobservable");
+  const task = queueWork(t, "waits after usage becomes unobservable");
 
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
 
@@ -45,7 +45,7 @@ it("checkUsage のnullを追加probeでも分類できなければfail-closed th
     },
   });
   t.worker.scriptUsage(null);
-  const task = await registerWork(t, "waits while usage is ambiguous");
+  const task = queueWork(t, "waits while usage is ambiguous");
 
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
 

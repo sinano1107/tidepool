@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import type { AuthorityProfile } from "../src/registry.js";
-import { api, bootTidepool, HOUR, mcpClient, type Tidepool } from "./harness.js";
+import { registerTask } from "../src/tasks.js";
+import { api, bootTidepool, HOUR, mcpClient, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -84,25 +85,20 @@ it("list_agents は registry に定義の無い human も、direct/needs_approva
 
 it("list_agents は review タスクでは、reviewer の assignable_to が空でも、レビュー対象の実行者を direct とマークする(ADR 0013 の decompose 例外と乖離しない — issue #43 / ADR 0014)", async () => {
   t = await bootTidepool({ listAgents: () => [{ name: "navigator", description: "Navigation specialist" }] });
-  const reviewed = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "wire the sensor",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-      assignee: "navigator",
-    })
-  ).json;
-  const review = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
+  // 扉を通さずに置く —— 扉の登録は pickup の契機で(ADR 0119 決定2)、レビュー対象が先に slot へ入る
+  const reviewed = queueWork(t, "wire the sensor", undefined, undefined, "navigator");
+  const review = registerTask(
+    t.db,
+    {
       type: "review",
       title: "RCA for the sensor task",
       purpose: "purpose",
       completion_criteria: "criteria",
       parent_id: reviewed.id,
       assignee: "auditor",
-    })
-  ).json;
+    },
+    t.clock.now(),
+  );
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up
 

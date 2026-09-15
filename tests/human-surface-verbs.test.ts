@@ -12,6 +12,7 @@ import {
   makeWorkspace,
   managementMcpClient,
   questions,
+  queueWork,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -143,7 +144,7 @@ async function exerciseSettlement(surface: HumanSurface, verb: SettlementVerb) {
   const spec = settlementSpecs[verb];
   const queuePool = await bootTidepool();
   pools.push(queuePool);
-  const parent = await registerWork(queuePool, `${surface} ${verb} parent`);
+  const parent = queueWork(queuePool, `${surface} ${verb} parent`);
   const child = (
     await api(queuePool.baseUrl, "POST", "/api/tasks", {
       type: "work",

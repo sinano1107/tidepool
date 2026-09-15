@@ -23,11 +23,10 @@ it("前提の破綻の宣言が slot を解放して親が早期統合復帰し�
   const [a] = JSON.parse(decomposed.content[0].text).child_ids;
   await t.clock.advance(HOUR);
 
+  // story 28 / ADR 0119 決定3: 解放系 verb の後始末の完走が pickup の契機 —— tick を待たない
   expect((await call(a, "declare_premise_breach", { reason: "module M is broken" })).isError ?? false).toBe(false);
-  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.title)).toEqual(["T", "A", "T"]);
   expect((await call(parent.id, "continue_decomposition", { line: "M is fine" })).isError ?? false).toBe(false);
-  await t.clock.advance(HOUR);
-
   expect(t.worker.started.map((x) => x.title)).toEqual(["T", "A", "T", "A"]);
 });
 
@@ -39,11 +38,9 @@ it("再分解は旧い子を破棄して新しい子を登録し、slot を解�
   const [a] = JSON.parse(decomposed.content[0].text).child_ids;
   await t.clock.advance(HOUR);
   await call(a, "declare_premise_breach", { reason: "module M is broken" });
-  await t.clock.advance(HOUR);
+  expect(t.worker.started.map((x) => x.title)).toEqual(["T", "A", "T"]);
 
   expect((await call(parent.id, "redecompose", { reason: "replan", children: [spec("X")] })).isError ?? false).toBe(false);
-  await t.clock.advance(HOUR);
-
   expect(t.worker.started.map((x) => x.title)).toEqual(["T", "A", "T", "X"]);
 });
 

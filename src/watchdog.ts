@@ -171,6 +171,8 @@ export function startWatchdog(deps: {
    *  後始末の中で走るので(ADR 0109 決定1)、これが無いと梯子の底へ落ちた完了は
    *  merge-back まで進んだきり PR 昇格 / 着地が永久に起きない。 */
   landing?: Landing;
+  /** 後始末が landing の後に撃つ pickup の契機(ADR 0119 決定3、`TeardownDeps.pollNow`)。 */
+  pollNow: () => void;
   config: WatchdogConfig;
 }): Watchdog {
   const { db, clock, slot, worker, containers, workspace, resolveWorkspace, config } = deps;
@@ -183,6 +185,7 @@ export function startWatchdog(deps: {
     resolve,
     githubAuth: deps.githubAuth,
     landing: deps.landing,
+    pollNow: deps.pollNow,
   };
   // keyed by task id; reset whenever a fresh pickup shows up for that id so a
   // retried run starts its own graceful-stop clock instead of inheriting

@@ -60,6 +60,8 @@ export interface RegisterThroughHumanDoorDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   isProtectedWorkspace?: (name: string) => boolean;
+  /** 登録の成功は pickup の契機である(ADR 0119 決定2)。門で弾かれた登録は撃たない。 */
+  pollNow: () => void;
 }
 
 export interface HumanRegisterInput extends RegisterTaskInput {
@@ -284,6 +286,7 @@ export async function registerThroughHumanDoor(
       }
       const task = result.value[0] ?? latestChild(deps.db, input.parent_id!);
       if (!task) throw new Error("human decompose did not register a child or approval question");
+      deps.pollNow();
       return { ok: true, task };
     }
     if (input.workspace !== undefined) {
@@ -342,7 +345,9 @@ export async function registerThroughHumanDoor(
         }
       }
     }
-    return { ok: true, task: registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin) };
+    const task = registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin);
+    deps.pollNow();
+    return { ok: true, task };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "invalid", error: err.message } };
@@ -353,7 +358,7 @@ export async function registerThroughHumanDoor(
 
 export interface SubmitAnswerDeps {
   db: Db;
-  onQueueHeadChanged: () => void;
+  pollNow: () => void;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
@@ -438,11 +443,11 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
 }
 
 /** A settled child can make its parent immediately pickable on either human surface. */
-export function pollIfParentUnblocked(db: Db, task: Task, onQueueHeadChanged: () => void): void {
+export function pollIfParentUnblocked(db: Db, task: Task, pollNow: () => void): void {
   if (!task.parent_id) return;
   const parent = getTask(db, task.parent_id);
   if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
-    onQueueHeadChanged();
+    pollNow();
   }
 }
 
@@ -467,7 +472,7 @@ function promotionRetryError(verdict: LandingVerdict): string | undefined {
 
 export interface CancelThroughHumanDoorDeps {
   db: Db;
-  onQueueHeadChanged: () => void;
+  pollNow: () => void;
   landing: Landing;
   /** ADR 0115 決定2 / issue #575: cancel された RCA 子が最後の決着になりうるので、
    *  cancel の扉も帰責の第2回を撃つ。 */
@@ -489,7 +494,7 @@ export interface EditThroughHumanDoorDeps {
 
 export interface CompleteThroughHumanDoorDeps {
   db: Db;
-  onQueueHeadChanged: () => void;
+  pollNow: () => void;
   landing: Landing;
   /** ADR 0115 決定2 / issue #575: 最後に決着した RCA 子が人間の完了でも第2回が走る。 */
   attributionClient?: AttributionClient;
@@ -519,7 +524,7 @@ export async function completeThroughHumanDoor(
     void attributeAfterRca(deps.db, deps, done, now()).catch((err) =>
       console.error(`[attribution] ${done.id}: ${String(err)}`),
     );
-    pollIfParentUnblocked(deps.db, done, deps.onQueueHeadChanged);
+    pollIfParentUnblocked(deps.db, done, deps.pollNow);
     await deps.landing.relandAncestors(done);
     return { ok: true, value: done };
   } catch (err) {
@@ -585,7 +590,7 @@ export async function cancelThroughHumanDoor(
     void attributeAfterRca(deps.db, deps, task, now()).catch((err) =>
       console.error(`[attribution] ${task.id}: ${String(err)}`),
     );
-    pollIfParentUnblocked(deps.db, task, deps.onQueueHeadChanged);
+    pollIfParentUnblocked(deps.db, task, deps.pollNow);
     await deps.landing.relandAncestors(task);
     return { ok: true, value: getTask(deps.db, task.id)! };
   } catch (err) {
@@ -861,6 +866,6 @@ export async function submitAnswer(
   if (task.question_quarantine_sandbox !== null) deps.reclaim?.acceptReclaimed();
   // An unblocked parent or reinstated quarantined resource can make the queue
   // head pickable immediately. During triage, staging keeps both flags false.
-  if (parentUnblocked || pickupResumed) deps.onQueueHeadChanged();
+  if (parentUnblocked || pickupResumed) deps.pollNow();
   return question;
 }

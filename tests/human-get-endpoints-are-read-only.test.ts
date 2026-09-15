@@ -32,7 +32,7 @@ function listGetRoutes(db: Db): string[] {
   const router = createApiRouter({
     db,
     clock: new FakeClock(),
-    onQueueHeadChanged: () => {},
+    pollNow: () => {},
     landing: unusedLanding,
   });
   return (router as unknown as { stack: { route?: { path: string; methods: Record<string, boolean> } }[] }).stack

@@ -17,7 +17,7 @@ function listRoutes(db: Db): { method: string; path: string }[] {
   const router = createApiRouter({
     db,
     clock: new FakeClock(),
-    onQueueHeadChanged: () => {},
+    pollNow: () => {},
     landing: unusedLanding,
   });
   const stack = (

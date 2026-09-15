@@ -9,7 +9,7 @@ import {
   HOUR,
   makeWorkspace,
   mcpClient,
-  registerWork,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -25,7 +25,7 @@ const WORK_LIMIT = 90 * MIN;
 
 it("タスク種別の絶対リミットを超えると畳み込み停止が一度だけ送られる、超えるまでは送られない", async () => {
   t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace: 1000 * MIN } });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
   await t.clock.advance(89 * MIN); // t = 149min, elapsed since pickup = 89min: still under 90min
@@ -41,7 +41,7 @@ it("タスク種別の絶対リミットを超えると畳み込み停止が一�
 it("畳み込み停止後、猶予を過ぎると容器の強制回収が一度だけ送られる", async () => {
   const grace = 30 * MIN;
   t = await bootTidepool({ watchdog: { timeLimits: { work: WORK_LIMIT }, grace } });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
   await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止 (elapsed = 90min)
@@ -67,7 +67,7 @@ it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min, checked out onto its task branch
   // the killed session left work mid-flight, uncommitted
@@ -102,7 +102,7 @@ it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
 
   // slot is free: a second task can now proceed
-  const second = await registerWork(t, "long haul");
+  const second = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, second.id]);
 });
@@ -114,7 +114,7 @@ it("failure question の「再実行」を選ぶと元タスクが先頭復帰�
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
   await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
@@ -138,7 +138,7 @@ it("再実行で再ピックアップされたタスクにも、新しい pickup
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   // first run: hits the limit, gets killed
   await t.clock.advance(HOUR); // picked up at t = 60min
@@ -223,7 +223,7 @@ it("回収済み観測のあと tree rule 自体が失敗すると、failure que
     workspace: ws,
     watchdog: { timeLimits: { work: WORK_LIMIT }, grace },
   });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
 
   await t.clock.advance(HOUR); // picked up at t = 60min
 
@@ -243,7 +243,7 @@ it("回収済み観測のあと tree rule 自体が失敗すると、failure que
   expect(events.find((e: any) => e.kind === "task_registered").origin).toBe("board");
 
   // needs-human の workspace はpickupを止める
-  await registerWork(t, "long haul");
+  queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });

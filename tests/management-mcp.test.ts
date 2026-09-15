@@ -18,6 +18,7 @@ import {
   api,
   bootTidepool,
   managementMcpClient,
+  queueWork,
   registerQuestion,
   registerWork,
   type Tidepool,
@@ -216,7 +217,7 @@ it("publish_workspace は宛先ごとオーケストレーションへ渡り、�
 // 停止理由は同じ1読みの envelope に載るしかない。
 it("list_queue の envelope は盤面全体の停止を1回で答え、行は todo のまま(ADR 0068)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "waits for the triage session to close");
+  const task = queueWork(t, "waits for the triage session to close");
   await api(t.baseUrl, "POST", "/api/triage/start");
 
   const client = await managementMcpClient(t.baseUrl);
@@ -622,7 +623,7 @@ it("answer_question は人間名義かつ mcp origin で question を回答す�
 
 it("cancel_task は人間名義かつ mcp origin で human task を cancel する(issue #192)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "retire the old tide gauge");
+  const task = queueWork(t, "retire the old tide gauge");
   const client = await managementMcpClient(t.baseUrl);
   try {
     const result: any = await client.callTool({
@@ -647,7 +648,7 @@ it("cancel_task は人間名義かつ mcp origin で human task を cancel す�
 
 it("edit_task は人間名義かつ mcp origin で未消費フィールドを更新する(issue #192)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "index tide charts");
+  const task = queueWork(t, "index tide charts");
   const client = await managementMcpClient(t.baseUrl);
   try {
     const result: any = await client.callTool({
@@ -674,7 +675,7 @@ it("edit_task は人間名義かつ mcp origin で未消費フィールドを更
 
 it("decompose_task は人間名義かつ mcp origin で子を一括登録する(issue #192)", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "modernize tide data");
+  const parent = queueWork(t, "modernize tide data");
   const client = await managementMcpClient(t.baseUrl);
   try {
     const result: any = await client.callTool({
@@ -854,7 +855,7 @@ it("register_task は LLM 登録ゲートの suggested_comment を tool error �
 
 it("cancel_task は open failure question を迂回できない(issue #192)", async () => {
   t = await bootTidepool();
-  const task = await registerWork(t, "failed tide migration");
+  const task = queueWork(t, "failed tide migration");
   registerQuestion(t, {
     title: "failure",
     purpose: "the migration failed",

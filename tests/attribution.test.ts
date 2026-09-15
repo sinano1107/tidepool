@@ -274,6 +274,16 @@ async function objectedAndCommitted(title: string, initial?: { cause: Cause; evi
   };
 }
 
+/** 次に空く slot を self RCA に回し、auditor RCA を最後尾へ下げる(どちらも Run now でない
+ *  並べ替えなので poll を撃たない)。後始末の完走が pickup の契機なので(ADR 0119 決定3)、
+ *  slot は空いた瞬間に先頭へ渡る —— 待たせたい auditor を先頭に残しておくと、それが拾われて
+ *  直接 cancel できなくなる。 */
+async function lineUpSelfRca(t: Tidepool, selfId: string, auditorId: string) {
+  await api(t.baseUrl, "POST", `/api/tasks/${selfId}/move`, { after: null });
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${auditorId}/move`, { after: board.at(-1).id });
+}
+
 /** RCA 子を worker として決着させる: 先頭へ移して pickup、所見を1行 log して完了。 */
 async function settleRca(t: Tidepool, reviewId: string, finding: string, outcome: string) {
   await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
@@ -288,6 +298,7 @@ async function settleRca(t: Tidepool, reviewId: string, finding: string, outcome
 it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2回が走り、RCA の findings を証拠にした cause が追記される(初回は消えず、1つでも未決着なら走らない)", async () => {
   const s = await objectedAndCommitted("uncertain");
   t = s.t;
+  await lineUpSelfRca(t, s.self.id, s.auditor.id);
   await completeIntegrationReviews(t, s.task.id);
   expect((await attributions(t, s.task.id)).map((e: any) => [e.payload.cause, e.payload.round])).toEqual([
     ["uncertain", "initial"],
@@ -521,7 +532,8 @@ it.each([
     expect(s.behaviorDraftClient.calls).toEqual([]);
     s.attributionClient.scriptJudgment(s.entry.id, { cause, evidence: "the RCA decided it" });
     s.behaviorDraftClient.scriptDraft(s.entry.id, { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" });
-    const repair = (await children(t, s.task.id)).find((x: any) => x.title === "repair: second");
+      const repair = (await children(t, s.task.id)).find((x: any) => x.title === "repair: second");
+    await lineUpSelfRca(t, self.id, auditor.id);
     await completeViaMcp(t, repair.id);
 
     await settleRca(t, self.id, "the criteria named the fixtures", "fixtures were required");

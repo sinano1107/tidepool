@@ -62,7 +62,7 @@ TIDEPOOL_TOKEN=<the board's token> bash .agents/skills/deploy-pi/scripts/smoke-t
 
 Needs the token because it *writes* to the board (issue #153 / ADR 0036). The board keeps only a hash and cannot reproduce it, so you supply the one you hold — or rotate (`npm run token` on the Pi, which invalidates every live cookie and the management MCP header; see [docs/human-surface-credential.md](../../../docs/human-surface-credential.md)). It goes over the tailnet URL from this machine and into curl via `--config` on stdin, so the token never lands on the Pi and never appears in `ps`.
 
-Registers a real `work` task, forces immediate pickup (task registration alone does **not** trigger pickup — see troubleshooting.md's polling note), waits for the default agent (`tako`) to run it end-to-end via the real `claude` CLI, and prints the handoff doc. Takes ~30-60s and costs one real agent session — skip it for routine deploys that don't touch scheduler/registry/worker code.
+Registers a real `work` task (registration itself triggers pickup — see troubleshooting.md's polling note), waits for the default agent (`tako`) to run it end-to-end via the real `claude` CLI, and prints the handoff doc. Takes ~30-60s and costs one real agent session — skip it for routine deploys that don't touch scheduler/registry/worker code.
 
 The smoke-test task can't be deleted afterward (`events` table is append-only by DB trigger — intentional, not a bug). If it clutters the board, rename its title with a prefix instead of trying to delete it — see troubleshooting.md.
 

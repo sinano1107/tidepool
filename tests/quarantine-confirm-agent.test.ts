@@ -5,7 +5,7 @@ import {
   api,
   bootTidepool,
   HOUR,
-  registerWork,
+  queueWork,
   type Tidepool,
 } from "./harness.js";
 
@@ -16,21 +16,10 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-async function registerDelegated(t: Tidepool, title: string, assignee: string): Promise<any> {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-    assignee,
-  });
-  return res.json;
-}
-
 it("quarantine 済み agent 宛ての todo はキュービューで skipped、ボードでは todo のまま表示される(ADR 0012 / issue #36)", async () => {
   t = await bootTidepool();
-  const delegated = await registerDelegated(t, "delegated to navigator", "navigator");
-  const other = await registerWork(t, "runs under the default agent");
+  const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
+  const other = queueWork(t, "runs under the default agent");
 
   const db = t.db;
   quarantineAgent(db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
@@ -50,7 +39,7 @@ it("quarantine 済み agent 宛ての todo はキュービューで skipped、�
 
 it("quarantine question への回答は、その agent 名宛ての todo がまだ残っていれば拒否される(needs_human は1のまま)", async () => {
   t = await bootTidepool();
-  const delegated = await registerDelegated(t, "delegated to navigator", "navigator");
+  const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
 
   const db = t.db;
   quarantineAgent(db, "navigator", new Error("unknown agent: navigator"), t.clock.now());
@@ -72,8 +61,8 @@ it("quarantine question への回答は、その agent 名宛ての todo がま�
 
 it("その agent 名宛ての todo がもう存在しなければ、回答が受理され needs_human が解除され pickup が即時再開する", async () => {
   t = await bootTidepool();
-  const delegated = await registerDelegated(t, "delegated to navigator", "navigator");
-  const other = await registerWork(t, "waiting behind the quarantine");
+  const delegated = queueWork(t, "delegated to navigator", undefined, undefined, "navigator");
+  const other = queueWork(t, "waiting behind the quarantine");
 
   const db = t.db;
   quarantineAgent(db, "navigator", new Error("unknown agent: navigator"), t.clock.now());

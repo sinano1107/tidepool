@@ -7,6 +7,7 @@ import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { InvalidAgentDefinitionError, type Provider } from "../src/registry.js";
+import { registerTask } from "../src/tasks.js";
 import { healthyOpenai, usagePanelText } from "./fakes.js";
 import {
   api,
@@ -16,6 +17,7 @@ import {
   HOUR,
   managementMcpClient,
   mcpClient,
+  queueWork,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -339,22 +341,19 @@ it("anthropic を温存中でも openai entry を持つ agent の task は走り
         task,
       ),
   });
-  const frontier = async (title: string, assignee: string) =>
-    (
-      await api(t.baseUrl, "POST", "/api/tasks", {
-        type: "work",
-        title,
-        purpose: "p",
-        completion_criteria: "c",
-        assignee,
-        tier: "frontier",
-      })
-    ).json;
+  // 扉を通さずに置く —— 扉の登録は pickup の契機(ADR 0119 決定2)で、温存中の usage を
+  // 仕込む前に走り出してしまう
+  const frontier = (title: string, assignee: string) =>
+    registerTask(
+      t.db,
+      { type: "work", title, purpose: "p", completion_criteria: "c", assignee, tier: "frontier" },
+      t.clock.now(),
+    );
   // 先頭から: 単一 entry の frontier(全 entry 除外)→ 複数 entry の frontier →
   // 要求なし(同じ agent だが economy の行なので窓に当たらない)
-  const blocked = await frontier("anthropic しか持たない frontier", "solo-agent");
-  const multi = await frontier("openai へ流れる frontier", "multi-agent");
-  const plain = await registerWork(t, "要求なしなので別のモデル", undefined, undefined, "solo-agent");
+  const blocked = frontier("anthropic しか持たない frontier", "solo-agent");
+  const multi = frontier("openai へ流れる frontier", "multi-agent");
+  const plain = queueWork(t, "要求なしなので別のモデル", undefined, undefined, "solo-agent");
 
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
   await t.clock.advance(HOUR);
@@ -385,15 +384,12 @@ it("全 entry が除外された行は Pickable head ではない —— 下の�
   });
   // 上の行は frontier を要求するので fable 行に解決され、唯一の entry が
   // 温存中の窓に当たる。下の行は要求なし = economy 行なのでその窓に当たらない
-  const blocked = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "温存中の fable 窓に当たる frontier",
-      purpose: "p",
-      completion_criteria: "c",
-      tier: "frontier",
-    })
-  ).json;
+  // 扉を通さない(扉の登録は pickup の契機 —— ADR 0119 決定2 —— で、usage を仕込む前に走る)
+  const blocked = registerTask(
+    t.db,
+    { type: "work", title: "温存中の fable 窓に当たる frontier", purpose: "p", completion_criteria: "c", tier: "frontier" },
+    t.clock.now(),
+  );
 
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
   await t.clock.advance(HOUR);
@@ -404,7 +400,7 @@ it("全 entry が除外された行は Pickable head ではない —— 下の�
 
   // 素の先頭は blocked のままだが、候補の先頭は下の runnable。1回の ↑ が空振り
   // しないことが、Pickable head が entry 集合で判定されている証拠である
-  const runnable = await registerWork(t, "要求なしなので別の行で走る");
+  const runnable = queueWork(t, "要求なしなので別の行で走る");
   await api(t.baseUrl, "POST", `/api/tasks/${runnable.id}/move`, { after: null });
   expect(t.worker.started.map((task) => task.id)).toEqual([runnable.id]);
 });
@@ -424,7 +420,9 @@ it("候補の解決が定義違反で倒れても queue の読み口は 200 を�
       );
     },
   });
-  const drifted = await registerWork(t, "定義が壊れた agent の行", undefined, undefined, "drifted-agent");
+  // 扉を通すと登録の契機(ADR 0119 決定2)の poll が drifted-agent を quarantine し、読み口の
+  // 振る舞いではなく quarantine の枝を見ることになる
+  const drifted = queueWork(t, "定義が壊れた agent の行", undefined, undefined, "drifted-agent");
 
   const queue = await api(t.baseUrl, "GET", "/api/queue");
   expect(queue.status).toBe(200);
@@ -497,9 +495,6 @@ it("entry が複数で片方の Provider に行が無ければ、もう片方の
 it("cost の task は要求ティアの最安の行で spawn され、Provider の出所は cost —— quality(既定)なら同じ agent でも Provider 順位の行(ADR 0114 決定4)", async () => {
   t = await bootTidepool(boardWithEntries({ "either-agent": ["anthropic", "openai"] }));
   const cheap = await requested("standard を最安で", "either-agent", { tier: "standard", priority: "cost" });
-  const ranked = await requested("standard を順位で", "either-agent", { tier: "standard" });
-
-  await t.clock.advance(HOUR);
   expect(t.worker.startedSettings[0]).toMatchObject({
     provider: "openai",
     model: "gpt-5.6-sol",
@@ -509,7 +504,9 @@ it("cost の task は要求ティアの最安の行で spawn され、Provider �
   await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
   await client.close();
   await completeIntegrationReviews(t, cheap.id);
-  await t.clock.advance(HOUR);
+  // 統合点レビューの後に登録する —— 先に積むと、完了の解放が撃つ poll(ADR 0119 決定3)が
+  // レビューより先にこちらを slot へ入れる
+  const ranked = await requested("standard を順位で", "either-agent", { tier: "standard" });
   expect(t.worker.started.filter((task) => task.type === "work").map((task) => task.id)).toEqual([cheap.id, ranked.id]);
   expect(t.worker.startedSettings.at(-1)).toMatchObject({
     provider: "anthropic",

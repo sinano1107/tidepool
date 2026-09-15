@@ -5,6 +5,7 @@ import {
   FULL_HANDOFF,
   HOUR,
   mcpClient,
+  queueWork,
   registerQuestion,
   registerWork,
   type Tidepool,
@@ -29,7 +30,7 @@ async function addChild(t: Tidepool, parentId: string, title: string, assignee?:
 
 it("直接 cancel は対象と未決着の子孫を一括で cancelled にし、done の子孫は残す", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "plan");
+  const parent = queueWork(t, "plan");
   const doneChild = await addChild(t, parent.id, "already done", "human");
   const todoChild = await addChild(t, parent.id, "still open", "human");
   const grandchild = await addChild(t, todoChild.id, "grandchild", "human");
@@ -49,7 +50,7 @@ it("直接 cancel は対象と未決着の子孫を一括で cancelled にし、
 
 it("cancelled のツリーは即時にボードから退く", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "doomed");
+  const parent = queueWork(t, "doomed");
   await addChild(t, parent.id, "child", "human");
 
   await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/cancel`, {});
@@ -60,8 +61,8 @@ it("cancelled のツリーは即時にボードから退く", async () => {
 
 it("理由は任意 — 付ければ cancelled イベントに残る", async () => {
   t = await bootTidepool();
-  const withReason = await registerWork(t, "with reason");
-  const without = await registerWork(t, "without reason");
+  const withReason = queueWork(t, "with reason");
+  const without = queueWork(t, "without reason");
 
   await api(t.baseUrl, "POST", `/api/tasks/${withReason.id}/cancel`, { reason: "changed my mind" });
   await api(t.baseUrl, "POST", `/api/tasks/${without.id}/cancel`, {});
@@ -220,7 +221,7 @@ it("provider 認証の quarantine 確認が開いていても、別の provider 
   t = await bootTidepool({
     agentsSpeakingProviders: (providers) => (providers.includes("moonshot") ? ["kipper"] : []),
   });
-  const task = await registerWork(t, "runs on anthropic", undefined, undefined, "deckhand");
+  const task = queueWork(t, "runs on anthropic", undefined, undefined, "deckhand");
   registerQuestion(t, {
     title: "moonshot authentication is unavailable — pickup of moonshot-speaking agents is stopped",
     purpose: "the moonshot credential died",

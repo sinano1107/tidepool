@@ -47,7 +47,7 @@ import {
   type RosterAgent,
   remoteTrackingRef,
 } from "./registry.js";
-import { startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
+import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
 import { runTeardown, sessionInTeardown, teardownStep } from "./teardown.js";
@@ -447,12 +447,20 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // ある(ADR 0099 決定1)。watchdog とは独立(slot と resolver しか要らない)なので、
   // 時限を持たない盤面でも中断は回収される。
   let watchdog: Watchdog | undefined;
+  // ADR 0119 決定3・4: pickup の契機は scheduler より先に組まれる deps(中断の一撃・起動時の
+  // 復旧)にも要るので、scheduler を後から解決する。解決するのは起動完了の時点(この関数の
+  // 末尾)である —— listen の前に poll が走れば、封じ込め検査がまだ bind していない人間面を
+  // 撃って fail-closed の quarantine に落ちる。それより前に届いた契機(復旧の後始末の完走を
+  // 含む)は捨ててよい: 起動完了の poll が同じ盤面を読む。
+  let startedScheduler: Scheduler | undefined;
+  const pollNow = () => startedScheduler?.pollNow();
   const onCapInterrupted = capInterruptionHandler({
     db,
     clock: options.clock,
     slot,
     resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
     heldForContainment: (taskId) => watchdog?.heldForContainment(taskId) ?? false,
+    pollNow,
   });
   const worker = options.worker({ db, clock: options.clock, containers, onCapInterrupted });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
@@ -508,6 +516,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
         githubAuth: options.githubAuth,
         landing,
+        pollNow,
       },
       unfinishedTeardown.taskId,
       teardownStep(db, unfinishedTeardown.taskId),
@@ -554,7 +563,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // an abandoned triage session may not pause pickup forever: the watchdog
   // closes it past the timeout, and reopening pickup is a "run now" trigger
   const stopTriageWatchdog = options.clock.setInterval(() => {
-    if (closeStaleTriage(db, options.clock.now())) scheduler.pollNow();
+    if (closeStaleTriage(db, options.clock.now())) pollNow();
   }, 60 * 1000);
   watchdog = options.watchdog
     ? startWatchdog({
@@ -567,6 +576,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         resolveWorkspace: options.resolveWorkspace,
         githubAuth: options.githubAuth,
         landing,
+        pollNow,
         config: options.watchdog,
       })
     : undefined;
@@ -633,13 +643,14 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     allocationClient: options.allocationClient,
     attributionClient: options.attributionClient,
     behaviorDraftClient: options.behaviorDraftClient,
+    pollNow,
   };
   app.use(
     "/api",
     createApiRouter({
       db,
       clock: options.clock,
-      onQueueHeadChanged: () => scheduler.pollNow(),
+      pollNow,
       throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
@@ -682,7 +693,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     createManagementMcpRouter({
       db,
       clock: options.clock,
-      onQueueHeadChanged: () => scheduler.pollNow(),
+      pollNow,
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
@@ -760,6 +771,11 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
       )
     : undefined;
+  // ADR 0119 決定4: 起動完了は pickup の契機である(毎時のティックは setInterval なので
+  // 起動直後には走らない)。scheduler の生成直後ではなくここで撃つのは、pickup の封じ込め
+  // 検査が上で bind した人間面の実ポートを撃ち、上の Harness の起動時検査と並走しないため。
+  startedScheduler = scheduler;
+  pollNow();
 
   return {
     port: humanPort,

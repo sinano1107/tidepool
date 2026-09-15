@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { FakeDraftClient } from "./fakes.js";
-import { api, bootTidepool, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -17,7 +17,7 @@ it("parent_id なしのドラフトには子の文脈が渡らない(ルート�
 it("parent_id 付きのドラフトには親の title/purpose/completion_criteria・既存兄弟の title・分解理由が渡る", async () => {
   const draftClient = new FakeDraftClient();
   t = await bootTidepool({ draftClient });
-  const parent = await registerWork(t, "build the toolchain");
+  const parent = queueWork(t, "build the toolchain");
   await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
     title: "existing sibling",

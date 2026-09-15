@@ -1,9 +1,14 @@
 import { afterEach, expect, it } from "vitest";
 import type { AuthorityProfile } from "../src/registry.js";
+import { type RegisterTaskInput, registerTask } from "../src/tasks.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+/** 人間の扉を通さない登録。扉の登録は pickup の契機(ADR 0119 決定2)なので、レビュー対象を
+ *  slot に入れずに review だけを先頭へ動かすテストはこちらで行を置く。 */
+const seed = (input: RegisterTaskInput) => registerTask(t.db, input, t.clock.now());
 
 const PERMISSIVE_AUTHORITY: AuthorityProfile = {
   name: "permissive",
@@ -59,25 +64,15 @@ it("review タスクは実行 assignee 自身の authority profile がどれだ�
 
 it("review タスクの分解子を、レビュー対象タスクの assignee と同じ宛先にする割当は、reviewer profile の assignable_to(空)に関わらず常に許可される(ADR 0013: 修理の宛先はレビュー対象の実行者)", async () => {
   t = await bootTidepool();
-  const reviewed = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "wire the moisture sensor",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-      assignee: "reef-crab",
-    })
-  ).json;
-  const review = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "review",
-      title: "RCA for the sensor task",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-      parent_id: reviewed.id,
-      assignee: "auditor",
-    })
-  ).json;
+  const reviewed = seed({ type: "work", title: "wire the moisture sensor", purpose: "purpose", completion_criteria: "criteria", assignee: "reef-crab" });
+  const review = seed({
+    type: "review",
+    title: "RCA for the sensor task",
+    purpose: "purpose",
+    completion_criteria: "criteria",
+    parent_id: reviewed.id,
+    assignee: "auditor",
+  });
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up
 
@@ -227,6 +222,9 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
       task.parent_id === pickedParent.id &&
       task.title.startsWith("rca (auditor):"),
   );
+  // 並べ替えは slot が埋まっている間に済ませる —— decompose の解放が撃つ poll(ADR 0119 決定3)が
+  // そのまま先頭の auditor review を拾う
+  await api(t.baseUrl, "POST", `/api/tasks/${pickedParentReview.id}/move`, { after: null });
   await parentClient.callTool({
     name: "decompose",
     arguments: {
@@ -235,7 +233,6 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
     },
   });
   await parentClient.close();
-  await api(t.baseUrl, "POST", `/api/tasks/${pickedParentReview.id}/move`, { after: null });
   await t.clock.advance(HOUR); // auditor review picked up
   const pickedReviewClient = await mcpClient(t.mcpBaseUrl, pickedParentReview.id);
   await pickedReviewClient.callTool({
@@ -274,24 +271,15 @@ it("task_completed が無ければ最後の pickup executor を修理先にで�
 
   await t.stop();
   t = await bootTidepool();
-  const untouchedParent = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "untouched reviewed work",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-    })
-  ).json;
-  const untouchedParentReview = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "review",
-      title: "review untouched work",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-      parent_id: untouchedParent.id,
-      assignee: "auditor",
-    })
-  ).json;
+  const untouchedParent = seed({ type: "work", title: "untouched reviewed work", purpose: "purpose", completion_criteria: "criteria" });
+  const untouchedParentReview = seed({
+    type: "review",
+    title: "review untouched work",
+    purpose: "purpose",
+    completion_criteria: "criteria",
+    parent_id: untouchedParent.id,
+    assignee: "auditor",
+  });
   await api(t.baseUrl, "POST", `/api/tasks/${untouchedParentReview.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up before its untouched parent
   const untouchedReviewClient = await mcpClient(t.mcpBaseUrl, untouchedParentReview.id);
@@ -342,25 +330,15 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
   t = await bootTidepool({
     resolveAuthority: (assignee) => (assignee === "auditor" ? PERMISSIVE_AUDITOR_AUTHORITY : undefined),
   });
-  const reviewed = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "wire the moisture sensor 2",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-      assignee: "reef-crab",
-    })
-  ).json;
-  const review = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "review",
-      title: "RCA for the sensor task 2",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-      parent_id: reviewed.id,
-      assignee: "auditor",
-    })
-  ).json;
+  const reviewed = seed({ type: "work", title: "wire the moisture sensor 2", purpose: "purpose", completion_criteria: "criteria", assignee: "reef-crab" });
+  const review = seed({
+    type: "review",
+    title: "RCA for the sensor task 2",
+    purpose: "purpose",
+    completion_criteria: "criteria",
+    parent_id: reviewed.id,
+    assignee: "auditor",
+  });
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR); // review picked up
 

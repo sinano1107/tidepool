@@ -34,7 +34,14 @@ import type {
 } from "../src/registry.js";
 import type { TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
-import { BOARD_WORKER_ID, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
+import {
+  BOARD_WORKER_ID,
+  getTask,
+  humanDecomposeTask,
+  type RegisterTaskInput,
+  registerTask,
+  type Task,
+} from "../src/tasks.js";
 import type { TranslationClient } from "../src/translate.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
@@ -540,6 +547,30 @@ export async function registerWork(
   return res.json;
 }
 
+/** `registerWork` と同じ行を、人間の扉を通さずに置く。扉の登録は自身が pickup の契機なので
+ *  (ADR 0119 決定2)、「todo のまま待っている行」を前提にするテストはこちらを使う。 */
+export function queueWork(
+  t: Tidepool,
+  title: string,
+  workspace?: string,
+  reviewFlag?: boolean,
+  assignee?: string,
+): Task {
+  return registerTask(
+    t.db,
+    {
+      type: "work",
+      title,
+      purpose: `purpose of ${title}`,
+      completion_criteria: `criteria of ${title}`,
+      ...(workspace !== undefined && { workspace }),
+      ...(reviewFlag !== undefined && { review_flag: reviewFlag }),
+      ...(assignee !== undefined && { assignee }),
+    },
+    t.clock.now(),
+  );
+}
+
 /** Put one decision line in the log for the slot task and return its entry. */
 export async function loggedEntry(t: Tidepool, taskId: string, line: string): Promise<any> {
   const client = await mcpClient(t.mcpBaseUrl, taskId);
@@ -551,16 +582,19 @@ export async function loggedEntry(t: Tidepool, taskId: string, line: string): Pr
 
 /** A child under `parentId` — which makes the parent `blocked` (unfinished
  *  child), so the parent sits at the raw head while never being pickable. */
-export async function registerChild(t: Tidepool, title: string, parentId: string): Promise<any> {
-  const res = await api(t.baseUrl, "POST", "/api/tasks", {
-    type: "work",
-    title,
-    purpose: `purpose of ${title}`,
-    completion_criteria: `criteria of ${title}`,
-    parent_id: parentId,
-    decompose_reason: `split ${title} from its parent`,
-  });
-  return res.json;
+/** 人間 decompose の子を1本、扉を通さずに置く(扉の登録は pickup の契機 —— ADR 0119 決定2 ——
+ *  なので、子が todo のまま待つことを前提にするテストのための形。`queueWork` と同じ)。 */
+export function registerChild(t: Tidepool, title: string, parentId: string): Task {
+  const [child] = humanDecomposeTask(
+    t.db,
+    getTask(t.db, parentId)!,
+    {
+      reason: `split ${title} from its parent`,
+      children: [{ title, purpose: `purpose of ${title}`, completion_criteria: `criteria of ${title}` }],
+    },
+    t.clock.now(),
+  );
+  return child!;
 }
 
 /** An unanswered question under `parentId`, which holds every sibling below it

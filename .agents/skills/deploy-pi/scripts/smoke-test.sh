@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end smoke test: registers a real work task, forces immediate pickup
-# (registration alone does NOT trigger the scheduler — see
-# references/troubleshooting.md), waits for the default agent (tako) to run it via the real
+# End-to-end smoke test: registers a real work task (registration itself
+# triggers pickup — see references/troubleshooting.md), waits for the default agent (tako) to run it via the real
 # `claude` CLI, and prints the handoff doc. Costs one real agent session.
 #
 # The task can't be deleted afterward (events table is append-only by DB
@@ -56,10 +55,6 @@ TASK_ID=$(echo "$TASK_JSON" | python3 -c 'import json,sys; print(json.load(sys.s
   exit 1
 }
 echo "[smoke-test] task id: $TASK_ID"
-
-echo "[smoke-test] forcing immediate pickup (move-to-front triggers onQueueHeadChanged -> scheduler.pollNow)..."
-board_curl -X POST "$BOARD/api/tasks/$TASK_ID/move" \
-  -H 'Content-Type: application/json' -d '{"after":null}' > /dev/null
 
 echo "[smoke-test] waiting up to ${TIMEOUT_S}s for completion..."
 end=$(( $(date +%s) + TIMEOUT_S ))

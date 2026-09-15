@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { FakeContainerRuntime } from "./fakes.js";
-import { api, bootTidepool, git, HOUR, makeWorkspace, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, git, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 const dirs: string[] = [];
@@ -40,7 +40,7 @@ it("強制回収の送達では slot は解放されない — 解放するの�
     containerRuntime: containers,
     watchdog: { ...watchdog, reclaimTimeout: 10 * HOUR },
   });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR); // pickup
   containers.hold(task.id); // このホストでは force だけでは容器が空にならない
 
@@ -49,7 +49,7 @@ it("強制回収の送達では slot は解放されない — 解放するの�
   // 送達と同 tick でも、その後の tick でも failure question は立たず slot も動かない
   expect(await questions()).toEqual([]);
   await t.clock.advance(1 * MIN);
-  const second = await registerWork(t, "long haul");
+  const second = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 
@@ -65,7 +65,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   const containers = new FakeContainerRuntime();
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws, containerRuntime: containers, watchdog });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(task.id);
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
@@ -87,7 +87,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   // slot は解放されない。tree rule も走っていない — まだ生きているかもしれない
   // process が書いている作業ツリーを退避すること自体が競合である
   expect(git(ws.path, "status", "--porcelain")).not.toBe("");
-  await registerWork(t, "long haul");
+  queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 
@@ -100,7 +100,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
 it("「今なぜ pickup が起きないか」の読み口が回収失敗を盤面全体の停止として答える", async () => {
   const containers = new FakeContainerRuntime();
   t = await bootTidepool({ containerRuntime: containers, watchdog });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(task.id);
 
@@ -114,7 +114,7 @@ it("「今なぜ pickup が起きないか」の読み口が回収失敗を盤�
 it("quarantine の回答時に容器の空を再観測する — populated なら回答は拒否され question は開いたまま", async () => {
   const containers = new FakeContainerRuntime();
   t = await bootTidepool({ containerRuntime: containers, watchdog });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(task.id);
   await forceReclaimed(task);
@@ -133,7 +133,7 @@ it("空を観測してから回答すると受理され、slot-release tree rule
   const containers = new FakeContainerRuntime();
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws, containerRuntime: containers, watchdog });
-  const task = await registerWork(t, "long haul");
+  const task = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   containers.hold(task.id);
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
@@ -152,7 +152,7 @@ it("空を観測してから回答すると受理され、slot-release tree rule
   expect(git(ws.path, "status", "--porcelain")).toBe("");
   expect(git(ws.path, "show", `task/${task.id}:draft.txt`)).toBe("stuck work");
 
-  const second = await registerWork(t, "long haul");
+  const second = queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, second.id]);
 });
@@ -165,7 +165,7 @@ it("容器機構の前提が boot 時に不成立なら、黙って弱い回収�
   const quarantine = await containmentQuestion();
   expect(quarantine.purpose).toContain("cgroup v2 delegation");
 
-  await registerWork(t, "long haul");
+  queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
 });
@@ -180,7 +180,7 @@ it("容器機構の前提は pickup と quarantine 回答時にも読み直さ�
   });
   containers.scriptPreflight("cgroup v2 delegation was lost after boot");
 
-  await registerWork(t, "long haul");
+  queueWork(t, "long haul");
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
   const quarantine = await containmentQuestion();

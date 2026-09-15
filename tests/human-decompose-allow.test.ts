@@ -1,12 +1,12 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
 it("未決着・実行中でない親への人間の子追加は成功し、追加した子タスクがそのまま返る", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
+  const parent = queueWork(t, "parent");
 
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
@@ -29,7 +29,7 @@ it("未決着・実行中でない親への人間の子追加は成功し、追�
 
 it("分解理由を書くと decision log エントリとして残る", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
+  const parent = queueWork(t, "parent");
 
   await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
@@ -90,7 +90,7 @@ it("Worker MCP の decompose も空の分解理由を拒否する", async () => 
 
 it("人間は同じ親に複数回にわたって子を追加できる(agent の子がまだない限り)", async () => {
   t = await bootTidepool();
-  const parent = await registerWork(t, "parent");
+  const parent = queueWork(t, "parent");
 
   await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",

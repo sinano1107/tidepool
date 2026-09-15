@@ -28,6 +28,9 @@ export interface TriageSession {
 export interface TriageCommitResult {
   outcome: "closed_now" | "already_closed_by_timeout" | "no_open_session";
   closed_at: string | null;
+  /** 振り分け(`task` / `meta_review`)が作ったタスク数。セッションの有無に依らず、1件でも
+   *  作れば候補が増えているので pickup の契機になる(ADR 0119 決定2)。 */
+  created_tasks: number;
 }
 
 /** Leave a session alone this long and the watchdog closes it. */
@@ -367,8 +370,9 @@ function applyScratchpad(
   db: Db,
   dispositions: Array<{ id: number; disposition: ScratchpadDisposition }>,
   now: Date,
-): void {
+): number {
   const lines = new Map(listScratchpad(db).map((l) => [l.id, l]));
+  let created = 0;
   const consume = db.prepare("DELETE FROM triage_scratchpad WHERE id = ?");
   for (const { id, disposition } of dispositions) {
     const line = lines.get(id);
@@ -387,14 +391,17 @@ function applyScratchpad(
     if (disposition === "meta_review") {
       // ADR 0120 決定2: 主題 memory の手動登録(周期の due は通らない)
       registerMetaReview(db, "memory", now);
+      created++;
       continue;
     }
+    created++;
     registerTask(
       db,
       { type: "work", title: line.line, purpose: "raised on the triage scratchpad", completion_criteria: "the line above is resolved" },
       now,
     );
   }
+  return created;
 }
 
 export interface PendingDump {
@@ -520,7 +527,7 @@ export function closeTriageSessionOnly(
   closedBy: "commit" | "timeout" = "commit",
 ): TriageCommitResult {
   const open = activeTriageSession(db);
-  if (!open) return { outcome: "no_open_session", closed_at: null };
+  if (!open) return { outcome: "no_open_session", closed_at: null, created_tasks: 0 };
   const path = closedBy === "timeout" ? "the timeout watchdog" : "close-only";
   db.transaction(() =>
     closeTriageSession(
@@ -532,7 +539,7 @@ export function closeTriageSessionOnly(
       `the session was closed by ${path} without a Board call`,
     ),
   )();
-  return { outcome: "closed_now", closed_at: now.toISOString() };
+  return { outcome: "closed_now", closed_at: now.toISOString(), created_tasks: 0 };
 }
 
 /** End the Triage: apply scratchpad dispositions and close a live session.
@@ -548,8 +555,9 @@ export function commitTriage(
   const open = activeTriageSession(db);
   if (!open) {
     let timedOut: Pick<TriageSession, "id" | "committed_at"> | undefined;
+    let created = 0;
     db.transaction(() => {
-      applyScratchpad(db, scratchpad, now);
+      created = applyScratchpad(db, scratchpad, now);
       timedOut = db
         .prepare(
           `SELECT id, committed_at FROM triage_sessions
@@ -562,11 +570,12 @@ export function commitTriage(
       }
     })();
     return timedOut
-      ? { outcome: "already_closed_by_timeout", closed_at: timedOut.committed_at }
-      : { outcome: "no_open_session", closed_at: null };
+      ? { outcome: "already_closed_by_timeout", closed_at: timedOut.committed_at, created_tasks: created }
+      : { outcome: "no_open_session", closed_at: null, created_tasks: created };
   }
+  let created = 0;
   db.transaction(() => {
-    applyScratchpad(db, scratchpad, now);
+    created = applyScratchpad(db, scratchpad, now);
     closeTriageSession(
       db,
       open,
@@ -576,5 +585,5 @@ export function commitTriage(
       "the Board call returned no judgment for this entry",
     );
   })();
-  return { outcome: "closed_now", closed_at: now.toISOString() };
+  return { outcome: "closed_now", closed_at: now.toISOString(), created_tasks: created };
 }

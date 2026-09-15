@@ -62,17 +62,13 @@ it.each([false, true])("restart recovers cap teardown without a failure question
 
   t = await bootTidepool({ dir: t.dir, workspace: ws });
   await settle();
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("todo");
   const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
   expect(queue.teardown).toBeUndefined();
-  expect(queue.tasks.filter((row: any) => row.type === "work")[0].id).toBe(task.id);
   expect((await questions(t)).some((q: any) => q.title.includes("interrupted task"))).toBe(false);
   expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("unfinished work");
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-  if (!failPreflight) {
-    await t.clock.advance(HOUR);
-    expect(started()).toEqual([task.id]);
-  }
+  // ADR 0119 決定4: 復旧の完走で todo に戻ったタスクは、tick を進めずに起動完了の poll で拾われる
+  // (前提検査が一度落ちた盤面では、その Containment quarantine の確認 question が pickup を止めている)
+  expect(started()).toEqual(failPreflight ? [] : [task.id]);
 });
 
 it("容器が生きている間は次の task が pickup されない —— 進めるのは回収済み観測である", async () => {
@@ -225,9 +221,10 @@ it("後始末の途中で盤面を再起動しても、前提検査が通れば�
   t = await bootTidepool({ dir: t.dir, workspace: ws });
   await settle();
 
-  // tree rule / merge-back / 休止位置 / slot 解放が完走している
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  // tree rule / merge-back / slot 解放が完走している —— 空いた枠には、起動完了の poll が
+  // tick を待たずに統合点レビューを入れる(ADR 0119 決定4。休止位置はその pickup が動かす)
   expect(git(ws.path, "show", `task/${task.id}:deliverable.txt`)).toBe("the real work");
+  expect(t.worker.started.map((x) => [x.type, x.parent_id])).toEqual([["review", task.id]]);
   // 統合点レビューを終えると着地が再発火する。
   await completeIntegrationReviews(t, task.id);
   expect((await questions(t)).some((q: any) => q.title.startsWith("land completed task"))).toBe(
