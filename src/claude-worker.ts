@@ -108,6 +108,13 @@ denial, make the call yourself from the main thread.`;
 // (src/sandbox.ts) — its "main-thread only" wording, this paragraph, and the
 // canary's BOARD_HOOK_WORDING move together.
 
+/** 前提の破綻と自タスク外の発見の2文(ADR 0121)。Claude の worker protocol と Codex の task prompt が共有する。 */
+export const PREMISE_BREACH_PROTOCOL =
+  "When the premise of the decomposition decision your task rests on turns out to be false, " +
+  "declare a premise breach rather than working around it or escalating it. " +
+  "A finding outside your task's scope is not your task: record the decision not to act on it " +
+  "with `log_decision`, and never decompose it into a child.";
+
 // ADR 0017: the worker protocol (rules of the road for a board worker) is a
 // board-wide doctrine, so it lives here and is injected into every session —
 // not copied into each agent definition, where it would drift the same way
@@ -120,13 +127,6 @@ denial, make the call yourself from the main thread.`;
 // canonical default agent is therefore an empty-body definition (tako) — it
 // carries no specialty prose, and this section supplies the protocol every
 // worker shares.
-/** 前提の破綻と自タスク外の発見の2文(ADR 0121)。Claude の worker protocol と Codex の task prompt が共有する。 */
-export const PREMISE_BREACH_PROTOCOL =
-  "When the premise of the decomposition decision your task rests on turns out to be false, " +
-  "declare a premise breach rather than working around it or escalating it. " +
-  "A finding outside your task's scope is not your task: record the decision not to act on it " +
-  "with `log_decision`, and never decompose it into a child.";
-
 const WORKER_PROTOCOL = `## Rules of the road
 
 Do the work in the current working directory. It is the task's workspace.

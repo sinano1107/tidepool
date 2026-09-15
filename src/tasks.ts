@@ -1513,7 +1513,6 @@ export function declarePremiseBreach(
         "a root task or an attached child escalates instead",
     );
   }
-  if (reason.length === 0) throw new DomainError("a premise breach requires a reason");
   const decision = task.based_on_decision;
   let question: Task | undefined;
   db.transaction(() => {
@@ -1553,13 +1552,19 @@ export function declarePremiseBreach(
   return question;
 }
 
-/** The child of `parent` whose premise breach is open — the precondition of both parent verbs. */
-function openPremiseBreachChild(db: Db, parent: Task): Task {
+/** The id of the child of `parentId` whose premise breach is open — the precondition of both
+ *  parent verbs, and the refusal of plain decompose. */
+function openPremiseBreachChildId(db: Db, parentId: string): string | undefined {
   const row = db
-    .prepare("SELECT * FROM tasks WHERE parent_id = ? AND premise_breach_decision IS NOT NULL LIMIT 1")
-    .get(parent.id) as TaskRow | undefined;
-  if (!row) throw new DomainError("no child of this task has an open premise breach");
-  return rowToTask(row);
+    .prepare("SELECT id FROM tasks WHERE parent_id = ? AND premise_breach_decision IS NOT NULL LIMIT 1")
+    .get(parentId) as { id: string } | undefined;
+  return row?.id;
+}
+
+function requireOpenPremiseBreachChildId(db: Db, parentId: string): string {
+  const id = openPremiseBreachChildId(db, parentId);
+  if (id === undefined) throw new DomainError("no child of this task has an open premise breach");
+  return id;
 }
 
 /** 続行(ADR 0121): 親の判断を判断ログ1行に置き、held を解く。親は blocked の todo に戻る。 */
@@ -1571,11 +1576,10 @@ export function continueDecomposition(
   now: Date,
   origin: EventOrigin = "worker",
 ): void {
-  const declarer = openPremiseBreachChild(db, parent);
-  if (line.length === 0) throw new DomainError("continuing a decomposition requires a line");
+  const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   db.transaction(() => {
     logDecision(db, parent, line, workerId, now, origin);
-    resolvePremiseBreach(db, declarer.id, "continue", workerId, now, origin);
+    resolvePremiseBreach(db, declarerId, "continue", workerId, now, origin);
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
   })();
 }
@@ -1591,12 +1595,12 @@ export function redecompose(
   isProtectedWorkspace?: (name: string) => boolean,
   origin: EventOrigin = "worker",
 ): Task[] {
-  const declarer = openPremiseBreachChild(db, parent);
+  const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   return db.transaction(() => {
-    for (const id of abandonScopeIds(db, declarer.id)) {
-      cancelUnsettledSubtree(db, id, workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarer.id }, origin);
+    for (const id of abandonScopeIds(db, declarerId)) {
+      cancelUnsettledSubtree(db, id, workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
     }
-    resolvePremiseBreach(db, declarer.id, "redecompose", workerId, now, origin);
+    resolvePremiseBreach(db, declarerId, "redecompose", workerId, now, origin);
     return decomposeTask(db, parent, input, workerId, now, authority, isProtectedWorkspace, origin);
   })();
 }
@@ -2115,7 +2119,7 @@ export function decomposeTask(
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
-  if (db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND premise_breach_decision IS NOT NULL").get(parent.id)) {
+  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
     throw new DomainError("a child's premise breach is open — call redecompose or continue_decomposition instead");
   }
   // before anything registers: a child whose request is a bad value must not
