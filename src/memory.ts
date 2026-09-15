@@ -797,8 +797,8 @@ const META_REVIEW_SUBJECTS = {
 type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
 
 /** 主題の meta-review を盤面名義で登録する(周期と scratchpad の振り分けの両方が通る1本、due は見ない)。 */
-export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): Task {
-  return db.transaction(() => {
+export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
+  db.transaction(() => {
     const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject], meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
     const { watermark } = db.prepare("SELECT MAX(id) AS watermark FROM events").get() as { watermark: number };
     appendEvent(db, {
@@ -808,7 +808,6 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
       payload: { kind: "meta_review_registered", subject, material_watermark: watermark },
       at: now,
     });
-    return task;
   })();
 }
 
