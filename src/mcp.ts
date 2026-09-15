@@ -351,8 +351,7 @@ async function taskContext(deps: McpDeps, task: Task) {
 /** pull の読み口のページ番号(1 始まり)。 */
 const page = z.number().int().min(1).optional();
 
-/** 子の workspace / assignee / reviewer が registry にあるか(issue #26 / #36)。登録する agent 自身の誤りなので、
- *  承認 question へ変換せず何かを登録する前に拒む。decompose と redecompose が共有する。 */
+/** decompose と redecompose が共有する。 */
 function assertChildrenKnown(deps: McpDeps, children: z.infer<typeof decomposeChildrenSchema>): void {
   // an explicitly named child workspace must exist in the registry
   // (issue #26) — this is the registering agent's own mistake, not an

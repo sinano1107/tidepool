@@ -1052,7 +1052,8 @@ function cancelUnsettledSubtree(
     .all(rootTaskId) as Array<{ id: string }>;
   db.transaction(() => {
     for (const { id } of rows) {
-      db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
+      // a cancelled declarer holds nothing — the cancel is the record that ends its breach
+      db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
       appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
     }
   })();
@@ -1122,8 +1123,8 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
     .get({ root: taskId });
   if (failure) {
     throw new DomainError(
-      "cannot directly cancel while an open failure question stands over this subtree — " +
-        "answer it (retry / abandon) first; that answer is the only gate",
+      "cannot directly cancel while an open Tidepool question with a cancel option (a failure or premise breach question) " +
+        "stands over this subtree — answer it first; that answer is the only gate",
     );
   }
   const fallback = typeAwareDefaultAgentSql("x.type", "@defaultAgentName", "@auditorName");
@@ -1608,7 +1609,7 @@ export function redecompose(
 function resolvePremiseBreach(
   db: Db,
   declarerId: string,
-  outcome: "continue" | "redecompose" | "question",
+  outcome: Extract<EventPayload, { kind: "premise_breach_resolved" }>["outcome"],
   workerId: string,
   now: Date,
   origin: EventOrigin,
@@ -2120,7 +2121,7 @@ export function decomposeTask(
     throw new DomainError("a decomposition carries at least one child task");
   }
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
-    throw new DomainError("a child's premise breach is open — call redecompose or continue_decomposition instead");
+    throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
   }
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only

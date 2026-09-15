@@ -201,6 +201,36 @@ it("続行の後、親の時系列は宣言の欄を持たず、親の続行の1
   db.close();
 });
 
+it("分解判断に乗らない root と付帯子の宣言は escalate へ案内して拒む", () => {
+  const db = openDb(":memory:");
+  const parent = root(db);
+  const attached = registerTask(db, { type: "work", ...spec("repair"), parent_id: parent.id }, at);
+
+  expect(() => declarePremiseBreach(db, getTask(db, parent.id)!, "r", "tako", at)).toThrow(/escalate/);
+  expect(() => declarePremiseBreach(db, attached, "r", "tako", at)).toThrow(/escalate/);
+  db.close();
+});
+
+it("破綻が開いたまま木が直接 cancel されると、cancel された宣言者は破綻の欄を持たない", () => {
+  const db = openDb(":memory:");
+  const parent = root(db);
+  const [a] = agentDecompose(db, parent, "A", "B");
+  declarePremiseBreach(db, getTask(db, a!.id)!, "module M is broken", "tako", at);
+
+  cancelTaskDirectly(db, getTask(db, parent.id)!, null, at, {});
+
+  expect(taskHistory(db, parent.id)).toEqual([
+    {
+      decision: "split T",
+      children: [
+        expect.not.objectContaining({ premise_breach: expect.anything() }),
+        expect.objectContaining({ title: "B", status: "cancelled" }),
+      ],
+    },
+  ]);
+  db.close();
+});
+
 it("破綻の question が立っている間、その木への直接 cancel は拒まれる", () => {
   const db = openDb(":memory:");
   const parent = root(db);
