@@ -171,7 +171,6 @@ export function startWatchdog(deps: {
    *  後始末の中で走るので(ADR 0109 決定1)、これが無いと梯子の底へ落ちた完了は
    *  merge-back まで進んだきり PR 昇格 / 着地が永久に起きない。 */
   landing?: Landing;
-  /** 後始末が landing の後に撃つ pickup の契機(ADR 0119 決定3、`TeardownDeps.pollNow`)。 */
   pollNow: () => void;
   config: WatchdogConfig;
 }): Watchdog {

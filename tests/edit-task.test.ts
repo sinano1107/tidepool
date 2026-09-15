@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { UnknownWorkspaceError } from "../src/workspace.js";
-import { api, bootTidepool, queueWork, registerChild, type Tidepool } from "./harness.js";
+import { api, bootTidepool, queueChild, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -104,7 +104,7 @@ it("review flag を編集でき、旧値がイベントに残る(人間登録タ
 it("人間 decompose で足した子タスク(人間登録)も編集できる", async () => {
   t = await bootTidepool();
   const parent = queueWork(t, "parent");
-  const child = registerChild(t, "child", parent.id);
+  const child = queueChild(t, "child", parent.id);
 
   const res = await api(t.baseUrl, "PATCH", `/api/tasks/${child.id}`, { title: "renamed child" });
   expect(res.status).toBe(200);

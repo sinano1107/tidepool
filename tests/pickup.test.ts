@@ -57,6 +57,23 @@ it("管理MCP の register_task で登録した work タスクも tick を進め
   }
 });
 
+it("管理MCP の decompose_task で足した子も tick を進めずに pickup される", async () => {
+  t = await bootTidepool();
+  const parent = queueWork(t, "parent");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({
+      name: "decompose_task",
+      arguments: { task_id: parent.id, reason: "split", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(t.worker.started.map((x) => x.title)).toEqual(["child"]);
+  } finally {
+    await client.close();
+  }
+});
+
 it("門で弾かれた登録は poll を撃たない", async () => {
   t = await bootTidepool({ agentRegistered: (name) => name !== "ghost" });
   queueWork(t, "waiting");

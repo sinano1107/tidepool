@@ -584,7 +584,7 @@ export async function loggedEntry(t: Tidepool, taskId: string, line: string): Pr
  *  child), so the parent sits at the raw head while never being pickable. */
 /** 人間 decompose の子を1本、扉を通さずに置く(扉の登録は pickup の契機 —— ADR 0119 決定2 ——
  *  なので、子が todo のまま待つことを前提にするテストのための形。`queueWork` と同じ)。 */
-export function registerChild(t: Tidepool, title: string, parentId: string): Task {
+export function queueChild(t: Tidepool, title: string, parentId: string): Task {
   const [child] = humanDecomposeTask(
     t.db,
     getTask(t.db, parentId)!,

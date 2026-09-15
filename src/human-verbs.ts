@@ -99,6 +99,8 @@ export interface DecomposeThroughHumanDoorDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   isProtectedWorkspace?: (name: string) => boolean;
+  /** 子の登録は pickup の契機である(ADR 0119 決定2)。拒否された分解は撃たない。 */
+  pollNow: () => void;
 }
 
 /** Shared human-surface decomposition. */
@@ -120,17 +122,9 @@ export function decomposeThroughHumanDoor(
     if (input.reason.length === 0) throw new DomainError("a decomposition requires a reason");
     const task = getTask(deps.db, taskId);
     if (!task) return { ok: false, failure: { kind: "not_found", error: "parent task not found" } };
-    return {
-      ok: true,
-      value: humanDecomposeTask(
-        deps.db,
-        task,
-        input,
-        now(),
-        deps.isProtectedWorkspace,
-        origin,
-      ),
-    };
+    const children = humanDecomposeTask(deps.db, task, input, now(), deps.isProtectedWorkspace, origin);
+    deps.pollNow();
+    return { ok: true, value: children };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -286,7 +280,6 @@ export async function registerThroughHumanDoor(
       }
       const task = result.value[0] ?? latestChild(deps.db, input.parent_id!);
       if (!task) throw new Error("human decompose did not register a child or approval question");
-      deps.pollNow();
       return { ok: true, task };
     }
     if (input.workspace !== undefined) {

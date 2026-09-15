@@ -11,8 +11,8 @@ import {
   makeWorkspace,
   mcpClient,
   quarantineAgentRow,
+  queueChild,
   queueWork,
-  registerChild,
   type Tidepool,
 } from "./harness.js";
 
@@ -138,7 +138,7 @@ it("a promoted task can then be run now once it is the head", async () => {
 it("a task under a blocked parent at the raw head is the pickable head: one ↑ runs it now", async () => {
   t = await bootTidepool();
   const parent = queueWork(t, "parent");
-  const child = registerChild(t, "child", parent.id);
+  const child = queueChild(t, "child", parent.id);
 
   // the raw todo head is the parent, but it has an unfinished child, so the
   // slot could never take it — the child is what a pickup would actually run
@@ -158,7 +158,7 @@ it("a task under a blocked parent at the raw head is the pickable head: one ↑ 
 it("a held row at the raw head does not swallow the ↑ of the task below it", async () => {
   t = await bootTidepool();
   const parent = queueWork(t, "parent");
-  const child = registerChild(t, "child", parent.id);
+  const child = queueChild(t, "child", parent.id);
   holdChildren(t, parent.id);
   const other = queueWork(t, "other");
 
@@ -193,7 +193,7 @@ it("a skipped row at the raw head does not swallow the ↑ of the task below it"
 it("a blocked parent is never the pickable head: ↑ on it fires nothing, however often", async () => {
   t = await bootTidepool();
   const parent = queueWork(t, "parent");
-  registerChild(t, "child", parent.id);
+  queueChild(t, "child", parent.id);
 
   await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/move`, { after: null });
   await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/move`, { after: null });
@@ -203,7 +203,7 @@ it("a blocked parent is never the pickable head: ↑ on it fires nothing, howeve
 it("with no pickable candidate at all, ↑ fires nothing — there is nothing to match", async () => {
   t = await bootTidepool();
   const parent = queueWork(t, "parent");
-  const child = registerChild(t, "child", parent.id);
+  const child = queueChild(t, "child", parent.id);
   holdChildren(t, parent.id);
 
   // every row is out of the slot: the parent is blocked, its only child held

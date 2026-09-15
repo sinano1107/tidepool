@@ -74,6 +74,8 @@ it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実
   writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
 
   await t.clock.advance(90 * MIN); // t = 150min: 畳み込み停止
+  // 次の todo は slot が埋まっている間に積まれる(毎時のティックでは拾われない)
+  const second = queueWork(t, "next in line");
   await t.clock.advance(grace); // t = 180min: 強制回収 → 容器が空になり失敗経路が走る
 
   // tree rule stashed the WIP and the tree is clean
@@ -101,9 +103,7 @@ it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
   expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
 
-  // slot is free: a second task can now proceed
-  const second = queueWork(t, "long haul");
-  await t.clock.advance(HOUR);
+  // 後始末の完走が slot を空けた時点で、次の todo は毎時のティックを待たずに拾われている(ADR 0119 決定3)
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, second.id]);
 });
 
