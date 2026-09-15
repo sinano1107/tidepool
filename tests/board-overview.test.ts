@@ -127,7 +127,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
     expect(board.find((t) => t.id === byBoard.id)?.registrant).toBe("tidepool");
   });
 
-  it("単一 task の表示形も status にかかわらず登録者を持つ(issue #262)", () => {
+  it("単一 task の表示形も登録者を持ち、todo 以外の status でも持つ(issue #262)", () => {
     const db = openDb(":memory:");
 
     const byAgent = registerTask(
