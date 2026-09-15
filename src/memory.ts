@@ -368,7 +368,7 @@ export function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRo
     const row = requireEntry(db, id);
     return row.version === version && row.invalidation_reason === null;
   };
-  const named = proposal.op === "invalidate" ? requireEntry(db, proposal.target.id) : requireEntry(db, proposal.candidate_id);
+  const named = requireEntry(db, proposal.op === "invalidate" ? proposal.target.id : proposal.candidate_id);
   const fresh =
     (proposal.op === "invalidate"
       ? unchanged(proposal.target)
@@ -430,6 +430,7 @@ export function proposeMemoryChange(
   return db.transaction(() => {
     let proposal: QuestionProposal;
     let heading: string[];
+    let shown: EntryRow;
     if (input.op === "consolidate") {
       const replaced = [...new Set(need(input.replaces, "replaces"))].map((id) => requireEntry(db, id));
       if (replaced.length === 0) throw new DomainError("a consolidation needs at least one entry to replace");
@@ -444,30 +445,29 @@ export function proposeMemoryChange(
         now,
       );
       proposal = { kind: "memory", op: "consolidate", candidate_id: created.entry_id, replaces: replaced.map(({ id, version }) => ({ id, version })) };
+      shown = requireEntry(db, created.entry_id);
       heading = [`Consolidate into new behavior candidate #${created.entry_id}, replacing:`, ...replaced.map((row) => `#${row.id}: ${row.text}`)];
     } else if (input.op === "invalidate") {
-      const row = requireEntry(db, need(input.target_id, "target_id"));
-      if (row.kind !== "behavior" || row.state !== "approved" || row.invalidation_reason !== null) {
-        throw new DomainError(`memory entry ${row.id} is not an approved, non-invalidated behavior`);
+      shown = requireEntry(db, need(input.target_id, "target_id"));
+      if (shown.kind !== "behavior" || shown.state !== "approved" || shown.invalidation_reason !== null) {
+        throw new DomainError(`memory entry ${shown.id} is not an approved, non-invalidated behavior`);
       }
       const reason = need(input.reason, "reason");
-      proposal = { kind: "memory", op: "invalidate", target: { id: row.id, version: row.version! }, reason, replaces: [] };
-      heading = [`Invalidate approved behavior #${row.id} (reason: ${reason}).`];
+      proposal = { kind: "memory", op: "invalidate", target: { id: shown.id, version: shown.version! }, reason, replaces: [] };
+      heading = [`Invalidate approved behavior #${shown.id} (reason: ${reason}).`];
     } else {
-      const row = requireEntry(db, need(input.candidate_id, "candidate_id"));
-      if (row.kind !== "behavior" || row.state !== "candidate" || row.invalidation_reason !== null) {
-        throw new DomainError(`memory entry ${row.id} is not a behavior candidate that is still open`);
+      shown = requireEntry(db, need(input.candidate_id, "candidate_id"));
+      if (shown.kind !== "behavior" || shown.state !== "candidate" || shown.invalidation_reason !== null) {
+        throw new DomainError(`memory entry ${shown.id} is not a behavior candidate that is still open`);
       }
-      proposal = { kind: "memory", op: "approve", candidate_id: row.id, replaces: [] };
-      heading = [`Approve behavior candidate #${row.id} as worded.`];
+      proposal = { kind: "memory", op: "approve", candidate_id: shown.id, replaces: [] };
+      heading = [`Approve behavior candidate #${shown.id} as worded.`];
     }
     // 承認は無効化ではないので陳腐化の hook に掛からない —— pin する entry が別の提案にも pin されていると、片方の承認後に
     // もう片方が人間の reject 待ちで周期を止める(ADR 0120 退けた案)。提案の時点で断る
-    const pinned = [...("candidate_id" in proposal ? [proposal.candidate_id] : [proposal.target.id]), ...proposal.replaces.map(({ id }) => id)];
-    for (const id of pinned) {
+    for (const id of [shown.id, ...proposal.replaces.map(({ id }) => id)]) {
       if (openProposalsPinning(db, id).length > 0) throw new DomainError(`memory entry ${id} is already in an open proposal question`);
     }
-    const shown = requireEntry(db, "candidate_id" in proposal ? proposal.candidate_id : proposal.target.id);
     const detail = [
       ...heading,
       `Scope: ${shown.scope ?? "whole board"}`,
