@@ -446,7 +446,7 @@ export function startScheduler(deps: {
     task: Task,
     setting: ExecutionSetting | undefined,
     content: Partial<TaskContent>,
-  ): Promise<(() => void) | undefined> {
+  ): Promise<(() => void) | void> {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
     // attribution resolves the same three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor pointer,
@@ -466,7 +466,7 @@ export function startScheduler(deps: {
       // an unknown workspace name (registry drift) quarantines in place of a
       // thrown error — the task stays wedged in the slot until the watchdog or
       // a human acts
-      if (!resolved) return undefined;
+      if (!resolved) return;
       // a branch discipline gap (issue #27: the workspace's configured
       // branch doesn't exist in this checkout) is a resource problem, same
       // as registry drift above — this task still stays wedged in the slot
@@ -482,7 +482,7 @@ export function startScheduler(deps: {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
       } catch (err) {
         await quarantineWithRepoAccessGuidance(resolved, err);
-        return undefined;
+        return;
       }
     }
     try {
@@ -503,7 +503,6 @@ export function startScheduler(deps: {
       // 撃つ —— poll の中で解放すれば、その契機は捨てられる(ADR 0119 決定5)
       return () => onSpawnFailed(picked.id, { error_code: null, message });
     }
-    return undefined;
   }
 
   /** The issue-backed pickup gate (issue #49 §5 / ADR 0016): an issue-backed
@@ -667,7 +666,7 @@ export function startScheduler(deps: {
     // できた — 後で立てると、hourly tick と `POST /tasks/:id/move` が同時に
     // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
-    let afterPoll: (() => void) | undefined;
+    let afterPoll: (() => void) | void;
     // **`throttleRevalidating` も `pickupBlocked` より手前で立てる。** 同じ gate が
     // 実 HTTP を待つ間、最後の throttle 観測値は stale でありうる。新しい観測へ
     // 向かっている事実を `GET /pause` が先に出せなければ、古い throttle を現在の

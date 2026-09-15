@@ -720,7 +720,8 @@ export class CodexWorker implements WorkerAdapter {
     this.running.set(task.id, child);
     child.on("error", (error) => {
       this.running.delete(task.id);
-      const failure = { error_code: (error as NodeJS.ErrnoException).code ?? null, message: error.message };
+      const errno = error as NodeJS.ErrnoException;
+      const failure = { error_code: errno.code ?? null, message: error.message };
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,
@@ -729,7 +730,7 @@ export class CodexWorker implements WorkerAdapter {
         at: this.options.clock.now(),
       });
       // "error" は spawn 専用ではない(kill の失敗も撃つ)—— 走っている session を落とさない
-      if ((error as NodeJS.ErrnoException).syscall?.startsWith("spawn")) {
+      if (errno.syscall?.startsWith("spawn")) {
         this.options.onSpawnFailed?.(task.id, failure);
       }
     });
