@@ -1,8 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
+import { registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { TRIAGE_TIMEOUT } from "../src/triage.js";
-import { FakeAttributionClient } from "./fakes.js";
+import { FakeAttributionClient, FakeBehaviorDraftClient } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -416,4 +417,204 @@ it("ログの HTTP / 管理 MCP 読取は異議の隣に最新の cause を返�
   } finally {
     await client.close();
   }
+});
+
+// Board call の Behavior candidate 起草(ADR 0120 決定1(b)(c) / issue #617)
+
+const memoryEntries = async (t: Tidepool) => (await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries;
+
+const draftsFailed = async (t: Tidepool, taskId: string) =>
+  (await api(t.baseUrl, "GET", `/api/tasks/${taskId}/events`)).json.filter((e: any) => e.kind === "memory_draft_failed");
+
+/** 起草 client つきの盤面で、work(既定 workspace charts)に1行 log → 完了 → 異議まで進める(commit は呼び手)。
+ *  `registrant` を渡すと agent が登録した task(decompose と同じ登録者の形)、`human` は人間が担当して人間の扉で完了。 */
+async function objectedForDraft(
+  title: string,
+  opts: { initial?: { cause: Cause; evidence: string }; registrant?: string; workspace?: string | null; human?: true } = {},
+) {
+  const attributionClient = new FakeAttributionClient();
+  const behaviorDraftClient = new FakeBehaviorDraftClient();
+  const t = await bootTidepool({ attributionClient, behaviorDraftClient });
+  const workspace = opts.workspace === null ? undefined : (opts.workspace ?? "charts");
+  const task = opts.registrant
+    ? registerTask(t.db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace }, t.clock.now(), opts.registrant, "worker")
+    : await registerWork(t, title, workspace, undefined, opts.human && "human");
+  let entry: any;
+  if (opts.human) {
+    await api(t.baseUrl, "POST", `/api/tasks/${task.id}/complete`, { handoff: FULL_HANDOFF });
+    entry = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.find((e: any) => e.kind === "task_completed");
+  } else {
+    await t.clock.advance(HOUR);
+    entry = await loggedEntry(t, task.id, "skipped the fixtures");
+    await completeViaMcp(t, task.id);
+  }
+  await completeIntegrationReviews(t, task.id);
+  if (opts.initial) attributionClient.scriptJudgment(entry.id, opts.initial);
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await object(t, entry.id, "always keep the fixtures");
+  return { t, attributionClient, behaviorDraftClient, task, entry };
+}
+
+/** commit して RCA 子を返す。 */
+async function commit(t: Tidepool, taskId: string, title: string) {
+  const res = await api(t.baseUrl, "POST", "/api/triage/close");
+  const kids = await children(t, taskId);
+  return {
+    res,
+    self: kids.find((x: any) => x.title === `rca (self): ${title}`),
+    auditor: kids.find((x: any) => x.title === `rca (auditor): ${title}`),
+  };
+}
+
+it.each([
+  ["worker", (t: Tidepool) => t.worker.id],
+  ["all", () => null],
+] as const)(
+  "初回の帰責が preference のエントリは commit 後に Board call が起草し、author board・出所 = 帰責 event・scope = task の workspace・宛先 = Board call の %s の candidate が載る",
+  async (addressee, expected) => {
+    const s = await objectedForDraft("naming", { initial: { cause: "preference", evidence: "taste" } });
+    t = s.t;
+    await api(t.baseUrl, "POST", "/api/settings/memory/definitions", { workspace: "charts", path: "testing", text: "how tests are run" });
+    s.behaviorDraftClient.scriptDraft(s.entry.id, { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee });
+
+    await commit(t, s.task.id, "naming");
+
+    const [attribution] = await attributions(t, s.task.id);
+    expect((await memoryEntries(t)).filter((e: any) => e.kind === "behavior")).toEqual([
+      expect.objectContaining({
+        state: "candidate",
+        scope: "charts",
+        path: "testing/fixtures",
+        title: "Keep fixtures",
+        text: "Always keep the fixtures.",
+        addressee: expected(t),
+        source: { kind: "event", ref: attribution.id },
+        author: { activity: "board", name: "tidepool" },
+      }),
+    ]);
+    expect(s.behaviorDraftClient.calls).toEqual([
+      {
+        input: {
+          entry_id: s.entry.id,
+          entry: "skipped the fixtures",
+          steering: ["always keep the fixtures"],
+          decision_log: ["skipped the fixtures", "completion report: done as specified"],
+          index: expect.stringContaining("testing/ — how tests are run"),
+        },
+        setting: expect.objectContaining({ model: "fable", effort: "high" }),
+      },
+    ]);
+  },
+);
+
+it.each([
+  ["preference", null],
+  ["capability", "worker"],
+  ["task_ambiguity", "planner"],
+  ["missing_information", "planner"],
+] as const)(
+  "第2回で %s に確定すると RCA の findings を入力に Board call が起草し、宛先は cause から導出される(Board call の addressee は preference だけが読む)",
+  async (cause, addressee) => {
+    const s = await objectedForDraft("second", { registrant: "planner" });
+    t = s.t;
+    const { self, auditor } = await commit(t, s.task.id, "second");
+    expect(s.behaviorDraftClient.calls).toEqual([]);
+    s.attributionClient.scriptJudgment(s.entry.id, { cause, evidence: "the RCA decided it" });
+    s.behaviorDraftClient.scriptDraft(s.entry.id, { path: "testing/fixtures", title: "Keep fixtures", text: "Always keep the fixtures.", addressee: "all" });
+    const repair = (await children(t, s.task.id)).find((x: any) => x.title === "repair: second");
+    await completeViaMcp(t, repair.id);
+
+    await settleRca(t, self.id, "the criteria named the fixtures", "fixtures were required");
+    await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+
+    const second = (await attributions(t, s.task.id)).find((e: any) => e.payload.round === "after_rca");
+    expect((await memoryEntries(t)).filter((e: any) => e.kind === "behavior")).toEqual([
+      expect.objectContaining({
+        scope: "charts",
+        addressee: addressee === "worker" ? t.worker.id : addressee,
+        source: { kind: "event", ref: second.id },
+        author: { activity: "board", name: "tidepool" },
+      }),
+    ]);
+    expect(s.behaviorDraftClient.calls.map((c) => c.input)).toEqual([
+      expect.objectContaining({
+        entry_id: s.entry.id,
+        rca_findings: ["the criteria named the fixtures", "completion report: fixtures were required"],
+      }),
+    ]);
+  },
+);
+
+it.each(["requirement_change", "environment"] as const)(
+  "第2回で %s に確定した場合は起草しない",
+  async (cause) => {
+    const s = await objectedForDraft("unlearned");
+    t = s.t;
+    const { self, auditor } = await commit(t, s.task.id, "unlearned");
+    s.attributionClient.scriptJudgment(s.entry.id, { cause, evidence: "outside the worker" });
+
+    await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
+    await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+
+    expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["uncertain", cause]);
+    expect(s.behaviorDraftClient.calls).toEqual([]);
+    expect(await draftsFailed(t, s.task.id)).toEqual([]);
+  },
+);
+
+it("人間が書いたエントリは preference でも起草しない", async () => {
+  const s = await objectedForDraft("by hand", { human: true, initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+
+  await commit(t, s.task.id, "by hand");
+
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload.cause)).toEqual(["preference"]);
+  expect(s.behaviorDraftClient.calls).toEqual([]);
+  expect(await memoryEntries(t)).toEqual([]);
+});
+
+it("起草の Board call の失敗は memory_draft_failed を残し、帰責の event と commit の応答は従来どおり", async () => {
+  const s = await objectedForDraft("flaky draft", { initial: { cause: "preference", evidence: "taste" } });
+  t = s.t;
+  s.behaviorDraftClient.scriptDraft(s.entry.id, new Error("claude CLI timed out"));
+
+  const { res } = await commit(t, s.task.id, "flaky draft");
+
+  expect(res.json.outcome).toBe("closed_now");
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+    [
+      "tidepool",
+      "board",
+      {
+        kind: "objection_attributed",
+        entry_id: s.entry.id,
+        objection_event_ids: [expect.any(Number)],
+        cause: "preference",
+        evidence: "taste",
+        round: "initial",
+      },
+    ],
+  ]);
+  expect((await draftsFailed(t, s.task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+    ["tidepool", "board", { kind: "memory_draft_failed", entry_id: s.entry.id, round: "initial", reason: "claude CLI timed out" }],
+  ]);
+  expect(await memoryEntries(t)).toEqual([]);
+});
+
+it.each([
+  ["workspace を持たない task", { workspace: null, cause: "preference" }, /workspace/],
+  ["人間が登録した task の task_ambiguity", { workspace: "charts", cause: "task_ambiguity" }, /not registered by an agent/],
+] as const)("%s は Board call を呼ばずに memory_draft_failed を残す", async (_, { workspace, cause }, reason) => {
+  const s = await objectedForDraft("undraftable", { workspace });
+  t = s.t;
+  const { self, auditor } = await commit(t, s.task.id, "undraftable");
+  s.attributionClient.scriptJudgment(s.entry.id, { cause, evidence: "decided after the RCA" });
+
+  await api(t.baseUrl, "POST", `/api/tasks/${self.id}/cancel`, {});
+  await api(t.baseUrl, "POST", `/api/tasks/${auditor.id}/cancel`, {});
+
+  expect(s.behaviorDraftClient.calls).toEqual([]);
+  expect((await draftsFailed(t, s.task.id)).map((e: any) => e.payload)).toEqual([
+    { kind: "memory_draft_failed", entry_id: s.entry.id, round: "after_rca", reason: expect.stringMatching(reason) },
+  ]);
 });

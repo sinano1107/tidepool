@@ -410,7 +410,10 @@ export type EventPayload =
       omitted: number;
       tokenizer: string;
       tokenizer_version: string;
-    };
+    }
+  // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃てなかった / 失敗した
+  // (異議されたタスクに帰属)。店の event ではなく rebuild は再生しない。
+  | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string };
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";

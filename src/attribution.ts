@@ -2,7 +2,8 @@ import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, getEvent, listEvents, taskDecisionLog } from "./events.js";
 import { type ExecutionSettingRow, loadExecutionSettingTable, rowFor } from "./execution-setting.js";
-import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
+import { buildMemoryInjection, createBehaviorCandidate, memoryScope } from "./memory.js";
+import { BOARD_WORKER_ID, DomainError, getRegistrant, getTask, HUMAN_WORKER_ID, listChildren, type Task } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import { type DecisionLogEntry, listObjectedEntries, objectedEntryText } from "./triage.js";
 
@@ -35,16 +36,40 @@ export interface AttributionClient {
   ): Promise<AttributionJudgment>;
 }
 
+/** Behavior candidate 起草の Board call に渡す入力(ADR 0120 決定1(b)(c)): 帰責と同じ材料に、
+ *  workspace の定義つき INDEX(spawn 注入と同じ節。見える approved が無ければ null)を足す。 */
+export interface BehaviorDraftInput extends AttributionInput {
+  index: string | null;
+}
+
+/** 起草の構造化出力。宛先 `worker` / `all` は `preference` のときだけ読まれる。 */
+export interface BehaviorDraft {
+  path: string;
+  title: string;
+  text: string;
+  addressee: "worker" | "all";
+}
+
+/** The Board call seam for Behavior candidate drafting (issue #617)、AttributionClient と同型。 */
+export interface BehaviorDraftClient {
+  draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
+}
+
+/** 帰責と起草の Board call が扉から受け取るもの(各扉の deps がそのまま満たす)。 */
+export interface BoardCallDeps {
+  attributionClient?: AttributionClient;
+  behaviorDraftClient?: BehaviorDraftClient;
+  workspace?: { name: string };
+}
+
 const uncertain = (evidence: string): AttributionJudgment => ({ cause: "uncertain", evidence });
 
 /** Board call を撃てるか。Provider / ティアは盤面設定の固定値(ADR 0111 決定4 と同じ枠)で、
  *  client 未設定・表の行の欠落・窓の閉鎖は「撃てなかった」として理由を返す。 */
-function boardCallSetting(
+function boardCallSetting<C>(
   db: Db,
-  client: AttributionClient | undefined,
-):
-  | { client: AttributionClient; setting: Pick<ExecutionSettingRow, "model" | "effort"> }
-  | { unavailable: string } {
+  client: C | undefined,
+): { client: C; setting: Pick<ExecutionSettingRow, "model" | "effort"> } | { unavailable: string } {
   if (!client) return { unavailable: "not attributed: no attribution client is configured" };
   let setting: Pick<ExecutionSettingRow, "model" | "effort">;
   try {
@@ -109,7 +134,7 @@ export async function attributeObjections(
  *  2つの扉が同時に「全部揃った」を見ることは無い。 */
 export async function attributeAfterRca(
   db: Db,
-  client: AttributionClient | undefined,
+  deps: BoardCallDeps,
   settled: Task,
   now: Date,
 ): Promise<void> {
@@ -127,21 +152,17 @@ export async function attributeAfterRca(
   }
   const pending = [...latest.values()].filter((e) => e.cause === "uncertain" && e.round === "initial");
   if (pending.length === 0) return;
-  const record = (initial: (typeof pending)[number], judgment: AttributionJudgment) =>
-    appendEvent(db, {
-      taskId: objectedId,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
-      payload: {
-        kind: "objection_attributed",
-        entry_id: initial.entry_id,
-        objection_event_ids: initial.objection_event_ids,
-        ...judgment,
-        round: "after_rca",
-      },
-      at: now,
-    });
-  const call = boardCallSetting(db, client);
+  const record = (initial: (typeof pending)[number], judgment: AttributionJudgment) => {
+    const payload = {
+      kind: "objection_attributed" as const,
+      entry_id: initial.entry_id,
+      objection_event_ids: initial.objection_event_ids,
+      ...judgment,
+      round: "after_rca" as const,
+    };
+    return { id: appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now }), ...payload };
+  };
+  const call = boardCallSetting(db, deps.attributionClient);
   if ("unavailable" in call) {
     for (const initial of pending) record(initial, uncertain(call.unavailable));
     return;
@@ -150,25 +171,82 @@ export async function attributeAfterRca(
   await Promise.all(
     pending.map(async (initial) => {
       let judgment: AttributionJudgment;
+      // 当時の decision log = 初回の注釈より前に書かれた entry
+      const input = { ...objectionInput(db, initial), rca_findings: rcaFindings };
       try {
-        const input: AttributionInput = {
-          entry_id: initial.entry_id,
-          entry: objectedEntryText(getEvent(db, initial.entry_id) as DecisionLogEntry),
-          steering: initial.objection_event_ids.map((id) => {
-            const p = getEvent(db, id)?.payload;
-            return p?.kind === "objection_raised" ? p.comment : "";
-          }),
-          // 当時の decision log = 初回の注釈より前に書かれた entry
-          decision_log: decisionLogText(db, objectedId, initial.id),
-          rca_findings: rcaFindings,
-        };
         judgment = await call.client.judge(input, call.setting);
       } catch (err) {
         judgment = uncertain(`Board call failed: ${message(err)}`);
       }
-      record(initial, judgment);
+      // 第2回の確定は起草の契機(ADR 0120 決定1(b)(c))
+      await draftBehaviorCandidate(db, deps, record(initial, judgment), input, now);
     }),
   );
+}
+
+/** 帰責の入力を注釈 event から組む: 異議エントリ本文・steering 列・その注釈より前の decision log。 */
+export function objectionInput(
+  db: Db,
+  attribution: { id: number; entry_id: number; objection_event_ids: number[] },
+): AttributionInput {
+  const entry = getEvent(db, attribution.entry_id) as DecisionLogEntry;
+  return {
+    entry_id: entry.id,
+    entry: objectedEntryText(entry),
+    steering: attribution.objection_event_ids.map((id) => {
+      const p = getEvent(db, id)?.payload;
+      return p?.kind === "objection_raised" ? p.comment : "";
+    }),
+    decision_log: decisionLogText(db, entry.task_id, attribution.id),
+  };
+}
+
+/** 帰責が起草に向くエントリから Board call で Behavior candidate を起草する(ADR 0120 決定1(b)(c) /
+ *  issue #617): 初回は `preference` だけ、第2回は学習向きの cause すべて。人間エントリと起草 client の
+ *  無い盤面は何もしない。宛先は cause から導出し(ADR 0115 決定4)、Board call の `addressee` は
+ *  `preference` だけが読む。撃てない・失敗は `memory_draft_failed` に畳み、ここからは投げない ——
+ *  帰責の transaction の後に走り、commit も settlement も止めない。 */
+export async function draftBehaviorCandidate(
+  db: Db,
+  deps: BoardCallDeps,
+  attribution: { id: number } & Extract<EventPayload, { kind: "objection_attributed" }>,
+  input: AttributionInput,
+  now: Date,
+): Promise<void> {
+  const { cause, round, entry_id } = attribution;
+  const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
+  const entry = getEvent(db, entry_id) as DecisionLogEntry;
+  if (!deps.behaviorDraftClient || !drafts || isHumanEntry(entry)) return;
+  const taskId = entry.task_id;
+  try {
+    const task = getTask(db, taskId)!;
+    const target = learningTarget(cause, entry.worker_id, getRegistrant(db, taskId), cause === "missing_information" ? "behavior" : undefined);
+    const scope = memoryScope(deps, task);
+    const call = boardCallSetting(db, deps.behaviorDraftClient);
+    if ("unavailable" in call) throw new Error(call.unavailable);
+    const index = buildMemoryInjection(db, task, scope, entry.worker_id).section;
+    const { addressee, ...draft } = await call.client.draft({ ...input, index }, call.setting);
+    createBehaviorCandidate(
+      db,
+      {
+        ...draft,
+        scope,
+        addressee: cause !== "preference" && target.kind === "behavior" ? target.addressee : addressee === "all" ? null : entry.worker_id,
+        source: { event_id: attribution.id },
+        author: { activity: "board", name: BOARD_WORKER_ID },
+      },
+      "board",
+      now,
+    );
+  } catch (err) {
+    appendEvent(db, {
+      taskId,
+      workerId: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "memory_draft_failed", entry_id, round, reason: message(err) },
+      at: now,
+    });
+  }
 }
 
 /** そのタスクの decision log を人間が読んだ本文の列に(`before` を渡せばその event id
@@ -194,6 +272,8 @@ export function latestAttribution(
 /** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
 export const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
 
+const LEARNING_CAUSES: readonly Cause[] = ["capability", "preference", "task_ambiguity", "missing_information"];
+
 /** 学習の行き先を cause から導出する(ADR 0115 決定4)。`as` は `missing_information` だけが
  *  要り、Knowledge は宛先を持たない。Behavior の宛先が agent に落ちなければ DomainError。 */
 export function learningTarget(
@@ -202,8 +282,7 @@ export function learningTarget(
   registrant: string,
   as?: "behavior" | "knowledge",
 ): { kind: "behavior"; addressee: string } | { kind: "knowledge" } {
-  const learns = cause === "capability" || cause === "preference" || cause === "task_ambiguity" || cause === "missing_information";
-  if (!learns) throw new DomainError(`the entry's cause is ${cause}: nothing to learn from it`);
+  if (!LEARNING_CAUSES.includes(cause)) throw new DomainError(`the entry's cause is ${cause}: nothing to learn from it`);
   if ((cause === "missing_information") !== (as !== undefined)) {
     throw new DomainError('as ("behavior" or "knowledge") is required for a missing_information entry and only for it');
   }

@@ -34,7 +34,7 @@ export interface MemoryEntryFields {
   /** definition と人間が書くエントリは null —— 出所は自身の作成 event(ADR 0083 追記4・追記5)で、
    *  id は event を書くまで決まらないので投影と再生が id から導く(sourceOf)。 */
   source: MemorySource | null;
-  author: { activity: "worker_verb" | "human" | "rca" | "meta_review"; name: string };
+  author: { activity: "worker_verb" | "human" | "rca" | "meta_review" | "board"; name: string };
 }
 
 interface MemoryEntry extends Omit<MemoryEntryFields, "source"> {
@@ -124,6 +124,8 @@ function createEntry(db: Db, fields: Omit<MemoryEntryFields, "source"> & { sourc
     throw new DomainError(`path must be "/"-separated non-empty segments without surrounding spaces: ${JSON.stringify(fields.path)}`);
   }
   if (fields.title.trim() === "" || fields.text.trim() === "") throw new DomainError("title and text must be non-empty");
+  // board = Board call の起草(ADR 0120 決定1(b)(c))は Behavior candidate だけ
+  if (fields.author.activity === "board" && fields.kind !== "behavior") throw new DomainError("a board-drafted entry can only be a behavior candidate");
   const ownSource = fields.kind === "definition" || fields.author.activity === "human";
   if (ownSource && fields.source !== undefined) throw new DomainError("a definition or a human-written entry has no source: it is the writer's own declaration");
   return db.transaction(() => {
@@ -206,6 +208,16 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
     original: originalTitle?.trim() && original_text?.trim() ? { title: originalTitle, text: original_text, language: getDisplayLanguage(db) } : null,
     author: { activity: "human" as const, name: HUMAN_WORKER_ID },
   };
+}
+
+/** Memory のスコープ = task の workspace。listLog と同じ解決で、null の workspace は盤面の
+ *  既定を継ぐ。null は盤面全体で、それを書けるのは meta-review の統合だけ —— worker の verb
+ *  (read verb も同じ helper を通るので込みで)と Board call の起草は null に解決されるなら拒否する(issue #623)。
+ *  resolveTaskWorkspace は quarantine の副作用を持つので使わない。 */
+export function memoryScope(board: { workspace?: { name: string } }, task: Pick<Task, "workspace">): string {
+  const scope = task.workspace ?? board.workspace?.name ?? null;
+  if (scope === null) throw new DomainError("memory verbs need a task workspace — this board has none configured");
+  return scope;
 }
 
 /** Behavior の candidate(spec #586 G の #358 向け seam)。宛先は agent 名 or null = 全員。
