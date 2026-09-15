@@ -4,6 +4,7 @@ import { getEvent, listEvents, listLog } from "../src/events.js";
 import {
   approvedMemoryEntries,
   approveMemoryProposal,
+  rejectMemoryProposal,
   buildMemoryInjection,
   createBehaviorCandidate,
   defineMemoryBranch,
@@ -420,10 +421,10 @@ it("rebuild は一覧を無効化の理由コード・後継 id ごと同じに�
 });
 
 /** 承認の export(issue #620 / spec #615 A)。pin の一致 / 不一致は回答の挙動としてサーバ境界が言う。 */
-function candidate(db: ReturnType<typeof openDb>, title: string) {
+function candidate(db: ReturnType<typeof openDb>, title: string, scope: string | null = null) {
   return createBehaviorCandidate(
     db,
-    { scope: null, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+    { scope, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
     "worker",
     at,
   ).entry_id;
@@ -519,15 +520,6 @@ it("invalidate op の承認は target を理由コードのまま後継なしで
   expect(approvedMemoryEntries(db)).toEqual([]);
 });
 
-function behavior(db: ReturnType<typeof openDb>, scope: string | null, title: string) {
-  return createBehaviorCandidate(
-    db,
-    { scope, path: "tide", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "meta_review", name: "auditor" } },
-    "worker",
-    at,
-  ).entry_id;
-}
-
 it("consolidate op の承認は candidate と approved Behavior の混ざった replaces を新 entry を後継とする superseded にし、pin 不一致なら何も残さない", () => {
   const { db } = board();
   const approvedOld = candidate(db, "approved wording");
@@ -558,14 +550,29 @@ it("consolidate op の承認は candidate と approved Behavior の混ざった 
 it("scope null の統合が承認されると別々の workspace の注入に届き、置換された workspace の entry は注入されなくなる", () => {
   const { db } = board();
   const task = registerTask(db, { type: "work", title: "fix tide chart", purpose: "chart drifts", completion_criteria: "tests pass" }, at);
-  const local = behavior(db, "tidepool", "tide chart local rule");
+  const local = candidate(db, "tide chart local rule", "tidepool");
   const localVersion = approve(db, local);
   const injected = (scope: string) => buildMemoryInjection(db, task, scope, "deckhand").entries.map((e) => e.id);
   expect(injected("tidepool")).toEqual([local]);
 
-  const boardWide = behavior(db, null, "tide chart board rule");
+  const boardWide = candidate(db, "tide chart board rule");
   approveMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: boardWide, replaces: [{ id: local, version: localVersion }] }, "question-4", "webui", at);
 
   expect(injected("tidepool")).toEqual([boardWide]);
   expect(injected("sandbox")).toEqual([boardWide]);
+});
+
+it("reject は consolidate の新 candidate だけを後継なしの rejected にして replaces を残し、invalidate の提案では何も変えない", () => {
+  const { db } = board();
+  const old = candidate(db, "old wording");
+  const version = approve(db, old);
+  const merged = candidate(db, "merged wording");
+  const before = listMemoryEntries(db, {});
+
+  rejectMemoryProposal(db, { kind: "memory", op: "invalidate", target: { id: old, version }, reason: "environment", replaces: [] }, "webui", at);
+  expect(listMemoryEntries(db, {})).toEqual(before);
+
+  rejectMemoryProposal(db, { kind: "memory", op: "consolidate", candidate_id: merged, replaces: [{ id: old, version }] }, "webui", at);
+  expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([{ id: merged, invalidation_reason: "rejected", successor_id: null }]);
+  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([old]);
 });

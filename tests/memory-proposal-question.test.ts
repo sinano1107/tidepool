@@ -213,7 +213,7 @@ it("consolidate の提案は meta_review 名義・decision 出所の新 candidat
       source: { kind: "decision" },
     });
     const { detail } = question.question_items[0];
-    for (const shown of [`#${approved}`, "Split migrations, always.", `#${board.ids[0]}`, "Keep migrations in their own commit, always.", "Keep each commit to one concern.", "every agent", "habits/commits", "whole board"]) {
+    for (const shown of [`#${approved} (scope: tidepool, addressee: deckhand)`, "Split migrations, always.", `#${board.ids[0]}`, "Keep migrations in their own commit, always.", "Keep each commit to one concern.", "every agent", "habits/commits", "whole board"]) {
       expect(detail).toContain(shown);
     }
   } finally {
@@ -247,42 +247,37 @@ it("invalidate の提案は target の pin と理由コードを焼き、detail 
   }
 });
 
-it("consolidate の approve で新 entry が approved になり replaces は後継 = 新 entry の superseded、reject では新 candidate だけが rejected で replaces は無傷", async () => {
+it("consolidate の回答は reject で新 candidate を rejected にして approved 集合を変えず、approve で approved 集合を新 entry だけにする", async () => {
   const board = await boardWithMetaReview(["Keep migrations in their own commit", "Split schema changes"]);
   try {
     const approved = await approvedBehavior(board, "Split migrations", "tidepool");
     const rejected = (await task((await consolidate(board, [approved, board.ids[0]!])).question_id));
-    const before = [await entry(approved), await entry(board.ids[0]!)];
+    const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
 
     expect((await answer(rejected.id, "reject")).status).toBe(200);
-    expect(await entry(rejected.question_proposal.candidate_id)).toMatchObject({ state: "candidate", invalidation_reason: "rejected", successor_id: null });
-    expect([await entry(approved), await entry(board.ids[0]!)]).toEqual(before);
+    expect(await entry(rejected.question_proposal.candidate_id)).toMatchObject({ invalidation_reason: "rejected" });
+    expect(await behaviors()).toEqual([approved]);
 
     const { question_id } = await consolidate(board, [approved, board.ids[0]!, board.ids[1]!]);
     const merged = (await task(question_id)).question_proposal.candidate_id;
     expect((await answer(question_id, "approve")).status).toBe(200);
-    expect(await entry(merged)).toMatchObject({ state: "approved", invalidation_reason: null });
-    for (const id of [approved, board.ids[0]!, board.ids[1]!]) {
-      expect(await entry(id)).toMatchObject({ invalidation_reason: "superseded", successor_id: merged });
-    }
-    expect((await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id)).toEqual([merged]);
+    expect(await behaviors()).toEqual([merged]);
   } finally {
     await board.client.close();
   }
 });
 
-it("invalidate の approve で target は理由コードのまま後継なしで無効化され、reject では何も変わらない", async () => {
+it("invalidate の回答は reject で approved 集合を変えず、approve で target を approved 集合から外す", async () => {
   const board = await boardWithMetaReview();
   try {
     const target = await approvedBehavior(board, "Split migrations");
-    const before = await entry(target);
+    const behaviors = async () => (await board.call("list_memory_behaviors", {})).entries.map((e: any) => e.id);
 
-    const rejected = (await invalidate(board, target)).question_id;
-    expect((await answer(rejected, "reject")).status).toBe(200);
-    expect(await entry(target)).toEqual(before);
+    expect((await answer((await invalidate(board, target)).question_id, "reject")).status).toBe(200);
+    expect(await behaviors()).toEqual([target]);
 
     expect((await answer((await invalidate(board, target, "capability")).question_id, "approve")).status).toBe(200);
-    expect(await entry(target)).toMatchObject({ state: "approved", invalidation_reason: "capability", successor_id: null });
+    expect(await behaviors()).toEqual([]);
   } finally {
     await board.client.close();
   }
@@ -342,7 +337,7 @@ it("invalidate は approved でない Behavior・Knowledge・無効化済みを 
     expect((await answer((await invalidate(board, invalidated)).question_id, "approve")).status).toBe(200);
 
     for (const bad of [board.ids[0]!, knowledge, invalidated]) {
-      expect(await invalidate(board, bad)).toMatchObject({ error: expect.stringContaining("not an approved, non-invalidated behavior") });
+      expect(await invalidate(board, bad)).toMatchObject({ error: expect.stringContaining("not a non-invalidated behavior in state approved") });
     }
   } finally {
     await board.client.close();
@@ -361,6 +356,17 @@ it("pin する entry のどれかが既に open な提案に pin されていれ
     expect(await consolidate(board, [board.ids[1]!, target])).toEqual(refused);
     expect(await board.call("propose_memory_change", { op: "approve", candidate_id: board.ids[0], rationale: "r" })).toEqual(refused);
     expect(await consolidate(board, [board.ids[1]!, consolidation.question_proposal.candidate_id])).toEqual(refused);
+  } finally {
+    await board.client.close();
+  }
+});
+
+it("op に属さない欄を渡すと、黙って捨てずに断られる", async () => {
+  const board = await boardWithMetaReview(["Keep migrations in their own commit", "Split schema changes"]);
+  try {
+    expect(await board.call("propose_memory_change", { op: "approve", candidate_id: board.ids[0], replaces: [board.ids[1]], rationale: "r" })).toMatchObject({
+      error: expect.stringContaining("op approve does not take replaces"),
+    });
   } finally {
     await board.client.close();
   }

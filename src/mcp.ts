@@ -911,7 +911,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
         replaces: z.array(z.number().int()).optional(),
         based_on_decision: z.number().int().optional(),
         target_id: z.number().int().optional(),
-        reason: z.enum(["capability", "environment", "requirement_change"]).optional(),
+        reason: invalidationSchema.shape.reason.exclude(["superseded", "path_moved"]).optional(),
         rationale: z.string().min(1),
       },
     },

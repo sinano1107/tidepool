@@ -405,8 +405,31 @@ export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questi
   })();
 }
 
+/** 提案の reject(spec #615 F): 同じ pin 検査の後、approve / consolidate は candidate だけを `rejected` で無効化し
+ *  (consolidate の replaces は残る)、invalidate は何もしない。 */
+export function rejectMemoryProposal(db: Db, proposal: QuestionProposal, origin: EventOrigin, at: Date): void {
+  assertProposalFresh(db, proposal);
+  if (proposal.op !== "invalidate") invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at);
+}
+
+function requireBehavior(db: Db, id: number, state?: MemoryEntryFields["state"]): EntryRow {
+  const row = requireEntry(db, id);
+  if (row.kind !== "behavior" || row.invalidation_reason !== null || (state !== undefined && row.state !== state)) {
+    throw new DomainError(`memory entry ${id} is not a non-invalidated behavior${state ? ` in state ${state}` : ""}`);
+  }
+  return row;
+}
+
+/** op ごとの欄。worker MCP の入力は平たい object のまま(判別共用体を top-level に置いた schema を worker harness が
+ *  受けるかは確かめていない)なので、必須と越境はここで引く。 */
+const PROPOSAL_FIELDS = {
+  approve: ["candidate_id"],
+  consolidate: ["text", "replaces", "based_on_decision"],
+  invalidate: ["target_id", "reason"],
+} as const;
+
 /** 提案 verb(spec #615 E / issue #620・#621): meta-review の子に提案 question を1件立て、pin を焼いて question の id を返す。
- *  op の欄は MCP の入力が平たいので、op ごとの必須欄はここで引く。consolidate の新 candidate と question は1 transaction。 */
+ *  consolidate の新 candidate と question は1 transaction。 */
 export function proposeMemoryChange(
   db: Db,
   metaReviewId: string,
@@ -427,16 +450,16 @@ export function proposeMemoryChange(
     if (value === undefined) throw new DomainError(`op ${input.op} needs ${field}`);
     return value;
   };
+  // 別の op の欄は黙って捨てず断る —— 捨てると meta-review は統合したつもりで承認の question が立つ
+  const stray = Object.entries(PROPOSAL_FIELDS).flatMap(([op, fields]) => (op === input.op ? [] : fields.filter((f) => input[f] !== undefined)));
+  if (stray.length > 0) throw new DomainError(`op ${input.op} does not take ${stray.join(", ")}`);
   return db.transaction(() => {
     let proposal: QuestionProposal;
     let heading: string[];
     let shown: EntryRow;
     if (input.op === "consolidate") {
-      const replaced = [...new Set(need(input.replaces, "replaces"))].map((id) => requireEntry(db, id));
+      const replaced = [...new Set(need(input.replaces, "replaces"))].map((id) => requireBehavior(db, id));
       if (replaced.length === 0) throw new DomainError("a consolidation needs at least one entry to replace");
-      for (const row of replaced) {
-        if (row.kind !== "behavior" || row.invalidation_reason !== null) throw new DomainError(`memory entry ${row.id} is not a non-invalidated behavior`);
-      }
       const decision = requireDecision(db, need(input.based_on_decision, "based_on_decision"));
       const created = createBehaviorCandidate(
         db,
@@ -446,20 +469,18 @@ export function proposeMemoryChange(
       );
       proposal = { kind: "memory", op: "consolidate", candidate_id: created.entry_id, replaces: replaced.map(({ id, version }) => ({ id, version })) };
       shown = requireEntry(db, created.entry_id);
-      heading = [`Consolidate into new behavior candidate #${created.entry_id}, replacing:`, ...replaced.map((row) => `#${row.id}: ${row.text}`)];
+      // scope null への統合で、どの workspace・宛先から広がるかを人間が見られるように置換対象ごとに載せる
+      heading = [
+        `Consolidate into new behavior candidate #${created.entry_id}, replacing:`,
+        ...replaced.map((row) => `#${row.id} (scope: ${row.scope ?? "whole board"}, addressee: ${row.addressee ?? "every agent"}): ${row.text}`),
+      ];
     } else if (input.op === "invalidate") {
-      shown = requireEntry(db, need(input.target_id, "target_id"));
-      if (shown.kind !== "behavior" || shown.state !== "approved" || shown.invalidation_reason !== null) {
-        throw new DomainError(`memory entry ${shown.id} is not an approved, non-invalidated behavior`);
-      }
+      shown = requireBehavior(db, need(input.target_id, "target_id"), "approved");
       const reason = need(input.reason, "reason");
       proposal = { kind: "memory", op: "invalidate", target: { id: shown.id, version: shown.version! }, reason, replaces: [] };
       heading = [`Invalidate approved behavior #${shown.id} (reason: ${reason}).`];
     } else {
-      shown = requireEntry(db, need(input.candidate_id, "candidate_id"));
-      if (shown.kind !== "behavior" || shown.state !== "candidate" || shown.invalidation_reason !== null) {
-        throw new DomainError(`memory entry ${shown.id} is not a behavior candidate that is still open`);
-      }
+      shown = requireBehavior(db, need(input.candidate_id, "candidate_id"), "candidate");
       proposal = { kind: "memory", op: "approve", candidate_id: shown.id, replaces: [] };
       heading = [`Approve behavior candidate #${shown.id} as worded.`];
     }
