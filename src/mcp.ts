@@ -5,7 +5,7 @@ import { type AllocationClient, reviewAllocation } from "./allocation-review.js"
 import { type AttributionClient, attributeAfterRca, isHumanEntry, latestAttribution, learningTarget } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { getEvent, listEvents } from "./events.js";
+import { getEvent } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -23,6 +23,7 @@ import {
   DomainError,
   decomposeTask,
   escalateTask,
+  getRegistrant,
   getTask,
   HANDOFF_FIELDS,
   HUMAN_ROSTER_AGENT,
@@ -642,8 +643,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const attribution = latestAttribution(deps.db, { id: entry_id, task_id: task.parent_id });
         if (!attribution) throw new DomainError(`entry ${entry_id} carries no attributed objection`);
         if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-        const registrant = listEvents(deps.db, entry.task_id).find((e) => e.kind === "task_registered")!.worker_id;
-        const target = learningTarget(attribution.cause, entry.worker_id, registrant, as);
+        const target = learningTarget(attribution.cause, entry.worker_id, getRegistrant(deps.db, entry.task_id), as);
         const input = {
           ...fields,
           scope: memoryScope(deps, getTask(deps.db, task.parent_id)!),

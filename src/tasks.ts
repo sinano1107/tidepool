@@ -1268,9 +1268,6 @@ export function answerQuestion(
     ).run(JSON.stringify(answers), comment ?? null, question.id);
     // the recommender is whoever registered the question — carried on the
     // answer event so per-agent acceptance rates need no join
-    const registered = db
-      .prepare("SELECT worker_id FROM events WHERE task_id = ? AND kind = 'task_registered'")
-      .get(question.id) as { worker_id: string } | undefined;
     appendEvent(db, {
       taskId: question.id,
       workerId: HUMAN_WORKER_ID,
@@ -1281,7 +1278,7 @@ export function answerQuestion(
           answer: a,
           recommendation_accepted: a === items[i]!.recommendation,
         })),
-        recommended_by: registered?.worker_id ?? HUMAN_WORKER_ID,
+        recommended_by: getRegistrant(db, question.id),
         ...(comment !== undefined && { comment }),
       },
       at: now,
@@ -2505,9 +2502,7 @@ export type BoardTask = Omit<Task, "status"> & {
    *  not a stored column (issue #261: tasks carry no registrant of their
    *  own, same read-time-resolution precedent as push.ts's
    *  listUnnotifiedHumanTasks). registerTask always writes exactly one such
-   *  event, so the join is one-to-one. Populated on `boardRows`-sourced rows
-   *  (listBoard/listQueue) only — `presentTask`'s single-task GET stays out
-   *  of this issue's server-side scope (only the boardRows JOIN). */
+   *  event, so the join is one-to-one. */
   registrant?: string;
 };
 
@@ -2518,11 +2513,20 @@ function isHeld(db: Db, taskId: string): boolean {
   return held === 1;
 }
 
+/** Who registered `taskId` — its own `task_registered` event's worker id.
+ *  registerTask always writes exactly one, so an existing task always has one. */
+export function getRegistrant(db: Db, taskId: string): string {
+  const { worker_id } = db
+    .prepare("SELECT worker_id FROM events WHERE task_id = ? AND kind = 'task_registered'")
+    .get(taskId) as { worker_id: string };
+  return worker_id;
+}
+
 export function presentTask(db: Db, task: Task): BoardTask {
   const { accepted } = db
     .prepare(`SELECT ${acceptedSql("tasks.id")} AS accepted FROM tasks WHERE id = ?`)
     .get(task.id) as { accepted: number };
-  const presented = { ...task, accepted: accepted === 1 };
+  const presented = { ...task, accepted: accepted === 1, registrant: getRegistrant(db, task.id) };
   if (task.status !== "todo") return presented;
   if (hasUnfinishedChildren(db, task.id)) return { ...presented, status: "blocked" };
   if (isHeld(db, task.id)) return { ...presented, status: "held" };

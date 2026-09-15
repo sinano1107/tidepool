@@ -795,6 +795,24 @@ function liveTitle(t) {
   if (t.issue_live_state === "unavailable") return `${t.title} (unavailable)`;
   return t.title;
 }
+function toQuestionCardShape(q, icons) {
+  const isBoard = q.registrant === "tidepool";
+  return {
+    id: q.id,
+    parent: q.parent_id,
+    agent: q.registrant,
+    agentIcon: isBoard ? void 0 : icons[q.registrant],
+    board: isBoard,
+    context: q.purpose,
+    // 1-4 items, each with its own title/detail/options (issue #30) — a
+    // single-item bundle is the degenerate, most common case
+    items: (q.question_items ?? []).map((item) => ({
+      title: item.title,
+      detail: item.detail,
+      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation }))
+    }))
+  };
+}
 function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }, yourTasks = []) {
   const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === "pause");
@@ -805,28 +823,13 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     const d = new Date(iso);
     return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   };
-  const questions = board.filter((t) => t.status === "todo" && t.type === "question").map((q) => {
-    const isBoard = q.registrant === "tidepool";
-    return {
-      id: q.id,
-      parent: q.parent_id,
-      agent: q.registrant,
-      agentIcon: isBoard ? void 0 : icons[q.registrant],
-      board: isBoard,
-      context: q.purpose,
-      // 着地 question(purely-local の land question / PR の merge question)は
-      // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
-      // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
-      landing: q.landing ?? null,
-      // 1-4 items, each with its own title/detail/options (issue #30) — a
-      // single-item bundle is the degenerate, most common case
-      items: (q.question_items ?? []).map((item) => ({
-        title: item.title,
-        detail: item.detail,
-        options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation }))
-      }))
-    };
-  });
+  const questions = board.filter((t) => t.status === "todo" && t.type === "question").map((q) => ({
+    ...toQuestionCardShape(q, icons),
+    // 着地 question(purely-local の land question / PR の merge question)は
+    // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
+    // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
+    landing: q.landing ?? null
+  }));
   const openSessionId = triage.session?.id ?? null;
   const logEntries = [...log.entries].reverse().map((e) => ({
     id: e.id,
@@ -2972,19 +2975,6 @@ function SettingsScreen({ say, registerLeaveGuard }) {
     /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, "The card you're editing has changes that were never saved. Leaving now drops them.")
   ));
 }
-function toQuestionCardShape(task, parentTask) {
-  return {
-    id: task.id,
-    parent: task.parent_id,
-    agent: parentTask?.assignee ?? "\u2014",
-    context: task.purpose,
-    items: (task.question_items ?? []).map((item) => ({
-      title: item.title,
-      detail: item.detail,
-      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation }))
-    }))
-  };
-}
 function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [q, setQ] = React.useState(void 0);
@@ -2994,16 +2984,14 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await fetch(`/api/tasks/${questionId}`);
-      const task = res.ok ? await res.json() : null;
-      if (!task || task.type !== "question" || task.status !== "todo") {
-        if (!cancelled) setQ(null);
-        return;
-      }
-      const parentTask = task.parent_id ? await fetch(`/api/tasks/${task.parent_id}`).then((r) => r.ok ? r.json() : null) : null;
+      const [task, candidates] = await Promise.all([
+        fetch(`/api/tasks/${questionId}`).then((r) => r.ok ? r.json() : null),
+        fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} }))
+      ]);
       if (cancelled) return;
+      if (!task || task.type !== "question" || task.status !== "todo") return setQ(null);
       setRawTask(task);
-      setQ(toQuestionCardShape(task, parentTask));
+      setQ(toQuestionCardShape(task, candidates.icons));
     })().catch(() => {
       if (!cancelled) setQ(null);
     });
