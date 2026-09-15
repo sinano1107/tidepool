@@ -603,7 +603,7 @@ it("起草の Board call の失敗は memory_draft_failed を残し、帰責の 
 
 it.each([
   ["workspace を持たない task", { workspace: null, cause: "preference" }, /workspace/],
-  ["人間が登録した task の task_ambiguity", { workspace: "charts", cause: "task_ambiguity" }, /not registered by an agent/],
+  ["人間が登録した task の task_ambiguity", { workspace: undefined, cause: "task_ambiguity" }, /not registered by an agent/],
 ] as const)("%s は Board call を呼ばずに memory_draft_failed を残す", async (_, { workspace, cause }, reason) => {
   const s = await objectedForDraft("undraftable", { workspace });
   t = s.t;

@@ -179,13 +179,13 @@ export async function attributeAfterRca(
         judgment = uncertain(`Board call failed: ${message(err)}`);
       }
       // 第2回の確定は起草の契機(ADR 0120 決定1(b)(c))
-      await draftBehaviorCandidate(db, deps, record(initial, judgment), input, now);
+      await draftBehaviorCandidate(db, deps, record(initial, judgment), now, input);
     }),
   );
 }
 
 /** 帰責の入力を注釈 event から組む: 異議エントリ本文・steering 列・その注釈より前の decision log。 */
-export function objectionInput(
+function objectionInput(
   db: Db,
   attribution: { id: number; entry_id: number; objection_event_ids: number[] },
 ): AttributionInput {
@@ -210,8 +210,8 @@ export async function draftBehaviorCandidate(
   db: Db,
   deps: BoardCallDeps,
   attribution: { id: number } & Extract<EventPayload, { kind: "objection_attributed" }>,
-  input: AttributionInput,
   now: Date,
+  input: AttributionInput = objectionInput(db, attribution),
 ): Promise<void> {
   const { cause, round, entry_id } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);

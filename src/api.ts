@@ -6,7 +6,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionClient, attributeObjections, type BehaviorDraftClient, draftBehaviorCandidate, latestAttribution, objectionInput } from "./attribution.js";
+import { type AttributionClient, attributeObjections, type BehaviorDraftClient, draftBehaviorCandidate, latestAttribution } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -1915,7 +1915,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         for (const entryId of judgments ? judgments.keys() : []) {
           const attribution = latestAttribution(db, getEvent(db, entryId) as { id: number; task_id: string });
           if (attribution) {
-            void draftBehaviorCandidate(db, { behaviorDraftClient, workspace }, attribution, objectionInput(db, attribution), clock.now()).catch((err) =>
+            void draftBehaviorCandidate(db, { behaviorDraftClient, workspace }, attribution, clock.now()).catch((err) =>
               console.error(`[memory-draft] ${entryId}: ${String(err)}`),
             );
           }
