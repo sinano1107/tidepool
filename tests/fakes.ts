@@ -8,6 +8,9 @@ import type {
   AttributionClient,
   AttributionInput,
   AttributionJudgment,
+  BehaviorDraft,
+  BehaviorDraftClient,
+  BehaviorDraftInput,
 } from "../src/attribution.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -646,6 +649,31 @@ export class FakeAttributionClient implements AttributionClient {
 
   scriptJudgment(entryId: number, judgment: AttributionJudgment | Error): void {
     this.scripted.set(entryId, judgment);
+  }
+}
+
+/** Scripted stand-in at the BehaviorDraftClient seam (issue #617): records every
+ *  input; the draft is scripted per objected entry (or an Error to throw); an
+ *  unscripted entry throws. */
+export class FakeBehaviorDraftClient implements BehaviorDraftClient {
+  readonly calls: Array<{
+    input: BehaviorDraftInput;
+    setting: Pick<ExecutionSettingRow, "model" | "effort">;
+  }> = [];
+  private readonly scripted = new Map<number, BehaviorDraft | Error>();
+
+  async draft(
+    input: BehaviorDraftInput,
+    setting: Pick<ExecutionSettingRow, "model" | "effort">,
+  ): Promise<BehaviorDraft> {
+    this.calls.push({ input, setting });
+    const answer = this.scripted.get(input.entry_id) ?? new Error("no draft scripted");
+    if (answer instanceof Error) throw answer;
+    return answer;
+  }
+
+  scriptDraft(entryId: number, draft: BehaviorDraft | Error): void {
+    this.scripted.set(entryId, draft);
   }
 }
 

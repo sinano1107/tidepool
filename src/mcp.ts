@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
 import { type AllocationClient, reviewAllocation } from "./allocation-review.js";
-import { type AttributionClient, attributeAfterRca, isHumanEntry, latestAttribution, learningTarget } from "./attribution.js";
+import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, isHumanEntry, latestAttribution, learningTarget } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { getEvent } from "./events.js";
@@ -11,7 +11,7 @@ import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertReviewerKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
-import { browseMemory, createBehaviorCandidate, defineMemoryBranch, readMemory, recordKnowledge, searchMemory } from "./memory.js";
+import { browseMemory, createBehaviorCandidate, defineMemoryBranch, memoryScope, readMemory, recordKnowledge, searchMemory } from "./memory.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -143,6 +143,9 @@ export interface McpDeps {
   /** The attribution's Board call seam (ADR 0115 決定2 / issue #575), asked
    *  once a task's last RCA child completes. Absent → `uncertain` stays. */
   attributionClient?: AttributionClient;
+  /** The Behavior candidate drafting Board call seam (issue #617), asked after the
+   *  second attribution round. Absent → nothing is drafted. */
+  behaviorDraftClient?: BehaviorDraftClient;
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's
@@ -419,7 +422,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           }
           // 帰責の第2回(ADR 0115 決定2): 同じ位置・同じ fire-and-forget。決着したのが
           // 異議されたタスクの最後の RCA 子だったときだけ中で撃つ
-          void attributeAfterRca(deps.db, deps.attributionClient, done, now).catch((err) =>
+          void attributeAfterRca(deps.db, deps, done, now).catch((err) =>
             console.error(`[attribution] ${done.id}: ${String(err)}`),
           );
           return { id: done.id, status: done.status };
@@ -725,16 +728,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   );
 
   return server;
-}
-
-/** Memory のスコープ = task の workspace。listLog と同じ解決で、null の workspace は盤面の
- *  既定を継ぐ。null は盤面全体で、それを書けるのは meta-review の統合だけ —— worker の verb
- *  (read verb も同じ helper を通るので込みで)は null に解決されるなら拒否する(issue #623)。
- *  resolveTaskWorkspace は quarantine の副作用を持つので使わない。 */
-function memoryScope(deps: McpDeps, task: Task): string {
-  const scope = task.workspace ?? deps.workspace?.name ?? null;
-  if (scope === null) throw new DomainError("memory verbs need a task workspace — this board has none configured");
-  return scope;
 }
 
 export function createMcpRouter(deps: McpDeps): Router {

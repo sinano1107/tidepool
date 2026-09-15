@@ -410,7 +410,10 @@ export type EventPayload =
       omitted: number;
       tokenizer: string;
       tokenizer_version: string;
-    };
+    }
+  // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃てなかった / 失敗した
+  // (異議されたタスクに帰属)。店の event ではなく rebuild は再生しない。
+  | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string };
 
 export type EventKind = EventPayload["kind"];
 export type EventOrigin = "webui" | "mcp" | "worker" | "board";
@@ -563,6 +566,10 @@ export function getEvent(db: Db, id: number): EventRow | undefined {
     | undefined;
   return row && { ...row, payload: JSON.parse(row.payload) as EventPayload };
 }
+
+/** 盤面の最新 event id(event が無ければ 0)。 */
+export const lastEventId = (db: Db): number =>
+  (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get() as { id: number }).id;
 
 export function listEvents(db: Db, taskId: string): EventRow[] {
   const rows = db

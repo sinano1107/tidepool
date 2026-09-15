@@ -165,6 +165,17 @@ it("後継が無効化済み・candidate のエントリなら置換は domain e
   expect(approvedMemoryEntries(db).map((e) => e.title)).toEqual(["kept"]);
 });
 
+it("author の活動 board(Board call の起草)は Knowledge と Definition では domain error で拒まれ、Behavior candidate にだけ書ける", () => {
+  const { db } = board();
+  const author = { activity: "board" as const, name: "tidepool" };
+  expect(() => recordKnowledge(db, { ...knowledge, author, source: { commit: "0a46a46" } }, "board", at)).toThrow(DomainError);
+  expect(() => defineMemoryBranch(db, { scope: "tidepool", path: "build", text: "how the build runs", author }, "board", at)).toThrow(DomainError);
+  expect(listMemoryEntries(db, {})).toEqual([]);
+
+  createBehaviorCandidate(db, { ...knowledge, author, addressee: null, source: { commit: "0a46a46" } }, "board", at);
+  expect(listMemoryEntries(db, {}).map((e) => e.author)).toEqual([author]);
+});
+
 it("無効化済み・存在しないエントリの無効化は domain error", () => {
   const { db } = board();
   const entry = record(db, "gone");

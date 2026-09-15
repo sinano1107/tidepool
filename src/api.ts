@@ -6,7 +6,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionClient, attributeObjections } from "./attribution.js";
+import { type AttributionClient, attributeObjections, type BehaviorDraftClient, draftAfterCommit } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -19,7 +19,7 @@ import {
   setDisplayLanguage,
 } from "./display-language.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
-import { advanceLogCursor, getLogCursor, listEvents, listLog } from "./events.js";
+import { advanceLogCursor, getLogCursor, lastEventId, listEvents, listLog } from "./events.js";
 import {
   applyExecutionSettingsChange,
   executionSettingsChangeSchema,
@@ -633,6 +633,9 @@ export interface ApiRouterDeps {
    *  commit half of POST /triage/close. Absent → every objection bundles as
    *  `uncertain`, so the RCAs stand as they did before attribution existed. */
   attributionClient?: AttributionClient;
+  /** The Behavior candidate drafting Board call seam (issue #617), fired after a
+   *  commit and after the second attribution round. Absent → nothing is drafted. */
+  behaviorDraftClient?: BehaviorDraftClient;
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), threaded straight to human decompose's
    *  own call into decomposeTask (issue #129) — same resource-side invariant
@@ -696,6 +699,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     githubTokenFile,
     translationClient,
     attributionClient,
+    behaviorDraftClient,
     fableAgents,
     agentsSpeakingProviders,
     agentsUsingHarnesses,
@@ -1354,6 +1358,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         agentsUsingHarnesses,
         landing,
         attributionClient,
+        behaviorDraftClient,
       },
       req.params.id,
       parsed.data.reason,
@@ -1401,6 +1406,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           providerCliAuth,
           boardState,
           attributionClient,
+          behaviorDraftClient,
         },
         task,
         parsed.data.answers,
@@ -1427,7 +1433,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, onQueueHeadChanged, landing, attributionClient },
+      { db, onQueueHeadChanged, landing, attributionClient, behaviorDraftClient, workspace },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),
@@ -1904,7 +1910,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // transaction that bundles and registers with the judgments in hand
         const open = activeTriageSession(db);
         const judgments = open && (await attributeObjections(db, attributionClient, open.id));
+        const since = lastEventId(db);
         result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
+        // ADR 0120 決定1(b): 帰責の transaction の後に起草を fire-and-forget(応答を待たせない)
+        draftAfterCommit(db, { behaviorDraftClient, workspace }, since, clock.now());
       }
       // Only closing an open session re-opens pickup. A sessionless triage
       // never stopped it, so its terminal commit is not a "run now" trigger.

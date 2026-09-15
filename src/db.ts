@@ -186,7 +186,7 @@ const MEMORY_ENTRIES_TABLE_DDL = `
       addressee           TEXT,
       source_kind         TEXT NOT NULL CHECK (source_kind IN ('event', 'commit', 'decision')),
       source_ref          TEXT NOT NULL,
-      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review')),
+      author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review', 'board')),
       author              TEXT NOT NULL,
       version             INTEGER,
       invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
