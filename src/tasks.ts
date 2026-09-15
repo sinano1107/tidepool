@@ -109,6 +109,9 @@ export interface Task {
    *  would-be child, materialized by answerQuestion only on an "approve"
    *  answer. */
   question_pending_child: PendingChildSpec | null;
+  /** Board-internal only (ADR 0120 決定4 / issue #620): 提案を運ぶ question の種別つき提案と pin。
+   *  この欄を持つ question は親を塞がない付帯子(awaitedChildSql)。 */
+  question_proposal: QuestionProposal | null;
   /** System-internal only (issue #11): the PR number a merge-decision
    *  question is standing in for — set only by recordPrOpened under the
    *  `escalate` merge dial, read only by submitAnswer to gate the actual
@@ -165,6 +168,16 @@ export interface TaskContent {
   completion_criteria: string;
 }
 
+/** 提案 question の種別つき提案(ADR 0120 決定4)。pin = replaces の版と candidate の状態。`routing` / `registry` と
+ *  consolidate / invalidate の op は後続(#549 / #583 / #621)が足す。 */
+export interface QuestionProposal {
+  kind: "memory";
+  op: "approve";
+  candidate_id: number;
+  /** version は candidate なら null(版は承認 event の id)。 */
+  replaces: Array<{ id: number; version: number | null }>;
+}
+
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];
   review_tier?: string;
@@ -204,12 +217,13 @@ interface PendingChildSpec extends TaskContent {
  *  boundary. */
 export type TaskRow = Omit<
   Task,
-  "question_items" | "question_answer" | "question_pending_child" | "title" | "purpose" | "completion_criteria" | "review_by"
+  "question_items" | "question_answer" | "question_pending_child" | "question_proposal" | "title" | "purpose" | "completion_criteria" | "review_by"
 > & {
   review_by: string | null;
   question_items: string | null;
   question_answer: string | null;
   question_pending_child: string | null;
+  question_proposal: string | null;
   title: string | null;
   purpose: string | null;
   completion_criteria: string | null;
@@ -256,6 +270,7 @@ export function rowToTask(row: TaskRow): Task {
     question_items: parseJson<QuestionItem[]>(row.question_items),
     question_answer: parseJson<string[]>(row.question_answer),
     question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
+    question_proposal: parseJson<QuestionProposal>(row.question_proposal),
   };
 }
 
@@ -344,6 +359,9 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   /** Board-internal only (ADR 0120 決定2 / issue #618): この task が主題の周期 meta-review であること。
    *  MCP / JSON API からは書けない —— registerMetaReview だけが渡す。 */
   meta_review_subject?: "memory" | "routing";
+  /** Board-internal only (ADR 0120 決定4 / issue #620): 提案 question の提案と pin。MCP / JSON API からは書けない ——
+   *  proposeMemoryChange だけが渡す。 */
+  proposal?: QuestionProposal;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -663,6 +681,7 @@ export function registerTask(
     question_answer_comment: null,
     question_cancel_option: input.cancel_option ?? null,
     question_pending_child: input.pending_child ?? null,
+    question_proposal: input.proposal ?? null,
     question_pending_merge_pr: input.pending_merge_pr ?? null,
     question_pending_local_merge_task_id: input.pending_local_merge_task_id ?? null,
     question_pending_pr_promotion_task_id: input.pending_pr_promotion_task_id ?? null,
@@ -682,12 +701,12 @@ export function registerTask(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, review_by, review_tier, tier, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
-         question_pending_child, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
+         question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
          question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, @review_tier, @tier, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
-         @question_pending_child, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
+         @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
          @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
     ).run({
       ...task,
@@ -702,6 +721,7 @@ export function registerTask(
       question_items: task.question_items && JSON.stringify(task.question_items),
       question_pending_child:
         task.question_pending_child && JSON.stringify(task.question_pending_child),
+      question_proposal: task.question_proposal && JSON.stringify(task.question_proposal),
       meta_review_subject: input.meta_review_subject ?? null,
     });
     appendEvent(db, {
@@ -1203,6 +1223,7 @@ export function assertAnswerable(question: Task, answers: string[]): void {
     question.question_pending_local_merge_task_id !== null ||
     question.question_pending_pr_promotion_task_id !== null ||
     question.question_pending_child !== null ||
+    question.question_proposal !== null ||
     question.question_cancel_option !== null;
   if (isFixedChoiceQuestion) {
     for (let i = 0; i < items.length; i++) {
@@ -1440,7 +1461,8 @@ export function answerQuestion(
           });
         }
       }
-      unblockTarget = question.parent_id ? getTask(db, question.parent_id) : undefined;
+      // 提案 question の親(meta-review)はこの回答を待っていない(付帯子)ので先頭へ戻さない
+      unblockTarget = question.parent_id && question.question_proposal === null ? getTask(db, question.parent_id) : undefined;
     }
 
     if (
@@ -1690,7 +1712,7 @@ export function settlePrPromotionQuestionsAsObserved(
  *  観測 event を1件だけ残す。`answerQuestion` を通さないので `question_answered` も
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
  *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。 */
-function settleQuestionAsObserved(
+export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
   payload: EventPayload,
@@ -2316,7 +2338,8 @@ function unfinishedChildSql(parentRef: string): string {
  *  parent it is holding up, so the predicate has one home rather than a copy
  *  per read口. `rowRef` is the SQL alias of the child row. */
 function awaitedChildSql(rowRef: string): string {
-  return `(${rowRef}.based_on_decision IS NOT NULL OR ${rowRef}.type = 'question')`;
+  // 提案を運ぶ question は付帯子(ADR 0120 決定3): 適用は盤面が行うので親は見届けない
+  return `(${rowRef}.based_on_decision IS NOT NULL OR (${rowRef}.type = 'question' AND ${rowRef}.question_proposal IS NULL))`;
 }
 
 /** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
@@ -2611,6 +2634,7 @@ export function listBoard(
     question_items: parseJson<QuestionItem[]>(row.question_items),
     question_answer: parseJson<string[]>(row.question_answer),
     question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
+    question_proposal: parseJson<QuestionProposal>(row.question_proposal),
   }));
 }
 
@@ -2687,6 +2711,7 @@ export function listQueue(
       question_items: parseJson<QuestionItem[]>(row.question_items),
       question_answer: parseJson<string[]>(row.question_answer),
       question_pending_child: parseJson<PendingChildSpec>(row.question_pending_child),
+      question_proposal: parseJson<QuestionProposal>(row.question_proposal),
     }))
     .map((task) =>
       task.status === "todo" && isSkipped?.(task) ? { ...task, status: "skipped" as const } : task,

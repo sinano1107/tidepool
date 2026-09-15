@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import { recordKnowledge } from "../src/memory.js";
+import { createBehaviorCandidate, recordKnowledge } from "../src/memory.js";
 import { BOARD_WORKER_ID, registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -91,3 +91,29 @@ it("同主題の open な task があれば登録せず、周期は間隔の下�
 async function finish(tp: Tidepool, taskId: string) {
   expect((await completeViaMcp(tp, taskId, false)).isError).not.toBe(true);
 }
+
+it("同主題の open な提案 question があれば、meta-review が完了していても登録しない —— 回答で決着すれば次の poll で登録される(issue #620)", async () => {
+  t = await bootTidepool();
+  expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: 1 })).status).toBe(200);
+  const candidate = createBehaviorCandidate(
+    t.db,
+    { scope: null, path: "habits", title: "Split migrations", text: "Split migrations.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+    "worker",
+    t.clock.now(),
+  ).entry_id;
+  await t.clock.advance(HOUR);
+  const [first] = await openMetaReviews(t);
+  const client = await mcpClient(t.mcpBaseUrl, first.id);
+  const proposed: any = await client.callTool({ name: "propose_memory_change", arguments: { op: "approve", candidate_id: candidate, rationale: "r" } });
+  await client.close();
+  const { question_id } = JSON.parse(proposed.content[0].text);
+  await finish(t, first.id);
+
+  material(t, "second");
+  await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、提案 question が open
+  expect((await openMetaReviews(t)).map((task) => task.id)).toEqual([first.id]); // 完了済みの first は question の木ごと盤面に残る
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"] })).status).toBe(200);
+  await t.clock.advance(HOUR);
+  expect(await openMetaReviews(t)).toMatchObject([{ status: "in_progress" }]);
+});

@@ -6,12 +6,12 @@ import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSIO
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, listEvents } from "./events.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
-import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, registerTask, type Task } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type QuestionProposal, registerTask, settleQuestionAsObserved, type Task } from "./tasks.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
- *  必須、残りの3つは cause.ts の語彙そのもの(間違っていた / 陳腐化)。 */
-export type InvalidationReason = "superseded" | "path_moved" | Extract<Cause, "capability" | "environment" | "requirement_change">;
-const INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change"] as const satisfies readonly InvalidationReason[];
+ *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */
+export type InvalidationReason = "superseded" | "path_moved" | Extract<Cause, "capability" | "environment" | "requirement_change"> | "rejected";
+const INVALIDATION_REASONS = ["superseded", "path_moved", "capability", "environment", "requirement_change", "rejected"] as const satisfies readonly InvalidationReason[];
 
 /** 出所(spec #586 A)。種別は参照の型から導く: commit / event = 事実、decision
  *  (decision_logged の event id)= 推論。 */
@@ -228,7 +228,8 @@ const humanEntryFields = {
 };
 export const humanKnowledgeSchema = z.object({ ...humanEntryFields, title: z.string(), original_title: z.string().optional() });
 export const humanDefinitionSchema = z.object({ ...humanEntryFields, supersedes: z.number().int().positive().optional() });
-export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS), successor_id: z.number().int().positive().optional() });
+// `rejected` は提案 question の reject だけが書く(人間の面・meta-review の verb からは渡せない)
+export const invalidationSchema = z.object({ reason: z.enum(INVALIDATION_REASONS).exclude(["rejected"]), successor_id: z.number().int().positive().optional() });
 
 /** 一覧の絞り込み(HTTP の query と管理MCP が共有)。workspace は完全一致、board_wide は盤面全体だけ。 */
 export const memoryListFilterSchema = z.object({
@@ -308,13 +309,26 @@ export function invalidateMemoryEntry(
       }
     }
     markInvalidated(db, entry_id, reason, successor_id ?? null);
-    return appendEvent(db, {
+    const eventId = appendEvent(db, {
       taskId: null,
       workerId,
       origin,
       payload: { kind: "memory_entry_invalidated", entry_id, reason, successor_id: successor_id ?? null },
       at,
     });
+    // pin の陳腐化(ADR 0120 決定4): この entry を pin する open な提案 question を観測で決着させる。回答中の question は
+    // answerQuestion が先に done にしているので、reject や承認の superseded が自分自身を決着させることは無い
+    const stale = db
+      .prepare(
+        `SELECT id FROM tasks WHERE type = 'question' AND status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'
+           AND (json_extract(question_proposal, '$.candidate_id') = @entry_id
+             OR EXISTS (SELECT 1 FROM json_each(question_proposal, '$.replaces') WHERE json_extract(value, '$.id') = @entry_id))`,
+      )
+      .all({ entry_id }) as Array<{ id: string }>;
+    for (const { id } of stale) {
+      settleQuestionAsObserved(db, id, { kind: "memory_proposal_stale", question_id: id, entry_id, observed_event_id: eventId }, at);
+    }
+    return eventId;
   })();
 }
 
@@ -331,6 +345,87 @@ export function invalidateMemoryByMetaReview(
   const row = requireEntry(db, input.entry_id);
   if (row.kind === "behavior" && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved behavior: propose its invalidation instead`);
   return invalidateMemoryEntry(db, input, workerId, origin, at);
+}
+
+function markApproved(db: Db, id: number, version: number): void {
+  db.prepare("UPDATE memory_entries SET state = 'approved', version = ? WHERE id = ?").run(version, id);
+}
+
+/** Behavior 承認の export(spec #615 A / issue #620): pin 検査(candidate が未無効化の Behavior candidate、replaces の版が
+ *  現在と一致し未無効化)→ memory_entry_approved(版 = この event の id)→ replaces を candidate を後継とする superseded で
+ *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。 */
+export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questionId: string, origin: EventOrigin, at: Date): number {
+  return db.transaction(() => {
+    const candidate = requireEntry(db, proposal.candidate_id);
+    const stale = [
+      ...(candidate.kind === "behavior" && candidate.state === "candidate" && candidate.invalidation_reason === null ? [] : [candidate.id]),
+      ...proposal.replaces.filter(({ id, version }) => {
+        const row = requireEntry(db, id);
+        return row.version !== version || row.invalidation_reason !== null;
+      }).map(({ id }) => id),
+    ];
+    if (stale.length > 0) throw new DomainError(`this proposal is stale: memory ${stale.join(", ")} changed since it was proposed`);
+    const eventId = appendEvent(db, {
+      taskId: null,
+      workerId: HUMAN_WORKER_ID,
+      origin,
+      payload: { kind: "memory_entry_approved", entry_id: candidate.id, question_id: questionId, replaced: proposal.replaces },
+      at,
+    });
+    markApproved(db, candidate.id, eventId);
+    for (const { id } of proposal.replaces) {
+      invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: candidate.id }, HUMAN_WORKER_ID, origin, at);
+    }
+    return eventId;
+  })();
+}
+
+/** 提案 verb(spec #615 E / issue #620): meta-review の子に提案 question を1件立て、pin を焼いて question の id を返す。
+ *  今は op approve だけ(consolidate / invalidate は #621)。 */
+export function proposeMemoryChange(
+  db: Db,
+  metaReview: Pick<Task, "id">,
+  input: { op: "approve"; candidate_id: number; rationale: string },
+  workerId: string,
+  now: Date,
+): { question_id: string } {
+  const row = requireEntry(db, input.candidate_id);
+  if (row.kind !== "behavior" || row.state !== "candidate" || row.invalidation_reason !== null) {
+    throw new DomainError(`memory entry ${row.id} is not a behavior candidate that is still open`);
+  }
+  const detail = [
+    `Approve behavior candidate #${row.id} as worded.`,
+    `Scope: ${row.scope ?? "whole board"}`,
+    `Path: ${row.path}`,
+    `Addressee: ${row.addressee ?? "every agent"}`,
+    `Title: ${row.title}`,
+    "New text:",
+    row.text,
+  ].join("\n");
+  const question = registerTask(
+    db,
+    {
+      type: "question",
+      title: `Approve memory: ${row.title}`,
+      purpose: input.rationale,
+      completion_criteria: "a human answer is recorded",
+      parent_id: metaReview.id,
+      question: [{ title: `Approve memory: ${row.title}`, detail, options: ["approve", "reject"], recommendation: "approve" }],
+      proposal: { kind: "memory", op: input.op, candidate_id: row.id, replaces: [] },
+    },
+    now,
+    workerId,
+    "worker",
+  );
+  return { question_id: question.id };
+}
+
+/** 提案 question への回答の適用(spec #615 F)。submitAnswer が answerQuestion と同じ transaction で呼ぶ ——
+ *  approve は承認の export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は candidate を `rejected` で無効化。 */
+export function applyMemoryProposalAnswer(db: Db, question: Pick<Task, "id" | "question_proposal">, answer: string, origin: EventOrigin, at: Date): void {
+  const proposal = question.question_proposal!;
+  if (answer === "approve") approveMemoryProposal(db, proposal, question.id, origin, at);
+  else invalidateMemoryEntry(db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at);
 }
 
 function markInvalidated(db: Db, id: number, reason: InvalidationReason, successorId: number | null): void {
@@ -379,7 +474,7 @@ function rowToEntry(row: EntryRow): MemoryEntry {
 }
 
 /** 店を変える memory 系 event の種別。watermark(snapshot 識別子)と再生が同じ列を読む。 */
-const STORE_EVENT_KINDS = "('memory_entry_created', 'memory_entry_invalidated')";
+const STORE_EVENT_KINDS = "('memory_entry_created', 'memory_entry_approved', 'memory_entry_invalidated')";
 
 /** 店を変える memory 系 events(id 順)。watermark の再生と rebuild が同じ列を読む。 */
 function storeEvents(db: Db, watermark = Number.MAX_SAFE_INTEGER) {
@@ -399,6 +494,9 @@ export function approvedMemoryEntries(db: Db, watermark?: number): MemoryEntry[]
     for (const { id, event } of storeEvents(db, watermark)) {
       if (event.kind === "memory_entry_created") {
         entries.set(id, { ...event.entry, id, source: sourceOf(event.entry, id), version: versionOf(event.entry.state, id) });
+      } else if (event.kind === "memory_entry_approved") {
+        const entry = entries.get(event.entry_id);
+        if (entry) entries.set(event.entry_id, { ...entry, state: "approved", version: id });
       } else {
         entries.delete(event.entry_id);
       }
@@ -949,6 +1047,7 @@ export const MEMORY_META_REVIEW_VERBS = [
   "fold_memory",
   "move_memory",
   "invalidate_memory",
+  "propose_memory_change",
 ] as const;
 
 /** この task が主題 `subject` の meta-review か(主題 memory 専用 verb の門が読む、#619 / #620)。 */
@@ -972,7 +1071,7 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
 }
 
 /** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する。due = 前回登録から周期が経ち、
- *  同主題の open な task が無く、前回の watermark より後に材料がある(前回が無ければ周期は満たす)。 */
+ *  同主題の open な task・提案 question が無く、前回の watermark より後に材料がある(前回が無ければ周期は満たす)。 */
 export function registerDueMetaReviews(db: Db, now: Date): void {
   const periodMs = readMemorySettings(db).meta_review_period_days * 24 * 60 * 60 * 1000;
   for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
@@ -983,9 +1082,13 @@ export function registerDueMetaReviews(db: Db, now: Date): void {
       )
       .get(subject) as { created_at: string; watermark: number } | undefined;
     if (last && Date.parse(last.created_at) + periodMs > now.getTime()) continue;
+    // 未決着 = 同主題の open な task か、同主題の open な提案 question(ADR 0120 決定2)
     const open = db
-      .prepare("SELECT 1 FROM tasks WHERE meta_review_subject = ? AND status IN ('todo', 'in_progress')")
-      .get(subject);
+      .prepare(
+        `SELECT 1 FROM tasks WHERE status IN ('todo', 'in_progress')
+           AND (meta_review_subject = @subject OR json_extract(question_proposal, '$.kind') = @subject)`,
+      )
+      .get({ subject });
     if (open) continue;
     const material = db
       .prepare(
@@ -1003,6 +1106,7 @@ export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin
     db.exec(`DELETE FROM memory_entries; DROP TABLE memory_fts; ${MEMORY_FTS_DDL};`);
     for (const { id, event } of storeEvents(db)) {
       if (event.kind === "memory_entry_created") insertEntry(db, id, event.entry);
+      else if (event.kind === "memory_entry_approved") markApproved(db, event.entry_id, id);
       else markInvalidated(db, event.entry_id, event.reason, event.successor_id);
     }
     db.prepare("UPDATE memory_index_version SET tokenizer = ?, preprocess_version = ?").run(MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION);

@@ -3,6 +3,7 @@ import { openDb } from "../src/db.js";
 import { getEvent, listEvents, listLog } from "../src/events.js";
 import {
   approvedMemoryEntries,
+  approveMemoryProposal,
   createBehaviorCandidate,
   defineMemoryBranch,
   ensureMemoryIndex,
@@ -415,4 +416,72 @@ it("rebuild は一覧を無効化の理由コード・後継 id ごと同じに�
 
   expect(listMemoryEntries(db, {})).toEqual(before);
   expect(getEvent(db, eventId)).toMatchObject({ kind: "memory_index_rebuilt", worker_id: "human", origin: "mcp" });
+});
+
+/** 承認の export(issue #620 / spec #615 A)。pin の一致 / 不一致は回答の挙動としてサーバ境界が言う。 */
+function candidate(db: ReturnType<typeof openDb>, title: string) {
+  return createBehaviorCandidate(
+    db,
+    { scope: null, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+    "worker",
+    at,
+  ).entry_id;
+}
+const approve = (db: ReturnType<typeof openDb>, candidate_id: number, replaces: Array<{ id: number; version: number | null }> = []) =>
+  approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id, replaces }, "question-1", "webui", at);
+
+it("承認は memory_entry_approved を task 非依存で残し、candidate を approved にして版 = その event の id にする", () => {
+  const { db } = board();
+  const id = candidate(db, "Keep migrations apart");
+
+  const eventId = approve(db, id);
+
+  expect(getEvent(db, eventId)).toMatchObject({
+    task_id: null,
+    worker_id: "human",
+    origin: "webui",
+    payload: { kind: "memory_entry_approved", entry_id: id, question_id: "question-1", replaced: [] },
+  });
+  expect(approvedMemoryEntries(db)).toMatchObject([{ id, state: "approved", version: eventId }]);
+});
+
+it("承認は replaces をその candidate を後継とする superseded で無効化する", () => {
+  const { db } = board();
+  const old = candidate(db, "old wording");
+  const oldVersion = approve(db, old);
+  const successor = candidate(db, "new wording");
+
+  const eventId = approve(db, successor, [{ id: old, version: oldVersion }]);
+
+  expect(getEvent(db, eventId)?.payload).toMatchObject({ replaced: [{ id: old, version: oldVersion }] });
+  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([successor]);
+  expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([{ id: old, invalidation_reason: "superseded", successor_id: successor }]);
+});
+
+it("承認は1 transaction —— 置換の途中で失敗すれば承認 event も approved も残らない", () => {
+  const { db } = board();
+  const old = candidate(db, "old wording");
+  const oldVersion = approve(db, old);
+  const successor = candidate(db, "new wording");
+  const before = listMemoryEntries(db, {});
+
+  // 同じ entry を2度置換すると2度目の無効化が落ちる(pin の検査は両方通る)
+  expect(() => approve(db, successor, [{ id: old, version: oldVersion }, { id: old, version: oldVersion }])).toThrow(DomainError);
+
+  expect(listMemoryEntries(db, {})).toEqual(before);
+  expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER).map((e) => e.id)).toEqual([old]);
+});
+
+it("watermark 再生と rebuild は承認を読む —— 承認前の watermark では candidate のまま、以降は版つきの approved", () => {
+  const { db } = board();
+  const old = candidate(db, "old wording");
+  const oldVersion = approve(db, old);
+  const successor = candidate(db, "new wording");
+  const eventId = approve(db, successor, [{ id: old, version: oldVersion }]);
+
+  expect(approvedMemoryEntries(db, eventId - 1).map((e) => e.id)).toEqual([old]);
+  expect(approvedMemoryEntries(db, Number.MAX_SAFE_INTEGER)).toEqual(approvedMemoryEntries(db));
+  const before = listMemoryEntries(db, {});
+  rebuildMemoryIndex(db, "human", "webui", at);
+  expect(listMemoryEntries(db, {})).toEqual(before);
 });

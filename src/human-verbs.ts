@@ -10,6 +10,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { quarantinedHarnesses } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
+import { applyMemoryProposalAnswer } from "./memory.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
@@ -803,15 +804,20 @@ export async function submitAnswer(
   // An answer during triage is durable immediately, but its parent unblock is
   // staged until commit. The activity touch also defers the timeout close.
   const session = triageActivity(deps.db, now(), openTriage);
-  const { question, parentUnblocked, pickupResumed } = answerQuestion(
-    deps.db,
-    task,
-    answers,
-    now(),
-    session && ((taskId) => stageFrontInsert(deps.db, session.id, taskId)),
-    comment,
-    origin,
-  );
+  // 提案 question(ADR 0120 決定3)は回答と記憶の適用を1 transaction にする —— pin 不一致は回答ごと拒否する
+  const { question, parentUnblocked, pickupResumed } = deps.db.transaction(() => {
+    const answered = answerQuestion(
+      deps.db,
+      task,
+      answers,
+      now(),
+      session && ((taskId) => stageFrontInsert(deps.db, session.id, taskId)),
+      comment,
+      origin,
+    );
+    if (task.question_proposal !== null) applyMemoryProposalAnswer(deps.db, task, answers[0]!, origin, now());
+    return answered;
+  })();
   if (wantsMerge) {
     appendEvent(deps.db, {
       taskId: task.id,
