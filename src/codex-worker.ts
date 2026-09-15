@@ -24,7 +24,13 @@ import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import { type ExecutionSetting, resolveExecutionSetting } from "./execution-setting.js";
-import { buildMemoryInjection, recordMemoryInjection } from "./memory.js";
+import {
+  buildMemoryInjection,
+  isMetaReviewOf,
+  MEMORY_META_REVIEW_VERBS,
+  recordMemoryInjection,
+  WORKER_MEMORY_VERBS,
+} from "./memory.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
 import type { WorkerAdapter } from "./worker.js";
@@ -630,7 +636,12 @@ export class CodexWorker implements WorkerAdapter {
       ...closedSurfaceConfig(),
       'forced_login_method="chatgpt"',
       `mcp_servers.tidepool.url=${toml(taskMcpUrl.toString())}`,
-      `mcp_servers.tidepool.enabled_tools=${toml(BOARD_VERBS)}`,
+      // ADR 0122 決定2: MCP の登録と同じ差を写す(probe の期待値 BOARD_VERBS は task 無しの面なので変えない)
+      `mcp_servers.tidepool.enabled_tools=${toml(
+        isMetaReviewOf(this.options.db, task.id, "memory")
+          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
+          : BOARD_VERBS,
+      )}`,
       "mcp_servers.tidepool.required=true",
       skillConfig(this.options.codexHome, workspace.path),
       `hooks.SubagentStart=[{hooks=[{type="command",command=${toml(hook)}}]}]`,

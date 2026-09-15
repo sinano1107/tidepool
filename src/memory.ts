@@ -4,7 +4,8 @@ import { z } from "zod";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, listEvents } from "./events.js";
+import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, registerTask, type Task } from "./tasks.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -175,6 +176,48 @@ export function defineMemoryBranch(
   })();
 }
 
+/** meta-review の Knowledge の畳み(issue #619 / ADR 0122 決定1): 新本文を `based_on_decision` の decision(推論)を
+ *  出所に作り、replaces(approved かつ未無効化の Knowledge、1つ以上)をその後継つき superseded にする。1 transaction。 */
+export function foldMemory(
+  db: Db,
+  input: Omit<EntryInput, "source" | "original"> & { replaces: number[]; based_on_decision: number },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  const { replaces, based_on_decision, ...fields } = input;
+  if (replaces.length === 0) throw new DomainError("fold_memory needs at least one entry to replace");
+  if (getEvent(db, based_on_decision)?.kind !== "decision_logged") throw new DomainError(`event ${based_on_decision} is not a logged decision`);
+  return db.transaction(() => {
+    for (const id of replaces) requireKnowledge(db, id);
+    const created = recordKnowledge(db, { ...fields, source: { event_id: based_on_decision } }, origin, at);
+    for (const id of replaces) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id: created.entry_id }, fields.author.name, origin, at);
+    return created;
+  })();
+}
+
+/** meta-review の Knowledge の移動(ADR 0122 決定1): 盤面が title・text・原文・出所を写して新しい scope / path に作り、
+ *  旧を `path_moved` で新へ指す —— 「本文は同じ」は LLM の申告でなくここが保証する。 */
+export function moveMemory(
+  db: Db,
+  input: { entry_id: number; scope: string | null; path: string; author: MemoryEntryFields["author"] },
+  origin: EventOrigin,
+  at: Date,
+): { entry_id: number; event_id: number } {
+  return db.transaction(() => {
+    const old = rowToEntry(requireKnowledge(db, input.entry_id));
+    const source = old.source.kind === "commit" ? { commit: old.source.ref } : { event_id: old.source.ref };
+    const created = recordKnowledge(db, { scope: input.scope, path: input.path, title: old.title, text: old.text, original: old.original, source, author: input.author }, origin, at);
+    invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: created.entry_id }, input.author.name, origin, at);
+    return created;
+  })();
+}
+
+function requireKnowledge(db: Db, id: number): EntryRow {
+  const row = requireEntry(db, id);
+  if (row.kind !== "knowledge" || row.invalidation_reason !== null) throw new DomainError(`memory entry ${id} is not an approved, non-invalidated knowledge entry`);
+  return row;
+}
+
 /** 人間の面(settings の HTTP / 管理MCP)の書き込み欄(spec #586 F)。workspace は null = 盤面全体、
  *  original_title / original_text は人間の原文で言語は盤面の表示言語。出所欄は無い(ADR 0083 追記5)。 */
 const humanEntryFields = {
@@ -210,9 +253,9 @@ export function humanEntryInput<T extends { workspace: string | null; original_t
   };
 }
 
-/** Memory のスコープ = task の workspace。listLog と同じ解決で、null の workspace は盤面の
- *  既定を継ぐ。null は盤面全体で、それを書けるのは meta-review の統合だけ —— worker の verb
- *  (read verb も同じ helper を通るので込みで)と Board call の起草は null に解決されるなら拒否する(issue #623)。
+/** worker の verb の Memory のスコープ = task の workspace に固定。listLog と同じ解決で、null の workspace は盤面の
+ *  既定を継ぐ。worker の verb(read verb も同じ helper を通るので込みで)と Board call の起草は null に解決されるなら
+ *  拒否する(issue #623)。meta-review の専用 verb はここを通らず引数の scope を使う(ADR 0122 決定1)。
  *  resolveTaskWorkspace は quarantine の副作用を持つので使わない。 */
 export function memoryScope(board: { workspace?: { name: string } }, task: Pick<Task, "workspace">): string {
   const scope = task.workspace ?? board.workspace?.name ?? null;
@@ -273,6 +316,21 @@ export function invalidateMemoryEntry(
       at,
     });
   })();
+}
+
+/** meta-review の無効化(ADR 0122 決定1): approved の Behavior は承認の線なので提案へ回し、`path_moved` は
+ *  `moveMemory` だけが生む。 */
+export function invalidateMemoryByMetaReview(
+  db: Db,
+  input: Parameters<typeof invalidateMemoryEntry>[1],
+  workerId: string,
+  origin: EventOrigin,
+  at: Date,
+): number {
+  if (input.reason === "path_moved") throw new DomainError("path_moved comes only from move_memory, which copies the text itself");
+  const row = requireEntry(db, input.entry_id);
+  if (row.kind === "behavior" && row.state === "approved") throw new DomainError(`memory entry ${row.id} is an approved behavior: propose its invalidation instead`);
+  return invalidateMemoryEntry(db, input, workerId, origin, at);
 }
 
 function markInvalidated(db: Db, id: number, reason: InvalidationReason, successorId: number | null): void {
@@ -425,7 +483,7 @@ function memoryWatermark(db: Db): number {
  *  memory マーカーに結ぶ。 */
 function recordPull<T>(
   db: Db,
-  reader: MemoryReader,
+  reader: Pick<MemoryReader, "taskId" | "agent">,
   pull: Omit<Extract<EventPayload, { kind: "memory_pulled" }>, "kind" | "watermark">,
   result: T,
   at: Date,
@@ -581,6 +639,85 @@ export function browseMemory(
         entries: leaves.map(({ id, title }) => ({ id, title })),
         truncated: children.length > page * PAGE_LENGTH,
       },
+      at,
+    );
+  })();
+}
+
+/** meta-review の一覧3つ(issue #619): 人間の面と同じ一覧を verb ごとに絞ってページで返す。scope・宛先では
+ *  絞らない(両方を見る必要があるのは矛盾を見る人間と meta-review だけ —— ADR 0083 追記4)。 */
+export function pullMemoryList(
+  db: Db,
+  reader: Pick<MemoryReader, "taskId" | "agent">,
+  verb: "list_memory_candidates" | "list_memory_behaviors" | "list_memory_entries",
+  input: Parameters<typeof listMemoryEntries>[1] & { include_invalidated?: boolean; page?: number },
+  at: Date,
+) {
+  const page = input.page ?? 1;
+  return db.transaction(() => {
+    const entries =
+      verb === "list_memory_entries"
+        ? listMemoryEntries(db, input)
+        : verb === "list_memory_behaviors"
+          ? listMemoryEntries(db, { kind: "behavior", state: "approved" })
+          : listMemoryEntries(db, {}).filter((e) => e.state === "candidate" && (input.include_invalidated || e.invalidation_reason === null));
+    const shown = entries.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
+    return recordPull(db, reader, { verb, input, returned_ids: shown.map((e) => e.id) }, { entries: shown, truncated: entries.length > page * PAGE_LENGTH }, at);
+  })();
+}
+
+/** meta-review の Precedent の読み口(issue #619): 異議つき decision マーカーを cause・outcome と、その decision より前に
+ *  読んだ / 見た記憶つきで返す。既定の `since_watermark` は前回(読み手の task 以外で最新)の memory meta-review 登録の
+ *  watermark で、異議の event がそれより後の decision だけを返す —— 古い decision への新しい異議も材料である。 */
+export function listPrecedents(
+  db: Db,
+  reader: Pick<MemoryReader, "taskId" | "agent">,
+  input: { since_watermark?: number; page?: number },
+  at: Date,
+) {
+  const page = input.page ?? 1;
+  return db.transaction(() => {
+    const since =
+      input.since_watermark ??
+      (
+        db
+          .prepare(
+            `SELECT json_extract(payload, '$.material_watermark') AS watermark FROM events
+              WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = 'memory' AND task_id IS NOT ? ORDER BY id DESC LIMIT 1`,
+          )
+          .get(reader.taskId) as { watermark: number } | undefined
+      )?.watermark ??
+      0;
+    const lastObjection = db.prepare(
+      `SELECT MAX(id) AS id FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ?`,
+    );
+    const precedents = listEpisodes(db, {}).flatMap((episode) => {
+      const objected = episode.markers.filter(
+        (m) => m.kind === "decision" && ((lastObjection.get(m.eventId) as { id: number | null }).id ?? -1) > since,
+      );
+      const events = objected.length === 0 ? [] : listEvents(db, episode.taskId);
+      return objected.map((m) => ({
+        task_id: episode.taskId,
+        workspace: episode.workspace,
+        agent: episode.agent,
+        worker_spawned_event_id: episode.workerSpawnedEventId,
+        decision_event_id: m.eventId!,
+        line: m.line,
+        displayed: m.displayed,
+        objections: m.objections,
+        cause: m.cause,
+        completed: episode.completed,
+        pr_merged: episode.prMerged,
+        entries_read: entriesReadBefore(episode, events, m.eventId!),
+        entries_seen: entriesSeenBefore(episode, events, m.eventId!),
+      }));
+    });
+    const shown = precedents.slice((page - 1) * PAGE_LENGTH, page * PAGE_LENGTH);
+    return recordPull(
+      db,
+      reader,
+      { verb: "list_precedents", input, returned_ids: [...new Set(shown.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))] },
+      { precedents: shown, truncated: precedents.length > page * PAGE_LENGTH },
       at,
     );
   })();
@@ -798,6 +935,20 @@ const META_REVIEW_SUBJECTS = {
   },
 } as const;
 type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
+
+/** worker の memory verb と、主題 memory の meta-review の接続でそれを置き換える専用 verb(ADR 0122 決定2)。MCP の登録と
+ *  Codex の `enabled_tools` が同じ差を写す。 */
+export const WORKER_MEMORY_VERBS = ["record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"] as const;
+export const MEMORY_META_REVIEW_VERBS = [
+  "list_memory_candidates",
+  "list_memory_behaviors",
+  "list_precedents",
+  "list_memory_entries",
+  "define_memory",
+  "fold_memory",
+  "move_memory",
+  "invalidate_memory",
+] as const;
 
 /** この task が主題 `subject` の meta-review か(主題 memory 専用 verb の門が読む、#619 / #620)。 */
 export function isMetaReviewOf(db: Db, taskId: string, subject: MetaReviewSubject): boolean {

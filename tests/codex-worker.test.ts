@@ -156,6 +156,36 @@ describe("CodexWorker (ADR 0098)", () => {
     });
   });
 
+  it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
+    const f = await fixture();
+    const enabledTools = (index: number) => {
+      const args = f.process.calls[index]!.args;
+      const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith("mcp_servers.tidepool.enabled_tools="))!;
+      return JSON.parse(entry.slice("mcp_servers.tidepool.enabled_tools=".length)) as string[];
+    };
+    f.worker.start(task(f.db));
+    f.worker.start(registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", title: "Memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" },
+      new Date("2026-08-24T00:00:00.000Z"),
+    ));
+
+    const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate"];
+    expect(enabledTools(0)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
+    expect(enabledTools(1)).toEqual([
+      ...base,
+      "propose_from_objection",
+      "list_memory_candidates",
+      "list_memory_behaviors",
+      "list_precedents",
+      "list_memory_entries",
+      "define_memory",
+      "fold_memory",
+      "move_memory",
+      "invalidate_memory",
+    ]);
+  });
+
   it("見える approved の記憶があれば work / review task とも注入節を taskPrompt の先頭に置き、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
     const f = await fixture();
     const bare = task(f.db, "codex-no-memory");

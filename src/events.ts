@@ -384,8 +384,18 @@ export type EventPayload =
   // memory マーカーになる。
   | {
       kind: "memory_pulled";
-      verb: "browse_memory" | "search_memory" | "read_memory";
-      input: { prefix?: string; query?: string; page?: number; ids?: number[] };
+      verb: "browse_memory" | "search_memory" | "read_memory" | "list_memory_candidates" | "list_memory_behaviors" | "list_memory_entries" | "list_precedents";
+      input: {
+        prefix?: string;
+        query?: string;
+        page?: number;
+        ids?: number[];
+        scope?: string | null;
+        kind?: string;
+        state?: string;
+        include_invalidated?: boolean;
+        since_watermark?: number;
+      };
       returned_ids: number[];
       watermark: number;
       candidates?: Array<{ id: number; dropped: MemoryDropReason | null }>;

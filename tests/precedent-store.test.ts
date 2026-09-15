@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventRow } from "../src/events.js";
+import { appendEvent, type EventRow, getEvent } from "../src/events.js";
+import { listPrecedents, registerMetaReview } from "../src/memory.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
 
 const FIXTURE_TASK = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
@@ -220,4 +221,59 @@ it("読み口は同じ (workspace, agent) の Episode を時系列(session を�
   expect(
     listEpisodes(db, { workspace: "sandbox", agent: "tako" }).map((e) => e.workerSpawnedEventId),
   ).toEqual([SPAWNED_EVENT_ID, 12]);
+});
+
+it("list_precedents は異議つき decision を cause・outcome・読んだ / 見た記憶つきで返し、既定では前回の meta-review 登録より後に異議が来たものだけを返す(issue #619)", () => {
+  const db = seedBoard();
+  projectAndPersist(db, {
+    workerSpawnedEventId: SPAWNED_EVENT_ID,
+    transcriptPath: writeTranscript(logDir(), `${FIXTURE_TASK}.${SPAWNED_EVENT_ID}.stream.jsonl`),
+  });
+  const at = new Date("2026-09-15T00:00:00.000Z");
+  const event = (payload: Parameters<typeof appendEvent>[1]["payload"]) =>
+    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
+  event({ kind: "memory_injected", worker_spawned_event_id: SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
+  event({ kind: "objection_raised", entry_id: 6, comment: "前の周期の異議", session_id: 1 });
+  registerMetaReview(db, "memory", at); // 前回の meta-review
+  const objection = event({ kind: "objection_raised", entry_id: 7, comment: "2回目は要らない", session_id: 1 });
+  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause: "preference", evidence: "e", round: "after_rca" });
+  registerMetaReview(db, "memory", at); // 今回の meta-review(読み手)
+  // setup のみ: 登録した task の id を引く
+  const [, current] = db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory' ORDER BY rowid").all() as Array<{ id: string }>;
+  const reader = { taskId: current!.id, agent: "auditor" };
+
+  const result = listPrecedents(db, reader, {}, at);
+  expect(result).toEqual({
+    precedents: [
+      {
+        task_id: FIXTURE_TASK,
+        workspace: "sandbox",
+        agent: "tako",
+        worker_spawned_event_id: SPAWNED_EVENT_ID,
+        decision_event_id: 7,
+        line: "kept the note to three bullets",
+        displayed: false,
+        objections: ["2回目は要らない"],
+        cause: "preference",
+        completed: {
+          result:
+            "Created notes.md with 3 bullets on tide pools; logged 3 decisions (2 identical); used 1 subagent and 1 advisor consult.",
+          handoffPresent: true,
+        },
+        pr_merged: null,
+        entries_read: [],
+        entries_seen: [42],
+      },
+    ],
+    truncated: false,
+    event_id: expect.any(Number),
+  });
+  expect(getEvent(db, result.event_id)).toMatchObject({
+    task_id: current!.id,
+    payload: { kind: "memory_pulled", verb: "list_precedents", returned_ids: [42] },
+  });
+  expect(listPrecedents(db, reader, { since_watermark: 0 }, at).precedents.map((p) => [p.decision_event_id, p.cause])).toEqual([
+    [6, null],
+    [7, "preference"],
+  ]);
 });
