@@ -26,7 +26,10 @@ workspace のままでは他の workspace の記憶を取り違える — どち
    `meta_review_subject = memory` の task にだけ #619 / #620 / #621 と本 ADR の verb を登録し、他の task の tool 一覧には
    出さない。Claude 側は `mcp__tidepool` をサーバ単位で開けたまま(ADR 0035 / 0038「verb の権限は盤面側が縛る」)、Codex 側
    は spawn ごとの `enabled_tools` に同じ差を写す。preflight probe は task 無しで繋ぐので基本の面だけを見、期待値は変えない。
-   呼び出し時の DomainError の門は残す — tool 一覧は権限の境界ではない。spec #615 E の「BOARD_VERBS に入れるが他の task
+   主題 `memory` の task には worker の memory verb(`record_knowledge` / `define_memory_branch` / `browse` / `search` / `read`)を
+   登録せず、専用 verb で**置き換える** — `memoryScope` は既定 workspace が設定されていれば null-workspace の task をそこへ解決する
+   ので、門ではなく非表示でしか塞げない(残せば meta-review が既定 workspace に author `worker_verb` の Knowledge を新規に書ける)。
+   memory 系でない worker verb は残す。呼び出し時の DomainError の門は残す — tool 一覧は権限の境界ではない。spec #615 E の「BOARD_VERBS に入れるが他の task
    から呼べば DomainError」は ADR に無い spec の線で、story 48(非 RCA の worker に新しい verb を見せない)と矛盾していた
    ので改める。`propose_from_objection`(#616)も同じ規則に揃える(派生 issue)。
 3. **記憶の書き込みは書き手の task の記録に属し、決定ログのエントリとして異議の対象になる。** ADR 0083 追記4 の「直接適用して
