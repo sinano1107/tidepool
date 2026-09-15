@@ -186,7 +186,7 @@ export function foldMemory(
 ): { entry_id: number; event_id: number } {
   const { replaces, based_on_decision, ...fields } = input;
   if (replaces.length === 0) throw new DomainError("fold_memory needs at least one entry to replace");
-  if (getEvent(db, based_on_decision)?.kind !== "decision_logged") throw new DomainError(`event ${based_on_decision} is not a logged decision`);
+  requireDecision(db, based_on_decision);
   return db.transaction(() => {
     for (const id of replaces) requireKnowledge(db, id);
     const created = recordKnowledge(db, { ...fields, source: { event_id: based_on_decision } }, origin, at);
@@ -210,6 +210,12 @@ export function moveMemory(
     invalidateMemoryEntry(db, { entry_id: old.id, reason: "path_moved", successor_id: created.entry_id }, input.author.name, origin, at);
     return created;
   })();
+}
+
+/** 畳みと統合の出所 = meta-review が log_decision で書いた推論。 */
+function requireDecision(db: Db, eventId: number): number {
+  if (getEvent(db, eventId)?.kind !== "decision_logged") throw new DomainError(`event ${eventId} is not a logged decision`);
+  return eventId;
 }
 
 function requireKnowledge(db: Db, id: number): EntryRow {
@@ -347,26 +353,28 @@ function openProposalsPinning(db: Db, entryId: number): string[] {
       .prepare(
         `SELECT id FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'
            AND (json_extract(question_proposal, '$.candidate_id') = @entryId
+             OR json_extract(question_proposal, '$.target.id') = @entryId
              OR EXISTS (SELECT 1 FROM json_each(question_proposal, '$.replaces') WHERE json_extract(value, '$.id') = @entryId))`,
       )
       .all({ entryId }) as Array<{ id: string }>
   ).map(({ id }) => id);
 }
 
-/** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior candidate で、replaces の版が現在と一致し未無効化。
+/** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior candidate(invalidate op は target の版が一致し未無効化)で、
+ *  replaces の版が現在と一致し未無効化。
  *  approve も reject も、見せた状態に対してだけ適用する。 */
 export function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRow {
-  const candidate = requireEntry(db, proposal.candidate_id);
+  const unchanged = ({ id, version }: { id: number; version: number | null }) => {
+    const row = requireEntry(db, id);
+    return row.version === version && row.invalidation_reason === null;
+  };
+  const named = proposal.op === "invalidate" ? requireEntry(db, proposal.target.id) : requireEntry(db, proposal.candidate_id);
   const fresh =
-    candidate.kind === "behavior" &&
-    candidate.state === "candidate" &&
-    candidate.invalidation_reason === null &&
-    proposal.replaces.every(({ id, version }) => {
-      const row = requireEntry(db, id);
-      return row.version === version && row.invalidation_reason === null;
-    });
+    (proposal.op === "invalidate"
+      ? unchanged(proposal.target)
+      : named.kind === "behavior" && named.state === "candidate" && named.invalidation_reason === null) && proposal.replaces.every(unchanged);
   if (!fresh) throw new DomainError("this proposal is stale: a memory entry it names changed since it was proposed");
-  return candidate;
+  return named;
 }
 
 function markApproved(db: Db, id: number, version: number): void {
@@ -374,10 +382,14 @@ function markApproved(db: Db, id: number, version: number): void {
 }
 
 /** Behavior 承認の export(spec #615 A / issue #620): pin 検査(assertProposalFresh)→ memory_entry_approved(版 = この event の id)→ replaces を candidate を後継とする superseded で
- *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。 */
+ *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。
+ *  invalidate op(issue #621)は target を理由コードで後継なしに無効化し、その memory_entry_invalidated の event id を返す。 */
 export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questionId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     const candidate = assertProposalFresh(db, proposal);
+    if (proposal.op === "invalidate") {
+      return invalidateMemoryEntry(db, { entry_id: candidate.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at);
+    }
     const eventId = appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,
@@ -393,50 +405,96 @@ export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questi
   })();
 }
 
-/** 提案 verb(spec #615 E / issue #620): meta-review の子に提案 question を1件立て、pin を焼いて question の id を返す。
- *  今は op approve だけ(consolidate / invalidate は #621)。 */
+/** 提案 verb(spec #615 E / issue #620・#621): meta-review の子に提案 question を1件立て、pin を焼いて question の id を返す。
+ *  op の欄は MCP の入力が平たいので、op ごとの必須欄はここで引く。consolidate の新 candidate と question は1 transaction。 */
 export function proposeMemoryChange(
   db: Db,
   metaReviewId: string,
-  input: { op: "approve"; candidate_id: number; rationale: string },
+  input: {
+    op: "approve" | "consolidate" | "invalidate";
+    rationale: string;
+    candidate_id?: number;
+    text?: { scope: string | null; path: string; title: string; text: string; addressee: string | null };
+    replaces?: number[];
+    based_on_decision?: number;
+    target_id?: number;
+    reason?: Extract<QuestionProposal, { op: "invalidate" }>["reason"];
+  },
   workerId: string,
   now: Date,
 ): { question_id: string } {
-  const row = requireEntry(db, input.candidate_id);
-  if (row.kind !== "behavior" || row.state !== "candidate" || row.invalidation_reason !== null) {
-    throw new DomainError(`memory entry ${row.id} is not a behavior candidate that is still open`);
-  }
-  // 承認は無効化ではないので陳腐化の hook に掛からない —— 同じ entry への2本目は、1本目の承認後に人間の reject 待ちで
-  // 周期を止める(ADR 0120 退けた案)。提案の時点で断る
-  if (openProposalsPinning(db, row.id).length > 0) {
-    throw new DomainError(`memory entry ${row.id} is already in an open proposal question`);
-  }
-  const detail = [
-    `Approve behavior candidate #${row.id} as worded.`,
-    `Scope: ${row.scope ?? "whole board"}`,
-    `Path: ${row.path}`,
-    `Addressee: ${row.addressee ?? "every agent"}`,
-    `Title: ${row.title}`,
-    "New text:",
-    row.text,
-  ].join("\n");
-  const title = `Approve memory: ${row.title}`;
-  const question = registerTask(
-    db,
-    {
-      type: "question",
-      title,
-      purpose: input.rationale,
-      completion_criteria: "a human answer is recorded",
-      parent_id: metaReviewId,
-      question: [{ title, detail, options: ["approve", "reject"], recommendation: "approve" }],
-      proposal: { kind: "memory", op: input.op, candidate_id: row.id, replaces: [] },
-    },
-    now,
-    workerId,
-    "worker",
-  );
-  return { question_id: question.id };
+  const need = <T>(value: T | undefined, field: string): T => {
+    if (value === undefined) throw new DomainError(`op ${input.op} needs ${field}`);
+    return value;
+  };
+  return db.transaction(() => {
+    let proposal: QuestionProposal;
+    let heading: string[];
+    if (input.op === "consolidate") {
+      const replaced = [...new Set(need(input.replaces, "replaces"))].map((id) => requireEntry(db, id));
+      if (replaced.length === 0) throw new DomainError("a consolidation needs at least one entry to replace");
+      for (const row of replaced) {
+        if (row.kind !== "behavior" || row.invalidation_reason !== null) throw new DomainError(`memory entry ${row.id} is not a non-invalidated behavior`);
+      }
+      const decision = requireDecision(db, need(input.based_on_decision, "based_on_decision"));
+      const created = createBehaviorCandidate(
+        db,
+        { ...need(input.text, "text"), source: { event_id: decision }, author: { activity: "meta_review", name: workerId } },
+        "worker",
+        now,
+      );
+      proposal = { kind: "memory", op: "consolidate", candidate_id: created.entry_id, replaces: replaced.map(({ id, version }) => ({ id, version })) };
+      heading = [`Consolidate into new behavior candidate #${created.entry_id}, replacing:`, ...replaced.map((row) => `#${row.id}: ${row.text}`)];
+    } else if (input.op === "invalidate") {
+      const row = requireEntry(db, need(input.target_id, "target_id"));
+      if (row.kind !== "behavior" || row.state !== "approved" || row.invalidation_reason !== null) {
+        throw new DomainError(`memory entry ${row.id} is not an approved, non-invalidated behavior`);
+      }
+      const reason = need(input.reason, "reason");
+      proposal = { kind: "memory", op: "invalidate", target: { id: row.id, version: row.version! }, reason, replaces: [] };
+      heading = [`Invalidate approved behavior #${row.id} (reason: ${reason}).`];
+    } else {
+      const row = requireEntry(db, need(input.candidate_id, "candidate_id"));
+      if (row.kind !== "behavior" || row.state !== "candidate" || row.invalidation_reason !== null) {
+        throw new DomainError(`memory entry ${row.id} is not a behavior candidate that is still open`);
+      }
+      proposal = { kind: "memory", op: "approve", candidate_id: row.id, replaces: [] };
+      heading = [`Approve behavior candidate #${row.id} as worded.`];
+    }
+    // 承認は無効化ではないので陳腐化の hook に掛からない —— pin する entry が別の提案にも pin されていると、片方の承認後に
+    // もう片方が人間の reject 待ちで周期を止める(ADR 0120 退けた案)。提案の時点で断る
+    const pinned = [...("candidate_id" in proposal ? [proposal.candidate_id] : [proposal.target.id]), ...proposal.replaces.map(({ id }) => id)];
+    for (const id of pinned) {
+      if (openProposalsPinning(db, id).length > 0) throw new DomainError(`memory entry ${id} is already in an open proposal question`);
+    }
+    const shown = requireEntry(db, "candidate_id" in proposal ? proposal.candidate_id : proposal.target.id);
+    const detail = [
+      ...heading,
+      `Scope: ${shown.scope ?? "whole board"}`,
+      `Path: ${shown.path}`,
+      `Addressee: ${shown.addressee ?? "every agent"}`,
+      `Title: ${shown.title}`,
+      input.op === "invalidate" ? "Text:" : "New text:",
+      shown.text,
+    ].join("\n");
+    const title = `${{ approve: "Approve", consolidate: "Consolidate", invalidate: "Invalidate" }[input.op]} memory: ${shown.title}`;
+    const question = registerTask(
+      db,
+      {
+        type: "question",
+        title,
+        purpose: input.rationale,
+        completion_criteria: "a human answer is recorded",
+        parent_id: metaReviewId,
+        question: [{ title, detail, options: ["approve", "reject"], recommendation: "approve" }],
+        proposal,
+      },
+      now,
+      workerId,
+      "worker",
+    );
+    return { question_id: question.id };
+  })();
 }
 
 function markInvalidated(db: Db, id: number, reason: InvalidationReason, successorId: number | null): void {
