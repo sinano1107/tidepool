@@ -3,6 +3,7 @@ import { appendEvent, type EventPayload } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import { aggregateCells, episodeOutcome, type LearnerEpisode, recommend } from "../src/learner.js";
 import {
+  api,
   bootTidepool,
   completeIntegrationReviews,
   completeViaMcp,
@@ -26,6 +27,16 @@ const candidate = (
 });
 const opus = candidate("anthropic", "opus");
 const sol = candidate("openai", "gpt-5.6-sol");
+
+/** 帰責の event は memory meta-review の材料なので、盤面が登録して queue に置く(issue #618)。後続の work が
+ *  次の pickup を取れるよう、先に head から走らせて完了させる(setup)。 */
+async function completeMemoryMetaReview(tp: Tidepool) {
+  const { id } = tp.db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory'").get() as { id: string };
+  await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
+  // 並べ替えと Run now は別 —— head での2回目の move が pickup を求める
+  await api(tp.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
+  expect((await completeViaMcp(tp, id, false)).isError).not.toBe(true);
+}
 
 /** 観測された episode の既定形。テストが言いたい1点だけを上書きする。 */
 function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
@@ -207,6 +218,7 @@ it("観測が効くと shadow 行は selector と乖離しうるが、選択は�
   appendEvent(t.db, { taskId: earlier.id, workerId: "board", origin: "board", at: t.clock.now(), payload: attributed });
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
+  await completeMemoryMetaReview(t);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -272,6 +284,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   });
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
+  await completeMemoryMetaReview(t);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);
@@ -336,6 +349,7 @@ it("セルの model は観測された具体 id —— pin が alias でも、�
   });
   await completeViaMcp(t, earlier.id);
   await completeIntegrationReviews(t, earlier.id);
+  await completeMemoryMetaReview(t);
 
   const later = await registerWork(t, "later");
   await t.clock.advance(HOUR);

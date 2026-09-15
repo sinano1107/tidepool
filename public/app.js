@@ -2063,30 +2063,38 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
   const id = "board:memory";
   const open = edit.isOpen(id);
   const cap = String(settings.injection_token_cap);
+  const period = String(settings.meta_review_period_days);
   const [draft, setDraft] = React.useState(cap);
+  const [periodDraft, setPeriodDraft] = React.useState(period);
   const [busy, setBusy] = React.useState(false);
-  const dirty = draft.trim() !== cap;
-  const ok = /^[1-9]\d*$/.test(draft.trim());
+  const dirty = draft.trim() !== cap || periodDraft.trim() !== period;
+  const ok = /^[1-9]\d*$/.test(draft.trim()) && /^[1-9]\d*$/.test(periodDraft.trim());
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api("/api/settings/memory", { injection_token_cap: Number(draft.trim()) });
-      say("success", "memory cap saved", `${saved.injection_token_cap} tokens`);
+      const saved = await api("/api/settings/memory", {
+        injection_token_cap: Number(draft.trim()),
+        meta_review_period_days: Number(periodDraft.trim())
+      });
+      say("success", "memory settings saved", `${saved.injection_token_cap} tokens \xB7 every ${saved.meta_review_period_days} days`);
       edit.close();
       await onSaved();
     } catch (err) {
-      say("danger", "memory cap save failed", String(err.message || err));
+      say("danger", "memory settings save failed", String(err.message || err));
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(cap)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom."), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => {
+    setDraft(cap);
+    setPeriodDraft(period);
+  }) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "memory")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "injection cap", kind: "mono", value: `${cap} tokens` }), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "meta-review period", kind: "mono", value: `${period} days` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Injection cap (tokens)", mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: cap }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom."), /* @__PURE__ */ React.createElement(Input, { label: "Meta-review period (days)", mono: true, value: periodDraft, onChange: (e) => setPeriodDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the fewest days between two memory meta-reviews. once past it, the board registers one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
       ok,
       busy,
-      saveLabel: "Save memory cap",
+      saveLabel: "Save memory settings",
       onSave: save,
       onCancel: () => edit.close()
     }

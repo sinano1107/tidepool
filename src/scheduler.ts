@@ -27,6 +27,7 @@ import {
   quarantinedHarnesses,
 } from "./harness-containment.js";
 import { recordShadow } from "./learner.js";
+import { registerDueMetaReviews } from "./memory.js";
 import { getProviderPaceOffset } from "./pace-offsets.js";
 import {
   canonicalHarness,
@@ -648,6 +649,10 @@ export function startScheduler(deps: {
     // pickup block と誤読させる(issue #297)。
     throttleRevalidating = true;
     try {
+      // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
+      // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
+      // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
+      registerDueMetaReviews(db, clock.now());
       // 上位 halt により観測へ至らないなら、再評価中ではない。その halt 自身が
       // `GET /pause` の列挙に現れるので、ここで freshness を降ろす。
       if (await pickupBlocked()) {

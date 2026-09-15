@@ -125,3 +125,37 @@ it("fresh 盤面に注入上限の1行表があり、正でない上限は CHECK
   expect(() => db.prepare("UPDATE memory_defaults SET injection_token_cap = 0").run()).toThrow(/CHECK/);
   db.close();
 });
+
+/** meta-review の主題列と周期の盤面設定(spec #615 D / issue #618)。fresh と migrate 後で同じ CHECK を言う。 */
+function expectMetaReviewSchema(db: ReturnType<typeof openDb>) {
+  const task = db.prepare(
+    "INSERT INTO tasks (id, type, status, title, purpose, completion_criteria, sort_key, created_at, meta_review_subject) VALUES (?, 'review', 'todo', 't', 'p', 'c', 1, '2026-09-15T00:00:00.000Z', ?)",
+  );
+  task.run("m", "memory");
+  task.run("r", "routing");
+  task.run("n", null);
+  expect(() => task.run("x", "precedent")).toThrow(/CHECK/);
+  const period = db.prepare(
+    "INSERT INTO memory_defaults (id, meta_review_period_days) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET meta_review_period_days = excluded.meta_review_period_days",
+  );
+  period.run(null);
+  period.run(3);
+  expect(() => period.run(0)).toThrow(/CHECK/);
+}
+
+it("fresh 盤面の tasks.meta_review_subject は memory / routing / NULL だけを、memory_defaults.meta_review_period_days は正の値か NULL を受ける(issue #618)", () => {
+  const db = openDb(":memory:");
+  expectMetaReviewSchema(db);
+  db.close();
+});
+
+it("主題列と周期列の無い旧い盤面は、再オープンで同じ CHECK つきの列を得る(issue #618)", async () => {
+  const dbPath = join(await mkdtemp(join(tmpdir(), "tidepool-db-migrate-meta-review-")), "board.sqlite");
+  openDb(dbPath).close();
+  const stripped = new Database(dbPath);
+  stripped.exec("ALTER TABLE tasks DROP COLUMN meta_review_subject; ALTER TABLE memory_defaults DROP COLUMN meta_review_period_days;");
+  stripped.close();
+  const db = openDb(dbPath);
+  expectMetaReviewSchema(db);
+  db.close();
+});

@@ -393,8 +393,9 @@ export type EventPayload =
   // spec #586 G: エントリ表と FTS を events から作り直した(盤面スコープ、task_id NULL)。
   // 刻んだ索引の版を持つ。
   | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
-  // spec #586 C: 人間が settings タブ / 管理MCP から注入上限を変えた(盤面スコープ、task_id NULL)。
-  | { kind: "memory_settings_changed"; injection_token_cap: number }
+  // spec #586 C / issue #618: 人間が settings タブ / 管理MCP から memory 設定を変えた(盤面スコープ、task_id NULL)。
+  // 変えなかった欄も合わせた後の値で持つ。
+  | { kind: "memory_settings_changed"; injection_token_cap: number; meta_review_period_days: number }
   // spec #586 C: spawn 時の注入(task 帰属、worker_spawned の直後)。注入した entry(定義を含む)の
   // id と版、組んだ時点の watermark、計数したトークン数と計数器、出した INDEX の深さ・木の全深さ・
   // 落とした関連 leaf の件数(#600 D。再生できない event なので消費者の着地を待たずに持つ)。
@@ -411,6 +412,9 @@ export type EventPayload =
       tokenizer: string;
       tokenizer_version: string;
     }
+  // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
+  // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
+  | { kind: "meta_review_registered"; subject: "memory"; material_watermark: number }
   // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃てなかった / 失敗した
   // (異議されたタスクに帰属)。店の event ではなく rebuild は再生しない。
   | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; reason: string };

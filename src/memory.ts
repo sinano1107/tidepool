@@ -5,7 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent } from "./events.js";
-import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, type Task } from "./tasks.js";
+import { BOARD_WORKER_ID, DomainError, HUMAN_WORKER_ID, registerTask, type Task } from "./tasks.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、残りの3つは cause.ts の語彙そのもの(間違っていた / 陳腐化)。 */
@@ -738,32 +738,110 @@ export function recordMemoryInjection(
 /** 注入上限の既定(spec #586 C)。上限は ADR 0083 決定10 が置いた唯一のノブ。 */
 const DEFAULT_INJECTION_TOKEN_CAP = 2000;
 
-export const memorySettingsChangeSchema = z.object({ injection_token_cap: z.number().int().positive() });
-type MemorySettings = z.infer<typeof memorySettingsChangeSchema>;
+/** meta-review の周期の既定(日、ADR 0120 決定2)。間隔の下限。 */
+const DEFAULT_META_REVIEW_PERIOD_DAYS = 7;
+
+export const memorySettingsChangeSchema = z.object({
+  injection_token_cap: z.number().int().positive().optional(),
+  meta_review_period_days: z.number().int().positive().optional(),
+});
+type MemorySettings = { injection_token_cap: number; meta_review_period_days: number };
 
 export function readMemorySettings(db: Db): MemorySettings {
-  const row = db.prepare("SELECT injection_token_cap FROM memory_defaults WHERE id = 1").get() as
-    | { injection_token_cap: number | null }
+  const row = db.prepare("SELECT injection_token_cap, meta_review_period_days FROM memory_defaults WHERE id = 1").get() as
+    | { injection_token_cap: number | null; meta_review_period_days: number | null }
     | undefined;
-  return { injection_token_cap: row?.injection_token_cap ?? DEFAULT_INJECTION_TOKEN_CAP };
+  return {
+    injection_token_cap: row?.injection_token_cap ?? DEFAULT_INJECTION_TOKEN_CAP,
+    meta_review_period_days: row?.meta_review_period_days ?? DEFAULT_META_REVIEW_PERIOD_DAYS,
+  };
 }
 
-/** 上限を書き、盤面スコープの操作イベントとして経路つきで残す(applyExecutionSettingsChange と
- *  同じ形)。返り値は memory_settings_changed の event id。 */
-export function changeMemorySettings(db: Db, change: MemorySettings, origin: EventOrigin, at: Date): number {
+/** 設定を書き、盤面スコープの操作イベントとして経路つきで残す(applyExecutionSettingsChange と
+ *  同じ形)。欄はどちらも省略でき、event は合わせた後の両欄を持つ。返り値は memory_settings_changed の event id。 */
+export function changeMemorySettings(
+  db: Db,
+  change: z.infer<typeof memorySettingsChangeSchema>,
+  origin: EventOrigin,
+  at: Date,
+): number {
+  const row = { injection_token_cap: change.injection_token_cap ?? null, meta_review_period_days: change.meta_review_period_days ?? null };
+  if (row.injection_token_cap === null && row.meta_review_period_days === null) throw new DomainError("change at least one memory setting");
   return db.transaction(() => {
+    // 渡さなかった欄は NULL(= コードの既定)のまま残す —— 既定値を行に焼かない
     db.prepare(
-      `INSERT INTO memory_defaults (id, injection_token_cap) VALUES (1, ?)
-       ON CONFLICT(id) DO UPDATE SET injection_token_cap = excluded.injection_token_cap`,
-    ).run(change.injection_token_cap);
+      `INSERT INTO memory_defaults (id, injection_token_cap, meta_review_period_days) VALUES (1, @injection_token_cap, @meta_review_period_days)
+       ON CONFLICT(id) DO UPDATE SET
+         injection_token_cap = COALESCE(excluded.injection_token_cap, injection_token_cap),
+         meta_review_period_days = COALESCE(excluded.meta_review_period_days, meta_review_period_days)`,
+    ).run(row);
     return appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,
       origin,
-      payload: { kind: "memory_settings_changed", ...change },
+      payload: { kind: "memory_settings_changed", ...readMemorySettings(db) },
       at,
     });
   })();
+}
+
+/** 周期 meta-review の主題(ADR 0120 決定2)。`routing` は #549 で足す。 */
+const META_REVIEW_SUBJECTS = {
+  memory: {
+    title: "Memory meta-review",
+    purpose:
+      "Periodic meta-review of the board's memory store. Judge repeats among candidates by reading them, not by counting. " +
+      "For a Behavior, ask whether it holds true whatever leaf sits under its branch. Propose changes through the proposal verb; " +
+      "apply fixes directly only to Knowledge and Definitions. Read the invalidated candidates and their reasons first, so you do not re-propose what was rejected.",
+    completion_criteria:
+      "every candidate and store change since the previous meta-review is either proposed, applied (Knowledge / Definitions only), or deliberately left as is",
+  },
+} as const;
+type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
+
+/** この task が主題 `subject` の meta-review か(主題 memory 専用 verb の門が読む、#619 / #620)。 */
+export function isMetaReviewOf(db: Db, taskId: string, subject: MetaReviewSubject): boolean {
+  return db.prepare("SELECT 1 FROM tasks WHERE id = ? AND meta_review_subject = ?").get(taskId, subject) !== undefined;
+}
+
+/** 主題の meta-review を盤面名義で登録する(周期と scratchpad の振り分けの両方が通る1本、due は見ない)。 */
+export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
+  db.transaction(() => {
+    const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject], meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
+    const { watermark } = db.prepare("SELECT MAX(id) AS watermark FROM events").get() as { watermark: number };
+    appendEvent(db, {
+      taskId: task.id,
+      workerId: BOARD_WORKER_ID,
+      origin: "board",
+      payload: { kind: "meta_review_registered", subject, material_watermark: watermark },
+      at: now,
+    });
+  })();
+}
+
+/** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する。due = 前回登録から周期が経ち、
+ *  同主題の open な task が無く、前回の watermark より後に材料がある(前回が無ければ周期は満たす)。 */
+export function registerDueMetaReviews(db: Db, now: Date): void {
+  const periodMs = readMemorySettings(db).meta_review_period_days * 24 * 60 * 60 * 1000;
+  for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
+    const last = db
+      .prepare(
+        `SELECT created_at, json_extract(payload, '$.material_watermark') AS watermark FROM events
+          WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(subject) as { created_at: string; watermark: number } | undefined;
+    if (last && Date.parse(last.created_at) + periodMs > now.getTime()) continue;
+    const open = db
+      .prepare("SELECT 1 FROM tasks WHERE meta_review_subject = ? AND status IN ('todo', 'in_progress')")
+      .get(subject);
+    if (open) continue;
+    const material = db
+      .prepare(
+        "SELECT 1 FROM events WHERE id > ? AND kind IN ('memory_entry_created', 'memory_entry_invalidated', 'objection_attributed')",
+      )
+      .get(last?.watermark ?? 0);
+    if (material) registerMetaReview(db, subject, now);
+  }
 }
 
 /** rebuild(spec #586 G): エントリ表と FTS を消し、memory 系 events を再生して作り直し、

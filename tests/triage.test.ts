@@ -341,8 +341,11 @@ it("scratchpad 行はセッションを開かず共有され、commit で振り�
   });
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const metaReview = board.find((x: any) => x.title === "the agent keeps renaming things");
-  expect(metaReview.type).toBe("review");
+  // meta_review の振り分けは周期と同じ登録関数で主題 memory の meta-review を刻む(due は見ない、issue #618)
+  const metaReview = board.find((x: any) => x.meta_review_subject === "memory");
+  expect(metaReview).toMatchObject({ type: "review", workspace: null });
+  const registered = (await api(t.baseUrl, "GET", `/api/tasks/${metaReview.id}/events`)).json.filter((e: any) => e.kind === "meta_review_registered");
+  expect(registered).toMatchObject([{ payload: { subject: "memory" } }]);
   const task = board.find((x: any) => x.title === "fix the flaky seed script");
   expect(task.type).toBe("work");
   expect(board.some((x: any) => x.title === "just grumbling")).toBe(false);
