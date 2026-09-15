@@ -344,8 +344,8 @@ it("scratchpad 行はセッションを開かず共有され、commit で振り�
   // meta_review の振り分けは周期と同じ登録関数で主題 memory の meta-review を刻む(due は見ない、issue #618)
   const metaReview = board.find((x: any) => x.meta_review_subject === "memory");
   expect(metaReview).toMatchObject({ type: "review", workspace: null });
-  const registered = t.db.prepare("SELECT task_id, payload FROM events WHERE kind = 'meta_review_registered'").all() as any[];
-  expect(registered.map((e) => [e.task_id, JSON.parse(e.payload).subject])).toEqual([[metaReview.id, "memory"]]);
+  const registered = (await api(t.baseUrl, "GET", `/api/tasks/${metaReview.id}/events`)).json.filter((e: any) => e.kind === "meta_review_registered");
+  expect(registered).toMatchObject([{ payload: { subject: "memory" } }]);
   const task = board.find((x: any) => x.title === "fix the flaky seed script");
   expect(task.type).toBe("work");
   expect(board.some((x: any) => x.title === "just grumbling")).toBe(false);

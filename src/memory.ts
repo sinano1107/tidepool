@@ -765,18 +765,21 @@ export function changeMemorySettings(
   origin: EventOrigin,
   at: Date,
 ): number {
-  if (Object.keys(change).length === 0) throw new DomainError("change at least one memory setting");
+  const row = { injection_token_cap: change.injection_token_cap ?? null, meta_review_period_days: change.meta_review_period_days ?? null };
+  if (row.injection_token_cap === null && row.meta_review_period_days === null) throw new DomainError("change at least one memory setting");
   return db.transaction(() => {
-    const merged = { ...readMemorySettings(db), ...change };
+    // 渡さなかった欄は NULL(= コードの既定)のまま残す —— 既定値を行に焼かない
     db.prepare(
       `INSERT INTO memory_defaults (id, injection_token_cap, meta_review_period_days) VALUES (1, @injection_token_cap, @meta_review_period_days)
-       ON CONFLICT(id) DO UPDATE SET injection_token_cap = excluded.injection_token_cap, meta_review_period_days = excluded.meta_review_period_days`,
-    ).run(merged);
+       ON CONFLICT(id) DO UPDATE SET
+         injection_token_cap = COALESCE(excluded.injection_token_cap, injection_token_cap),
+         meta_review_period_days = COALESCE(excluded.meta_review_period_days, meta_review_period_days)`,
+    ).run(row);
     return appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,
       origin,
-      payload: { kind: "memory_settings_changed", ...merged },
+      payload: { kind: "memory_settings_changed", ...readMemorySettings(db) },
       at,
     });
   })();
@@ -795,6 +798,11 @@ const META_REVIEW_SUBJECTS = {
   },
 } as const;
 type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
+
+/** この task が主題 `subject` の meta-review か(主題 memory 専用 verb の門が読む、#619 / #620)。 */
+export function isMetaReviewOf(db: Db, taskId: string, subject: MetaReviewSubject): boolean {
+  return db.prepare("SELECT 1 FROM tasks WHERE id = ? AND meta_review_subject = ?").get(taskId, subject) !== undefined;
+}
 
 /** 主題の meta-review を盤面名義で登録する(周期と scratchpad の振り分けの両方が通る1本、due は見ない)。 */
 export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {

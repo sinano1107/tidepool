@@ -245,4 +245,9 @@ it("注入上限は未設定なら 2,000 トークンで、変更は読み口に
     origin: "webui",
     payload: { kind: "memory_settings_changed", injection_token_cap: 500, meta_review_period_days: 7 },
   });
+
+  // 片方だけの変更は他方を保ち、event は両欄を運ぶ(issue #618)
+  const periodEventId = changeMemorySettings(db, { meta_review_period_days: 3 }, "mcp", at);
+  expect(getEvent(db, periodEventId)?.payload).toEqual({ kind: "memory_settings_changed", injection_token_cap: 500, meta_review_period_days: 3 });
+  expect(() => changeMemorySettings(db, {}, "webui", at)).toThrow(/at least one/);
 });

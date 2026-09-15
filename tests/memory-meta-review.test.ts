@@ -21,20 +21,9 @@ function material(tp: Tidepool, title: string) {
   );
 }
 
-/** 決着した task は GET /api/tasks の木から畳まれるので、登録の履歴は表から読む。 */
-function metaReviews(tp: Tidepool) {
-  return tp.db.prepare("SELECT id, status FROM tasks WHERE meta_review_subject IS NOT NULL ORDER BY sort_key").all() as Array<{
-    id: string;
-    status: string;
-  }>;
-}
-
-function registeredEvents(tp: Tidepool) {
-  return tp.db.prepare("SELECT task_id, worker_id, payload FROM events WHERE kind = 'meta_review_registered' ORDER BY id").all() as Array<{
-    task_id: string;
-    worker_id: string;
-    payload: string;
-  }>;
+/** 盤面に open な memory meta-review(登録されれば同じ pass で拾われて open のまま見える)。 */
+async function openMetaReviews(tp: Tidepool): Promise<any[]> {
+  return ((await api(tp.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory");
 }
 
 it("前回登録が無く材料があれば、poll が盤面名義で memory meta-review を登録し、同じ pass で pickup する(issue #618)", async () => {
@@ -43,26 +32,30 @@ it("前回登録が無く材料があれば、poll が盤面名義で memory met
 
   await t.clock.advance(HOUR);
 
-  const { id } = metaReviews(t)[0]!;
-  const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.id === id);
-  expect(review).toMatchObject({ type: "review", meta_review_subject: "memory", workspace: null, status: "in_progress" });
+  const [{ id }] = await openMetaReviews(t);
   // assignee は未指定のまま刻まれ、読み口で Auditor に解決される
-  expect(t.db.prepare("SELECT assignee FROM tasks WHERE id = ?").get(review.id)).toEqual({ assignee: null });
-  expect(t.worker.started.map((task) => task.id)).toEqual([review.id]);
-  const registrant = t.db.prepare("SELECT worker_id FROM events WHERE task_id = ? AND kind = 'task_registered'").get(review.id);
-  expect(registrant).toEqual({ worker_id: BOARD_WORKER_ID });
-  const [event] = registeredEvents(t);
-  expect(event!).toMatchObject({ task_id: review.id, worker_id: BOARD_WORKER_ID });
-  expect(JSON.parse(event!.payload)).toEqual({ kind: "meta_review_registered", subject: "memory", material_watermark: expect.any(Number) });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json).toMatchObject({
+    type: "review",
+    meta_review_subject: "memory",
+    workspace: null,
+    assignee: null,
+    status: "in_progress",
+    registrant: BOARD_WORKER_ID,
+  });
+  expect(t.worker.started.map((task) => task.id)).toEqual([id]);
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
+  expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([
+    { worker_id: BOARD_WORKER_ID, payload: { subject: "memory", material_watermark: expect.any(Number) } },
+  ]);
 });
 
-it("材料が無ければ登録せず、meta_review_registered も残さない(issue #618)", async () => {
+it("材料が無ければ登録しない(issue #618)", async () => {
   t = await bootTidepool();
 
   await t.clock.advance(HOUR);
 
-  expect(metaReviews(t)).toEqual([]);
-  expect(registeredEvents(t)).toEqual([]);
+  expect(await openMetaReviews(t)).toEqual([]);
+  expect(t.worker.started).toEqual([]);
 });
 
 it("同主題の open な task があれば登録せず、周期は間隔の下限で、期限超過後は材料が出た poll で登録される(issue #618)", async () => {
@@ -70,29 +63,29 @@ it("同主題の open な task があれば登録せず、周期は間隔の下�
   expect((await api(t.baseUrl, "POST", "/api/settings/memory", { meta_review_period_days: 1 })).status).toBe(200);
   material(t, "first");
   await t.clock.advance(HOUR);
-  const first = metaReviews(t)[0]!;
+  const [first] = await openMetaReviews(t);
 
   material(t, "second");
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、同主題が open(slot で走っている)
-  expect(metaReviews(t)).toHaveLength(1);
+  expect((await openMetaReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
   await finish(t, first.id);
   await t.clock.advance(HOUR); // 前回登録より後の材料 "second" があり、周期も過ぎている
-  const second = metaReviews(t)[1]!;
-  expect(second.status).toBe("in_progress");
+  const [second] = await openMetaReviews(t);
+  expect(second).toMatchObject({ status: "in_progress" });
 
   await finish(t, second.id);
   material(t, "third");
   await t.clock.advance(20 * HOUR); // 材料はあるが、前回登録から周期(1日)が経っていない
-  expect(metaReviews(t)).toHaveLength(2);
+  expect(await openMetaReviews(t)).toEqual([]);
   await t.clock.advance(5 * HOUR); // 周期を過ぎた最初の poll で登録
-  const third = metaReviews(t)[2]!;
-  expect(third.status).toBe("in_progress");
+  const [third] = await openMetaReviews(t);
+  expect(third).toMatchObject({ status: "in_progress" });
 
   await finish(t, third.id);
   await t.clock.advance(2 * DAY); // 周期は過ぎたが、前回登録以降の材料が無い
-  expect(metaReviews(t)).toHaveLength(3);
-  expect(registeredEvents(t)).toHaveLength(3);
+  expect(await openMetaReviews(t)).toEqual([]);
+  expect(t.worker.started).toHaveLength(3);
 });
 
 async function finish(tp: Tidepool, taskId: string) {
