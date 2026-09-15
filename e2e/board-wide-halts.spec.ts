@@ -1,7 +1,7 @@
 import { quarantineCliAuth } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { FakeContainerRuntime, usagePanelText } from "../tests/fakes.js";
-import { api, HOUR, registerWork } from "../tests/harness.js";
+import { api, HOUR, queueWork, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 test("Pause 中の queue ↑ は操作を隠さず、slot と toast が停止理由を名指す(ADR 0058)", async ({
@@ -9,7 +9,7 @@ test("Pause 中の queue ↑ は操作を隠さず、slot と toast が停止理
   page,
 }) => {
   const t = await boot();
-  await registerWork(t, "waits for resume");
+  queueWork(t, "waits for resume");
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Queue" }).click();
@@ -76,7 +76,7 @@ test("usage 観測が遅い queue ↑ は pickup 成功を名乗らず、再評�
   page,
 }) => {
   const t = await boot();
-  await registerWork(t, "waits for a fresh usage observation");
+  queueWork(t, "waits for a fresh usage observation");
   let release!: () => void;
   t.worker.scriptUsageGate(
     new Promise<void>((resolve) => {
@@ -105,7 +105,7 @@ test("fable 線で止まった行だけがキューで減光し、盤面は流�
 }) => {
   const t = await boot({ fableAgents: () => ["fable-artisan"] });
   const now = t.clock.now();
-  await registerWork(t, "paced fable work", undefined, undefined, "fable-artisan");
+  queueWork(t, "paced fable work", undefined, undefined, "fable-artisan");
   // session/week は健全、fable 線だけ超過 — tests/throttle.test.ts と同じ観測
   t.worker.scriptUsage(
     usagePanelText({
@@ -130,7 +130,7 @@ test("triage と Pause が同時なら slot はサーバ順序の先頭(triage)�
   page,
 }) => {
   const t = await boot();
-  await registerWork(t, "waits behind both halts");
+  queueWork(t, "waits behind both halts");
   await api(t.baseUrl, "POST", "/api/triage/start");
 
   await page.goto(t.baseUrl);

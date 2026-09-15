@@ -1,5 +1,5 @@
 import { FakeDraftClient } from "../tests/fakes.js";
-import { api, type Tidepool } from "../tests/harness.js";
+import { api, queueWork, type Tidepool } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
 // 親を塞ぐ human タスクの完了(issue #13 / #301)。孤立行のワンタップは
@@ -11,17 +11,18 @@ const PARENT_TITLE = "parent work";
 const CHILD_TITLE = "sign the paperwork";
 
 /** 親 → それを塞ぐ human の子、という最小の木。子の id ではなく親の id を返すのは、
- *  行が名指す `blocks <parent>` の相手がそれだから。 */
+ *  行が名指す `blocks <parent>` の相手がそれだから。親は扉を通さずに置く —— 扉の登録は
+ *  pickup の契機で(ADR 0119 決定2)、走り出した親には子を足せない。 */
 async function blockingTree(t: Tidepool): Promise<string> {
-  const parent = await api(t.baseUrl, "POST", "/api/tasks", { ...ROOT, title: PARENT_TITLE });
+  const parent = queueWork(t, PARENT_TITLE);
   await api(t.baseUrl, "POST", "/api/tasks", {
     ...ROOT,
     title: CHILD_TITLE,
     assignee: "human",
-    parent_id: parent.json.id,
+    parent_id: parent.id,
     decompose_reason: "the signature is mine to give",
   });
-  return parent.json.id;
+  return parent.id;
 }
 
 test("親を塞ぐ human タスクの Done は完了ダイアログを開き、draft が6項目を埋めて欠落欄に警告を出す", async ({
