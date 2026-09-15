@@ -341,6 +341,9 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   quarantine_harness?: string;
   /** System-internal only (ADR 0075): the warned configured expiry epoch. */
   cli_auth_expiry_warning?: number;
+  /** Board-internal only (ADR 0120 決定2 / issue #618): この task が主題の周期 meta-review であること。
+   *  MCP / JSON API からは書けない —— registerMetaReview だけが渡す。 */
+  meta_review_subject?: "memory" | "routing";
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -680,12 +683,12 @@ export function registerTask(
          risk_flag, review_flag, review_by, review_tier, tier, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, created_at)
+         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, @review_tier, @tier, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @created_at)`,
+         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
     ).run({
       ...task,
       review_by: task.review_by && JSON.stringify(task.review_by),
@@ -699,6 +702,7 @@ export function registerTask(
       question_items: task.question_items && JSON.stringify(task.question_items),
       question_pending_child:
         task.question_pending_child && JSON.stringify(task.question_pending_child),
+      meta_review_subject: input.meta_review_subject ?? null,
     });
     appendEvent(db, {
       taskId: task.id,

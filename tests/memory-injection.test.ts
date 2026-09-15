@@ -234,15 +234,15 @@ it("注入の記録は task 帰属・agent 名義の memory_injected で、worke
 
 it("注入上限は未設定なら 2,000 トークンで、変更は読み口に効き、人間名義・task 無しの memory_settings_changed を残す", () => {
   const db = openDb(":memory:");
-  expect(readMemorySettings(db)).toEqual({ injection_token_cap: 2000 });
+  expect(readMemorySettings(db)).toEqual({ injection_token_cap: 2000, meta_review_period_days: 7 });
 
   const eventId = changeMemorySettings(db, { injection_token_cap: 500 }, "webui", at);
 
-  expect(readMemorySettings(db)).toEqual({ injection_token_cap: 500 });
+  expect(readMemorySettings(db)).toEqual({ injection_token_cap: 500, meta_review_period_days: 7 });
   expect(getEvent(db, eventId)).toMatchObject({
     task_id: null,
     worker_id: "human",
     origin: "webui",
-    payload: { kind: "memory_settings_changed", injection_token_cap: 500 },
+    payload: { kind: "memory_settings_changed", injection_token_cap: 500, meta_review_period_days: 7 },
   });
 });

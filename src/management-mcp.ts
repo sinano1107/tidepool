@@ -504,7 +504,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "read_memory_settings",
     {
-      description: "Read the board's memory settings: injection_token_cap, the token cap on the memory section injected into a worker at spawn.",
+      description:
+        "Read the board's memory settings: injection_token_cap, the token cap on the memory section injected into a worker at spawn; " +
+        "meta_review_period_days, the minimum number of days between two periodic memory meta-reviews.",
     },
     async () => toolResult(readMemorySettings(deps.db)),
   );
@@ -512,13 +514,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "change_memory_settings",
     {
       description:
-        `Set the board's memory injection token cap as the human (a positive integer, counted with ${TOKENIZER.id}). Takes effect at the next spawn.`,
+        `Change the board's memory settings as the human; give at least one field. injection_token_cap: a positive integer, counted with ${TOKENIZER.id}, takes effect at the next spawn. ` +
+        "meta_review_period_days: a positive integer, the minimum days between periodic memory meta-reviews.",
       inputSchema: memorySettingsChangeSchema.shape,
     },
-    async (change) => {
+    async (change) => memoryVerb(() => {
       changeMemorySettings(deps.db, change, "mcp", deps.clock.now());
-      return toolResult(readMemorySettings(deps.db));
-    },
+      return readMemorySettings(deps.db);
+    }),
   );
   // spec #586 F / issue #593: the human's memory surface. No approve verb — approval
   // only goes through a question (#358). Domain errors come back as tool errors.

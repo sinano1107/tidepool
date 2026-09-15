@@ -1666,16 +1666,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(readMemorySettings(db));
   });
 
-  router.post("/settings/memory", (req, res) => {
-    const parsed = memorySettingsChangeSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: z.treeifyError(parsed.error) });
-      return;
-    }
-    changeMemorySettings(db, parsed.data, "webui", clock.now());
-    res.json(readMemorySettings(db));
-  });
-
   // spec #586 F / issue #593: 記憶の一覧(candidate・無効化済み・影の定義も)。GET は盤面を変異させない
   // (ADR 0036)ので、原文の無い agent 由来の表示翻訳は他の面と同じく POST /translate の memory_entry
   const memoryListQuery = memoryListFilterSchema.extend({ board_wide: z.literal("true").optional() });
@@ -1705,6 +1695,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         res.status(400).json({ error: err.message });
       }
     };
+  router.post(
+    "/settings/memory",
+    memoryWrite(memorySettingsChangeSchema, (change) => {
+      changeMemorySettings(db, change, "webui", clock.now());
+      return readMemorySettings(db);
+    }),
+  );
   router.post("/settings/memory/knowledge", memoryWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post("/settings/memory/definitions", memoryWrite(humanDefinitionSchema, (input) => defineMemoryBranch(db, humanEntryInput(db, input), "webui", clock.now())));
   router.post(

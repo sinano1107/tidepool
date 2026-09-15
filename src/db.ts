@@ -3,6 +3,11 @@ import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
 
 export type Db = Database.Database;
 
+// board-internal only (ADR 0120 決定2 / issue #618): この task が主題 X の周期 meta-review であること。
+// 盤面の登録関数だけが書き、MCP / JSON API からは書けない。fresh と ALTER で同じ CHECK を持つ。
+const META_REVIEW_SUBJECT_COLUMN = "meta_review_subject TEXT CHECK (meta_review_subject IN ('memory', 'routing'))";
+const META_REVIEW_PERIOD_COLUMN = "meta_review_period_days INTEGER CHECK (meta_review_period_days > 0)";
+
 // Shared between the fresh-board CREATE and the old-schema rebuild migration
 // below (title/purpose/completion_criteria's NOT NULL -> CHECK relaxation) so
 // the two can never drift apart.
@@ -126,6 +131,7 @@ const TASKS_TABLE_DDL = `
       -- here: those live on the workspace and the board settings.
       tier                TEXT,
       priority            TEXT,
+      ${META_REVIEW_SUBJECT_COLUMN},
       created_at          TEXT NOT NULL,
       -- exactly one content source, exclusively (issue #49, ADR 0016): an
       -- ordinary task carries all three content fields and no
@@ -595,9 +601,11 @@ export function openDb(path: string): Db {
 
     -- Memory の盤面設定(1行、spec #586 C / issue #592): spawn 注入のトークン上限。
     -- 行が無い / NULL = 未設定 = コードの既定(2,000)。settings タブと管理MCP が書く。
+    -- meta_review_period_days: 周期 meta-review の間隔の下限(日、NULL = 既定 7、issue #618)。
     CREATE TABLE IF NOT EXISTS memory_defaults (
       id                  INTEGER PRIMARY KEY CHECK (id = 1),
-      injection_token_cap INTEGER CHECK (injection_token_cap > 0)
+      injection_token_cap INTEGER CHECK (injection_token_cap > 0),
+      ${META_REVIEW_PERIOD_COLUMN}
     );
 
     -- append-only is enforced by structure, not convention
@@ -676,6 +684,11 @@ export function openDb(path: string): Db {
     "question_cli_auth_expiry_warning",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);
+  }
+  if (!cols.includes("meta_review_subject")) db.exec(`ALTER TABLE tasks ADD COLUMN ${META_REVIEW_SUBJECT_COLUMN}`);
+  const memoryDefaultsCols = (db.prepare("PRAGMA table_info(memory_defaults)").all() as Array<{ name: string }>).map((c) => c.name);
+  if (!memoryDefaultsCols.includes("meta_review_period_days")) {
+    db.exec(`ALTER TABLE memory_defaults ADD COLUMN ${META_REVIEW_PERIOD_COLUMN}`);
   }
   // #190 / ADR 0032: the operation route is separate from the worker identity.
   // Existing rows predate route recording and therefore represent the only
