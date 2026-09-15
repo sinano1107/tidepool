@@ -225,6 +225,7 @@ export function buildWorkerOptions(
     clock: Clock;
     containers: WorkerContainers;
     onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
+    onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   },
 ): ClaudeWorkerOptions {
   return {
@@ -256,6 +257,8 @@ export function buildWorkerOptions(
     // in_progress のまま watchdog 待ちになる」形で静かに fail する — advisorDisabled と
     // 同じ類なので、上の網羅テストが見張る面に載せる
     onCapInterrupted: session.onCapInterrupted,
+    // ADR 0118: 渡し忘れは「spawn に失敗した pickup が in_progress のまま枠を握る」形で静かに fail する
+    onSpawnFailed: session.onSpawnFailed,
   };
 }
 
@@ -265,7 +268,7 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, containers, onCapInterrupted }) => {
+  return ({ db, clock, containers, onCapInterrupted, onSpawnFailed }) => {
     const resolveHarness = harnessResolver(board, db)!;
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
@@ -273,7 +276,10 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
       resolveHarness,
       adapters: {
         "claude-code": new ClaudeCodeWorker(
-          buildWorkerOptions({ ...board, registryDir }, { db, clock, containers, onCapInterrupted }),
+          buildWorkerOptions(
+            { ...board, registryDir },
+            { db, clock, containers, onCapInterrupted, onSpawnFailed },
+          ),
         ),
         codex: new CodexWorker({
           db,
@@ -290,6 +296,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
           executable: board.codexExecutable,
           cliVersion: CODEX_CLI_VERSION,
           boardState: board.boardState,
+          onSpawnFailed,
         }),
       },
     });

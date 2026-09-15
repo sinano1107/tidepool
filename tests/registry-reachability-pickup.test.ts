@@ -44,6 +44,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     slot: new Slot(),
     worker,
     containers: fakeContainers(),
+    onSpawnFailed: () => {},
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
     registryReachability: async () => refreshRegistry(registryDir, undefined),
   });
@@ -75,6 +76,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     slot: new Slot(),
     worker,
     containers: fakeContainers(),
+    onSpawnFailed: () => {},
     registryReachability: async () => ({
       available: false,
       reason: "origin is unreachable",

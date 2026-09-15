@@ -217,7 +217,7 @@ it("最終 verb 着地後に root が exit しないまま時限を超えると�
   await fallToTheBottom(f);
 
   const containment = questions(f.db).find((q) => q.title.includes("containment"));
-  expect(containment?.purpose).toContain("finished its work and reported it");
+  expect(containment?.purpose).toContain("is settled");
   // タスクの決着は host 側の事情で覆らない
   expect(questions(f.db).some((q) => q.title.includes("watchdog killed"))).toBe(false);
   expect(getTask(f.db, f.task.id)?.status).toBe("done");

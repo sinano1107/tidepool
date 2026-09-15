@@ -2142,7 +2142,10 @@ describe("ClaudeCodeWorker", () => {
   // spawn_failed is the dedicated event that closes the pair worker_spawned
   // opened.
   it("spawn 自体が ENOENT で失敗(syscall が \"spawn\" で始まる)すると spawn_failed を error_code/message 付きで記録し running から消す(issue #127)", async () => {
-    const { start, emitError, db, worker, killed } = await makeWorker();
+    const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
+    const { start, emitError, db, worker, killed } = await makeWorker({}, {
+      onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
+    });
     const task = start("task-spawn-enoent");
     const err = Object.assign(new Error("spawn claude ENOENT"), {
       code: "ENOENT",
@@ -2156,6 +2159,8 @@ describe("ClaudeCodeWorker", () => {
       error_code: "ENOENT",
       message: "spawn claude ENOENT",
     });
+    // ADR 0118: 記録と後始末は盤面側の一撃が持つ
+    expect(spawnFailures).toEqual([[task.id, { error_code: "ENOENT", message: "spawn claude ENOENT" }]]);
     // running から消えている: 死んだ子への合図は no-op のはずなので、
     // watchdog 相当の畳み込み停止を呼んでも子の kill() は一切呼ばれない
     worker.gracefulStop(task.id);
@@ -2163,13 +2168,15 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("spawn 族でない error(例: kill 失敗の syscall: \"kill\")は console.error のみで spawn_failed イベントは書かない(issue #127)", async () => {
-    const { start, emitError, db } = await makeWorker();
+    const spawnFailures: string[] = [];
+    const { start, emitError, db } = await makeWorker({}, { onSpawnFailed: (taskId) => spawnFailures.push(taskId) });
     const task = start("task-non-spawn-error");
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const err = Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" });
       emitError(err);
       expect(listEvents(db, task.id).some((e) => e.kind === "spawn_failed")).toBe(false);
+      expect(spawnFailures).toEqual([]);
       expect(errorSpy).toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();

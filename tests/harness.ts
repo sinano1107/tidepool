@@ -260,6 +260,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     // exit で強制回収を撃つのは adapter の仕事である(ADR 0109 決定4)
     worker: options.workerAdapter ?? ((deps) => {
       worker.useContainers(deps.containers);
+      worker.onSpawnFailed = deps.onSpawnFailed;
       return worker;
     }),
     containerRuntime: containers,

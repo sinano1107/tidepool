@@ -130,7 +130,7 @@ it("startScheduler を直接構築しても、省略された Auditor は既定�
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
-  const scheduler = startScheduler({ db, clock, slot: new Slot(), worker, containers: fakeContainers() });
+  const scheduler = startScheduler({ db, clock, slot: new Slot(), worker, containers: fakeContainers(), onSpawnFailed: () => {} });
   const review = registerTask(
     db,
     {

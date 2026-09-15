@@ -94,6 +94,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     slot: new Slot(),
     worker,
     containers: passthroughContainers(),
+    onSpawnFailed: () => {},
     resolveHarness: (task: Task) => canonicalHarness(providers.get(task.assignee!)!),
     harnessContainment: async (harness) =>
       harness === "codex"

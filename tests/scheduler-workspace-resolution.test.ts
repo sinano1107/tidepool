@@ -28,6 +28,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       slot,
       worker,
       containers: fakeContainers(),
+      onSpawnFailed: () => {},
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];
@@ -64,6 +65,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       slot,
       worker,
       containers: fakeContainers(),
+      onSpawnFailed: () => {},
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];
@@ -100,6 +102,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       slot,
       worker,
       containers: fakeContainers(),
+      onSpawnFailed: () => {},
       workspace: prod,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "prod"];

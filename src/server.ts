@@ -50,10 +50,10 @@ import {
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
-import { runTeardown, sessionInTeardown, teardownStep } from "./teardown.js";
+import { runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
-import { capInterruptionHandler, failTask, startWatchdog, type Watchdog, type WatchdogConfig } from "./watchdog.js";
+import { capInterruptionHandler, failTask, spawnFailureHandler, startWatchdog, type Watchdog, type WatchdogConfig } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import { type ContainerRuntime, WorkerContainers } from "./worker-container.js";
 import {
@@ -158,6 +158,8 @@ export type WorkerFactory = (deps: {
   /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
    *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
   onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
+  /** ADR 0118: Node の `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
+  onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
 }) => WorkerAdapter;
 
 export interface ServerOptions {
@@ -454,15 +456,18 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // 含む)は捨ててよい: 起動完了の poll が同じ盤面を読む。
   let startedScheduler: Scheduler | undefined;
   const pollNow = () => startedScheduler?.pollNow();
-  const onCapInterrupted = capInterruptionHandler({
+  const sessionTeardown: TeardownDeps = {
     db,
     clock: options.clock,
     slot,
     resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
     heldForContainment: (taskId) => watchdog?.heldForContainment(taskId) ?? false,
     pollNow,
-  });
-  const worker = options.worker({ db, clock: options.clock, containers, onCapInterrupted });
+  };
+  const onCapInterrupted = capInterruptionHandler(sessionTeardown);
+  // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
+  const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
+  const worker = options.worker({ db, clock: options.clock, containers, onCapInterrupted, onSpawnFailed });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
     ...(options.cliAuth && { anthropic: options.cliAuth }),
     ...options.providerCliAuth,
@@ -543,6 +548,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     slot,
     worker,
     containers,
+    onSpawnFailed,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     auditorName,

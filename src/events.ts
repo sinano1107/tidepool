@@ -322,9 +322,9 @@ export type EventPayload =
   // the child never comes into being, only an "error" event fires, never
   // "exit") — a different failure class from worker_exited, not a variant of
   // it. worker_exited(exit_code: null, signal: null) was considered and
-  // rejected: CONTEXT.md's Worker session is "one run from spawn to exit",
-  // and a process that never spawned never had a session — reusing
-  // worker_exited would fabricate the fact of an exit that did not happen.
+  // rejected: a session that never had a process (ADR 0118 決定1) has no exit
+  // — reusing worker_exited would fabricate the fact of an exit that did not
+  // happen.
   // Node's real exits always carry a non-null code or signal, so (null, null)
   // is otherwise an impossible pair; smuggling meaning into an impossible
   // value makes the reader reverse-engineer what the pair "really" means.
@@ -337,15 +337,12 @@ export type EventPayload =
   // says "cost accounting does not apply here" rather than "cost was not
   // recorded".
   //
-  // ADR 0025 point 6 contrast: the skill-enumeration failure path in
-  // claude-worker.ts's start() deliberately writes no event at all — that
-  // failure retreats before worker_spawned is written, so no pair is open and
-  // there is nothing to close (silence is safe there). A spawn() failure is
-  // the opposite shape: worker_spawned is already written by the time
-  // "error" fires (launch() writes it synchronously right after spawn()
-  // returns), so the pair is open — leaving it that way would make a failed
-  // spawn indistinguishable in the event log from a session still running.
-  // spawn_failed is what closes it.
+  // ADR 0118 決定5: a synchronous throw from `worker.start` writes this event
+  // too (error_code: null, message = the caught exception), from the
+  // scheduler — the observation point. Whether or not a worker_spawned pair is
+  // open, the worker never ran and the failure question is answered away; this
+  // event is what keeps the fact on the timeline. No reader pairs it, so an
+  // unpaired spawn_failed breaks nothing.
   | { kind: "spawn_failed"; error_code: string | null; message: string }
   // ADR 0111 決定4 / issue #547: 配分評価 —— review の verdict が確定した後、盤面が
   // Board call に問うた「この結果に対する実行設定は適切だったか」。**判断種別**の

@@ -114,6 +114,8 @@ export interface CodexWorkerOptions {
   /** Board-owned worker-session container supervisor (ADR 0099). */
   containers: WorkerContainers;
   boardState?: BoardStatePath[];
+  /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
+  onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
 }
 
 export interface CodexCapabilityObservation {
@@ -717,18 +719,23 @@ export class CodexWorker implements WorkerAdapter {
     });
     this.running.set(task.id, child);
     child.on("error", (error) => {
+      const errno = error as NodeJS.ErrnoException;
+      // "error" は spawn 専用ではない(kill の失敗も撃つ)—— 走っている session を落とさず、
+      // worker が1度も走らなかった事実も書かない(Claude adapter と同じ、ADR 0118)
+      if (!errno.syscall?.startsWith("spawn")) {
+        console.error(`[codex-worker] error on task ${task.id}:`, error);
+        return;
+      }
       this.running.delete(task.id);
+      const failure = { error_code: errno.code ?? null, message: error.message };
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,
         origin: "board",
-        payload: {
-          kind: "spawn_failed",
-          error_code: (error as NodeJS.ErrnoException).code ?? null,
-          message: error.message,
-        },
+        payload: { kind: "spawn_failed", ...failure },
         at: this.options.clock.now(),
       });
+      this.options.onSpawnFailed?.(task.id, failure);
     });
     child.on("exit", (code, signal) => {
       this.running.delete(task.id);
