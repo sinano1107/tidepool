@@ -9,9 +9,25 @@ import { getEvent } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { assertReviewerKnown } from "./human-verbs.js";
+import { assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
-import { browseMemory, createBehaviorCandidate, defineMemoryBranch, memoryScope, readMemory, recordKnowledge, searchMemory } from "./memory.js";
+import {
+  browseMemory,
+  createBehaviorCandidate,
+  defineMemoryBranch,
+  foldMemory,
+  invalidateMemoryByMetaReview,
+  invalidationSchema,
+  isMetaReviewOf,
+  listPrecedents,
+  memoryListFilterSchema,
+  memoryScope,
+  moveMemory,
+  pullMemoryList,
+  readMemory,
+  recordKnowledge,
+  searchMemory,
+} from "./memory.js";
 import type { AuthorityProfile, RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -328,10 +344,15 @@ async function taskContext(deps: McpDeps, task: Task) {
   return { id: task.id, ...content };
 }
 
+/** pull の読み口のページ番号(1 始まり)。 */
+const page = z.number().int().min(1).optional();
+
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
   const server = new McpServer({ name: "tidepool", version: "0.0.0" });
+  // ADR 0122 決定2: 主題 memory の meta-review には worker の memory verb を登録せず、専用 verb で置き換える
+  const memoryMetaReview = attributedTaskId !== null && isMetaReviewOf(deps.db, attributedTaskId, "memory");
 
   server.registerTool(
     "get_current_task",
@@ -582,40 +603,42 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
-    "record_knowledge",
-    {
-      description:
-        "Record a fact you established about this workspace so later sessions can read it " +
-        "instead of rediscovering it. It is kept as-is (no approval step); you cannot edit or " +
-        "withdraw it. path is a \"/\"-separated hierarchy (e.g. build/tests). When you open a new branch, " +
-        "define it first with define_memory_branch. source is exactly " +
-        "one of {event_id} (a board event id, such as one log_decision returned) or {commit} " +
-        "(a commit hash). " +
-        BOARD_WRITE_LANGUAGE_RULE,
-      // the schema stays permissive: the exactly-one-source invariant is
-      // enforced inside the verb so callers get a domain error
-      inputSchema: {
-        path: z.string(),
-        title: z.string().min(1),
-        text: z.string().min(1),
-        source: z.object({ event_id: z.number().int().optional(), commit: z.string().optional() }).optional(),
+  if (!memoryMetaReview) {
+    server.registerTool(
+      "record_knowledge",
+      {
+        description:
+          "Record a fact you established about this workspace so later sessions can read it " +
+          "instead of rediscovering it. It is kept as-is (no approval step); you cannot edit or " +
+          "withdraw it. path is a \"/\"-separated hierarchy (e.g. build/tests). When you open a new branch, " +
+          "define it first with define_memory_branch. source is exactly " +
+          "one of {event_id} (a board event id, such as one log_decision returned) or {commit} " +
+          "(a commit hash). " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        // the schema stays permissive: the exactly-one-source invariant is
+        // enforced inside the verb so callers get a domain error
+        inputSchema: {
+          path: z.string(),
+          title: z.string().min(1),
+          text: z.string().min(1),
+          source: z.object({ event_id: z.number().int().optional(), commit: z.string().optional() }).optional(),
+        },
       },
-    },
-    async (input) =>
-      runVerb(deps, attributedTaskId, (task) =>
-        recordKnowledge(
-          deps.db,
-          {
-            ...input,
-            scope: memoryScope(deps, task),
-            author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
-          },
-          "worker",
-          deps.clock.now(),
+      async (input) =>
+        runVerb(deps, attributedTaskId, (task) =>
+          recordKnowledge(
+            deps.db,
+            {
+              ...input,
+              scope: memoryScope(deps, task),
+              author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
+            },
+            "worker",
+            deps.clock.now(),
+          ),
         ),
-      ),
-  );
+    );
+  }
 
   server.registerTool(
     "propose_from_objection",
@@ -659,6 +682,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
+  if (memoryMetaReview) {
+    registerMemoryMetaReviewVerbs(server, deps, attributedTaskId);
+    return server;
+  }
+
   server.registerTool(
     "define_memory_branch",
     {
@@ -688,7 +716,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // spec #586 D: 記憶の pull。各 pull は memory_pulled を書き、その event id を返す
   // (Precedent の memory マーカーの結合キー)。
   const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedWorkerId(deps, task) });
-  const page = z.number().int().min(1).optional();
 
   server.registerTool(
     "browse_memory",
@@ -728,6 +755,139 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   );
 
   return server;
+}
+
+/** 直接適用の scope(ADR 0122 決定1): null = 盤面全体は常に可、workspace 名は registry と照合する。registry の無い盤面
+ *  では照合できないので名前を拒む(buildWorkspaceResolver の固定 workspace への fallback はどの名前も通すので使わない)。 */
+function registeredScope(deps: McpDeps, scope: string | null): string | null {
+  if (scope === null) return null;
+  if (!deps.resolveWorkspace) throw new DomainError(`unknown workspace: ${scope}`);
+  assertWorkspaceKnown(scope, deps.resolveWorkspace, undefined);
+  return scope;
+}
+
+/** 主題 memory の meta-review 専用 verb(issue #619 / ADR 0120 決定2・ADR 0122)。tool 一覧は権限の境界ではないので、
+ *  呼び出し時の門も持つ。 */
+function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string | null): void {
+  const run = (verb: (reader: { taskId: string; agent: string }, now: Date) => unknown) =>
+    runVerb(deps, attributedTaskId, (task) => {
+      if (!isMetaReviewOf(deps.db, task.id, "memory")) throw new DomainError("memory meta-review verbs are only for a memory meta-review task");
+      return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
+    });
+  const author = (reader: { agent: string }) => ({ activity: "meta_review" as const, name: reader.agent });
+  const scope = z.string().min(1).nullable().describe("A registry workspace name, or null for the whole board.");
+
+  server.registerTool(
+    "list_memory_candidates",
+    {
+      description:
+        "List memory candidates with their cause, author, and source. include_invalidated adds invalidated " +
+        "candidates with their invalidation reason and successor — read them so you do not re-propose what was rejected.",
+      inputSchema: { include_invalidated: z.boolean().optional(), page },
+    },
+    async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_candidates", input, now)),
+  );
+
+  server.registerTool(
+    "list_memory_behaviors",
+    {
+      description: "List every approved Behavior on the board, across all addressees and scopes.",
+      inputSchema: { page },
+    },
+    async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_behaviors", input, now)),
+  );
+
+  server.registerTool(
+    "list_precedents",
+    {
+      description:
+        "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
+        "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
+        "Defaults to objections since the previous memory meta-review; pass since_watermark (an event id) to look further back.",
+      inputSchema: { since_watermark: z.number().int().min(0).optional(), page },
+    },
+    async (input) => run((reader, now) => listPrecedents(deps.db, reader, input, now)),
+  );
+
+  server.registerTool(
+    "list_memory_entries",
+    {
+      description:
+        "List memory entries as the human settings view does — candidates, invalidated entries, and board-wide " +
+        "definitions shadowed by a workspace one included. scope: a workspace name, null for board-wide only, omit for all.",
+      inputSchema: {
+        scope: scope.optional(),
+        kind: memoryListFilterSchema.shape.kind,
+        state: memoryListFilterSchema.shape.state,
+        page,
+      },
+    },
+    async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_entries", input, now)),
+  );
+
+  server.registerTool(
+    "define_memory",
+    {
+      description:
+        "Draft or revise a branch definition in the given scope: one line declaring what is filed under the path. " +
+        "A branch has one definition per scope; revise it with supersedes, which may point at a definition in another scope. " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: { scope, path: z.string(), definition: z.string(), supersedes: z.number().int().optional() },
+    },
+    async (input) =>
+      run((reader, now) =>
+        defineMemoryBranch(
+          deps.db,
+          { scope: registeredScope(deps, input.scope), path: input.path, text: input.definition, supersedes: input.supersedes, author: author(reader) },
+          "worker",
+          now,
+        ),
+      ),
+  );
+
+  server.registerTool(
+    "fold_memory",
+    {
+      description:
+        "Fold approved Knowledge entries into one new Knowledge entry in the given scope: every entry in replaces is " +
+        "invalidated as superseded by the new one. based_on_decision is the event id log_decision returned for your " +
+        "reasoning; it becomes the source (an inference). " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: {
+        scope,
+        path: z.string(),
+        title: z.string().min(1),
+        text: z.string().min(1),
+        replaces: z.array(z.number().int()),
+        based_on_decision: z.number().int(),
+      },
+    },
+    async (input) =>
+      run((reader, now) => foldMemory(deps.db, { ...input, scope: registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
+  );
+
+  server.registerTool(
+    "move_memory",
+    {
+      description:
+        "Move a Knowledge entry to another scope and path: the board copies its title, text, and source into a new " +
+        "entry and invalidates the old one as path_moved. Definitions and Behaviors cannot be moved.",
+      inputSchema: { entry_id: z.number().int(), scope, path: z.string() },
+    },
+    async (input) =>
+      run((reader, now) => moveMemory(deps.db, { ...input, scope: registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
+  );
+
+  server.registerTool(
+    "invalidate_memory",
+    {
+      description:
+        "Invalidate a candidate, Knowledge entry, or Definition. reason is superseded (with successor_id) or " +
+        "capability / environment / requirement_change. An approved Behavior cannot be invalidated here — propose it instead.",
+      inputSchema: { entry_id: z.number().int(), ...invalidationSchema.shape },
+    },
+    async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now) })),
+  );
 }
 
 export function createMcpRouter(deps: McpDeps): Router {
