@@ -14,7 +14,7 @@ import {
   rebuildMemoryIndex,
   recordKnowledge,
 } from "../src/memory.js";
-import { DomainError, logDecision, registerTask } from "../src/tasks.js";
+import { countUnsettledAttachedChildren, DomainError, logDecision, registerTask } from "../src/tasks.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -484,4 +484,25 @@ it("watermark 再生と rebuild は承認を読む —— 承認前の watermark
   const before = listMemoryEntries(db, {});
   rebuildMemoryIndex(db, "human", "webui", at);
   expect(listMemoryEntries(db, {})).toEqual(before);
+});
+
+it("提案を運ぶ question は着地の門で付帯子として数え、提案を運ばない question は親が待つ子として数えない", () => {
+  const { db, task } = board();
+  const question = {
+    type: "question" as const,
+    title: "q",
+    purpose: "p",
+    completion_criteria: "c",
+    parent_id: task.id,
+    question: [{ title: "q", options: ["approve", "reject"], recommendation: "approve" }],
+  };
+  registerTask(db, question, at);
+  expect(countUnsettledAttachedChildren(db, task.id)).toBe(0);
+
+  registerTask(
+    db,
+    { ...question, proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } },
+    at,
+  );
+  expect(countUnsettledAttachedChildren(db, task.id)).toBe(1);
 });
