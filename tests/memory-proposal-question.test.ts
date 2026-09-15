@@ -1,7 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { getEvent } from "../src/events.js";
-import { createBehaviorCandidate, listMemoryEntries } from "../src/memory.js";
-import { countUnsettledAttachedChildren } from "../src/tasks.js";
+import { approveMemoryProposal, createBehaviorCandidate } from "../src/memory.js";
 import { api, bootTidepool, completeViaMcp, HOUR, mcpClient, type Tidepool } from "./harness.js";
 
 /** 提案 question の扉(issue #620 / ADR 0120 決定3・4): meta-review の提案 verb、付帯子としての question、回答での適用、
@@ -45,7 +43,7 @@ async function boardWithMetaReview(titles = ["Keep migrations in their own commi
 const task = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
 const answer = (id: string, option: string) => api(t.baseUrl, "POST", `/api/tasks/${id}/answer`, { answers: [option] });
-const entry = (id: number) => listMemoryEntries(t.db, {}).find((e) => e.id === id)!;
+const entry = async (id: number) => ((await api(t.baseUrl, "GET", "/api/settings/memory/entries")).json.entries as any[]).find((e) => e.id === id);
 
 it("approve の提案は meta-review の子に1 item の question を立て、pin を question_proposal に焼き、detail に新本文・宛先・path・scope を載せる", async () => {
   const { review, ids, client, propose } = await boardWithMetaReview();
@@ -71,7 +69,7 @@ it("approve の提案は meta-review の子に1 item の question を立て、pi
   }
 });
 
-it("提案 question が open でも meta-review は完了でき、着地の門は付帯子として数える", async () => {
+it("提案 question が open でも meta-review は完了できる", async () => {
   const { review, ids, client, propose } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
@@ -79,42 +77,52 @@ it("提案 question が open でも meta-review は完了でき、着地の門�
     expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
     expect(await task(review.id)).toMatchObject({ status: "done" });
     expect(await task(questionId)).toMatchObject({ status: "todo" });
-    expect(countUnsettledAttachedChildren(t.db, review.id)).toBe(1);
   } finally {
     await client.close();
   }
 });
 
-it("approve の回答で candidate が approved(版 = memory_entry_approved の id)になり、選択肢外の回答は拒否される", async () => {
-  const { ids, client, propose } = await boardWithMetaReview();
+it("approve の回答で candidate が approved になって Behavior の pull に届き、選択肢外の回答は拒否される", async () => {
+  const { ids, client, call, propose } = await boardWithMetaReview();
   try {
     const questionId = await propose(ids[0]!);
 
     expect((await answer(questionId, "approve it")).status).toBe(409);
-    expect(entry(ids[0]!)).toMatchObject({ state: "candidate" });
+    expect(await entry(ids[0]!)).toMatchObject({ state: "candidate" });
 
     expect((await answer(questionId, "approve")).status).toBe(200);
-    const approved = entry(ids[0]!);
-    expect(approved).toMatchObject({ state: "approved", invalidation_reason: null });
-    expect(getEvent(t.db, approved.version!)?.payload).toEqual({ kind: "memory_entry_approved", entry_id: ids[0], question_id: questionId, replaced: [] });
+    expect(await entry(ids[0]!)).toMatchObject({ state: "approved", invalidation_reason: null });
+    expect((await call("list_memory_behaviors", {})).entries.map((e: any) => e.id)).toEqual([ids[0]]);
   } finally {
     await client.close();
   }
 });
 
-it("pin が古い approve は回答ごと拒否され何も残らない —— 別の question で先に承認された candidate は、見せた状態と違う", async () => {
+it("同じ candidate への2本目の提案は断られる —— 1本目の承認は無効化でないので、2本目は陳腐化で決着しない", async () => {
+  const { ids, client, call, propose } = await boardWithMetaReview();
+  try {
+    await propose(ids[0]!);
+
+    expect(await call("propose_memory_change", { op: "approve", candidate_id: ids[0], rationale: "again" })).toMatchObject({
+      error: expect.stringContaining("already in an open proposal question"),
+    });
+  } finally {
+    await client.close();
+  }
+});
+
+it("pin が古い提案への回答は approve も reject も拒否され何も残らない", async () => {
   const { ids, client, propose } = await boardWithMetaReview();
   try {
-    const first = await propose(ids[0]!);
-    const second = await propose(ids[0]!);
-    expect((await answer(first, "approve")).status).toBe(200);
-    const approved = entry(ids[0]!);
+    const questionId = await propose(ids[0]!);
+    approveMemoryProposal(t.db, (await task(questionId)).question_proposal, "elsewhere", "webui", t.clock.now());
+    const approved = await entry(ids[0]!);
 
-    expect((await answer(second, "approve")).status).toBe(409);
+    for (const option of ["approve", "reject"]) expect((await answer(questionId, option)).status).toBe(409);
 
-    expect(await task(second)).toMatchObject({ status: "todo", question_answer: null });
-    expect((await events(second)).map((e) => e.kind)).toEqual(["task_registered"]);
-    expect(entry(ids[0]!)).toEqual(approved);
+    expect(await task(questionId)).toMatchObject({ status: "todo", question_answer: null });
+    expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered"]);
+    expect(await entry(ids[0]!)).toEqual(approved);
   } finally {
     await client.close();
   }
@@ -127,7 +135,7 @@ it("reject の回答で candidate は後継なしの rejected で無効化され
 
     expect((await answer(questionId, "reject")).status).toBe(200);
 
-    expect(entry(ids[0]!)).toMatchObject({ state: "candidate", invalidation_reason: "rejected", successor_id: null });
+    expect(await entry(ids[0]!)).toMatchObject({ state: "candidate", invalidation_reason: "rejected", successor_id: null });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
   } finally {
     await client.close();

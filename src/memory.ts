@@ -318,14 +318,7 @@ export function invalidateMemoryEntry(
     });
     // pin の陳腐化(ADR 0120 決定4): この entry を pin する open な提案 question を観測で決着させる。回答中の question は
     // answerQuestion が先に done にしているので、reject や承認の superseded が自分自身を決着させることは無い
-    const stale = db
-      .prepare(
-        `SELECT id FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'
-           AND (json_extract(question_proposal, '$.candidate_id') = @entry_id
-             OR EXISTS (SELECT 1 FROM json_each(question_proposal, '$.replaces') WHERE json_extract(value, '$.id') = @entry_id))`,
-      )
-      .all({ entry_id }) as Array<{ id: string }>;
-    for (const { id } of stale) {
+    for (const id of openProposalsPinning(db, entry_id)) {
       settleQuestionAsObserved(db, id, { kind: "memory_proposal_stale", question_id: id, entry_id, observed_event_id: eventId }, at);
     }
     return eventId;
@@ -347,25 +340,44 @@ export function invalidateMemoryByMetaReview(
   return invalidateMemoryEntry(db, input, workerId, origin, at);
 }
 
+/** この entry を pin する open な提案 question の id(陳腐化の hook と、同じ entry への二重提案の拒否が読む)。 */
+function openProposalsPinning(db: Db, entryId: number): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT id FROM tasks WHERE status = 'todo' AND json_extract(question_proposal, '$.kind') = 'memory'
+           AND (json_extract(question_proposal, '$.candidate_id') = @entryId
+             OR EXISTS (SELECT 1 FROM json_each(question_proposal, '$.replaces') WHERE json_extract(value, '$.id') = @entryId))`,
+      )
+      .all({ entryId }) as Array<{ id: string }>
+  ).map(({ id }) => id);
+}
+
+/** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior candidate で、replaces の版が現在と一致し未無効化。
+ *  approve も reject も、見せた状態に対してだけ適用する。 */
+export function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRow {
+  const candidate = requireEntry(db, proposal.candidate_id);
+  const fresh =
+    candidate.kind === "behavior" &&
+    candidate.state === "candidate" &&
+    candidate.invalidation_reason === null &&
+    proposal.replaces.every(({ id, version }) => {
+      const row = requireEntry(db, id);
+      return row.version === version && row.invalidation_reason === null;
+    });
+  if (!fresh) throw new DomainError("this proposal is stale: a memory entry it names changed since it was proposed");
+  return candidate;
+}
+
 function markApproved(db: Db, id: number, version: number): void {
   db.prepare("UPDATE memory_entries SET state = 'approved', version = ? WHERE id = ?").run(version, id);
 }
 
-/** Behavior 承認の export(spec #615 A / issue #620): pin 検査(candidate が未無効化の Behavior candidate、replaces の版が
- *  現在と一致し未無効化)→ memory_entry_approved(版 = この event の id)→ replaces を candidate を後継とする superseded で
+/** Behavior 承認の export(spec #615 A / issue #620): pin 検査(assertProposalFresh)→ memory_entry_approved(版 = この event の id)→ replaces を candidate を後継とする superseded で
  *  無効化、を1 transaction。承認は人間の回答なので人間名義。返り値は memory_entry_approved の event id。 */
 export function approveMemoryProposal(db: Db, proposal: QuestionProposal, questionId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
-    const candidate = requireEntry(db, proposal.candidate_id);
-    const fresh =
-      candidate.kind === "behavior" &&
-      candidate.state === "candidate" &&
-      candidate.invalidation_reason === null &&
-      proposal.replaces.every(({ id, version }) => {
-        const row = requireEntry(db, id);
-        return row.version === version && row.invalidation_reason === null;
-      });
-    if (!fresh) throw new DomainError("this proposal is stale: a memory entry it names changed since it was proposed");
+    const candidate = assertProposalFresh(db, proposal);
     const eventId = appendEvent(db, {
       taskId: null,
       workerId: HUMAN_WORKER_ID,
@@ -393,6 +405,11 @@ export function proposeMemoryChange(
   const row = requireEntry(db, input.candidate_id);
   if (row.kind !== "behavior" || row.state !== "candidate" || row.invalidation_reason !== null) {
     throw new DomainError(`memory entry ${row.id} is not a behavior candidate that is still open`);
+  }
+  // 承認は無効化ではないので陳腐化の hook に掛からない —— 同じ entry への2本目は、1本目の承認後に人間の reject 待ちで
+  // 周期を止める(ADR 0120 退けた案)。提案の時点で断る
+  if (openProposalsPinning(db, row.id).length > 0) {
+    throw new DomainError(`memory entry ${row.id} is already in an open proposal question`);
   }
   const detail = [
     `Approve behavior candidate #${row.id} as worded.`,
