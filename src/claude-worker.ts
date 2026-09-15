@@ -1,5 +1,5 @@
 import { execFile, spawn as nodeSpawn } from "node:child_process";
-import { createWriteStream, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -615,6 +615,13 @@ export class MoonshotApiKeyMissingError extends Error {
     );
     this.name = "MoonshotApiKeyMissingError";
   }
+}
+
+/** moonshot の資格情報の不在(ADR 0116 決定4): 鍵ファイルが置かれていなければ path を
+ *  名指す理由を返す。存否だけを読み、中身は見ない —— 空や不正な鍵は失効(401)の領分。 */
+export function moonshotKeyAbsence(keyFile: string | undefined): string | undefined {
+  const path = resolveMoonshotApiKeyFile(keyFile);
+  return existsSync(path) ? undefined : `no Moonshot API key file at ${path}`;
 }
 
 /** Read the Moonshot key at spawn time — never cached on the worker, so a

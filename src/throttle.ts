@@ -140,7 +140,7 @@ export interface ProviderUsageWindowState {
 
 export interface ProviderUsageObservation {
   provider: Provider;
-  status: "observed" | "unauthorized" | "unobservable";
+  status: "observed" | "unauthorized" | "unobservable" | "absent";
   plan: string | null;
   cliVersion: string | null;
   reason?: string;

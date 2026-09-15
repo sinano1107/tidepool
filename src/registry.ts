@@ -29,8 +29,9 @@ export interface AgentDefinition {
    *  **正規化された entry の配列**であり、agent.md 側の3つの綴り(省略 / 単一
    *  文字列 / 配列)は `normalizeProviderEntries` が1つのこの形へ畳む —— 読み手
    *  (selector・門・spawn)が綴りの分岐を持たないための正規形である。
-   *  省略の意味は「盤面が知る全 Provider を advisor 無しの床の構成で」で、
-   *  ADR 0097 決定1 の「必須」はここで撤回された。
+   *  省略の意味は「盤面が知る Provider のうち、正準経路がこの agent の宣言
+   *  (`skills`)を満たすものを advisor なしの床の構成で」(ADR 0116 決定1)で、
+   *  ADR 0097 決定1 の「必須」は ADR 0110 決定1 で撤回された。
    *
    *  値の列挙と検証は registry 側(`PROVIDER_VALUES` / `assertValidAgentDefinition`)、
    *  値が意味するもの(エンドポイント・env 名・モデル表記)はアダプタ側の定数
@@ -45,8 +46,8 @@ export interface AgentDefinition {
    *  持ち、列挙の検査は登録と pickup の門(`assertValidAgentDefinition`)が行う。 */
   tier?: string;
   /** ピン留めが退役した後も agent.md に残っている値の名前(ADR 0110 決定1)。
-   *  `model` / `effort`(実行設定へ移った)と、自由文字列のままの `advisor`
-   *  (真偽値へ変わった)。**読み込みでは倒さない** —— 手で commit された違反が
+   *  `model` / `effort`(実行設定へ移った)と、トップレベルの `advisor`(entry の
+   *  性質になった、ADR 0116 決定2)。**読み込みでは倒さない** —— 手で commit された違反が
    *  registry 全体を煉瓦にしないよう、拒否するのは登録と pickup の門である
    *  (`provider` の列挙違反と同じ扱い、ADR 0097 決定3)。 */
   retiredFields: readonly string[];
@@ -141,25 +142,27 @@ export interface AgentProviderEntry {
  *  parse が同じこの1本を通る** —— 2箇所で畳めば、フォームから来た定義と手で
  *  commit された定義が別の形になり、門が別々の判定に至る。
  *
- *  - 省略 → 盤面が知る全 Provider(`PROVIDER_VALUES` の宣言順)を床の構成で
- *  - 単一文字列 → 長さ1の entry(今日の綴り)
- *  - 配列 → 要素は文字列または `{name, advisor?}`
- *
- *  トップレベルの `advisor` は**全 entry に掛かる**。掛かった先が advisor を
- *  提供しない経路なら、黙って落とさず門が定義ごと拒む(ADR 0097 決定3)——
- *  entry 側に `advisor` が書かれていれば、そちらが掛かる。 */
+ *  - 省略 → 盤面が知る Provider(`PROVIDER_VALUES` の宣言順)のうち、正準経路が
+ *    `skills` を満たすものを advisor なしの床の構成で(ADR 0116 決定1)。適合0なら
+ *    空の列になり、門が「宣言を満たす経路が無い」として拒む
+ *  - 単一文字列 → advisor なしの長さ1の entry
+ *  - 配列 → 要素は文字列または `{name, advisor?}`。advisor は entry にだけ書く
+ *    (ADR 0116 決定2) */
 export function normalizeProviderEntries(
   provider: unknown,
-  advisor: boolean,
+  skills: readonly string[],
 ): AgentProviderEntry[] {
   if (provider === undefined || provider === null || provider === "") {
-    return PROVIDER_VALUES.map((name) => ({ name, advisor }));
+    return PROVIDER_VALUES.filter((name) => routeSatisfiesSkills(name, skills)).map((name) => ({
+      name,
+      advisor: false,
+    }));
   }
   const written = Array.isArray(provider) ? provider : [provider];
   return written.map((entry) =>
     typeof entry === "string"
-      ? { name: entry, advisor }
-      : { name: (entry as AgentProviderEntry).name, advisor: (entry as { advisor?: boolean }).advisor ?? advisor },
+      ? { name: entry, advisor: false }
+      : { name: (entry as AgentProviderEntry).name, advisor: (entry as { advisor?: boolean }).advisor ?? false },
   );
 }
 
@@ -167,11 +170,17 @@ export function normalizeProviderEntries(
  *  0098). This is board-owned routing state, never registry frontmatter. */
 export type Harness = "claude-code" | "codex";
 
-const CANONICAL_ROUTES: Record<Provider, { harness: Harness; advisor: boolean }> = {
-  anthropic: { harness: "claude-code", advisor: true },
-  moonshot: { harness: "claude-code", advisor: false },
-  openai: { harness: "codex", advisor: false },
+/** 正準経路の能力表(ADR 0098 / ADR 0116 決定1)。登録の門と省略の展開が同じこの表を
+ *  読む。`skills` は「非空の skill allowlist を提供するか」(Codex は v1 で持たない)。 */
+const CANONICAL_ROUTES: Record<Provider, { harness: Harness; advisor: boolean; skills: boolean }> = {
+  anthropic: { harness: "claude-code", advisor: true, skills: true },
+  moonshot: { harness: "claude-code", advisor: false, skills: true },
+  openai: { harness: "codex", advisor: false, skills: false },
 };
+
+function routeSatisfiesSkills(provider: Provider, skills: readonly string[]): boolean {
+  return skills.length === 0 || CANONICAL_ROUTES[provider].skills;
+}
 
 /** Provider -> Harness is a total, one-to-one-at-use mapping with no fallback
  *  (ADR 0098). A second Harness for a Provider is a new recorded decision. */
@@ -242,15 +251,16 @@ export function assertValidAgentDefinition(
       agentName,
       `agent.md no longer carries the execution setting: ${retiredFields.join(" / ")} (ADR 0110 決定1). ` +
         "model and effort are chosen at pickup from the board's provider × tier table, and advisor is a " +
-        `boolean whose model is derived from that same table — declare a tier (${TIERS.join(" / ")}) ` +
-        "and/or `advisor: true` instead",
+        "property of a provider entry whose model is derived from that same table (ADR 0116 決定2) — " +
+        `declare a tier (${TIERS.join(" / ")}) and/or write the advisor on its entry, e.g. ` +
+        "`provider: [{ name: anthropic, advisor: true }]`, instead",
     );
   }
   if (entries.length === 0) {
     throw new InvalidAgentDefinitionError(
       agentName,
-      "an empty provider list leaves no route this agent could ever run on — omit the field " +
-        "to run on every Provider the board knows (ADR 0110 決定1)",
+      "no canonical route satisfies this agent's declaration, so there is no route it could ever run on " +
+        "— omit the field to run on every Provider whose route satisfies its skills (ADR 0116 決定1)",
     );
   }
   if (tier !== undefined && !(TIERS as readonly string[]).includes(tier)) {
@@ -276,7 +286,7 @@ export function assertValidAgentDefinition(
         `canonical route "${name} -> ${route.harness}" does not offer an advisor — a definition declaring one does not stand (ADR 0098)`,
       );
     }
-    if (route.harness === "codex" && skills.length > 0) {
+    if (!routeSatisfiesSkills(name as Provider, skills)) {
       throw new InvalidAgentDefinitionError(
         agentName,
         `canonical route "${name} -> ${route.harness}" does not offer skills in v1 — ` +
@@ -588,10 +598,6 @@ const agentFrontmatterSchema = z.looseObject({
   // nullish: 値の無い `tier:` の1行(YAML では null)で registry 読み取り全体を
   // 倒さない —— 空白だけの値と同じく「書かれていない」として扱う。
   tier: z.string().nullish(),
-  // 真偽値へ変わった側(ADR 0110 決定1)。旧綴りの自由文字列も**読めてしまう**
-  // ようにしてあるのは、手で commit された `advisor: opus` が registry 読み取り
-  // 全体を倒さないため —— 退役フィールドとして門が1体だけ隔離する。
-  advisor: z.union([z.boolean(), z.string()]).nullish(),
   icon: z
     .string()
     .refine(isSingleTwemojiGrapheme, {
@@ -767,14 +773,13 @@ function isWritten(value: unknown): boolean {
   return value !== undefined && value !== null && String(value).trim() !== "";
 }
 
-/** agent.md に残っている退役フィールド(ADR 0110 決定1)。`model` / `effort` は
- *  実行設定へ移り、`advisor` は自由文字列から真偽値へ変わった —— どれも黙って
- *  無視すると「書いたのに効かない値」になるので、門が名前を挙げて拒否する。 */
+/** agent.md に残っている退役フィールド。`model` / `effort` は実行設定へ移り
+ *  (ADR 0110 決定1)、トップレベルの `advisor` は entry の性質になった(ADR 0116
+ *  決定2)—— どれも黙って無視すると「書いたのに効かない値」になるので、門が名前を
+ *  挙げて拒否する。スキーマは looseObject なので、値の形を問わず読み込みは倒れない。 */
 function retiredExecutionFields(raw: unknown): string[] {
   const meta = (raw ?? {}) as Record<string, unknown>;
-  const fields = ["model", "effort"].filter((name) => isWritten(meta[name]));
-  if (typeof meta.advisor === "string" && meta.advisor.trim() !== "") fields.push("advisor");
-  return fields;
+  return ["model", "effort", "advisor"].filter((name) => isWritten(meta[name]));
 }
 
 function parseAgentFile(name: string, raw: string): AgentDefinition {
@@ -793,7 +798,7 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     version: meta.version,
     authority: meta.authority,
     description: meta.description,
-    provider: normalizeProviderEntries(meta.provider, meta.advisor === true),
+    provider: normalizeProviderEntries(meta.provider, meta.skills),
     tier: isWritten(meta.tier) ? (meta.tier as string) : undefined,
     retiredFields: retiredExecutionFields(parsed),
     icon: meta.icon,

@@ -15,8 +15,9 @@ import {
   hashToken,
 } from "../src/auth.js";
 import type { BoardStatePath } from "../src/board-state.js";
+import { moonshotKeyAbsence } from "../src/claude-worker.js";
 import type { CliAuthCheck } from "../src/cli-auth.js";
-import type { CodexAppServerProbe } from "../src/codex-app-server.js";
+import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import type { GitHubAuth } from "../src/github-auth.js";
@@ -182,6 +183,10 @@ export interface BootOptions {
    *  gate. Absent → no provider quarantine skips anything. */
   agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
   openaiUsage?: CodexAppServerProbe;
+  /** ADR 0116 決定4: moonshot の鍵ファイル / Codex の codexHome。渡した盤面だけが
+   *  資格情報の不在を実ファイルの存否で観測する。Absent → 不在の観測なし。 */
+  moonshotApiKeyFile?: string;
+  codexHome?: string;
   /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定を Provider 順位で
    *  並べたもの(除外は未適用)。渡した盤面は Provider ごとの usage 観測を行う。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
@@ -277,6 +282,10 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     fableAgents: options.fableAgents,
     agentsSpeakingProviders: options.agentsSpeakingProviders,
     openaiUsage: options.openaiUsage,
+    credentialAbsence: {
+      ...(options.moonshotApiKeyFile && { moonshot: () => moonshotKeyAbsence(options.moonshotApiKeyFile) }),
+      ...(options.codexHome && { openai: () => codexLoginAbsence(options.codexHome!) }),
+    },
     taskExecutionCandidates: options.taskExecutionCandidates,
     resolveHarness: options.resolveHarness,
     harnessContainment: options.harnessContainment,

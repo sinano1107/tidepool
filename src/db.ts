@@ -334,7 +334,7 @@ export function openDb(path: string): Db {
     -- compound key stays unique for the account-wide window in SQLite.
     CREATE TABLE IF NOT EXISTS provider_usage_observations (
       provider     TEXT PRIMARY KEY CHECK (provider IN ('anthropic', 'moonshot', 'openai')),
-      status       TEXT NOT NULL CHECK (status IN ('observed', 'unauthorized', 'unobservable')),
+      status       TEXT NOT NULL CHECK (status IN ('observed', 'unauthorized', 'unobservable', 'absent')),
       plan         TEXT,
       cli_version  TEXT,
       reason       TEXT,

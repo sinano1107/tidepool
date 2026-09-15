@@ -163,7 +163,7 @@ export interface SelectorInput {
   /** この agent が走ってよい Provider entry(ADR 0110 決定1)。長さ1なら今日の
    *  単一 Provider の agent で、選択は「それしか無かった」になる。 */
   entries: readonly { provider: Provider; advisor: boolean }[];
-  /** Provider 順位(盤面設定 `execution_defaults.provider_rank`、未設定 = 資格情報の
+  /** Provider 順位(盤面設定 `execution_defaults.provider_rank`、未設定 = 盤面が知る Provider の
    *  宣言順 `PROVIDER_VALUES`)。**入力であって定数ではない** —— 盤面境界の薄い
    *  ラッパ(`selectorInputFor`)が DB から読んで渡す。`PROVIDER_VALUES` の順列で
    *  あること(`isProviderRank`)は書く口が保証する —— 欠けた Provider は
