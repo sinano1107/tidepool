@@ -730,7 +730,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   return server;
 }
 
-
 export function createMcpRouter(deps: McpDeps): Router {
   return createStatelessMcpRouter((req) => {
     const taskParam = typeof req.query.task === "string" ? req.query.task : null;

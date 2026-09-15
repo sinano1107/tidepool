@@ -6,7 +6,7 @@ import {
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
-import { type AttributionClient, attributeObjections, type BehaviorDraftClient, draftBehaviorCandidate, latestAttribution } from "./attribution.js";
+import { type AttributionClient, attributeObjections, type BehaviorDraftClient, draftAfterCommit } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
 import type { BoardStatePath } from "./board-state.js";
 import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -19,7 +19,7 @@ import {
   setDisplayLanguage,
 } from "./display-language.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
-import { advanceLogCursor, getEvent, getLogCursor, listEvents, listLog } from "./events.js";
+import { advanceLogCursor, getLogCursor, lastEventId, listEvents, listLog } from "./events.js";
 import {
   applyExecutionSettingsChange,
   executionSettingsChangeSchema,
@@ -1910,16 +1910,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // transaction that bundles and registers with the judgments in hand
         const open = activeTriageSession(db);
         const judgments = open && (await attributeObjections(db, attributionClient, open.id));
+        const since = lastEventId(db);
         result = commitTriage(db, clock.now(), parsed.data.scratchpad, judgments);
         // ADR 0120 決定1(b): 帰責の transaction の後に起草を fire-and-forget(応答を待たせない)
-        for (const entryId of judgments ? judgments.keys() : []) {
-          const attribution = latestAttribution(db, getEvent(db, entryId) as { id: number; task_id: string });
-          if (attribution) {
-            void draftBehaviorCandidate(db, { behaviorDraftClient, workspace }, attribution, clock.now()).catch((err) =>
-              console.error(`[memory-draft] ${entryId}: ${String(err)}`),
-            );
-          }
-        }
+        draftAfterCommit(db, { behaviorDraftClient, workspace }, since, clock.now());
       }
       // Only closing an open session re-opens pickup. A sessionless triage
       // never stopped it, so its terminal commit is not a "run now" trigger.

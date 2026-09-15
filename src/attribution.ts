@@ -50,7 +50,7 @@ export interface BehaviorDraft {
   addressee: "worker" | "all";
 }
 
-/** The Board call seam for Behavior candidate drafting (issue #617)、AttributionClient と同型。 */
+/** Behavior candidate 起草の Board call の seam(issue #617)。AttributionClient と同型。 */
 export interface BehaviorDraftClient {
   draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "model" | "effort">): Promise<BehaviorDraft>;
 }
@@ -70,7 +70,7 @@ function boardCallSetting<C>(
   db: Db,
   client: C | undefined,
 ): { client: C; setting: Pick<ExecutionSettingRow, "model" | "effort"> } | { unavailable: string } {
-  if (!client) return { unavailable: "not attributed: no attribution client is configured" };
+  if (!client) return { unavailable: "Board call not made: no client is configured" };
   let setting: Pick<ExecutionSettingRow, "model" | "effort">;
   try {
     setting = rowFor(loadExecutionSettingTable(db), "anthropic", "frontier");
@@ -184,6 +184,19 @@ export async function attributeAfterRca(
   );
 }
 
+/** commit が書いた初回の帰責(`since` より後の event)ごとに起草を fire-and-forget する。境で切るのは、
+ *  commit が束ねなかった entry の古い帰責から二度起草しないため。 */
+export function draftAfterCommit(db: Db, deps: BoardCallDeps, since: number, now: Date): void {
+  const rows = db.prepare("SELECT id FROM events WHERE kind = 'objection_attributed' AND id > ? ORDER BY id").all(since) as { id: number }[];
+  for (const { id } of rows) {
+    const payload = getEvent(db, id)!.payload;
+    if (payload.kind !== "objection_attributed") continue;
+    void draftBehaviorCandidate(db, deps, { id, ...payload }, now).catch((err) =>
+      console.error(`[memory-draft] ${payload.entry_id}: ${String(err)}`),
+    );
+  }
+}
+
 /** 帰責の入力を注釈 event から組む: 異議エントリ本文・steering 列・その注釈より前の decision log。 */
 function objectionInput(
   db: Db,
@@ -220,7 +233,9 @@ export async function draftBehaviorCandidate(
   const taskId = entry.task_id;
   try {
     const task = getTask(db, taskId)!;
-    const target = learningTarget(cause, entry.worker_id, getRegistrant(db, taskId), cause === "missing_information" ? "behavior" : undefined);
+    // preference の宛先は Board call が選ぶ。他の cause は導出(登録者が agent でなければここで失敗)
+    const derived =
+      cause === "preference" ? null : learningTarget(cause, entry.worker_id, getRegistrant(db, taskId), cause === "missing_information" ? "behavior" : undefined);
     const scope = memoryScope(deps, task);
     const call = boardCallSetting(db, deps.behaviorDraftClient);
     if ("unavailable" in call) throw new Error(call.unavailable);
@@ -231,7 +246,7 @@ export async function draftBehaviorCandidate(
       {
         ...draft,
         scope,
-        addressee: cause !== "preference" && target.kind === "behavior" ? target.addressee : addressee === "all" ? null : entry.worker_id,
+        addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.worker_id,
         source: { event_id: attribution.id },
         author: { activity: "board", name: BOARD_WORKER_ID },
       },
