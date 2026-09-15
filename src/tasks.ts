@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-import { appendEvent, type EventOrigin, type EventPayload, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, taskDecisionLog } from "./events.js";
 import { PRIORITIES, type Priority, TIERS, type Tier } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
@@ -87,6 +87,8 @@ export interface Task {
   parent_id: string | null;
   /** Decision-log entry this decomposed child rests on; null outside a decomposition decision. */
   based_on_decision: number | null;
+  /** 開いている前提の破綻が指す分解判断(ADR 0121)。閉じていれば null。 */
+  premise_breach_decision: number | null;
   sort_key: number;
   handoff_doc: string | null;
   /** The PR opened for this task's completed work (issue #11), or null if
@@ -674,6 +676,7 @@ export function registerTask(
     priority: (input.priority as Priority | undefined) ?? null,
     parent_id: input.parent_id ?? null,
     based_on_decision: input.based_on_decision ?? null,
+    premise_breach_decision: null,
     sort_key: maxKey + 1,
     handoff_doc: null,
     pr_number: null,
@@ -1049,7 +1052,8 @@ function cancelUnsettledSubtree(
     .all(rootTaskId) as Array<{ id: string }>;
   db.transaction(() => {
     for (const { id } of rows) {
-      db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
+      // a cancelled declarer holds nothing — the cancel is the record that ends its breach
+      db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
       appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
     }
   })();
@@ -1119,8 +1123,8 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
     .get({ root: taskId });
   if (failure) {
     throw new DomainError(
-      "cannot directly cancel while an open failure question stands over this subtree — " +
-        "answer it (retry / abandon) first; that answer is the only gate",
+      "cannot directly cancel while an open Tidepool question with a cancel option (a failure or premise breach question) " +
+        "stands over this subtree — answer it first; that answer is the only gate",
     );
   }
   const fallback = typeAwareDefaultAgentSql("x.type", "@defaultAgentName", "@auditorName");
@@ -1416,14 +1420,7 @@ export function answerQuestion(
       const failed = getTask(db, question.parent_id!)!;
       const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
       if (plan) {
-        const siblingIds = db
-          .prepare(
-            `SELECT candidate.id
-             FROM tasks candidate JOIN tasks failed ON failed.id = ?
-             WHERE ${abandonScopeSql("failed", "candidate")}`,
-          )
-          .all(failed.id) as Array<{ id: string }>;
-        for (const { id } of siblingIds) {
+        for (const id of abandonScopeIds(db, failed.id)) {
           cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
         }
         unblockTarget = plan;
@@ -1500,9 +1497,161 @@ function abandonScopeSql(failedRef: string, candidateRef: string): string {
   )`;
 }
 
+/** Declare a premise breach (ADR 0121): the decomposition decision this child rests
+ *  on is false. Holds the declarer's abandon scope until the decision's author judges.
+ *  Not a failure — the task stays unsettled and the caller frees the slot. */
+export function declarePremiseBreach(
+  db: Db,
+  task: Task,
+  reason: string,
+  workerId: string,
+  now: Date,
+  origin: EventOrigin = "worker",
+): Task | undefined {
+  if (task.type !== "work" || task.based_on_decision === null) {
+    throw new DomainError(
+      "only a child of a decomposition decision can declare a premise breach — " +
+        "a root task or an attached child escalates instead",
+    );
+  }
+  const decision = task.based_on_decision;
+  let question: Task | undefined;
+  db.transaction(() => {
+    const { prior } = db
+      .prepare(
+        "SELECT COUNT(*) AS prior FROM events WHERE kind = 'premise_breached' AND json_extract(payload, '$.based_on_decision') = ?",
+      )
+      .get(decision) as { prior: number };
+    appendEvent(db, {
+      taskId: task.id,
+      workerId,
+      origin,
+      payload: { kind: "premise_breached", line: reason, based_on_decision: decision },
+      at: now,
+    });
+    db.prepare("UPDATE tasks SET status = 'todo', premise_breach_decision = ? WHERE id = ?").run(decision, task.id);
+    // 書き手が人間、または同じ判断への2度目以降 —— 人間が判断する
+    if (getEvent(db, decision)?.worker_id !== HUMAN_WORKER_ID && prior === 0) return;
+    question = escalateTask(
+      db,
+      task,
+      {
+        context:
+          `${reason}\n\n"continue" keeps the decomposition decision and resumes this task. ` +
+          abandonConsequence(db, task),
+        questions: [
+          { title: `premise breach: ${task.title}`, options: ["continue", "abandon"], recommendation: "continue" },
+        ],
+        cancel_option: "abandon",
+      },
+      BOARD_WORKER_ID,
+      now,
+      "board",
+    );
+    resolvePremiseBreach(db, task.id, "question", BOARD_WORKER_ID, now, "board");
+  })();
+  return question;
+}
+
+/** The id of the child of `parentId` whose premise breach is open — the precondition of both
+ *  parent verbs, and the refusal of plain decompose. */
+function openPremiseBreachChildId(db: Db, parentId: string): string | undefined {
+  const row = db
+    .prepare("SELECT id FROM tasks WHERE parent_id = ? AND premise_breach_decision IS NOT NULL LIMIT 1")
+    .get(parentId) as { id: string } | undefined;
+  return row?.id;
+}
+
+function requireOpenPremiseBreachChildId(db: Db, parentId: string): string {
+  const id = openPremiseBreachChildId(db, parentId);
+  if (id === undefined) throw new DomainError("no child of this task has an open premise breach");
+  return id;
+}
+
+/** 続行(ADR 0121): 親の判断を判断ログ1行に置き、held を解く。親は blocked の todo に戻る。 */
+export function continueDecomposition(
+  db: Db,
+  parent: Task,
+  line: string,
+  workerId: string,
+  now: Date,
+  origin: EventOrigin = "worker",
+): void {
+  const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
+  db.transaction(() => {
+    logDecision(db, parent, line, workerId, now, origin);
+    resolvePremiseBreach(db, declarerId, "continue", workerId, now, origin);
+    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
+  })();
+}
+
+/** 再分解(ADR 0121): 破綻した判断の未決着の子を cancel し、新しい decompose を1 transaction で行う。 */
+export function redecompose(
+  db: Db,
+  parent: Task,
+  input: DecomposeInput,
+  workerId: string,
+  now: Date,
+  authority?: AuthorityContext,
+  isProtectedWorkspace?: (name: string) => boolean,
+  origin: EventOrigin = "worker",
+): Task[] {
+  const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
+  return db.transaction(() => {
+    for (const id of abandonScopeIds(db, declarerId)) {
+      cancelUnsettledSubtree(db, id, workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
+    }
+    resolvePremiseBreach(db, declarerId, "redecompose", workerId, now, origin);
+    return decomposeTask(db, parent, input, workerId, now, authority, isProtectedWorkspace, origin);
+  })();
+}
+
+function resolvePremiseBreach(
+  db: Db,
+  declarerId: string,
+  outcome: Extract<EventPayload, { kind: "premise_breach_resolved" }>["outcome"],
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): void {
+  db.prepare("UPDATE tasks SET premise_breach_decision = NULL WHERE id = ?").run(declarerId);
+  appendEvent(db, {
+    taskId: declarerId,
+    workerId,
+    origin,
+    payload: { kind: "premise_breach_resolved", outcome },
+    at: now,
+  });
+}
+
+/** Canonical English abandon consequence baked into failure questions
+ *  (ADR 0015 / 0048) and breach questions (ADR 0121). It states the decision-discard
+ *  rule and count only when unfinished same-decision siblings exist. */
+export function abandonConsequence(db: Db, task: Task): string {
+  const siblingCount = unfinishedDecisionSiblingCount(db, task);
+  return siblingCount > 0
+    ? `"abandon" discards this decomposition decision — this task's remaining work plus ` +
+        `${siblingCount} unfinished ${siblingCount === 1 ? "sibling" : "siblings"} from the same ` +
+        `decomposition decision — and returns the parent to the queue head to replan.`
+    : `"abandon" cancels this task and its remaining work.`;
+}
+
+/** The ids in `failedId`'s abandon scope, shared by the abandon cascade and redecompose. */
+function abandonScopeIds(db: Db, failedId: string): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT candidate.id
+         FROM tasks candidate JOIN tasks failed ON failed.id = ?
+         WHERE ${abandonScopeSql("failed", "candidate")}`,
+      )
+      .all(failedId) as Array<{ id: string }>
+  ).map(({ id }) => id);
+}
+
 /** Count of unfinished same-decision siblings baked into abandon's human-facing
  *  text. Derived from the cancel/held scope so the wording cannot drift. */
-export function unfinishedDecisionSiblingCount(db: Db, failed: Task): number {
+function unfinishedDecisionSiblingCount(db: Db, failed: Task): number {
   if (failed.parent_id === null) return 0;
   const { count } = db
     .prepare(
@@ -1971,6 +2120,9 @@ export function decomposeTask(
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
+  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
+    throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
+  }
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only
   // throw at the moment a human clicks approve (registerTask validates the
@@ -2334,6 +2486,18 @@ function unfinishedChildSql(parentRef: string): string {
               AND ${awaitedChildSql("c")})`;
 }
 
+/** 早期統合復帰(ADR 0121): 子の前提の破綻が開いていて、待っている未決着の子がすべてその
+ *  破綻の abandon の範囲に入る親。pickup の blocked の門だけが読む例外で、blocked の導出は変えない。 */
+function earlyIntegrationReturnSql(parentRef: string): string {
+  return `EXISTS (SELECT 1 FROM tasks d
+            WHERE d.parent_id = ${parentRef} AND d.premise_breach_decision IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM tasks c
+                WHERE c.parent_id = ${parentRef}
+                  AND c.status NOT IN ('done', 'cancelled')
+                  AND ${awaitedChildSql("c")}
+                  AND NOT ${abandonScopeSql("d", "c")}))`;
+}
+
 /** Just the child-side half of that rule (ADR 0049): "is this row a child its
  *  parent waits for?". `listYourTasks` applies it to the row itself to name the
  *  parent it is holding up, so the predicate has one home rather than a copy
@@ -2473,6 +2637,10 @@ const HELD_IDS_CTE = `
       )
     )
     WHERE q.type = 'question' AND q.status = 'todo'
+    UNION
+    SELECT candidate.id
+    FROM tasks declarer JOIN tasks candidate ON ${abandonScopeSql("declarer", "candidate")}
+    WHERE declarer.premise_breach_decision IS NOT NULL
     UNION
     SELECT c.id FROM tasks c JOIN held_ids h ON c.parent_id = h.id
   )
@@ -2776,12 +2944,16 @@ interface SettledChildContext {
    *  `answer` so a resumed parent reads why, not just what. */
   comment?: string | null;
   origin_question?: { title: string; answer: string[] | null } | null;
+  /** 再分解が破棄した子(ADR 0121): 前提の破綻を宣言した子と、その理由。 */
+  origin_breach?: { title: string; reason: string };
 }
 
 type HistoryChildContext = TaskContent &
   Omit<SettledChildContext, "title" | "status"> & {
     status: BoardTask["status"];
     you?: true;
+    /** この子が宣言して、まだ閉じていない前提の破綻の理由(ADR 0121)。 */
+    premise_breach?: string;
   };
 
 interface DecisionHistoryEntry {
@@ -2842,6 +3014,7 @@ export function taskHistory(
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === currentTaskId && { you: true as const }),
+      ...(child.premise_breach_decision !== null && { premise_breach: premiseBreachReason(db, child.id) }),
       ...(child.status === "done" && child.type === "work"
         ? { handoff_doc: child.handoff_doc }
         : {}),
@@ -2852,16 +3025,7 @@ export function taskHistory(
             comment: child.question_answer_comment,
           }
         : {}),
-      ...(child.status === "cancelled"
-        ? (() => {
-            const origin = cancelOriginQuestion(db, child.id);
-            return {
-              origin_question: origin
-                ? { title: origin.title, answer: origin.question_answer }
-                : null,
-            };
-          })()
-        : {}),
+      ...(child.status === "cancelled" ? cancelOrigin(db, child.id) : {}),
     };
     const decision =
       based_on_decision === undefined ? undefined : decisions.get(based_on_decision);
@@ -2889,15 +3053,29 @@ export function taskHistory(
 }
 
 /** A cancelled task's `task_cancelled` event names the abandon question that
- *  discarded its decomposition decision (ADR 0006 / 0048) — the single hop
- *  back is the entire "why" a resumed parent needs. */
-function cancelOriginQuestion(db: Db, taskId: string): Task | undefined {
+ *  discarded its decomposition decision (ADR 0006 / 0048), or the premise breach a
+ *  redecompose acted on (ADR 0121) — the single hop back is the entire "why" a
+ *  resumed parent needs. */
+function cancelOrigin(db: Db, taskId: string): Pick<SettledChildContext, "origin_question" | "origin_breach"> {
   const row = db
     .prepare("SELECT payload FROM events WHERE task_id = ? AND kind = 'task_cancelled'")
     .get(taskId) as { payload: string } | undefined;
-  if (!row) return undefined;
-  const { origin_question_id } = JSON.parse(row.payload) as { origin_question_id: string };
-  return getTask(db, origin_question_id);
+  if (!row) return { origin_question: null };
+  const payload = JSON.parse(row.payload) as Extract<EventPayload, { kind: "task_cancelled" }>;
+  if ("origin_breach_task_id" in payload) {
+    const declarer = getTask(db, payload.origin_breach_task_id)!;
+    return { origin_breach: { title: declarer.title, reason: premiseBreachReason(db, declarer.id) } };
+  }
+  const question = getTask(db, payload.origin_question_id);
+  return { origin_question: question ? { title: question.title, answer: question.question_answer } : null };
+}
+
+/** そのタスクの最新の前提の破綻の理由。 */
+function premiseBreachReason(db: Db, taskId: string): string {
+  const { payload } = db
+    .prepare("SELECT payload FROM events WHERE task_id = ? AND kind = 'premise_breached' ORDER BY id DESC LIMIT 1")
+    .get(taskId) as { payload: string };
+  return (JSON.parse(payload) as Extract<EventPayload, { kind: "premise_breached" }>).line;
 }
 
 /** Every direct child of `parentId`, any status, in board order (issue #129's
@@ -2961,7 +3139,7 @@ export function nextSlotTask(
        WHERE t.status = 'todo'
          AND t.type <> 'question'
          AND t.assignee IS NOT @humanWorkerId
-         AND NOT ${unfinishedChildSql("t.id")}
+         AND (NOT ${unfinishedChildSql("t.id")} OR ${earlyIntegrationReturnSql("t.id")})
          AND NOT ${heldSql("t.id")}
          AND (@defaultWorkspaceName IS NULL OR NOT ${workspaceQuarantinedSql(
            "t.workspace",

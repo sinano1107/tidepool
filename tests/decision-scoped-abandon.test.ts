@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import {
+  abandonConsequence,
   answerQuestion,
   getTask,
   listChildren,
@@ -8,7 +9,6 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
-import { abandonConsequence } from "../src/watchdog.js";
 
 const at = new Date("2026-08-05T00:00:00.000Z");
 

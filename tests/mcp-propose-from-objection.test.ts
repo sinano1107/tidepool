@@ -215,3 +215,37 @@ it("agent 登録の task では(盤面の登録は除く)task_ambiguity と miss
     await client.close();
   }
 });
+
+it("前提の破綻の宣言への異議エントリも、宣言者の review の RCA から提案できる", async () => {
+  const attributionClient = new FakeAttributionClient();
+  t = await bootTidepool({ attributionClient });
+  const parent = await registerWork(t, "T", "charts");
+  await t.clock.advance(HOUR);
+  const worker = await mcpClient(t.mcpBaseUrl, parent.id);
+  const [a] = body(
+    await worker.callTool({ name: "decompose", arguments: { reason: "split T", children: [{ title: "A", purpose: "p", completion_criteria: "c" }] } }),
+  ).child_ids;
+  await worker.close();
+  await t.clock.advance(HOUR);
+  const declarer = await mcpClient(t.mcpBaseUrl, a);
+  await declarer.callTool({ name: "declare_premise_breach", arguments: { reason: "module M is broken" } });
+  await declarer.close();
+  const entry = (await api(t.baseUrl, "GET", `/api/tasks/${a}/events`)).json.find((e: any) => e.kind === "premise_breached");
+  attributionClient.scriptJudgment(entry.id, { cause: "capability", evidence: "scripted capability" });
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entry.id, comment: "M was fine" });
+  await api(t.baseUrl, "POST", "/api/triage/close");
+  // triage close の poll で早期統合復帰した親が続行し、held の子(RCA を含む)を解く
+  const resumed = await mcpClient(t.mcpBaseUrl, parent.id);
+  await resumed.callTool({ name: "continue_decomposition", arguments: { line: "M is fine" } });
+  await resumed.close();
+  const self = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.title === "rca (self): A");
+  await runNow(self.id);
+
+  const result = await propose(self.id, { entry_id: entry.id });
+
+  expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+  expect(await memoryEntries()).toEqual([
+    expect.objectContaining({ id: body(result).entry_id, kind: "behavior", addressee: entry.worker_id, source: { kind: "event", ref: await attributionId(a, entry.id) } }),
+  ]);
+});

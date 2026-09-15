@@ -90,6 +90,10 @@ export type EventPayload =
   // through task_id
   | { kind: "task_completed"; handoff_present: boolean; result: string | null }
   | { kind: "task_escalated"; question_id: string }
+  // ADR 0121: 子が自分の乗る分解判断の前提の破綻を宣言した(人間向け kind — 判断ログに並び異議が打てる)。
+  // line は宣言の理由。resolved はその宣言が閉じた帰結(question = 人間の question に渡した)。
+  | { kind: "premise_breached"; line: string; based_on_decision: number }
+  | { kind: "premise_breach_resolved"; outcome: "continue" | "redecompose" | "question" }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
@@ -132,6 +136,8 @@ export type EventPayload =
   // origin_question_id is the answered failure question, shared by every task
   // touched by the cascade (including the failed task's own subtree)
   | { kind: "task_cancelled"; origin_question_id: string }
+  // ADR 0121: 再分解が破棄した旧判断の子 —— origin_breach_task_id は前提の破綻を宣言した子
+  | { kind: "task_cancelled"; origin_breach_task_id: string }
   // issue #130: a human's direct cancel — the second cancel path (CONTEXT.md's
   // Cancel), no failure question above it, so reason is the human's own free
   // text (null when they gave none). Shared by every task the cascade touches
@@ -480,7 +486,7 @@ export function appendEvent(
 
 /** The decision log is not its own entity: it is the events table narrowed to
  *  the kinds a human skims (issue #5). Kinds join this list; no table is added. */
-export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed"] as const;
+export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached"] as const;
 
 /** A log entry annotated with its resolved workspace name (issue #44): the
  *  event's own task's `workspace`, or the board's default when the task

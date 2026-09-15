@@ -867,7 +867,7 @@ it("cancel_task は open failure question を迂回できない(issue #192)", as
   try {
     const result: any = await client.callTool({ name: "cancel_task", arguments: { task_id: task.id } });
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("open failure question");
+    expect(result.content[0].text).toContain("answer it first");
   } finally {
     await client.close();
   }

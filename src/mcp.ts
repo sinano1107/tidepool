@@ -5,7 +5,7 @@ import { type AllocationClient, reviewAllocation } from "./allocation-review.js"
 import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient, isHumanEntry, latestAttribution, learningTarget } from "./attribution.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { getEvent } from "./events.js";
+import { getEvent, HUMAN_FACING_KINDS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -36,8 +36,10 @@ import {
   assigneeNeedsApproval,
   completeTask,
   contentSourceFor,
+  continueDecomposition,
   DEFAULT_AUDITOR_NAME,
   DomainError,
+  declarePremiseBreach,
   decomposeTask,
   escalateTask,
   getRegistrant,
@@ -46,6 +48,7 @@ import {
   HUMAN_ROSTER_AGENT,
   HUMAN_WORKER_ID,
   logDecision,
+  redecompose,
   resolveTaskAgent,
   type Task,
   taskHistory,
@@ -348,6 +351,78 @@ async function taskContext(deps: McpDeps, task: Task) {
 /** pull の読み口のページ番号(1 始まり)。 */
 const page = z.number().int().min(1).optional();
 
+/** decompose と redecompose が共有する。 */
+function assertChildrenKnown(deps: McpDeps, children: z.infer<typeof decomposeChildrenSchema>): void {
+  // an explicitly named child workspace must exist in the registry
+  // (issue #26) — this is the registering agent's own mistake, not an
+  // authority question, so it's rejected outright before anything
+  // registers rather than converted into an approval question (ADR
+  // 0009). Absent a real registry, every name is accepted, same as
+  // execution-time resolution's fallback.
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  if (resolve) {
+    for (const child of children) {
+      if (child.workspace === undefined) continue;
+      try {
+        resolve(child.workspace);
+      } catch (err) {
+        if (!(err instanceof UnknownWorkspaceError)) throw err;
+        throw new DomainError(`unknown workspace: ${child.workspace}`);
+      }
+    }
+  }
+  // the agent-name generalization of the check above (ADR 0012 / issue
+  // #36): an explicitly named child assignee must exist in the
+  // registry — the registering agent's own mistake, not an authority
+  // question, so it's rejected outright before the assignable_to check
+  // even runs. `human` is valid only as a work assignee, never a reviewer.
+  for (const child of children) {
+    if (deps.agentRegistered) {
+      if (
+        child.assignee !== undefined &&
+        child.assignee !== HUMAN_WORKER_ID &&
+        !deps.agentRegistered(child.assignee)
+      ) {
+        throw new DomainError(`unknown agent: ${child.assignee}`);
+      }
+    }
+    for (const reviewer of child.review_by ?? []) {
+      assertReviewerKnown(deps.agentRegistered, reviewer);
+    }
+  }
+}
+
+/** decompose と redecompose が共有する子の入力。 */
+const decomposeChildrenSchema = z.array(
+  z.object({
+    title: z.string().min(1),
+    purpose: z.string().min(1),
+    completion_criteria: z.string().min(1),
+    risk_flag: z.boolean().optional(),
+    assignee: z
+      .string()
+      .optional()
+      .describe(
+        "Who to delegate to. Your own system prompt's Roster section lists who " +
+          "you can assign directly; call list_agents for the full board.",
+      ),
+    workspace: z.string().optional(),
+    review_flag: z
+      .boolean()
+      .optional()
+      .describe(
+        "Opt this child into an independent review of its deliverable on completion. " +
+          "No authority check applies — declaring it is never out of scope.",
+      ),
+    tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
+    review_by: z.array(z.string().min(1)).optional()
+      .describe("Reviewer agent names; one completion review per name. Omit to use the board Auditor."),
+    review_tier: z.string().optional()
+      .describe("Quality tier for completion reviews; overrides each reviewer's tier, then the board default."),
+    priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
+  }),
+);
+
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
 function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServer {
@@ -489,76 +564,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         reason: z.string().min(1),
-        children: z.array(
-          z.object({
-            title: z.string().min(1),
-            purpose: z.string().min(1),
-            completion_criteria: z.string().min(1),
-            risk_flag: z.boolean().optional(),
-            assignee: z
-              .string()
-              .optional()
-              .describe(
-                "Who to delegate to. Your own system prompt's Roster section lists who " +
-                  "you can assign directly; call list_agents for the full board.",
-              ),
-            workspace: z.string().optional(),
-            review_flag: z
-              .boolean()
-              .optional()
-              .describe(
-                "Opt this child into an independent review of its deliverable on completion. " +
-                  "No authority check applies — declaring it is never out of scope.",
-              ),
-            tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
-            review_by: z.array(z.string().min(1)).optional()
-              .describe("Reviewer agent names; one completion review per name. Omit to use the board Auditor."),
-            review_tier: z.string().optional()
-              .describe("Quality tier for completion reviews; overrides each reviewer's tier, then the board default."),
-            priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
-          }),
-        ),
+        children: decomposeChildrenSchema,
       },
     },
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-        // an explicitly named child workspace must exist in the registry
-        // (issue #26) — this is the registering agent's own mistake, not an
-        // authority question, so it's rejected outright before anything
-        // registers rather than converted into an approval question (ADR
-        // 0009). Absent a real registry, every name is accepted, same as
-        // execution-time resolution's fallback.
-        const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-        if (resolve) {
-          for (const child of input.children) {
-            if (child.workspace === undefined) continue;
-            try {
-              resolve(child.workspace);
-            } catch (err) {
-              if (!(err instanceof UnknownWorkspaceError)) throw err;
-              throw new DomainError(`unknown workspace: ${child.workspace}`);
-            }
-          }
-        }
-        // the agent-name generalization of the check above (ADR 0012 / issue
-        // #36): an explicitly named child assignee must exist in the
-        // registry — the registering agent's own mistake, not an authority
-        // question, so it's rejected outright before the assignable_to check
-        // even runs. `human` is valid only as a work assignee, never a reviewer.
-        for (const child of input.children) {
-          if (deps.agentRegistered) {
-            if (
-              child.assignee !== undefined &&
-              child.assignee !== HUMAN_WORKER_ID &&
-              !deps.agentRegistered(child.assignee)
-            ) {
-              throw new DomainError(`unknown agent: ${child.assignee}`);
-            }
-          }
-          for (const reviewer of child.review_by ?? []) {
-            assertReviewerKnown(deps.agentRegistered, reviewer);
-          }
-        }
+        assertChildrenKnown(deps, input.children);
         const children = decomposeTask(
           deps.db,
           task,
@@ -601,6 +612,75 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
         const question = escalateTask(deps.db, task, input, workerId, now, "worker");
         return { question_id: question.id, parent_status: "blocked" };
+      }),
+  );
+
+  server.registerTool(
+    "declare_premise_breach",
+    {
+      description:
+        "Declare that the premise of the decomposition decision your task rests on is false " +
+        "(for example, a sibling's result contradicts it). Not a failure. Every unsettled child " +
+        "of that decision, this task included, is held until the decision's author judges: an " +
+        "agent-authored decision returns your parent early to continue or redecompose; a " +
+        "human-authored decision, or a repeat breach of the same decision, becomes a " +
+        "continue / abandon question for the human. This task stays unsettled and the slot is " +
+        "freed — commit your work first. A root task or a child outside a decomposition " +
+        "decision escalates instead. " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: { reason: z.string().min(1) },
+    },
+    async ({ reason }) =>
+      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        const question = declarePremiseBreach(deps.db, task, reason, workerId, now, "worker");
+        return { question_id: question?.id ?? null, status: "held" };
+      }),
+  );
+
+  server.registerTool(
+    "continue_decomposition",
+    {
+      description:
+        "Answer a child's premise breach by keeping your decomposition decision: records your " +
+        "judgment as one decision-log line (the child resumes with it in its history), releases " +
+        "the held children, blocks this task again, and frees the slot. Your continue is final " +
+        "for this premise — a repeat breach goes to the human. Only while a child of this task " +
+        "has an open premise breach; then plain decompose and complete_task are refused. " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: { line: z.string().min(1) },
+    },
+    async ({ line }) =>
+      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        continueDecomposition(deps.db, task, line, workerId, now, "worker");
+        return { parent_status: "blocked" };
+      }),
+  );
+
+  server.registerTool(
+    "redecompose",
+    {
+      description:
+        "Answer a child's premise breach by replacing your decomposition decision in one call: " +
+        "cancels every unsettled child of the breached decision (done children stay), then " +
+        "decomposes the remaining work exactly as decompose does, and frees the slot. Only " +
+        "while a child of this task has an open premise breach. " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: { reason: z.string().min(1), children: decomposeChildrenSchema },
+    },
+    async (input) =>
+      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        assertChildrenKnown(deps, input.children);
+        const children = redecompose(
+          deps.db,
+          task,
+          input,
+          workerId,
+          now,
+          attributedAuthority(deps, task),
+          deps.isProtectedWorkspace,
+          "worker",
+        );
+        return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
       }),
   );
 
@@ -664,7 +744,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           throw new DomainError("propose_from_objection is only for a review of an objected task");
         }
         const entry = getEvent(deps.db, entry_id);
-        if (entry?.task_id !== task.parent_id || (entry.kind !== "decision_logged" && entry.kind !== "task_completed")) {
+        if (entry?.task_id !== task.parent_id || !(HUMAN_FACING_KINDS as readonly string[]).includes(entry.kind)) {
           throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
         }
         const attribution = latestAttribution(deps.db, { id: entry_id, task_id: task.parent_id });

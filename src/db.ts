@@ -38,6 +38,9 @@ const TASKS_TABLE_DDL = `
       -- Immutable provenance: the decision-log event this decomposed child
       -- rests on. Null for tasks outside a decomposition decision.
       based_on_decision   INTEGER,
+      -- 前提の破綻の射影(ADR 0121 / issue #631): 宣言が開いている間だけ、破綻した分解判断の
+      -- event id を持つ。閉じたら null。
+      premise_breach_decision INTEGER,
       sort_key            REAL NOT NULL,
       handoff_doc         TEXT,
       -- the PR opened for this task's completed work (issue #11), or null —
