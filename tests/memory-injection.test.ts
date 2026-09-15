@@ -137,6 +137,14 @@ it("title / purpose / completion criteria が stopword だけの task は、関�
   expect(injection.section).not.toContain("### Relevant entries");
 });
 
+it("主題 memory の meta-review には、見える approved があっても節を出さない(ADR 0122 決定2)", () => {
+  const { db, task, record } = board();
+  record({ path: "tide", title: "fix tide chart" });
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").section).not.toBeNull();
+  const review = registerTask(db, { type: "review", title: "fix tide chart", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at);
+  expect(buildMemoryInjection(db, review, "tidepool", "deckhand")).toMatchObject({ section: null, entries: [] });
+});
+
 it("approved が1つも見えなければ節を出さず、entries は空", () => {
   const { db, task, record } = board();
   record({ path: "tide", title: "tide elsewhere", scope: "sandbox" });

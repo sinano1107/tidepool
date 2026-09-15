@@ -773,16 +773,17 @@ type MemoryInjection = {
  *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
  *  組む。関連度の query は task の title + purpose + completion criteria の語の OR で、順位は search と
  *  同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
- *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。 */
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。主題 memory の meta-review には組まない ——
+ *  節は scope を task から解決し、案内する pull verb はその接続に無い(ADR 0122 決定2)。 */
 export function buildMemoryInjection(
   db: Db,
-  task: Pick<Task, "title" | "purpose" | "completion_criteria">,
+  task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
   scope: string | null,
   agent: string,
 ): MemoryInjection {
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
-    const visible = visibleEntries(db, { scope, agent });
+    const visible = isMetaReviewOf(db, task.id, "memory") ? [] : visibleEntries(db, { scope, agent });
     if (visible.length === 0) return { section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
     const tree = (prefix: string, depth: number): Array<IndexBranch & { depth: number }> =>
       indexChildren(visible, prefix)

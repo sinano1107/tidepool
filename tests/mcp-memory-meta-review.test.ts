@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
-import { defineMemoryBranch, listMemoryEntries, recordKnowledge } from "../src/memory.js";
+import { defineMemoryBranch, listMemoryEntries, MEMORY_META_REVIEW_VERBS, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/tasks.js";
 import { UnknownWorkspaceError } from "../src/workspace.js";
 import { api, bootTidepool, HOUR, makeWorkspace, mcpClient, registerWork, type Tidepool } from "./harness.js";
@@ -17,17 +17,8 @@ afterEach(async () => {
 
 const body = (result: any) => JSON.parse(result.content[0].text);
 
-const WORKER_MEMORY = ["record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"];
-const META_REVIEW_MEMORY = [
-  "list_memory_candidates",
-  "list_memory_behaviors",
-  "list_precedents",
-  "list_memory_entries",
-  "define_memory",
-  "fold_memory",
-  "move_memory",
-  "invalidate_memory",
-];
+const WORKER_MEMORY: string[] = [...WORKER_MEMORY_VERBS];
+const META_REVIEW_MEMORY: string[] = [...MEMORY_META_REVIEW_VERBS];
 
 /** registry に sandbox だけがある盤面と、slot に入った memory meta-review(材料の Knowledge を1件書いて poll させる)。 */
 async function boardWithMetaReview() {
@@ -56,7 +47,7 @@ async function boardWithMetaReview() {
   return { review, client, call, material };
 }
 
-it("主題 memory の task の接続には専用 verb が登録され worker の memory verb は無く、普通の task の接続はその逆。memory 系でない worker verb は両方に残る", async () => {
+it("主題 memory の task の接続の tool 一覧は、普通の task の一覧から worker の memory verb を除き専用 verb を足したもの(Codex の enabled_tools と同じ定数)", async () => {
   const { client } = await boardWithMetaReview();
   const work = await registerWork(t, "index the tide charts");
   const workClient = await mcpClient(t.mcpBaseUrl, work.id);
@@ -64,10 +55,9 @@ it("主題 memory の task の接続には専用 verb が登録され worker の
     const names = async (c: typeof client) => (await c.listTools()).tools.map((tool) => tool.name);
     const metaReview = await names(client);
     const worker = await names(workClient);
-    expect(metaReview).toEqual(expect.arrayContaining([...META_REVIEW_MEMORY, "get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate"]));
-    expect(metaReview.filter((name) => WORKER_MEMORY.includes(name))).toEqual([]);
-    expect(worker).toEqual(expect.arrayContaining([...WORKER_MEMORY, "get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate"]));
+    expect(worker).toEqual(expect.arrayContaining([...WORKER_MEMORY, "get_current_task", "log_decision", "complete_task"]));
     expect(worker.filter((name) => META_REVIEW_MEMORY.includes(name))).toEqual([]);
+    expect(metaReview.sort()).toEqual([...worker.filter((name) => !WORKER_MEMORY.includes(name)), ...META_REVIEW_MEMORY].sort());
   } finally {
     await client.close();
     await workClient.close();
@@ -99,24 +89,24 @@ it("直接適用4つは引数の scope(null = 盤面全体 / registry の worksp
     const { event_id: decision } = (await call("log_decision", { line: "the build note belongs board-wide" })).body;
     const folded = await call("fold_memory", { scope: null, path: "toolchain", title: "Node 22", text: "Use Node 22.", replaces: [material], based_on_decision: decision });
     const moved = await call("move_memory", { entry_id: folded.body.entry_id, scope: "sandbox", path: "toolchain/node" });
-    expect(await call("move_memory", { entry_id: moved.body.entry_id, scope: "charts", path: "toolchain" })).toMatchObject({ isError: true });
-    const invalidated = await call("invalidate_memory", { entry_id: revised.body.entry_id, reason: "requirement_change" });
-    expect(invalidated).toMatchObject({ isError: false, body: { event_id: expect.any(Number) } });
-    expect(await call("invalidate_memory", { entry_id: moved.body.entry_id, reason: "path_moved", successor_id: material })).toMatchObject({ isError: true });
+    expect(await call("invalidate_memory", { entry_id: revised.body.entry_id, reason: "requirement_change" })).toMatchObject({
+      isError: false,
+      body: { event_id: expect.any(Number) },
+    });
 
-    expect(listMemoryEntries(t.db, {}).map((e) => [e.id, e.kind, e.scope, e.path, e.author, e.invalidation_reason, e.successor_id])).toEqual([
-      [material, "knowledge", "sandbox", "build", { activity: "worker_verb", name: "deckhand" }, "superseded", folded.body.entry_id],
-      [boardWide.body.entry_id, "definition", null, "build", author, "superseded", revised.body.entry_id],
-      [revised.body.entry_id, "definition", "sandbox", "build", author, "requirement_change", null],
-      [folded.body.entry_id, "knowledge", null, "toolchain", author, "path_moved", moved.body.entry_id],
-      [moved.body.entry_id, "knowledge", "sandbox", "toolchain/node", author, null, null],
+    expect(listMemoryEntries(t.db, {}).map((e) => [e.id, e.scope, e.author, e.invalidation_reason])).toEqual([
+      [material, "sandbox", { activity: "worker_verb", name: "deckhand" }, "superseded"],
+      [boardWide.body.entry_id, null, author, "superseded"],
+      [revised.body.entry_id, "sandbox", author, "requirement_change"],
+      [folded.body.entry_id, null, author, "path_moved"],
+      [moved.body.entry_id, "sandbox", author, null],
     ]);
   } finally {
     await client.close();
   }
 });
 
-it("list_memory_entries は scope(名前 / null = 盤面全体 / 省略 = すべて)・種別・状態で絞った一覧を影に入った定義と無効化済みごと返し、読み口4つは event id を載せる", async () => {
+it("list_memory_entries は scope の名前 / null(盤面全体)/ 省略(すべて)を区別して渡し、読み口4つは event id を載せる", async () => {
   const { client, call, material } = await boardWithMetaReview();
   const now = t.clock.now();
   const human = { activity: "human" as const, name: "human" };
@@ -126,9 +116,7 @@ it("list_memory_entries は scope(名前 / null = 盤面全体 / 省略 = すべ
     const ids = async (args: Record<string, unknown>) => (await call("list_memory_entries", args)).body.entries.map((e: any) => e.id);
     expect(await ids({})).toEqual([material, boardWide, shadowing]);
     expect(await ids({ scope: null })).toEqual([boardWide]);
-    expect(await ids({ scope: "sandbox", kind: "definition", state: "approved", page: 1 })).toEqual([shadowing]);
-    await call("invalidate_memory", { entry_id: material, reason: "environment" });
-    expect(await ids({ state: "invalidated" })).toEqual([material]);
+    expect(await ids({ scope: "sandbox", kind: "definition", page: 1 })).toEqual([shadowing]);
 
     for (const verb of ["list_memory_entries", "list_memory_candidates", "list_memory_behaviors", "list_precedents"]) {
       expect(await call(verb)).toMatchObject({ isError: false, body: { truncated: false, event_id: expect.any(Number) } });

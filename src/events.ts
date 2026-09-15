@@ -391,8 +391,8 @@ export type EventPayload =
         page?: number;
         ids?: number[];
         scope?: string | null;
-        kind?: string;
-        state?: string;
+        kind?: MemoryEntryFields["kind"];
+        state?: MemoryEntryFields["state"] | "invalidated";
         include_invalidated?: boolean;
         since_watermark?: number;
       };

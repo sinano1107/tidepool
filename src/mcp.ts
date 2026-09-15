@@ -9,7 +9,7 @@ import { getEvent } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { assertReviewerKnown } from "./human-verbs.js";
+import { assertReviewerKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
   browseMemory,
@@ -343,6 +343,9 @@ async function taskContext(deps: McpDeps, task: Task) {
   }).expand();
   return { id: task.id, ...content };
 }
+
+/** pull の読み口のページ番号(1 始まり)。 */
+const page = z.number().int().min(1).optional();
 
 /** Domain verbs only, no generic CRUD (ADR 0002). Attribution comes from the
  *  spawn-time ?task= URL param and must match the current slot task. */
@@ -713,7 +716,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // spec #586 D: 記憶の pull。各 pull は memory_pulled を書き、その event id を返す
   // (Precedent の memory マーカーの結合キー)。
   const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedWorkerId(deps, task) });
-  const page = z.number().int().min(1).optional();
 
   server.registerTool(
     "browse_memory",
@@ -759,15 +761,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
  *  では照合できないので名前を拒む(buildWorkspaceResolver の固定 workspace への fallback はどの名前も通すので使わない)。 */
 function registeredScope(deps: McpDeps, scope: string | null): string | null {
   if (scope === null) return null;
-  try {
-    if (deps.resolveWorkspace) {
-      deps.resolveWorkspace(scope);
-      return scope;
-    }
-  } catch (err) {
-    if (!(err instanceof UnknownWorkspaceError)) throw err;
-  }
-  throw new DomainError(`unknown workspace: ${scope}`);
+  if (!deps.resolveWorkspace) throw new DomainError(`unknown workspace: ${scope}`);
+  assertWorkspaceKnown(scope, deps.resolveWorkspace, undefined);
+  return scope;
 }
 
 /** 主題 memory の meta-review 専用 verb(issue #619 / ADR 0120 決定2・ADR 0122)。tool 一覧は権限の境界ではないので、
@@ -779,7 +775,6 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
       return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
     });
   const author = (reader: { agent: string }) => ({ activity: "meta_review" as const, name: reader.agent });
-  const page = z.number().int().min(1).optional();
   const scope = z.string().min(1).nullable().describe("A registry workspace name, or null for the whole board.");
 
   server.registerTool(
@@ -821,7 +816,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
         "List memory entries as the human settings view does — candidates, invalidated entries, and board-wide " +
         "definitions shadowed by a workspace one included. scope: a workspace name, null for board-wide only, omit for all.",
       inputSchema: {
-        scope: z.string().min(1).nullable().optional(),
+        scope: scope.optional(),
         kind: memoryListFilterSchema.shape.kind,
         state: memoryListFilterSchema.shape.state,
         page,
@@ -889,7 +884,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
       description:
         "Invalidate a candidate, Knowledge entry, or Definition. reason is superseded (with successor_id) or " +
         "capability / environment / requirement_change. An approved Behavior cannot be invalidated here — propose it instead.",
-      inputSchema: { entry_id: z.number().int(), reason: invalidationSchema.shape.reason, successor_id: z.number().int().optional() },
+      inputSchema: { entry_id: z.number().int(), ...invalidationSchema.shape },
     },
     async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now) })),
   );
