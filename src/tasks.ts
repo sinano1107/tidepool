@@ -168,15 +168,16 @@ export interface TaskContent {
   completion_criteria: string;
 }
 
-/** 提案 question の種別つき提案(ADR 0120 決定4)。pin = replaces の版と candidate の状態。`routing` / `registry` と
- *  consolidate / invalidate の op は後続(#549 / #583 / #621)が足す。 */
-export interface QuestionProposal {
+/** 提案 question の種別つき提案(ADR 0120 決定4)。pin = replaces / target の版と candidate の状態。`routing` / `registry` は
+ *  後続(#549 / #583)が足す。 */
+export type QuestionProposal = {
   kind: "memory";
-  op: "approve";
-  candidate_id: number;
-  /** version は candidate なら null(版は承認 event の id)。 */
+  /** version は candidate なら null(版は承認 event の id)。invalidate では空。 */
   replaces: Array<{ id: number; version: number | null }>;
-}
+} & (
+  | { op: "approve" | "consolidate"; candidate_id: number }
+  | { op: "invalidate"; target: { id: number; version: number }; reason: "capability" | "environment" | "requirement_change" }
+);
 
 interface PendingChildSpec extends TaskContent {
   review_by?: string[];

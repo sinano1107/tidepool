@@ -92,7 +92,7 @@ it("PR が開いたままの祖先へ merge back された修理を、盤面が 
   const work = await landedWork(workspace);
   expect(t.github.requests).toHaveLength(1);
 
-  const before = await completeRepair(work, workspace);
+  await completeRepair(work, workspace);
 
   // 修理はタスクブランチに載り、PR は増えず、盤面が origin へ押し直す
   expect(git(workspace.path, "show", `task/${work.id}:repair.txt`)).toBe("fixed");

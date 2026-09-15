@@ -895,11 +895,36 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
     {
       description:
         "Propose a Behavior change to the human as one approve / reject question attached to this task. op approve asks to " +
-        "approve a Behavior candidate exactly as worded; rationale is why you propose it (the question's context). " +
-        "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id.",
-      inputSchema: { op: z.literal("approve"), candidate_id: z.number().int(), rationale: z.string().min(1) },
+        "approve a Behavior candidate exactly as worded (candidate_id). op consolidate drafts text as a new Behavior candidate " +
+        "that replaces the Behavior candidates and approved Behaviors in replaces; based_on_decision is the event id " +
+        "log_decision returned for your reasoning and becomes its source. op invalidate asks to invalidate the approved Behavior " +
+        "target_id for reason capability / environment / requirement_change. rationale is why you propose it (the question's context). " +
+        "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id. " +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: {
+        op: z.enum(["approve", "consolidate", "invalidate"]),
+        candidate_id: z.number().int().optional(),
+        text: z
+          .object({ scope, path: z.string(), title: z.string().min(1), text: z.string().min(1), addressee: z.string().min(1).nullable() })
+          .optional()
+          .describe("op consolidate: the new Behavior. addressee is an agent name, or null for every agent."),
+        replaces: z.array(z.number().int()).optional(),
+        based_on_decision: z.number().int().optional(),
+        target_id: z.number().int().optional(),
+        reason: invalidationSchema.shape.reason.exclude(["superseded", "path_moved"]).optional(),
+        rationale: z.string().min(1),
+      },
     },
-    async (input) => run((reader, now) => proposeMemoryChange(deps.db, reader.taskId, input, reader.agent, now)),
+    async (input) =>
+      run((reader, now) =>
+        proposeMemoryChange(
+          deps.db,
+          reader.taskId,
+          { ...input, text: input.text && { ...input.text, scope: registeredScope(deps, input.text.scope) } },
+          reader.agent,
+          now,
+        ),
+      ),
   );
 }
 
