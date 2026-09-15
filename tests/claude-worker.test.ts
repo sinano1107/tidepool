@@ -59,6 +59,7 @@ function makeTask(
     priority: null,
     parent_id: null,
     based_on_decision: null,
+    premise_breach_decision: null,
     sort_key: 1,
     handoff_doc: null,
     pr_number: null,
@@ -715,6 +716,9 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).toContain("did not happen");
     // escalate posture (deckhand 本文が運んでいた rules of the road)
     expect(systemPrompt).toContain("Escalating is never wrong");
+    // 前提の破綻と自タスク外の発見の2文(ADR 0121 / issue #631)
+    expect(systemPrompt).toContain("When the premise of the decomposition decision your task rests on turns out to be false, declare a premise breach rather than working around it or escalating it.");
+    expect(systemPrompt).toContain("A finding outside your task's scope is not your task: record the decision not to act on it with `log_decision`, and never decompose it into a child.");
     expect(systemPrompt).toContain(
       "This may be a resumed task session: if the task history shows prior-session traces, inspect the task branch with `git log` before starting work.",
     );

@@ -123,7 +123,7 @@ export function raiseObjection(
 export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
   /** decision-log kinds are always task-scoped (only the board-scoped execution_settings_changed / memory_entry_* / memory_index_rebuilt / memory_settings_changed are not) */
   task_id: string;
-  payload: Extract<EventRow["payload"], { kind: "decision_logged" | "task_completed" }>;
+  payload: Extract<EventRow["payload"], { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
 };
 
 /** One objected log entry with every direction comment raised against it this
@@ -137,9 +137,9 @@ interface ObjectionPair {
 /** The text of a log entry as the human read it — a decision's line, or the
  *  completion report — shared by the repair / RCA purposes and the Board call. */
 export function objectedEntryText(entry: DecisionLogEntry): string {
-  return entry.payload.kind === "decision_logged"
-    ? entry.payload.line
-    : `completion report: ${entry.payload.result ?? "(no outcome recorded)"}`;
+  return entry.payload.kind === "task_completed"
+    ? `completion report: ${entry.payload.result ?? "(no outcome recorded)"}`
+    : entry.payload.line;
 }
 
 /** Render the entry/comment pairs shared by repair and RCA tasks. Entries are

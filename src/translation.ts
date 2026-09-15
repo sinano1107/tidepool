@@ -46,7 +46,7 @@ export async function translateSource(
 function resolveLogEntrySource(db: Db, eventId: number): string {
   const event = getEvent(db, eventId);
   if (!event) throw new TranslationTargetError(`no event with id ${eventId}`);
-  if (event.payload.kind === "decision_logged") return event.payload.line;
+  if (event.payload.kind === "decision_logged" || event.payload.kind === "premise_breached") return event.payload.line;
   if (event.payload.kind === "task_completed") {
     if (event.payload.result === null) {
       throw new TranslationTargetError(`event ${eventId} has no completion report text`);

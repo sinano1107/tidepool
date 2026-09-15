@@ -17,7 +17,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { agentGitIdentityEnv } from "./claude-worker.js";
+import { agentGitIdentityEnv, PREMISE_BREACH_PROTOCOL } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import { CODEX_APP_SERVER_VERSION } from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
@@ -49,6 +49,9 @@ const BOARD_VERBS = [
   "log_decision",
   "decompose",
   "escalate",
+  "declare_premise_breach",
+  "continue_decomposition",
+  "redecompose",
   "record_knowledge",
   "define_memory_branch",
   "browse_memory",
@@ -170,6 +173,7 @@ function taskPrompt(task: Task, systemPrompt: string, authority: string): string
   return `${systemPrompt}\n\n## Authority\n\n${authority}\n\n` +
     "Use only the tidepool MCP verbs to report board decisions and completion. " +
     "Board verbs are main-thread only; if a subagent needs one, call it from the main thread.\n\n" +
+    `${PREMISE_BREACH_PROTOCOL}\n\n` +
     `First call get_current_task for task ${task.id}, then complete this task: ${task.title}\n\n` +
     `Purpose: ${task.purpose}\nCompletion criteria: ${task.completion_criteria}`;
 }

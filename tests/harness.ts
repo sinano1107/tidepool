@@ -339,7 +339,14 @@ const boards = new Map<string, ScriptedWorker>();
  *  長さはゼロである。**まだ生きている session**(空にならない容器)を測りたいテストは
  *  `t.containers.hold(taskId)` を先に呼ぶ —— `FakeContainerRuntime` が最初から持っている
  *  「回収に失敗するホストは明示的にスクリプトする」と同じ形である。 */
-const RELEASING_VERBS = new Set(["complete_task", "decompose", "escalate"]);
+const RELEASING_VERBS = new Set([
+  "complete_task",
+  "decompose",
+  "escalate",
+  "declare_premise_breach",
+  "continue_decomposition",
+  "redecompose",
+]);
 
 /** Real MCP client over streamable HTTP, attributed to a task via ?task=. */
 export async function mcpClient(baseUrl: string, taskId?: string): Promise<Client> {

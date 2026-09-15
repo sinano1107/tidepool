@@ -121,6 +121,9 @@ describe("CodexWorker (ADR 0098)", () => {
       "--ignore-rules", "--strict-config", "-C", f.workspace, "-m", "gpt-5.6-terra",
     ]));
     const config = call.args.filter((_, index) => call.args[index - 1] === "-c").join("\n");
+    // 前提の破綻と自タスク外の発見の2文(ADR 0121 / issue #631)
+    expect(call.args.at(-1)).toContain("When the premise of the decomposition decision your task rests on turns out to be false, declare a premise breach rather than working around it or escalating it.");
+    expect(call.args.at(-1)).toContain("A finding outside your task's scope is not your task: record the decision not to act on it with `log_decision`, and never decompose it into a child.");
     expect(config).toContain('model_reasoning_effort="high"');
     expect(config).toContain('default_permissions="tidepool-work"');
     expect(config).toContain('\":root\"=\"deny\"');
@@ -170,7 +173,7 @@ describe("CodexWorker (ADR 0098)", () => {
       new Date("2026-08-24T00:00:00.000Z"),
     ));
 
-    const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate"];
+    const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
     expect(enabledTools(0)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
     expect(enabledTools(1)).toEqual([
       ...base,

@@ -43,6 +43,7 @@ import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import type { Slot } from "./slot.js";
 import { clearSpendDown, getSpendDown } from "./spend-down.js";
 import {
+  abandonConsequence,
   contentSourceFor,
   DEFAULT_AUDITOR_NAME,
   escalateTask,
@@ -66,7 +67,6 @@ import {
   type ThrottleDecision,
   type UsageSnapshot,
 } from "./usage.js";
-import { abandonConsequence } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import type { WorkerContainers } from "./worker-container.js";
 import {

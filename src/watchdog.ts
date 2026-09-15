@@ -4,13 +4,7 @@ import type { Db } from "./db.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
-import {
-  escalateTask,
-  getTask,
-  type Task,
-  type TaskType,
-  unfinishedDecisionSiblingCount,
-} from "./tasks.js";
+import { abandonConsequence, escalateTask, getTask, type Task, type TaskType } from "./tasks.js";
 import {
   markTeardown,
   runTeardown,
@@ -72,19 +66,6 @@ function pickedUpAt(db: Db, taskId: string): number {
     )
     .get(taskId) as { created_at: string } | undefined;
   return row ? new Date(row.created_at).getTime() : 0;
-}
-
-/** Canonical English abandon consequence baked into failure questions
- *  (ADR 0015 / 0048). It states the decision-discard rule and count only when
- *  unfinished same-decision siblings exist. Shared by watchdog and issue-backed
- *  deterministic failures so their wording cannot drift. */
-export function abandonConsequence(db: Db, task: Task): string {
-  const siblingCount = unfinishedDecisionSiblingCount(db, task);
-  return siblingCount > 0
-    ? `"abandon" discards this decomposition decision — this task's remaining work plus ` +
-        `${siblingCount} unfinished ${siblingCount === 1 ? "sibling" : "siblings"} from the same ` +
-        `decomposition decision — and returns the parent to the queue head to replan.`
-    : `"abandon" cancels this task and its remaining work.`;
 }
 
 /** The failure escalation: a question child in tidepool's own name (the agent
