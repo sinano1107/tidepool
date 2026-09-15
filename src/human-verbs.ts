@@ -10,6 +10,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { quarantinedHarnesses } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
+import { approveMemoryProposal, assertProposalFresh, invalidateMemoryEntry } from "./memory.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
@@ -803,15 +804,26 @@ export async function submitAnswer(
   // An answer during triage is durable immediately, but its parent unblock is
   // staged until commit. The activity touch also defers the timeout close.
   const session = triageActivity(deps.db, now(), openTriage);
-  const { question, parentUnblocked, pickupResumed } = answerQuestion(
-    deps.db,
-    task,
-    answers,
-    now(),
-    session && ((taskId) => stageFrontInsert(deps.db, session.id, taskId)),
-    comment,
-    origin,
-  );
+  // 提案 question(ADR 0120 決定3・spec #615 F)は回答と記憶の適用を1 transaction にする —— approve は承認の export
+  // (pin 不一致の DomainError は回答ごと巻き戻す)、reject は同じ pin 検査の後に candidate を `rejected` で無効化
+  const { question, parentUnblocked, pickupResumed } = deps.db.transaction(() => {
+    const answered = answerQuestion(
+      deps.db,
+      task,
+      answers,
+      now(),
+      session && ((taskId) => stageFrontInsert(deps.db, session.id, taskId)),
+      comment,
+      origin,
+    );
+    const proposal = task.question_proposal;
+    if (proposal && answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now());
+    else if (proposal) {
+      assertProposalFresh(deps.db, proposal);
+      invalidateMemoryEntry(deps.db, { entry_id: proposal.candidate_id, reason: "rejected" }, HUMAN_WORKER_ID, origin, now());
+    }
+    return answered;
+  })();
   if (wantsMerge) {
     appendEvent(deps.db, {
       taskId: task.id,

@@ -4,7 +4,7 @@ import type { Db } from "./db.js";
 import type { ExecutionSettingsChange, ProviderSource, TierSource } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./registry.js";
-import type { TaskType } from "./tasks.js";
+import type { QuestionProposal, TaskType } from "./tasks.js";
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
  *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
@@ -374,11 +374,17 @@ export type EventPayload =
   // どの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
   | ({ kind: "execution_settings_changed" } & ExecutionSettingsChange)
   // ADR 0083 / spec #586 A: Memory の正本。エントリ表(memory_entries)は同じ
-  // transaction で維持する投影で、この2つの再生で任意 watermark の approved 集合に
+  // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
   // 戻せる。どちらも task 非依存(task_id NULL)で、決定 log には現れない。
   // created の event id がそのままエントリの id(Knowledge は版も)。
   | { kind: "memory_entry_created"; entry: MemoryEntryFields }
   | { kind: "memory_entry_invalidated"; entry_id: number; reason: InvalidationReason; successor_id: number | null }
+  // ADR 0120 決定3・4 / issue #620: 提案 question の approve で candidate が approved になった(版 = この event の id)。
+  // replaced = pin した置換対象の id と版(後続の superseded 無効化が同じ transaction で続く)。
+  | { kind: "memory_entry_approved"; entry_id: number; question_id: string; replaced: QuestionProposal["replaces"] }
+  // ADR 0120 決定4 / issue #620: pin に含まれる entry が無効化され、盤面が提案 question を観測で決着させた
+  // (決着させた question に帰属)。observed_event_id = その memory_entry_invalidated の id。
+  | { kind: "memory_proposal_stale"; question_id: string; entry_id: number; observed_event_id: number }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
   // 候補ごとの落ちた理由(null = 返した)。event id は tool 結果に載り、Precedent の
   // memory マーカーになる。
@@ -434,7 +440,7 @@ export type EventOrigin = "webui" | "mcp" | "worker" | "board";
 
 export interface EventRow {
   id: number;
-  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*` / `memory_index_rebuilt` / `memory_settings_changed`)。 */
+  /** null は盤面スコープのイベント(`execution_settings_changed` / `memory_entry_*`(approved を含む)/ `memory_index_rebuilt` / `memory_settings_changed`)。 */
   task_id: string | null;
   worker_id: string;
   origin: EventOrigin;
@@ -500,7 +506,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   // an inner join is safe here only because every HUMAN_FACING_KIND is
   // task-scoped (the task-less kinds — execution_settings_changed, the
-  // memory_entry_* pair, memory_index_rebuilt and memory_settings_changed — are not among them) and tasks are never deleted
+  // memory_entry_* kinds, memory_index_rebuilt and memory_settings_changed — are not among them) and tasks are never deleted
   // (append-only) — no log entry can end up orphaned, so this can never
   // silently drop one
   const rows = db

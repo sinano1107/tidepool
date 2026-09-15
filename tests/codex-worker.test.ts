@@ -183,6 +183,7 @@ describe("CodexWorker (ADR 0098)", () => {
       "fold_memory",
       "move_memory",
       "invalidate_memory",
+      "propose_memory_change",
     ]);
   });
 

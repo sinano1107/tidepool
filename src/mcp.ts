@@ -23,6 +23,7 @@ import {
   memoryListFilterSchema,
   memoryScope,
   moveMemory,
+  proposeMemoryChange,
   pullMemoryList,
   readMemory,
   recordKnowledge,
@@ -887,6 +888,18 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
       inputSchema: { entry_id: z.number().int(), ...invalidationSchema.shape },
     },
     async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now) })),
+  );
+
+  server.registerTool(
+    "propose_memory_change",
+    {
+      description:
+        "Propose a Behavior change to the human as one approve / reject question attached to this task. op approve asks to " +
+        "approve a Behavior candidate exactly as worded; rationale is why you propose it (the question's context). " +
+        "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id.",
+      inputSchema: { op: z.literal("approve"), candidate_id: z.number().int(), rationale: z.string().min(1) },
+    },
+    async (input) => run((reader, now) => proposeMemoryChange(deps.db, reader.taskId, input, reader.agent, now)),
   );
 }
 

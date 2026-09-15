@@ -74,6 +74,9 @@ const TASKS_TABLE_DDL = `
       -- promotion failed. submitAnswer retries it synchronously on
       -- "retry"; never set through MCP or the JSON API.
       question_pending_pr_promotion_task_id TEXT,
+      -- board-internal only (ADR 0120 決定4 / issue #620): 提案を運ぶ question の種別つき提案(JSON)と pin。
+      -- 盤面の提案 verb だけが書き、この列を持つ question は親を塞がない付帯子。
+      question_proposal TEXT,
       -- system-internal only (issue #21): the workspace name a quarantine
       -- Confirmation question stands in for — set only by quarantineWorkspace,
       -- read only to dedup a re-fire onto the same open question. Never set
@@ -195,7 +198,7 @@ const MEMORY_ENTRIES_TABLE_DDL = `
       author_activity     TEXT NOT NULL CHECK (author_activity IN ('worker_verb', 'human', 'rca', 'meta_review', 'board')),
       author              TEXT NOT NULL,
       version             INTEGER,
-      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change')),
+      invalidation_reason TEXT CHECK (invalidation_reason IN ('superseded', 'path_moved', 'capability', 'environment', 'requirement_change', 'rejected')),
       successor_id        INTEGER REFERENCES memory_entries(id)
     )`;
 
@@ -203,7 +206,7 @@ const MEMORY_ENTRIES_TABLE_DDL = `
 // database is the audit record's final backstop, so its route vocabulary is
 // constrained here as well as by EventOrigin in TypeScript.
 // task_id is NULL for board-scoped events (execution_settings_changed, issue #545;
-// memory_entry_created / memory_entry_invalidated, issue #590; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592) — a settings change
+// memory_entry_created / memory_entry_invalidated, issue #590; memory_entry_approved, issue #620; memory_index_rebuilt, issue #591; memory_settings_changed, issue #592) — a settings change
 // or a memory entry belongs to no task but still carries its route.
 const EVENTS_TABLE_DDL = `
     CREATE TABLE events (
