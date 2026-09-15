@@ -58,6 +58,6 @@ it("単一文字列の provider は advisor なしの長さ1 entry(ADR 0116 決�
 
 it("走れる経路が1つも無い provider の集合は宣言を満たす経路が無いとして拒否される(ADR 0116 決定1)", () => {
   expect(() => assertValidAgentDefinition("deckhand", { provider: [] })).toThrow(
-    /no canonical route satisfies this agent's declaration/,
+    /no provider entry is left/,
   );
 });

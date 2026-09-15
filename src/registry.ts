@@ -259,8 +259,8 @@ export function assertValidAgentDefinition(
   if (entries.length === 0) {
     throw new InvalidAgentDefinitionError(
       agentName,
-      "no canonical route satisfies this agent's declaration, so there is no route it could ever run on " +
-        "— omit the field to run on every Provider whose route satisfies its skills (ADR 0116 決定1)",
+      "no provider entry is left — a written empty list, or an omitted provider whose declaration no canonical " +
+        "route satisfies, leaves no route this agent could ever run on (ADR 0116 決定1)",
     );
   }
   if (tier !== undefined && !(TIERS as readonly string[]).includes(tier)) {

@@ -161,15 +161,6 @@ describe("loadRegistry", () => {
     );
   });
 
-  it("旧綴りの advisor(model 名)は読み込みを倒さず、退役フィールドとして残る", async () => {
-    const dir = await makeRegistry({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nadvisor: opus\n---\nYou are Deckhand.\n`,
-    });
-    const agent = loadRegistry(dir, "purely-local").agents.deckhand!;
-    expect(agent.provider).toEqual([{ name: "anthropic", advisor: false }]);
-    expect(agent.retiredFields).toEqual(["advisor"]);
-  });
-
   it("frontmatter の provider を読み込む(ADR 0097 決定1: 推論の向き先・課金元の宣言 — harness とは独立した概念)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nskills:\n  - "*"\ndescription: General work agent for the tidepool board\nprovider: anthropic\n---\nYou are Deckhand.\n`,

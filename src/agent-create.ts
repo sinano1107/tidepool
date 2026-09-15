@@ -150,13 +150,16 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
 /** フォームの入力を registry の正規形へ(ADR 0110 決定1)。フォームは単一
  *  provider + advisor チェックボックスのまま = 長さ1の entry で、綴りを畳むのは
  *  parse と共有する1本(`normalizeProviderEntries`)である。チェックボックスは
- *  entry の advisor に畳む(ADR 0116 決定2: advisor は entry の性質だけ)。 */
+ *  書かれた entry にだけ畳む —— 省略の展開は常に advisor なし(ADR 0116 決定1/2)。 */
 function normalizedDefinition(
   input: CreateAgentInput,
 ): Omit<AgentDefinition, "version" | "retiredFields"> {
   return {
     ...input,
-    provider: normalizeProviderEntries(input.provider, input.skills).map((entry) => ({ ...entry, advisor: input.advisor === true })),
+    provider: normalizeProviderEntries(
+      input.advisor === true ? [{ name: input.provider, advisor: true }] : input.provider,
+      input.skills,
+    ),
   };
 }
 
