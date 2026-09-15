@@ -7,6 +7,8 @@ import { listEvents } from "../src/events.js";
 import { recordKnowledge } from "../src/memory.js";
 import {
   completeTask,
+  declarePremiseBreach,
+  decomposeTask,
   logDecision,
   registerTask,
   splitHandoffMarkdown,
@@ -88,6 +90,22 @@ it("task_completed イベントの result を解決して翻訳する", async ()
     text: "センサーは5分ごとに湿度を報告する",
     cached: false,
   });
+});
+
+it("premise_breached イベントの宣言の理由を解決して翻訳する", async () => {
+  const db = await freshDb();
+  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW);
+  const [child] = decomposeTask(db, parent, { reason: "split", children: [{ title: "a", purpose: "p", completion_criteria: "c" }] }, "tako", NOW);
+  declarePremiseBreach(db, child!, "module M is broken", "tako", NOW);
+  const event = listEvents(db, child!.id).find((entry) => entry.kind === "premise_breached");
+
+  const client = new FakeTranslationClient();
+  client.scriptTranslation("モジュールMが壊れている");
+
+  const outcome = await translateLogEntry(db, client, event!.id, "Japanese", NOW);
+
+  expect(outcome).toEqual({ status: "translated", text: "モジュールMが壊れている", cached: false });
+  expect(client.calls).toEqual([{ source: "module M is broken", language: "Japanese" }]);
 });
 
 it("存在しない event id は TranslationTargetError を投げる", async () => {

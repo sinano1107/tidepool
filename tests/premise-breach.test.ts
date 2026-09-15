@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { listLog, taskDecisionLog } from "../src/events.js";
 import {
   answerQuestion,
   BOARD_WORKER_ID,
@@ -238,5 +239,22 @@ it("破綻の question が立っている間、その木への直接 cancel は�
   declarePremiseBreach(db, getTask(db, a!.id)!, "module M is broken", "tako", at);
 
   expect(() => cancelTaskDirectly(db, getTask(db, parent.id)!, null, at, {})).toThrow(/answer it/);
+  db.close();
+});
+
+it("前提の破綻の宣言は判断ログの一覧(盤面全体・宣言者の task)に異議を向けられるエントリとして並ぶ", () => {
+  const db = openDb(":memory:");
+  const parent = root(db);
+  const [a] = agentDecompose(db, parent, "A");
+
+  declarePremiseBreach(db, getTask(db, a!.id)!, "module M is broken", "tako", at);
+
+  const breach = expect.objectContaining({
+    task_id: a!.id,
+    kind: "premise_breached",
+    payload: expect.objectContaining({ line: "module M is broken" }),
+  });
+  expect(taskDecisionLog(db, a!.id)).toEqual([breach]);
+  expect(listLog(db)).toContainEqual(breach);
   db.close();
 });
