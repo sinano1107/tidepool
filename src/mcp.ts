@@ -867,8 +867,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, attribu
         based_on_decision: z.number().int(),
       },
     },
-    async ({ scope: target, ...input }) =>
-      run((reader, now) => foldMemory(deps.db, { ...input, scope: registeredScope(deps, target), author: author(reader) }, "worker", now)),
+    async (input) =>
+      run((reader, now) => foldMemory(deps.db, { ...input, scope: registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
   );
 
   server.registerTool(
