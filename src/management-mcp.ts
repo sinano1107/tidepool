@@ -82,7 +82,7 @@ import {
   listQueue,
   listYourTasks,
 } from "./tasks.js";
-import { sessionInTeardown } from "./teardown.js";
+import { type FailedTeardownCheck, sessionInTeardown } from "./teardown.js";
 import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -121,7 +121,7 @@ export interface ManagementMcpDeps {
   reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0112 決定3: 落ちた後始末の受理の門(WebUI 側と同じ配線)。 */
-  teardownQuarantine?: (taskId: string) => Promise<void>;
+  teardownQuarantine?: FailedTeardownCheck;
   cliAuth?: CliAuthCheck;
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   boardState?: BoardStatePath[];

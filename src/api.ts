@@ -110,7 +110,7 @@ import {
   presentTask,
   type Task,
 } from "./tasks.js";
-import { sessionInTeardown } from "./teardown.js";
+import { type FailedTeardownCheck, sessionInTeardown } from "./teardown.js";
 import {
   getProviderUsage,
   getThrottleState,
@@ -567,7 +567,7 @@ export interface ApiRouterDeps {
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0112 決定3: re-runs the throwing teardown before accepting a failed-teardown
    *  answer — the check *is* the release gate. */
-  teardownQuarantine?: (taskId: string) => Promise<void>;
+  teardownQuarantine?: FailedTeardownCheck;
   /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
   cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting

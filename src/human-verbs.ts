@@ -38,6 +38,7 @@ import {
   type Task,
   taskIdForPr,
 } from "./tasks.js";
+import type { FailedTeardownCheck } from "./teardown.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import {
@@ -372,7 +373,7 @@ export interface SubmitAnswerDeps {
    *  **投げる版で**もう一度走らせることに一致する —— 通れば受理へ進み、まだ投げるなら
    *  `DomainError` で回答を拒む。合成 root が `acceptTeardownQuarantine` を束ねて渡す
    *  (人間 verb 側は後始末の deps 一式を知らない)。Absent → 後始末を持たない盤面。 */
-  teardownQuarantine?: (taskId: string) => Promise<void>;
+  teardownQuarantine?: FailedTeardownCheck;
   cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
    *  a provider-auth Confirmation answer — same "検証つきで解除" as `cliAuth`,

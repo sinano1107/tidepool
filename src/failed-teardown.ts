@@ -39,8 +39,8 @@ export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, n
       purpose:
         `the board's own teardown for task ${taskId} threw this exception, and that teardown has ` +
         `been unfinished since ${startedAt}:\n\n${err instanceof Error ? err.message : String(err)}\n\n` +
-        "No task is picked up while this stands — the execution slot is still held by that " +
-        "session. Answering re-runs the same teardown: if it throws again the answer is refused, " +
+        "No task is picked up while this stands. Answering re-runs the same teardown: " +
+        "if it throws again the answer is refused, " +
         "this question stays open, and the refusal carries that run's exception body.",
       completion_criteria: "the teardown for that task runs to completion",
       question: [

@@ -114,6 +114,11 @@ export async function runTeardown(
   }
 }
 
+/** 落ちた後始末の受理の門(ADR 0112 決定3)。隣の門(`ContainmentCheck` /
+ *  `RegistryReachabilityCheck`)と違い可否を返さない —— 検査が後始末の再実行そのもの
+ *  なので、答えは「通った」か「投げた」しかない。 */
+export type FailedTeardownCheck = (taskId: string) => Promise<void>;
+
 /** 落ちた後始末の解放の門(ADR 0112 決定3)。他の quarantine 族が受理の直前に資源を
  *  検証するのと同じ位置で走るが、検証すべき資源が無いので検査は後始末の再実行そのもの
  *  に一致する —— 通れば受理へ進み、まだ投げるなら `DomainError` で回答を拒む。
@@ -138,8 +143,10 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
 }
 
 /** 投げる後始末。捕まえる版が `runTeardown` で、受理の検査はこちらを走らせる
- *  (ADR 0112 決定3: フラグ引数で分岐を型に持ち込まない)。 */
-export async function teardown(
+ *  (ADR 0112 決定3: フラグ引数で分岐を型に持ち込まない)。ファイル外に呼び手は
+ *  無いので export しない(ADR 0107 決定5)—— 外から見えるのは捕まえる版と
+ *  `acceptTeardownQuarantine` の2つである。 */
+async function teardown(
   deps: TeardownDeps,
   taskId: string,
   step: TeardownStep,
