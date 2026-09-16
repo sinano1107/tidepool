@@ -62,7 +62,7 @@ const BOARD_VERBS = [
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
-export const CLOSED_FEATURES = [
+const CLOSED_FEATURES = [
   "apps",
   "auth_elicitation",
   "browser_use",
@@ -83,27 +83,29 @@ export const CLOSED_FEATURES = [
   "workspace_dependencies",
 ] as const;
 /** `codex features list` の全量(name → effective state)の写し。stage 列は含めない —— 面は state。
- * CODEX_CLI_VERSION に**従属する**期待値で、pin を上げたら下の手順で採り直す。採り直さなければ
- * version 行が先に倒れて preflight は通らない —— pin 更新時の CLOSED_FEATURES 読み直しを、この定数が
- * コードで強制する(ADR 0108 追記、issue #532)。
+ * CODEX_CLI_VERSION に**従属する**期待値で、pin を上げたら下の手順で採り直す。採り直さない限り
+ * feature 差分で preflight が倒れ続けるので、pin 更新時の CLOSED_FEATURES 読み直しをこの定数が
+ * コードで強制する(ADR 0108 追記、issue #532)。型が CLOSED_FEATURES の全名を `"false"` に縛るので、
+ * 採り直しで閉じたはずの名前が転んでいれば、テストではなくコンパイルが先に落ちる。
  *
- * 採取条件(0.147.0 で実測): venue は Lima VM `tidepool`(Linux aarch64 musl) —— preflight が走るのは
- * そちら。Mac(darwin arm64)の出力と1行も違わず、CODEX_HOME が新規の空でもログイン済みでも同一
- * (auth 非依存)。`-c` は closedSurfaceConfig() と同じもので、FEATS は CLOSED_FEATURES の全名 ——
- * どちらかを動かしたらこの定数も動く。skillConfig() は採取時には付けていない(probe は付ける)。
- * **bash で走らせること** —— zsh は括っていない `$FEATS` を語分割しないので、下の for が1周しか回らず
- * 18 名前が丸ごと1つの `-c` に化ける。Codex は未知の名前を無言で受理するので、黙って効かない。
+ * 採取条件(pin の版で実測。採り直しも必ず pin と同じ版で): venue は Lima VM `tidepool`
+ * (Linux aarch64 musl) —— preflight が走るのはそちら。Mac(darwin arm64)の出力と1行も違わず、
+ * CODEX_HOME が新規の空でもログイン済みでも同一(auth 非依存)。`skillConfig()` の有無でも同一なので
+ * 採取時は付けていない(probe は付ける)。`-c` は closedSurfaceConfig() と同じもので、FEATS は
+ * CLOSED_FEATURES の全名 —— どちらかを動かしたらこの定数も動く。
  *
  * ```bash
  * CODEX_HOME=$(mktemp -d)
- * FEATS="<CLOSED_FEATURES の全名を空白区切りで>"
+ * FEATS=(<CLOSED_FEATURES の全名>)
  * ARGS=(-c features.network_proxy=true -c features.hooks=true)
- * for f in $FEATS; do ARGS+=(-c "features.$f=false"); done
+ * for f in "${FEATS[@]}"; do ARGS+=(-c "features.$f=false"); done
  * ARGS+=(-c 'web_search="disabled"' -c tools.web_search=false -c project_doc_max_bytes=0)
  * codex features list "${ARGS[@]}" | awk '{print $1, $NF}'
  * ```
  */
-export const CODEX_FEATURE_SNAPSHOT: Readonly<Record<string, string>> = {
+export const CODEX_FEATURE_SNAPSHOT: Readonly<
+  Record<(typeof CLOSED_FEATURES)[number], "false"> & Record<string, "true" | "false">
+> = {
   apply_patch_freeform: "false",
   apply_patch_streaming_events: "false",
   apps: "false",

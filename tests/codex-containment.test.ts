@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  CLOSED_FEATURES,
   CODEX_CLI_VERSION,
   CODEX_FEATURE_SNAPSHOT,
   type CodexCapabilityObservation,
@@ -69,10 +68,6 @@ it.each([
     expect(capability.reason).toContain(expected);
     expect(capability.reason).not.toContain("apply_patch_freeform");
   }
-});
-
-it("CLOSED_FEATURES の全名が期待 snapshot で false —— 定数を写した時点の取りこぼしを捕まえる", () => {
-  expect(CLOSED_FEATURES.filter((feature) => CODEX_FEATURE_SNAPSHOT[feature] !== "false")).toEqual([]);
 });
 
 it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {
