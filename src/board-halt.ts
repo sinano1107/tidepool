@@ -1,6 +1,7 @@
 import { openCliAuthQuestion } from "./cli-auth.js";
 import { openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
+import { openFailedTeardownQuestion } from "./failed-teardown.js";
 import { isPaused } from "./pause.js";
 import { openRegistryReachabilityQuestion } from "./registry-reachability.js";
 import { getThrottleState } from "./throttle.js";
@@ -11,7 +12,7 @@ import { activeTriageSession } from "./triage.js";
  *  操舵なので入らない。
  *
  *  属性を持つのは throttle entry だけである(ADR 0068 決定2)。`observedAt` は
- *  throttle の答えが使用量の読み取りに由来して遅れるための鮮度であり、他の4つは
+ *  throttle の答えが使用量の読み取りに由来して遅れるための鮮度であり、他の kind は
  *  「row / question が存在する」という盤面自身の事実なので偽の鮮度を持たない。
  *  `revalidating`(再観測中)は独立の kind ではなく throttle の状態、`failClosed`
  *  は「使用量そのものを読めなかった」(ADR 0028)で「線を超えた」とは別の答え。
@@ -19,9 +20,22 @@ import { activeTriageSession } from "./triage.js";
  *  `containment` は**回収済み観測の不成立も含む**(ADR 0099 決定4): 残存 process の
  *  停止範囲は盤面全体で、機構は既存の Containment quarantine を再利用する — 新しい
  *  quarantine 族は立てないので、列挙も1行のままである。どちらで止まっているかは
- *  question の本文が言う。 */
+ *  question の本文が言う。
+ *
+ *  `failedTeardown` は**盤面自身のコードが投げた**後始末である(ADR 0112 決定1)。
+ *  想定どおり走る後始末は停止ではない(枠がまだ空いていないだけ)が、落ちた後始末は
+ *  人間が来るまで終わらないので「枠が空かない」であり、停止そのものである。並ぶのは
+ *  containment の直後 —— 両方立ったときに先に直すべきはホスト全体の側である。 */
 export type BoardHalt =
-  | { kind: "triage" | "pause" | "containment" | "registryReachability" | "cliAuth" }
+  | {
+      kind:
+        | "triage"
+        | "pause"
+        | "containment"
+        | "failedTeardown"
+        | "registryReachability"
+        | "cliAuth";
+    }
   | {
       kind: "throttle";
       revalidating: boolean;
@@ -51,6 +65,7 @@ export function boardHalts(
   if (activeTriageSession(db)) halts.push({ kind: "triage" });
   if (isPaused(db)) halts.push({ kind: "pause" });
   if (openContainmentQuestion(db)) halts.push({ kind: "containment" });
+  if (openFailedTeardownQuestion(db)) halts.push({ kind: "failedTeardown" });
   if (openRegistryReachabilityQuestion(db)) halts.push({ kind: "registryReachability" });
   if (openCliAuthQuestion(db)) halts.push({ kind: "cliAuth" });
   const throttle = getThrottleState(db);

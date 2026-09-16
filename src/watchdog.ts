@@ -1,6 +1,7 @@
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
+import { openFailedTeardownQuestion } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
@@ -326,6 +327,13 @@ export function startWatchdog(deps: {
   function tick(): void {
     const taskId = slot.currentTaskId;
     if (taskId === null) return;
+    // ADR 0112 決定4: 落ちた後始末は梯子(強制回収 → 回収 timeout → Containment
+    // quarantine)に入らない。原因を知らないハンドラに文面を書かせると偽の断言になる
+    // —— 容器はもう空なので強制回収は no-op で、続く Containment question は
+    // 「その session のプロセスがこのホストに残っている」と断言するが実際には残って
+    // いない。門は**行**に持つ: in-memory の門は再起動を越えないので、越えなければ
+    // 起動のたびに偽の question を1枚ずつ刷る。
+    if (openFailedTeardownQuestion(db)) return;
     const task = getTask(db, taskId);
     if (!task) return;
     const pickup = pickedUpAt(db, taskId);

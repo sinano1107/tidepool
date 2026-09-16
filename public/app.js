@@ -918,6 +918,14 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       "moved to front \u2014 pickup blocked",
       "worker containment is not established"
     ),
+    // ADR 0112 決定1: 盤面自身のコードが投げた後始末。想定どおり走っている後始末を
+    // 報せる下の待ちの行と違い、これは止まっている
+    failedTeardown: () => halt(
+      { color: "var(--coral-4)", line: "board teardown failed \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "the board's own teardown failed"
+    ),
     registryReachability: () => halt(
       { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null },
       "warn",

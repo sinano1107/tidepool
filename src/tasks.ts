@@ -143,6 +143,10 @@ export interface Task {
   question_quarantine_sandbox: number | null;
   /** System-internal only (ADR 0052): registry reachability quarantine. */
   question_quarantine_registry: number | null;
+  /** System-internal only (ADR 0112): the id of the task whose teardown threw.
+   *  Borrows the quarantine family's mechanism only — it names a task because
+   *  what became unrunnable is the board's own code, not a resource. */
+  question_quarantine_teardown: string | null;
   /** System-internal only (ADR 0070): Claude CLI authentication quarantine. */
   question_quarantine_cli_auth: number | null;
   /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
@@ -348,6 +352,9 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   quarantine_sandbox?: boolean;
   /** System-internal only (ADR 0052): registry reachability Confirmation. */
   quarantine_registry?: boolean;
+  /** System-internal only (ADR 0112): the id of the task whose teardown threw.
+   *  Never set via MCP or the JSON API — only quarantineFailedTeardown sets this. */
+  quarantine_teardown?: string;
   /** System-internal only (ADR 0070): Claude CLI authentication Confirmation. */
   quarantine_cli_auth?: boolean;
   /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
@@ -415,6 +422,7 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
     input.quarantine_agent !== undefined ||
     input.quarantine_sandbox !== undefined ||
     input.quarantine_registry !== undefined ||
+    input.quarantine_teardown !== undefined ||
     input.quarantine_cli_auth !== undefined ||
     input.quarantine_provider_auth !== undefined ||
     input.quarantine_harness !== undefined
@@ -693,6 +701,7 @@ export function registerTask(
     question_quarantine_agent: input.quarantine_agent ?? null,
     question_quarantine_sandbox: input.quarantine_sandbox ? 1 : null,
     question_quarantine_registry: input.quarantine_registry ? 1 : null,
+    question_quarantine_teardown: input.quarantine_teardown ?? null,
     question_quarantine_cli_auth: input.quarantine_cli_auth ? 1 : null,
     question_quarantine_provider_auth: input.quarantine_provider_auth ?? null,
     question_quarantine_harness: input.quarantine_harness ?? null,
@@ -706,12 +715,12 @@ export function registerTask(
          risk_flag, review_flag, review_by, review_tier, tier, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_cli_auth, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
+         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_teardown, question_quarantine_cli_auth, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, @review_tier, @tier, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
+         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_teardown, @question_quarantine_cli_auth, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
     ).run({
       ...task,
       review_by: task.review_by && JSON.stringify(task.review_by),
@@ -1367,6 +1376,23 @@ export function answerQuestion(
         workerId: HUMAN_WORKER_ID,
         origin,
         payload: { kind: "registry_reinstated" },
+        at: now,
+      });
+      pickupResumed = true;
+      return;
+    }
+
+    // ADR 0112 決定3: 解放の門は後始末の再実行そのものである。ここへ来た時点でそれは
+    // 完走している —— 呼び出し側が受理の直前に走らせ、まだ投げるなら回答を拒んでいる。
+    if (question.question_quarantine_teardown !== null) {
+      appendEvent(db, {
+        taskId: question.id,
+        workerId: HUMAN_WORKER_ID,
+        origin,
+        payload: {
+          kind: "teardown_reinstated",
+          task: question.question_quarantine_teardown,
+        },
         at: now,
       });
       pickupResumed = true;

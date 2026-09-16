@@ -101,6 +101,12 @@ const TASKS_TABLE_DDL = `
       -- question standing in for registry remote reachability. Board-wide,
       -- but distinct from worker containment; never set via MCP or JSON API.
       question_quarantine_registry INTEGER,
+      -- system-internal only (ADR 0112): the id of the task whose teardown
+      -- threw. Borrows the quarantine family's mechanism only — what became
+      -- unrunnable is the board's own code, not a resource — so it names a
+      -- task rather than a resource. Set only by quarantineFailedTeardown;
+      -- never via MCP or the JSON API.
+      question_quarantine_teardown TEXT,
       -- system-internal only (ADR 0070): 1 on the single Confirmation
       -- question standing in for Claude CLI authentication. Board-wide;
       -- never set via MCP or JSON API.

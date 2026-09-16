@@ -76,6 +76,7 @@ function makeTask(
     question_quarantine_agent: null,
     question_quarantine_sandbox: null,
     question_quarantine_registry: null,
+    question_quarantine_teardown: null,
     question_quarantine_cli_auth: null,
     question_quarantine_provider_auth: null,
     question_quarantine_harness: null,

@@ -565,6 +565,9 @@ export interface ApiRouterDeps {
   reclaim?: PendingReclaim;
   /** ADR 0052: re-runs refresh before accepting a registry quarantine answer. */
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0112 決定3: re-runs the throwing teardown before accepting a failed-teardown
+   *  answer — the check *is* the release gate. */
+  teardownQuarantine?: (taskId: string) => Promise<void>;
   /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
   cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
@@ -688,6 +691,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     harnessContainment,
     reclaim,
     registryReachability,
+    teardownQuarantine,
     cliAuth,
     providerCliAuth,
     vapidPublicKey,
@@ -1403,6 +1407,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           harnessContainment,
           reclaim,
           registryReachability,
+          teardownQuarantine,
           cliAuth,
           providerCliAuth,
           boardState,
@@ -1767,10 +1772,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   }
 
   // ADR 0109 決定2 / CONTEXT.md「後始末」: 「今なぜ pickup が起きないか」に答える
-  // 読み口は、盤面全体の停止の列挙と**並べて**後始末を報せる。**列挙そのものには
-  // 加えない** —— 後始末は停止ではなく、枠がまだ空いていない状態である。人間から
+  // 読み口は、盤面全体の停止の列挙と**並べて**後始末を報せる。想定どおり走っている
+  // 後始末は停止ではなく枠がまだ空いていないだけなので、列挙には入らない —— 人間から
   // 見れば「タスクは done なのに次が始まらない」であり、説明が無ければ古い停止と
-  // 誤読される。
+  // 誤読される。**落ちた**後始末だけは列挙の側にも `failedTeardown` として現れ
+  // (ADR 0112 決定1)、同じ session について2つが同時に出る —— このフィールドが言う
+  // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、別の事実である
+  // (把握して受け入れた重複)。
   function teardownJson() {
     const teardown = sessionInTeardown(db);
     return teardown ? { teardown } : {};
