@@ -41,7 +41,7 @@
           探索の範囲で1つも見つからなかった(<span class="font-mono text-xs">appendEvent</span> は 5欄の interface に 47 kind、
           <span class="font-mono text-xs">slot.ts</span> は 37行に ADR 0109 決定2 の不変条件、<span class="font-mono text-xs">learner.ts</span> は
           純粋な決定核 + 1つの不純な殻 —— いずれも deletion test に耐える)。薄いのは<strong>同じ概念が N 箇所に手で綴られている</strong>側で、
-          7候補のうち5つがその形である(残る2つは、置き場が違う帳簿と、3度綴られた判定)。
+          7候補のうち5つがその形である(残る2つは、置き場が違う帳簿と、閉包の中にいる門)。
         </p>
         <p class="text-sm text-slate-600 max-w-3xl leading-relaxed">
           2026-09-01 のレビューの4件(着地 module・人間面の扉・containment の合成・「着地済み」の述語)は
@@ -86,10 +86,10 @@
                 <text x="6" y="276" font-size="9" fill="#7f1d1d" font-family="ui-monospace,monospace">→ registerTask(question) → 散文</text>
 
                 <g font-size="9" font-family="ui-monospace,monospace">
-                  <rect x="176" y="22" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="41" fill="#334155">db.ts 列 ×8 +列挙2箇所</text>
+                  <rect x="176" y="22" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="41" fill="#334155">db.ts 列の言及 ×15</text>
                   <rect x="176" y="58" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="77" fill="#334155">tasks.ts 欄×8 + ||×8</text>
-                  <rect x="176" y="94" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="113" fill="#334155">human-verbs.ts if×8</text>
-                  <rect x="176" y="130" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="149" fill="#334155">board-halt.ts 列挙×6</text>
+                  <rect x="176" y="94" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="113" fill="#334155">human-verbs.ts 解除×12</text>
+                  <rect x="176" y="130" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="149" fill="#334155">board-halt.ts kind×9</text>
                 </g>
                 <line x1="140" y1="120" x2="174" y2="40" stroke="#dc2626" stroke-width="1.5"/><path d="M174 40 l-7 1 l4 5 z" fill="#dc2626"/>
                 <line x1="140" y1="120" x2="174" y2="74" stroke="#dc2626" stroke-width="1.5"/><path d="M174 74 l-7 0 l3 6 z" fill="#dc2626"/>
@@ -567,8 +567,8 @@ flowchart LR
 
                 <line x1="174" y1="110" x2="158" y2="110" stroke="#dc2626" stroke-width="2"/>
                 <line x1="158" y1="110" x2="174" y2="110" stroke="#dc2626" stroke-width="2"/>
-                <text x="6" y="252" font-size="10" fill="#7f1d1d" font-weight="600">contract test が見るのは id / gracefulStop / checkUsage の3つ</text>
-                <text x="6" y="266" font-size="10" fill="#7f1d1d" font-weight="600">—— 重複が全部載っている start() は契約の外</text>
+                <text x="6" y="252" font-size="10" fill="#7f1d1d" font-weight="600">実行設定 null の例外文言は両側で逐語同一</text>
+                <text x="6" y="266" font-size="10" fill="#7f1d1d" font-weight="600">(claude:1905 / codex:628)—— boardStateOverlap の行も同一</text>
                 <text x="6" y="286" font-size="9" fill="#7f1d1d">codex-worker.ts:20 は claude-worker.ts から2つ import している</text>
               </svg>
             </div>
@@ -598,7 +598,7 @@ flowchart LR
                   <text x="180" y="214" fill="#64748b" font-size="8">TOML -c / hook 設置</text>
                   <text x="180" y="228" fill="#64748b" font-size="8">enabled_tools</text>
                 </g>
-                <text x="6" y="268" font-size="10" fill="#065f46" font-weight="600">contract test が start() を見られるようになる</text>
+                <text x="6" y="268" font-size="10" fill="#065f46" font-weight="600">生涯の挙動を1本の interface で言える</text>
                 <text x="6" y="284" font-size="9" fill="#475569">worker_spawned / worker_exited の断言 50+7 / 32+8 が1本になる</text>
               </svg>
             </div>
@@ -624,7 +624,7 @@ flowchart LR
           <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
             <li>locality: 生涯の修正が1箇所</li>
             <li>106行が implementation へ沈む</li>
-            <li>contract test が本体を見る</li>
+            <li>生涯のテストが1本になる</li>
             <li>adapter 同士の import が切れる</li>
             <li>3つ目の Harness の代価が 46行規模になる</li>
             <li>ADR 0118 の変更が片側だけに当たらない</li>
@@ -633,53 +633,50 @@ flowchart LR
         <!-- ---------- 7 ---------- -->
         <article id="c7" class="space-y-6">
           <div class="space-y-3">
-            <h2 class="font-serif text-3xl">7. 「なぜ拾われないか」に1つの述語が答える</h2>
+            <h2 class="font-serif text-3xl">7. pickup の門が閉包の中にあり、ドメイン層の seam に届かない</h2>
             <div class="flex flex-wrap gap-2">
               <span class="px-2.5 py-1 rounded-full bg-amber-500 text-white text-xs font-semibold tracking-wide">Worth exploring</span>
               <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process</span>
             </div>
             <p class="font-mono text-xs text-slate-600 leading-relaxed">
-              src/tasks.ts:3140-3189(nextSlotTask)&middot; src/tasks.ts:2860-2915(listQueue)&middot; src/tasks.ts:2836-2859(24行の規約コメント)&middot;
-              src/scheduler.ts:388-846 &middot; src/api.ts:720-735 &middot; src/management-mcp.ts:268,284 &middot; src/board-halt.ts:60-83
+              src/scheduler.ts:390(pickupBlocked)&middot; src/scheduler.ts:664(poll)&middot; src/scheduler.ts:723-806(entry 除外の83行)&middot;
+              src/scheduler.ts:94,120,138,169(export されている行単位の除外)&middot; src/tasks.ts:3140-3189 &middot; src/api.ts:720-735 &middot; src/board-halt.ts:60-83
             </p>
           </div>
 
           <div class="rounded-lg border border-slate-200 bg-white p-4">
-            <div class="label text-slate-500 mb-3">before — 同じ問いに3つの実装</div>
+            <div class="label text-slate-500 mb-3">before — 行の側は共有されている。盤面の門だけが閉包の中にいる</div>
             <div class="mermaid">
 flowchart TB
-  Q["「なぜこのタスクは拾われないのか」"]
-  subgraph A["① 選定 — SQL 8述語"]
-    A1["tasks.ts:3157 nextSlotTask<br/>+ 述語の断片6本 2505-2762"]
+  subgraph EXP["export されている — 共有されており、乖離しない"]
+    E1["allEntriesExcluded / entryExclusionPredicate<br/>pickupExcludedAssignees / pickupExclusions"]
+    E2["api.ts:720-735 が1つの式から引数を組み<br/>listQueue と poll が同じ集合を見る"]
+    E1 --- E2
   end
-  subgraph B["② 門 — TS 約7段"]
-    B1["scheduler.ts:388-846<br/>slot / halts / containment / throttle<br/>fable 線 / entry 除外 83行 / issue 展開"]
-    B2["board-halt.ts → triage / pause /<br/>containment / registry / cli-auth / throttle"]
-    B3["teardown.ts / watchdog.ts"]
+  subgraph CLO["startScheduler の閉包の中 — export されていない"]
+    C1["pickupBlocked :390<br/>slot / halts / containment / throttle /<br/>issue 展開 / entry 除外ループ 83行"]
+    C2["poll :664"]
+    C1 --- C2
   end
-  subgraph C["③ 表示 — もう一度"]
-    C1["listQueue の CASE 節<br/>+ 引数を api.ts:725 と<br/>management-mcp.ts:268 が別々に組む"]
-  end
-  Q --> A --> B
-  Q --> C
-  A1 -. "poll は listQueue を呼ばず<br/>listQueue は poll を呼ばない<br/>—— 24行のコメントだけが揃えている" .-> C1
+  T["この門の挙動に触る唯一の道 = bootTidepool<br/>(ADR 0107 の seam(i)・サーバー境界)"]
+  CLO --> T
   classDef leak fill:#fef2f2,stroke:#dc2626,stroke-width:2px;
-  class C1 leak
+  classDef ok fill:#ecfdf5,stroke:#059669;
+  class CLO,T leak
+  class EXP ok
             </div>
-            <p class="text-xs text-slate-500 mt-3 font-mono">端から端まで読むのに 11 ファイル。ADR 0068 決定4 が盤面全体の半分を <span class="text-slate-700">boardHalts</span> の1読みにしたが、行の側に同じものは無い。</p>
+            <p class="text-xs text-slate-500 mt-3 font-mono">ADR 0107 決定3「挙動は、それが現れる<span class="text-slate-700">最も低い seam</span> で1度だけ言う」が、この門については適用できない —— 最も低い seam に出ていない。</p>
           </div>
 
           <div class="rounded-lg border-2 border-slate-800 bg-white p-4">
-            <div class="label text-slate-500 mb-3">after — 判定が1つ、面はそれを読む</div>
+            <div class="label text-slate-500 mb-3">after — 門が verdict を返す export になる</div>
             <div class="mermaid">
 flowchart LR
-  P["pickability module<br/>行 → 拾える / 拾えない + 理由"]
-  S["scheduler — 拾う"]
-  QV["listQueue — 表示する"]
-  MC["管理MCP / HTTP"]
+  P["門の判定<br/>盤面の状態 → 通す / 塞ぐ + 塞いでいるもの"]
+  S["poll — 拾う"]
+  D["ドメイン層のテスト<br/>(bootTidepool 無しで門を言える)"]
   P --> S
-  P --> QV
-  P --> MC
+  P --> D
   classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a;
   class P deep
             </div>
@@ -688,24 +685,24 @@ flowchart LR
           <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
             <div class="space-y-2">
               <div class="label text-slate-500">problem</div>
-              <p>拾える条件が SQL(8述語)・scheduler の閉包(約7段)・listQueue の CASE 節の3つに分かれて綴られ、3つ目は呼び出し側2箇所が引数を別々に組む。門が scheduler の閉包の中にあるのでドメイン層から届かず、約20の挙動のうち12はサーバー境界でしか固定できていない。</p>
+              <p><span class="font-mono text-xs">pickupBlocked</span> と <span class="font-mono text-xs">poll</span> は <span class="font-mono text-xs">startScheduler</span> の内側の関数で export されていない。門の挙動を固定するにはサーバー境界を起こすしかなく、ADR 0107 が名付けたドメイン層の seam に出ていない。副作用として「なぜこの行は拾われないのか」を端から端まで読むのに11ファイル要る。</p>
             </div>
             <div class="space-y-2">
               <div class="label text-slate-500">solution</div>
-              <p>行と盤面の状態から「拾えるか、拾えないなら何が塞いでいるか」を答える述語を1つ置き、scheduler も表示も同じものを読む。</p>
+              <p>門の並びを verdict を返す export にし、<span class="font-mono text-xs">poll</span> はそれを読む側になる。行単位の除外は既に export されて共有されているので、足りないのは盤面側の1本。</p>
             </div>
           </div>
 
-          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
-            <strong>ADR 0068 決定4 と衝突しない</strong> —— あちらが痛み待ちにしたのは<strong>行ごとの理由の文言</strong>(#398)である。ここが言うのは判定そのものの重複で、
-            文言を増やすかどうかは別の判断のまま残せる。生きた検査(containment probe / usage 観測 / registry fetch)の順序は ADR 0008 / 0030 / 0052 の設計なので動かさない —— 述語が扱うのは行の側だけ。
+          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm space-y-1">
+            <p><strong>乖離の話ではない</strong> —— <span class="font-mono text-xs">api.ts:720-735</span> のコメントが「述語だけでなく、そこへ渡す引数も1つの式から出す」と宣言しており、<span class="font-mono text-xs">entryExclusionPredicate</span> は poll と表示が共有している。行の側に揃える機構は<strong>ある</strong>。</p>
+            <p><strong>#398 との線</strong> —— あちらは行ごとの理由の<strong>文言</strong>(ADR 0068 決定4 が痛み待ちにしたもの)。ここはテストの seam。生きた検査(containment probe / usage 観測 / registry fetch)を verdict に含めるかは未決で、ADR 0008 の just-in-time と触れる。</p>
           </div>
 
           <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
-            <li>locality: 拾える条件が1箇所</li>
-            <li>表示と選定が規約でなく構造で揃う</li>
-            <li>ドメイン層で門を書けるようになる</li>
-            <li>41欄の harness を起こさずに済む検査が増える</li>
+            <li>ドメイン層で門を言えるようになる</li>
+            <li>ADR 0107 決定3 がこの門にも届く</li>
+            <li>41欄の harness を起こさない検査が増える</li>
+            <li>塞いでいるものが1つの答えになる</li>
           </ul>
         </article>
       </section>
@@ -715,7 +712,7 @@ flowchart LR
         <div class="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
           <div class="space-y-1">
             <div class="font-semibold">ドメインエラー → HTTP の写像が3方式</div>
-            <p class="text-slate-600 text-xs leading-relaxed">境界を越える error class 30、<span class="font-mono">instanceof</span> 57、同じ 502 の落とし所が逐語で11回。
+            <p class="text-slate-600 text-xs leading-relaxed">境界を越える error class 30、<span class="font-mono">instanceof</span> 57、同じ 502 の落とし所が逐語で8回。
             <span class="font-mono">human-verbs.ts</span> の <span class="font-mono">GateFailure</span> union は形が効くことを既に証明しているが、19 の handler は従っていない。
             候補になりうるが、他6件より「どの error をどう扱うか」の判断が1件ずつ要る。</p>
           </div>
