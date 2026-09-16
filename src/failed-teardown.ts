@@ -30,6 +30,9 @@ export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, n
   const row = db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").get(taskId) as
     | { teardown_started_at: string | null }
     | undefined;
+  // 行に時刻が無いのは、回収 timeout で梯子の底へ落ちた session の受理(`acceptReclaimed`)
+  // だけである —— あの経路は後始末に入らないまま確認 question で止まっているので、後始末が
+  // 始まったのはこの瞬間であり、catch 時刻がそのまま「いつから未了か」になる。
   const startedAt = row?.teardown_started_at ?? now.toISOString();
   registerTask(
     db,

@@ -10,7 +10,9 @@ import { submitAnswer } from "../src/human-verbs.js";
 import type { Landing } from "../src/landing.js";
 import { Slot } from "../src/slot.js";
 import {
+  BOARD_WORKER_ID,
   completeTask,
+  escalateTask,
   getTask,
   listBoard,
   pickupTask,
@@ -43,6 +45,11 @@ beforeEach(() => {
 
 const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question");
 
+const events = (db: Db, taskId: string) =>
+  (db.prepare("SELECT kind FROM events WHERE task_id = ?").all(taskId) as { kind: string }[]).map(
+    (e) => e.kind,
+  );
+
 interface Fixture {
   db: Db;
   clock: FakeClock;
@@ -59,7 +66,7 @@ interface Fixture {
 /** 後始末が投げる session。落ちるのは盤面自身のコード —— workspace の解決が想定外の
  *  例外で止まる(`releaseWorkspace` が自前で quarantine に落とす nameable な失敗は
  *  そもそもここへ届かない)。 */
-async function session(route: "complete" | "cap" = "complete"): Promise<Fixture> {
+async function session(route: "complete" | "cap" | "watchdog" = "complete"): Promise<Fixture> {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const ws = await makeWorkspace(dirs, "sandbox");
@@ -77,6 +84,22 @@ async function session(route: "complete" | "cap" = "complete"): Promise<Fixture>
     route === "complete"
       ? completeTask(db, picked, FULL_HANDOFF, "deckhand", clock.now())
       : picked;
+  // watchdog の強制回収は failure question を**後始末より先に**立てる(escalate verb と
+  // 同じ順)。決着した status がそのまま経路になる(ADR 0113 決定3)
+  if (route === "watchdog") {
+    escalateTask(
+      db,
+      picked,
+      {
+        context: "the task hit its work time limit",
+        questions: [{ title: "watchdog killed task: one", options: ["retry", "abandon"], recommendation: "retry" }],
+        cancel_option: "abandon",
+      },
+      BOARD_WORKER_ID,
+      clock.now(),
+      "board",
+    );
+  }
   markTeardown(db, task.id, clock.now());
   slot.enterTeardown();
 
@@ -154,21 +177,34 @@ it("通常完了・上限到達による中断・watchdog の強制回収のど�
   const cap = await session("cap");
   await runTeardown(cap.deps, cap.task.id, teardownStep(cap.db, cap.task.id));
 
-  const forced = await session("cap");
-  // watchdog の強制回収だけが持つのは、ツリー規律の前に走る記録である
-  await runTeardown(forced.deps, forced.task.id, {
-    ready: (task) => task.status === "in_progress",
-    record: () => {},
-  });
+  const forced = await session("watchdog");
+  await runTeardown(forced.deps, forced.task.id, teardownStep(forced.db, forced.task.id));
 
   const done = await session();
   await runTeardown(done.deps, done.task.id, teardownStep(done.db, done.task.id));
 
   expect([cap, forced, done].map((f) => questions(f.db).map((q) => q.title))).toEqual([
     [FAILED_TEARDOWN_QUESTION_TITLE],
-    [FAILED_TEARDOWN_QUESTION_TITLE],
+    ["watchdog killed task: one", FAILED_TEARDOWN_QUESTION_TITLE],
     [FAILED_TEARDOWN_QUESTION_TITLE],
   ]);
+});
+
+it("watchdog の強制回収で落ちた後始末の受理は、殺したタスクを queue head へ戻さない", async () => {
+  const f = await session("watchdog");
+  await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
+  const question = openQuestion(f);
+  f.repair();
+
+  await answer(f, question);
+
+  // 決着済みなので上限到達による中断の復帰は走らない —— 自動リトライは存在せず
+  // (CONTEXT.md「Watchdog」)、queue へ戻すかは retry / abandon の回答が決める
+  expect(events(f.db, f.task.id)).not.toContain("cap_interrupted");
+  expect(getTask(f.db, question.id)?.status).toBe("done");
+  // 殺したタスクの行き先を決めるのは、立ったままの retry / abandon の問いである
+  expect(questions(f.db).map((q) => q.title)).toEqual(["watchdog killed task: one"]);
+  expect(f.slot.currentTaskId).toBeNull();
 });
 
 it("早期 return では立たない —— 枠の主が変わった / 梯子の底で保留は失敗ではない", async () => {

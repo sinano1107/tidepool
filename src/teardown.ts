@@ -44,9 +44,6 @@ export interface TeardownDeps {
 
 /** 経路ごとに違うのはここに挙げたものだけである。 */
 export interface TeardownStep {
-  /** ツリー規律の**前**に走る記録 —— watchdog の failure question がこれ(自分の
-   *  escalate を真似て、記録を先に置く)。 */
-  record?: (task: Task, now: Date) => void;
   /** ツリー規律の**後**の状態遷移 —— 上限到達による中断の todo 復帰がこれ。完了経路は
    *  タスクが既に決着しているので持たない。 */
   transition?: (task: Task, now: Date) => void;
@@ -144,8 +141,7 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
 
 /** 投げる後始末。捕まえる版が `runTeardown` で、受理の検査はこちらを走らせる
  *  (ADR 0112 決定3: フラグ引数で分岐を型に持ち込まない)。ファイル外に呼び手は
- *  無いので export しない(ADR 0107 決定5)—— 外から見えるのは捕まえる版と
- *  `acceptTeardownQuarantine` の2つである。 */
+ *  無いので export しない(ADR 0107 決定5)。 */
 async function teardown(
   deps: TeardownDeps,
   taskId: string,
@@ -179,7 +175,6 @@ async function teardown(
   // その await を跨ぐ間に枠の主が変わる / 梯子の底へ落ちることがありうるので、門をもう一度読む
   if (!releasable()) return;
   const now = clock.now();
-  step.record?.(task, now);
   if (workspace) {
     releaseWorkspace(
       db,
