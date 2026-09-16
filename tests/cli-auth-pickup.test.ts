@@ -10,7 +10,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("checkUsage がnullでも追加probeで401が確定したときだけcliAuth questionを立てる(ADR 0070)", async () => {
+it("checkUsage がnullでも追加probeで401が確定したときだけ provider の Confirmation を立てる(ADR 0070)", async () => {
   let checks = 0;
   t = await bootTidepool({
     cliAuth: async () => {

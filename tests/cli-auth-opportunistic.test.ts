@@ -20,7 +20,7 @@ it("実execFile境界は非ゼロ終了でも401 JSONのstdoutを分類側へ渡
   expect(failure).toMatchObject({ stdout: JSON.stringify({ api_error_status: 401 }) });
 });
 
-it("AI draft が api_error_status: 401 を返したら、その場でcliAuth questionを立てる(ADR 0070)", async () => {
+it("AI draft が api_error_status: 401 を返したら、その場で provider の Confirmation を立てる(ADR 0070)", async () => {
   t = await bootTidepool({
     cliAuth: async () => ({ status: "authenticated" }),
     draftClient: new ClaudeDraftClient({
@@ -47,7 +47,7 @@ it("AI draft が api_error_status: 401 を返したら、その場でcliAuth que
   });
 });
 
-it("表示時翻訳が api_error_status: 401 を返したら、その場でcliAuth questionを立てる(ADR 0070)", async () => {
+it("表示時翻訳が api_error_status: 401 を返したら、その場で provider の Confirmation を立てる(ADR 0070)", async () => {
   t = await bootTidepool({
     cliAuth: async () => ({ status: "authenticated" }),
     translationClient: new ClaudeTranslationClient({
