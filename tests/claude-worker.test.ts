@@ -1971,6 +1971,9 @@ describe("ClaudeCodeWorker", () => {
       `${JSON.stringify({
         type: "result",
         result: "done",
+        // 実 CLI の正常完了行は is_error: false を運ぶ。ここが欠けていると
+        // 「is_error 欄があるだけで捨てる」実装も緑になる(issue #534 code review)
+        is_error: false,
         total_cost_usd: 0.1234,
         usage: {
           input_tokens: 100,
@@ -2053,11 +2056,12 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ usage: null });
   });
 
-  it("is_error の result 行は usage の自己申告ではない — 中断された session は usage null(issue #534)", async () => {
+  it("is_error の result 行は usage の自己申告ではない — 途中で止まった session は欠測(issue #534)", async () => {
     const { start, stdout, emitExit, db } = await makeWorker();
     start("task-aborted-streaming");
-    // 2.1.241 を SIGINT で止めたときの逐語(2026-09-12 のトリアージ実測)。
-    // 主モデルの出力は実際に流れているのに envelope は全ゼロで、形検査は通る。
+    // 2.1.241 を SIGINT で止めたときの実測(2026-09-12 のトリアージ)から、
+    // 読まれる欄だけを写したもの。主モデルの出力は実際に流れているのに
+    // envelope は全ゼロで、形検査は通る。
     stdout.write(
       `${JSON.stringify({
         type: "result",
