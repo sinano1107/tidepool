@@ -91,7 +91,8 @@ export const CLOSED_FEATURES = [
  * そちら。Mac(darwin arm64)の出力と1行も違わず、CODEX_HOME が新規の空でもログイン済みでも同一
  * (auth 非依存)。`-c` は closedSurfaceConfig() と同じもので、FEATS は CLOSED_FEATURES の全名 ——
  * どちらかを動かしたらこの定数も動く。skillConfig() は採取時には付けていない(probe は付ける)。
- * **bash で走らせること** —— zsh は "${ARGS[@]}" を語分割しないので `-c` が1本にまとまり、黙って効かない。
+ * **bash で走らせること** —— zsh は括っていない `$FEATS` を語分割しないので、下の for が1周しか回らず
+ * 18 名前が丸ごと1つの `-c` に化ける。Codex は未知の名前を無言で受理するので、黙って効かない。
  *
  * ```bash
  * CODEX_HOME=$(mktemp -d)
@@ -253,7 +254,7 @@ export interface CodexCapabilityObservation {
   features: Readonly<Record<string, string>>;
 }
 
-/** 期待と観測の差だけを言う(全量は並べない —— 104 行の表は人間の quarantine 画面では読めない)。 */
+/** 期待と観測の差だけを言う(全量は並べない —— 面の全行を並べた表は Quarantine 画面では読めない)。 */
 function featureDrift(observed: Readonly<Record<string, string>>): string[] {
   const names = [...new Set([...Object.keys(CODEX_FEATURE_SNAPSHOT), ...Object.keys(observed)])].sort();
   return names
