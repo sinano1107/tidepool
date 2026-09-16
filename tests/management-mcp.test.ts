@@ -8,7 +8,9 @@ import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
+  type CreateWorkspaceInput,
   GitHubIdentityMissingError,
+  LiveCheckoutSignalsError,
   type PublishWorkspaceInput,
   type UpdateWorkspaceInput,
   WorkspaceAlreadyPublishedError,
@@ -991,6 +993,48 @@ it("管理MCP に registry リソースの削除 verb は無い(ADR 0088 / issue
     const { tools } = await client.listTools();
     // 扉は WebUI のみ —— 配線されていても MCP には現れない
     expect(tools.map((tool) => tool.name).filter((name) => name.startsWith("delete_"))).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("create_workspace は生きた dev checkout の信号でも登録を通し、信号と clone 入口の提案を結果に載せる(issue #383)", async () => {
+  const calls: CreateWorkspaceInput[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async (input) => {
+        calls.push(input);
+        if (input.mode === "register" && input.confirm !== true) {
+          throw new LiveCheckoutSignalsError(
+            input.path,
+            ["uncommitted_changes", "claude_settings_hooks"],
+            "/mnt/workspaces/tidepool",
+          );
+        }
+        return "/home/masaki/tidepool";
+      },
+    },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    // 確認をエージェントに肩代わりさせる経路は作らない: スキーマに `confirm` が
+    // 無いので、エージェントが送っても届かない(下の calls[0] が undefined)
+    const create: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "tidepool", mode: "register", path: "/home/masaki/tidepool", confirm: true },
+    });
+
+    // 拒否ではない —— 登録は通る(issue #383 の「やらないこと」: 自動拒否)
+    expect(create.isError ?? false).toBe(false);
+    const payload: any = readToolPayload(create);
+    expect(payload.path).toBe("/home/masaki/tidepool");
+    expect(payload.notice).toContain("uncommitted_changes, claude_settings_hooks");
+    expect(payload.notice).toContain("/mnt/workspaces/tidepool");
+    // 文面はこの扉が綴る: HTTP の扉宛ての「confirm: true で出し直せ」を写すと、
+    // 既に済んだ操作の指示になり、かつスキーマに無い引数を名指しすることになる
+    expect(payload.notice).not.toContain("confirm");
+    // adapter が内部で立てた2回目だけが confirm を持つ
+    expect(calls.map((c) => (c as any).confirm)).toEqual([undefined, true]);
   } finally {
     await client.close();
   }

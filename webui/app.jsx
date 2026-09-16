@@ -1240,6 +1240,22 @@ const DANGEROUS_REASON_LABEL = {
     'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
 };
 
+// issue #383 の信号コード。DANGEROUS_REASON_LABEL とは別の表である — この族は
+// エージェントの権限を1ミリも広げず、守っているのは人間自身の作業ツリーのほう
+// なので、CONTEXT.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
+// 「確認は WebUI 専用」がこの族まで及ぶと読める)。訳すだけという性質は同じで、
+// 判定はサーバ単一正本(ADR 0027)。
+const LIVE_CHECKOUT_SIGNAL_LABEL = {
+  uncommitted_changes:
+    'The checkout has uncommitted changes or untracked files — someone is working in this tree right now.',
+  worktree_unreadable:
+    'The checkout has no readable working tree — the board could not tell whether work is in progress there.',
+  claude_settings_local:
+    'The checkout has .claude/settings.local.json — host-local state a human put there for their own sessions.',
+  claude_settings_hooks:
+    'The checkout\'s .claude/settings.json carries hooks — the shape of a development checkout, not a disposable one.',
+};
+
 // The merge dial (registry.ts): required and three-valued since ADR 0079, so
 // the leading entry is "not chosen yet", not a default — Save stays disabled
 // until one of the three is picked. auto_if_ci_green is the dangerous one.
@@ -1452,9 +1468,12 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
   );
 }
 
-// The two-phase dangerous-value save (issue #78, #55 phase 3; generalized to
-// workspaces by ADR 0061 決定1), shared by every door that can carry a
-// dangerous value. The first attempt omits the confirm flag; when the payload
+// The two-phase confirmed save (issue #78, #55 phase 3; generalized to
+// workspaces by ADR 0061 決定1), shared by every door whose first attempt can
+// come back 409 `confirm_required`. Most of those doors carry a dangerous
+// value; issue #383's register gate does not (it shows the human what their
+// own checkout looks like), which is why the reason codes and their labels are
+// per-door rather than one table. The first attempt omits the confirm flag; when the payload
 // grants broad power the server answers 409 confirm_required with the machine
 // reason codes (issue #77). We surface those in a dialog and, once the human
 // accepts, resend the very same body with the flag set. The board makes no
@@ -1463,10 +1482,10 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
 // workspaces — ADR 0061 決定1 kept the workspace door's existing flag name
 // rather than adding a second boolean). Returns the busy flag, the save
 // entrypoint, and the dialog element the caller renders inline.
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = 'dangerous_values', labels = DANGEROUS_REASON_LABEL }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
-  const [confirm, setConfirm] = React.useState(null); // { reasons, resend } | null while safe
+  const [confirm, setConfirm] = React.useState(null); // { reasons, detail, resend } | null while safe
   const save = async (path, method, body, verb, name) => {
     const attempt = async (confirmed) => {
       setBusy(true);
@@ -1482,10 +1501,12 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         // (bad input, a push that never landed — ADR 0052 決定1) by its
         // confirm_required flag — only that one opens the dialog for a resend
         if (err.status === 409 && err.detail?.confirm_required) {
-          setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
+          setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say('danger', `${noun} ${verb} failed`, String(err.message || err));
+          // `not ${verb}` であって `${verb} failed` ではない — verb は過去分詞
+          // (added / deleted / updated)なので、後者は「workspace added failed」に崩れる
+          say('danger', `${noun} not ${verb}${failDetail ? ` — ${failDetail}` : ''}`, String(err.message || err));
         }
       }
       setBusy(false);
@@ -1503,9 +1524,12 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>{dialogLead}</p>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {(confirm?.reasons ?? []).map((r) => (
-          <li key={r}>{DANGEROUS_REASON_LABEL[r] ?? r}</li>
+          <li key={r}>{labels[r] ?? r}</li>
         ))}
       </ul>
+      {/* 理由コードの列挙の下に、その扉だけが持つ一行(issue #383 の clone 入口の
+          着地先など)。出せるものが無ければ何も描かない */}
+      {confirm && dialogNote?.(confirm.detail)}
     </PortalDialog>
   );
   return { busy, save, dialog };
@@ -2248,31 +2272,41 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const [path, setPath] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [prot, setProt] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
   const ok = registryNameOk(name) && (mode === 'clone' ? !!repo.trim() : mode === 'register' ? !!path.trim() : true);
   const dirty = mode !== 'clone' || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
 
-  const submit = async () => {
-    setBusy(true);
-    try {
-      await api('/api/workspaces', {
-        mode, name: name.trim(),
-        ...(mode === 'clone' ? { repo: repo.trim() } : {}),
-        ...(mode === 'register' ? { path: path.trim() } : {}),
-        ...(notes.trim() ? { notes: notes.trim() } : {}),
-        ...(prot ? { protected: true } : {}),
-      });
-      say('success', 'workspace added — committed to the registry', name.trim());
-      edit.close();
-      await onCreated();
-    } catch (err) {
-      // creation is idempotent server-side — a failed attempt leaves only
-      // orphans the registry never saw, so "just press it again" is honest
-      say('danger', 'workspace creation failed — safe to retry as-is', String(err.message || err));
-    }
-    setBusy(false);
-  };
+  // issue #383: register の門が「人間の生きた dev checkout に見える」と言ったら
+  // 409 が返り、ダイアログで受け入れると同じ body が confirm 付きで再送される —
+  // 危険な値・削除と同じ二段扉(判定はサーバ単一正本、ADR 0027)
+  const { busy, save, dialog } = useDangerousSave(say, async () => { edit.close(); await onCreated(); }, {
+    noun: 'workspace',
+    confirmKey: 'confirm',
+    dialogTitle: 'Register a checkout someone is working in?',
+    dialogLead: 'This path looks like a human\'s live development checkout:',
+    dialogNote: (detail) =>
+      detail?.clone_landing ? (
+        <p style={{ margin: '8px 0 0', fontSize: 'var(--text-sm)' }}>
+          The clone entrance would give the board its own checkout at{' '}
+          <span style={{ fontFamily: 'var(--font-mono)' }}>{detail.clone_landing}</span> instead —
+          one repository, two checkouts.
+        </p>
+      ) : null,
+    confirmLabel: 'Register anyway',
+    reasonsKey: 'live_checkout_signals',
+    labels: LIVE_CHECKOUT_SIGNAL_LABEL,
+    // creation is idempotent server-side — a failed attempt leaves only
+    // orphans the registry never saw, so "just press it again" is honest
+    failDetail: 'safe to retry as-is',
+  });
+  const submit = () =>
+    save('/api/workspaces', 'POST', {
+      mode, name: name.trim(),
+      ...(mode === 'clone' ? { repo: repo.trim() } : {}),
+      ...(mode === 'register' ? { path: path.trim() } : {}),
+      ...(notes.trim() ? { notes: notes.trim() } : {}),
+      ...(prot ? { protected: true } : {}),
+    }, 'added', name.trim());
   const modeOptions = [
     { value: 'clone', label: 'clone a repository' },
     { value: 'create', label: 'create a new local checkout' },
@@ -2315,6 +2349,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
       <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
       <EditActions ok={ok} busy={busy} saveLabel="Add workspace — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
+      {dialog}
     </Card>
   );
 }

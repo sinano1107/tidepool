@@ -92,6 +92,7 @@ import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
+  LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
@@ -318,7 +319,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // landing place has to be readable before (the description) and after
       // (the result) — the WebUI's "see it, then decide" has no MCP shape.
       description:
-        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default.",
+        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default. register goes through even when the path looks like a checkout a human is working in; the result then carries a notice naming what was observed and where the clone entrance would have landed instead.",
       inputSchema: createWorkspaceSchema,
     },
     async (input) => {
@@ -326,6 +327,32 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       try {
         return toolResult({ path: await deps.workspaceAdmin.create(input) });
       } catch (err) {
+        // issue #383: 「人間の生きた dev checkout」の信号は、ここでは拒否にしない
+        // (ADR 0082 決定1 — 1回の呼び出しで登録まで進む面に「見せてから決める」形は
+        // 無い)。通したうえで、観測した信号と clone 入口の提案を結果に載せる。
+        // ADR 0088 の形(拒んで WebUI へ案内)は採らない: この信号はエージェントの
+        // 権限を広げず、拒めば今日 MCP から通っている dirty checkout の register を
+        // 通らなくする = issue が「やらないこと」に挙げた自動拒否そのものになる。
+        // スキーマに `confirm` は生やさず、ここで内部的に立てる — 確認をエージェントに
+        // 肩代わりさせる経路は作らない。信号の**判定**は domain が唯一の正本(ADR 0027)
+        // だが、**文面**はこの扉が自分で綴る: `err.message` は HTTP の扉宛てで
+        // 「confirm: true で出し直せ」と言っており、ここの読み手にとっては既に済んだ
+        // 操作の指示であり、かつ渡す手段の無い引数の名指しである。
+        if (err instanceof LiveCheckoutSignalsError && input.mode === "register") {
+          try {
+            const path = await deps.workspaceAdmin.create({ ...input, confirm: true });
+            return toolResult({
+              path,
+              notice:
+                `registered as asked. This path looks like a checkout a human is working in (${err.reasons.join(", ")})` +
+                (err.cloneLanding === null
+                  ? ". Tell the human what was observed."
+                  : `. The clone entrance would have given the board its own checkout at ${err.cloneLanding} instead — tell the human, who may prefer that.`),
+            });
+          } catch (retried) {
+            return registryToolError(retried);
+          }
+        }
         return registryToolError(err);
       }
     },
