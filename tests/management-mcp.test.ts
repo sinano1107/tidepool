@@ -1017,9 +1017,11 @@ it("create_workspace は生きた dev checkout の信号でも登録を通し、
   });
   const client = await managementMcpClient(t.baseUrl);
   try {
+    // 確認をエージェントに肩代わりさせる経路は作らない: スキーマに `confirm` が
+    // 無いので、エージェントが送っても届かない(下の calls[0] が undefined)
     const create: any = await client.callTool({
       name: "create_workspace",
-      arguments: { name: "tidepool", mode: "register", path: "/home/masaki/tidepool" },
+      arguments: { name: "tidepool", mode: "register", path: "/home/masaki/tidepool", confirm: true },
     });
 
     // 拒否ではない —— 登録は通る(issue #383 の「やらないこと」: 自動拒否)
@@ -1028,12 +1030,7 @@ it("create_workspace は生きた dev checkout の信号でも登録を通し、
     expect(payload.path).toBe("/home/masaki/tidepool");
     expect(payload.notice).toContain("uncommitted_changes, claude_settings_hooks");
     expect(payload.notice).toContain("/mnt/workspaces/tidepool");
-    // 確認はエージェントが渡すものではない —— スキーマに confirm は無く、
-    // adapter が内部で立てる
-    const { tools } = await client.listTools();
-    expect(
-      (tools.find((tool) => tool.name === "create_workspace") as any).inputSchema.properties.confirm,
-    ).toBeUndefined();
+    // adapter が内部で立てた2回目だけが confirm を持つ
     expect(calls.map((c) => (c as any).confirm)).toEqual([undefined, true]);
   } finally {
     await client.close();
