@@ -29,7 +29,7 @@ import {
   recordKnowledge,
   searchMemory,
 } from "./memory.js";
-import type { AuthorityProfile, RosterAgent } from "./registry.js";
+import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
 import {
@@ -182,31 +182,6 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
     deps.auditorName ?? DEFAULT_AUDITOR_NAME,
   );
 }
-
-/** The reviewer profile (ADR 0013 / issue #15 layer 2): read-only is a
- *  property of the `review` task type, not of whoever executes it, so this
- *  code constant overrides whatever authority profile the executing agent
- *  would otherwise carry — the one place in the authority model where task
- *  type overrides profile. A code constant, not a registry entry, so the
- *  enforcement floor itself sits outside what Condensation's registry-edit
- *  loop could ever propose a diff against. `allowed_workspaces: []` blocks
- *  every explicit workspace target; `assignable_to: []` blocks every
- *  explicit assignee except the one structural exception decomposeTask
- *  carves out for a review's own repair children (the reviewed task's own
- *  assignee — ADR 0013). The same "task type overrides profile" line reaches
- *  both spawn layers: ADR 0056's system-prompt assembly imports this exact
- *  profile for `## Authority`, while the CLI harness's `reviewToolDenials`
- *  (claude-worker.ts) reads `task.type` directly because the deny needs to
- *  exist before spawn resolves an authority profile — same task-type-not-agent
- *  principle, adapter-side enforcement primitive (ADR 0005). */
-export const REVIEWER_AUTHORITY_PROFILE: AuthorityProfile = {
-  name: "reviewer",
-  guidance:
-    "You are reviewing read-only. Never fix directly — findings become repair tasks.\n" +
-    "Assign a repair to the worker in your roster: they executed the task you are reviewing.",
-  assignable_to: [],
-  allowed_workspaces: [],
-};
 
 /** The authority governing this task: a `review` task always runs under the
  *  fixed reviewer profile above (ADR 0013), regardless of who it's assigned

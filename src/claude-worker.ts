@@ -20,7 +20,6 @@ import {
   MOONSHOT_DEFAULT_MODEL,
   resolveExecutionSetting,
 } from "./execution-setting.js";
-import { REVIEWER_AUTHORITY_PROFILE } from "./mcp.js";
 import { buildMemoryInjection, recordMemoryInjection } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
 import {
@@ -29,6 +28,7 @@ import {
   isPluginGlob,
   loadRegistry,
   ownEntry,
+  REVIEWER_AUTHORITY_PROFILE,
   type Registry,
   type RegistrySource,
   type RosterAgent,

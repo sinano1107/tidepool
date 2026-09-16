@@ -788,7 +788,7 @@ function RecordCardHead({ children, editing, onEdit }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 26 }}>
       {children}
-      {!editing && (
+      {!editing && onEdit && (
         <div style={{ marginLeft: 'auto' }}>
           <Button variant="ghost" size="sm" onClick={onEdit}>Edit</Button>
         </div>
@@ -1165,11 +1165,20 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <RecordCardHead editing={open} onEdit={startEdit}>
+      {/* a built-in has no registry file to edit (ADR 0117 決定2) — the door
+          is left out rather than offered and refused; creating a same-named
+          agent is how it gets shadowed, and that door announces itself */}
+      <RecordCardHead editing={open} onEdit={agent.builtin ? undefined : startEdit}>
         {/* while editing, the chip previews the draft icon — picking one
             confirms itself immediately, as it did on the flat surface */}
         <AgentChip name={agent.name} icon={open ? draft.icon : (agent.icon ?? '')} />
       </RecordCardHead>
+      {!open && (agent.builtin || agent.shadowsBuiltIn) && (
+        <FieldRow label="definition" kind="text"
+          value={agent.builtin
+            ? 'built-in — carried by the board itself, with no registry file. Create an agent with this name to shadow it.'
+            : 'shadows built-in — this registry entry wins over the board\'s built-in agent of the same name. Delete it to fall back.'} />
+      )}
       {!open && (
         <React.Fragment>
           <FieldRow label="description" kind={agent.description ? 'text' : 'unset'} value={agent.description ?? ''} unsetLabel="—" />
@@ -2324,8 +2333,12 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   const submit = async () => {
     setBusy(true);
     try {
-      await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
-      say('success', 'agent added — committed to the registry', name.trim());
+      const created = await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
+      // 静かな shadow は作らない(ADR 0117 決定2): 告げるのは応答で、判定ではない
+      say('success', 'agent added — committed to the registry',
+        created?.shadows_built_in
+          ? `${name.trim()} — shadows the board's built-in agent of the same name`
+          : name.trim());
       edit.close();
       await onCreated();
     } catch (err) {
@@ -2612,7 +2625,11 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       footnote: 'edits commit to agents/<name>.md in the registry',
       indexSummary: (items) => `${items.length} agents`,
       rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
-      rowSummary: (a) => a.authority,
+      // the built-in / shadows built-in mark (ADR 0117 決定2) — server-derived
+      // (GET /api/agents), never decided here: the display only mirrors which
+      // fugu the machine resolves. A built-in has no registry profile to show.
+      rowSummary: (a) =>
+        a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
       record: (rec) => (
         <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions}
           hostSkills={hostSkills}
@@ -2800,7 +2817,9 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         {rec && sec.record(rec)}
         {/* 編集中は出さない: 未保存のカードを開いたまま消せると、破棄の問い
             (決定4)を素通りする */}
-        {rec && editing === null && (
+        {/* 組み込みは registry のエントリではないので削除の扉も出さない
+            (ADR 0117 決定2)— サーバ側の門は残るが、通らない扉は見せない */}
+        {rec && editing === null && !rec.builtin && (
           <DeleteRecord section={sec} sectionKey={sectionKey} name={recordName} say={say}
             onDeleted={async () => { await sec.reload(); go([sectionKey]); }} />
         )}

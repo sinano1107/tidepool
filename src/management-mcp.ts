@@ -62,6 +62,7 @@ import {
   InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
+  isBuiltInAgentName,
   MERGE_DIAL_VALUES,
   type Provider,
   type RegistryReachabilityCheck,
@@ -395,7 +396,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       if (!deps.agentAdmin?.create) return toolError("agent administration is not configured");
       try {
         await deps.agentAdmin.create({ ...input, systemPrompt: system_prompt });
-        return toolResult({});
+        // 静かな shadow は作らない(ADR 0117 決定2) —— WebUI の 201 と同じ通知を
+        // この扉にも置く。真のときだけ載せる
+        return toolResult(isBuiltInAgentName(input.name) ? { shadows_built_in: true } : {});
       } catch (err) {
         return registryToolError(err);
       }

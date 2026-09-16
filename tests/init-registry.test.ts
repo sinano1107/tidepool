@@ -79,8 +79,14 @@ describe("npm run init-registry", () => {
     expect(git(origin, "rev-list", "--count", "main")).toBe("1");
     expect(git(clone, "status", "--short")).toBe("");
 
+    // 種は既定 agent・その profile・workspaces だけ(ADR 0117 決定1): auditor の
+    // 2ファイルは組み込みが引き受けるので書かれない
+    expect(git(clone, "ls-tree", "-r", "--name-only", "main").split("\n")).toEqual([
+      "agents/tako.md",
+      "authority/standard.yaml",
+      "workspaces.yaml",
+    ]);
     const registry = loadRegistry(clone, "remote-backed");
-    expect(Object.keys(registry.agents).sort()).toEqual(["fugu", "tako"]);
     expect(registry.agents.tako).toEqual({
       name: "tako",
       version: "1",
@@ -90,33 +96,17 @@ describe("npm run init-registry", () => {
       tier: undefined,
       retiredFields: [],
       icon: "🐙",
-      skills: ["*"],
-      systemPrompt: "",
-    });
-    expect(registry.agents.fugu).toEqual({
-      name: "fugu",
-      version: "1",
-      authority: "auditor",
-      description: "Reviews work independently against its completion criteria.",
-      provider: [{ name: "anthropic", advisor: false }],
-      tier: undefined,
-      retiredFields: [],
-      icon: "🐡",
+      // ADR 0025 決定7: 既定 agent は @workspace
       skills: ["@workspace"],
       systemPrompt: "",
     });
+    // 種まき直後の盤面にも Auditor は居る —— ファイルではなく組み込みとして
+    expect(registry.agents.fugu?.builtin).toBe(true);
     expect(registry.authority.standard).toEqual({
       name: "standard",
       guidance: "",
       assignable_to: ["*"],
       allowed_workspaces: ["*"],
-      merge: "escalate",
-    });
-    expect(registry.authority.auditor).toEqual({
-      name: "auditor",
-      guidance: "",
-      assignable_to: [],
-      allowed_workspaces: [],
       merge: "escalate",
     });
     expect(registry.workspaces).toEqual({ sandbox: {} });
@@ -126,7 +116,7 @@ describe("npm run init-registry", () => {
     expect(git(workspace, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(git(workspace, "rev-list", "--count", "HEAD")).toBe("1");
     expect(git(workspace, "show", "--format=", "--stat")).toBe("");
-    expect(result.stdout).toContain('Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".');
+    expect(result.stdout).toContain('Registry seeded with agent "tako" and workspace "sandbox".');
     expect(result.stdout).not.toContain("First task example");
     // merge question は worker が感知できない盤面側の出来事なので completion criteria には書かない
     expect(result.stdout).not.toContain("merge question");
@@ -299,7 +289,7 @@ describe("npm run init-registry", () => {
     expect(existsSync(join(workspace, "README.md"))).toBe(false);
   });
 
-  it("uses configured agent, auditor, workspace, and workspaces directory values", async () => {
+  it("uses configured agent, workspace, and workspaces directory values, and ignores TIDEPOOL_AUDITOR (ADR 0117 決定1: 種とポインタは独立)", async () => {
     const { clone, root } = await emptyRegistryClone();
     const workspacesDir = join(root, "configured-workspaces");
 
@@ -314,24 +304,24 @@ describe("npm run init-registry", () => {
     );
 
     expect(result.status, result.stderr).toBe(0);
+    expect(git(clone, "ls-tree", "-r", "--name-only", "main").split("\n")).toEqual([
+      "agents/ika.md",
+      "authority/standard.yaml",
+      "workspaces.yaml",
+    ]);
     const registry = loadRegistry(clone, "remote-backed");
-    expect(Object.keys(registry.agents).sort()).toEqual(["ika", "namako"]);
     expect(registry.workspaces).toEqual({ lagoon: {} });
     expect(existsSync(join(workspacesDir, "lagoon", "README.md"))).toBe(false);
-    expect(result.stdout).toContain(
-      'Registry seeded with agent "ika", auditor "namako", and workspace "lagoon".',
-    );
+    expect(result.stdout).toContain('Registry seeded with agent "ika" and workspace "lagoon".');
+    expect(result.stdout).not.toContain("namako");
   });
 
   it.each([
     ["TIDEPOOL_WORKSPACE", "../escape", "invalid workspace name"],
     ["TIDEPOOL_AGENT", "bad/agent", "invalid agent name"],
-    ["TIDEPOOL_AUDITOR", "bad/auditor", "invalid agent name"],
-    [
-      "TIDEPOOL_AUDITOR",
-      "tako",
-      "TIDEPOOL_AGENT and TIDEPOOL_AUDITOR must name different agents",
-    ],
+    // 既定 agent が組み込みの名前を取ると、種まき自身が静かな shadow を作る
+    // (ADR 0117 決定2: 静かな shadow は作らない)
+    ["TIDEPOOL_AGENT", "fugu", 'TIDEPOOL_AGENT must not name the built-in agent "fugu"'],
   ])("refuses unsafe %s values before changing either location", async (key, value, message) => {
     const { clone, origin, root } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
@@ -376,7 +366,7 @@ describe("npm run init-registry", () => {
     expect(result.status, result.stderr).toBe(0);
     const guide = readFileSync(join(ROOT, "docs", "mac-first-boot.md"), "utf8");
 
-    expect(result.stdout).toContain('Registry seeded with agent "tako", auditor "fugu", and workspace "sandbox".');
+    expect(result.stdout).toContain('Registry seeded with agent "tako" and workspace "sandbox".');
     expect(result.stdout).not.toContain("First task example");
 
     // 自分の repo を足す段(第2段)は第1段の完走の後に置く(ADR 0090 決定4 — #392 が
