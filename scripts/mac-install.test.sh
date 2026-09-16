@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Tests for scripts/mac-install.sh and scripts/vm-board.sh (issue #484).
 # Same shape as scripts/deploy-pi.test.sh: stubs record every external
-# command, each case sources the script into a fresh `bash -c` subprocess so
-# its `set -e` is real, and the summary is PASS/FAIL counts.
+# command, each case runs the script in a fresh `bash -c` subprocess so its
+# `set -e` is real, and the summary is PASS/FAIL counts. Cases source the
+# script and call main; the `curl | bash` case pipes it into bash instead,
+# because that invocation is the only one where BASH_SOURCE is unset.
 #
 # What is pinned here is external behaviour at the command boundary: which
 # commands run, in what order, and which are skipped on a second run. No real
@@ -184,15 +186,18 @@ run_install() {
   fi
 
   if [ "$STDIN_PIPE" = "1" ]; then
-    output=$(printf '' | run_main 2>&1) && rc=0 || rc=$?
+    output=$(run_main 'cat "$SCRIPT_DIR/mac-install.sh" | bash' 2>&1) && rc=0 || rc=$?
   else
-    output=$(run_main < /dev/null 2>&1) && rc=0 || rc=$?
+    output=$(run_main 'set -euo pipefail; source "$SCRIPT_DIR/mac-install.sh"; main' < /dev/null 2>&1) \
+      && rc=0 || rc=$?
   fi
   log="$(cat "$CMD_LOG")"
 }
 
-# run_main is split out so the caller can choose stdin: an unquoted
-# "< /dev/null" in a variable would be words, not a redirection.
+# run_main is split out so the caller can choose the invocation: sourcing the
+# script (every case but one) or piping it into bash the way `curl | bash`
+# does. An unquoted "< /dev/null" in a variable would be words, not a
+# redirection, so stdin is the caller's to pick too.
 run_main() {
   env \
     PATH="$STUB_DIR:/usr/bin:/bin" \
@@ -211,7 +216,7 @@ run_main() {
     REGISTRY_SEEDED="$REGISTRY_SEEDED" \
     SCRIPT_DIR="$SCRIPT_DIR" \
     ${EXTRA_ENV} \
-    bash -c 'set -euo pipefail; source "$SCRIPT_DIR/mac-install.sh"; main'
+    bash -c "$1"
 }
 
 # --- precheck ---------------------------------------------------------------
@@ -345,9 +350,12 @@ assert_contains "override: prints the start line for the named instance" \
   "caffeinate -i -s limactl shell other -- bash -lc '~/tidepool/scripts/vm-board.sh'" "$output"
 
 # --- curl | bash ------------------------------------------------------------
-# stdin is a pipe, so the installer reattaches to /dev/tty for the two
-# interactive logins. Where there is no controlling terminal (CI, this test)
-# that reattach fails, and `set -e` must not take the run down with it.
+# The documented invocation, and the only one bash reads from stdin: the
+# script is piped in rather than sourced, so BASH_SOURCE is unset and the
+# guard around main has to survive `set -u`. stdin being a pipe also makes the
+# installer reattach to /dev/tty for the two interactive logins; where there is
+# no controlling terminal (CI, this test) that reattach fails, and `set -e`
+# must not take the run down with it.
 
 reset_case
 STDIN_PIPE=1

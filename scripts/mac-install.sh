@@ -167,8 +167,14 @@ main() {
   print_next_steps
 }
 
-# guarded so scripts/mac-install.test.sh can `source` this file and call
-# main() against its stubs
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Guarded so scripts/mac-install.test.sh can `source` this file and call main()
+# against its stubs. Under `curl | bash` bash reads this script from stdin and
+# leaves BASH_SOURCE unset, so the default is what keeps `set -u` from killing
+# the documented invocation; $0 is "bash" in that case, and matches.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
   main "$@"
+  # Also only under `curl | bash`: bash is still reading commands from fd 0,
+  # which reattach_tty pointed at the terminal — without this it would read
+  # whatever the owner types next as the rest of the script.
+  exit
 fi
