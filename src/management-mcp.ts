@@ -655,6 +655,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             review_flag: z.boolean().optional(),
             review_by: z.array(z.string().min(1)).optional(),
             review_tier: z.string().optional(),
+            tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
+            priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
         ),
       },

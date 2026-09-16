@@ -16,6 +16,7 @@ import {
   makeWorkspace,
   managementMcpClient,
   mcpClient,
+  queueWork,
   registerWork,
   TEST_CREDENTIAL,
   type Tidepool,
@@ -131,6 +132,36 @@ it("decompose の ChildSpec は要求2列を受け取り、不正値は toolErro
     priority: "cost",
   });
   expect(board.find((x: any) => x.title === "x")).toBeUndefined();
+});
+
+it("管理MCP の decompose_task は要求2列を受け取る(issue #659)", async () => {
+  t = await bootTidepool();
+  const parent = queueWork(t, "modernize tide data");
+  const client = await managementMcpClient(t.baseUrl);
+  const ok: any = await client.callTool({
+    name: "decompose_task",
+    arguments: {
+      task_id: parent.id,
+      reason: "the hard half deserves a stronger model",
+      children: [
+        {
+          title: "the hard half",
+          purpose: "p",
+          completion_criteria: "c",
+          tier: "frontier",
+          priority: "cost",
+        },
+      ],
+    },
+  });
+  expect(ok.isError ?? false).toBe(false);
+  await client.close();
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.find((x: any) => x.title === "the hard half")).toMatchObject({
+    tier: "frontier",
+    priority: "cost",
+  });
 });
 
 /* ------------------------------------------------------------------ *
