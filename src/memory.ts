@@ -363,7 +363,7 @@ function openProposalsPinning(db: Db, entryId: number): string[] {
 /** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior candidate(invalidate op は target の版が一致し未無効化)で、
  *  replaces の版が現在と一致し未無効化。
  *  approve も reject も、見せた状態に対してだけ適用する。 */
-export function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRow {
+function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRow {
   const unchanged = ({ id, version }: { id: number; version: number | null }) => {
     const row = requireEntry(db, id);
     return row.version === version && row.invalidation_reason === null;

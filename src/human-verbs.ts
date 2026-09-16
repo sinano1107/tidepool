@@ -187,7 +187,7 @@ export async function addIssueCommentThroughHumanDoor(
   }
 }
 
-export function assertAssigneeKnown(
+function assertAssigneeKnown(
   agentRegistered: ((name: string) => boolean) | undefined,
   assignee: string | undefined,
 ): void {
@@ -405,7 +405,7 @@ function resolveWorkspaceForAnswer(
  *  provider quarantines from the db and maps them to agent names through the
  *  caller's registry seam — computed here once so the WebUI and MCP cancel
  *  routes can't drift apart. */
-export function humanCancelDefaults(
+function humanCancelDefaults(
   db: Db,
   workspace: WorkspaceConfig | undefined,
   defaultAgentName: string | undefined,
@@ -442,7 +442,7 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
 }
 
 /** A settled child can make its parent immediately pickable on either human surface. */
-export function pollIfParentUnblocked(db: Db, task: Task, pollNow: () => void): void {
+function pollIfParentUnblocked(db: Db, task: Task, pollNow: () => void): void {
   if (!task.parent_id) return;
   const parent = getTask(db, task.parent_id);
   if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
