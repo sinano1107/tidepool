@@ -1668,15 +1668,13 @@ function GitHubLoginCard({ loggedIn }) {
   );
 }
 
-// Translation spend (issue #273). Read-only, and no new instrument: GET
-// /api/translate/usage has returned every generated translation's tokens since
-// issue #47 and no screen ever read it. The last call's in/out is where a
-// regression in ADR 0062's env would show — compared against that ADR, not
-// against a second copy of its numbers kept here.
+// Translation spend (issue #273). The last call's in/out is where a regression
+// in ADR 0062's env would show — compared against that ADR, not against a
+// second copy of its numbers kept here.
 function TranslateUsageCard({ records }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const cost = records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0);
-  const last = records[records.length - 1];
+  const last = records.at(-1);
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>translation spend</span>
@@ -1690,10 +1688,6 @@ function TranslateUsageCard({ records }) {
       ) : (
         <FieldRow label="generated" kind="unset" unsetLabel="no generated translations yet" />
       )}
-      <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-        only generated translations are counted — a cache replay costs nothing and never
-        appears here.
-      </p>
     </Card>
   );
 }
@@ -2543,10 +2537,9 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       .catch(() => setGithubLoggedIn(null));
   }, []);
 
-  // issue #273: null → まだ読めていない(カードを出さない)。[] は「生成ゼロ」で
-  // カードは出る。board 階層末尾の loading… カスケードには足さない —— 読めなくても
-  // 残りの設定は読めるので、board 全体を loading… に張り付かせない
-  const [translateUsage, setTranslateUsage] = React.useState(null);
+  // issue #273: 末尾の loading… カスケードには足さない —— これが読めなくても残りの
+  // 設定は読めるので、board 全体を loading… に張り付かせない([] は「生成ゼロ」)
+  const [translateUsage, setTranslateUsage] = React.useState(null); // null → still loading
   React.useEffect(() => {
     api('/api/translate/usage', undefined, 'GET')
       .then(({ records }) => setTranslateUsage(records))

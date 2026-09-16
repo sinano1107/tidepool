@@ -1953,7 +1953,7 @@ function GitHubLoginCard({ loggedIn }) {
 function TranslateUsageCard({ records }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const cost = records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0);
-  const last = records[records.length - 1];
+  const last = records.at(-1);
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "translation spend"), last ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "generated", kind: "mono", value: `${records.length} calls` }), /* @__PURE__ */ React.createElement(FieldRow, { label: "estimated cost", kind: "mono", value: `$${cost.toFixed(4)}` }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
@@ -1961,7 +1961,7 @@ function TranslateUsageCard({ records }) {
       kind: "mono",
       value: `${last.usage.input_tokens} in / ${last.usage.output_tokens} out`
     }
-  )) : /* @__PURE__ */ React.createElement(FieldRow, { label: "generated", kind: "unset", unsetLabel: "no generated translations yet" }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "only generated translations are counted \u2014 a cache replay costs nothing and never appears here."));
+  )) : /* @__PURE__ */ React.createElement(FieldRow, { label: "generated", kind: "unset", unsetLabel: "no generated translations yet" }));
 }
 function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
   const { Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
