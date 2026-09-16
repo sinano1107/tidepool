@@ -324,9 +324,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     },
     async (input) => {
       if (!deps.workspaceAdmin?.create) return toolError("workspace administration is not configured");
-      const create = deps.workspaceAdmin.create;
       try {
-        return toolResult({ path: await create(input) });
+        return toolResult({ path: await deps.workspaceAdmin.create(input) });
       } catch (err) {
         // issue #383: 「人間の生きた dev checkout」の信号は、ここでは拒否にしない
         // (ADR 0082 決定1 — 1回の呼び出しで登録まで進む面に「見せてから決める」形は
@@ -339,7 +338,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // (ADR 0027)なので、読み直すのではなく確認付きで出し直す。
         if (err instanceof LiveCheckoutSignalsError && input.mode === "register") {
           try {
-            return toolResult({ path: await create({ ...input, confirm: true }), notice: err.message });
+            return toolResult({ path: await deps.workspaceAdmin.create({ ...input, confirm: true }), notice: err.message });
           } catch (retried) {
             return registryToolError(retried);
           }

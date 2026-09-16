@@ -624,7 +624,7 @@ export class NotAGitRepositoryError extends Error {
  *  とは**別の族**である(CONTEXT.md「危険な値」= エージェントの権限を広げる値の列挙で
  *  あり、この3つはどれも権限を広げない)。409 の `dangerous_values` に載る枠は共有する
  *  —— WebUI 側の翻訳表が1つで済むのは、枠が「確認の理由コード」だからである。 */
-export type LiveCheckoutSignal =
+type LiveCheckoutSignal =
   | "uncommitted_changes"
   | "claude_settings_local"
   | "claude_settings_hooks";

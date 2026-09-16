@@ -1814,7 +1814,7 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
           setConfirm({ reasons: err.detail.dangerous_values ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say("danger", failDetail ? `${noun} ${verb} failed \u2014 ${failDetail}` : `${noun} ${verb} failed`, String(err.message || err));
+          say("danger", `${noun} ${verb} failed${failDetail ? ` \u2014 ${failDetail}` : ""}`, String(err.message || err));
         }
       }
       setBusy(false);
