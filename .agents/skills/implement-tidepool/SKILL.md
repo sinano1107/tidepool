@@ -48,11 +48,13 @@ Alongside the commits, it returns the problems it found and left alone: anything
 
 Back in this thread, run `/code-review` on both axes (Standards + Spec) against the commit this branch started from, then apply the findings that should be applied and commit them as the third stage.
 
+Add one line to each sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
+
 Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. Every other call is yours, and it is accountable because it goes in the pull request.
 
 ## Filing what the run found
 
-Before opening the PR, take the problems the sub-agent reported and every review finding you left unapplied because it lies outside the issue. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
+Before opening the PR, gather everything the run surfaced, wherever it came from: the sub-agent's report, the review sub-agents' notes on what the diff did not cause, every review finding you left unapplied because it lies outside the issue, and what you noticed yourself — reading the issue and ADRs, agreeing the seams, applying findings. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
 
 - **Belongs to an existing issue** — comment there. A closed hit means "not worth an issue", and the reason cites it.
 - **New, and observed** — `gh issue create --label needs-triage`, the body citing the originating issue and where the observation is (file, test, commit on this branch). It enters `/triage` like any other filed issue.
