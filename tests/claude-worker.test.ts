@@ -2089,16 +2089,13 @@ describe("ClaudeCodeWorker", () => {
     stdout.write(
       `${JSON.stringify({
         type: "result",
-        subtype: "error_during_execution",
         is_error: true,
-        terminal_reason: "aborted_streaming",
         total_cost_usd: 0.001,
         usage: {
           input_tokens: 0,
           cache_creation_input_tokens: 0,
           cache_read_input_tokens: 0,
           output_tokens: 0,
-          iterations: [],
         },
       })}\n`,
     );
@@ -3363,8 +3360,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     const events = listEvents(db, task.id);
     const exited = events.find((e) => e.kind === "worker_exited")!;
-    // 429 の envelope は `is_error: true` で usage 欄の形は満たすが、自己申告
-    // として受理しない(issue #534) —— 盤面は SIGINT のゼロと区別できない
+    // 429 の envelope は usage 欄の形を満たすが自己申告ではない(issue #534)
     expect(exited.payload).toMatchObject({ kind: "worker_exited", exit_code: 1, usage: null });
     const interrupted = events.find((e) => e.kind === "cap_interrupted")!;
     expect(interrupted.origin).toBe("board");
