@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { BuiltInAgentNotEditableError } from "../src/agent-create.js";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
@@ -358,6 +359,36 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
     expect(readToolPayload(await client.callTool({ name: "list_profiles", arguments: {} }))).toEqual({ profiles: [] });
     expect(readToolPayload(await client.callTool({ name: "update_profile", arguments: profile }))).toEqual({});
     expect(updateProfile).toHaveBeenCalledWith(profile);
+  } finally {
+    await client.close();
+  }
+});
+
+it("管理MCP の update_agent も組み込みを編集できない —— 入口の拒否であって上流の失敗ではない(ADR 0117 決定2)", async () => {
+  const update = vi.fn(async () => {
+    throw new BuiltInAgentNotEditableError("fugu");
+  });
+  t = await bootTidepool({
+    agentAdmin: { create: async () => {}, list: () => [], update, authorityProfiles: () => [] },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const denied: any = await client.callTool({
+      name: "update_agent",
+      arguments: {
+        name: "fugu",
+        authority: "standard",
+        provider: "anthropic",
+        description: "my own auditor",
+        skills: ["@workspace"],
+        system_prompt: "",
+      },
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0].text).toContain("built-in");
+    // fallback の "registry upstream error" は盤面側の障害の顔 —— そこへ落ちると
+    // 「同名を作れば shadow できる」という次の一手が読み取れない
+    expect(denied.content[0].text).not.toContain("registry upstream error");
   } finally {
     await client.close();
   }

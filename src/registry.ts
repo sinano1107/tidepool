@@ -1041,7 +1041,9 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   }
   // 名前の解決は registry が先、無ければ組み込み(ADR 0117 決定2 の shadowing)。
   // ここで1つの map に畳むので、下流(assignee 候補・review_by 検査・roster・
-  // spawn)は分岐を持たない。
+  // spawn)は名前の解決では分岐を持たない。唯一の分岐は profile の解決
+  // (`resolveExecutionAgent`)—— 組み込みの profile は registry に無いので、
+  // そこだけが印を読む。
   if (!Object.hasOwn(agents, BUILT_IN_AUDITOR.name)) agents[BUILT_IN_AUDITOR.name] = BUILT_IN_AUDITOR;
   const authority: Record<string, AuthorityProfile> = {};
   for (const path of gitListDir(dir, ref, "authority")) {

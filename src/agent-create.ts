@@ -286,8 +286,11 @@ export async function deleteAgent(
   // `assignable_to` に名前が並んでいるだけは参照ではない(ADR 0087 決定2)
   const reasons: DeletionBlockedReason[] = [];
   // 組み込みを shadow しているエントリだけは、ポインタの指す先でも参照されていても
-  // 消せる(ADR 0117 決定2 —— ADR 0087 決定3 の唯一の例外): 消えれば名前は組み込みへ
-  // 落ちるだけで、`assignee: fugu` も `review_by: ["fugu"]` も解決し続ける。
+  // 消せる —— CONTEXT.md「削除」が「消せない」と数え上げた全体に対する唯一の例外で
+  // ある(ADR 0117 決定2。ADR 0117 が名指すのは ADR 0087 決定3 だが、緩むのは決定2 の
+  // 未決着タスク検査も同じで、根拠も同じ「消えても壊れない」である): 消えれば名前は
+  // 組み込みへ落ちるだけで、`assignee: fugu` も `review_by: ["fugu"]` も解決し続ける
+  // —— ただし work タスクの授権は組み込みの reviewer profile へ**狭まる**(ADR 0013)。
   // `board_default` は緩めない —— 既定 agent は registry に残る(ADR 0117 決定3)。
   const shadowsBuiltIn = isBuiltInAgentName(input.name);
   if (deps.unsettledTaskCount > 0 && !shadowsBuiltIn) {

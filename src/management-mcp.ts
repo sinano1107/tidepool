@@ -4,6 +4,7 @@ import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
+  BuiltInAgentNotEditableError,
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
@@ -199,6 +200,9 @@ function registryToolError(err: unknown) {
     err instanceof RegistrySelfPublishError ||
     err instanceof InvalidAgentNameError ||
     err instanceof UnknownAgentError ||
+    // ADR 0117 決定2 の「組み込みは編集できない」—— 入口の拒否であって上流の失敗
+    // ではないので、`registry upstream error` の器に落としてはいけない
+    err instanceof BuiltInAgentNotEditableError ||
     err instanceof UnknownAuthorityProfileError ||
     err instanceof InvalidAgentIconError ||
     err instanceof InvalidSkillAllowlistError ||
