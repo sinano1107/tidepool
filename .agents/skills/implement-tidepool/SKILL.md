@@ -42,11 +42,24 @@ Dispatch one sub-agent at the implementation model, carrying the issue number, t
 
 A stage with no diff produces no commit. Never amend: keeping the stages apart is what makes each applied change reviewable and revertible on its own.
 
+Alongside the commits, it returns the problems it found and left alone: anything outside the issue's scope it would otherwise have fixed or worked around. For each, what and where (a file and line, or the test that shows it), whether it was observed or only suspected, and the existing issue it seems to belong to, if any. Filing is not its job.
+
 ## Code review
 
 Back in this thread, run `/code-review` on both axes (Standards + Spec) against the commit this branch started from, then apply the findings that should be applied and commit them as the third stage.
 
 Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. Every other call is yours, and it is accountable because it goes in the pull request.
+
+## Filing what the run found
+
+Before opening the PR, take the problems the sub-agent reported and every review finding you left unapplied because it lies outside the issue, and settle each one:
+
+- **Belongs to an existing issue** — comment there. Search first, closed ones included (`gh issue list --state all --search`); a closed hit means "not worth an issue", and the reason cites it.
+- **New, and observed** — `gh issue create --label needs-triage`, the body citing the originating issue and where the observation is (file, test, commit on this branch). It enters `/triage` like any other filed issue.
+- **New, but only suspected** — file it `needs-info`, saying what observation would settle it. An issue is not an observation (ADR 0102).
+- **Not worth an issue** — say so in the PR, with a reason held to the same bar as a review finding.
+
+Filing is not a fix: the queue grows by what was seen, not by what you think should change.
 
 ## The pull request
 
@@ -63,6 +76,8 @@ Then add the section this flow depends on:
 List **every** finding `/ponytail-review` and `/code-review` raised — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `CONTEXT.md`, an existing test. "Out of scope" on its own is not a reason.
 
 Completeness is the whole point of the section. A list that quietly drops the findings you chose not to act on is worse than no list, because it reads as though review found nothing there.
+
+A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for what the sub-agent reported: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections; one that appears in neither reads as though the run saw nothing.
 
 ## Where this stops
 
