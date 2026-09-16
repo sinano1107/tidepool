@@ -238,7 +238,10 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       githubIssueNumber: t.github_issue_number,
     });
   }
-  const running = board.find((t) => t.status === 'in_progress');
+  // 後始末中の session の行は「走っている」ではない (issue #561 / ADR 0113 決定2) ——
+  // 上限到達による中断では行が `in_progress` のまま残る。concurrency=1 なのでその行は
+  // teardown の taskId そのもの。queue 画面の slot 状態も `data.running` 経由でここに従う
+  const running = board.find((t) => t.status === 'in_progress' && t.id !== teardown?.taskId);
   const throttled = !!throttle?.throttled;
   // ADR 0030: which pace line is hit (session/week), and the fable line's own
   // per-task state — resets_at is now the catch-up ("resumes") instant, and a
@@ -310,6 +313,14 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     },
   };
   const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+  // 後始末行は1本のまま、待っている理由だけが経路で変わる。経路を導くのはサーバ
+  // (`teardown.settlement`、ADR 0113 決定3)で、ここは HALT_COPY と同じ値 → コピーの
+  // 写像だけを持つ —— 行の status から導き直せば写しが2本になる
+  const TEARDOWN_META = {
+    completed: "waiting for this session's processes to exit",
+    interrupted: 'usage limit hit · task returns to the queue once processes exit',
+    released: "task released · waiting for this session's processes to exit",
+  };
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -332,7 +343,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
         // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
         color: 'var(--sun-4)', taskId: teardown.taskId,
         line: 'session teardown · nothing new starts',
-        meta: `waiting for this session's processes to exit · since ${fmtTime(teardown.startedAt)}`,
+        meta: `${TEARDOWN_META[teardown.settlement]} · since ${fmtTime(teardown.startedAt)}`,
       }
     : fableThrottled
     ? {
