@@ -1,6 +1,6 @@
 ---
 name: implement-tidepool
-description: Build a ready-for-agent tidepool issue end to end — branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, and a PR that records how every review finding was handled. Use this instead of /implement in this repo.
+description: Build a ready-for-agent tidepool issue end to end — branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, a PR that records how every review finding was handled, and the filing of what the run found along the way. Use this instead of /implement in this repo.
 disable-model-invocation: true
 argument-hint: "<issue> [decision already taken]"
 ---
@@ -77,7 +77,7 @@ List **every** finding `/ponytail-review` and `/code-review` raised — the appl
 
 Completeness is the whole point of the section. A list that quietly drops the findings you chose not to act on is worse than no list, because it reads as though review found nothing there.
 
-A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for what the sub-agent reported: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
+A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the sub-agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
 
 ## Where this stops
 
