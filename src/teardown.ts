@@ -66,7 +66,7 @@ type Settlement = "completed" | "released" | "interrupted";
 /** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・回収済み
  *  観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す永続事実は持たないので、
  *  対応表がここ以外に増えたらそれは写しである。 */
-function settlementOf(status: string | undefined): Settlement {
+function settlementOf(status: Task["status"] | undefined): Settlement {
   if (status === "in_progress") return "interrupted";
   return status === "done" ? "completed" : "released";
 }
@@ -247,7 +247,7 @@ export function sessionInTeardown(
       "SELECT id, status, teardown_started_at FROM tasks WHERE teardown_started_at IS NOT NULL " +
         "ORDER BY teardown_started_at LIMIT 1",
     )
-    .get() as { id: string; status: string; teardown_started_at: string } | undefined;
+    .get() as { id: string; status: Task["status"]; teardown_started_at: string } | undefined;
   return (
     row && {
       taskId: row.id,

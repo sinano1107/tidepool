@@ -6,10 +6,10 @@ import { expect, test } from "./fixtures.js";
 /** issue #561 / ADR 0113。後始末中の session の行は「走っている」ではない ——
  *  上限到達による中断では行が `in_progress` のまま残る(決定2)ので、slot 行が
  *  それをタスクの実行と取り違えていた。経路はサーバが `teardown.settlement` で
- *  導き、ブラウザは値 → コピーの写像だけを持つ(決定3 / ADR 0068 決定1)。 */
+ *  導き、ブラウザは値 → コピーの写像だけを持つ(決定3 / ADR 0068 決定7)。 */
 
-/** 実行枠の状態(busy/limit/free)がブラウザに現れるのはここだけ —— `queue-screen.jsx`
- *  は busy でないときだけ slot 行を減光する。 */
+/** 実行枠の状態(busy/limit/free)がブラウザに現れるのはここだけ ——
+ *  `ui_kits/tidepool-webui/queue-screen.jsx` は `free` のときだけ slot 行を減光する。 */
 const color = (locator: Locator) => locator.evaluate((el) => getComputedStyle(el).color);
 
 /** design token の実効値。色そのものをテストに焼き込むと theme の調整で落ちる。 */
