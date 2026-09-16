@@ -243,6 +243,10 @@ export type EventPayload =
   // ADR 0052: registry remote reachability was rechecked successfully when
   // its Confirmation question was answered, so board-wide pickup resumes.
   | { kind: "registry_reinstated" }
+  // ADR 0112: the board's own teardown was re-run at answer time and completed,
+  // so board-wide pickup resumes. Like the three board-wide kinds around it, it
+  // names nothing — which task it was is on the question this event hangs on.
+  | { kind: "teardown_reinstated" }
   | { kind: "cli_auth_reinstated" }
   // ADR 0097 決定2 / issue #446: the provider-scoped sibling of
   // cli_auth_reinstated — the provider's authentication probe passed at

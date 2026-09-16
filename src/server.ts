@@ -24,6 +24,7 @@ import {
 } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
+import { openFailedTeardownQuestion } from "./failed-teardown.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
@@ -50,7 +51,7 @@ import {
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
-import { runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
+import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import { capInterruptionHandler, failTask, spawnFailureHandler, startWatchdog, type Watchdog, type WatchdogConfig } from "./watchdog.js";
@@ -507,22 +508,29 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // 進めば、生き残った process の居る workspace を盤面が書く(#382 が sparse-checkout の
   // 復元で踏んだのと同じ形で、置き場所も同じ)。検査が通らない間は Containment
   // quarantine が pickup を止めており、未了は行に残ったまま次の起動を待つ。
+  //
+  // ADR 0112 決定4: ただし落ちた後始末の question が開いているなら撃ち直さない ——
+  // 撃てば同じ所で落ちて無言に戻る。枠も占めない: question が pickup を止めている
+  // 以上、枠を握らせる理由が無い。門を**行**に持つので、この判断は再起動を越える。
+  //
+  // 起動時復旧と、落ちた後始末の受理の門(ADR 0112 決定3)が通る後始末は同じものである。
+  const teardownDeps: TeardownDeps = {
+    db,
+    clock: options.clock,
+    slot,
+    resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
+    githubAuth: options.githubAuth,
+    landing,
+    pollNow,
+  };
   const unfinishedTeardown = sessionInTeardown(db);
-  if (unfinishedTeardown && runtimePreflight.available) {
+  if (unfinishedTeardown && runtimePreflight.available && !openFailedTeardownQuestion(db)) {
     // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
     // 走り切るまで pickup は進まない
     slot.occupy(unfinishedTeardown.taskId);
     slot.enterTeardown();
     void runTeardown(
-      {
-        db,
-        clock: options.clock,
-        slot,
-        resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
-        githubAuth: options.githubAuth,
-        landing,
-        pollNow,
-      },
+      teardownDeps,
       unfinishedTeardown.taskId,
       teardownStep(db, unfinishedTeardown.taskId),
     );
@@ -542,6 +550,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         return common.available ? adapterContainment(harness) : common;
       }
     : undefined;
+  // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
+  // (`containment` / `registryReachability` と同じ配線)。
+  const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
   const scheduler = startScheduler({
     db,
     clock: options.clock,
@@ -672,6 +683,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       // 受理時に容器の空を再観測し、空なら tree rule を走らせて slot を解放する。
       reclaim: watchdog,
       registryReachability,
+      teardownQuarantine,
       cliAuth: options.cliAuth,
       providerCliAuth,
       vapidPublicKey: options.vapidPublicKey,
@@ -715,6 +727,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       harnessContainment,
       reclaim: watchdog,
       registryReachability,
+      teardownQuarantine,
       cliAuth: options.cliAuth,
       providerCliAuth,
       boardState: options.boardState?.paths,

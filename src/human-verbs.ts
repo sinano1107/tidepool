@@ -38,6 +38,7 @@ import {
   type Task,
   taskIdForPr,
 } from "./tasks.js";
+import type { FailedTeardownCheck } from "./teardown.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import {
@@ -368,6 +369,11 @@ export interface SubmitAnswerDeps {
    *  持たない盤面(回収を待っている slot が存在しない)。 */
   reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0112 決定3: 落ちた後始末の受理の門。検証すべき資源が無いので、検査は後始末を
+   *  **投げる版で**もう一度走らせることに一致する —— 通れば受理へ進み、まだ投げるなら
+   *  `DomainError` で回答を拒む。合成 root が `acceptTeardownQuarantine` を束ねて渡す
+   *  (人間 verb 側は後始末の deps 一式を知らない)。Absent → 後始末を持たない盤面。 */
+  teardownQuarantine?: FailedTeardownCheck;
   cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
    *  a provider-auth Confirmation answer — same "検証つきで解除" as `cliAuth`,
@@ -754,6 +760,15 @@ export async function submitAnswer(
           "Kill them by hand, then answer again",
       );
     }
+  }
+
+  // 停止の列挙と同じ順で containment の直後(ADR 0112 決定1)。検査そのものが後始末の
+  // 再実行なので、投げれば question は開いたまま残り、人間は直してもう一度答えられる。
+  if (task.question_quarantine_teardown !== null) {
+    if (!deps.teardownQuarantine) {
+      throw new DomainError("the failed teardown cannot be re-run on this board");
+    }
+    await deps.teardownQuarantine(task.question_quarantine_teardown);
   }
 
   if (task.question_quarantine_registry !== null && deps.registryReachability) {

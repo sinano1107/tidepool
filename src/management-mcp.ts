@@ -82,7 +82,7 @@ import {
   listQueue,
   listYourTasks,
 } from "./tasks.js";
-import { sessionInTeardown } from "./teardown.js";
+import { type FailedTeardownCheck, sessionInTeardown } from "./teardown.js";
 import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -120,6 +120,8 @@ export interface ManagementMcpDeps {
   /** ADR 0099 決定3: 回収済み観測を待つ slot の門(WebUI 側と同じ配線)。 */
   reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
+  /** ADR 0112 決定3: 落ちた後始末の受理の門(WebUI 側と同じ配線)。 */
+  teardownQuarantine?: FailedTeardownCheck;
   cliAuth?: CliAuthCheck;
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   boardState?: BoardStatePath[];
@@ -261,7 +263,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     entryExclusionPredicate(deps.db, deps.taskExecutionCandidates);
 
   server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () => {
-    // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない
+    // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない ——
+    // ただし**落ちた**後始末は列挙の側にも出る(ADR 0112 決定1)。このフィールドが言う
+    // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、同時に出る重複は
+    // 承知の上である
     const teardown = sessionInTeardown(deps.db);
     return toolResult({
       halts: boardHalts(deps.db, deps.throttleRevalidating),
@@ -771,6 +776,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               harnessContainment: deps.harnessContainment,
               reclaim: deps.reclaim,
               registryReachability: deps.registryReachability,
+              teardownQuarantine: deps.teardownQuarantine,
               cliAuth: deps.cliAuth,
               providerCliAuth: deps.providerCliAuth,
               boardState: deps.boardState,
