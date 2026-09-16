@@ -147,7 +147,6 @@ export interface Task {
    *  Borrows the quarantine family's mechanism only — it names a task because
    *  what became unrunnable is the board's own code, not a resource. */
   question_quarantine_teardown: string | null;
-  /** System-internal only (ADR 0070): Claude CLI authentication quarantine. */
   /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
    *  provider-scoped authentication quarantine stands in for — resource-scoped
    *  (only that provider's agents stop), never board-wide. */
@@ -354,7 +353,6 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   /** System-internal only (ADR 0112): the id of the task whose teardown threw.
    *  Never set via MCP or the JSON API — only quarantineFailedTeardown sets this. */
   quarantine_teardown?: string;
-  /** System-internal only (ADR 0070): Claude CLI authentication Confirmation. */
   /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
    *  provider-scoped authentication Confirmation question stands in for.
    *  Never set via MCP or the JSON API — only the cli-auth classification

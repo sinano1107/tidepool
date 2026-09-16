@@ -375,8 +375,9 @@ export interface SubmitAnswerDeps {
    *  (人間 verb 側は後始末の deps 一式を知らない)。Absent → 後始末を持たない盤面。 */
   teardownQuarantine?: FailedTeardownCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
-   *  a provider-auth Confirmation answer — the「検証つきで解除」を資源単位に
-   *  当てた形で、question が背負う provider の probe を撃つ。 */
+   *  a provider-auth Confirmation answer — the board never takes the human's
+   *  "repaired" at face value. Keyed by the provider the question stands in
+   *  for; absent that entry → the answer cannot be verified and is refused. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
