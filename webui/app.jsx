@@ -1176,8 +1176,8 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
       {!open && (agent.builtin || agent.shadowsBuiltIn) && (
         <FieldRow label="definition" kind="text"
           value={agent.builtin
-            ? 'built-in — carried by the board itself, with no registry file. Create an agent with this name to shadow it.'
-            : 'shadows built-in — this registry entry wins over the board\'s built-in agent of the same name. Delete it to fall back.'} />
+            ? 'built-in — no registry file; create an agent with this name to shadow it'
+            : 'shadows built-in — this entry wins; delete it to fall back to the board\'s own'} />
       )}
       {!open && (
         <React.Fragment>

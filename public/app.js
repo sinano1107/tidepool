@@ -1589,7 +1589,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
     {
       label: "definition",
       kind: "text",
-      value: agent.builtin ? "built-in \u2014 carried by the board itself, with no registry file. Create an agent with this name to shadow it." : "shadows built-in \u2014 this registry entry wins over the board's built-in agent of the same name. Delete it to fall back."
+      value: agent.builtin ? "built-in \u2014 no registry file; create an agent with this name to shadow it" : "shadows built-in \u2014 this entry wins; delete it to fall back to the board's own"
     }
   ), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "description", kind: agent.description ? "text" : "unset", value: agent.description ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,

@@ -252,26 +252,24 @@ export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filte
  *  `version` は registry の刻印ではないので固定文字列で、spawn 記録の
  *  `definition_version` がこれを運ぶ(当時版は registry commit に無い、ADR 0020)。 */
 const BUILT_IN_AUDITOR_SKILLS = ["@workspace"];
-const BUILT_IN_AGENTS: Record<string, AgentDefinition> = {
-  [DEFAULT_AUDITOR_NAME]: {
-    name: DEFAULT_AUDITOR_NAME,
-    version: "built-in",
-    authority: REVIEWER_AUTHORITY_PROFILE.name,
-    description: "Reviews work independently against its completion criteria.",
-    provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
-    retiredFields: [],
-    icon: "\u{1F421}",
-    skills: BUILT_IN_AUDITOR_SKILLS,
-    systemPrompt: "",
-    builtin: true,
-  },
+const BUILT_IN_AUDITOR: AgentDefinition = {
+  name: DEFAULT_AUDITOR_NAME,
+  version: "built-in",
+  authority: REVIEWER_AUTHORITY_PROFILE.name,
+  description: "Reviews work independently against its completion criteria.",
+  provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
+  retiredFields: [],
+  icon: "🐡",
+  skills: BUILT_IN_AUDITOR_SKILLS,
+  systemPrompt: "",
+  builtin: true,
 };
 
 /** その名前を組み込みが持っているか(ADR 0117 決定2)。registry に同名の
  *  エントリがあるかどうかとは独立 —— 「shadow している」を言えるのは、この
  *  述語と loaded map の印の2つが揃ったときだけである。 */
 export function isBuiltInAgentName(name: string): boolean {
-  return Object.hasOwn(BUILT_IN_AGENTS, name);
+  return name === BUILT_IN_AUDITOR.name;
 }
 
 /** 定義が成立していない(ADR 0097 決定3 / ADR 0110 決定1): provider が列挙の外、
@@ -1044,9 +1042,7 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   // 名前の解決は registry が先、無ければ組み込み(ADR 0117 決定2 の shadowing)。
   // ここで1つの map に畳むので、下流(assignee 候補・review_by 検査・roster・
   // spawn)は分岐を持たない。
-  for (const [name, definition] of Object.entries(BUILT_IN_AGENTS)) {
-    if (!Object.hasOwn(agents, name)) agents[name] = definition;
-  }
+  if (!Object.hasOwn(agents, BUILT_IN_AUDITOR.name)) agents[BUILT_IN_AUDITOR.name] = BUILT_IN_AUDITOR;
   const authority: Record<string, AuthorityProfile> = {};
   for (const path of gitListDir(dir, ref, "authority")) {
     if (!path.endsWith(".yaml")) continue;

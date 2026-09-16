@@ -276,14 +276,14 @@ export async function deleteAgent(
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
-  // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序)。profile の
-  // `assignable_to` に名前が並んでいるだけは参照ではない(ADR 0087 決定2)
   // 組み込みは registry のエントリではないので、参照の検査に進まない(ADR 0117
   // 決定2): 「消せない」が答えのすべてであり、Auditor ポインタを他所へ向けても
   // 未決着タスクが decay しても、この理由は変わらない
   if (existing.builtin) {
     throw new DeletionBlockedError("agent", input.name, [{ code: "built_in" }]);
   }
+  // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序)。profile の
+  // `assignable_to` に名前が並んでいるだけは参照ではない(ADR 0087 決定2)
   const reasons: DeletionBlockedReason[] = [];
   // 組み込みを shadow しているエントリだけは、ポインタの指す先でも参照されていても
   // 消せる(ADR 0117 決定2 —— ADR 0087 決定3 の唯一の例外): 消えれば名前は組み込みへ

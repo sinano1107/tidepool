@@ -184,7 +184,7 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
 }
 
 /** The authority governing this task: a `review` task always runs under the
- *  fixed reviewer profile above (ADR 0013), regardless of who it's assigned
+ *  fixed reviewer profile (registry.ts, ADR 0013), regardless of who it's assigned
  *  to. Otherwise `resolveAuthority` read fresh against the task's own
  *  `assignee` when configured (ADR 0012 / issue #36), else the board's single
  *  fixed `authority` (pre-#36 shape, and still today's shape for a board with

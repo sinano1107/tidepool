@@ -35,9 +35,7 @@ function main(): void {
   const registryDir = process.env.TIDEPOOL_REGISTRY;
   if (!registryDir) throw new Error("TIDEPOOL_REGISTRY is required");
 
-  // TIDEPOOL_AUDITOR は読まない(ADR 0117 決定1): Auditor の既定は組み込みなので
-  // 種に無く、ポインタの指し先がまだ作られていない状態は review タスクだけを
-  // quarantine する既存の姿のままでよい —— 種とポインタは独立である。
+  // TIDEPOOL_AUDITOR は読まない —— Auditor の既定は組み込みで種に無い(ADR 0117 決定1)
   const agentName = process.env.TIDEPOOL_AGENT ?? DEFAULT_AGENT_NAME;
   const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? DEFAULT_WORKSPACE_NAME;
   const emptyRegistry: Registry = { commit: "", agents: {}, authority: {}, workspaces: {} };
