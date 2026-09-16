@@ -134,10 +134,22 @@ it("decompose の ChildSpec は要求2列を受け取り、不正値は toolErro
   expect(board.find((x: any) => x.title === "x")).toBeUndefined();
 });
 
-it("管理MCP の decompose_task は要求2列を受け取る(issue #659)", async () => {
+it("管理MCP の decompose_task は要求2列を受け取り、不正値は toolError になる(issue #659)", async () => {
   t = await bootTidepool();
   const parent = queueWork(t, "modernize tide data");
   const client = await managementMcpClient(t.baseUrl);
+  // 不正値を先に —— 成功した分解は parent を blocked にするので、後続の拒否が
+  // ティアではなく parent の状態で起きてしまう。
+  const bad: any = await client.callTool({
+    name: "decompose_task",
+    arguments: {
+      task_id: parent.id,
+      reason: "a split with an unknown tier",
+      children: [{ title: "x", purpose: "p", completion_criteria: "c", tier: "platinum" }],
+    },
+  });
+  expect(bad.isError).toBe(true);
+
   const ok: any = await client.callTool({
     name: "decompose_task",
     arguments: {
