@@ -62,7 +62,7 @@ const BOARD_VERBS = [
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
-const CLOSED_FEATURES = [
+export const CLOSED_FEATURES = [
   "apps",
   "auth_elicitation",
   "browser_use",
@@ -82,6 +82,132 @@ const CLOSED_FEATURES = [
   "view_image",
   "workspace_dependencies",
 ] as const;
+/** `codex features list` の全量(name → effective state)の写し。stage 列は含めない —— 面は state。
+ * CODEX_CLI_VERSION に**従属する**期待値で、pin を上げたら下の手順で採り直す。採り直さなければ
+ * version 行が先に倒れて preflight は通らない —— pin 更新時の CLOSED_FEATURES 読み直しを、この定数が
+ * コードで強制する(ADR 0108 追記、issue #532)。
+ *
+ * 採取条件(0.147.0 で実測): venue は Lima VM `tidepool`(Linux aarch64 musl) —— preflight が走るのは
+ * そちら。Mac(darwin arm64)の出力と1行も違わず、CODEX_HOME が新規の空でもログイン済みでも同一
+ * (auth 非依存)。`-c` は closedSurfaceConfig() と同じもので、FEATS は CLOSED_FEATURES の全名 ——
+ * どちらかを動かしたらこの定数も動く。skillConfig() は採取時には付けていない(probe は付ける)。
+ * **bash で走らせること** —— zsh は "${ARGS[@]}" を語分割しないので `-c` が1本にまとまり、黙って効かない。
+ *
+ * ```bash
+ * CODEX_HOME=$(mktemp -d)
+ * FEATS="<CLOSED_FEATURES の全名を空白区切りで>"
+ * ARGS=(-c features.network_proxy=true -c features.hooks=true)
+ * for f in $FEATS; do ARGS+=(-c "features.$f=false"); done
+ * ARGS+=(-c 'web_search="disabled"' -c tools.web_search=false -c project_doc_max_bytes=0)
+ * codex features list "${ARGS[@]}" | awk '{print $1, $NF}'
+ * ```
+ */
+export const CODEX_FEATURE_SNAPSHOT: Readonly<Record<string, string>> = {
+  apply_patch_freeform: "false",
+  apply_patch_streaming_events: "false",
+  apps: "false",
+  apps_mcp_path_override: "false",
+  artifact: "false",
+  auth_elicitation: "false",
+  browser_use: "false",
+  browser_use_external: "false",
+  browser_use_full_cdp_access: "false",
+  chronicle: "false",
+  code_mode: "false",
+  code_mode_buffered_exec: "false",
+  code_mode_host: "true",
+  code_mode_only: "false",
+  codex_git_commit: "false",
+  collaboration_modes: "true",
+  computer_use: "false",
+  concurrent_reasoning_summaries: "false",
+  current_time_reminder: "false",
+  default_mode_request_user_input: "false",
+  deferred_executor: "false",
+  deferred_tool_world_state: "false",
+  elevated_windows_sandbox: "false",
+  enable_fanout: "false",
+  enable_mcp_apps: "false",
+  enable_request_compression: "true",
+  exec_permission_approvals: "false",
+  executed_tool_call_metadata: "false",
+  executor_capability_discovery: "false",
+  experimental_windows_sandbox: "false",
+  external_agent_memory_import: "false",
+  external_migration: "false",
+  fast_mode: "true",
+  goals: "false",
+  guardian_approval: "true",
+  guardianv2: "false",
+  hooks: "true",
+  image_detail_original: "false",
+  image_generation: "false",
+  image_resize_notice: "false",
+  in_app_browser: "false",
+  in_app_updates: "true",
+  item_ids: "true",
+  js_repl: "false",
+  js_repl_tools_only: "false",
+  local_thread_store_compression: "false",
+  mcp_2026_07_28: "false",
+  memories: "false",
+  mentions_v2: "true",
+  multi_agent: "true",
+  multi_agent_mode: "false",
+  multi_agent_v2: "false",
+  network_proxy: "true",
+  non_prefixed_mcp_tool_names: "false",
+  personality: "true",
+  plugin_hooks: "false",
+  plugin_sharing: "true",
+  plugins: "false",
+  prevent_idle_sleep: "false",
+  realtime_conversation: "false",
+  recommended_plugins: "false",
+  remote_compaction_v2: "true",
+  remote_control: "false",
+  remote_models: "false",
+  remote_plugin: "false",
+  request_permissions_tool: "false",
+  request_rule: "false",
+  resize_all_images: "true",
+  respect_system_proxy: "false",
+  responses_websockets: "false",
+  responses_websockets_v2: "false",
+  rollout_budget: "false",
+  runtime_metrics: "false",
+  search_tool: "false",
+  secret_auth_storage: "false",
+  shell_snapshot: "true",
+  shell_tool: "true",
+  shell_zsh_fork: "false",
+  skill_env_var_dependency_prompt: "false",
+  skill_mcp_dependency_install: "false",
+  skill_search: "false",
+  sqlite: "true",
+  standalone_web_search: "false",
+  steer: "true",
+  terminal_resize_reflow: "true",
+  terminal_visualization_instructions: "false",
+  token_budget: "false",
+  tool_call_mcp_elicitation: "true",
+  tool_search: "false",
+  tool_search_always_defer_mcp_tools: "true",
+  tool_suggest: "false",
+  tui_app_server: "true",
+  unavailable_dummy_tools: "false",
+  undo: "false",
+  unified_exec: "true",
+  unified_exec_zsh_fork: "false",
+  use_agent_identity: "false",
+  use_legacy_landlock: "false",
+  use_linux_sandbox_bwrap: "false",
+  view_image: "false",
+  web_search_cached: "false",
+  web_search_request: "false",
+  workspace_dependencies: "false",
+  workspace_owner_usage_nudge: "false",
+};
 const SYSTEM_SKILLS = ["imagegen", "openai-docs", "plugin-creator", "skill-creator", "skill-installer"];
 const SECRET_ENV = [
   "OPENAI_API_KEY",
@@ -124,7 +250,17 @@ export interface CodexCapabilityObservation {
   skills: readonly string[];
   hooks: readonly string[];
   permissions: readonly string[];
-  closedFeatures: readonly string[];
+  features: Readonly<Record<string, string>>;
+}
+
+/** 期待と観測の差だけを言う(全量は並べない —— 104 行の表は人間の quarantine 画面では読めない)。 */
+function featureDrift(observed: Readonly<Record<string, string>>): string[] {
+  const names = [...new Set([...Object.keys(CODEX_FEATURE_SNAPSHOT), ...Object.keys(observed)])].sort();
+  return names
+    .filter((name) => CODEX_FEATURE_SNAPSHOT[name] !== observed[name])
+    .map((name) =>
+      `${name} (expected ${CODEX_FEATURE_SNAPSHOT[name] ?? "absent"}, observed ${observed[name] ?? "absent"})`
+    );
 }
 
 export type CodexCapabilityProbe = () => Promise<CodexCapabilityObservation>;
@@ -146,16 +282,19 @@ export async function checkCodexCapability(
       ["skill", [], observed.skills],
       ["hook", CODEX_HOOKS, observed.hooks],
       ["permission", CODEX_PERMISSIONS, observed.permissions],
-      ["closed feature", CLOSED_FEATURES, observed.closedFeatures],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
-  return mismatch
-    ? {
-        available: false,
-        reason:
-          `Codex containment preflight ${mismatch[0]} mismatch: expected ` +
-          `${JSON.stringify(mismatch[1])}, observed ${JSON.stringify(mismatch[2])}`,
-      }
+  if (mismatch) {
+    return {
+      available: false,
+      reason:
+        `Codex containment preflight ${mismatch[0]} mismatch: expected ` +
+        `${JSON.stringify(mismatch[1])}, observed ${JSON.stringify(mismatch[2])}`,
+    };
+  }
+  const drift = featureDrift(observed.features);
+  return drift.length > 0
+    ? { available: false, reason: `Codex containment preflight feature mismatch: ${drift.join(", ")}` }
     : { available: true };
 }
 
@@ -479,10 +618,11 @@ async function actualCodexCapability(options: {
       ["features", "list", ...configArgs(config)],
       { cwd: workspace, env },
     );
-    const disabled = new Map(
+    // 先頭 field が name、末尾 field が state。stage 列は空白を含みうる(under development)ので数えない。
+    const observedFeatures = Object.fromEntries(
       features.trim().split("\n").map((line) => {
         const fields = line.trim().split(/\s+/);
-        return [fields[0], fields.at(-1)] as const;
+        return [fields[0] ?? "", fields.at(-1) ?? ""] as const;
       }),
     );
     await probePermission(options.executable, workspace, taskTemp, "work", env);
@@ -493,7 +633,7 @@ async function actualCodexCapability(options: {
       skills: observedSkills(promptInput),
       hooks: probeHook(options.codexHome, taskTemp),
       permissions: [...CODEX_PERMISSIONS],
-      closedFeatures: CLOSED_FEATURES.filter((feature) => disabled.get(feature) === "false"),
+      features: observedFeatures,
     };
   } finally {
     rmSync(taskTemp, { recursive: true, force: true });

@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  CLOSED_FEATURES,
   CODEX_CLI_VERSION,
+  CODEX_FEATURE_SNAPSHOT,
   type CodexCapabilityObservation,
   checkCodexCapability,
 } from "../src/codex-worker.js";
@@ -24,26 +26,7 @@ const VALID: CodexCapabilityObservation = {
   skills: [],
   hooks: ["SubagentStart", "PreToolUse"],
   permissions: ["tidepool-work", "tidepool-review"],
-  closedFeatures: [
-    "apps",
-    "auth_elicitation",
-    "browser_use",
-    "browser_use_external",
-    "browser_use_full_cdp_access",
-    "computer_use",
-    "goals",
-    "image_generation",
-    "in_app_browser",
-    "memories",
-    "plugins",
-    "recommended_plugins",
-    "remote_plugin",
-    "skill_mcp_dependency_install",
-    "skill_search",
-    "tool_suggest",
-    "view_image",
-    "workspace_dependencies",
-  ],
+  features: CODEX_FEATURE_SNAPSHOT,
 };
 
 it.each([
@@ -52,11 +35,47 @@ it.each([
   ["skill", { skills: ["openai-docs"] }],
   ["hook", { hooks: ["SubagentStart"] }],
   ["permission", { permissions: ["tidepool-work"] }],
-  ["feature", { closedFeatures: VALID.closedFeatures.slice(1) }],
 ] as const)("Codex %s surface drift fails its Harness preflight closed", async (_, changed) => {
   const capability = await checkCodexCapability(async () => ({ ...VALID, ...changed }));
   expect(capability.available).toBe(false);
   if (!capability.available) expect(capability.reason).toContain("Codex containment preflight");
+});
+
+it("観測した feature 面が期待 snapshot と全量一致すれば preflight は成立する", async () => {
+  const capability = await checkCodexCapability(async () => VALID);
+  expect(capability.available).toBe(true);
+});
+
+const withoutFeature = (dropped: string) =>
+  Object.fromEntries(Object.entries(CODEX_FEATURE_SNAPSHOT).filter(([name]) => name !== dropped));
+
+// 差分の名前と期待/観測の state だけを言い、一致した 104 行は reason に出さない(issue #532)
+it.each([
+  [
+    "ベンダーが増やした未知の名前",
+    { ...CODEX_FEATURE_SNAPSHOT, vendor_new_thing: "true" },
+    ["vendor_new_thing (expected absent, observed true)"],
+  ],
+  [
+    "既存の名前が false から true へ転ぶ",
+    { ...CODEX_FEATURE_SNAPSHOT, code_mode: "true" },
+    ["code_mode (expected false, observed true)"],
+  ],
+  [
+    "期待していた名前が面から消える",
+    withoutFeature("computer_use"),
+    ["computer_use (expected false, observed absent)"],
+  ],
+] as const)("feature 面の%sは preflight を倒し、reason は差分だけを載せる", async (_, features, expected) => {
+  const capability = await checkCodexCapability(async () => ({ ...VALID, features }));
+  expect(capability.available).toBe(false);
+  if (capability.available) return;
+  for (const line of expected) expect(capability.reason).toContain(line);
+  expect(capability.reason).not.toContain("apply_patch_freeform");
+});
+
+it("CLOSED_FEATURES の全名が期待 snapshot で false —— 定数を写した時点の取りこぼしを捕まえる", () => {
+  expect(CLOSED_FEATURES.filter((feature) => CODEX_FEATURE_SNAPSHOT[feature] !== "false")).toEqual([]);
 });
 
 it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {
