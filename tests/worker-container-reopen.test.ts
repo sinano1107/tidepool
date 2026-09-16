@@ -3,16 +3,14 @@ import { WorkerContainers } from "../src/worker-container.js";
 import { FakeContainerRuntime } from "./fakes.js";
 
 /** 盤面側 supervisor が持つ帳簿の寿命(ADR 0099 決定2)。同じ session id での再 open は
- *  retry・上限到達による中断からの先頭復帰で実際に起きる(CONTEXT.md「Worker session」—
- *  タスクと session は多対1、pickup は task id を session id に使う)。 */
+ *  retry・上限到達による中断からの先頭復帰で実際に起きる(CONTEXT.md「Worker session」)。 */
 
 const SESSION = "task-1";
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-/** 1つ目の容器が回収済み観測まで進んだ盤面。「回収済み観測の後」とは
- *  `reclaimed` が解決した後のことであり、強制回収を送った直後の同期の点ではない
- *  (ADR 0109 決定4 — force は送達であって回収の完了ではない)。 */
+/** 1つ目の容器が回収済み観測まで進んだ盤面。「回収済み観測の後」とは `reclaimed` が
+ *  解決した後であり、強制回収を送った直後の同期の点ではない。 */
 async function reclaimedOnce() {
   const containers = new WorkerContainers(new FakeContainerRuntime());
   const first = containers.open(SESSION);
