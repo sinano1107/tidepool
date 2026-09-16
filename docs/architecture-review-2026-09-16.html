@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — tidepool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { curve: "basis" } });
+    </script>
+    <style>
+      body { font-feature-settings: "palt"; }
+      .seam { stroke-dasharray: 5 4; }
+      .label { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+      .mermaid { display: flex; justify-content: center; }
+      .mermaid svg { max-width: 100%; height: auto; }
+      .hatch { background-image: repeating-linear-gradient(45deg, #e7e5e4 0 6px, #f5f5f4 6px 12px); }
+      .deepbox { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .copybox { background-image: repeating-linear-gradient(90deg, #fee2e2 0 4px, #fef2f2 4px 8px); }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 antialiased">
+    <main class="max-w-5xl mx-auto px-6 py-14 space-y-14">
+
+      <header class="space-y-6">
+        <div class="flex items-baseline justify-between border-b border-slate-300 pb-4">
+          <h1 class="font-serif text-4xl tracking-tight">tidepool — architecture review</h1>
+          <span class="font-mono text-xs text-slate-500">2026-09-16 &middot; main @ dcc898f</span>
+        </div>
+        <div class="flex flex-wrap gap-x-8 gap-y-2 text-xs text-slate-600">
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 border-2 border-slate-700 bg-white"></span> module</span>
+          <span class="flex items-center gap-2"><svg width="26" height="10"><line class="seam" x1="0" y1="5" x2="26" y2="5" stroke="#475569" stroke-width="2"/></svg> seam</span>
+          <span class="flex items-center gap-2"><svg width="26" height="10"><line x1="0" y1="5" x2="20" y2="5" stroke="#dc2626" stroke-width="2"/><path d="M20 1 L26 5 L20 9 Z" fill="#dc2626"/></svg> leakage</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 deepbox"></span> deep module</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 copybox border border-red-200"></span> 写し(同じ綴りの複製)</span>
+        </div>
+        <p class="text-sm text-slate-600 max-w-3xl leading-relaxed">
+          起点は直近150 commit の hot spot(<span class="font-mono text-xs">src/memory.ts 38 / src/mcp.ts 25 / src/db.ts 21 / webui/app.jsx 20 / src/events.ts 17</span> touches)。
+          4クラスタを並行に walk した。今回の所見は<strong>すべて水平方向</strong>である —— deletion test に落ちる pass-through は
+          探索の範囲で1つも見つからなかった(<span class="font-mono text-xs">appendEvent</span> は 5欄の interface に 47 kind、
+          <span class="font-mono text-xs">slot.ts</span> は 37行に ADR 0109 決定2 の不変条件、<span class="font-mono text-xs">learner.ts</span> は
+          純粋な決定核 + 1つの不純な殻 —— いずれも deletion test に耐える)。薄いのは<strong>同じ概念が N 箇所に手で綴られている</strong>側で、
+          7候補のうち5つがその形である(残る2つは、置き場が違う帳簿と、3度綴られた判定)。
+        </p>
+        <p class="text-sm text-slate-600 max-w-3xl leading-relaxed">
+          2026-09-01 のレビューの4件(着地 module・人間面の扉・containment の合成・「着地済み」の述語)は
+          ADR 0106 / 0109 と #512 / #528 で着地済みなので再掲しない。ADR 0107 が禁じた
+          「<span class="font-mono text-xs">tasks.ts</span> の輸出面を絞る」も出さない —— 実際、輸出52件に外部呼び手の無いものは<strong>1つも無い</strong>。
+        </p>
+      </header>
+
+      <section id="candidates" class="space-y-16">
+        <!-- ---------- 1 ---------- -->
+        <article id="c1" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">1. 確認型 question の登録と解除を1つの deep module にする</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              src/agent.ts:86,111 &middot; src/cli-auth.ts:98,129,150,164,214,232 &middot; src/containment.ts:126,144 &middot;
+              src/harness-containment.ts:12,28,48 &middot; src/registry-reachability.ts:13,40 &middot; src/failed-teardown.ts:16,30,56 &middot;
+              src/workspace.ts:868,918 &middot; src/tasks.ts:344-366,421-428 &middot; src/db.ts:87-127,669-696 &middot;
+              src/human-verbs.ts:698-805 &middot; src/board-halt.ts:29-83
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">before — 7つの写し</div>
+              <svg viewBox="0 0 320 300" class="w-full">
+                <text x="6" y="14" class="label" fill="#64748b">writer files</text>
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="22" width="132" height="26" class="copybox" stroke="#fca5a5"/><text x="12" y="39" fill="#7f1d1d">agent.ts</text>
+                  <rect x="6" y="52" width="132" height="26" class="copybox" stroke="#fca5a5"/><text x="12" y="69" fill="#7f1d1d">cli-auth.ts ×2</text>
+                  <rect x="6" y="82" width="132" height="26" class="copybox" stroke="#fca5a5"/><text x="12" y="99" fill="#7f1d1d">containment.ts</text>
+                  <rect x="6" y="112" width="132" height="26" class="copybox" stroke="#fca5a5"/><text x="12" y="129" fill="#7f1d1d">harness-containment.ts</text>
+                  <rect x="6" y="142" width="132" height="26" class="copybox" stroke="#fca5a5"/><text x="12" y="159" fill="#7f1d1d">registry-reachability.ts</text>
+                  <rect x="6" y="172" width="132" height="26" class="copybox" stroke="#fca5a5"/><text x="12" y="189" fill="#7f1d1d">failed-teardown.ts</text>
+                  <rect x="6" y="202" width="132" height="26" class="copybox" stroke="#fca5a5"/><text x="12" y="219" fill="#7f1d1d">workspace.ts</text>
+                </g>
+                <text x="6" y="248" font-size="9" fill="#7f1d1d" font-family="ui-monospace,monospace">各ファイルが同じ4手を手で綴る:</text>
+                <text x="6" y="262" font-size="9" fill="#7f1d1d" font-family="ui-monospace,monospace">SELECT … WHERE quarantine_X → 検査</text>
+                <text x="6" y="276" font-size="9" fill="#7f1d1d" font-family="ui-monospace,monospace">→ registerTask(question) → 散文</text>
+
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="176" y="22" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="41" fill="#334155">db.ts 列 ×8 +列挙2箇所</text>
+                  <rect x="176" y="58" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="77" fill="#334155">tasks.ts 欄×8 + ||×8</text>
+                  <rect x="176" y="94" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="113" fill="#334155">human-verbs.ts if×8</text>
+                  <rect x="176" y="130" width="138" height="30" fill="white" stroke="#475569"/><text x="182" y="149" fill="#334155">board-halt.ts 列挙×6</text>
+                </g>
+                <line x1="140" y1="120" x2="174" y2="40" stroke="#dc2626" stroke-width="1.5"/><path d="M174 40 l-7 1 l4 5 z" fill="#dc2626"/>
+                <line x1="140" y1="120" x2="174" y2="74" stroke="#dc2626" stroke-width="1.5"/><path d="M174 74 l-7 0 l3 6 z" fill="#dc2626"/>
+                <line x1="140" y1="120" x2="174" y2="110" stroke="#dc2626" stroke-width="1.5"/><path d="M174 110 l-7 -1 l2 6 z" fill="#dc2626"/>
+                <line x1="140" y1="120" x2="174" y2="146" stroke="#dc2626" stroke-width="1.5"/><path d="M174 146 l-7 -2 l1 7 z" fill="#dc2626"/>
+                <text x="176" y="180" font-size="10" fill="#7f1d1d" font-weight="600">1種類足す = 6ファイル / 7箇所</text>
+              </svg>
+            </div>
+
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">after — 1つの表 + 1つの門</div>
+              <svg viewBox="0 0 320 300" class="w-full">
+                <text x="6" y="14" class="label" fill="#64748b">confirmation question module</text>
+                <rect x="6" y="22" width="308" height="34" class="deepbox"/>
+                <text x="16" y="44" font-size="11" fill="#e2e8f0" font-family="ui-monospace,monospace">interface: 種類の表(1種 = 1行)</text>
+                <rect x="6" y="56" width="308" height="132" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+                <g font-size="9" font-family="ui-monospace,monospace" fill="#334155">
+                  <text x="16" y="76">開いているか(列の読み)</text>
+                  <text x="16" y="92">生きた検査を撃つ</text>
+                  <text x="16" y="108">question を立てる(散文は行が持つ)</text>
+                  <text x="16" y="124">回答受理の前に同じ検査を撃ち直す</text>
+                  <text x="16" y="140">停止の列挙へ載せる / 載せない</text>
+                  <text x="16" y="156">資源単位 or 盤面全体</text>
+                  <text x="16" y="178" fill="#64748b">← 今日 7ファイルに散っている実装</text>
+                </g>
+                <line class="seam" x1="6" y1="200" x2="314" y2="200" stroke="#475569" stroke-width="2"/>
+                <text x="6" y="214" class="label" fill="#64748b">callers</text>
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="222" width="72" height="24" fill="white" stroke="#475569"/><text x="12" y="238" fill="#334155">scheduler</text>
+                  <rect x="86" y="222" width="72" height="24" fill="white" stroke="#475569"/><text x="92" y="238" fill="#334155">worker</text>
+                  <rect x="166" y="222" width="72" height="24" fill="white" stroke="#475569"/><text x="172" y="238" fill="#334155">submitAnswer</text>
+                  <rect x="246" y="222" width="68" height="24" fill="white" stroke="#475569"/><text x="252" y="238" fill="#334155">boardHalts</text>
+                </g>
+                <text x="6" y="270" font-size="10" fill="#065f46" font-weight="600">1種類足す = 表に1行</text>
+                <text x="6" y="286" font-size="9" fill="#475569">ADR 0068 が読み口に与えた性質を、書き手側にも与える</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
+            <div class="space-y-2">
+              <div class="label text-slate-500">problem</div>
+              <p>CONTEXT.md は「確認型 question」という名前を持っているのに、コードにその module が無い —— 8種類が7ファイルで同じ4手を手で綴り、列・検証・受理の門・停止の列挙に同じ8つの綴りが並ぶ。</p>
+            </div>
+            <div class="space-y-2">
+              <div class="label text-slate-500">solution</div>
+              <p>種類ごとの差(列・散文・生きた検査・停止に載るか・資源単位か盤面全体か)を1つの表の1行にし、立てる側と解除する側の両方がその表を読む。</p>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+            <strong>ADR 0068 の受入基準の続き</strong> —— 「新しい盤面全体の停止が生まれたとき、増えるのは配線ではなく列挙の1行になる」は
+            <strong>読み口(boardHalts)にだけ</strong>適用された。書き手は7ファイルのまま残っている。ADR と矛盾せず、同じ基準の未適用側である。
+          </div>
+
+          <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
+            <li>locality: 1種類の全部が1箇所</li>
+            <li>leverage: 1つの interface、8つの種類</li>
+            <li>写し7本が implementation へ沈む</li>
+            <li>受理の門の8分岐が表の駆動になる</li>
+            <li>interface がテスト面になる(今は種類ごとに別ファイル)</li>
+            <li>種類の追加漏れが構造的に起きない</li>
+          </ul>
+        </article>
+        <!-- ---------- 2 ---------- -->
+        <article id="c2" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">2. 着地の帳簿を landing.ts に引き取る</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              src/tasks.ts:1756-2054(11 export)&middot; src/tasks.ts:2563 &middot; src/landing.ts:10-28 &middot; src/human-verbs.ts:635 &middot; src/server-options.ts
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">before — 帳簿だけが外に住む</div>
+              <div class="mermaid">
+flowchart TB
+  subgraph T["src/tasks.ts &nbsp;3189行"]
+    direction TB
+    V["タスクの語彙・登録・生涯<br/>質問・分解・読み口"]
+    M["着地の帳簿 1756-2054<br/>registerMergeQuestion / taskIdForPr<br/>listPendingAutoMerges / recordPrOpened<br/>…11 export"]
+  end
+  L["src/landing.ts<br/>ADR 0106 の着地 module"]
+  M -- "9/11 は landing.ts が唯一の呼び手" --> L
+  V -.- M
+  classDef stray fill:#fef2f2,stroke:#dc2626,stroke-width:2px;
+  classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a;
+  class M stray
+  class L deep
+              </div>
+            </div>
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">after — 判断と帳簿が同じ module</div>
+              <div class="mermaid">
+flowchart TB
+  subgraph T2["src/tasks.ts &nbsp;≈2890行"]
+    V2["タスクの語彙・登録・生涯<br/>質問・分解・読み口"]
+  end
+  subgraph L2["src/landing.ts — 着地 module"]
+    D["判断(ADR 0106 決定1)"]
+    S["帳簿(merge question / PR / auto-merge)"]
+  end
+  V2 -- "taskIdForPr など少数の共有語彙" --> L2
+  classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a;
+  class L2 deep
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
+            <div class="space-y-2">
+              <div class="label text-slate-500">problem</div>
+              <p>ADR 0106 決定2 は「着地の全決定は1つの module」と決めたが、その module の<strong>状態</strong>(merge question・PR 昇格・無人 merge キュー)は 300行のまま tasks.ts に残った。11 export のうち9本は landing.ts しか呼ばない。</p>
+            </div>
+            <div class="space-y-2">
+              <div class="label text-slate-500">solution</div>
+              <p>着地しか読まない帳簿を landing.ts の implementation へ移す。tasks.ts に残るのは他 module も使う語彙(<span class="font-mono text-xs">taskIdForPr</span> / <span class="font-mono text-xs">recordPrOpened</span>)だけ。</p>
+            </div>
+          </div>
+
+          <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
+            <li>locality: 着地の変更が1ファイルに収まる</li>
+            <li>tasks.ts の interface が9本縮む</li>
+            <li>ADR 0106 の決定が構造に現れる</li>
+            <li>着地のテストが landing.ts の interface を通る</li>
+          </ul>
+        </article>
+        <!-- ---------- 3 ---------- -->
+        <article id="c3" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">3. Board call の CLI 呼び出しを1つの deep module にする</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">local-substitutable</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              src/claude-draft-client.ts:218-264(runOneShotJsonPrompt)&middot; src/claude-translation-client.ts:166-211 &middot;
+              src/claude-allocation-client.ts:44-71 &middot; src/claude-attribution-client.ts:45-59 &middot; src/claude-behavior-draft-client.ts:38-49 &middot;
+              src/claude-worker.ts(defaultExec / pinnedModelFlags / emptyToolSurfaceFlags / boardCallEnv)&middot; tests/claude-*-client.test.ts ×5
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">before — runner が client の中に住み、1本が fork した</div>
+              <svg viewBox="0 0 330 320" class="w-full">
+                <rect x="6" y="20" width="318" height="120" fill="#fff" stroke="#475569"/>
+                <text x="12" y="36" font-size="10" font-family="ui-monospace,monospace" fill="#334155">claude-draft-client.ts &nbsp;264行</text>
+                <rect x="16" y="44" width="180" height="40" class="deepbox"/>
+                <text x="24" y="62" font-size="9" fill="#e2e8f0" font-family="ui-monospace,monospace">runOneShotJsonPrompt</text>
+                <text x="24" y="76" font-size="8" fill="#94a3b8" font-family="ui-monospace,monospace">10 flags + envelope + is_error</text>
+                <text x="206" y="62" font-size="8" fill="#64748b" font-family="ui-monospace,monospace">← 本来は</text>
+                <text x="206" y="74" font-size="8" fill="#64748b" font-family="ui-monospace,monospace">&nbsp;&nbsp;&nbsp;共有の原語</text>
+                <rect x="16" y="92" width="180" height="36" fill="#f1f5f9" stroke="#94a3b8"/>
+                <text x="24" y="114" font-size="9" fill="#475569" font-family="ui-monospace,monospace">下書きの schema と prompt</text>
+
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="156" width="98" height="40" fill="#fff" stroke="#475569"/><text x="12" y="172" fill="#334155">allocation 73行</text><text x="12" y="186" fill="#94a3b8">class ceremony 18</text>
+                  <rect x="112" y="156" width="98" height="40" fill="#fff" stroke="#475569"/><text x="118" y="172" fill="#334155">attribution 60行</text><text x="118" y="186" fill="#94a3b8">ceremony 15</text>
+                  <rect x="218" y="156" width="106" height="40" fill="#fff" stroke="#475569"/><text x="224" y="172" fill="#334155">behavior-draft 50行</text><text x="224" y="186" fill="#94a3b8">ceremony 13</text>
+                </g>
+                <line x1="55" y1="154" x2="70" y2="86" stroke="#475569" stroke-width="1"/>
+                <line x1="160" y1="154" x2="100" y2="86" stroke="#475569" stroke-width="1"/>
+                <line x1="270" y1="154" x2="130" y2="86" stroke="#475569" stroke-width="1"/>
+
+                <rect x="6" y="216" width="318" height="56" class="copybox" stroke="#dc2626" stroke-width="2"/>
+                <text x="12" y="232" font-size="10" font-family="ui-monospace,monospace" fill="#7f1d1d">claude-translation-client.ts:166-211 — runner の写し45行</text>
+                <text x="12" y="248" font-size="9" font-family="ui-monospace,monospace" fill="#7f1d1d">--system-prompt / 推論なし env / usage を返す が</text>
+                <text x="12" y="262" font-size="9" font-family="ui-monospace,monospace" fill="#7f1d1d">5引数の interface で言えなかったので分岐した</text>
+                <line x1="165" y1="214" x2="120" y2="90" stroke="#dc2626" stroke-width="2" class="seam"/>
+                <path d="M120 90 l1 8 l6 -5 z" fill="#dc2626"/>
+                <text x="12" y="292" font-size="10" font-weight="600" fill="#7f1d1d">帰結: 翻訳だけが is_error を読まない(#652)</text>
+                <text x="12" y="308" font-size="9" fill="#7f1d1d">コメント2箇所は逐語コピー、参照先の関数名は既に存在しない</text>
+              </svg>
+            </div>
+
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">after — 1つの原語、4つの schema</div>
+              <svg viewBox="0 0 330 320" class="w-full">
+                <text x="6" y="16" class="label" fill="#64748b">board-call module</text>
+                <rect x="6" y="24" width="318" height="40" class="deepbox"/>
+                <text x="16" y="42" font-size="10" fill="#e2e8f0" font-family="ui-monospace,monospace">interface: prompt・model/effort・system prompt?・</text>
+                <text x="16" y="56" font-size="10" fill="#e2e8f0" font-family="ui-monospace,monospace">推論の有無・usage を受け取るか・label</text>
+                <rect x="6" y="64" width="318" height="96" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+                <g font-size="9" font-family="ui-monospace,monospace" fill="#334155">
+                  <text x="16" y="82">10 flags(-p / json / --max-turns 1 / --safe-mode …)</text>
+                  <text x="16" y="98">空のツール面(ADR 0062)・advisor 不在(ADR 0044)</text>
+                  <text x="16" y="114">envelope の検査 — is_error は必ず見る</text>
+                  <text x="16" y="130">usage を落とさずに返す</text>
+                  <text x="16" y="146">401 の再 throw(cli-auth)</text>
+                </g>
+                <line class="seam" x1="6" y1="176" x2="324" y2="176" stroke="#475569" stroke-width="2"/>
+                <text x="6" y="192" class="label" fill="#64748b">callers — 各自は schema と prompt だけ</text>
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="200" width="60" height="30" fill="white" stroke="#475569"/><text x="12" y="219" fill="#334155">draft</text>
+                  <rect x="72" y="200" width="60" height="30" fill="white" stroke="#475569"/><text x="78" y="219" fill="#334155">translate</text>
+                  <rect x="138" y="200" width="60" height="30" fill="white" stroke="#475569"/><text x="144" y="219" fill="#334155">alloc</text>
+                  <rect x="204" y="200" width="60" height="30" fill="white" stroke="#475569"/><text x="210" y="219" fill="#334155">attrib</text>
+                  <rect x="270" y="200" width="54" height="30" fill="white" stroke="#475569"/><text x="276" y="219" fill="#334155">behavior</text>
+                </g>
+                <text x="6" y="256" font-size="10" fill="#065f46" font-weight="600">runner に直接のテストが立つ(今は0本)</text>
+                <text x="6" y="272" font-size="9" fill="#475569">5本の test が同じ4つの flag を言い直す形が消える</text>
+                <text x="6" y="294" font-size="9" fill="#475569">#456(Codex の生成系 Board call)が来たとき、</text>
+                <text x="6" y="308" font-size="9" fill="#475569">増えるのは adapter 1つで、sibling 5ファイルではない</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
+            <div class="space-y-2">
+              <div class="label text-slate-500">problem</div>
+              <p>Board call の原語 <span class="font-mono text-xs">runOneShotJsonPrompt</span>(47行、10 flags と envelope を隠す本物の深さ)が5つの client の1つの中に住んでいる。5引数の interface が翻訳の要求(system prompt・推論なし・usage)を言えず、翻訳は45行を写して分岐した —— その写しが <span class="font-mono text-xs">is_error</span> を落とし、#652 になった。</p>
+            </div>
+            <div class="space-y-2">
+              <div class="label text-slate-500">solution</div>
+              <p>runner を自分の module に出し、翻訳が必要とした3つの差を interface に入れる。残る3つの client は schema + prompt + label だけになる(class の ceremony 15行×3 が消える)。</p>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+            <strong>#652 は未実測の部分を含む</strong> —— 「エラー本文がキャッシュに載る」は <span class="font-mono text-xs">-p --output-format json</span> が
+            <span class="font-mono text-xs">is_error: true</span> で exit 0 を返す場合の話で、exit code はまだ測られていない。
+            <strong>写しが存在すること自体</strong>(45行・逐語コピーのコメント・死んだ関数名参照)は実測不要の既存重複である。
+            <span class="font-mono text-xs">is_error</span> を<strong>どう扱うか</strong>は呼び手ごとに違う(#652 の範囲外の項)ので、module が決めるのは「必ず面に出す」までで、方針は呼び手に残す。
+          </div>
+
+          <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
+            <li>leverage: 1つの interface、5つの用途</li>
+            <li>locality: CLI の綴りが1箇所</li>
+            <li>写し45行が implementation へ沈む</li>
+            <li>runner に初めて直接のテストが立つ</li>
+            <li>usage を返すかが interface の選択肢になる</li>
+            <li>claude-worker.ts への依存4本が切れる</li>
+          </ul>
+        </article>
+        <!-- ---------- 4 ---------- -->
+        <article id="c4" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">4. ブラウザが盤面の語彙を写すのをやめる</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">ports &amp; adapters</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              webui/app.jsx:131,184,219,772-781,1115-1120,1231-1254,1316-1329,1890-1891,3084-3091,3624-3626 &middot;
+              src/tasks.ts:12,42,51,760-767,2288-2300 &middot; src/registry.ts:156,512-530,923-931 &middot;
+              src/execution-setting.ts:12 &middot; src/memory.ts:14,302 &middot; src/api.ts:1661
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-4">
+            <div class="label text-slate-500">12 の写し — 左が正本、右がブラウザの言い直し</div>
+            <div class="grid grid-cols-[1fr_auto_1fr] gap-x-4 gap-y-1 text-xs font-mono items-center">
+              <div class="text-right text-slate-700">tasks.ts:42 BOARD_WORKER_ID</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:131 <span class="text-red-700">'tidepool'</span></div>
+              <div class="text-right text-slate-700">tasks.ts:12 HUMAN_WORKER_ID</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:184,226,3625 <span class="text-red-700">'human'</span></div>
+              <div class="text-right text-slate-700">tasks.ts:760 HANDOFF_FIELDS</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:3084 6キー同順</div>
+              <div class="text-right text-slate-700">registry.ts:156 MERGE_DIAL_VALUES</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:1249 MERGE_OPTIONS</div>
+              <div class="text-right text-slate-700">registry.ts:512 skill allowlist 文法</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:1316 skillAddError</div>
+              <div class="text-right text-slate-700">registry.ts:923 名前の文字集合</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:772 registryNameOk</div>
+              <div class="text-right text-slate-700">memory.ts:14 INVALIDATION_REASONS</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:1890 + 後継の要否</div>
+              <div class="text-right text-slate-700">profile-create/workspace-create 危険な値</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:1231 6キー</div>
+              <div class="text-right text-slate-700">landing.ts / ADR 0018 の着地先</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:779 landingPath</div>
+              <div class="text-right text-slate-700">tasks.ts:51 TaskStatus</div><div class="text-slate-400">→</div><div class="text-slate-600">app.jsx:219 + kit で2度</div>
+              <div class="text-right bg-amber-50 text-amber-900 px-1 rounded">execution-setting.ts:12 TIERS<br/><span class="text-[10px]">api.ts:1661 が既に配っている</span></div><div class="text-amber-600">→</div><div class="bg-amber-50 text-amber-900 px-1 rounded">app.jsx:1115 TIER_OPTIONS 手打ち<br/><span class="text-[10px]">同じファイルで provider はサーバ由来</span></div>
+              <div class="text-right bg-red-50 text-red-900 px-1 rounded">tasks.ts:2289 settled =<br/>done <strong>|| cancelled</strong></div><div class="text-red-600 font-bold">✕</div><div class="bg-red-50 text-red-900 px-1 rounded">app.jsx:3624 settled =<br/>done <strong>のみ</strong> — 既に乖離</div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+              <div class="label text-slate-500">before — 語彙が面をまたいで2度綴られる</div>
+              <div class="mermaid">
+flowchart LR
+  D["src/ — 語彙の正本<br/>tasks.ts / registry.ts<br/>execution-setting.ts / memory.ts"]
+  A["src/api.ts<br/>67 route"]
+  W["webui/app.jsx 3807行<br/>12 の言い直し"]
+  D --> A --> W
+  D -. "写経(配線ではない)" .-> W
+  linkStyle 2 stroke:#dc2626,stroke-width:2px;
+  classDef leak fill:#fef2f2,stroke:#dc2626,stroke-width:2px;
+  class W leak
+              </div>
+            </div>
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4 space-y-2">
+              <div class="label text-slate-500">after — 語彙は1度、面には配られる</div>
+              <div class="mermaid">
+flowchart LR
+  D2["src/ — 語彙の正本"]
+  A2["語彙を配る読み口<br/>api.ts:1661 が tier で既にこの形"]
+  W2["webui/app.jsx<br/>受け取って描くだけ"]
+  D2 --> A2 --> W2
+  classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a;
+  class A2 deep
+              </div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
+            <div class="space-y-2">
+              <div class="label text-slate-500">problem</div>
+              <p>ドメインの語彙12件がブラウザで手打ちされている。1件は<strong>既に乖離</strong>(決着の定義から <span class="font-mono text-xs">cancelled</span> が欠落 —— 今はサーバが cancelled 行を濾しているので露見していないだけ)、1件はサーバが同じ読み口で<strong>既に配っているのに</strong>手打ち(tier。同じファイルで provider はサーバ由来)。</p>
+            </div>
+            <div class="space-y-2">
+              <div class="label text-slate-500">solution</div>
+              <p>語彙をサーバが配り、ブラウザは受け取って描く。tier は読み口が既にあるので配線だけ。どこまで配るかは1件ずつの判断で、一括置換ではない。</p>
+            </div>
+          </div>
+
+          <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
+            <li>locality: 語彙の変更が1箇所</li>
+            <li>乖離が構造的に起きなくなる</li>
+            <li>ブラウザの判断が描画だけになる</li>
+            <li>ADR 0051 の一方向同期と同じ向き</li>
+          </ul>
+        </article>
+        <!-- ---------- 5 ---------- -->
+        <article id="c5" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">5. 盤面が宣言する形を、面ごとに手で綴らない</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold tracking-wide">Strong</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              src/mcp.ts:373-401 &middot; src/management-mcp.ts:647-659,718-737 &middot; src/api.ts:169-208 &middot;
+              src/codex-worker.ts:45-61(BOARD_VERBS)&middot; src/mcp.ts:727,773,803,816,828(登録順)&middot; tests/codex-containment.test.ts:23 &middot; tests/codex-worker.test.ts:180,189 &middot; tests/mcp-board-language.test.ts:24
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">before — 同じ宣言が面ごとに手打ち</div>
+              <svg viewBox="0 0 330 300" class="w-full">
+                <text x="6" y="16" font-size="10" font-weight="600" fill="#334155">(a) タスク登録の要求の形</text>
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="24" width="150" height="46" fill="#fff" stroke="#475569"/>
+                  <text x="12" y="40" fill="#334155">mcp.ts:373 decompose 子</text><text x="12" y="54" fill="#065f46">11欄 + .min(1)</text><text x="12" y="66" fill="#64748b">worker の面</text>
+                  <rect x="172" y="24" width="152" height="46" class="copybox" stroke="#dc2626" stroke-width="2"/>
+                  <text x="178" y="40" fill="#7f1d1d">mgmt-mcp.ts:647 同じ子</text><text x="178" y="54" fill="#7f1d1d" font-weight="600">9欄 — tier/priority 欠落</text><text x="178" y="66" fill="#7f1d1d">人間の面</text>
+                  <rect x="6" y="78" width="150" height="40" fill="#fff" stroke="#475569"/>
+                  <text x="12" y="94" fill="#334155">api.ts:169 register</text><text x="12" y="108" fill="#334155">tier / priority あり</text>
+                  <rect x="172" y="78" width="152" height="40" fill="#fff" stroke="#475569"/>
+                  <text x="178" y="94" fill="#334155">mgmt-mcp.ts:718 register</text><text x="178" y="108" fill="#334155">tier / priority あり</text>
+                </g>
+                <text x="6" y="136" font-size="10" font-weight="600" fill="#7f1d1d">帰結: 人間は登録では tier を指定でき、分解では指定できない</text>
+
+                <text x="6" y="168" font-size="10" font-weight="600" fill="#334155">(b) 盤面 verb の列</text>
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="176" width="150" height="58" fill="#fff" stroke="#475569"/>
+                  <text x="12" y="192" fill="#334155">mcp.ts の registerTool 順</text>
+                  <text x="12" y="206" fill="#64748b">…, propose_from_objection,</text>
+                  <text x="12" y="218" fill="#64748b">define, browse, search, read</text>
+                  <text x="12" y="230" fill="#64748b">= MCP が返す列</text>
+                  <rect x="172" y="176" width="152" height="58" class="copybox" stroke="#dc2626" stroke-width="2"/>
+                  <text x="178" y="192" fill="#7f1d1d">codex-worker.ts:45 手打ち</text>
+                  <text x="178" y="206" fill="#7f1d1d">…, define, browse, search,</text>
+                  <text x="178" y="218" fill="#7f1d1d">read, propose_from_objection</text>
+                  <text x="178" y="230" fill="#7f1d1d" font-weight="600">1つだけ位置が違う</text>
+                </g>
+                <text x="6" y="254" font-size="10" font-weight="600" fill="#7f1d1d">帰結: 照合が JSON.stringify で順序に敏感 →</text>
+                <text x="6" y="268" font-size="10" font-weight="600" fill="#7f1d1d">Codex route の worker が現状1つも起動しない(#645、VM 実測)</text>
+                <text x="6" y="288" font-size="9" fill="#7f1d1d">同じ列は test 側にも3本の写しがある(codex-containment / codex-worker / mcp-board-language)</text>
+              </svg>
+            </div>
+
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">after — 宣言が1つ、面はそれを読む</div>
+              <svg viewBox="0 0 330 300" class="w-full">
+                <text x="6" y="16" class="label" fill="#64748b">(a) task intake の形</text>
+                <rect x="6" y="24" width="318" height="30" class="deepbox"/>
+                <text x="16" y="43" font-size="10" fill="#e2e8f0" font-family="ui-monospace,monospace">要求の欄と検証を1つが持つ</text>
+                <rect x="6" y="54" width="318" height="26" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+                <text x="16" y="71" font-size="9" fill="#334155" font-family="ui-monospace,monospace">面ごとの差は「どの欄を開けるか」だけ</text>
+                <line class="seam" x1="6" y1="90" x2="324" y2="90" stroke="#475569" stroke-width="2"/>
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="98" width="72" height="24" fill="white" stroke="#475569"/><text x="12" y="114" fill="#334155">HTTP</text>
+                  <rect x="86" y="98" width="72" height="24" fill="white" stroke="#475569"/><text x="92" y="114" fill="#334155">管理MCP</text>
+                  <rect x="166" y="98" width="72" height="24" fill="white" stroke="#475569"/><text x="172" y="114" fill="#334155">worker MCP</text>
+                  <rect x="246" y="98" width="78" height="24" fill="white" stroke="#475569"/><text x="252" y="114" fill="#334155">WebUI</text>
+                </g>
+
+                <text x="6" y="150" class="label" fill="#64748b">(b) 盤面 verb の列</text>
+                <rect x="6" y="158" width="318" height="30" class="deepbox"/>
+                <text x="16" y="177" font-size="10" fill="#e2e8f0" font-family="ui-monospace,monospace">登録が正本、preflight はそれを読む</text>
+                <rect x="6" y="188" width="318" height="44" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+                <text x="16" y="205" font-size="9" fill="#334155" font-family="ui-monospace,monospace">ADR 0122 決定2 で verb は task ごとに違う —</text>
+                <text x="16" y="219" font-size="9" fill="#334155" font-family="ui-monospace,monospace">静的な手打ち列は構造的に既に古い</text>
+                <text x="6" y="256" font-size="10" fill="#065f46" font-weight="600">verb を1本足す = 登録1箇所</text>
+                <text x="6" y="272" font-size="9" fill="#475569">今日は mcp.ts + codex-worker.ts + test 2本</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
+            <div class="space-y-2">
+              <div class="label text-slate-500">problem</div>
+              <p>同じ宣言が面ごとに手で綴られ、どちらも<strong>既に食い違っている</strong> —— 人間面の decompose は tier / priority を落とし(空文字の検証を schema と domain のどちらが持つかも面ごとに違う —— 前者は欠落、後者は要確認)、Codex の verb 列は並びが1つずれて Codex route が起動しない(#645 で VM 実測)。</p>
+            </div>
+            <div class="space-y-2">
+              <div class="label text-slate-500">solution</div>
+              <p>(a) タスク登録の要求の形を1つが持ち、面は「どの欄を開けるか」だけ宣言する。(b) verb の列は登録が正本になり、preflight は盤面が組んだ定数ではなく登録から導く。</p>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm space-y-1">
+            <p><strong>ADR 0108 / ADR 0039 決定3 は塞いでいない</strong> —— MCP 軸の照合を過剰側だけに絞る決定は「何と照合するか」の話で、「期待値をどこから引くか」には触れていない。ADR 0039 決定3 の「期待集合を2箇所に置かない」はむしろこの方向である。</p>
+            <p><strong>#645 の判断どころはこのカードの外</strong> —— 順序で縛ること自体の是非は #645 が持つ。ここが言うのは「期待値が手打ちだから並べ替えで直しても次の人が同じ罠を踏む」までである。</p>
+          </div>
+
+          <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
+            <li>locality: 欄の追加が1箇所</li>
+            <li>面ごとの欄落ちが構造的に消える</li>
+            <li>verb 追加が登録1箇所に戻る</li>
+            <li>test の3本目の写しが要らなくなる</li>
+          </ul>
+        </article>
+        <!-- ---------- 6 ---------- -->
+        <article id="c6" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">6. worker session の生涯を adapter の外へ出す</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-amber-500 text-white text-xs font-semibold tracking-wide">Worth exploring</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">ports &amp; adapters</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              src/worker.ts:12-38,73 &middot; src/claude-worker.ts:1781-1919,2196-2241,2293-2310,2314-2371 &middot;
+              src/codex-worker.ts:20,596-631,679-708,721-738,740-771,779-781 &middot; tests/worker-adapter-contract.test.ts:17-33
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">before — seam の両側に同じ生涯</div>
+              <svg viewBox="0 0 330 300" class="w-full">
+                <text x="6" y="14" class="label" fill="#64748b">WorkerAdapter — 4 member</text>
+                <line class="seam" x1="6" y1="22" x2="324" y2="22" stroke="#475569" stroke-width="2"/>
+                <rect x="6" y="30" width="150" height="200" fill="#fff" stroke="#475569" stroke-width="2"/>
+                <text x="12" y="46" font-size="10" font-family="ui-monospace,monospace" fill="#334155">ClaudeCodeWorker</text>
+                <rect x="14" y="54" width="134" height="106" class="copybox" stroke="#dc2626"/>
+                <g font-size="8" font-family="ui-monospace,monospace" fill="#7f1d1d">
+                  <text x="20" y="68">registry / workspace 解決</text>
+                  <text x="20" y="80">boardStateOverlap → 隔離</text>
+                  <text x="20" y="92">agent / 実行設定の解決</text>
+                  <text x="20" y="104">worker_spawned の記録</text>
+                  <text x="20" y="116">spawn 失敗の処理 19行</text>
+                  <text x="20" y="128">exit → worker_exited 29行</text>
+                  <text x="20" y="144" font-weight="600">計 81+25+19+29</text>
+                </g>
+                <rect x="14" y="166" width="134" height="56" fill="#f1f5f9" stroke="#94a3b8"/>
+                <text x="20" y="182" font-size="8" fill="#475569" font-family="ui-monospace,monospace">stream-json / skill 拒否</text>
+                <text x="20" y="194" font-size="8" fill="#475569" font-family="ui-monospace,monospace">ツール面検査 / PTY usage</text>
+                <text x="20" y="210" font-size="8" fill="#334155" font-family="ui-monospace,monospace">= 固有 315行</text>
+
+                <rect x="174" y="30" width="150" height="200" fill="#fff" stroke="#475569" stroke-width="2"/>
+                <text x="180" y="46" font-size="10" font-family="ui-monospace,monospace" fill="#334155">CodexWorker</text>
+                <rect x="182" y="54" width="134" height="106" class="copybox" stroke="#dc2626"/>
+                <g font-size="8" font-family="ui-monospace,monospace" fill="#7f1d1d">
+                  <text x="188" y="68">同じ</text>
+                  <text x="188" y="80">同じ(5行そのまま)</text>
+                  <text x="188" y="92">同じ(error 文言も同一)</text>
+                  <text x="188" y="104">同じ</text>
+                  <text x="188" y="116">同じ 18行 —— コメントに</text>
+                  <text x="188" y="128">「Claude adapter と同じ」</text>
+                  <text x="188" y="144" font-weight="600">計 30+28+18+30 = 106</text>
+                </g>
+                <rect x="182" y="166" width="134" height="56" fill="#f1f5f9" stroke="#94a3b8"/>
+                <text x="188" y="182" font-size="8" fill="#475569" font-family="ui-monospace,monospace">TOML 設定 / hook 設置</text>
+                <text x="188" y="194" font-size="8" fill="#475569" font-family="ui-monospace,monospace">enabled_tools</text>
+                <text x="188" y="210" font-size="8" fill="#334155" font-family="ui-monospace,monospace">= 固有 46行(全体の36%)</text>
+
+                <line x1="174" y1="110" x2="158" y2="110" stroke="#dc2626" stroke-width="2"/>
+                <line x1="158" y1="110" x2="174" y2="110" stroke="#dc2626" stroke-width="2"/>
+                <text x="6" y="252" font-size="10" fill="#7f1d1d" font-weight="600">contract test が見るのは id / gracefulStop / checkUsage の3つ</text>
+                <text x="6" y="266" font-size="10" fill="#7f1d1d" font-weight="600">—— 重複が全部載っている start() は契約の外</text>
+                <text x="6" y="286" font-size="9" fill="#7f1d1d">codex-worker.ts:20 は claude-worker.ts から2つ import している</text>
+              </svg>
+            </div>
+
+            <div class="rounded-lg border-2 border-slate-800 bg-white p-4 space-y-3">
+              <div class="label text-slate-500">after — 生涯は1つ、adapter は spawn の形だけ</div>
+              <svg viewBox="0 0 330 300" class="w-full">
+                <text x="6" y="14" class="label" fill="#64748b">worker session module</text>
+                <rect x="6" y="22" width="318" height="120" class="deepbox"/>
+                <g font-size="9" font-family="ui-monospace,monospace" fill="#e2e8f0">
+                  <text x="16" y="42">registry / workspace / agent / 実行設定の解決</text>
+                  <text x="16" y="58">boardStateOverlap → 隔離</text>
+                  <text x="16" y="74">worker_spawned・記憶注入・transcript の口</text>
+                  <text x="16" y="90">spawn 失敗 → 失敗 question → 後始末(ADR 0118)</text>
+                  <text x="16" y="106">exit → worker_exited → 強制回収</text>
+                  <text x="16" y="126" fill="#94a3b8">生涯は Harness に依らない —— ADR 0109 / 0118 の側</text>
+                </g>
+                <line class="seam" x1="6" y1="156" x2="324" y2="156" stroke="#475569" stroke-width="2"/>
+                <text x="6" y="172" class="label" fill="#64748b">adapter — 「どう起こすか」だけ</text>
+                <g font-size="9" font-family="ui-monospace,monospace">
+                  <rect x="6" y="180" width="152" height="64" fill="white" stroke="#475569" stroke-width="2"/>
+                  <text x="14" y="198" fill="#334155">Claude</text>
+                  <text x="14" y="214" fill="#64748b" font-size="8">flags / stream-json / skill 拒否</text>
+                  <text x="14" y="228" fill="#64748b" font-size="8">ツール面検査 / PTY usage</text>
+                  <rect x="172" y="180" width="152" height="64" fill="white" stroke="#475569" stroke-width="2"/>
+                  <text x="180" y="198" fill="#334155">Codex</text>
+                  <text x="180" y="214" fill="#64748b" font-size="8">TOML -c / hook 設置</text>
+                  <text x="180" y="228" fill="#64748b" font-size="8">enabled_tools</text>
+                </g>
+                <text x="6" y="268" font-size="10" fill="#065f46" font-weight="600">contract test が start() を見られるようになる</text>
+                <text x="6" y="284" font-size="9" fill="#475569">worker_spawned / worker_exited の断言 50+7 / 32+8 が1本になる</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
+            <div class="space-y-2">
+              <div class="label text-slate-500">problem</div>
+              <p>seam は本物(2つの実装 + 2つのテスト実装)だが、seam を切ったときに<strong>生涯まで一緒に複製された</strong>。CodexWorker.start() の165行のうち106行(64%)が Claude 側の写しで、error 文言まで同一。片方のコメントが「Claude adapter と同じ」と書いている。</p>
+            </div>
+            <div class="space-y-2">
+              <div class="label text-slate-500">solution</div>
+              <p>Harness に依らない生涯(解決 → 記録 → spawn 失敗 → exit → 回収)を1つの module にし、adapter には「どう起こすか」だけを残す。ADR 0098 の分割に戻す話ではなく、分割線をもう1段下げる話。</p>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+            <strong>ついでに片付く2件</strong> —— <span class="font-mono text-xs">checkUsage</span> は seam の member だが honor しているのは1つだけ(Codex は無条件 null、router は
+            <span class="font-mono text-xs">"claude-code"</span> 固定、実際の OpenAI usage は scheduler が seam を迂回)。
+            <span class="font-mono text-xs">claude-worker.ts</span> は Board call の CLI 語彙(<span class="font-mono text-xs">defaultExec</span> を含む5本)の実質的な置き場にもなっており、候補3と同じ根を持つ。
+          </div>
+
+          <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
+            <li>locality: 生涯の修正が1箇所</li>
+            <li>106行が implementation へ沈む</li>
+            <li>contract test が本体を見る</li>
+            <li>adapter 同士の import が切れる</li>
+            <li>3つ目の Harness の代価が 46行規模になる</li>
+            <li>ADR 0118 の変更が片側だけに当たらない</li>
+          </ul>
+        </article>
+        <!-- ---------- 7 ---------- -->
+        <article id="c7" class="space-y-6">
+          <div class="space-y-3">
+            <h2 class="font-serif text-3xl">7. 「なぜ拾われないか」に1つの述語が答える</h2>
+            <div class="flex flex-wrap gap-2">
+              <span class="px-2.5 py-1 rounded-full bg-amber-500 text-white text-xs font-semibold tracking-wide">Worth exploring</span>
+              <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-mono">in-process</span>
+            </div>
+            <p class="font-mono text-xs text-slate-600 leading-relaxed">
+              src/tasks.ts:3140-3189(nextSlotTask)&middot; src/tasks.ts:2860-2915(listQueue)&middot; src/tasks.ts:2836-2859(24行の規約コメント)&middot;
+              src/scheduler.ts:388-846 &middot; src/api.ts:720-735 &middot; src/management-mcp.ts:268,284 &middot; src/board-halt.ts:60-83
+            </p>
+          </div>
+
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="label text-slate-500 mb-3">before — 同じ問いに3つの実装</div>
+            <div class="mermaid">
+flowchart TB
+  Q["「なぜこのタスクは拾われないのか」"]
+  subgraph A["① 選定 — SQL 8述語"]
+    A1["tasks.ts:3157 nextSlotTask<br/>+ 述語の断片6本 2505-2762"]
+  end
+  subgraph B["② 門 — TS 約7段"]
+    B1["scheduler.ts:388-846<br/>slot / halts / containment / throttle<br/>fable 線 / entry 除外 83行 / issue 展開"]
+    B2["board-halt.ts → triage / pause /<br/>containment / registry / cli-auth / throttle"]
+    B3["teardown.ts / watchdog.ts"]
+  end
+  subgraph C["③ 表示 — もう一度"]
+    C1["listQueue の CASE 節<br/>+ 引数を api.ts:725 と<br/>management-mcp.ts:268 が別々に組む"]
+  end
+  Q --> A --> B
+  Q --> C
+  A1 -. "poll は listQueue を呼ばず<br/>listQueue は poll を呼ばない<br/>—— 24行のコメントだけが揃えている" .-> C1
+  classDef leak fill:#fef2f2,stroke:#dc2626,stroke-width:2px;
+  class C1 leak
+            </div>
+            <p class="text-xs text-slate-500 mt-3 font-mono">端から端まで読むのに 11 ファイル。ADR 0068 決定4 が盤面全体の半分を <span class="text-slate-700">boardHalts</span> の1読みにしたが、行の側に同じものは無い。</p>
+          </div>
+
+          <div class="rounded-lg border-2 border-slate-800 bg-white p-4">
+            <div class="label text-slate-500 mb-3">after — 判定が1つ、面はそれを読む</div>
+            <div class="mermaid">
+flowchart LR
+  P["pickability module<br/>行 → 拾える / 拾えない + 理由"]
+  S["scheduler — 拾う"]
+  QV["listQueue — 表示する"]
+  MC["管理MCP / HTTP"]
+  P --> S
+  P --> QV
+  P --> MC
+  classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a;
+  class P deep
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-6 text-sm leading-relaxed">
+            <div class="space-y-2">
+              <div class="label text-slate-500">problem</div>
+              <p>拾える条件が SQL(8述語)・scheduler の閉包(約7段)・listQueue の CASE 節の3つに分かれて綴られ、3つ目は呼び出し側2箇所が引数を別々に組む。門が scheduler の閉包の中にあるのでドメイン層から届かず、約20の挙動のうち12はサーバー境界でしか固定できていない。</p>
+            </div>
+            <div class="space-y-2">
+              <div class="label text-slate-500">solution</div>
+              <p>行と盤面の状態から「拾えるか、拾えないなら何が塞いでいるか」を答える述語を1つ置き、scheduler も表示も同じものを読む。</p>
+            </div>
+          </div>
+
+          <div class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+            <strong>ADR 0068 決定4 と衝突しない</strong> —— あちらが痛み待ちにしたのは<strong>行ごとの理由の文言</strong>(#398)である。ここが言うのは判定そのものの重複で、
+            文言を増やすかどうかは別の判断のまま残せる。生きた検査(containment probe / usage 観測 / registry fetch)の順序は ADR 0008 / 0030 / 0052 の設計なので動かさない —— 述語が扱うのは行の側だけ。
+          </div>
+
+          <ul class="grid grid-cols-2 gap-x-8 gap-y-1 text-sm list-disc list-inside marker:text-slate-400">
+            <li>locality: 拾える条件が1箇所</li>
+            <li>表示と選定が規約でなく構造で揃う</li>
+            <li>ドメイン層で門を書けるようになる</li>
+            <li>41欄の harness を起こさずに済む検査が増える</li>
+          </ul>
+        </article>
+      </section>
+      <!-- ============ 計測したがカードにしなかったもの ============ -->
+      <section id="noted" class="space-y-4">
+        <h2 class="font-serif text-2xl border-b border-slate-300 pb-2">計測したが、カードにしなかったもの</h2>
+        <div class="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
+          <div class="space-y-1">
+            <div class="font-semibold">ドメインエラー → HTTP の写像が3方式</div>
+            <p class="text-slate-600 text-xs leading-relaxed">境界を越える error class 30、<span class="font-mono">instanceof</span> 57、同じ 502 の落とし所が逐語で11回。
+            <span class="font-mono">human-verbs.ts</span> の <span class="font-mono">GateFailure</span> union は形が効くことを既に証明しているが、19 の handler は従っていない。
+            候補になりうるが、他6件より「どの error をどう扱うか」の判断が1件ずつ要る。</p>
+          </div>
+          <div class="space-y-1">
+            <div class="font-semibold">単一行の設定 module が6つ</div>
+            <p class="text-slate-600 text-xs leading-relaxed"><span class="font-mono">pause / spend-down / quiet-hours / display-language / pace-offsets / glossary</span> —— いずれも
+            <span class="font-mono">WHERE id = 1</span> の get/set。計 ~270行・~14 endpoint・~8 schema が構造上は1概念。
+            薄いが、畳んでも複雑さは<strong>移るだけ</strong>(deletion test は通らない)。</p>
+          </div>
+          <div class="space-y-1">
+            <div class="font-semibold">deps の手渡しが5箇所</div>
+            <p class="text-slate-600 text-xs leading-relaxed"><span class="font-mono">BoardComposition 22 → ServerOptions 45 → ApiRouterDeps 35 / ManagementMcpDeps 30 / McpDeps 21</span>。
+            依存1つ足すと5箇所。<span class="font-mono">server-options.ts</span> の ~600行は同形の resolver 20本。
+            合成 root の作法(ADR 0041)そのものなので、これ自体は設計どおり。</p>
+          </div>
+          <div class="space-y-1">
+            <div class="font-semibold">能力の門が17回・文言8種</div>
+            <p class="text-slate-600 text-xs leading-relaxed"><span class="font-mono">if (!xAdmin?.verb) 503</span> が17箇所。deps を <span class="font-mono">Partial&lt;&gt;</span> にしているのはテストが個別に fake できるようにするためで、
+            テストの都合が production の門を17本に増やしている。</p>
+          </div>
+          <div class="space-y-1">
+            <div class="font-semibold">承認済み記憶を作る seam が無い</div>
+            <p class="text-slate-600 text-xs leading-relaxed">4ファイル5箇所のテストが <span class="font-mono">UPDATE memory_entries SET state='approved'</span> を直接撃っている。
+            承認は <span class="font-mono">submitAnswer</span> 経由しか無いので、行を偽造するしか手が無い —— ADR 0107 決定2 の違反は症状で、欠けている seam が原因。</p>
+          </div>
+          <div class="space-y-1">
+            <div class="font-semibold">kit の3ファイルが bundle されていない</div>
+            <p class="text-slate-600 text-xs leading-relaxed"><span class="font-mono">ui_kits/</span> の settings / register / tweaks(計1399行)は
+            <span class="font-mono">build-webui-bundle.mjs</span> の対象外だが <span class="font-mono">index.html</span> は読み込む。
+            探索の成果物(別プロジェクト・ADR 0051)なので古いこと自体は異常ではないが、<span class="font-mono">app.jsx</span> と6つの記号が逐語で重なっている。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ TOP RECOMMENDATION ============ -->
+      <section id="top-recommendation" class="space-y-4">
+        <h2 class="font-serif text-2xl border-b border-slate-300 pb-2">Top recommendation</h2>
+        <div class="rounded-lg border-2 border-slate-800 bg-white p-6 space-y-3">
+          <div class="flex items-baseline gap-3">
+            <a href="#c1" class="font-serif text-2xl underline decoration-slate-300 underline-offset-4">1. 確認型 question の登録と解除を1つの deep module にする</a>
+            <span class="px-2.5 py-1 rounded-full bg-emerald-600 text-white text-xs font-semibold">Strong</span>
+          </div>
+          <p class="text-sm leading-relaxed">
+            7候補のうちこれだけが<strong>名前を CONTEXT.md が既に持っていて、module がコードに無い</strong>。
+            ADR 0068 は「新しい停止が生まれたとき増えるのは列挙の1行」という受入基準を書き、読み口にはそれを与えた ——
+            書き手はいまも6ファイル7箇所で、種類は8つに増えている。決めることが少なく(表の欄を決めるだけで、どの停止がどう振る舞うかは全部 ADR にある)、
+            触る範囲が既存の挙動と1対1に対応する。grilling の焦点は1つ —— 受理の門の8種類の検査(workspace 解決 / agent 登録 / containment probe / 後始末の再実行 / registry 到達性 / cliAuth / provider 別 auth / harness containment)が表に載るのか、deps の手渡しが別の形で残るのか。
+          </p>
+          <p class="text-sm leading-relaxed text-slate-600">
+            次に置くなら <a href="#c3" class="underline decoration-slate-300 underline-offset-2">候補3(Board call の runner)</a> ——
+            写しが実際に穴を1つ産んでいて(#652)、範囲が5ファイルに閉じている。
+            <a href="#c2" class="underline decoration-slate-300 underline-offset-2">候補2(着地の帳簿)</a> は純粋な移動で判断がほぼ要らないので、
+            他の作業のついでに片付く形をしている。
+          </p>
+        </div>
+      </section>
+
+    </main>
+  </body>
+</html>
