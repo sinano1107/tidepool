@@ -959,10 +959,14 @@ function isStreamResultEvent(value: unknown): value is StreamResultEvent {
 }
 
 /** The decoded-line form. A line that isn't a `result`, or one whose shape
- *  doesn't match, simply isn't one — the last *complete* result line already
- *  seen wins. */
+ *  doesn't match, simply isn't one — the last *accepted* result line already
+ *  seen wins. `is_error: true` is not a usage self-report (issue #534): an
+ *  aborted or 429 session fills the shape with zeros while the main model's
+ *  tokens actually burned, so the board records 欠測 (null) rather than a
+ *  false zero. */
 function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEvent | null {
   if (parsed === null || parsed.type !== "result") return null;
+  if (parsed.is_error === true) return null;
   return isStreamResultEvent(parsed) ? parsed : null;
 }
 

@@ -2053,6 +2053,62 @@ describe("ClaudeCodeWorker", () => {
     expect(exited?.payload).toMatchObject({ usage: null });
   });
 
+  it("is_error の result 行は usage の自己申告ではない — 中断された session は usage null(issue #534)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-aborted-streaming");
+    // 2.1.241 を SIGINT で止めたときの逐語(2026-09-12 のトリアージ実測)。
+    // 主モデルの出力は実際に流れているのに envelope は全ゼロで、形検査は通る。
+    stdout.write(
+      `${JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        terminal_reason: "aborted_streaming",
+        duration_ms: 11623,
+        num_turns: 2,
+        total_cost_usd: 0,
+        usage: {
+          input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          output_tokens: 0,
+          iterations: [],
+        },
+        modelUsage: {},
+      })}\n`,
+    );
+    emitExit(1, null);
+    const exited = listEvents(db, "task-aborted-streaming").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ usage: null });
+  });
+
+  it("total_cost_usd が非ゼロでも is_error なら usage null — 判定はゼロではなく is_error 一点(issue #534)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-aborted-nonzero-cost");
+    // 2.1.269 の形: helper モデル分だけコストが乗った「ゼロではないが誤り」の envelope
+    stdout.write(
+      `${JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        terminal_reason: "aborted_streaming",
+        total_cost_usd: 0.001,
+        usage: {
+          input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          output_tokens: 0,
+          iterations: [],
+        },
+      })}\n`,
+    );
+    emitExit(1, null);
+    const exited = listEvents(db, "task-aborted-nonzero-cost").find(
+      (e) => e.kind === "worker_exited",
+    );
+    expect(exited?.payload).toMatchObject({ usage: null });
+  });
+
   it("非ゼロ終了は worker_exited イベントに加えて console.error でも観測できる(issue #32 code review: defaultSpawn から失われた診断ログの復元)", async () => {
     const { start, emitExit } = await makeWorker();
     start("task-crashed");
@@ -3307,7 +3363,9 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     const events = listEvents(db, task.id);
     const exited = events.find((e) => e.kind === "worker_exited")!;
-    expect(exited.payload).toMatchObject({ kind: "worker_exited", exit_code: 1 });
+    // 429 の envelope は `is_error: true` で usage 欄の形は満たすが、自己申告
+    // として受理しない(issue #534) —— 盤面は SIGINT のゼロと区別できない
+    expect(exited.payload).toMatchObject({ kind: "worker_exited", exit_code: 1, usage: null });
     const interrupted = events.find((e) => e.kind === "cap_interrupted")!;
     expect(interrupted.origin).toBe("board");
     expect(interrupted.worker_id).toBe("tidepool");
