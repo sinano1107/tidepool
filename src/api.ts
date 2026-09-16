@@ -570,11 +570,9 @@ export interface ApiRouterDeps {
   /** ADR 0112 決定3: re-runs the throwing teardown before accepting a failed-teardown
    *  answer — the check *is* the release gate. */
   teardownQuarantine?: FailedTeardownCheck;
-  /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
-  cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
-   *  a provider-auth Confirmation answer (the resource-scoped sibling of
-   *  `cliAuth` above — the board's own provider stays on `cliAuth`). */
+   *  a provider-auth Confirmation answer. Resource-scoped for every provider,
+   *  the board's own included (ADR 0098 決定6). */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
    *  the given providers — the pickup exclusion set the queue view's `skipped`
@@ -694,7 +692,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     reclaim,
     registryReachability,
     teardownQuarantine,
-    cliAuth,
     providerCliAuth,
     vapidPublicKey,
     auditorName,
@@ -1416,7 +1413,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           reclaim,
           registryReachability,
           teardownQuarantine,
-          cliAuth,
           providerCliAuth,
           boardState,
           attributionClient,

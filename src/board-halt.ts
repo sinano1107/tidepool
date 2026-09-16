@@ -1,4 +1,3 @@
-import { openCliAuthQuestion } from "./cli-auth.js";
 import { openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
 import { openFailedTeardownQuestion } from "./failed-teardown.js";
@@ -33,8 +32,7 @@ export type BoardHalt =
         | "pause"
         | "containment"
         | "failedTeardown"
-        | "registryReachability"
-        | "cliAuth";
+        | "registryReachability";
     }
   | {
       kind: "throttle";
@@ -67,7 +65,6 @@ export function boardHalts(
   if (openContainmentQuestion(db)) halts.push({ kind: "containment" });
   if (openFailedTeardownQuestion(db)) halts.push({ kind: "failedTeardown" });
   if (openRegistryReachabilityQuestion(db)) halts.push({ kind: "registryReachability" });
-  if (openCliAuthQuestion(db)) halts.push({ kind: "cliAuth" });
   const throttle = getThrottleState(db);
   const revalidating = throttleRevalidating();
   if (throttle.throttled || revalidating) {
