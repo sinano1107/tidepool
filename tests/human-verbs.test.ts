@@ -5,12 +5,12 @@ import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { registerThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
+import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
   BOARD_WORKER_ID,
   getTask,
   listBoard,
   registerMergeQuestion,
-  registerPrPromotionFailureQuestion,
   registerTask,
   type Task,
 } from "../src/tasks.js";
