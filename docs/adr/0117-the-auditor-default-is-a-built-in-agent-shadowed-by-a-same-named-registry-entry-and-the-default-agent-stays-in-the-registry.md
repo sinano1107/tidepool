@@ -34,4 +34,9 @@ Auditor の registry エントリに何が残っているかを一つずつ当�
 
 - ADR 0087 決定3 の規則に例外が1つ、ADR 0089 決定3 の根拠は撤回、決定4・5 の auditor 分は組み込みが引き受ける。ADR 0020 の当時版は
   組み込みでは registry commit に無く、spawn 記録の定義版が盤面の版を運ぶ。
+
+  **2026-09-16 追記(issue #568 の実装で判明)**: 盤面に「版」は無い —— `package.json` は `private: true` で `version` フィールドを
+  持たない。そのため `worker_spawned.definition_version` が組み込みの spawn で運ぶのは版ではなく固定文字列 `"built-in"` であり、
+  Episode の「当時の agent 定義の版」欄が言うのは「registry に無い = 盤面の code が定義を持っていた」ことだけである。盤面の版が
+  必要になったら、それは `package.json` に版を持たせるという別の決定になる。
 - 専門 agent の本文の存在価値は未観測(唯一の実測は fugu の A/B)— 最初の専門 agent が現れたときの問いとして別 issue に置く。
