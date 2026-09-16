@@ -20,12 +20,21 @@ TEMPLATE_URL="${TIDEPOOL_TEMPLATE_URL:-https://raw.githubusercontent.com/sinano1
 
 # Piped in through `curl | bash`, stdin is the pipe, but `gh auth login` and
 # `claude auth login` below want a terminal. Reattach to the controlling one
-# if there is any; a machine without one (CI, a detached shell) must not die
-# here, so the failing redirection is contained in its own group.
+# by its real device rather than /dev/tty: /dev/tty is the alias for whatever
+# the controlling terminal is, and a fd opened on it does not carry the
+# owner's keystrokes through `limactl shell` into the VM — the login prompt
+# arrives and then sits there unanswerable, with ^C ignored (measured on the
+# acceptance run of #484; a fd on /dev/ttysNNN works from the same script).
+# A machine without a controlling terminal (CI, a detached shell) must not die
+# here, so every step can decline and the failing redirection is contained in
+# its own group.
 reattach_tty() {
-  if [[ ! -t 0 && -e /dev/tty ]]; then
-    { exec < /dev/tty; } 2> /dev/null || true
-  fi
+  if [[ -t 0 ]]; then return; fi
+  local dev
+  dev="$(ps -o tty= -p $$ 2> /dev/null | tr -d '[:space:]')"
+  # No controlling terminal: macOS prints "??" here.
+  if [[ -z "$dev" || "$dev" == *'?'* || ! -e "/dev/$dev" ]]; then return; fi
+  { exec < "/dev/$dev"; } 2> /dev/null || true
 }
 
 # Every VM-side command goes through here. `bash -lc` because a login shell is
