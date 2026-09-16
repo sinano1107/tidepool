@@ -7,7 +7,7 @@ argument-hint: "<issue> [decision already taken]"
 
 # Implement (tidepool)
 
-A tidepool-local derivative of `/implement`. Upstream `/implement` is deliberately left untouched, so skills that route to it — `ask-matt`, `to-tickets` — keep pointing at the canonical one. In this repo, reach for this skill instead: it adds the branch, the ponytail beats, the code-review follow-through, and the pull request — all of which upstream leaves to the human — and takes the delegation decision when one has not been made yet.
+A tidepool-local derivative of `/implement`. Upstream `/implement` is deliberately left untouched, so skills that route to it — `ask-matt`, `to-tickets` — keep pointing at the canonical one. In this repo, reach for this skill instead: it adds the branch, the ponytail beats, the code-review follow-through, the filing of what the run found, and the pull request — all of which upstream leaves to the human — and takes the delegation decision when one has not been made yet.
 
 `$ARGUMENTS` is the issue number, optionally followed by a delegation decision already taken — written however `/implementation-delegation` phrased it, e.g. `378 Opus 5 / high, review at Fable 5.1`.
 
@@ -42,7 +42,7 @@ Dispatch one sub-agent at the implementation model, carrying the issue number, t
 
 A stage with no diff produces no commit. Never amend: keeping the stages apart is what makes each applied change reviewable and revertible on its own.
 
-Alongside the commits, it returns the problems it found and left alone: anything outside the issue's scope it would otherwise have fixed or worked around. For each, what and where (a file and line, or the test that shows it), whether it was observed or only suspected, and the existing issue it seems to belong to, if any. Filing is not its job.
+Alongside the commits, it returns the problems it found and left alone: anything outside the issue's scope it would otherwise have fixed or worked around. For each, what and where (a file and line, or the test that shows it), whether it was observed or only suspected, and the existing issue it seems to belong to, if any. Filing happens in this thread, below.
 
 ## Code review
 
@@ -52,14 +52,12 @@ Judge each finding rather than applying the set wholesale. One finding is never 
 
 ## Filing what the run found
 
-Before opening the PR, take the problems the sub-agent reported and every review finding you left unapplied because it lies outside the issue, and settle each one:
+Before opening the PR, take the problems the sub-agent reported and every review finding you left unapplied because it lies outside the issue. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
 
-- **Belongs to an existing issue** — comment there. Search first, closed ones included (`gh issue list --state all --search`); a closed hit means "not worth an issue", and the reason cites it.
+- **Belongs to an existing issue** — comment there. A closed hit means "not worth an issue", and the reason cites it.
 - **New, and observed** — `gh issue create --label needs-triage`, the body citing the originating issue and where the observation is (file, test, commit on this branch). It enters `/triage` like any other filed issue.
 - **New, but only suspected** — file it `needs-info`, saying what observation would settle it. An issue is not an observation (ADR 0102).
 - **Not worth an issue** — say so in the PR, with a reason held to the same bar as a review finding.
-
-Filing is not a fix: the queue grows by what was seen, not by what you think should change.
 
 ## The pull request
 
@@ -77,7 +75,7 @@ List **every** finding `/ponytail-review` and `/code-review` raised — the appl
 
 Completeness is the whole point of the section. A list that quietly drops the findings you chose not to act on is worse than no list, because it reads as though review found nothing there.
 
-A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for what the sub-agent reported: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections; one that appears in neither reads as though the run saw nothing.
+A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for what the sub-agent reported: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
 
 ## Where this stops
 
