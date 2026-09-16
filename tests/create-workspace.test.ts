@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import { RepoAccessMissingError } from "../src/repo-access.js";
 import {
   BoardStateOverlapError,
   createWorkspace,
+  LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
@@ -220,6 +221,109 @@ describe("createWorkspace: register モード(issue #57)", () => {
     ).rejects.toThrow(NotAGitRepositoryError);
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+});
+
+/** 信号1だけを立てる: 作業ツリーに untracked のファイルが1つある。 */
+async function dirtyCheckout(): Promise<string> {
+  const dir = await makeLocalOnlyCheckout();
+  await writeFile(join(dir, "wip.md"), "human's work in progress");
+  return dir;
+}
+
+/** 信号2だけを立てる: gitignore される `.claude/settings.local.json`(だから
+ *  `git status --porcelain` には現れない — この検査が独立に要る根拠)。 */
+async function checkoutWithLocalSettings(): Promise<string> {
+  const dir = await makeLocalOnlyCheckout();
+  await mkdir(join(dir, ".claude"), { recursive: true });
+  await writeFile(join(dir, ".claude", "settings.local.json"), "{}");
+  await writeFile(join(dir, ".gitignore"), ".claude/settings.local.json\n");
+  git(dir, "add", "-A");
+  git(dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "ignore local settings");
+  return dir;
+}
+
+/** 信号3だけを立てる: hooks を持つ **tracked** な `.claude/settings.json`。
+ *  `workspaceSettingsDisposition` の `projectHooks` は tracked のときだけ立つので
+ *  commit まで進める(add どまりだと staged = 信号1 も一緒に立ってしまう)。 */
+async function checkoutWithProjectHooks(): Promise<string> {
+  const dir = await makeLocalOnlyCheckout();
+  await mkdir(join(dir, ".claude"), { recursive: true });
+  await writeFile(
+    join(dir, ".claude", "settings.json"),
+    JSON.stringify({ hooks: { PreToolUse: [] } }),
+  );
+  git(dir, "add", "-A");
+  git(dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "project hooks");
+  return dir;
+}
+
+describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => {
+  const cases: [string, () => Promise<string>, string][] = [
+    ["uncommitted changes / untracked files", dirtyCheckout, "uncommitted_changes"],
+    [".claude/settings.local.json の存在", checkoutWithLocalSettings, "claude_settings_local"],
+    [".claude/settings.json の hooks", checkoutWithProjectHooks, "claude_settings_hooks"],
+  ];
+  for (const [label, makeCheckout, code] of cases) {
+    it(`${label} だけでも、confirm 無しの register は拒まれコミットを積まない`, async () => {
+      const registryDir = await makeMainRegistry();
+      const before = git(registryDir, "rev-parse", "HEAD");
+      const deps = await makeDeps(registryDir);
+      const path = await makeCheckout();
+
+      await expect(
+        createWorkspace({ mode: "register", name: "sandbox", path }, deps),
+      ).rejects.toMatchObject({ name: "LiveCheckoutSignalsError", reasons: [code] });
+      expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
+      expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+    });
+  }
+
+  it("confirm: true の再送は従来どおり登録する — エントリに confirm は残らない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const path = await dirtyCheckout();
+
+    await createWorkspace({ mode: "register", name: "sandbox", path, confirm: true }, deps);
+
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });
+  });
+
+  // 拒否ではなく提示: origin があるなら clone 入口の着地先を決定の瞬間に名指しする
+  // (ADR 0082)。
+  it("origin を持つ checkout では、規約由来の clone 着地先が提案に載る", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const upstream = await makeUpstream();
+    const path = await makeExistingCheckout(upstream);
+    await writeFile(join(path, "wip.md"), "human's work in progress");
+
+    const err = await createWorkspace({ mode: "register", name: "sandbox", path }, deps).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(LiveCheckoutSignalsError);
+    expect((err as LiveCheckoutSignalsError).cloneLanding).toBe(
+      join(deps.workspacesBaseDir, "sandbox"),
+    );
+    expect((err as LiveCheckoutSignalsError).message).toContain(
+      join(deps.workspacesBaseDir, "sandbox"),
+    );
+  });
+
+  // purely-local には代替の入口が無い(コピーは ADR 0052/0053 でこの issue が
+  // 退けている)ので、提案そのものを出さない。
+  it("origin を持たない checkout では clone 入口の提案が無い", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const path = await dirtyCheckout();
+
+    const err = await createWorkspace({ mode: "register", name: "sandbox", path }, deps).catch(
+      (e: unknown) => e,
+    );
+
+    expect((err as LiveCheckoutSignalsError).cloneLanding).toBeNull();
+    expect((err as LiveCheckoutSignalsError).message).not.toContain("clone entrance");
   });
 });
 

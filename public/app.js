@@ -1636,7 +1636,13 @@ const DANGEROUS_REASON_LABEL = {
   allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.',
   unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
   review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.",
-  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains."
+  allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains.",
+  // issue #383: 危険な値の族ではない(エージェントの権限は1ミリも広がらない) —
+  // 守っているのは人間自身の作業ツリーのほうである。確認の理由コードという枠だけ
+  // 共有しているので、翻訳表も同じ1つで足りる
+  uncommitted_changes: "The checkout has uncommitted changes or untracked files \u2014 someone is working in this tree right now.",
+  claude_settings_local: "The checkout has .claude/settings.local.json \u2014 host-local state a human put there for their own sessions.",
+  claude_settings_hooks: "The checkout's .claude/settings.json carries hooks \u2014 the shape of a development checkout, not a disposable one."
 };
 const MERGE_OPTIONS = [
   { value: "", label: "choose one \u2014 the dial is required" },
@@ -1791,7 +1797,7 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
     section.singular
   )), dialog);
 }
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null);
@@ -1805,10 +1811,10 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         await onDone(result);
       } catch (err) {
         if (err.status === 409 && err.detail?.confirm_required) {
-          setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
+          setConfirm({ reasons: err.detail.dangerous_values ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say("danger", `${noun} ${verb} failed`, String(err.message || err));
+          say("danger", failDetail ? `${noun} ${verb} failed \u2014 ${failDetail}` : `${noun} ${verb} failed`, String(err.message || err));
         }
       }
       setBusy(false);
@@ -1824,7 +1830,8 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: busy, onClick: () => setConfirm(null) }, "Cancel"), /* @__PURE__ */ React.createElement(Button, { variant: "danger", disabled: busy, onClick: () => confirm && confirm.resend() }, confirmLabel ?? "Save anyway"))
     },
     /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 8px", fontSize: "var(--text-sm)" } }, dialogLead),
-    /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, fontSize: "var(--text-sm)", display: "flex", flexDirection: "column", gap: 6 } }, (confirm?.reasons ?? []).map((r) => /* @__PURE__ */ React.createElement("li", { key: r }, DANGEROUS_REASON_LABEL[r] ?? r)))
+    /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, fontSize: "var(--text-sm)", display: "flex", flexDirection: "column", gap: 6 } }, (confirm?.reasons ?? []).map((r) => /* @__PURE__ */ React.createElement("li", { key: r }, DANGEROUS_REASON_LABEL[r] ?? r))),
+    confirm && dialogNote?.(confirm.detail)
   );
   return { busy, save, dialog };
 }
@@ -2435,29 +2442,31 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const [path, setPath] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [prot, setProt] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
   const ok = registryNameOk(name) && (mode === "clone" ? !!repo.trim() : mode === "register" ? !!path.trim() : true);
   const dirty = mode !== "clone" || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
-  const submit = async () => {
-    setBusy(true);
-    try {
-      await api("/api/workspaces", {
-        mode,
-        name: name.trim(),
-        ...mode === "clone" ? { repo: repo.trim() } : {},
-        ...mode === "register" ? { path: path.trim() } : {},
-        ...notes.trim() ? { notes: notes.trim() } : {},
-        ...prot ? { protected: true } : {}
-      });
-      say("success", "workspace added \u2014 committed to the registry", name.trim());
-      edit.close();
-      await onCreated();
-    } catch (err) {
-      say("danger", "workspace creation failed \u2014 safe to retry as-is", String(err.message || err));
-    }
-    setBusy(false);
-  };
+  const { busy, save, dialog } = useDangerousSave(say, async () => {
+    edit.close();
+    await onCreated();
+  }, {
+    noun: "workspace",
+    confirmKey: "confirm",
+    dialogTitle: "Register a checkout someone is working in?",
+    dialogLead: "This path looks like a human's live development checkout:",
+    dialogNote: (detail) => detail?.clone_landing ? /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0", fontSize: "var(--text-sm)" } }, "The clone entrance would give the board its own checkout at", " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, detail.clone_landing), " instead \u2014 one repository, two checkouts.") : null,
+    confirmLabel: "Register anyway",
+    // creation is idempotent server-side — a failed attempt leaves only
+    // orphans the registry never saw, so "just press it again" is honest
+    failDetail: "safe to retry as-is"
+  });
+  const submit = () => save("/api/workspaces", "POST", {
+    mode,
+    name: name.trim(),
+    ...mode === "clone" ? { repo: repo.trim() } : {},
+    ...mode === "register" ? { path: path.trim() } : {},
+    ...notes.trim() ? { notes: notes.trim() } : {},
+    ...prot ? { protected: true } : {}
+  }, "added", name.trim());
   const modeOptions = [
     { value: "clone", label: "clone a repository" },
     { value: "create", label: "create a new local checkout" },
@@ -2509,7 +2518,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
       onSave: submit,
       onCancel: () => edit.close()
     }
-  ));
+  ), dialog);
 }
 function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;

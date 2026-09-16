@@ -21,6 +21,7 @@ import {
   refreshRegistryForWrite,
 } from "./registry-write.js";
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
+import { workspaceSettingsDisposition } from "./sandbox.js";
 import {
   conventionCheckoutPath,
   entryCheckoutPath,
@@ -49,6 +50,12 @@ export type CreateWorkspaceInput = {
        *  explicit, host-specific path (ADR 0018 keeps board-created entries
        *  convention-derived instead). */
       path: string;
+      /** この checkout が「人間の生きた dev checkout」に見えたとき(issue #383)の
+       *  同意。`createWorkspace` に危険な値(ADR 0061 決定1)の門は今日1つも無いので、
+       *  このフラグが意味するのはこの信号族**だけ**である。ADR 0088 の族ではない —
+       *  この信号はエージェントの権限を1ミリも広げず、守っているのは人間の作業ツリー
+       *  のほうである。 */
+      confirm?: boolean;
     }
   | {
       mode: "clone";
@@ -183,6 +190,20 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
     if (overlap) throw new BoardStateOverlapError(overlap.reason);
   }
   const entry = await buildEntry(input, deps);
+  // issue #383: 「人間の生きた dev checkout」の信号は `rev-parse` の**後**(git
+  // リポジトリでないパスは NotAGitRepositoryError が勝つ)、registry コミットの
+  // **前**。`entry.repo` は registerExistingCheckout が既に済ませた origin の観測
+  // なので、clone 入口の提案はそれを読み直さずに合成できる。
+  if (input.mode === "register" && input.confirm !== true) {
+    const reasons = liveCheckoutSignals(input.path);
+    if (reasons.length > 0) {
+      throw new LiveCheckoutSignalsError(
+        input.path,
+        reasons,
+        entry.repo === undefined ? null : conventionCheckoutPath(input.name, deps.workspacesBaseDir),
+      );
+    }
+  }
   if (input.notes !== undefined) entry.notes = input.notes;
   if (input.protected) entry.protected = true;
   commitWorkspaceEntry(deps, input.name, entry, `add workspace ${input.name} via WebUI`);
@@ -595,6 +616,56 @@ export class NotAGitRepositoryError extends Error {
   constructor(path: string) {
     super(`${path} is not a git repository`);
     this.name = "NotAGitRepositoryError";
+  }
+}
+
+/** issue #383 の信号コード: 「このパスは人間が今日も使っている作業ツリーに見える」を
+ *  数え上げる、安定した機械可読な文字列。ADR 0061 の `DangerousWorkspaceValueReason`
+ *  とは**別の族**である(CONTEXT.md「危険な値」= エージェントの権限を広げる値の列挙で
+ *  あり、この3つはどれも権限を広げない)。409 の `dangerous_values` に載る枠は共有する
+ *  —— WebUI 側の翻訳表が1つで済むのは、枠が「確認の理由コード」だからである。 */
+export type LiveCheckoutSignal =
+  | "uncommitted_changes"
+  | "claude_settings_local"
+  | "claude_settings_hooks";
+
+/** 登録対象の checkout に「生きた dev checkout らしさ」の信号があるか(issue #383)。
+ *
+ *  `settings.local.json` の検査は `git status` の冗長ではない —— このファイルは
+ *  gitignore されるので untracked としても現れない。hooks の読み口は `src/sandbox.ts`
+ *  の `workspaceSettingsDisposition` をそのまま使う(設定の読み手は1つ)。 */
+function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
+  const reasons: LiveCheckoutSignal[] = [];
+  // --no-optional-locks: 門が人間の生きた作業ツリーの index.lock を取らない
+  // (守ろうとしているものを触りにいかない)
+  if (git(path, "--no-optional-locks", "status", "--porcelain") !== "") {
+    reasons.push("uncommitted_changes");
+  }
+  if (existsSync(join(path, ".claude", "settings.local.json"))) reasons.push("claude_settings_local");
+  if (workspaceSettingsDisposition(path).projectHooks) reasons.push("claude_settings_hooks");
+  return reasons;
+}
+
+/** 登録の門が観測した信号を人間へ**提示**する(issue #383 — 拒否ではない)。同意した
+ *  再送(`confirm: true`)は従来どおり登録する。
+ *
+ *  メッセージは信号コードと clone 入口の提案を1箇所で綴る唯一の場所である —— API の
+ *  409 も管理MCP の結果テキストもこれを読む。`cloneLanding` が null(origin を持たない
+ *  purely-local な checkout)のときは提案の行そのものが無い: コピーはこの issue が
+ *  明示的に退けた道(ADR 0052/0053)なので、出せる代替の入口が存在しない。 */
+export class LiveCheckoutSignalsError extends Error {
+  constructor(
+    path: string,
+    public readonly reasons: LiveCheckoutSignal[],
+    public readonly cloneLanding: string | null,
+  ) {
+    super(
+      `${path} looks like a checkout a human is working in (${reasons.join(", ")})` +
+        (cloneLanding === null
+          ? "; register it anyway with confirm: true"
+          : `; the clone entrance would give the board its own checkout at ${cloneLanding} instead — register this path anyway with confirm: true`),
+    );
+    this.name = "LiveCheckoutSignalsError";
   }
 }
 

@@ -92,6 +92,7 @@ import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
+  LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
@@ -318,14 +319,31 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // landing place has to be readable before (the description) and after
       // (the result) — the WebUI's "see it, then decide" has no MCP shape.
       description:
-        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default.",
+        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default. register goes through even when the path looks like a checkout a human is working in; the result then carries a notice naming what was observed and where the clone entrance would have landed instead.",
       inputSchema: createWorkspaceSchema,
     },
     async (input) => {
       if (!deps.workspaceAdmin?.create) return toolError("workspace administration is not configured");
+      const create = deps.workspaceAdmin.create;
       try {
-        return toolResult({ path: await deps.workspaceAdmin.create(input) });
+        return toolResult({ path: await create(input) });
       } catch (err) {
+        // issue #383: 「人間の生きた dev checkout」の信号は、ここでは拒否にしない
+        // (ADR 0082 決定1 — 1回の呼び出しで登録まで進む面に「見せてから決める」形は
+        // 無い)。通したうえで、観測した信号と clone 入口の提案を結果に載せる。
+        // ADR 0088 の形(拒んで WebUI へ案内)は採らない: この信号はエージェントの
+        // 権限を広げず、拒めば今日 MCP から通っている dirty checkout の register を
+        // 通らなくする = issue が「やらないこと」に挙げた自動拒否そのものになる。
+        // スキーマに `confirm` は生やさず、ここで内部的に立てる — 確認をエージェントに
+        // 肩代わりさせる経路は作らない。信号の判定も文面も domain 側が唯一の正本
+        // (ADR 0027)なので、読み直すのではなく確認付きで出し直す。
+        if (err instanceof LiveCheckoutSignalsError && input.mode === "register") {
+          try {
+            return toolResult({ path: await create({ ...input, confirm: true }), notice: err.message });
+          } catch (retried) {
+            return registryToolError(retried);
+          }
+        }
         return registryToolError(err);
       }
     },

@@ -153,6 +153,7 @@ import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
+  LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
   RegistrySelfDeleteError,
@@ -280,7 +281,13 @@ const createWorkspaceCommon = z.object({
   protected: z.boolean().optional(),
 });
 const createWorkspaceSchema = z.discriminatedUnion("mode", [
-  createWorkspaceCommon.extend({ mode: z.literal("register"), path: z.string().min(1) }),
+  // confirm は register だけが持つ(issue #383): 信号の同意であって、危険な値
+  // (ADR 0061 / CONTEXT.md「危険な値」)の族ではない
+  createWorkspaceCommon.extend({
+    mode: z.literal("register"),
+    path: z.string().min(1),
+    confirm: z.boolean().optional(),
+  }),
   createWorkspaceCommon.extend({ mode: z.literal("clone"), repo: z.string().min(1) }),
   createWorkspaceCommon.extend({ mode: z.literal("create") }),
 ]);
@@ -864,6 +871,17 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof OrphanCheckoutMismatchError
       ) {
         res.status(400).json({ error: err.message });
+      } else if (err instanceof LiveCheckoutSignalsError) {
+        // issue #383: 危険な値の 409 と同じラウンドトリップ(WebUI の
+        // useDangerousSave がそのまま乗る)。載せる `clone_landing` は
+        // サーバが合成した着地先で、origin を持たない checkout では null ——
+        // 出せる代替の入口が無いことを、空文字ではなく null で言う
+        res.status(409).json({
+          error: err.message,
+          confirm_required: true,
+          dangerous_values: err.reasons,
+          clone_landing: err.cloneLanding,
+        });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }

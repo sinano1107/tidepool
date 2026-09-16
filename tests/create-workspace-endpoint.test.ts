@@ -5,6 +5,7 @@ import { RepoAccessMissingError } from "../src/repo-access.js";
 import {
   BoardStateOverlapError,
   type CreateWorkspaceInput,
+  LiveCheckoutSignalsError,
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
@@ -187,4 +188,57 @@ it("整合しない孤児 checkout(OrphanCheckoutMismatchError)は 400 で場所
   // 400: 帯域外で片付けるか register モードで拾えば通る呼び出し側の状態の問題
   expect(res.status).toBe(400);
   expect(res.json.error).toContain("/mnt/workspaces/lagoon");
+});
+
+it("生きた dev checkout の信号は 409 に信号コードと clone 着地先を載せ、confirm 付きの再送が 201 になる(issue #383)", async () => {
+  const calls: CreateWorkspaceInput[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async (input) => {
+        calls.push(input);
+        if (input.mode === "register" && input.confirm !== true) {
+          throw new LiveCheckoutSignalsError(
+            input.path,
+            ["uncommitted_changes", "claude_settings_local"],
+            "/mnt/workspaces/tidepool",
+          );
+        }
+        return "/home/masaki/tidepool";
+      },
+    },
+  });
+  const body = { mode: "register", name: "tidepool", path: "/home/masaki/tidepool" };
+
+  const refused = await api(t.baseUrl, "POST", "/api/workspaces", body);
+
+  expect(refused.status).toBe(409);
+  expect(refused.json).toMatchObject({
+    confirm_required: true,
+    dangerous_values: ["uncommitted_changes", "claude_settings_local"],
+    clone_landing: "/mnt/workspaces/tidepool",
+  });
+
+  const confirmed = await api(t.baseUrl, "POST", "/api/workspaces", { ...body, confirm: true });
+
+  expect(confirmed.status).toBe(201);
+  expect(calls.at(-1)).toEqual({ ...body, confirm: true });
+});
+
+it("origin を持たない checkout の 409 は clone_landing を null で返す(提案できる入口が無い)", async () => {
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async () => {
+        throw new LiveCheckoutSignalsError("/home/masaki/scratch", ["uncommitted_changes"], null);
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "POST", "/api/workspaces", {
+    mode: "register",
+    name: "scratch",
+    path: "/home/masaki/scratch",
+  });
+
+  expect(res.status).toBe(409);
+  expect(res.json.clone_landing).toBeNull();
 });
