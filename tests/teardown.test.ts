@@ -52,6 +52,8 @@ it.each([false, true])("restart recovers cap teardown without a failure question
   await writeFile(`${ws.path}/wip.txt`, "unfinished work\n");
   // Setup the durable state at the instant the adapter observed a 429 exit.
   markTeardown(t.db, task.id, t.clock.now());
+  // 上限到達による中断の経路: 行は `in_progress` のまま残る(ADR 0113 決定2)
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.settlement).toBe("interrupted");
   await t.stopServer();
   if (failPreflight) {
     const runtime = new FakeContainerRuntime();
@@ -129,6 +131,8 @@ it("decompose と escalate も同じ —— 枠を握っているのは task で
     });
     expect(result.isError ?? false).toBe(false);
     await client.close();
+    // エスカレーション・分解の経路: タスクは queue へ戻り、行は `todo` である
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.settlement).toBe("released");
 
     await t.clock.advance(HOUR);
     expect(started()).toEqual([first.id]);
@@ -210,6 +214,7 @@ it("「今なぜ pickup が起きないか」の読み口が後始末を報せ�
   const pause = (await api(t.baseUrl, "GET", "/api/pause")).json;
   expect(pause.halts).toEqual([]);
   expect(pause.teardown.taskId).toBe(task.id);
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.settlement).toBe("completed");
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
 
   t.containers.fireEmpty(task.id);

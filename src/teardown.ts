@@ -61,17 +61,29 @@ export interface TeardownStep {
   workspace?: WorkspaceConfig | null;
 }
 
+/** 後始末の経路。**行の status から導く唯一の写像**(ADR 0113 決定3)—— 経路を表す
+ *  永続事実は持たないので、対応表がここ以外に増えたらそれは写しである。 */
+export type Settlement = "completed" | "released" | "interrupted";
+
 /** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・
- *  回収済み観測は同じ規則を通す。経路を表す別の永続事実は持たない。 */
+ *  回収済み観測と、読み口の経路フィールドが同じこの1点を通す。 */
+function settlementOf(status: string | undefined): Settlement {
+  if (status === "in_progress") return "interrupted";
+  return status === "done" ? "completed" : "released";
+}
+
 export function teardownStep(db: Db, taskId: string): TeardownStep {
-  const task = getTask(db, taskId);
-  if (task?.status === "in_progress") {
-    return {
-      ready: (current) => current.status === "in_progress",
-      transition: (current, now) => returnForCapInterruption(db, current, now),
-    };
+  switch (settlementOf(getTask(db, taskId)?.status)) {
+    case "interrupted":
+      return {
+        ready: (current) => current.status === "in_progress",
+        transition: (current, now) => returnForCapInterruption(db, current, now),
+      };
+    case "completed":
+      return { completion: true };
+    default:
+      return { completion: false };
   }
-  return { completion: task?.status === "done" };
 }
 
 /** 後始末の一撃(ADR 0109 決定1): tree rule → 状態遷移 → slot 解放。
@@ -231,12 +243,21 @@ function clearTeardown(db: Db, taskId: string): void {
 
 /** 後始末が未了の session(あれば)。concurrency = 1 なので高々1つである。
  *  起動時の復旧・後始末の時限・「今なぜ pickup が起きないか」の読み口が共有する。 */
-export function sessionInTeardown(db: Db): { taskId: string; startedAt: string } | undefined {
+export function sessionInTeardown(
+  db: Db,
+): { taskId: string; startedAt: string; settlement: Settlement } | undefined {
   const row = db
     .prepare(
-      "SELECT id, teardown_started_at FROM tasks WHERE teardown_started_at IS NOT NULL " +
+      "SELECT id, status, teardown_started_at FROM tasks WHERE teardown_started_at IS NOT NULL " +
         "ORDER BY teardown_started_at LIMIT 1",
     )
-    .get() as { id: string; teardown_started_at: string } | undefined;
-  return row && { taskId: row.id, startedAt: row.teardown_started_at };
+    .get() as { id: string; status: string; teardown_started_at: string } | undefined;
+  return (
+    row && {
+      taskId: row.id,
+      startedAt: row.teardown_started_at,
+      // 読み手が行の status から経路を導き直さないように、ここで写像を1度だけ当てる
+      settlement: settlementOf(row.status),
+    }
+  );
 }

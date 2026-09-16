@@ -3400,7 +3400,11 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     stdout.write(CAP_STREAM);
 
     emitExit(1, null);
-    expect(sessionInTeardown(db)).toEqual({ taskId: task.id, startedAt: new FakeClock().now().toISOString() });
+    expect(sessionInTeardown(db)).toEqual({
+      taskId: task.id,
+      startedAt: new FakeClock().now().toISOString(),
+      settlement: "interrupted",
+    });
     expect(slot.inTeardown).toBe(true);
     await new Promise((resolve) => setImmediate(resolve));
 

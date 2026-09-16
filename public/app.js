@@ -891,7 +891,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       githubIssueNumber: t.github_issue_number
     });
   }
-  const running = board.find((t) => t.status === "in_progress");
+  const running = board.find((t) => t.status === "in_progress" && t.id !== teardown?.taskId);
   const throttled = !!throttle?.throttled;
   const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
   const hitLines = ["session", "week", "fable"].filter((w) => throttleWindows[w]?.throttled);
@@ -978,6 +978,11 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     }
   };
   const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+  const TEARDOWN_META = {
+    completed: "waiting for this session's processes to exit",
+    interrupted: "usage limit hit \xB7 task returns to the queue once processes exit",
+    released: "task released \xB7 waiting for this session's processes to exit"
+  };
   const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : teardown ? {
     // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
     // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
@@ -985,7 +990,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     color: "var(--sun-4)",
     taskId: teardown.taskId,
     line: "session teardown \xB7 nothing new starts",
-    meta: `waiting for this session's processes to exit \xB7 since ${fmtTime(teardown.startedAt)}`
+    meta: `${TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
   } : fableThrottled ? {
     // fable line only (ADR 0030): the board keeps flowing — fable-model
     // tasks alone wait for their catch-up
