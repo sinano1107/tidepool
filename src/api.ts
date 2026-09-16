@@ -3,6 +3,7 @@ import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
+  BuiltInAgentNotEditableError,
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
@@ -76,6 +77,7 @@ import {
   InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
+  isBuiltInAgentName,
   PROVIDER_OPTIONS,
   PROVIDER_VALUES,
   type Provider,
@@ -971,7 +973,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     try {
       await agentAdmin.create(parsed.data);
-      res.status(201).json({});
+      // 静かな shadow は作らない(ADR 0117 決定2): 同名を拒まない代わりに、
+      // 作成の扉が「組み込みを shadow した」ことを告げる。真のときだけ載せる
+      res.status(201).json(isBuiltInAgentName(parsed.data.name) ? { shadows_built_in: true } : {});
     } catch (err) {
       // same posture as /workspaces' create: the human's own synchronous
       // request fails fast on a bad input (400), anything else — including a
@@ -1040,6 +1044,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } catch (err) {
       if (err instanceof UnknownAgentError) {
         res.status(404).json({ error: err.message });
+      } else if (err instanceof BuiltInAgentNotEditableError) {
+        // 削除の `blocked` と同じ器(ADR 0117 決定2): 確認では買えず、出し直しても
+        // 通らない —— が、盤面の自己拒否ではないので 403 ではない
+        res.status(409).json({ error: err.message, blocked: true });
       } else if (
         err instanceof UnknownAuthorityProfileError ||
         err instanceof InvalidAgentIconError ||

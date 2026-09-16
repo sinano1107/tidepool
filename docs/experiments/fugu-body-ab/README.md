@@ -52,6 +52,9 @@ B の後半はこの状態に当たり、scheduler の throttle 判定を素通�
 
 ## 再現
 
+**ADR 0117(2026-09-12)以降、このスクリプトは走らない** —— 種まきが `agents/fugu.md` を書かなくなり(fugu は
+盤面の組み込みになった)、本文を差し替える対象のファイルが存在しない。上の実測は当時の手順の記録として残す。
+
 ```bash
 docs/experiments/fugu-body-ab/run.sh A empty 4700
 docs/experiments/fugu-body-ab/run.sh B docs/experiments/fugu-body-ab/five-lines.md 4710

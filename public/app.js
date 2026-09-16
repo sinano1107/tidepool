@@ -1280,7 +1280,7 @@ function PortalDialog(props) {
 }
 function RecordCardHead({ children, editing, onEdit }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, children, !editing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: onEdit }, "Edit")));
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, children, !editing && onEdit && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: onEdit }, "Edit")));
 }
 function EditActions({ dirty = true, ok = true, busy, saveLabel, onSave, onCancel }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
@@ -1584,7 +1584,14 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement(AgentChip, { name: agent.name, icon: open ? draft.icon : agent.icon ?? "" })), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "description", kind: agent.description ? "text" : "unset", value: agent.description ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: agent.builtin ? void 0 : startEdit }, /* @__PURE__ */ React.createElement(AgentChip, { name: agent.name, icon: open ? draft.icon : agent.icon ?? "" })), !open && (agent.builtin || agent.shadowsBuiltIn) && /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "definition",
+      kind: "text",
+      value: agent.builtin ? "built-in \u2014 no registry file; create an agent with this name to shadow it" : "shadows built-in \u2014 this entry wins; delete it to fall back to the board's own"
+    }
+  ), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "description", kind: agent.description ? "text" : "unset", value: agent.description ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "specialty",
@@ -2521,8 +2528,12 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   const submit = async () => {
     setBusy(true);
     try {
-      await api("/api/agents", { name: name.trim(), ...agentBody(draft) });
-      say("success", "agent added \u2014 committed to the registry", name.trim());
+      const created = await api("/api/agents", { name: name.trim(), ...agentBody(draft) });
+      say(
+        "success",
+        "agent added \u2014 committed to the registry",
+        created?.shadows_built_in ? `${name.trim()} \u2014 shadows the board's built-in agent of the same name` : name.trim()
+      );
       edit.close();
       await onCreated();
     } catch (err) {
@@ -2810,7 +2821,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       footnote: "edits commit to agents/<name>.md in the registry",
       indexSummary: (items) => `${items.length} agents`,
       rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? "" }),
-      rowSummary: (a) => a.authority,
+      // the built-in / shadows built-in mark (ADR 0117 決定2) — server-derived
+      // (GET /api/agents), never decided here: the display only mirrors which
+      // fugu the machine resolves. A built-in has no registry profile to show.
+      rowSummary: (a) => a.builtin ? "built-in" : a.shadowsBuiltIn ? `${a.authority} \xB7 shadows built-in` : a.authority,
       record: (rec) => /* @__PURE__ */ React.createElement(
         AgentRecord,
         {
@@ -2961,7 +2975,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         meta: rec ? `${sec.singular} \xB7 ${idx + 1} of ${items.length}` : sec.singular,
         onBack: () => go([sectionKey])
       }
-    ), !rec && sec.items === null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), !rec && sec.items !== null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "no longer in the registry \u2014 it may have been removed outside the board"), rec && sec.record(rec), rec && editing === null && /* @__PURE__ */ React.createElement(
+    ), !rec && sec.items === null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), !rec && sec.items !== null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "no longer in the registry \u2014 it may have been removed outside the board"), rec && sec.record(rec), rec && editing === null && !rec.builtin && /* @__PURE__ */ React.createElement(
       DeleteRecord,
       {
         section: sec,

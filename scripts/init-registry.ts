@@ -8,14 +8,11 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  DEFAULT_AGENT_NAME,
-  DEFAULT_AUDITOR_NAME,
-  DEFAULT_WORKSPACE_NAME,
-} from "../src/defaults.js";
+import { DEFAULT_AGENT_NAME, DEFAULT_WORKSPACE_NAME } from "../src/defaults.js";
 import {
   assertValidAgentName,
   assertValidWorkspaceName,
+  isBuiltInAgentName,
   type Registry,
 } from "../src/registry.js";
 import { resolveWorkspacesBaseDir } from "../src/workspace.js";
@@ -38,14 +35,15 @@ function main(): void {
   const registryDir = process.env.TIDEPOOL_REGISTRY;
   if (!registryDir) throw new Error("TIDEPOOL_REGISTRY is required");
 
+  // TIDEPOOL_AUDITOR は読まない —— Auditor の既定は組み込みで種に無い(ADR 0117 決定1)
   const agentName = process.env.TIDEPOOL_AGENT ?? DEFAULT_AGENT_NAME;
-  const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
   const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? DEFAULT_WORKSPACE_NAME;
   const emptyRegistry: Registry = { commit: "", agents: {}, authority: {}, workspaces: {} };
   assertValidAgentName(emptyRegistry, agentName);
-  assertValidAgentName(emptyRegistry, auditorName);
-  if (agentName === auditorName) {
-    throw new Error("TIDEPOOL_AGENT and TIDEPOOL_AUDITOR must name different agents");
+  // 空の registry に対する名前検査は組み込みを知らない —— 既定 agent が組み込みの
+  // 名前を取れば、種まき自身が静かな shadow を作ることになる(ADR 0117 決定2)
+  if (isBuiltInAgentName(agentName)) {
+    throw new Error(`TIDEPOOL_AGENT must not name the built-in agent "${agentName}"`);
   }
   assertValidWorkspaceName(emptyRegistry, workspaceName);
   const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_DIR);
@@ -93,9 +91,7 @@ function main(): void {
   }
 
   copyTemplate("agents/default-agent.md", join(registryDir, "agents", `${agentName}.md`));
-  copyTemplate("agents/auditor-agent.md", join(registryDir, "agents", `${auditorName}.md`));
   copyTemplate("authority/standard.yaml", join(registryDir, "authority", "standard.yaml"));
-  copyTemplate("authority/auditor.yaml", join(registryDir, "authority", "auditor.yaml"));
   const workspaces = readFileSync(join(TEMPLATE_ROOT, "workspaces.yaml"), "utf8").replace(
     "__TIDEPOOL_WORKSPACE__",
     workspaceName,
@@ -105,9 +101,7 @@ function main(): void {
     registryDir,
     "add",
     `agents/${agentName}.md`,
-    `agents/${auditorName}.md`,
     "authority/standard.yaml",
-    "authority/auditor.yaml",
     "workspaces.yaml",
   );
   git(registryDir, "commit", "-m", "Seed Tidepool registry");
@@ -131,7 +125,7 @@ function main(): void {
     );
   }
 
-  process.stdout.write(`Registry seeded with agent "${agentName}", auditor "${auditorName}", and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n`);
+  process.stdout.write(`Registry seeded with agent "${agentName}" and workspace "${workspaceName}".\n\nNext steps:\n1. Start Tidepool with the same environment: npm start\n2. Open the WebUI.\n`);
 }
 
 try {

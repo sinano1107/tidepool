@@ -182,7 +182,9 @@ export async function deleteProfile(input: DeleteProfileInput, deps: ProfileAdmi
   // 決定2)。`assignable_to` / `allowed_workspaces` に名前が並んでいるだけの
   // agent / workspace は参照ではない —— 許可先が1つ消えるだけで無害である。
   const holders = Object.values(registry.agents)
-    .filter((agent) => agent.authority === input.name)
+    // 組み込みは profile map を引かない(ADR 0117 決定1 / agent.ts の1分岐)ので、
+    // 同名の profile があっても参照者ではない
+    .filter((agent) => agent.builtin !== true && agent.authority === input.name)
     .map((agent) => agent.name);
   if (holders.length > 0) {
     throw new DeletionBlockedError("profile", input.name, [

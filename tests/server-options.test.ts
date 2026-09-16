@@ -153,7 +153,9 @@ it("origin/main がまだ無い remote-backed 盤面でも、起動時 refresh �
     workspaceName: "tidepool",
   });
 
-  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand"]);
+  // registry のファイルは deckhand 1つだが、組み込みの fugu が同じ map に乗る
+  // (ADR 0117 決定2)—— roster も候補もこの1つの map を読む
+  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
 });
 
 // 決定4 の fail-open。remote へ届かないこと自体は起動を拒む理由にならない —— 床は
@@ -178,7 +180,7 @@ it("起動時 refresh が失敗しても合成は落ちず、理由を1度だけ
     warnings: error.mock.calls.length,
     warning: error.mock.calls.flat().join(" "),
   }).toMatchObject({
-    composed: ["deckhand"],
+    composed: ["deckhand", "fugu"],
     warnings: 1,
     warning: expect.stringContaining("[registry] startup refresh failed"),
   });
@@ -420,8 +422,8 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.isProtectedWorkspace?.("guarded")).toBe(true);
   expect(options.isProtectedWorkspace?.("deckhand")).toBe(false);
   // 残りの registry 由来の口も、registry の中身をそのまま映していること
-  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand"]);
-  expect(options.registryCandidates?.()?.assignees).toEqual(["deckhand", "human"]);
+  expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
+  expect(options.registryCandidates?.()?.assignees).toEqual(["deckhand", "fugu", "human"]);
   // assignee 未設定は defaultAgentName へ、registry の知らない名前は undefined へ
   expect(options.resolveAuthority?.(null)).toBeDefined();
   expect(options.resolveAuthority?.("nobody")).toBeUndefined();

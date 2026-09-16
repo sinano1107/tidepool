@@ -20,7 +20,6 @@ import {
   MOONSHOT_DEFAULT_MODEL,
   resolveExecutionSetting,
 } from "./execution-setting.js";
-import { REVIEWER_AUTHORITY_PROFILE } from "./mcp.js";
 import { buildMemoryInjection, recordMemoryInjection } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
 import {
@@ -29,6 +28,7 @@ import {
   isPluginGlob,
   loadRegistry,
   ownEntry,
+  REVIEWER_AUTHORITY_PROFILE,
   type Registry,
   type RegistrySource,
   type RosterAgent,
@@ -285,7 +285,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
 /** review タスクの harness deny(ADR 0013 追記 / issue #59): read-only は
  *  review という task type の性質であって実行エージェントの性質ではない
  *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
- *  従来の reviewer profile(mcp.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
+ *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
  *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
  *  ここはその追記が狙う CLI ツール層の強制 — 両方とも「task type が profile を
  *  上書きする」という ADR 0013 の同じ原則の別レイヤーでの実装。issue #56 の

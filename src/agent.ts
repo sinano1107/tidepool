@@ -6,6 +6,7 @@ import {
   assertValidAgentDefinition,
   InvalidAgentDefinitionError,
   ownEntry,
+  REVIEWER_AUTHORITY_PROFILE,
   type Registry,
 } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
@@ -52,7 +53,13 @@ export function resolveExecutionAgent(
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
   assertValidAgentDefinition(name, definition);
-  const profile = ownEntry(registry.authority, definition.authority);
+  // 組み込み(ADR 0117 決定1)だけは profile を registry から引かない —— 種まきは
+  // auditor の profile を書かず、組み込みは授権を増やさないので、床そのものである
+  // ADR 0013 の定数を直に返す(registry の authority map には注入しない: 注入すると
+  // profile 一覧・削除・authority select に、編集も削除もできない行が生える)。
+  const profile = definition.builtin
+    ? REVIEWER_AUTHORITY_PROFILE
+    : ownEntry(registry.authority, definition.authority);
   if (!profile) throw new Error(`unknown authority profile: ${definition.authority}`);
   return { name, definition, profile };
 }
