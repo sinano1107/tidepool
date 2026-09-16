@@ -4,16 +4,12 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { createLanding } from "../src/landing.js";
 import {
-  completeTask,
-  getTask,
-  listBoard,
-  recordPrOpened,
+  createLanding,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
-  registerTask,
-} from "../src/tasks.js";
+} from "../src/landing.js";
+import { completeTask, getTask, listBoard, recordPrOpened, registerTask } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
 import {
   prepareWorkspaceAtPickup,

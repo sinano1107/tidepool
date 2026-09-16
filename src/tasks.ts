@@ -1757,39 +1757,6 @@ export const MERGE_QUESTION_OPTIONS = ["merge", "hold"] as const;
 
 export const PR_PROMOTION_FAILURE_OPTIONS = ["retry", "abandon promotion"] as const;
 
-/** A PR promotion failure never rolls back completion or the tree rule (issue
- *  #19). It instead leaves a Tidepool-owned question whose retry points back
- *  to the completed task, where its branch and handoff still live. */
-export function registerPrPromotionFailureQuestion(
-  db: Db,
-  task: Task,
-  error: string,
-  now: Date,
-): void {
-  const title = `PR promotion failed: ${task.title}`;
-  registerTask(
-    db,
-    {
-      type: "question",
-      title,
-      purpose: `Creating a PR for completed task "${task.title}" failed: ${error}`,
-      completion_criteria: "a human decides whether to retry PR promotion",
-      question: [
-        {
-          title,
-          options: [...PR_PROMOTION_FAILURE_OPTIONS],
-          recommendation: "retry",
-        },
-      ],
-      pending_pr_promotion_task_id: task.id,
-      workspace: task.workspace ?? undefined,
-    },
-    now,
-    BOARD_WORKER_ID,
-    "board",
-  );
-}
-
 /** Registers the merge-decision question every merge escalation shares
  *  (the `escalate` dial, and `auto_if_ci_green`'s risky-task and CI-failure
  *  fallbacks) — only the title/purpose/recommendation differ per caller.
@@ -1841,46 +1808,6 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
   return row.id;
 }
 
-/** ADR 0079 決定3/4: retires a merge question whose PR turned out to be
- *  already merged outside the board. Deliberately not `answerQuestion`:
- *  nobody decided anything, so there is no `question_answered` event, no
- *  recorded option, and no recommendation-acceptance statistic — a "hold"
- *  submitted against an already-merged PR must never read back as a hold
- *  decision. Settles only a still-open question — the merged check is an
- *  awaited network read, so another path can settle it in that window, and
- *  a second observation must not re-stamp an already-closed question. */
-export function settleMergeQuestionAsObserved(
-  db: Db,
-  questionId: string,
-  prNumber: number,
-  now: Date,
-): void {
-  settleQuestionAsObserved(db, questionId, { kind: "pr_merge_observed", pr_number: prNumber }, now);
-}
-
-/** ADR 0092 決定3 の再発火が着地を成立させたら、同じタスクを指す PR 昇格失敗の
- *  question はもう誰にも訊くことがない(issue #406)。開いたままにすると `retry` が
- *  既に開いている PR へ `gh pr create` を撃ち、`abandon promotion` は「PR は無い」と
- *  事実と逆の決定を記録する。引退は上と同じ観測決着 —— 再発火は人間の決定ではない。
- *  再発火が二度失敗して失敗 question が積み上がっている場合もあるので、todo の行は
- *  すべて引退させる。 */
-export function settlePrPromotionQuestionsAsObserved(
-  db: Db,
-  taskId: string,
-  now: Date,
-  excludeQuestionId?: string,
-): void {
-  const rows = db
-    .prepare(
-      `SELECT id FROM tasks
-        WHERE question_pending_pr_promotion_task_id = ? AND status = 'todo' AND id <> ?`,
-    )
-    .all(taskId, excludeQuestionId ?? "") as Array<{ id: string }>;
-  for (const { id } of rows) {
-    settleQuestionAsObserved(db, id, { kind: "pr_promotion_observed" }, now);
-  }
-}
-
 /** 観測決着の1つの綴り: `status='todo'` 限定の UPDATE で question を閉じ、盤面名義の
  *  観測 event を1件だけ残す。`answerQuestion` を通さないので `question_answered` も
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
@@ -1906,35 +1833,6 @@ export function settleQuestionAsObserved(
   })();
 }
 
-/** ADR 0053 decision 3: a purely-local root completion has no PR surface, so
- *  the board asks whether to fast-forward its task branch onto the protected
- *  branch or leave it there permanently. The task id is deliberately stored
- *  separately from question_pending_merge_pr: one names a local branch while
- *  the other names a GitHub PR. */
-export function registerLocalMergeQuestion(
-  db: Db,
-  task: Task,
-  purpose: string,
-  now: Date,
-): void {
-  const title = `land completed task: ${task.title}`;
-  registerTask(
-    db,
-    {
-      type: "question",
-      title,
-      purpose,
-      completion_criteria: "a human decides whether to land the completed task branch",
-      question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation: "merge" }],
-      pending_local_merge_task_id: task.id,
-      workspace: task.workspace ?? undefined,
-    },
-    now,
-    BOARD_WORKER_ID,
-    "board",
-  );
-}
-
 /** Queues a completed low-risk task's PR for the auto_if_ci_green poll (issue
  *  #11) — recordPrOpened's low-risk branch is the only writer; the poll
  *  itself (merge.ts) is the only reader/deleter. */
@@ -1943,41 +1841,6 @@ function queuePendingAutoMerge(db: Db, taskId: string, prNumber: number): void {
     taskId,
     prNumber,
   );
-}
-
-interface PendingAutoMerge {
-  task_id: string;
-  pr_number: number;
-}
-
-export function listPendingAutoMerges(db: Db): PendingAutoMerge[] {
-  return db
-    .prepare("SELECT task_id, pr_number FROM pending_auto_merges")
-    .all() as PendingAutoMerge[];
-}
-
-/** The merge decisions the board still holds (ADR 0079 決定3) — the slow
- *  outside-merge scan's whole reading list. `external` never registers one,
- *  so a dial that declared the merge outside the board is out of scope by
- *  construction, not by a filter that could drift. Empty means the scan makes
- *  no network call at all. */
-interface OpenMergeQuestion {
-  id: string;
-  pr_number: number;
-  workspace: string | null;
-}
-
-export function listOpenMergeQuestions(db: Db): OpenMergeQuestion[] {
-  return db
-    .prepare(
-      `SELECT id, question_pending_merge_pr AS pr_number, workspace FROM tasks
-       WHERE type = 'question' AND status = 'todo' AND question_pending_merge_pr IS NOT NULL`,
-    )
-    .all() as OpenMergeQuestion[];
-}
-
-export function clearPendingAutoMerge(db: Db, taskId: string): void {
-  db.prepare("DELETE FROM pending_auto_merges WHERE task_id = ?").run(taskId);
 }
 
 /** Records that a completed task's work opened a PR (issue #11): pr_number is
@@ -2555,28 +2418,6 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
     )
     .get(taskId) as { n: number };
   return n;
-}
-
-/** 門で止まったことを board 名義で1回だけ刻む(ADR 0092 決定1)。着地は1つのタスクに
- *  つき一度きりなので、「この待ちで既に刻んだか」は「このタスクに landing_deferred が
- *  あるか」で足りる — 付帯子が決着するたびの再検査で重複させない。 */
-export function recordLandingDeferred(
-  db: Db,
-  taskId: string,
-  block: { kind: "attached_children" | "objections"; count: number },
-  now: Date,
-): void {
-  const already = db
-    .prepare("SELECT 1 FROM events WHERE task_id = ? AND kind = 'landing_deferred'")
-    .get(taskId);
-  if (already) return;
-  appendEvent(db, {
-    taskId,
-    workerId: BOARD_WORKER_ID,
-    origin: "board",
-    payload: { kind: "landing_deferred", reason: block.kind, count: block.count },
-    at: now,
-  });
 }
 
 /** The one SQL shape of "this task's execution workspace is quarantined"
