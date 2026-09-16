@@ -266,9 +266,9 @@ export interface ServerOptions {
   harnessContainment?: HarnessContainmentCheck;
   /** ADR 0097 決定2 / issue #446: per-provider authentication probes — the
    *  re-verification a provider-auth Confirmation question's answer fires.
-   *  The board's own provider (anthropic) keeps `cliAuth` below; this record
-   *  holds only the resource-scoped ones. Absent a provider's entry → its
-   *  answer cannot be verified and is refused. */
+   *  The board's own provider (anthropic) is folded in from `cliAuth` below —
+   *  every provider is resource-scoped (ADR 0098 決定6). Absent a provider's
+   *  entry → its answer cannot be verified and is refused. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0052: remote-backed registry reachability check for boot and pickup. */
   registryReachability?: RegistryReachabilityCheck;
@@ -684,7 +684,6 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       reclaim: watchdog,
       registryReachability,
       teardownQuarantine,
-      cliAuth: options.cliAuth,
       providerCliAuth,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
@@ -728,7 +727,6 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       reclaim: watchdog,
       registryReachability,
       teardownQuarantine,
-      cliAuth: options.cliAuth,
       providerCliAuth,
       boardState: options.boardState?.paths,
       fableAgents: options.fableAgents,

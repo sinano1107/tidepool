@@ -2330,7 +2330,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       if (code !== 0) console.error(`[worker] claude exited with ${signal ?? code}`);
       // issue #446 / ADR 0097 決定2: the 401 is attributed to the provider this
       // session was spawned to speak (a spawn-time fact), never inferred from
-      // the envelope — anthropic keeps the board-wide halt, any other provider
+      // the envelope — every provider, the board's own included (ADR 0098 決定6),
       // quarantines only its own agents' pickup.
       if (cliAuthFailed) {
         quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now());

@@ -374,10 +374,10 @@ export interface SubmitAnswerDeps {
    *  `DomainError` で回答を拒む。合成 root が `acceptTeardownQuarantine` を束ねて渡す
    *  (人間 verb 側は後始末の deps 一式を知らない)。Absent → 後始末を持たない盤面。 */
   teardownQuarantine?: FailedTeardownCheck;
-  cliAuth?: CliAuthCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
-   *  a provider-auth Confirmation answer — same "検証つきで解除" as `cliAuth`,
-   *  scoped to the provider the question stands in for. */
+   *  a provider-auth Confirmation answer — the board never takes the human's
+   *  "repaired" at face value. Keyed by the provider the question stands in
+   *  for; absent that entry → the answer cannot be verified and is refused. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
@@ -780,18 +780,9 @@ export async function submitAnswer(
     }
   }
 
-  if (task.question_quarantine_cli_auth !== null) {
-    if (!deps.cliAuth) throw new DomainError("Claude authentication cannot be verified");
-    const result = await deps.cliAuth();
-    if (result.status !== "authenticated") {
-      throw new DomainError(`Claude authentication is still unavailable: ${result.reason}`);
-    }
-  }
-
   if (task.question_quarantine_provider_auth !== null) {
     // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
-    // 再検証を回答受理の直前に撃つ — 盤面全体の cliAuth と同じ検証つき解除を
-    // 資源単位に写した形。
+    // 再検証を回答受理の直前に撃つ(CONTEXT.md「Quarantine」の検証つき解除)。
     const provider = task.question_quarantine_provider_auth as Provider;
     const check = deps.providerCliAuth?.[provider];
     if (!check) throw new DomainError(`${provider} authentication cannot be verified`);

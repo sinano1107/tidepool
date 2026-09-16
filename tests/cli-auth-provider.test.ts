@@ -2,12 +2,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { boardHalts } from "../src/board-halt.js";
 import { createMoonshotCliAuthCheck } from "../src/claude-cli-auth.js";
-import {
-  openCliAuthQuestion,
-  quarantineCliAuthForProvider,
-  quarantinedAuthProviders,
-} from "../src/cli-auth.js";
+import { quarantineCliAuthForProvider, quarantinedAuthProviders } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { listBoard } from "../src/tasks.js";
 
@@ -29,7 +26,7 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
     expect(question?.purpose).toContain("`~/.tidepool/moonshot-api-key`");
     expect(question?.purpose).toContain("TIDEPOOL_MOONSHOT_API_KEY_FILE");
     // 資源単位の停止は盤面全体の停止の列挙に入らない(ADR 0058 決定1)
-    expect(openCliAuthQuestion(db)).toBeUndefined();
+    expect(boardHalts(db)).toEqual([]);
   });
 
   it("同一 provider への2度目の quarantine は question を増やさない(1資源につき確認は最大1枚)", () => {
@@ -50,7 +47,7 @@ describe("quarantineCliAuthForProvider(issue #454 / ADR 0098)", () => {
     );
     expect(question?.question_quarantine_provider_auth).toBe("anthropic");
     expect(question?.purpose).toContain("claude setup-token");
-    expect(openCliAuthQuestion(db)).toBeUndefined();
+    expect(boardHalts(db)).toEqual([]);
   });
 
   it("quarantinedAuthProviders は資源単位の quarantine 中の provider だけを返す", () => {

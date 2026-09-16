@@ -124,7 +124,6 @@ export interface ManagementMcpDeps {
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0112 決定3: 落ちた後始末の受理の門(WebUI 側と同じ配線)。 */
   teardownQuarantine?: FailedTeardownCheck;
-  cliAuth?: CliAuthCheck;
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
@@ -786,7 +785,6 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               reclaim: deps.reclaim,
               registryReachability: deps.registryReachability,
               teardownQuarantine: deps.teardownQuarantine,
-              cliAuth: deps.cliAuth,
               providerCliAuth: deps.providerCliAuth,
               boardState: deps.boardState,
               attributionClient: deps.attributionClient,

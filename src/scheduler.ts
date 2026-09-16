@@ -210,8 +210,9 @@ async function checkThrottle(
 ): Promise<{ decision: ThrottleDecision; snapshot: UsageSnapshot }> {
   const resultText = await worker.checkUsage();
   // `null` is deliberately ambiguous (modal, renderer, marker, auth, …).
-  // Preserve fail-closed throttle, and raise cliAuth only if a second probe
-  // produces the definitive structured 401 evidence (ADR 0070).
+  // Preserve fail-closed throttle, and quarantine the provider's authentication
+  // only if a second probe produces the definitive structured 401 evidence
+  // (ADR 0070; the halt is resource-scoped since ADR 0098 決定6).
   if (resultText === null && cliAuth) {
     try {
       const auth = await cliAuth();
