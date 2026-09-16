@@ -171,6 +171,7 @@ reset_case() {
   REGISTRY_SEEDED=0
   EXTRA_ENV=""
   STDIN_PIPE=0
+  PIPE_TRAILER=""
 }
 
 # run_install sets $rc, $output and $log. main() runs as a bare top-level
@@ -186,7 +187,8 @@ run_install() {
   fi
 
   if [ "$STDIN_PIPE" = "1" ]; then
-    output=$(run_main 'cat "$SCRIPT_DIR/mac-install.sh" | bash' 2>&1) && rc=0 || rc=$?
+    output=$(run_main '{ cat "$SCRIPT_DIR/mac-install.sh"; printf "%s\n" "$PIPE_TRAILER"; } | bash' 2>&1) \
+      && rc=0 || rc=$?
   else
     output=$(run_main 'set -euo pipefail; source "$SCRIPT_DIR/mac-install.sh"; main' < /dev/null 2>&1) \
       && rc=0 || rc=$?
@@ -215,6 +217,7 @@ run_main() {
     REGISTRY_CLONED="$REGISTRY_CLONED" \
     REGISTRY_SEEDED="$REGISTRY_SEEDED" \
     SCRIPT_DIR="$SCRIPT_DIR" \
+    PIPE_TRAILER="$PIPE_TRAILER" \
     ${EXTRA_ENV} \
     bash -c "$1"
 }
@@ -350,18 +353,32 @@ assert_contains "override: prints the start line for the named instance" \
   "caffeinate -i -s limactl shell other -- bash -lc '~/tidepool/scripts/vm-board.sh'" "$output"
 
 # --- curl | bash ------------------------------------------------------------
-# The documented invocation, and the only one bash reads from stdin: the
-# script is piped in rather than sourced, so BASH_SOURCE is unset and the
-# guard around main has to survive `set -u`. stdin being a pipe also makes the
-# installer reattach to /dev/tty for the two interactive logins; where there is
-# no controlling terminal (CI, this test) that reattach fails, and `set -e`
-# must not take the run down with it.
+# The documented invocation, and the only one bash reads from stdin. Two things
+# follow from that, and both are pinned here:
+#
+#   1. BASH_SOURCE is unset, so the guard around main has to survive `set -u`.
+#   2. bash goes on reading fd 0 after main returns, so main has to end the
+#      script itself. Where a controlling terminal exists, fd 0 by then is the
+#      terminal and what the owner types next would run as the rest of the
+#      script; here there is none, so fd 0 is still the pipe and the leak shows
+#      as the appended line running.
+#
+# reattach_tty declines without a controlling terminal (CI, this test) and
+# `set -e` must not take the run down with it — the exit code below covers it.
 
 reset_case
 STDIN_PIPE=1
 run_install
-assert_eq "piped stdin: the run survives a failed /dev/tty reattach" "0" "$rc"
+assert_eq "piped stdin: the run survives a declined reattach" "0" "$rc"
 assert_contains "piped stdin: still reaches the end" "npm run init-registry" "$log"
+
+# Whatever follows the script on fd 0 must not be read as more script.
+reset_case
+STDIN_PIPE=1
+PIPE_TRAILER='echo LEAKED-TRAILER'
+run_install
+assert_eq "piped stdin: trailing input does not abort the run" "0" "$rc"
+assert_not_contains "piped stdin: stops reading fd 0 once main is done" "LEAKED-TRAILER" "$output"
 
 # --- vm-board.sh ------------------------------------------------------------
 # Runs inside the VM, launched by `limactl shell -- <path>`: no login shell, no

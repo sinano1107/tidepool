@@ -31,8 +31,10 @@ TEMPLATE_URL="${TIDEPOOL_TEMPLATE_URL:-https://raw.githubusercontent.com/sinano1
 reattach_tty() {
   if [[ -t 0 ]]; then return; fi
   local dev
-  dev="$(ps -o tty= -p $$ 2> /dev/null | tr -d '[:space:]')"
-  # No controlling terminal: macOS prints "??" here.
+  # `|| true`: under `pipefail` the assignment carries the pipeline's status,
+  # so a missing `ps` would abort the run here rather than decline.
+  dev="$(ps -o tty= -p $$ 2> /dev/null | tr -d '[:space:]')" || true
+  # No controlling terminal: macOS prints "??", Linux "?".
   if [[ -z "$dev" || "$dev" == *'?'* || ! -e "/dev/$dev" ]]; then return; fi
   { exec < "/dev/$dev"; } 2> /dev/null || true
 }
@@ -184,6 +186,7 @@ if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
   main "$@"
   # Also only under `curl | bash`: bash is still reading commands from fd 0,
   # which reattach_tty pointed at the terminal — without this it would read
-  # whatever the owner types next as the rest of the script.
+  # whatever the owner types next as the rest of the script. Nothing may be
+  # added after `fi`: piped, it would never run.
   exit
 fi
