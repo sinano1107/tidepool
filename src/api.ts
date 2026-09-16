@@ -873,13 +873,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         res.status(400).json({ error: err.message });
       } else if (err instanceof LiveCheckoutSignalsError) {
         // issue #383: 危険な値の 409 と同じラウンドトリップ(WebUI の
-        // useDangerousSave がそのまま乗る)。載せる `clone_landing` は
-        // サーバが合成した着地先で、origin を持たない checkout では null ——
-        // 出せる代替の入口が無いことを、空文字ではなく null で言う
+        // useDangerousSave がそのまま乗る)。ただし理由コードの欄は分ける ——
+        // この信号は CONTEXT.md「危険な値」の族ではなく、同じ欄に載せると
+        // ADR 0088 の「確認は WebUI 専用」がここまで及ぶと読める。
+        // `clone_landing` はサーバが合成した着地先で、origin を持たない
+        // checkout では null —— 出せる代替の入口が無いことを、空文字ではなく null で言う
         res.status(409).json({
           error: err.message,
           confirm_required: true,
-          dangerous_values: err.reasons,
+          live_checkout_signals: err.reasons,
           clone_landing: err.cloneLanding,
         });
       } else {

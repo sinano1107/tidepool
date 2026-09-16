@@ -1238,11 +1238,18 @@ const DANGEROUS_REASON_LABEL = {
     'Review-allowed commands is non-empty — review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.',
   allowed_domains_set:
     'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
-  // issue #383: 危険な値の族ではない(エージェントの権限は1ミリも広がらない) —
-  // 守っているのは人間自身の作業ツリーのほうである。確認の理由コードという枠だけ
-  // 共有しているので、翻訳表も同じ1つで足りる
+};
+
+// issue #383 の信号コード。DANGEROUS_REASON_LABEL とは別の表である — この族は
+// エージェントの権限を1ミリも広げず、守っているのは人間自身の作業ツリーのほう
+// なので、CONTEXT.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
+// 「確認は WebUI 専用」がこの族まで及ぶと読める)。訳すだけという性質は同じで、
+// 判定はサーバ単一正本(ADR 0027)。
+const LIVE_CHECKOUT_SIGNAL_LABEL = {
   uncommitted_changes:
     'The checkout has uncommitted changes or untracked files — someone is working in this tree right now.',
+  worktree_unreadable:
+    'The checkout has no readable working tree — the board could not tell whether work is in progress there.',
   claude_settings_local:
     'The checkout has .claude/settings.local.json — host-local state a human put there for their own sessions.',
   claude_settings_hooks:
@@ -1461,9 +1468,12 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
   );
 }
 
-// The two-phase dangerous-value save (issue #78, #55 phase 3; generalized to
-// workspaces by ADR 0061 決定1), shared by every door that can carry a
-// dangerous value. The first attempt omits the confirm flag; when the payload
+// The two-phase confirmed save (issue #78, #55 phase 3; generalized to
+// workspaces by ADR 0061 決定1), shared by every door whose first attempt can
+// come back 409 `confirm_required`. Most of those doors carry a dangerous
+// value; issue #383's register gate does not (it shows the human what their
+// own checkout looks like), which is why the reason codes and their labels are
+// per-door rather than one table. The first attempt omits the confirm flag; when the payload
 // grants broad power the server answers 409 confirm_required with the machine
 // reason codes (issue #77). We surface those in a dialog and, once the human
 // accepts, resend the very same body with the flag set. The board makes no
@@ -1472,7 +1482,7 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
 // workspaces — ADR 0061 決定1 kept the workspace door's existing flag name
 // rather than adding a second boolean). Returns the busy flag, the save
 // entrypoint, and the dialog element the caller renders inline.
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = 'dangerous_values', labels = DANGEROUS_REASON_LABEL }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null); // { reasons, detail, resend } | null while safe
@@ -1491,10 +1501,12 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         // (bad input, a push that never landed — ADR 0052 決定1) by its
         // confirm_required flag — only that one opens the dialog for a resend
         if (err.status === 409 && err.detail?.confirm_required) {
-          setConfirm({ reasons: err.detail.dangerous_values ?? [], detail: err.detail, resend: () => attempt(true) });
+          setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say('danger', `${noun} ${verb} failed${failDetail ? ` — ${failDetail}` : ''}`, String(err.message || err));
+          // `not ${verb}` であって `${verb} failed` ではない — verb は過去分詞
+          // (added / deleted / updated)なので、後者は「workspace added failed」に崩れる
+          say('danger', `${noun} not ${verb}${failDetail ? ` — ${failDetail}` : ''}`, String(err.message || err));
         }
       }
       setBusy(false);
@@ -1512,7 +1524,7 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>{dialogLead}</p>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {(confirm?.reasons ?? []).map((r) => (
-          <li key={r}>{DANGEROUS_REASON_LABEL[r] ?? r}</li>
+          <li key={r}>{labels[r] ?? r}</li>
         ))}
       </ul>
       {/* 理由コードの列挙の下に、その扉だけが持つ一行(issue #383 の clone 入口の
@@ -2281,6 +2293,8 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
         </p>
       ) : null,
     confirmLabel: 'Register anyway',
+    reasonsKey: 'live_checkout_signals',
+    labels: LIVE_CHECKOUT_SIGNAL_LABEL,
     // creation is idempotent server-side — a failed attempt leaves only
     // orphans the registry never saw, so "just press it again" is honest
     failDetail: 'safe to retry as-is',

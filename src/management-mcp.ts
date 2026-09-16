@@ -334,11 +334,21 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // 権限を広げず、拒めば今日 MCP から通っている dirty checkout の register を
         // 通らなくする = issue が「やらないこと」に挙げた自動拒否そのものになる。
         // スキーマに `confirm` は生やさず、ここで内部的に立てる — 確認をエージェントに
-        // 肩代わりさせる経路は作らない。信号の判定も文面も domain 側が唯一の正本
-        // (ADR 0027)なので、読み直すのではなく確認付きで出し直す。
+        // 肩代わりさせる経路は作らない。信号の**判定**は domain が唯一の正本(ADR 0027)
+        // だが、**文面**はこの扉が自分で綴る: `err.message` は HTTP の扉宛てで
+        // 「confirm: true で出し直せ」と言っており、ここの読み手にとっては既に済んだ
+        // 操作の指示であり、かつ渡す手段の無い引数の名指しである。
         if (err instanceof LiveCheckoutSignalsError && input.mode === "register") {
           try {
-            return toolResult({ path: await deps.workspaceAdmin.create({ ...input, confirm: true }), notice: err.message });
+            const path = await deps.workspaceAdmin.create({ ...input, confirm: true });
+            return toolResult({
+              path,
+              notice:
+                `registered as asked. This path looks like a checkout a human is working in (${err.reasons.join(", ")})` +
+                (err.cloneLanding === null
+                  ? ". Tell the human what was observed."
+                  : `. The clone entrance would have given the board its own checkout at ${err.cloneLanding} instead — tell the human, who may prefer that.`),
+            });
           } catch (retried) {
             return registryToolError(retried);
           }

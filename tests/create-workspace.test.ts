@@ -31,22 +31,18 @@ async function makeMainRegistry(): Promise<string> {
   return dir;
 }
 
+/** fixture の commit — ホストの user.name / user.email に依存させない。 */
+function commitAll(dir: string, message: string): void {
+  git(dir, "add", "-A");
+  git(dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", message);
+}
+
 /** clone 元の実 git リポジトリ(ローカルパス = clone 可能な URL)。 */
 async function makeUpstream(defaultBranch = "main"): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "tidepool-upstream-"));
   git(dir, "init", "-b", defaultBranch);
   await writeFile(join(dir, "readme.md"), "upstream fixture");
-  git(dir, "add", "-A");
-  git(
-    dir,
-    "-c",
-    "user.name=test",
-    "-c",
-    "user.email=test@example.com",
-    "commit",
-    "-m",
-    "initial commit",
-  );
+  commitAll(dir, "initial commit");
   return dir;
 }
 
@@ -238,8 +234,7 @@ async function checkoutWithLocalSettings(): Promise<string> {
   await mkdir(join(dir, ".claude"), { recursive: true });
   await writeFile(join(dir, ".claude", "settings.local.json"), "{}");
   await writeFile(join(dir, ".gitignore"), ".claude/settings.local.json\n");
-  git(dir, "add", "-A");
-  git(dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "ignore local settings");
+  commitAll(dir, "ignore local settings");
   return dir;
 }
 
@@ -253,8 +248,7 @@ async function checkoutWithProjectHooks(): Promise<string> {
     join(dir, ".claude", "settings.json"),
     JSON.stringify({ hooks: { PreToolUse: [] } }),
   );
-  git(dir, "add", "-A");
-  git(dir, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "project hooks");
+  commitAll(dir, "project hooks");
   return dir;
 }
 
@@ -278,6 +272,39 @@ describe("createWorkspace: 生きた dev checkout の信号(issue #383)", () => 
       expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
     });
   }
+
+  // bare repo は `rev-parse --git-dir` を通ってここへ来る(NotAGitRepositoryError が
+  // 拾わない)。`git status` は「作業ツリーの外」で落ちるので、素通しすると素の例外が
+  // 呼び出し側の入力の問題を盤面の故障(502)に化けさせる。「読めなかった」は
+  // 「きれい」ではないという線で、拒まずに信号として見せる。
+  it("作業ツリーを持たないパス(bare repo)は例外ではなく信号として現れる", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const parent = await mkdtemp(join(tmpdir(), "tidepool-bare-"));
+    const path = join(parent, "bare.git");
+    git(parent, "init", "--bare", path);
+
+    await expect(
+      createWorkspace({ mode: "register", name: "sandbox", path }, deps),
+    ).rejects.toMatchObject({ name: "LiveCheckoutSignalsError", reasons: ["worktree_unreadable"] });
+  });
+
+  // 既に規約どおりの場所にある checkout を register で拾った場合、clone 入口の
+  // 「代わりにこちらへ」は自分自身を指してしまう —— 提案になっていないので出さない。
+  it("登録先が既に規約由来の着地先そのものなら、clone 入口の提案は出ない", async () => {
+    const registryDir = await makeMainRegistry();
+    const deps = await makeDeps(registryDir);
+    const upstream = await makeUpstream();
+    const path = join(deps.workspacesBaseDir, "sandbox");
+    git(deps.workspacesBaseDir, "clone", "--quiet", upstream, path);
+    await writeFile(join(path, "wip.md"), "human's work in progress");
+
+    const err = await createWorkspace({ mode: "register", name: "sandbox", path }, deps).catch(
+      (e: unknown) => e,
+    );
+
+    expect((err as LiveCheckoutSignalsError).cloneLanding).toBeNull();
+  });
 
   it("confirm: true の再送は従来どおり登録する — エントリに confirm は残らない", async () => {
     const registryDir = await makeMainRegistry();

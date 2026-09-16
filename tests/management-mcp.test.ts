@@ -1030,6 +1030,9 @@ it("create_workspace は生きた dev checkout の信号でも登録を通し、
     expect(payload.path).toBe("/home/masaki/tidepool");
     expect(payload.notice).toContain("uncommitted_changes, claude_settings_hooks");
     expect(payload.notice).toContain("/mnt/workspaces/tidepool");
+    // 文面はこの扉が綴る: HTTP の扉宛ての「confirm: true で出し直せ」を写すと、
+    // 既に済んだ操作の指示になり、かつスキーマに無い引数を名指しすることになる
+    expect(payload.notice).not.toContain("confirm");
     // adapter が内部で立てた2回目だけが confirm を持つ
     expect(calls.map((c) => (c as any).confirm)).toEqual([undefined, true]);
   } finally {

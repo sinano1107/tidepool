@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { GitHubClient } from "./github.js";
@@ -197,10 +197,14 @@ export async function createWorkspace(input: CreateWorkspaceInput, deps: Workspa
   if (input.mode === "register" && input.confirm !== true) {
     const reasons = liveCheckoutSignals(input.path);
     if (reasons.length > 0) {
+      // 提案が登録しようとしている当のパスを指すなら提案ではない —— 人間が既に
+      // 規約どおりの場所にある checkout を register で拾っている場合に起きる
+      const landing =
+        entry.repo === undefined ? null : conventionCheckoutPath(input.name, deps.workspacesBaseDir);
       throw new LiveCheckoutSignalsError(
         input.path,
         reasons,
-        entry.repo === undefined ? null : conventionCheckoutPath(input.name, deps.workspacesBaseDir),
+        landing !== null && resolve(landing) !== resolve(input.path) ? landing : null,
       );
     }
   }
@@ -622,10 +626,13 @@ export class NotAGitRepositoryError extends Error {
 /** issue #383 の信号コード: 「このパスは人間が今日も使っている作業ツリーに見える」を
  *  数え上げる、安定した機械可読な文字列。ADR 0061 の `DangerousWorkspaceValueReason`
  *  とは**別の族**である(CONTEXT.md「危険な値」= エージェントの権限を広げる値の列挙で
- *  あり、この3つはどれも権限を広げない)。409 の `dangerous_values` に載る枠は共有する
- *  —— WebUI 側の翻訳表が1つで済むのは、枠が「確認の理由コード」だからである。 */
+ *  あり、これらはどれも権限を広げない)。したがって 409 でも `dangerous_values` には
+ *  載せず、`live_checkout_signals` という自分の欄を持つ —— 同じ欄に相乗りすると、
+ *  「危険な値の確認は WebUI 専用」(ADR 0088)がこの族まで縛ると読める。管理MCP を
+ *  拒否にしないという決定はまさにその逆であり、区別は注釈ではなく綴りで持たせる。 */
 type LiveCheckoutSignal =
   | "uncommitted_changes"
+  | "worktree_unreadable"
   | "claude_settings_local"
   | "claude_settings_hooks";
 
@@ -638,8 +645,17 @@ function liveCheckoutSignals(path: string): LiveCheckoutSignal[] {
   const reasons: LiveCheckoutSignal[] = [];
   // --no-optional-locks: 門が人間の生きた作業ツリーの index.lock を取らない
   // (守ろうとしているものを触りにいかない)
-  if (git(path, "--no-optional-locks", "status", "--porcelain") !== "") {
-    reasons.push("uncommitted_changes");
+  try {
+    if (git(path, "--no-optional-locks", "status", "--porcelain") !== "") {
+      reasons.push("uncommitted_changes");
+    }
+  } catch {
+    // 作業ツリーを持たないパス(bare repo は `rev-parse --git-dir` を通ってここへ
+    // 来る)。「読めなかった」を「きれい」と読ませない —— sandbox.ts の
+    // workspaceSettingsDisposition と同じ fail-closed だが、この門は拒まないので
+    // 人間が見て納得すれば従来どおり登録される。素の例外を投げれば 502(盤面の
+    // 故障)に化け、呼び出し側の入力の問題を盤面のせいにしてしまう
+    reasons.push("worktree_unreadable");
   }
   if (existsSync(join(path, ".claude", "settings.local.json"))) reasons.push("claude_settings_local");
   if (workspaceSettingsDisposition(path).projectHooks) reasons.push("claude_settings_hooks");
