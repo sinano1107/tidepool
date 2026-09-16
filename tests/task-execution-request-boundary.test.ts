@@ -16,13 +16,14 @@ import {
   makeWorkspace,
   managementMcpClient,
   mcpClient,
+  queueWork,
   registerWork,
   TEST_CREDENTIAL,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
-/** ADR 0107 決定1 の盤面境界 —— 3つの入口が要求2列を**受け取る**ことと、不正値が
+/** ADR 0107 決定1 の盤面境界 —— 4つの入口が要求2列を**受け取る**ことと、不正値が
  *  その入口の失敗の綴り(400 / toolError)になることだけを言う。「どの値が正しいか」
  *  はドメイン層が1度だけ言う(決定3)ので、入口ごとに enum を書き直さない。 */
 
@@ -131,6 +132,48 @@ it("decompose の ChildSpec は要求2列を受け取り、不正値は toolErro
     priority: "cost",
   });
   expect(board.find((x: any) => x.title === "x")).toBeUndefined();
+});
+
+it("管理MCP の decompose_task は要求2列を受け取り、不正値は toolError になる(issue #659)", async () => {
+  t = await bootTidepool();
+  const parent = queueWork(t, "modernize tide data");
+  const client = await managementMcpClient(t.baseUrl);
+  // 不正値を先に —— 成功した分解は parent を blocked にするので、後続の拒否が
+  // ティアではなく parent の状態で起きてしまう。
+  const bad: any = await client.callTool({
+    name: "decompose_task",
+    arguments: {
+      task_id: parent.id,
+      reason: "a split with an unknown tier",
+      children: [{ title: "x", purpose: "p", completion_criteria: "c", tier: "platinum" }],
+    },
+  });
+  expect(bad.isError).toBe(true);
+
+  const ok: any = await client.callTool({
+    name: "decompose_task",
+    arguments: {
+      task_id: parent.id,
+      reason: "the hard half deserves a stronger model",
+      children: [
+        {
+          title: "the hard half",
+          purpose: "p",
+          completion_criteria: "c",
+          tier: "frontier",
+          priority: "cost",
+        },
+      ],
+    },
+  });
+  expect(ok.isError ?? false).toBe(false);
+  await client.close();
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.find((x: any) => x.title === "the hard half")).toMatchObject({
+    tier: "frontier",
+    priority: "cost",
+  });
 });
 
 /* ------------------------------------------------------------------ *
