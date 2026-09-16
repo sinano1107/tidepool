@@ -61,29 +61,25 @@ export interface TeardownStep {
   workspace?: WorkspaceConfig | null;
 }
 
-/** 後始末の経路。**行の status から導く唯一の写像**(ADR 0113 決定3)—— 経路を表す
- *  永続事実は持たないので、対応表がここ以外に増えたらそれは写しである。 */
-export type Settlement = "completed" | "released" | "interrupted";
+type Settlement = "completed" | "released" | "interrupted";
 
-/** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・
- *  回収済み観測と、読み口の経路フィールドが同じこの1点を通す。 */
+/** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・回収済み
+ *  観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す永続事実は持たないので、
+ *  対応表がここ以外に増えたらそれは写しである。 */
 function settlementOf(status: string | undefined): Settlement {
   if (status === "in_progress") return "interrupted";
   return status === "done" ? "completed" : "released";
 }
 
 export function teardownStep(db: Db, taskId: string): TeardownStep {
-  switch (settlementOf(getTask(db, taskId)?.status)) {
-    case "interrupted":
-      return {
-        ready: (current) => current.status === "in_progress",
-        transition: (current, now) => returnForCapInterruption(db, current, now),
-      };
-    case "completed":
-      return { completion: true };
-    default:
-      return { completion: false };
+  const settlement = settlementOf(getTask(db, taskId)?.status);
+  if (settlement === "interrupted") {
+    return {
+      ready: (current) => current.status === "in_progress",
+      transition: (current, now) => returnForCapInterruption(db, current, now),
+    };
   }
+  return { completion: settlement === "completed" };
 }
 
 /** 後始末の一撃(ADR 0109 決定1): tree rule → 状態遷移 → slot 解放。

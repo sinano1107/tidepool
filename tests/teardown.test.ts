@@ -214,8 +214,9 @@ it("「今なぜ pickup が起きないか」の読み口が後始末を報せ�
   const pause = (await api(t.baseUrl, "GET", "/api/pause")).json;
   expect(pause.halts).toEqual([]);
   expect(pause.teardown.taskId).toBe(task.id);
-  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.settlement).toBe("completed");
-  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
+  const teardown = (await api(t.baseUrl, "GET", "/api/queue")).json.teardown;
+  expect(teardown.taskId).toBe(task.id);
+  expect(teardown.settlement).toBe("completed");
 
   t.containers.fireEmpty(task.id);
   await settle();

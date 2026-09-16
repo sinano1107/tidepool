@@ -239,10 +239,8 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     });
   }
   // 後始末中の session の行は「走っている」ではない (issue #561 / ADR 0113 決定2) ——
-  // 上限到達による中断では行が `in_progress` のまま残るので、除かなければ slot 行が
-  // 死んだ session をタスクの実行として描く。concurrency=1 なので teardown の taskId は
-  // その session の行そのものである。`data.running` 経由の queue 画面の slot 状態
-  // (busy/limit/free)も同じこの1点に従う —— 2本目の判定を持たせない
+  // 上限到達による中断では行が `in_progress` のまま残る。concurrency=1 なのでその行は
+  // teardown の taskId そのもの。queue 画面の slot 状態も `data.running` 経由でここに従う
   const running = board.find((t) => t.status === 'in_progress' && t.id !== teardown?.taskId);
   const throttled = !!throttle?.throttled;
   // ADR 0030: which pace line is hit (session/week), and the fable line's own

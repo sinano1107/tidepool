@@ -8,9 +8,8 @@ import { expect, test } from "./fixtures.js";
  *  それをタスクの実行と取り違えていた。経路はサーバが `teardown.settlement` で
  *  導き、ブラウザは値 → コピーの写像だけを持つ(決定3 / ADR 0068 決定1)。 */
 
-/** 実行枠の状態(busy/limit/free)がブラウザに現れるのはここだけ ——
- *  `queue-screen.jsx` は busy でないときだけ slot 行を減光する。meta は常に
- *  `--text-muted` なので、行が meta と同じ色なら busy ではない。 */
+/** 実行枠の状態(busy/limit/free)がブラウザに現れるのはここだけ —— `queue-screen.jsx`
+ *  は busy でないときだけ slot 行を減光する。 */
 const color = (locator: Locator) => locator.evaluate((el) => getComputedStyle(el).color);
 
 /** design token の実効値。色そのものをテストに焼き込むと theme の調整で落ちる。 */
@@ -24,11 +23,6 @@ const token = (page: Page, name: string) =>
     return value;
   }, name);
 
-const openQueue = async (page: any, baseUrl: string) => {
-  await page.goto(baseUrl);
-  await page.getByRole("button", { name: "Queue" }).click();
-};
-
 test("上限到達による中断の後始末は、走っているタイトルではなく queue 復帰を告げる後始末行になる", async ({
   boot,
   page,
@@ -39,7 +33,8 @@ test("上限到達による中断の後始末は、走っているタイトル�
   // adapter が 429 exit を観測した瞬間の durable な状態(行は in_progress のまま)
   markTeardown(t.db, task.id, t.clock.now());
 
-  await openQueue(page, t.baseUrl);
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Queue" }).click();
   const line = page.getByText("session teardown · nothing new starts");
   await expect(line).toBeVisible();
   const meta = page.getByText("usage limit hit · task returns to the queue once processes exit");
@@ -56,7 +51,8 @@ test("完了経路の後始末は現行どおり後始末行を出す", async ({
   t.containers.hold(task.id); // 最終 verb は着地したのに process が残っている
   await completeViaMcp(t, task.id);
 
-  await openQueue(page, t.baseUrl);
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Queue" }).click();
   await expect(page.getByText("session teardown · nothing new starts")).toBeVisible();
   await expect(page.getByText("waiting for this session's processes to exit")).toBeVisible();
 });
@@ -69,7 +65,8 @@ test("後始末が無ければ実行中の行は従来どおりタイトルを�
   await registerWork(t, "already running");
   await t.clock.advance(HOUR);
 
-  await openQueue(page, t.baseUrl);
+  await page.goto(t.baseUrl);
+  await page.getByRole("button", { name: "Queue" }).click();
   await expect(page.getByText("already running")).toBeVisible();
   expect(await color(page.getByText("slot", { exact: true }))).toBe(await token(page, "--tide-4"));
   expect(await color(page.getByText("already running"))).toBe(await token(page, "--text-body"));
