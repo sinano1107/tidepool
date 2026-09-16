@@ -1668,6 +1668,33 @@ function GitHubLoginCard({ loggedIn }) {
   );
 }
 
+// Translation spend (issue #273). The last call's in/out is where a regression
+// in ADR 0062's env would show — compared against that ADR, not against a
+// second copy of its numbers kept here.
+// `records` null means the read failed: a face put here to catch a silent
+// regression must not itself go silent, so the card stays and says so.
+function TranslateUsageCard({ records }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  const last = records?.at(-1);
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <span style={settingsCardLabel}>translation spend</span>
+      {last ? (
+        <React.Fragment>
+          <FieldRow label="translations" kind="mono" value={`${records.length} generated`} />
+          <FieldRow label="estimated cost" kind="mono"
+            value={`$${records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`} />
+          <FieldRow label="last call" kind="mono"
+            value={`${last.usage.input_tokens} in / ${last.usage.output_tokens} out`} />
+        </React.Fragment>
+      ) : (
+        <FieldRow label="translations" kind="unset"
+          unsetLabel={records ? 'none generated yet' : 'usage unavailable'} />
+      )}
+    </Card>
+  );
+}
+
 function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
   const { Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:language';
@@ -2513,6 +2540,18 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       .catch(() => setGithubLoggedIn(null));
   }, []);
 
+  // issue #273: 末尾の loading… カスケードには足さない —— これが読めなくても残りの
+  // 設定は読めるので、board 全体を loading… に張り付かせない([] は「生成ゼロ」)
+  const [translateUsage, setTranslateUsage] = React.useState(null); // null → still loading
+  // 失敗はカードを消さずに面へ出す —— 読めなかったことが見えないと、この顔を
+  // 足した理由(記録があることと検知されることは別)がそのまま欠ける
+  const [translateUsageFailed, setTranslateUsageFailed] = React.useState(false);
+  React.useEffect(() => {
+    api('/api/translate/usage', undefined, 'GET')
+      .then(({ records }) => setTranslateUsage(records))
+      .catch(() => setTranslateUsageFailed(true));
+  }, []);
+
 
   const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
   // ADR 0082 決定1: 規約導出の着地先を合成するための基点 — { path, source }。
@@ -2792,6 +2831,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
           <MemoryEntriesCard workspaceNames={workspaceNames} language={displayLanguage} say={say} edit={edit} />
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
+        {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
         {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
