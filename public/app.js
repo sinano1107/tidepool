@@ -1950,6 +1950,19 @@ function GitHubLoginCard({ loggedIn }) {
     }
   ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the board acts on GitHub as tidepool[bot], and reaches only the repositories the Tidepool App is installed on. run ", /* @__PURE__ */ React.createElement("code", null, "npm run github-login"), " in a terminal on this host to log in \u2014 the same command re-logs in, and the board picks it up without a restart."));
 }
+function TranslateUsageCard({ records }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  const cost = records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0);
+  const last = records[records.length - 1];
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "translation spend"), last ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "generated", kind: "mono", value: `${records.length} calls` }), /* @__PURE__ */ React.createElement(FieldRow, { label: "estimated cost", kind: "mono", value: `$${cost.toFixed(4)}` }), /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "last call",
+      kind: "mono",
+      value: `${last.usage.input_tokens} in / ${last.usage.output_tokens} out`
+    }
+  )) : /* @__PURE__ */ React.createElement(FieldRow, { label: "generated", kind: "unset", unsetLabel: "no generated translations yet" }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "only generated translations are counted \u2014 a cache replay costs nothing and never appears here."));
+}
 function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
   const { Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:language";
@@ -2687,6 +2700,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   React.useEffect(() => {
     api("/api/settings/github", void 0, "GET").then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn)).catch(() => setGithubLoggedIn(null));
   }, []);
+  const [translateUsage, setTranslateUsage] = React.useState(null);
+  React.useEffect(() => {
+    api("/api/translate/usage", void 0, "GET").then(({ records }) => setTranslateUsage(records)).catch(() => setTranslateUsage(null));
+  }, []);
   const [workspaces, setWorkspaces] = React.useState(null);
   const [baseDir, setBaseDir] = React.useState(null);
   const [unavailable, setUnavailable] = React.useState(false);
@@ -2956,7 +2973,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), translateUsage !== null && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {
