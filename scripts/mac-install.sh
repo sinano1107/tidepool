@@ -20,12 +20,23 @@ TEMPLATE_URL="${TIDEPOOL_TEMPLATE_URL:-https://raw.githubusercontent.com/sinano1
 
 # Piped in through `curl | bash`, stdin is the pipe, but `gh auth login` and
 # `claude auth login` below want a terminal. Reattach to the controlling one
-# if there is any; a machine without one (CI, a detached shell) must not die
-# here, so the failing redirection is contained in its own group.
+# by its real device rather than /dev/tty: /dev/tty is the alias for whatever
+# the controlling terminal is, and a fd opened on it does not carry the
+# owner's keystrokes through `limactl shell` into the VM — the login prompt
+# arrives and then sits there unanswerable, with ^C ignored (measured on the
+# acceptance run of #484; a fd on /dev/ttysNNN works from the same script).
+# A machine without a controlling terminal (CI, a detached shell) must not die
+# here, so every step can decline and the failing redirection is contained in
+# its own group.
 reattach_tty() {
-  if [[ ! -t 0 && -e /dev/tty ]]; then
-    { exec < /dev/tty; } 2> /dev/null || true
-  fi
+  if [[ -t 0 ]]; then return; fi
+  local dev
+  # `|| true`: under `pipefail` the assignment carries the pipeline's status,
+  # so a missing `ps` would abort the run here rather than decline.
+  dev="$(ps -o tty= -p $$ 2> /dev/null | tr -d '[:space:]')" || true
+  # No controlling terminal: macOS prints "??", Linux "?".
+  if [[ -z "$dev" || "$dev" == *'?'* || ! -e "/dev/$dev" ]]; then return; fi
+  { exec < "/dev/$dev"; } 2> /dev/null || true
 }
 
 # Every VM-side command goes through here. `bash -lc` because a login shell is
@@ -167,8 +178,15 @@ main() {
   print_next_steps
 }
 
-# guarded so scripts/mac-install.test.sh can `source` this file and call
-# main() against its stubs
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Guarded so scripts/mac-install.test.sh can `source` this file and call main()
+# against its stubs. Under `curl | bash` bash reads this script from stdin and
+# leaves BASH_SOURCE unset, so the default is what keeps `set -u` from killing
+# the documented invocation; $0 is "bash" in that case, and matches.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
   main "$@"
+  # Also only under `curl | bash`: bash is still reading commands from fd 0,
+  # which reattach_tty pointed at the terminal — without this it would read
+  # whatever the owner types next as the rest of the script. Nothing may be
+  # added after `fi`: piped, it would never run.
+  exit
 fi
