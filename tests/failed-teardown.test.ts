@@ -103,18 +103,22 @@ async function session(route: "complete" | "cap" = "complete"): Promise<Fixture>
   return { db, clock, slot, task, ws, deps, landing, landed, repair: () => (broken = false) };
 }
 
-const answerDeps = (f: Fixture, deps: TeardownDeps = f.deps) => ({
-  db: f.db,
-  pollNow() {},
-  landing: f.landing,
-  teardownQuarantine: (taskId: string) => acceptTeardownQuarantine(deps, taskId),
-});
-
 /** 立っている落ちた後始末の question。 */
 const openQuestion = (f: Fixture) => getTask(f.db, openFailedTeardownQuestion(f.db)!.id)!;
 
-const answer = (f: Fixture, question: Task, deps?: TeardownDeps) =>
-  submitAnswer(answerDeps(f, deps), question, ["repaired by hand"], undefined, () => f.clock.now());
+const answer = (f: Fixture, question: Task, deps: TeardownDeps = f.deps) =>
+  submitAnswer(
+    {
+      db: f.db,
+      pollNow() {},
+      landing: f.landing,
+      teardownQuarantine: (taskId: string) => acceptTeardownQuarantine(deps, taskId),
+    },
+    question,
+    ["repaired by hand"],
+    undefined,
+    () => f.clock.now(),
+  );
 
 it("後始末が投げたら、落ちた後始末の question が1枚立つ —— 断言は3つだけで、再実行を予告する", async () => {
   const f = await session();

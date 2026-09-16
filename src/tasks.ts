@@ -1389,10 +1389,7 @@ export function answerQuestion(
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
         origin,
-        payload: {
-          kind: "teardown_reinstated",
-          task: question.question_quarantine_teardown,
-        },
+        payload: { kind: "teardown_reinstated" },
         at: now,
       });
       pickupResumed = true;

@@ -27,12 +27,10 @@ export function openFailedTeardownQuestion(db: Db): { id: string } | undefined {
 export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, now: Date): void {
   // 1件につき確認は最大1枚。登録の直前にもう一度読む(`quarantineContainment` と同じ posture)
   if (openFailedTeardownQuestion(db)) return;
-  const startedAt =
-    (
-      db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").get(taskId) as
-        | { teardown_started_at: string | null }
-        | undefined
-    )?.teardown_started_at ?? now.toISOString();
+  const row = db.prepare("SELECT teardown_started_at FROM tasks WHERE id = ?").get(taskId) as
+    | { teardown_started_at: string | null }
+    | undefined;
+  const startedAt = row?.teardown_started_at ?? now.toISOString();
   registerTask(
     db,
     {
@@ -40,7 +38,7 @@ export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, n
       title: FAILED_TEARDOWN_QUESTION_TITLE,
       purpose:
         `the board's own teardown for task ${taskId} threw this exception, and that teardown has ` +
-        `been unfinished since ${startedAt}:\n\n${failureBody(err)}\n\n` +
+        `been unfinished since ${startedAt}:\n\n${err instanceof Error ? err.message : String(err)}\n\n` +
         "No task is picked up while this stands — the execution slot is still held by that " +
         "session. Answering re-runs the same teardown: if it throws again the answer is refused, " +
         "this question stays open, and the refusal carries that run's exception body.",
@@ -58,8 +56,4 @@ export function quarantineFailedTeardown(db: Db, taskId: string, err: unknown, n
     BOARD_WORKER_ID,
     "board",
   );
-}
-
-export function failureBody(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

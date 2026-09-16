@@ -512,6 +512,17 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // ADR 0112 決定4: ただし落ちた後始末の question が開いているなら撃ち直さない ——
   // 撃てば同じ所で落ちて無言に戻る。枠も占めない: question が pickup を止めている
   // 以上、枠を握らせる理由が無い。門を**行**に持つので、この判断は再起動を越える。
+  //
+  // 起動時復旧と、落ちた後始末の受理の門(ADR 0112 決定3)が通る後始末は同じものである。
+  const teardownDeps: TeardownDeps = {
+    db,
+    clock: options.clock,
+    slot,
+    resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
+    githubAuth: options.githubAuth,
+    landing,
+    pollNow,
+  };
   const unfinishedTeardown = sessionInTeardown(db);
   if (unfinishedTeardown && runtimePreflight.available && !openFailedTeardownQuestion(db)) {
     // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
@@ -519,15 +530,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
     slot.occupy(unfinishedTeardown.taskId);
     slot.enterTeardown();
     void runTeardown(
-      {
-        db,
-        clock: options.clock,
-        slot,
-        resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
-        githubAuth: options.githubAuth,
-        landing,
-        pollNow,
-      },
+      teardownDeps,
       unfinishedTeardown.taskId,
       teardownStep(db, unfinishedTeardown.taskId),
     );
@@ -547,21 +550,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         return common.available ? adapterContainment(harness) : common;
       }
     : undefined;
-  // ADR 0112 決定3: 落ちた後始末の解放の門。人間 verb には後始末の deps 一式ではなく
-  // この1つの callback を渡す(`containment` / `registryReachability` と同じ配線)。
-  const teardownQuarantine = (taskId: string) =>
-    acceptTeardownQuarantine(
-      {
-        db,
-        clock: options.clock,
-        slot,
-        resolve: buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
-        githubAuth: options.githubAuth,
-        landing,
-        pollNow,
-      },
-      taskId,
-    );
+  // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
+  // (`containment` / `registryReachability` と同じ配線)。
+  const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
   const scheduler = startScheduler({
     db,
     clock: options.clock,

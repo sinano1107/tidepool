@@ -1,6 +1,6 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { failureBody, quarantineFailedTeardown } from "./failed-teardown.js";
+import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
@@ -131,7 +131,8 @@ export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: strin
     await teardown(deps, taskId, teardownStep(deps.db, taskId));
   } catch (err) {
     throw new DomainError(
-      `the teardown for task ${taskId} threw again: ${failureBody(err)}`,
+      `the teardown for task ${taskId} threw again: ` +
+        (err instanceof Error ? err.message : String(err)),
     );
   }
 }
