@@ -43,6 +43,11 @@ Absent means completion needs something outside the cloud container: hardware th
 Absent is the point: an open issue with no `verify:*` label is work not yet done, so the open set
 reads as a queue. The label comes off when the observation lands, and the issue closes with it.
 
+**It rides the issue that holds the confirmation, not the implementation one.** Implementation issues
+close at merge (ADR 0126), so the issue still waiting on production is the derived one — the row whose
+whole content is "watch for X". Putting the label on a merged implementation issue would reopen a
+question its own close already answered.
+
 **A label, not a comment.** The queue is read as a list — `gh issue list`, the web list — and a
 comment only speaks once the issue is already open. Filter the queue with
 `gh issue list --search '-label:verify:production'`. The filter names the venue, so a second

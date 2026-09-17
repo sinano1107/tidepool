@@ -81,4 +81,4 @@ A review finding that was filed or commented on says so on its own line above (`
 
 ## Where this stops
 
-At the open pull request. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human runs the final verification and merges.
+At the open pull request. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human merges, and the PR's `Closes #<issue>` closes the issue with it (ADR 0126) — no confirmation of yours gates that. When the issue's subject is a symptom observed in the real environment, the check that the symptom is gone belongs to one of the issues the filing step above produces, not to this one staying open.

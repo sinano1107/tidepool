@@ -73,9 +73,15 @@ One issue per session, cleared between them. Two implementation sessions in one 
 
 - **Agreeing the seams**, before the first test. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask. The seams on offer are the three in ADR 0107 — server boundary (`bootTidepool`), domain layer (exported functions, asserted through exports), schema layer (SQL, migrations only) — and a behaviour is stated once, at the lowest seam it shows at.
 - **Merging the pull request.** The skill stops at an open PR and never merges, closes, or ticks acceptance criteria.
-- **Closing the originating issue.** It closes when the change has been confirmed at the venue its
-  subject demands — CI for what the suite covers, the Lima VM for worker-facing behaviour
-  (containers, reclaim, containment, a real worker run — [machine-setup.md](./machine-setup.md)),
-  production for what nothing else can show. Merging alone is not that confirmation. When
-  production really is the only venue, the issue stays open and carries `verify:production`, so
-  the open set still reads as a queue of work to do — see [triage-labels.md](./triage-labels.md).
+
+Closing the originating issue is **not** one of them. The PR carries `Closes #<issue>` and merging
+closes it (ADR 0126) — the spec is the contract and CI covers it, so no human confirmation gates the
+close.
+
+When an issue's subject is a **symptom observed in the real environment** ("the Codex route's worker
+cannot start"), merging still closes it — but the confirmation that the symptom is gone moves to a
+**derived issue**, because merging only says the suspected cause was removed. That issue carries
+`needs-info` until the observation lands (ADR 0102), and `verify:production` when production is the
+only venue that can show it — on the derived issue, never on the implementation one. See
+[triage-labels.md](./triage-labels.md). The venue is usually CI, or the Lima VM for worker-facing
+behaviour (containers, reclaim, containment, a real worker run — [machine-setup.md](./machine-setup.md)).
