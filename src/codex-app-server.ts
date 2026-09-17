@@ -150,7 +150,7 @@ function probeEnv(codexHome: string): NodeJS.ProcessEnv {
   return env;
 }
 
-function commandFailure(result: CodexCliCommandResult): string | null {
+export function commandFailure(result: CodexCliCommandResult): string | null {
   return result.exitCode === 0 ? null : result.stderr.trim() || `Codex exited ${result.exitCode}`;
 }
 

@@ -19,6 +19,7 @@ import { agentGitIdentityEnv, PREMISE_BREACH_PROTOCOL } from "./claude-worker.js
 import type { Clock } from "./clock.js";
 import {
   CODEX_APP_SERVER_VERSION,
+  commandFailure,
   defaultCommand,
   parseResponses,
   respondedTo,
@@ -138,17 +139,6 @@ export interface CodexHookRegistration {
   command: string | null;
 }
 
-/** 盤面が Codex に登録されていることを要求する hook —— spawn が渡す宣言と同じ1つの形。 */
-function expectedCodexHooks(hookPath: string): CodexHookRegistration[] {
-  return [{
-    event: "preToolUse",
-    matcher: BOARD_HOOK_MATCHER,
-    enabled: true,
-    source: "sessionFlags",
-    command: hookPath,
-  }];
-}
-
 /** `hooks/list` の `result` から、登録を cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
  *  vendor の応答の形が変わったときに落ちる場所はここ1つ。 */
 export function observedHooks(result: unknown): CodexHookRegistration[] {
@@ -189,7 +179,12 @@ export async function checkCodexCapability(
     [
       ["version", [CODEX_CLI_VERSION], [observed.cliVersion]],
       ["skill", [], observed.skills],
-      ["hook", expectedCodexHooks(hookPath), observed.hooks],
+      // 盤面が Codex に登録されていることを要求する hook —— spawn が渡す宣言と同じ1つの形
+      [
+        "hook",
+        [{ event: "preToolUse", matcher: BOARD_HOOK_MATCHER, enabled: true, source: "sessionFlags", command: hookPath }],
+        observed.hooks,
+      ],
       ["permission", CODEX_PERMISSIONS, observed.permissions],
       ["closed feature", CLOSED_FEATURES, observed.closedFeatures],
       ["developer instructions", [CODEX_DEVELOPER_MARKER], observed.developerMarkers],
@@ -429,11 +424,8 @@ async function probeHookRegistration(
     ["app-server", ...configArgs(hookConfig(hook))],
     { env, input, until: respondedTo([1, 2]) },
   );
-  if (observed.exitCode !== 0) {
-    throw new Error(
-      `hooks/list probe failed: ${observed.stderr.trim() || `Codex exited ${observed.exitCode}`}`,
-    );
-  }
+  const failed = commandFailure(observed);
+  if (failed) throw new Error(`hooks/list probe failed: ${failed}`);
   return observedHooks(resultOf(parseResponses(observed.stdout), 2, "hooks/list"));
 }
 
