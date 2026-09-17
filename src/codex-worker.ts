@@ -13,8 +13,6 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { agentGitIdentityEnv, PREMISE_BREACH_PROTOCOL } from "./claude-worker.js";
@@ -123,7 +121,6 @@ export interface CodexWorkerOptions {
 
 export interface CodexCapabilityObservation {
   cliVersion: string;
-  mcpTools: readonly string[];
   skills: readonly string[];
   hooks: readonly string[];
   permissions: readonly string[];
@@ -147,7 +144,6 @@ export async function checkCodexCapability(
   const mismatch = (
     [
       ["version", [CODEX_CLI_VERSION], [observed.cliVersion]],
-      ["MCP tool", BOARD_VERBS, observed.mcpTools],
       ["skill", [], observed.skills],
       ["hook", CODEX_HOOKS, observed.hooks],
       ["permission", CODEX_PERMISSIONS, observed.permissions],
@@ -360,16 +356,6 @@ export function observedDeveloperMarkers(promptInput: string): string[] {
     .filter((text) => text === CODEX_DEVELOPER_MARKER);
 }
 
-async function probeMcpTools(mcpUrl: string): Promise<string[]> {
-  const client = new Client({ name: "tidepool-codex-containment", version: "0.0.0" });
-  try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(mcpUrl)));
-    return (await client.listTools()).tools.map((tool) => tool.name);
-  } finally {
-    await client.close();
-  }
-}
-
 function probeHook(codexHome: string, taskTemp: string): string[] {
   const hook = installBoardHook(codexHome);
   const state = join(taskTemp, "hook-state.json");
@@ -484,7 +470,6 @@ async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
   workspace: string;
-  mcpUrl: string;
 }): Promise<CodexCapabilityObservation> {
   const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-")));
   const workspace = realpathSync(options.workspace);
@@ -518,7 +503,6 @@ async function actualCodexCapability(options: {
     await probePermission(options.executable, workspace, taskTemp, "review", env);
     return {
       cliVersion,
-      mcpTools: await probeMcpTools(options.mcpUrl),
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
       hooks: probeHook(options.codexHome, taskTemp),
@@ -534,7 +518,6 @@ export function createCodexCapabilityCheck(options: {
   executable: string;
   codexHome: string;
   workspace: string;
-  mcpUrl: string;
 }): () => Promise<ContainmentCapability> {
   return () => checkCodexCapability(() => actualCodexCapability(options));
 }
@@ -674,7 +657,8 @@ export class CodexWorker implements WorkerAdapter {
       ...closedSurfaceConfig(),
       'forced_login_method="chatgpt"',
       `mcp_servers.tidepool.url=${toml(taskMcpUrl.toString())}`,
-      // ADR 0122 決定2: MCP の登録と同じ差を写す(probe の期待値 BOARD_VERBS は task 無しの面なので変えない)
+      // ADR 0122 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+      // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
       `mcp_servers.tidepool.enabled_tools=${toml(
         isMetaReviewOf(this.options.db, task.id, "memory")
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...MEMORY_META_REVIEW_VERBS]
