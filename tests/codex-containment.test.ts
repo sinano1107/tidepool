@@ -37,6 +37,7 @@ const VALID: CodexCapabilityObservation = {
     "image_generation",
     "in_app_browser",
     "memories",
+    "multi_agent",
     "plugins",
     "recommended_plugins",
     "remote_plugin",

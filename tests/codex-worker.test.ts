@@ -163,12 +163,14 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("features.plugins=false");
     expect(config).toContain("features.skill_search=false");
     expect(config).toContain("features.apps=false");
+    expect(config).toContain("features.multi_agent=false");
     expect(config).toContain('forced_login_method="chatgpt"');
     expect(config).toContain("project_doc_max_bytes=0");
     expect(config).toContain('web_search="disabled"');
     expect(config).toContain("mcp_servers.tidepool.enabled_tools=");
     expect(config).toContain("get_current_task");
     expect(config).toContain("mcp_servers.tidepool.required=true");
+    expect(config).toContain('mcp_servers.tidepool.default_tools_approval_mode="approve"');
     expect(config).toContain("skills.config=");
     expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
     expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md"));
