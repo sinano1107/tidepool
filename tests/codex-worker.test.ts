@@ -20,12 +20,6 @@ const CLI_VERSION = "codex-cli 0.147.0";
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-/** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
-function enabledTools(args: string[]): string[] {
-  const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith("mcp_servers.tidepool.enabled_tools="))!;
-  return JSON.parse(entry.slice("mcp_servers.tidepool.enabled_tools=".length)) as string[];
-}
-
 function task(db: ReturnType<typeof openDb>, title = "codex-task") {
   return registerTask(db, {
     type: "work",
@@ -78,6 +72,18 @@ function recordingSpawn() {
     error: (error: Error) => errors.forEach((fn) => fn(error)),
   };
 }
+
+/** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
+function configValue<T>(args: string[], prefix: string): T {
+  const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith(prefix))!;
+  return JSON.parse(entry.slice(prefix.length)) as T;
+}
+
+/** 盤面が書いた文面は `-c developer_instructions=` に載る(ADR 0124 決定2)。 */
+const developerInstructions = (args: string[]) => configValue<string>(args, "developer_instructions=");
+
+/** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
+const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_servers.tidepool.enabled_tools=");
 
 async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
@@ -147,8 +153,8 @@ describe("CodexWorker (ADR 0098)", () => {
     ]));
     const config = call.args.filter((_, index) => call.args[index - 1] === "-c").join("\n");
     // 前提の破綻と自タスク外の発見の2文(ADR 0121 / issue #631)
-    expect(call.args.at(-1)).toContain("When the premise of the decomposition decision your task rests on turns out to be false, declare a premise breach rather than working around it or escalating it.");
-    expect(call.args.at(-1)).toContain("A finding outside your task's scope is not your task: record the decision not to act on it with `log_decision`, and never decompose it into a child.");
+    expect(developerInstructions(call.args)).toContain("When the premise of the decomposition decision your task rests on turns out to be false, declare a premise breach rather than working around it or escalating it.");
+    expect(developerInstructions(call.args)).toContain("A finding outside your task's scope is not your task: record the decision not to act on it with `log_decision`, and never decompose it into a child.");
     expect(config).toContain('model_reasoning_effort="high"');
     expect(config).toContain('default_permissions="tidepool-work"');
     expect(config).toContain('\":root\"=\"deny\"');
@@ -206,6 +212,39 @@ describe("CodexWorker (ADR 0098)", () => {
     ]);
   });
 
+  it("盤面の文面は developer_instructions に、task 固有の指示は prompt 引数に置く —— work / review とも同じ配置(ADR 0124 決定1・2)", async () => {
+    const f = await fixture();
+    const work = task(f.db, "codex-layer-work");
+    const review = registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-layer-review", purpose: "read the diff", completion_criteria: "findings are filed" },
+      new Date("2026-08-24T00:00:00.000Z"),
+    );
+    for (const value of [work, review]) f.worker.start(value);
+
+    for (const [i, value] of [work, review].entries()) {
+      const args = f.process.calls[i]!.args;
+      const developer = developerInstructions(args);
+      expect(developer).toContain("You are the Codex worker.");
+      expect(developer).toContain("## Authority");
+      expect(developer).toContain("Use only the tidepool MCP verbs to report board decisions and completion.");
+      expect(developer).toContain("Board verbs are main-thread only");
+      expect(developer).toContain("declare a premise breach");
+      expect(developer).not.toContain(value.title);
+      expect(developer).not.toContain(value.purpose);
+      expect(developer).not.toContain(value.completion_criteria);
+      // 次の part と区切り無しに連結するので末尾の空行が文面の一部(ADR 0124 Consequences)
+      expect(developer.endsWith("\n\n")).toBe(true);
+
+      const prompt = args.at(-1)!;
+      expect(prompt).toContain(`First call get_current_task for task ${value.id}, then complete this task: ${value.title}`);
+      expect(prompt).toContain(`Purpose: ${value.purpose}`);
+      expect(prompt).toContain(`Completion criteria: ${value.completion_criteria}`);
+      expect(prompt).not.toContain("You are the Codex worker.");
+      expect(prompt).not.toContain("## Authority");
+    }
+  });
+
   it.each([
     ["work", task],
     ["主題 memory の meta-review", metaReviewTask],
@@ -223,11 +262,11 @@ describe("CodexWorker (ADR 0098)", () => {
     }
   });
 
-  it("見える approved の記憶があれば work / review task とも注入節を taskPrompt の先頭に置き、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
+  it("見える approved の記憶があれば work / review task とも注入節を developer_instructions の先頭に置き、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
     const f = await fixture();
     const bare = task(f.db, "codex-no-memory");
     f.worker.start(bare);
-    expect(f.process.calls[0]!.args.at(-1)).not.toContain("## Memory");
+    expect(developerInstructions(f.process.calls[0]!.args)).not.toContain("## Memory");
 
     recordKnowledge(
       f.db,
@@ -244,7 +283,7 @@ describe("CodexWorker (ADR 0098)", () => {
     for (const [i, value] of [work, review].entries()) {
       f.worker.start(value);
       const { section } = buildMemoryInjection(f.db, value, "work", "codex-agent");
-      expect(f.process.calls[i + 1]!.args.at(-1)!.startsWith(`${section}\n\n`)).toBe(true);
+      expect(developerInstructions(f.process.calls[i + 1]!.args).startsWith(`${section}\n\n`)).toBe(true);
     }
 
     for (const value of [bare, work, review]) {
