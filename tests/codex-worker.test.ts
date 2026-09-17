@@ -463,11 +463,9 @@ describe("CodexWorker (ADR 0098)", () => {
 describe("resolveCodexExecutable", () => {
   it("PATH に載っているのが symlink でも実体のパスを返す —— sandbox が exec するのは実体なので、read を与える dir も実体側でなければ届かない(issue #646)", async () => {
     const base = await mkdtemp(join(tmpdir(), "tidepool-codex-which-"));
-    const realDir = join(base, "real");
     const linkDir = join(base, "link");
-    await mkdir(realDir);
     await mkdir(linkDir);
-    const realExecutable = join(realDir, "codex");
+    const realExecutable = join(base, "codex");
     await writeFile(realExecutable, "#!/bin/sh\n", { mode: 0o755 });
     await symlink(realExecutable, join(linkDir, "codex"));
 
