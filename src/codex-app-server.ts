@@ -289,9 +289,6 @@ function normalizeWindow(
   const resetsAt = new Date(value.resetsAt * 1000);
   if (resetsAt.getTime() <= now.getTime()) throw new Error(`${name} window reset is not in the future`);
   const durationMs = value.windowDurationMins * 60_000;
-  if (resetsAt.getTime() - now.getTime() > durationMs) {
-    throw new Error(`${name} window reset exceeds its duration`);
-  }
   return {
     name,
     model,
