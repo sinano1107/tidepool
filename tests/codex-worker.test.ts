@@ -220,8 +220,8 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(developer).not.toContain(value.title);
       expect(developer).not.toContain(value.purpose);
       expect(developer).not.toContain(value.completion_criteria);
-      // 次の part(<skills_instructions>)と区切り無しに連結するので終端が要る(ADR 0124)
-      expect(developer.endsWith("\n")).toBe(true);
+      // 次の part と区切り無しに連結するので末尾の空行が文面の一部(ADR 0124 Consequences)
+      expect(developer.endsWith("\n\n")).toBe(true);
 
       const prompt = args.at(-1)!;
       expect(prompt).toContain(`First call get_current_task for task ${value.id}, then complete this task: ${value.title}`);

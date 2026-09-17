@@ -81,8 +81,9 @@ it("届かなかった理由は期待値と観測値の両方を名指す(ADR 01
   }
 });
 
-// 実物の `codex debug prompt-input` 出力(0.147.0、preflight と同じ config 列)。
-// パスだけ無害な固定値へ、marker だけ実装の定数へ置換してある。
+// 実物の `codex debug prompt-input` 出力(0.147.0、preflight と同じ config 列を、
+// 運用者の config から隔離した盤面所有の CODEX_HOME で叩いたもの)。
+// workspace のパスだけ無害な固定値へ、marker だけ実装の定数へ置換してある。
 const promptInput = (name: string) =>
   readFileSync(new URL(`fixtures/codex-prompt-input-${name}.json`, import.meta.url), "utf8");
 
