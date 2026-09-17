@@ -143,7 +143,7 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
           status: "unauthorized",
           provider: "openai",
           cliVersion: "codex-cli 0.147.0",
-          reason: "Codex reports that OpenAI authentication is required",
+          reason: "Codex reports no signed-in account",
         };
   t = await bootTidepool({
     openaiUsage,
@@ -170,7 +170,7 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
   });
   expect(refused).toMatchObject({
     status: 409,
-    json: { error: "openai authentication is still unavailable: Codex reports that OpenAI authentication is required" },
+    json: { error: "openai authentication is still unavailable: Codex reports no signed-in account" },
   });
 
   authenticated = true;
@@ -197,7 +197,7 @@ it("codexHome に auth.json が無い openai は probe を撃たずに absent �
         status: "unauthorized",
         provider: "openai",
         cliVersion: "codex-cli 0.147.0",
-        reason: "Codex reports that OpenAI authentication is required",
+        reason: "Codex reports no signed-in account",
       };
     },
     taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],

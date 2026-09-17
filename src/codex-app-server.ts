@@ -15,7 +15,12 @@ export interface CodexCliCommandResult {
 export type CodexCliCommand = (
   executable: string,
   args: string[],
-  options: { env: NodeJS.ProcessEnv; input?: string },
+  options: {
+    env: NodeJS.ProcessEnv;
+    input?: string;
+    /** 真になった時点で stdin を閉じる。省略時は input を書いたら即 EOF。 */
+    until?: (stdout: string) => boolean;
+  },
 ) => Promise<CodexCliCommandResult>;
 
 export interface ProviderUsageWindow {
@@ -118,11 +123,17 @@ const defaultCommand: CodexCliCommand = (executable, args, options) =>
       child.kill("SIGKILL");
       finish(null);
     }, 15_000);
-    child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      stdout += chunk;
+      if (options.until && !child.stdin.writableEnded && options.until(stdout)) child.stdin.end();
+    });
     child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
     child.on("error", () => finish(null));
     child.on("exit", (code) => finish(code));
-    child.stdin.end(options.input);
+    // App Server は EOF で打ち切り、flush できた分しか返さない(#706)。述語を渡した呼び手だけ
+    // 待ちたい応答が揃うまで stdin を開けたままにし、15 秒 SIGKILL は fallback に残す。
+    if (options.until) child.stdin.write(options.input ?? "");
+    else child.stdin.end(options.input);
   });
 
 /** openai の資格情報の不在(ADR 0116 決定4): Codex の login 未実施 = codexHome 配下に
@@ -229,17 +240,41 @@ async function compatibilityCheck(
   }
 }
 
-function parseResponses(stdout: string): Map<number, unknown> {
-  const responses = new Map<number, unknown>();
+/** error 行は id ごとに保たれる —— どの要求が失敗したかで答えが変わる(ADR 0127 決定2)。 */
+type JsonRpcOutcome = { result: unknown } | { error: string };
+
+function parseResponses(stdout: string): Map<number, JsonRpcOutcome> {
+  const responses = new Map<number, JsonRpcOutcome>();
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
-    const message = JSON.parse(line) as { id?: unknown; result?: unknown; error?: unknown };
-    if (typeof message.id === "number") {
-      if (message.error !== undefined) throw new Error(`JSON-RPC request ${message.id} failed`);
-      responses.set(message.id, message.result);
-    }
+    const message = JSON.parse(line) as { id?: unknown; result?: unknown; error?: { message?: unknown } };
+    if (typeof message.id !== "number") continue; // 通知(id の無い行)は読み飛ばす
+    responses.set(
+      message.id,
+      message.error === undefined
+        ? { result: message.result }
+        : { error: typeof message.error.message === "string" ? message.error.message : JSON.stringify(message.error) },
+    );
   }
   return responses;
+}
+
+/** 失敗した要求は理由ごと投げる —— どの id が無言だったかが reason から読めるようにする。 */
+function resultOf(responses: Map<number, JsonRpcOutcome>, id: number, method: string): unknown {
+  const outcome = responses.get(id);
+  if (!outcome) throw new Error(`${method} returned no response`);
+  if ("error" in outcome) throw new Error(`${method} failed: ${outcome.error}`);
+  return outcome.result;
+}
+
+/** 待っている id の応答が出揃ったか。chunk 境界は JSON の途中に落ちるので、完結した行だけを読む。 */
+function respondedToAll(stdout: string): boolean {
+  try {
+    const responses = parseResponses(stdout.slice(0, stdout.lastIndexOf("\n") + 1));
+    return [1, 2, 3].every((id) => responses.has(id));
+  } catch {
+    return false;
+  }
 }
 
 function normalizeWindow(
@@ -300,7 +335,7 @@ export function createCodexAppServerProbe(options: {
     ].map((request) => JSON.stringify(request)).join("\n") + "\n";
     let observed: CodexCliCommandResult;
     try {
-      observed = await command(options.executable, ["app-server"], { env, input });
+      observed = await command(options.executable, ["app-server"], { env, input, until: respondedToAll });
     } catch (error) {
       return {
         status: "unobservable",
@@ -320,21 +355,32 @@ export function createCodexAppServerProbe(options: {
     }
     try {
       const responses = parseResponses(observed.stdout);
-      initializeResponse.parse(responses.get(1));
-      const account = accountResponse.parse(responses.get(2));
-      if (account.requiresOpenaiAuth) {
-        if (account.account) throw new Error("Codex simultaneously reports an account and required authentication");
-        return {
-          status: "unauthorized",
-          provider: "openai",
-          cliVersion: compatible.cliVersion,
-          reason: "Codex reports that OpenAI authentication is required",
-        };
+      const unauthorized = (reason: string): CodexAppServerProbeResult =>
+        ({ status: "unauthorized", provider: "openai", cliVersion: compatible.cliVersion, reason });
+
+      initializeResponse.parse(resultOf(responses, 1, "initialize"));
+      const account = accountResponse.parse(resultOf(responses, 2, "account/read"));
+      // `requiresOpenaiAuth` は設定中の model provider の性質で login を語らない。読むのは
+      // `false`(OpenAI 認証を使わない構成 = 盤面の前提外)のときだけ(ADR 0127 決定1)。
+      // 前提外の構成では account の不在も login の証拠にならないので、先に観測不能へ倒す。
+      if (!account.requiresOpenaiAuth) {
+        throw new Error("configured model provider does not use OpenAI authentication");
+      }
+      if (account.account === null) return unauthorized("Codex reports no signed-in account");
+
+      const rateLimits = responses.get(3);
+      if (rateLimits && "error" in rateLimits) {
+        // vendor は fetch の失敗をすべて -32603 に畳むので、401 は message の文字列でしか見えない。
+        // 外れる方向は観測不能 —— 人間を呼ぶ側には倒さない(ADR 0127 決定2)。
+        if (/\b401\b/.test(rateLimits.error)) {
+          return unauthorized(`Codex rejected the rate-limit read with HTTP 401: ${rateLimits.error}`);
+        }
+        throw new Error(`account/rateLimits/read failed: ${rateLimits.error}`);
       }
       if (account.account?.type !== "chatgpt" || account.account.planType === "unknown") {
         throw new Error("Codex account is not a known ChatGPT subscription plan");
       }
-      const limits = rateLimitsResponse.parse(responses.get(3));
+      const limits = rateLimitsResponse.parse(resultOf(responses, 3, "account/rateLimits/read"));
       if (limits.rateLimits.planType !== account.account.planType) {
         throw new Error("account and rate-limit plans contradict each other");
       }
