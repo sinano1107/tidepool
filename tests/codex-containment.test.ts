@@ -24,8 +24,9 @@ afterEach(() => t?.stop());
 
 /** 盤面が `installBoardHook` で置く hook のパス。preflight はこのパスから期待する登録を組む。 */
 const BOARD_HOOK_PATH = "/board/codex-home/tidepool-hooks/main-thread-mcp.mjs";
-/** 盤面が Codex に登録されていることを要求する hook —— event・matcher・enabled・source・command
- *  の5項目(ADR 0130 決定3)。`trustStatus` は session flags 由来なら常に untrusted なので見ない。 */
+/** 盤面が Codex に登録されていることを要求する hook —— ADR 0130 決定3 の4項目
+ *  (event・matcher・enabled・source)に #731 が `command` を足したもの。
+ *  `trustStatus` は session flags 由来なら常に untrusted なので見ない。 */
 const BOARD_HOOK_REGISTRATION = {
   event: "preToolUse",
   matcher: "mcp__tidepool__.*",
@@ -122,7 +123,7 @@ it("prompt-input の developer item に載った marker だけを拾う(ADR 0124
 const hooksListResult = () =>
   JSON.parse(readFileSync(new URL("fixtures/codex-hooks-list.json", import.meta.url), "utf8"));
 
-it("hooks/list の応答から、盤面が照合する登録の5項目だけを取り出す(ADR 0130 決定3)", () => {
+it("hooks/list の応答から、盤面が照合する登録の項目だけを取り出す(ADR 0130 決定3)", () => {
   expect(observedHooks(hooksListResult())).toEqual([BOARD_HOOK_REGISTRATION]);
 
   // 登録が1つも無い形の2種: cwd の entry 自体が無い / entry はあるが hooks が空
@@ -130,6 +131,12 @@ it("hooks/list の応答から、盤面が照合する登録の5項目だけを�
   const empty = hooksListResult();
   empty.data[0].hooks = [];
   expect(observedHooks(empty)).toEqual([]);
+
+  // vendor の schema では matcher / command とも optional かつ nullable —— 欠けた形は null に揃える
+  const bare = hooksListResult();
+  delete bare.data[0].hooks[0].matcher;
+  bare.data[0].hooks[0].command = null;
+  expect(observedHooks(bare)).toEqual([{ ...BOARD_HOOK_REGISTRATION, matcher: null, command: null }]);
 
   // 複数件は cwd を跨いでも並びのまま畳む —— 宣言との比較は集合ではなく列で行う
   const many = hooksListResult();

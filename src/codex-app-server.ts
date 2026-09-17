@@ -106,7 +106,7 @@ const initializeResponse = z.object({
   codexHome: z.string(),
 });
 
-export const defaultCommand: CodexCliCommand = (executable, args, options) =>
+const defaultCommand: CodexCliCommand = (executable, args, options) =>
   new Promise((resolve) => {
     const child = spawn(executable, args, { env: options.env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
@@ -150,7 +150,7 @@ function probeEnv(codexHome: string): NodeJS.ProcessEnv {
   return env;
 }
 
-export function commandFailure(result: CodexCliCommandResult): string | null {
+function commandFailure(result: CodexCliCommandResult): string | null {
   return result.exitCode === 0 ? null : result.stderr.trim() || `Codex exited ${result.exitCode}`;
 }
 
@@ -241,9 +241,9 @@ async function compatibilityCheck(
 }
 
 /** error 行は id ごとに保たれる —— どの要求が失敗したかで答えが変わる(ADR 0127 決定2)。 */
-export type JsonRpcOutcome = { result: unknown } | { error: string };
+type JsonRpcOutcome = { result: unknown } | { error: string };
 
-export function parseResponses(stdout: string): Map<number, JsonRpcOutcome> {
+function parseResponses(stdout: string): Map<number, JsonRpcOutcome> {
   const responses = new Map<number, JsonRpcOutcome>();
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
@@ -260,7 +260,7 @@ export function parseResponses(stdout: string): Map<number, JsonRpcOutcome> {
 }
 
 /** 失敗した要求は理由ごと投げる —— どの id が無言だったかが reason から読めるようにする。 */
-export function resultOf(responses: Map<number, JsonRpcOutcome>, id: number, method: string): unknown {
+function resultOf(responses: Map<number, JsonRpcOutcome>, id: number, method: string): unknown {
   const outcome = responses.get(id);
   if (!outcome) throw new Error(`${method} returned no response`);
   if ("error" in outcome) throw new Error(`${method} failed: ${outcome.error}`);
@@ -268,7 +268,7 @@ export function resultOf(responses: Map<number, JsonRpcOutcome>, id: number, met
 }
 
 /** 待っている id の応答が出揃ったか。chunk 境界は JSON の途中に落ちるので、完結した行だけを読む。 */
-export function respondedTo(ids: readonly number[]): (stdout: string) => boolean {
+function respondedTo(ids: readonly number[]): (stdout: string) => boolean {
   return (stdout) => {
     try {
       const responses = parseResponses(stdout.slice(0, stdout.lastIndexOf("\n") + 1));
@@ -277,6 +277,36 @@ export function respondedTo(ids: readonly number[]): (stdout: string) => boolean
       return false;
     }
   };
+}
+
+/** app-server への1往復。`initialize` → `initialized` を前置きし、渡した要求の結果を同じ並びで返す。
+ *  stdin は応答が揃うまで開けたままにする —— EOF で打ち切ると応答は来ない(#706)。
+ *  使用量 probe はこれを通さない: あちらは id ごとの error 行を読み分ける(ADR 0127 決定2)。 */
+export async function callAppServer(
+  executable: string,
+  env: NodeJS.ProcessEnv,
+  args: readonly string[],
+  requests: ReadonlyArray<{ method: string; params: unknown }>,
+): Promise<unknown[]> {
+  const ids = requests.map((_, index) => index + 2);
+  const input = [
+    {
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "tidepool", version: "0.0.0" }, capabilities: {} },
+    },
+    { method: "initialized" },
+    ...requests.map((request, index) => ({ id: ids[index], ...request })),
+  ].map((request) => JSON.stringify(request)).join("\n") + "\n";
+  const observed = await defaultCommand(executable, ["app-server", ...args], {
+    env,
+    input,
+    until: respondedTo([1, ...ids]),
+  });
+  const failed = commandFailure(observed);
+  if (failed) throw new Error(`app-server call failed: ${failed}`);
+  const responses = parseResponses(observed.stdout);
+  return requests.map((request, index) => resultOf(responses, ids[index]!, request.method));
 }
 
 function normalizeWindow(

@@ -17,14 +17,7 @@ import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { agentGitIdentityEnv, PREMISE_BREACH_PROTOCOL } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
-import {
-  CODEX_APP_SERVER_VERSION,
-  commandFailure,
-  defaultCommand,
-  parseResponses,
-  respondedTo,
-  resultOf,
-} from "./codex-app-server.js";
+import { CODEX_APP_SERVER_VERSION, callAppServer } from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
@@ -129,8 +122,9 @@ export interface CodexWorkerOptions {
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
 }
 
-/** Codex に登録された hook のうち、盤面が宣言と突き合わせる5項目。`trustStatus` は含めない ——
- *  session flags 由来の hook は常に `untrusted` で、走る前提は exec 側の bypass flag が持つ。 */
+/** Codex に登録された hook のうち、盤面が宣言と突き合わせる項目 —— ADR 0130 決定3 の4つ
+ *  (event・matcher・enabled・source)に、#731 が `command` を足したもの。`trustStatus` は含めない
+ *  —— session flags 由来の hook は常に `untrusted` で、走る前提は exec 側の bypass flag が持つ。 */
 export interface CodexHookRegistration {
   event: string;
   matcher: string | null;
@@ -140,7 +134,8 @@ export interface CodexHookRegistration {
 }
 
 /** `hooks/list` の `result` から、登録を cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
- *  vendor の応答の形が変わったときに落ちる場所はここ1つ。 */
+ *  vendor の応答の形が変わったら、読み替えを直す場所はここ1つ —— 形の崩れは preflight の
+ *  `hook mismatch` の観測値として出る(fail-closed)。 */
 export function observedHooks(result: unknown): CodexHookRegistration[] {
   const { data } = result as { data: Array<{ hooks: Array<Record<string, unknown>> }> };
   return data.flatMap((entry) => entry.hooks).map((hook) => ({
@@ -399,8 +394,7 @@ export function observedDeveloperMarkers(promptInput: string): string[] {
 }
 
 /** 盤面が渡した hook を Codex が実際に**登録**したかを、使用量 probe と同じ app-server 面の
- *  `hooks/list` で読む(ADR 0130 決定3)。stdin は応答が揃うまで開けたままにする —— EOF で
- *  打ち切ると応答は来ない。
+ *  `hooks/list` で読む(ADR 0130 決定3)。
  *
  *  これは**登録**の観測であって**選択**の観測ではない。matcher が実物の呼び出しを選ぶことは
  *  開けた走行でしか観測できず、その受け入れは #730 が持つ。この行を「選択も見ている」と
@@ -410,23 +404,10 @@ async function probeHookRegistration(
   env: NodeJS.ProcessEnv,
   hook: string,
 ): Promise<CodexHookRegistration[]> {
-  const input = [
-    {
-      id: 1,
-      method: "initialize",
-      params: { clientInfo: { name: "tidepool", version: "0.0.0" }, capabilities: {} },
-    },
-    { method: "initialized" },
-    { id: 2, method: "hooks/list", params: { cwds: [] } },
-  ].map((request) => JSON.stringify(request)).join("\n") + "\n";
-  const observed = await defaultCommand(
-    executable,
-    ["app-server", ...configArgs(hookConfig(hook))],
-    { env, input, until: respondedTo([1, 2]) },
-  );
-  const failed = commandFailure(observed);
-  if (failed) throw new Error(`hooks/list probe failed: ${failed}`);
-  return observedHooks(resultOf(parseResponses(observed.stdout), 2, "hooks/list"));
+  const [listed] = await callAppServer(executable, env, configArgs(hookConfig(hook)), [
+    { method: "hooks/list", params: { cwds: [] } },
+  ]);
+  return observedHooks(listed);
 }
 
 const PERMISSION_CANARY = `
