@@ -106,7 +106,7 @@ const initializeResponse = z.object({
   codexHome: z.string(),
 });
 
-const defaultCommand: CodexCliCommand = (executable, args, options) =>
+export const defaultCommand: CodexCliCommand = (executable, args, options) =>
   new Promise((resolve) => {
     const child = spawn(executable, args, { env: options.env, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
@@ -241,9 +241,9 @@ async function compatibilityCheck(
 }
 
 /** error 行は id ごとに保たれる —— どの要求が失敗したかで答えが変わる(ADR 0127 決定2)。 */
-type JsonRpcOutcome = { result: unknown } | { error: string };
+export type JsonRpcOutcome = { result: unknown } | { error: string };
 
-function parseResponses(stdout: string): Map<number, JsonRpcOutcome> {
+export function parseResponses(stdout: string): Map<number, JsonRpcOutcome> {
   const responses = new Map<number, JsonRpcOutcome>();
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
@@ -260,7 +260,7 @@ function parseResponses(stdout: string): Map<number, JsonRpcOutcome> {
 }
 
 /** 失敗した要求は理由ごと投げる —— どの id が無言だったかが reason から読めるようにする。 */
-function resultOf(responses: Map<number, JsonRpcOutcome>, id: number, method: string): unknown {
+export function resultOf(responses: Map<number, JsonRpcOutcome>, id: number, method: string): unknown {
   const outcome = responses.get(id);
   if (!outcome) throw new Error(`${method} returned no response`);
   if ("error" in outcome) throw new Error(`${method} failed: ${outcome.error}`);
@@ -268,13 +268,15 @@ function resultOf(responses: Map<number, JsonRpcOutcome>, id: number, method: st
 }
 
 /** 待っている id の応答が出揃ったか。chunk 境界は JSON の途中に落ちるので、完結した行だけを読む。 */
-function respondedToAll(stdout: string): boolean {
-  try {
-    const responses = parseResponses(stdout.slice(0, stdout.lastIndexOf("\n") + 1));
-    return [1, 2, 3].every((id) => responses.has(id));
-  } catch {
-    return false;
-  }
+export function respondedTo(ids: readonly number[]): (stdout: string) => boolean {
+  return (stdout) => {
+    try {
+      const responses = parseResponses(stdout.slice(0, stdout.lastIndexOf("\n") + 1));
+      return ids.every((id) => responses.has(id));
+    } catch {
+      return false;
+    }
+  };
 }
 
 function normalizeWindow(
@@ -332,7 +334,7 @@ export function createCodexAppServerProbe(options: {
     ].map((request) => JSON.stringify(request)).join("\n") + "\n";
     let observed: CodexCliCommandResult;
     try {
-      observed = await command(options.executable, ["app-server"], { env, input, until: respondedToAll });
+      observed = await command(options.executable, ["app-server"], { env, input, until: respondedTo([1, 2, 3]) });
     } catch (error) {
       return {
         status: "unobservable",

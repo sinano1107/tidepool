@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import {
   accessSync,
   appendFileSync,
@@ -12,12 +12,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { agentGitIdentityEnv, PREMISE_BREACH_PROTOCOL } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
-import { CODEX_APP_SERVER_VERSION } from "./codex-app-server.js";
+import {
+  CODEX_APP_SERVER_VERSION,
+  defaultCommand,
+  parseResponses,
+  respondedTo,
+  resultOf,
+} from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload } from "./events.js";
@@ -58,7 +64,8 @@ const BOARD_VERBS = [
   "propose_from_objection",
 ] as const;
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
-const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;
+/** 盤面 verb を選ぶ matcher。spawn の設定と preflight の期待値は同じここから来る。 */
+const BOARD_HOOK_MATCHER = "mcp__tidepool__.*";
 /** ADR 0124 決定4: probe 専用の1行。`codex debug prompt-input` は推論リクエストを
  *  送らないので、この marker がモデルに届くことはない。 */
 export const CODEX_DEVELOPER_MARKER = "tidepool-containment-probe: developer layer canary";
@@ -121,10 +128,44 @@ export interface CodexWorkerOptions {
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
 }
 
+/** Codex に登録された hook のうち、盤面が宣言と突き合わせる5項目。`trustStatus` は含めない ——
+ *  session flags 由来の hook は常に `untrusted` で、走る前提は exec 側の bypass flag が持つ。 */
+export interface CodexHookRegistration {
+  event: string;
+  matcher: string | null;
+  enabled: boolean;
+  source: string;
+  command: string | null;
+}
+
+/** 盤面が Codex に登録されていることを要求する hook —— spawn が渡す宣言と同じ1つの形。 */
+function expectedCodexHooks(hookPath: string): CodexHookRegistration[] {
+  return [{
+    event: "preToolUse",
+    matcher: BOARD_HOOK_MATCHER,
+    enabled: true,
+    source: "sessionFlags",
+    command: hookPath,
+  }];
+}
+
+/** `hooks/list` の `result` から、登録を cwd を跨いで並びのまま取り出す(ADR 0130 決定3)。
+ *  vendor の応答の形が変わったときに落ちる場所はここ1つ。 */
+export function observedHooks(result: unknown): CodexHookRegistration[] {
+  const { data } = result as { data: Array<{ hooks: Array<Record<string, unknown>> }> };
+  return data.flatMap((entry) => entry.hooks).map((hook) => ({
+    event: hook.eventName as string,
+    matcher: (hook.matcher ?? null) as string | null,
+    enabled: hook.enabled as boolean,
+    source: hook.source as string,
+    command: (hook.command ?? null) as string | null,
+  }));
+}
+
 export interface CodexCapabilityObservation {
   cliVersion: string;
   skills: readonly string[];
-  hooks: readonly string[];
+  hooks: readonly CodexHookRegistration[];
   permissions: readonly string[];
   closedFeatures: readonly string[];
   /** 盤面が `developer_instructions` で渡した marker のうち、developer item に載ったもの。 */
@@ -136,6 +177,7 @@ export type CodexCapabilityProbe = () => Promise<CodexCapabilityObservation>;
 /** Version pin + measured #195 surface contract. Any drift closes Codex only. */
 export async function checkCodexCapability(
   probe: CodexCapabilityProbe,
+  hookPath: string,
 ): Promise<ContainmentCapability> {
   let observed: CodexCapabilityObservation;
   try {
@@ -147,7 +189,7 @@ export async function checkCodexCapability(
     [
       ["version", [CODEX_CLI_VERSION], [observed.cliVersion]],
       ["skill", [], observed.skills],
-      ["hook", CODEX_HOOKS, observed.hooks],
+      ["hook", expectedCodexHooks(hookPath), observed.hooks],
       ["permission", CODEX_PERMISSIONS, observed.permissions],
       ["closed feature", CLOSED_FEATURES, observed.closedFeatures],
       ["developer instructions", [CODEX_DEVELOPER_MARKER], observed.developerMarkers],
@@ -230,7 +272,6 @@ function permissionConfig(
 function closedSurfaceConfig(): string[] {
   return [
     "features.network_proxy=true",
-    "features.hooks=true",
     ...CLOSED_FEATURES.map((feature) => `features.${feature}=false`),
     'web_search="disabled"',
     "tools.web_search=false",
@@ -238,35 +279,38 @@ function closedSurfaceConfig(): string[] {
   ];
 }
 
-/** Board-owned hook: remember subagent turns, then deny only their Tidepool MCP calls.
- * Parsing/state failures deny too; an unenforced hook must never fail open. */
+function boardHookPath(codexHome: string): string {
+  return join(codexHome, "tidepool-hooks", "main-thread-mcp.mjs");
+}
+
+/** Board-owned hook: deny a Tidepool MCP call that carries a subagent identifier.
+ * The main thread omits `agent_id` entirely, so presence of the key — not its truthiness —
+ * is the gate. Parsing failures deny too; an unenforced hook must never fail open. */
 function installBoardHook(codexHome: string): string {
-  const hookDir = join(codexHome, "tidepool-hooks");
-  const hook = join(hookDir, "main-thread-mcp.mjs");
-  mkdirSync(hookDir, { recursive: true });
+  const hook = boardHookPath(codexHome);
+  mkdirSync(dirname(hook), { recursive: true });
   writeFileSync(
     hook,
     `#!/usr/bin/env node
-import { readFileSync, writeFileSync } from "node:fs";
-const state = process.env.TIDEPOOL_SUBAGENT_STATE;
+import { readFileSync } from "node:fs";
 const deny = reason => process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:reason}}));
 try {
   const input = JSON.parse(readFileSync(0, "utf8"));
-  if (!state) throw new Error("missing hook state");
-  if (input.hook_event_name === "SubagentStart") {
-    const turns = JSON.parse(readFileSync(state, "utf8"));
-    if (!input.turn_id || !input.agent_id || !Array.isArray(turns)) throw new Error("invalid SubagentStart");
-    writeFileSync(state, JSON.stringify([...new Set([...turns, input.turn_id])]));
-  } else if (input.hook_event_name === "PreToolUse" && String(input.tool_name).startsWith("mcp__tidepool__")) {
-    const turns = JSON.parse(readFileSync(state, "utf8"));
-    if (!Array.isArray(turns)) throw new Error("invalid hook state");
-    if (input.agent_id || turns.includes(input.turn_id)) deny("Tidepool board verbs are main-thread only");
-  }
+  if (input.hook_event_name !== "PreToolUse") throw new Error("unexpected hook event " + input.hook_event_name);
+  if (String(input.tool_name).startsWith("mcp__tidepool__") && "agent_id" in input) deny("Tidepool board verbs are main-thread only");
 } catch (error) { deny("Tidepool hook failed closed: " + String(error)); }
 `,
   );
   chmodSync(hook, 0o700);
   return hook;
+}
+
+/** 門の宣言。spawn が Codex に渡す設定と、preflight が登録を観測するときの設定は同じここから。 */
+function hookConfig(hook: string): string[] {
+  return [
+    "features.hooks=true",
+    `hooks.PreToolUse=[{matcher=${toml(BOARD_HOOK_MATCHER)},hooks=[{type="command",command=${toml(hook)}}]}]`,
+  ];
 }
 
 function skillConfig(codexHome: string, workspace: string): string {
@@ -359,28 +403,38 @@ export function observedDeveloperMarkers(promptInput: string): string[] {
     .filter((text) => text === CODEX_DEVELOPER_MARKER);
 }
 
-function probeHook(codexHome: string, taskTemp: string): string[] {
-  const hook = installBoardHook(codexHome);
-  const state = join(taskTemp, "hook-state.json");
-  writeFileSync(state, "[]", { mode: 0o600 });
-  const env = { ...process.env, TIDEPOOL_SUBAGENT_STATE: state };
-  execFileSync(process.execPath, [hook], {
-    env,
-    input: JSON.stringify({ hook_event_name: "SubagentStart", turn_id: "sub", agent_id: "a" }),
-  });
-  const denied = JSON.parse(execFileSync(process.execPath, [hook], {
-    env,
-    input: JSON.stringify({
-      hook_event_name: "PreToolUse",
-      turn_id: "sub",
-      tool_name: "mcp__tidepool__complete_task",
-    }),
-    encoding: "utf8",
-  })) as { hookSpecificOutput?: { permissionDecision?: string } };
-  if (denied.hookSpecificOutput?.permissionDecision !== "deny") {
-    throw new Error("Codex Board hook did not deny a subagent Board verb");
+/** 盤面が渡した hook を Codex が実際に**登録**したかを、使用量 probe と同じ app-server 面の
+ *  `hooks/list` で読む(ADR 0130 決定3)。stdin は応答が揃うまで開けたままにする —— EOF で
+ *  打ち切ると応答は来ない。
+ *
+ *  これは**登録**の観測であって**選択**の観測ではない。matcher が実物の呼び出しを選ぶことは
+ *  開けた走行でしか観測できず、その受け入れは #730 が持つ。この行を「選択も見ている」と
+ *  読んで #730 の受け入れ観測を省いてはならない。 */
+async function probeHookRegistration(
+  executable: string,
+  env: NodeJS.ProcessEnv,
+  hook: string,
+): Promise<CodexHookRegistration[]> {
+  const input = [
+    {
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "tidepool", version: "0.0.0" }, capabilities: {} },
+    },
+    { method: "initialized" },
+    { id: 2, method: "hooks/list", params: { cwds: [] } },
+  ].map((request) => JSON.stringify(request)).join("\n") + "\n";
+  const observed = await defaultCommand(
+    executable,
+    ["app-server", ...configArgs(hookConfig(hook))],
+    { env, input, until: respondedTo([1, 2]) },
+  );
+  if (observed.exitCode !== 0) {
+    throw new Error(
+      `hooks/list probe failed: ${observed.stderr.trim() || `Codex exited ${observed.exitCode}`}`,
+    );
   }
-  return [...CODEX_HOOKS];
+  return observedHooks(resultOf(parseResponses(observed.stdout), 2, "hooks/list"));
 }
 
 const PERMISSION_CANARY = `
@@ -476,9 +530,7 @@ async function actualCodexCapability(options: {
 }): Promise<CodexCapabilityObservation> {
   const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-")));
   const workspace = realpathSync(options.workspace);
-  const hookState = join(taskTemp, "subagent-turns.json");
-  writeFileSync(hookState, "[]", { mode: 0o600 });
-  const env = workerEnv(options.executable, options.codexHome, taskTemp, hookState, "tidepool");
+  const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
   const config = [
     ...closedSurfaceConfig(),
     skillConfig(options.codexHome, workspace),
@@ -508,7 +560,7 @@ async function actualCodexCapability(options: {
       cliVersion,
       skills: observedSkills(promptInput),
       developerMarkers: observedDeveloperMarkers(promptInput),
-      hooks: probeHook(options.codexHome, taskTemp),
+      hooks: await probeHookRegistration(options.executable, env, installBoardHook(options.codexHome)),
       permissions: [...CODEX_PERMISSIONS],
       closedFeatures: CLOSED_FEATURES.filter((feature) => disabled.get(feature) === "false"),
     };
@@ -522,14 +574,16 @@ export function createCodexCapabilityCheck(options: {
   codexHome: string;
   workspace: string;
 }): () => Promise<ContainmentCapability> {
-  return () => checkCodexCapability(() => actualCodexCapability(options));
+  return () => checkCodexCapability(
+    () => actualCodexCapability(options),
+    boardHookPath(options.codexHome),
+  );
 }
 
 function workerEnv(
   executable: string,
   codexHome: string,
   taskTemp: string,
-  hookState: string,
   agentName: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -544,7 +598,6 @@ function workerEnv(
     npm_config_userconfig: "/dev/null",
     npm_config_offline: "true",
     npm_config_update_notifier: "false",
-    TIDEPOOL_SUBAGENT_STATE: hookState,
     ...agentGitIdentityEnv(agentName),
   };
   for (const name of SECRET_ENV) delete env[name];
@@ -648,8 +701,6 @@ export class CodexWorker implements WorkerAdapter {
     }
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     const hook = installBoardHook(this.options.codexHome);
-    const hookState = join(dirname(hook), `${task.id}-${basename(taskTemp)}.subagent-turns.json`);
-    writeFileSync(hookState, "[]", { mode: 0o600 });
     const taskMcpUrl = new URL(this.options.mcpUrl);
     taskMcpUrl.searchParams.set("task", task.id);
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
@@ -671,8 +722,7 @@ export class CodexWorker implements WorkerAdapter {
       // ADR 0129 決定1: 答える人の居ない exec では承認の問いは Cancel にしかならない。verb の権限は盤面側が縛る
       'mcp_servers.tidepool.default_tools_approval_mode="approve"',
       skillConfig(this.options.codexHome, workspace.path),
-      `hooks.SubagentStart=[{hooks=[{type="command",command=${toml(hook)}}]}]`,
-      `hooks.PreToolUse=[{matcher="mcp__tidepool__.*",hooks=[{type="command",command=${toml(hook)}}]}]`,
+      ...hookConfig(hook),
     ];
     const child = this.containers.open(task.id).spawn(
       this.options.executable,
@@ -687,13 +737,7 @@ export class CodexWorker implements WorkerAdapter {
       ],
       {
         cwd: workspace.path,
-        env: workerEnv(
-          this.options.executable,
-          this.options.codexHome,
-          taskTemp,
-          hookState,
-          agent.name,
-        ),
+        env: workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name),
       },
     );
     const spawned = appendEvent(this.options.db, {
