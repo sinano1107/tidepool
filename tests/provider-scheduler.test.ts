@@ -95,32 +95,35 @@ it("先頭 Provider が throttle 中でも同じ poll で次を選び、回復�
   expect(t.worker.started.map((task) => task.id)).toEqual([anthropic.id, openai.id]);
 });
 
-// idle の間 backend は観測のたびに「今 + 窓幅」を返す。窓を残すとペース線が elapsed ≈ 0 で
-// 予約ぶん絞り、待ち明けの再観測がまた滑った reset を見る livelock になる(ADR 0128 決定2)。
+/** idle の窓の実物の形 —— backend は自分の時計で「今 + 窓幅」の絶対時刻を返すので、reset は
+ *  観測のたびに滑り、ペース線から見た elapsed はいつも ≈ 0 になる(ADR 0128)。 */
+const slidingWindows = (usedPercent: number) => async (now: Date): Promise<CodexAppServerProbeResult> => ({
+  status: "observed",
+  provider: "openai",
+  cliVersion: "codex-cli 0.147.0",
+  plan: "plus",
+  windows: [
+    {
+      name: "primary",
+      model: null,
+      usedPercent,
+      durationMs: 5 * HOUR,
+      resetsAt: new Date(now.getTime() + 5 * HOUR).toISOString(),
+    },
+    {
+      name: "secondary",
+      model: null,
+      usedPercent,
+      durationMs: 7 * 24 * HOUR,
+      resetsAt: new Date(now.getTime() + 7 * 24 * HOUR).toISOString(),
+    },
+  ],
+});
+
+// 窓を残すとペース線が予約ぶん絞り、待ち明けの再観測がまた滑った reset を見る livelock になる。
 it("使用率 0% の窓は未開始として観測から落ち、reset が窓幅まるごと先でも openai は pickup される", async () => {
   t = await bootTidepool({
-    openaiUsage: async (now) => ({
-      status: "observed",
-      provider: "openai",
-      cliVersion: "codex-cli 0.147.0",
-      plan: "plus",
-      windows: [
-        {
-          name: "primary",
-          model: null,
-          usedPercent: 0,
-          durationMs: 5 * HOUR,
-          resetsAt: new Date(now.getTime() + 5 * HOUR).toISOString(),
-        },
-        {
-          name: "secondary",
-          model: null,
-          usedPercent: 0,
-          durationMs: 7 * 24 * HOUR,
-          resetsAt: new Date(now.getTime() + 7 * 24 * HOUR).toISOString(),
-        },
-      ],
-    }),
+    openaiUsage: slidingWindows(0),
     taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
   });
   const openai = await registerWork(t, "idle codex", undefined, undefined, "codex-agent");
@@ -137,21 +140,7 @@ it("使用率 0% の窓は未開始として観測から落ち、reset が窓幅
 // 次の観測から予約込みのペース線が効く(ADR 0128 決定1)。
 it("窓が開いて 1% 付いた次の観測では、同じ滑る reset でも予約ぶん throttled になる", async () => {
   t = await bootTidepool({
-    openaiUsage: async (now) => ({
-      status: "observed",
-      provider: "openai",
-      cliVersion: "codex-cli 0.147.0",
-      plan: "plus",
-      windows: [
-        {
-          name: "primary",
-          model: null,
-          usedPercent: 1,
-          durationMs: 5 * HOUR,
-          resetsAt: new Date(now.getTime() + 5 * HOUR).toISOString(),
-        },
-      ],
-    }),
+    openaiUsage: slidingWindows(1),
     taskExecutionCandidates: () => [candidate("openai", "gpt-5.6-sol")],
   });
   await registerWork(t, "just opened its window", undefined, undefined, "codex-agent");
