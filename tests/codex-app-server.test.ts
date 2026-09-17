@@ -246,7 +246,7 @@ it.each([
   [
     "account/read が account を持たない",
     [INITIALIZED, { id: 2, result: { account: null, requiresOpenaiAuth: true } }],
-    "no signed-in account",
+    "account/read reports no account",
   ],
   [
     "account はあるが rateLimits/read が HTTP 401 で拒否される(token の失効)",
@@ -314,6 +314,25 @@ it.each([
     "connection refused",
   ],
   [
+    // message には upstream の body がそのまま写る —— 裸の 401 を拾うと、失効していないのに
+    // 確認 question が立つ。照合が外れる方向は観測不能でなければならない(ADR 0127 決定2)。
+    "rateLimits/read が 5xx で、その body の中に 401 が写っている",
+    [
+      INITIALIZED,
+      SIGNED_IN,
+      {
+        id: 3,
+        error: {
+          code: -32603,
+          message:
+            "failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: " +
+            '500 Internal Server Error; content-type=application/json; body={ "upstream": { "status": 401 } }',
+        },
+      },
+    ],
+    "500 Internal Server Error",
+  ],
+  [
     // 他は observed の形そのもの —— 観測不能にしているのは requiresOpenaiAuth: false だけ。
     "OpenAI 認証を使わない provider 構成(requiresOpenaiAuth: false)",
     [
@@ -321,6 +340,13 @@ it.each([
       { id: 2, result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: false } },
       RATE_LIMITS,
     ],
+    "does not use OpenAI authentication",
+  ],
+  [
+    // account の不在と requiresOpenaiAuth: false が同時に立つ唯一の組 —— 読む順が逆だと
+    // unauthorized になり、設定の事実で quarantine の question が立つ。
+    "前提外の provider 構成で account も無い(requiresOpenaiAuth: false かつ account: null)",
+    [INITIALIZED, { id: 2, result: { account: null, requiresOpenaiAuth: false } }, RATE_LIMITS],
     "does not use OpenAI authentication",
   ],
 ])("失効と言い切れない観測は確認 question を立てず観測不能に留まる: %s", async (_case, rows, cause) => {

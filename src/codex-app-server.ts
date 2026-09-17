@@ -366,13 +366,19 @@ export function createCodexAppServerProbe(options: {
       if (!account.requiresOpenaiAuth) {
         throw new Error("configured model provider does not use OpenAI authentication");
       }
-      if (account.account === null) return unauthorized("Codex reports no signed-in account");
+      // 不在(auth.json が無い)はここへ来ない —— probe の手前で pickup から外れる(ADR 0116 決定4)。
+      // ここで account が無いのは、置いてあった資格情報が使えなくなったこと = 失効である。
+      if (account.account === null) {
+        return unauthorized("Codex credential is no longer usable: account/read reports no account");
+      }
 
       const rateLimits = responses.get(3);
       if (rateLimits && "error" in rateLimits) {
         // vendor は fetch の失敗をすべて -32603 に畳むので、401 は message の文字列でしか見えない。
-        // 外れる方向は観測不能 —— 人間を呼ぶ側には倒さない(ADR 0127 決定2)。
-        if (/\b401\b/.test(rateLimits.error)) {
+        // 照合は status line の綴りに絞る —— message には upstream の body がそのまま写るので、
+        // 裸の 401 を拾うと 5xx の body 内の 401 で question が立つ。外れる方向は観測不能に、
+        // 人間を呼ぶ側には倒さない(ADR 0127 決定2)。
+        if (/\b401 Unauthorized\b/.test(rateLimits.error)) {
           return unauthorized(`Codex rejected the rate-limit read with HTTP 401: ${rateLimits.error}`);
         }
         throw new Error(`account/rateLimits/read failed: ${rateLimits.error}`);
