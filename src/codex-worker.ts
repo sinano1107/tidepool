@@ -389,6 +389,7 @@ const [workspace, taskTemp, outside, access] = process.argv.slice(2);
 const workspaceFile = workspace + "/.tidepool-codex-permission-canary";
 const taskFile = taskTemp + "/task-canary";
 try {
+  // 読めることの証明は listing が throw しないことだけ —— workspace の中身に前提を置かない (#708)
   fs.readdirSync(workspace);
   try {
     fs.readFileSync(outside, "utf8");
