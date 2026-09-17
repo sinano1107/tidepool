@@ -12,9 +12,16 @@ import { listEvents } from "../src/events.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, passthroughContainers } from "./fakes.js";
+import { bootTidepool, mcpClient } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
+
+/** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
+function enabledTools(args: string[]): string[] {
+  const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith("mcp_servers.tidepool.enabled_tools="))!;
+  return JSON.parse(entry.slice("mcp_servers.tidepool.enabled_tools=".length)) as string[];
+}
 
 function task(db: ReturnType<typeof openDb>, title = "codex-task") {
   return registerTask(db, {
@@ -164,11 +171,6 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
     const f = await fixture();
-    const enabledTools = (index: number) => {
-      const args = f.process.calls[index]!.args;
-      const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith("mcp_servers.tidepool.enabled_tools="))!;
-      return JSON.parse(entry.slice("mcp_servers.tidepool.enabled_tools=".length)) as string[];
-    };
     f.worker.start(task(f.db));
     f.worker.start(registerTask(
       f.db,
@@ -177,8 +179,8 @@ describe("CodexWorker (ADR 0098)", () => {
     ));
 
     const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
-    expect(enabledTools(0)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
-    expect(enabledTools(1)).toEqual([
+    expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
+    expect(enabledTools(f.process.calls[1]!.args)).toEqual([
       ...base,
       "propose_from_objection",
       "list_memory_candidates",
@@ -191,6 +193,25 @@ describe("CodexWorker (ADR 0098)", () => {
       "invalidate_memory",
       "propose_memory_change",
     ]);
+  });
+
+  it.each([
+    ["work", { type: "work", assignee: "codex-agent", workspace: "work", title: "codex-task", purpose: "p", completion_criteria: "c" }],
+    ["主題 memory の meta-review", { type: "review", assignee: "codex-agent", title: "Memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }],
+  ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, shape) => {
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const f = await fixture();
+    f.worker.start(registerTask(f.db, shape, at));
+    const t = await bootTidepool();
+    const client = await mcpClient(t.mcpBaseUrl, registerTask(t.db, shape, at).id);
+    try {
+      // 片方は BOARD_VERBS の並び、片方は registerTool の順。どちらの順序も意味を持たない
+      expect([...enabledTools(f.process.calls[0]!.args)].sort())
+        .toEqual((await client.listTools()).tools.map((tool) => tool.name).sort());
+    } finally {
+      await client.close();
+      await t.stop();
+    }
   });
 
   it("見える approved の記憶があれば work / review task とも注入節を taskPrompt の先頭に置き、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {

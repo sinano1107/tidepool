@@ -697,7 +697,6 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     executable: board.codexExecutable,
     codexHome: board.codexHome,
     workspace: workspace.path,
-    mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
   });
   const claudeContainment = async (): Promise<ContainmentCapability> => {
     const sandbox = checkSandboxCapability(platform);
