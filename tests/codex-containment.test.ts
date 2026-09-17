@@ -20,7 +20,6 @@ afterEach(() => t?.stop());
 
 const VALID: CodexCapabilityObservation = {
   cliVersion: CODEX_CLI_VERSION,
-  mcpTools: ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"],
   skills: [],
   hooks: ["SubagentStart", "PreToolUse"],
   permissions: ["tidepool-work", "tidepool-review"],
@@ -48,7 +47,6 @@ const VALID: CodexCapabilityObservation = {
 
 it.each([
   ["version", { cliVersion: "codex-cli 0.148.0" }],
-  ["tool", { mcpTools: VALID.mcpTools.slice(1) }],
   ["skill", { skills: ["openai-docs"] }],
   ["hook", { hooks: ["SubagentStart"] }],
   ["permission", { permissions: ["tidepool-work"] }],
