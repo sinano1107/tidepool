@@ -308,15 +308,16 @@ function runFile(
 }
 
 /** Resolve once at composition time. Worker spawn uses the returned absolute path,
- * so a narrower child PATH cannot turn an observed CLI into ENOENT. */
+ * so a narrower child PATH cannot turn an observed CLI into ENOENT.
+ * 見つかった場合に返すのは symlink を解いた実体のパス —— sandbox が exec するのは実体なので、
+ * `permissionConfig()` が read を与える `dirname()` も実体側でなければ届かない(issue #646)。 */
 export function resolveCodexExecutable(searchPath = process.env.PATH ?? ""): string {
   const directories = searchPath.split(delimiter).filter(Boolean);
   for (const directory of directories) {
-    if (!directory) continue;
     const candidate = resolve(directory, "codex");
     try {
       accessSync(candidate, fsConstants.X_OK);
-      return candidate;
+      return realpathSync(candidate);
     } catch {
       // Keep searching the declared PATH.
     }
