@@ -34,6 +34,18 @@ function task(db: ReturnType<typeof openDb>, title = "codex-task") {
   }, new Date("2026-08-24T00:00:00.000Z"));
 }
 
+/** 主題 memory の meta-review task —— enabled_tools と盤面の tool 一覧はこの主題でだけ形が変わる(ADR 0122 決定2)。 */
+function metaReviewTask(db: ReturnType<typeof openDb>) {
+  return registerTask(db, {
+    type: "review",
+    assignee: "codex-agent",
+    title: "Memory meta-review",
+    purpose: "keep the memory store correct",
+    completion_criteria: "the store is reviewed",
+    meta_review_subject: "memory",
+  }, new Date("2026-08-24T00:00:00.000Z"));
+}
+
 function recordingSpawn() {
   const calls: Array<{ command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
   const stdout = new PassThrough();
@@ -172,11 +184,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
     const f = await fixture();
     f.worker.start(task(f.db));
-    f.worker.start(registerTask(
-      f.db,
-      { type: "review", assignee: "codex-agent", title: "Memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" },
-      new Date("2026-08-24T00:00:00.000Z"),
-    ));
+    f.worker.start(metaReviewTask(f.db));
 
     const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
     expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
@@ -196,17 +204,16 @@ describe("CodexWorker (ADR 0098)", () => {
   });
 
   it.each([
-    ["work", { type: "work", assignee: "codex-agent", workspace: "work", title: "codex-task", purpose: "p", completion_criteria: "c" }],
-    ["主題 memory の meta-review", { type: "review", assignee: "codex-agent", title: "Memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }],
-  ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, shape) => {
-    const at = new Date("2026-08-24T00:00:00.000Z");
+    ["work", task],
+    ["主題 memory の meta-review", metaReviewTask],
+  ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
-    f.worker.start(registerTask(f.db, shape, at));
+    f.worker.start(register(f.db));
     const t = await bootTidepool();
-    const client = await mcpClient(t.mcpBaseUrl, registerTask(t.db, shape, at).id);
+    const client = await mcpClient(t.mcpBaseUrl, register(t.db).id);
     try {
       // 片方は BOARD_VERBS の並び、片方は registerTool の順。どちらの順序も意味を持たない
-      expect([...enabledTools(f.process.calls[0]!.args)].sort())
+      expect(enabledTools(f.process.calls[0]!.args).sort())
         .toEqual((await client.listTools()).tools.map((tool) => tool.name).sort());
     } finally {
       await client.close();
