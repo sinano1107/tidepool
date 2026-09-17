@@ -61,6 +61,9 @@ const BOARD_VERBS = [
 ] as const;
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 const CODEX_HOOKS = ["SubagentStart", "PreToolUse"] as const;
+/** ADR 0124 決定4: probe 専用の1行。`codex debug prompt-input` は推論リクエストを
+ *  送らないので、この marker がモデルに届くことはない。 */
+export const CODEX_DEVELOPER_MARKER = "tidepool-containment-probe: developer layer canary";
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
 const CLOSED_FEATURES = [
   "apps",
@@ -125,6 +128,8 @@ export interface CodexCapabilityObservation {
   hooks: readonly string[];
   permissions: readonly string[];
   closedFeatures: readonly string[];
+  /** 盤面が `developer_instructions` で渡した marker のうち、developer item に載ったもの。 */
+  developerMarkers: readonly string[];
 }
 
 export type CodexCapabilityProbe = () => Promise<CodexCapabilityObservation>;
@@ -147,6 +152,7 @@ export async function checkCodexCapability(
       ["hook", CODEX_HOOKS, observed.hooks],
       ["permission", CODEX_PERMISSIONS, observed.permissions],
       ["closed feature", CLOSED_FEATURES, observed.closedFeatures],
+      ["developer instructions", [CODEX_DEVELOPER_MARKER], observed.developerMarkers],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
   return mismatch
@@ -171,12 +177,19 @@ function tomlInline(value: Record<string, unknown>): string {
     .join(",")}}`;
 }
 
-function taskPrompt(task: Task, systemPrompt: string, authority: string): string {
-  return `${systemPrompt}\n\n## Authority\n\n${authority}\n\n` +
+/** ADR 0124 決定1・2: 盤面が書いた文面 —— task に固有でない背景知識 —— は
+ *  `developer_instructions` に載せる。Codex は次の part(`<skills_instructions>`)との間に
+ *  区切りを入れないので、終端の空行は文面の一部である。 */
+function developerInstructions(memorySection: string | null, systemPrompt: string, authority: string): string {
+  return `${memorySection ? `${memorySection}\n\n` : ""}${systemPrompt}\n\n## Authority\n\n${authority}\n\n` +
     "Use only the tidepool MCP verbs to report board decisions and completion. " +
     "Board verbs are main-thread only; if a subagent needs one, call it from the main thread.\n\n" +
-    `${PREMISE_BREACH_PROTOCOL}\n\n` +
-    `First call get_current_task for task ${task.id}, then complete this task: ${task.title}\n\n` +
+    `${PREMISE_BREACH_PROTOCOL}\n\n`;
+}
+
+/** user turn に残るのは、その task に固有の指示だけ(ADR 0124 決定1)。 */
+function taskPrompt(task: Task): string {
+  return `First call get_current_task for task ${task.id}, then complete this task: ${task.title}\n\n` +
     `Purpose: ${task.purpose}\nCompletion criteria: ${task.completion_criteria}`;
 }
 
@@ -332,6 +345,21 @@ function observedSkills(promptInput: string): string[] {
   return available ? [...available.matchAll(/^- ([^:\n]+):/gm)].map((match) => match[1]!) : [];
 }
 
+/** ADR 0124 決定4: `codex debug prompt-input` の出力から、**developer role の item に
+ *  属する part のうち marker と完全一致するもの**を集める。組み込み prompt 自体が
+ *  developer item なので、role の存在ではなく逐語の一致だけが層への到達を言う。 */
+export function observedDeveloperMarkers(promptInput: string, marker: string): string[] {
+  const messages = JSON.parse(promptInput) as Array<{
+    role?: string;
+    content?: Array<{ text?: string }>;
+  }>;
+  return messages
+    .filter((message) => message.role === "developer")
+    .flatMap((message) => message.content ?? [])
+    .map((part) => part.text)
+    .filter((text): text is string => text === marker);
+}
+
 async function probeMcpTools(mcpUrl: string): Promise<string[]> {
   const client = new Client({ name: "tidepool-codex-containment", version: "0.0.0" });
   try {
@@ -471,7 +499,14 @@ async function actualCodexCapability(options: {
     const cliVersion = (await runFile(options.executable, ["--version"], { env })).trim();
     const promptInput = await runFile(
       options.executable,
-      ["debug", "prompt-input", ...configArgs(config), "containment canary"],
+      [
+        "debug",
+        "prompt-input",
+        // 盤面の文面が載る層そのものを観測する行。`features list` には渡さない
+        // —— 実測したのは prompt-input の面だけ(ADR 0124 の測定)。
+        ...configArgs([...config, `developer_instructions=${toml(CODEX_DEVELOPER_MARKER)}`]),
+        "containment canary",
+      ],
       { cwd: workspace, env },
     );
     const features = await runFile(
@@ -491,6 +526,7 @@ async function actualCodexCapability(options: {
       cliVersion,
       mcpTools: await probeMcpTools(options.mcpUrl),
       skills: observedSkills(promptInput),
+      developerMarkers: observedDeveloperMarkers(promptInput, CODEX_DEVELOPER_MARKER),
       hooks: probeHook(options.codexHome, taskTemp),
       permissions: [...CODEX_PERMISSIONS],
       closedFeatures: CLOSED_FEATURES.filter((feature) => disabled.get(feature) === "false"),
@@ -636,8 +672,10 @@ export class CodexWorker implements WorkerAdapter {
     writeFileSync(hookState, "[]", { mode: 0o600 });
     const taskMcpUrl = new URL(this.options.mcpUrl);
     taskMcpUrl.searchParams.set("task", task.id);
+    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
     const config = [
       `model_reasoning_effort=${toml(setting.effort)}`,
+      `developer_instructions=${toml(developerInstructions(memory.section, agent.definition.systemPrompt, agent.profile.guidance))}`,
       ...permissionConfig(task.type, workspace.path, taskTemp, this.options.executable),
       ...closedSurfaceConfig(),
       'forced_login_method="chatgpt"',
@@ -653,7 +691,6 @@ export class CodexWorker implements WorkerAdapter {
       `hooks.SubagentStart=[{hooks=[{type="command",command=${toml(hook)}}]}]`,
       `hooks.PreToolUse=[{matcher="mcp__tidepool__.*",hooks=[{type="command",command=${toml(hook)}}]}]`,
     ];
-    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name);
     const child = this.containers.open(task.id).spawn(
       this.options.executable,
       [
@@ -663,7 +700,7 @@ export class CodexWorker implements WorkerAdapter {
         "-C", workspace.path,
         "-m", setting.model,
         ...config.flatMap((entry) => ["-c", entry]),
-        `${memory.section ? `${memory.section}\n\n` : ""}${taskPrompt(task, agent.definition.systemPrompt, agent.profile.guidance)}`,
+        taskPrompt(task),
       ],
       {
         cwd: workspace.path,

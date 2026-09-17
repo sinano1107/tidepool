@@ -1,8 +1,11 @@
+import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
+  CODEX_DEVELOPER_MARKER,
   type CodexCapabilityObservation,
   checkCodexCapability,
+  observedDeveloperMarkers,
 } from "../src/codex-worker.js";
 import { listEvents } from "../src/events.js";
 import { harnessContainmentPickupBlocked } from "../src/harness-containment.js";
@@ -44,7 +47,12 @@ const VALID: CodexCapabilityObservation = {
     "view_image",
     "workspace_dependencies",
   ],
+  developerMarkers: [CODEX_DEVELOPER_MARKER],
 };
+
+it("宣言どおりの観測は封じ込めを成立させる", async () => {
+  expect(await checkCodexCapability(async () => VALID)).toEqual({ available: true });
+});
 
 it.each([
   ["version", { cliVersion: "codex-cli 0.148.0" }],
@@ -53,10 +61,47 @@ it.each([
   ["hook", { hooks: ["SubagentStart"] }],
   ["permission", { permissions: ["tidepool-work"] }],
   ["feature", { closedFeatures: VALID.closedFeatures.slice(1) }],
+  // 盤面の文面が developer 層に届かなかった3つの形(ADR 0124 決定4): 鍵が無視された、
+  // 別の層に載った、item の構造が変わった
+  ["developer instructions (空)", { developerMarkers: [] }],
+  ["developer instructions (別値)", { developerMarkers: ["some other text"] }],
+  ["developer instructions (重複)", { developerMarkers: [CODEX_DEVELOPER_MARKER, CODEX_DEVELOPER_MARKER] }],
 ] as const)("Codex %s surface drift fails its Harness preflight closed", async (_, changed) => {
   const capability = await checkCodexCapability(async () => ({ ...VALID, ...changed }));
   expect(capability.available).toBe(false);
   if (!capability.available) expect(capability.reason).toContain("Codex containment preflight");
+});
+
+it("届かなかった理由は期待値と観測値の両方を名指す(ADR 0124 決定4)", async () => {
+  const capability = await checkCodexCapability(async () => ({ ...VALID, developerMarkers: [] }));
+  expect(capability.available).toBe(false);
+  if (!capability.available) {
+    expect(capability.reason).toContain(CODEX_DEVELOPER_MARKER);
+    expect(capability.reason).toContain("observed []");
+  }
+});
+
+// 実物の `codex debug prompt-input` 出力(0.147.0、preflight と同じ config 列)。
+// パスだけ無害な固定値へ、marker だけ実装の定数へ置換してある。
+const promptInput = (name: string) =>
+  readFileSync(new URL(`fixtures/codex-prompt-input-${name}.json`, import.meta.url), "utf8");
+
+it("prompt-input の developer item に載った marker だけを拾う(ADR 0124 決定4)", () => {
+  expect(observedDeveloperMarkers(promptInput("developer-marker"), CODEX_DEVELOPER_MARKER))
+    .toEqual([CODEX_DEVELOPER_MARKER]);
+  expect(observedDeveloperMarkers(promptInput("no-marker"), CODEX_DEVELOPER_MARKER)).toEqual([]);
+});
+
+it("user item に同じ文字列が載っているだけの出力は観測に数えない(別の層に載った形)", () => {
+  const items = JSON.parse(promptInput("developer-marker")) as Array<{
+    role: string;
+    content: Array<{ type: string; text: string }>;
+  }>;
+  const developer = items.find((item) => item.role === "developer")!;
+  developer.content = developer.content.filter((part) => part.text !== CODEX_DEVELOPER_MARKER);
+  items.at(-1)!.content.push({ type: "input_text", text: CODEX_DEVELOPER_MARKER });
+
+  expect(observedDeveloperMarkers(JSON.stringify(items), CODEX_DEVELOPER_MARKER)).toEqual([]);
 });
 
 it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {
