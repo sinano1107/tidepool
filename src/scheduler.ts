@@ -617,7 +617,9 @@ export function startScheduler(deps: {
           status: "observed",
           plan: result.plan,
           cliVersion: result.cliVersion,
-          windows: result.windows.map((window) => ({
+          // 使用率 0% の窓は未開始(Idle)—— 観測できた不在で、ペース線を持たず絞らない。
+          // 判別は使用率だけで reset 時刻は見ない(ADR 0128 決定1・2)。
+          windows: result.windows.filter((window) => window.usedPercent !== 0).map((window) => ({
             window: window.name,
             model: window.model,
             usedPercent: window.usedPercent,

@@ -391,6 +391,35 @@ it.each([
   expect(result).toMatchObject({ status: "unobservable", reason: expect.stringContaining(cause) });
 });
 
+// idle の窓は backend が自分の時計で「今 + 窓幅」を返すので、reset は probe の往復と秒への丸めの
+// ぶん必ず pickup 時刻 + 窓幅を超える。窓幅以内という上限は vendor の契約ではない(ADR 0128 決定3)。
+it("reset が pickup 時刻 + 窓幅を往復ぶん超えていても観測として通る", async () => {
+  const result = await probe([
+    INITIALIZED,
+    SIGNED_IN,
+    {
+      id: 3,
+      result: {
+        rateLimits: {
+          limitId: "codex",
+          planType: "plus",
+          primary: { usedPercent: 0, windowDurationMins: 300, resetsAt: 18_003 },
+          secondary: { usedPercent: 0, windowDurationMins: 10_080, resetsAt: 604_803 },
+        },
+      },
+    },
+  ]);
+
+  // Idle の除外は scheduler 側なので、窓は observed の結果に残る。
+  expect(result).toMatchObject({
+    status: "observed",
+    windows: [
+      { name: "primary", usedPercent: 0, durationMs: 18_000_000, resetsAt: "1970-01-01T05:00:03.000Z" },
+      { name: "secondary", usedPercent: 0, durationMs: 604_800_000, resetsAt: "1970-01-08T00:00:03.000Z" },
+    ],
+  });
+});
+
 it("accepts the validated codex indexed view but does not guess that unknown limit ids are models", async () => {
   const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
   const command: CodexCliCommand = async (_executable, args) => {
