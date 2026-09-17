@@ -1,0 +1,29 @@
+{
+  "data": [
+    {
+      "cwd": "/board/workspace",
+      "hooks": [
+        {
+          "key": "/<session-flags>/config.toml:pre_tool_use:0:0",
+          "eventName": "preToolUse",
+          "handlerType": "command",
+          "matcher": "mcp__tidepool__.*",
+          "command": "/board/codex-home/tidepool-hooks/main-thread-mcp.mjs",
+          "timeoutSec": 600,
+          "statusMessage": null,
+          "additionalContextLimit": null,
+          "sourcePath": "/<session-flags>/config.toml",
+          "source": "sessionFlags",
+          "pluginId": null,
+          "displayOrder": 0,
+          "enabled": true,
+          "isManaged": false,
+          "currentHash": "sha256:b2669106f2f1cbe7c52d32a3483a14c097b1ceb87d0f698f0d278cd1edb818db",
+          "trustStatus": "untrusted"
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}

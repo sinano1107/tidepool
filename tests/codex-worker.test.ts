@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,7 +149,8 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(call.env.GITHUB_TOKEN).toBeUndefined();
     expect(call.args).toEqual(expect.arrayContaining([
       "--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--ignore-user-config",
-      "--ignore-rules", "--strict-config", "-C", f.workspace, "-m", "gpt-5.6-terra",
+      "--ignore-rules", "--strict-config", "--dangerously-bypass-hook-trust",
+      "-C", f.workspace, "-m", "gpt-5.6-terra",
     ]));
     const config = call.args.filter((_, index) => call.args[index - 1] === "-c").join("\n");
     // 前提の破綻と自タスク外の発見の2文(ADR 0121 / issue #631)
@@ -175,8 +176,11 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
     expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md"));
     expect(config).toContain("?task=" + value.id);
-    expect(config).toContain("hooks.SubagentStart=");
-    expect(config).toContain("hooks.PreToolUse=");
+    expect(config).toContain("features.hooks=true");
+    expect(config).toContain('hooks.PreToolUse=[{matcher="mcp__tidepool__.*"');
+    // 門は agent_id 1本(ADR 0130 決定1)—— SubagentStart の登録も state file の env も渡らない
+    expect(config).not.toContain("hooks.SubagentStart=");
+    expect(call.env.TIDEPOOL_SUBAGENT_STATE).toBeUndefined();
     expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")?.payload).toMatchObject({
       kind: "worker_spawned",
       // ADR 0110 決定3: -m と model_reasoning_effort に渡した値そのもの、および
@@ -319,45 +323,44 @@ describe("CodexWorker (ADR 0098)", () => {
     });
   });
 
-  it("the spawned Board-owned hook denies Tidepool MCP only from subagent turns and fails closed", async () => {
+  it("the spawned Board-owned hook denies a Tidepool MCP call carrying an agent_id and fails closed", async () => {
     const f = await fixture();
-    const value = task(f.db, "codex-hook");
-    f.worker.start(value);
+    f.worker.start(task(f.db, "codex-hook"));
     const env = f.process.calls[0]!.env;
     const hook = join(f.codexHome, "tidepool-hooks", "main-thread-mcp.mjs");
-    const invoke = (input: object) =>
+    const invoke = (input: unknown) =>
       execFileSync(process.execPath, [hook], {
         env,
-        input: JSON.stringify(input),
+        input: typeof input === "string" ? input : JSON.stringify(input),
         encoding: "utf8",
       });
+    const denied = { hookSpecificOutput: { permissionDecision: "deny" } };
 
-    expect(env.TIDEPOOL_SUBAGENT_STATE).toContain(f.codexHome);
-    expect(invoke({
+    // subagent の呼び出しには必ず agent_id が載る。main thread では key ごと出ない(ADR 0130 決定1)
+    expect(JSON.parse(invoke({
       hook_event_name: "PreToolUse",
-      turn_id: "main-turn",
-      tool_name: "mcp__tidepool__complete_task",
-    })).toBe("");
-    expect(invoke({
-      hook_event_name: "SubagentStart",
-      turn_id: "sub-turn",
       agent_id: "agent-1",
+      tool_name: "mcp__tidepool__complete_task",
+    }))).toMatchObject(denied);
+    expect(invoke({
+      hook_event_name: "PreToolUse",
+      tool_name: "mcp__tidepool__complete_task",
     })).toBe("");
+    // 門が選ぶのは盤面 verb だけ —— subagent の他の tool は素通しする
+    expect(invoke({
+      hook_event_name: "PreToolUse",
+      agent_id: "agent-1",
+      tool_name: "shell",
+    })).toBe("");
+    // 空の agent_id も subagent の識別子 —— 真偽ではなく key の有無で見る
     expect(JSON.parse(invoke({
       hook_event_name: "PreToolUse",
-      turn_id: "sub-turn",
+      agent_id: "",
       tool_name: "mcp__tidepool__complete_task",
-    }))).toMatchObject({
-      hookSpecificOutput: { permissionDecision: "deny" },
-    });
-    writeFileSync(env.TIDEPOOL_SUBAGENT_STATE!, "not-json");
-    expect(JSON.parse(invoke({
-      hook_event_name: "PreToolUse",
-      turn_id: "main-turn",
-      tool_name: "mcp__tidepool__complete_task",
-    }))).toMatchObject({
-      hookSpecificOutput: { permissionDecision: "deny" },
-    });
+    }))).toMatchObject(denied);
+    // 執行されない門は fail-open にしない: 解釈できない入力はすべて deny
+    expect(JSON.parse(invoke("not-json"))).toMatchObject(denied);
+    expect(JSON.parse(invoke({ hook_event_name: "SessionStart" }))).toMatchObject(denied);
   });
 
   it("normalizes a successful Codex JSONL fixture into the durable session event", async () => {
