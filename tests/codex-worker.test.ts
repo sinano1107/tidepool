@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { quarantinedAuthProviders } from "../src/cli-auth.js";
-import { type CodexSpawnFn, CodexWorker } from "../src/codex-worker.js";
+import { type CodexSpawnFn, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
@@ -457,5 +457,20 @@ describe("CodexWorker (ADR 0098)", () => {
       signal: "SIGINT",
       usage: null,
     });
+  });
+});
+
+describe("resolveCodexExecutable", () => {
+  it("PATH に載っているのが symlink でも実体のパスを返す —— sandbox が exec するのは実体なので、read を与える dir も実体側でなければ届かない(issue #646)", async () => {
+    const base = await mkdtemp(join(tmpdir(), "tidepool-codex-which-"));
+    const realDir = join(base, "real");
+    const linkDir = join(base, "link");
+    await mkdir(realDir);
+    await mkdir(linkDir);
+    const realExecutable = join(realDir, "codex");
+    await writeFile(realExecutable, "#!/bin/sh\n", { mode: 0o755 });
+    await symlink(realExecutable, join(linkDir, "codex"));
+
+    expect(resolveCodexExecutable(linkDir)).toBe(await realpath(realExecutable));
   });
 });
