@@ -319,7 +319,6 @@ function TpScratchpad({ lines, onAdd, onRemove }) {
 }
 const TP_SCRATCH_KINDS = [
   { key: "task", label: "task" },
-  { key: "meta_review", label: "meta-review" },
   { key: "register", label: "register" },
   { key: "discard", label: "discard" }
 ];
