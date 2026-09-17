@@ -57,13 +57,14 @@ function recordingSpawn() {
   };
 }
 
-/** 盤面が書いた文面は `-c developer_instructions=` に載る(ADR 0124 決定2)。
- *  値は toml() = JSON.stringify なので、読むときは JSON.parse で戻す。 */
-function developerInstructions(args: string[]): string {
-  const prefix = "developer_instructions=";
+/** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
+function configValue<T>(args: string[], prefix: string): T {
   const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith(prefix))!;
-  return JSON.parse(entry.slice(prefix.length)) as string;
+  return JSON.parse(entry.slice(prefix.length)) as T;
 }
+
+/** 盤面が書いた文面は `-c developer_instructions=` に載る(ADR 0124 決定2)。 */
+const developerInstructions = (args: string[]) => configValue<string>(args, "developer_instructions=");
 
 async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
@@ -172,11 +173,8 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
     const f = await fixture();
-    const enabledTools = (index: number) => {
-      const args = f.process.calls[index]!.args;
-      const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith("mcp_servers.tidepool.enabled_tools="))!;
-      return JSON.parse(entry.slice("mcp_servers.tidepool.enabled_tools=".length)) as string[];
-    };
+    const enabledTools = (index: number) =>
+      configValue<string[]>(f.process.calls[index]!.args, "mcp_servers.tidepool.enabled_tools=");
     f.worker.start(task(f.db));
     f.worker.start(registerTask(
       f.db,

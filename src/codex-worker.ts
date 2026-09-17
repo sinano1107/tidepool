@@ -348,7 +348,7 @@ function observedSkills(promptInput: string): string[] {
 /** ADR 0124 決定4: `codex debug prompt-input` の出力から、**developer role の item に
  *  属する part のうち marker と完全一致するもの**を集める。組み込み prompt 自体が
  *  developer item なので、role の存在ではなく逐語の一致だけが層への到達を言う。 */
-export function observedDeveloperMarkers(promptInput: string, marker: string): string[] {
+export function observedDeveloperMarkers(promptInput: string): string[] {
   const messages = JSON.parse(promptInput) as Array<{
     role?: string;
     content?: Array<{ text?: string }>;
@@ -356,8 +356,8 @@ export function observedDeveloperMarkers(promptInput: string, marker: string): s
   return messages
     .filter((message) => message.role === "developer")
     .flatMap((message) => message.content ?? [])
-    .map((part) => part.text)
-    .filter((text): text is string => text === marker);
+    .map((part) => part.text ?? "")
+    .filter((text) => text === CODEX_DEVELOPER_MARKER);
 }
 
 async function probeMcpTools(mcpUrl: string): Promise<string[]> {
@@ -499,14 +499,8 @@ async function actualCodexCapability(options: {
     const cliVersion = (await runFile(options.executable, ["--version"], { env })).trim();
     const promptInput = await runFile(
       options.executable,
-      [
-        "debug",
-        "prompt-input",
-        // 盤面の文面が載る層そのものを観測する行。`features list` には渡さない
-        // —— 実測したのは prompt-input の面だけ(ADR 0124 の測定)。
-        ...configArgs([...config, `developer_instructions=${toml(CODEX_DEVELOPER_MARKER)}`]),
-        "containment canary",
-      ],
+      // marker は prompt-input にだけ渡す —— 実測したのはこの面だけ(ADR 0124 の測定)
+      ["debug", "prompt-input", ...configArgs([...config, `developer_instructions=${toml(CODEX_DEVELOPER_MARKER)}`]), "containment canary"],
       { cwd: workspace, env },
     );
     const features = await runFile(
@@ -526,7 +520,7 @@ async function actualCodexCapability(options: {
       cliVersion,
       mcpTools: await probeMcpTools(options.mcpUrl),
       skills: observedSkills(promptInput),
-      developerMarkers: observedDeveloperMarkers(promptInput, CODEX_DEVELOPER_MARKER),
+      developerMarkers: observedDeveloperMarkers(promptInput),
       hooks: probeHook(options.codexHome, taskTemp),
       permissions: [...CODEX_PERMISSIONS],
       closedFeatures: CLOSED_FEATURES.filter((feature) => disabled.get(feature) === "false"),

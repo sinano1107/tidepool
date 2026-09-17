@@ -87,21 +87,13 @@ const promptInput = (name: string) =>
   readFileSync(new URL(`fixtures/codex-prompt-input-${name}.json`, import.meta.url), "utf8");
 
 it("prompt-input の developer item に載った marker だけを拾う(ADR 0124 決定4)", () => {
-  expect(observedDeveloperMarkers(promptInput("developer-marker"), CODEX_DEVELOPER_MARKER))
-    .toEqual([CODEX_DEVELOPER_MARKER]);
-  expect(observedDeveloperMarkers(promptInput("no-marker"), CODEX_DEVELOPER_MARKER)).toEqual([]);
-});
+  expect(observedDeveloperMarkers(promptInput("developer-marker"))).toEqual([CODEX_DEVELOPER_MARKER]);
+  expect(observedDeveloperMarkers(promptInput("no-marker"))).toEqual([]);
 
-it("user item に同じ文字列が載っているだけの出力は観測に数えない(別の層に載った形)", () => {
-  const items = JSON.parse(promptInput("developer-marker")) as Array<{
-    role: string;
-    content: Array<{ type: string; text: string }>;
-  }>;
-  const developer = items.find((item) => item.role === "developer")!;
-  developer.content = developer.content.filter((part) => part.text !== CODEX_DEVELOPER_MARKER);
+  // 同じ文字列が user item に載っているだけの形(別の層に載った)は観測に数えない
+  const items = JSON.parse(promptInput("no-marker")) as Array<{ content: Array<{ type: string; text: string }> }>;
   items.at(-1)!.content.push({ type: "input_text", text: CODEX_DEVELOPER_MARKER });
-
-  expect(observedDeveloperMarkers(JSON.stringify(items), CODEX_DEVELOPER_MARKER)).toEqual([]);
+  expect(observedDeveloperMarkers(JSON.stringify(items))).toEqual([]);
 });
 
 it("a failed Codex Harness preflight skips that route and starts a Claude-route row in the same poll", async () => {
