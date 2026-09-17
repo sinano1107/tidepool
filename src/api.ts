@@ -509,7 +509,7 @@ const closeSchema = z.object({
     .array(
       z.object({
         id: z.number().int().positive(),
-        disposition: z.enum(["meta_review", "task", "register", "discard"]),
+        disposition: z.enum(["task", "register", "discard"]),
       }),
     )
     .default([]),

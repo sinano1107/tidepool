@@ -1145,7 +1145,7 @@ export function isMetaReviewOf(db: Db, taskId: string, subject: MetaReviewSubjec
   return db.prepare("SELECT 1 FROM tasks WHERE id = ? AND meta_review_subject = ?").get(taskId, subject) !== undefined;
 }
 
-/** 主題の meta-review を盤面名義で登録する(周期と scratchpad の振り分けの両方が通る1本、due は見ない)。 */
+/** 主題の meta-review を盤面名義で登録する(周期が通る1本、due は見ない)。 */
 export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
   db.transaction(() => {
     const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject], meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");

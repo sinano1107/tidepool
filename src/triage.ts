@@ -2,7 +2,6 @@ import type { AttributionJudgment } from "./attribution.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventRow, getEvent, HUMAN_FACING_KINDS } from "./events.js";
-import { registerMetaReview } from "./memory.js";
 import {
   BOARD_WORKER_ID,
   type BoardTask,
@@ -28,7 +27,7 @@ export interface TriageSession {
 export interface TriageCommitResult {
   outcome: "closed_now" | "already_closed_by_timeout" | "no_open_session";
   closed_at: string | null;
-  /** 振り分け(`task` / `meta_review`)が作ったタスク数。セッションの有無に依らず、1件でも
+  /** 振り分け(`task`)が作ったタスク数。セッションの有無に依らず、1件でも
    *  作れば候補が増えているので pickup の契機になる(ADR 0119 決定2)。 */
   created_tasks: number;
 }
@@ -360,12 +359,11 @@ export function listScratchpad(db: Db): ScratchpadLine[] {
   return db.prepare("SELECT * FROM triage_scratchpad ORDER BY id").all() as ScratchpadLine[];
 }
 
-export type ScratchpadDisposition = "meta_review" | "task" | "register" | "discard";
+export type ScratchpadDisposition = "task" | "register" | "discard";
 
-/** The commit screen's verdict per line: a meta-review task (the condensation
- *  entry point), an ordinary work task, a pending dump bound for Register
- *  (issue #61 — the line needs writing up, not something a worker can act on
- *  as-is), or nothing at all. */
+/** The commit screen's verdict per line: an ordinary work task, a pending
+ *  dump bound for Register (issue #61 — the line needs writing up, not
+ *  something a worker can act on as-is), or nothing at all. */
 function applyScratchpad(
   db: Db,
   dispositions: Array<{ id: number; disposition: ScratchpadDisposition }>,
@@ -389,11 +387,6 @@ function applyScratchpad(
       continue;
     }
     created++;
-    if (disposition === "meta_review") {
-      // ADR 0120 決定2: 主題 memory の手動登録(周期の due は通らない)
-      registerMetaReview(db, "memory", now);
-      continue;
-    }
     registerTask(
       db,
       { type: "work", title: line.line, purpose: "raised on the triage scratchpad", completion_criteria: "the line above is resolved" },
