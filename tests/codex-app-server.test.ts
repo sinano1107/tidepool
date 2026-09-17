@@ -235,14 +235,12 @@ const SIGNED_IN = {
   result: { account: { type: "chatgpt", email: null, planType: "plus" }, requiresOpenaiAuth: true },
 };
 
-async function probe(rows: unknown[]) {
-  const root = await mkdtemp(join(tmpdir(), "tidepool-codex-probe-"));
-  return createCodexAppServerProbe({
+const probe = (rows: unknown[]) =>
+  createCodexAppServerProbe({
     executable: "/opt/tidepool/bin/codex",
-    codexHome: root,
+    codexHome: "/tmp/codex",
     command: fakeCodex(rows),
   })(new Date(1_000));
-}
 
 it.each([
   [
@@ -268,14 +266,12 @@ it.each([
     "HTTP 401",
   ],
 ])("Codex の失効の証拠は2つあり、どちらも openai の unauthorized になる: %s", async (_case, rows, evidence) => {
-  const result = await probe(rows);
-
-  expect(result).toMatchObject({
+  expect(await probe(rows)).toMatchObject({
     status: "unauthorized",
     provider: "openai",
     cliVersion: CODEX_APP_SERVER_VERSION,
+    reason: expect.stringContaining(evidence),
   });
-  expect(result.status !== "observed" && result.reason).toContain(evidence);
 });
 
 const RATE_LIMITS = {
@@ -328,10 +324,11 @@ it.each([
     "does not use OpenAI authentication",
   ],
 ])("失効と言い切れない観測は確認 question を立てず観測不能に留まる: %s", async (_case, rows, cause) => {
-  const result = await probe(rows);
-
-  expect(result).toMatchObject({ status: "unobservable", provider: "openai" });
-  expect(result.status !== "observed" && result.reason).toContain(cause);
+  expect(await probe(rows)).toMatchObject({
+    status: "unobservable",
+    provider: "openai",
+    reason: expect.stringContaining(cause),
+  });
 });
 
 // 各行が名前どおりの条件で落ちていることを reason で留める —— 揃って "unobservable" に
@@ -365,8 +362,7 @@ it.each([
     },
   ]);
 
-  expect(result.status).toBe("unobservable");
-  expect(result.status !== "observed" && result.reason).toContain(cause);
+  expect(result).toMatchObject({ status: "unobservable", reason: expect.stringContaining(cause) });
 });
 
 it("accepts the validated codex indexed view but does not guess that unknown limit ids are models", async () => {
