@@ -74,6 +74,8 @@ const CLOSED_FEATURES = [
   "image_generation",
   "in_app_browser",
   "memories",
+  // ADR 0129 決定2: Codex route の「subagent から盤面 verb 禁止」の床はこの feature を閉じること
+  "multi_agent",
   "plugins",
   "recommended_plugins",
   "remote_plugin",
@@ -666,6 +668,9 @@ export class CodexWorker implements WorkerAdapter {
           : BOARD_VERBS,
       )}`,
       "mcp_servers.tidepool.required=true",
+      // ADR 0129 決定1: 答える人の居ない exec では承認の問いは Cancel にしかならない。
+      // 面は tidepool server に閉じ、verb の権限は盤面側(authority profile / MCP router)が縛る
+      'mcp_servers.tidepool.default_tools_approval_mode="approve"',
       skillConfig(this.options.codexHome, workspace.path),
       `hooks.SubagentStart=[{hooks=[{type="command",command=${toml(hook)}}]}]`,
       `hooks.PreToolUse=[{matcher="mcp__tidepool__.*",hooks=[{type="command",command=${toml(hook)}}]}]`,
