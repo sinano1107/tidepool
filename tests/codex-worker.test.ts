@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { quarantinedAuthProviders } from "../src/cli-auth.js";
 import { type CodexSpawnFn, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -12,10 +12,13 @@ import { listEvents } from "../src/events.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, passthroughContainers } from "./fakes.js";
-import { bootTidepool, mcpClient } from "./harness.js";
+import { bootTidepool, mcpClient, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 const CLI_VERSION = "codex-cli 0.147.0";
+
+let t: Tidepool;
+afterEach(() => t?.stop());
 
 /** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
 function enabledTools(args: string[]): string[] {
@@ -209,7 +212,7 @@ describe("CodexWorker (ADR 0098)", () => {
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     f.worker.start(register(f.db));
-    const t = await bootTidepool();
+    t = await bootTidepool();
     const client = await mcpClient(t.mcpBaseUrl, register(t.db).id);
     try {
       // 片方は BOARD_VERBS の並び、片方は registerTool の順。どちらの順序も意味を持たない
@@ -217,7 +220,6 @@ describe("CodexWorker (ADR 0098)", () => {
         .toEqual((await client.listTools()).tools.map((tool) => tool.name).sort());
     } finally {
       await client.close();
-      await t.stop();
     }
   });
 
