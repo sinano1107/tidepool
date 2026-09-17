@@ -61,6 +61,8 @@ Before opening the PR, gather everything the run surfaced, wherever it came from
 - **New, but only suspected** — file it `needs-info`, saying what observation would settle it. An issue is not an observation (ADR 0102).
 - **Not worth an issue** — say so in the PR, with a reason held to the same bar as a review finding.
 
+One more, and it comes from the originating issue rather than from the run: **its subject is a symptom observed in the real environment** ("the Codex route's worker cannot start", not "add a preflight row"). The change removes a suspected cause and merging will close the issue (ADR 0126), so file a confirmation issue, `needs-info`, naming the venue and the observation that would settle it. Merging is not that observation, and neither is a green suite — the symptom was observed outside both. When the run already filed an issue that blocks the venue check, say there that it carries the confirmation too, rather than opening a second row.
+
 ## The pull request
 
 Push the branch and open a PR. Follow the shape this repo already uses: a Japanese body with `## Summary`, a `## Test plan` checklist, and `Closes #<issue>`.
@@ -81,4 +83,4 @@ A review finding that was filed or commented on says so on its own line above (`
 
 ## Where this stops
 
-At the open pull request. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human merges, and the PR's `Closes #<issue>` closes the issue with it (ADR 0126) — no confirmation of yours gates that. When the issue's subject is a symptom observed in the real environment, the check that the symptom is gone belongs to one of the issues the filing step above produces, not to this one staying open.
+At the open pull request. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human merges, and the PR's `Closes #<issue>` closes the issue with it (ADR 0126) — no confirmation of yours gates that. When the issue's subject is a symptom observed in the real environment, what survives the close is the confirmation issue the filing step above files, not this one staying open.
