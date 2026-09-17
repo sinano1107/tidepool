@@ -14,6 +14,12 @@ When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the 
 
 Edit the right-hand column to match whatever vocabulary you actually use.
 
+A `needs-info` issue waits on an observation, so where it goes when the observation lands depends on
+what the observation showed: it **closes** when the observation is the answer, and takes
+`needs-triage` only when the observation leaves something to decide. This is the general rule, not a
+property of `verify:production` below — a confirmation issue whose venue is CI or the Lima VM closes
+the same way.
+
 ## Priority labels
 
 Orthogonal to the five roles above: a `ready-for-agent` issue additionally carries at most one `priority:*` label, ranking it for pickup. The 2026-07-17 triage ranked by what unblocks Tidepool developing Tidepool itself (deliverable integrity and trust foundations first, guardrails and tooling next, ops/UX last).
