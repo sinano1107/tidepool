@@ -2,7 +2,7 @@
 
 ## Board picks up nothing after a deploy (most common issue — check this first)
 
-Symptom: service is `active`, WebUI/API return 200, but a registered task just sits in `todo` forever, and `journalctl -u tidepool.service` shows nothing at all (no errors, no `[worker]` lines).
+Symptom: service is `active`, WebUI/API return 200, but a registered task just sits in `todo` forever, and `journalctl -u tidepool.service` shows nothing at all (no errors, no `[worker]` lines) — or, since issue #682, at most one `[usage] timed out before the CLI prompt:` line and nothing else. Only the startup-modal case leaves that line; the other causes below are still silent.
 
 **Check `throttle_state` before anything else:**
 

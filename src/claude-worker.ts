@@ -1515,6 +1515,9 @@ const PANEL_QUIET_MS = 2_000;
 // that measured observation window; normal completion still happens on the
 // 2s quiet debounce, so this is only the runaway ceiling.
 const USAGE_TIMEOUT_MS = 30_000;
+// How much of the stuck screen the timeout trace carries (ADR 0131 決定3). One
+// log line's worth — enough to name the dialog, not the whole 200x50 screen.
+const USAGE_TRACE_CHARS = 200;
 // Wide enough that "Current session …" never wraps at 80 columns (ADR 0028).
 const PTY_COLS = 200;
 const PTY_ROWS = 50;
@@ -1534,17 +1537,21 @@ const CTRL_C = "\x03";
 // drop the flag and that gate comes back (claude 2.1.273, ADR 0131 決定2).
 const USAGE_TUI_SETTINGS = JSON.stringify({ tui: "fullscreen" });
 
+// Strip ANSI/OSC escapes, leaving the whitespace alone.
+function stripEscapes(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[@-_][0-9;?]*[A-Za-z]?/g, "")
+    .replace(/\x1b[=>78]/g, "");
+}
+
 // Strip ANSI/OSC escapes and all whitespace. The CLI positions words with
 // cursor-move escapes, not spaces, so a marker like "Current session" is never
 // a contiguous substring of the raw stream; matching against this squashed
 // view ("Currentsession") is robust across renderers and terminal widths. The
 // captured raw is still returned verbatim — this view is only for matching.
 function squash(text: string): string {
-  return text
-    .replace(/\x1b\][^\x07]*\x07/g, "")
-    .replace(/\x1b[@-_][0-9;?]*[A-Za-z]?/g, "")
-    .replace(/\x1b[=>78]/g, "")
-    .replace(/\s+/g, "");
+  return stripEscapes(text).replace(/\s+/g, "");
 }
 
 /** Space-insensitive (but case-sensitive) substring match against the squashed
@@ -2467,8 +2474,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  screen; parseUsage reads that plain text (ADR 0074). Spawn failure or exit
    *  before the panel appears resolves null so the scheduler fails closed. A
    *  timeout after panel observation returns the latest composed screen as a
-   *  best effort. The session is always torn down (Ctrl-C×2 then kill) so no
-   *  orphan is left behind. `--settings` pins the fullscreen renderer (see
+   *  best effort. A timeout *before* the CLI prompt ever renders also leaves the
+   *  head of the stuck screen in the board log, since that fail-closed null is
+   *  otherwise traceless (ADR 0131 決定3). The session is always torn down
+   *  (Ctrl-C×2 then kill) so no orphan is left behind. `--settings` pins the fullscreen renderer (see
    *  USAGE_TUI_SETTINGS) so the panel stays parseable regardless of the host's
    *  own TUI setting.
    *
@@ -2532,9 +2541,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
 
       const timer = setTimeout(() => {
         // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。fail-closed に
-        // 畳まれると痕跡が残らないので、止まった画面だけ1行残す(ADR 0131 決定3)。
+        // 畳まれると痕跡が残らないので、止まった画面だけ1行残す(ADR 0131 決定3)。squash は
+        // 照合用の view で語間が潰れるため、読ませる側は空白を1つに畳むだけにする。
+        // ponytail: 画面ではなく stream 順。読み違えるようなら composeTerminalScreen へ。
         if (!promptSeen) {
-          console.warn(`[usage] timed out before the CLI prompt: ${squash(buffer).slice(0, 200)}`);
+          const screen = stripEscapes(buffer).replace(/\s+/g, " ").trim();
+          console.warn(
+            `[usage] timed out before the CLI prompt: ${screen.slice(0, USAGE_TRACE_CHARS)}`,
+          );
         }
         finish(hasUsagePanel(buffer) ? buffer : null);
       }, USAGE_TIMEOUT_MS);

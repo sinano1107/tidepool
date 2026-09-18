@@ -48,7 +48,7 @@ Note the split since issue #50 / ADR 0024: this human `gh auth` only serves the 
 ssh $PI 'node /opt/tidepool/scripts/prepare-claude-cli.mjs /opt/tidepool'
 ```
 
-This merges `projects["/opt/tidepool"].hasTrustDialogAccepted: true` and `hasCompletedOnboarding: true` into `~/.claude.json` (home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`) without touching anything else in the file. Skip it and the board silently fails the throttle closed (`checkUsage` times out → null) and picks up nothing — see troubleshooting.md's first entry.
+This merges `projects["/opt/tidepool"].hasTrustDialogAccepted: true` and `hasCompletedOnboarding: true` into `~/.claude.json` (home-side — survives redeploy, since deploy only rsyncs `/opt/tidepool`) without touching anything else in the file. Skip it and the board fails the throttle closed (`checkUsage` times out → null) and picks up nothing; the only trace is one `[usage] timed out before the CLI prompt:` line naming the dialog it stopped at — see troubleshooting.md's first entry.
 
 A what's-new modal after a `claude` update is a **separate** gate this script does not cover — it still needs a one-time interactive dismissal: `ssh $PI`, then `cd /opt/tidepool && claude`, dismiss the modal, and quit.
 

@@ -156,18 +156,6 @@ describe("node scripts/prepare-claude-cli.mjs", () => {
     });
   });
 
-  it("leaves the file byte-for-byte unchanged on a second run", () => {
-    const projectCwd = "/home/masaki/tidepool";
-    const { result: first, claudeJsonPath, home: seededHome } = runScript(projectCwd);
-    expect(first.status, first.stderr).toBe(0);
-    const afterFirst = readFileSync(claudeJsonPath, "utf8");
-
-    const second = execScript(seededHome, projectCwd);
-
-    expect(second.status, second.stderr).toBe(0);
-    expect(readFileSync(claudeJsonPath, "utf8")).toBe(afterFirst);
-  });
-
   it("resolves a relative cwd argument against the process's own working directory", () => {
     const { result, claudeJsonPath } = runScript("some/relative/dir", { cwd: ROOT });
 

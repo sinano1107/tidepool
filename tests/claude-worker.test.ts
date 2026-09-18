@@ -1902,13 +1902,18 @@ describe("ClaudeCodeWorker", () => {
       const pending = worker.checkUsage();
 
       // 初回対話(テーマ選択)が REPL より手前に出て、プロンプトに一度も着かない
-      rec.emitData(`Choose the text style that looks best ${"x".repeat(400)} TAIL_BEYOND_CAP`);
+      rec.emitData(
+        `\x1b[2J\x1b[H  Choose the text style\r\n  that looks best ${"x".repeat(400)} TAIL_BEYOND_CAP`,
+      );
       await vi.advanceTimersByTimeAsync(60_000);
 
       await expect(pending).resolves.toBeNull();
-      // どの画面で止まったかが読める(cli-auth の1行しか残らなかったのが #682)
+      // どの画面で止まったかが人間に読める —— 語間が潰れない(cli-auth の1行しか
+      // 残らなかったのが #682)。エスケープは落ち、先頭の余白も落ちる
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[usage] timed out before the CLI prompt: Choosethetext"),
+        expect.stringContaining(
+          "[usage] timed out before the CLI prompt: Choose the text style that looks best x",
+        ),
       );
       // 長さは固定 —— 画面全体を盤面ログに流し込まない
       expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("TAIL_BEYOND_CAP"));
