@@ -3151,8 +3151,8 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   );
 }
 
-// The six handoff fields (src/tasks.ts's HANDOFF_FIELDS) under the kit's own
-// labels for them (ui_kits/tidepool-webui/index.html's TP_HANDOFF_FIELDS).
+// The six handoff fields (src/tasks.ts's HANDOFF_FIELDS) under the labels this
+// screen shows them by — the field names are the server's, the wording is not.
 const HANDOFF_FIELDS = [
   ['outcome', 'outcome vs criteria'],
   ['deliverables', 'deliverable location'],

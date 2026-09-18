@@ -1,4 +1,4 @@
-// ui_kits/tidepool-webui/queue-screen.jsx
+// webui/queue-screen.jsx
 function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6 }) {
   const { QueueItem } = window.TidepoolDesignSystem_8a0ead;
   const itemEls = React.useRef(/* @__PURE__ */ new Map());
@@ -175,7 +175,7 @@ function QueueScreen({ data, slotState = "busy", wsAlert = false, paused = false
 }
 Object.assign(window, { QueueScreen, TpQueueList });
 
-// ui_kits/tidepool-webui/triage-screen.jsx
+// webui/triage-screen.jsx
 function TpWaterline({ progress }) {
   return /* @__PURE__ */ React.createElement("div", { style: { height: 2, background: "var(--rock-2)", position: "relative", borderRadius: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: "0 auto 0 0", width: `${progress * 100}%`, background: "var(--tide-4)", borderRadius: 1, transition: "width var(--duration-slow) var(--ease-tidal)" } }));
 }
@@ -663,7 +663,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
 }
 Object.assign(window, { TriageScreen, TpQuestionCard, TpQuestionItemPicker, TpWaterline, TpSegmentGauge });
 
-// ui_kits/tidepool-webui/single-question-view.jsx
+// webui/single-question-view.jsx
 function TpPushBanner({ q, onOpen, onDismiss }) {
   const headline = q.items.length > 1 ? `${q.items.length} questions` : q.items[0].title;
   return /* @__PURE__ */ React.createElement(
@@ -703,7 +703,7 @@ function TpSingleQuestion({ q, onAnswer, onClose, onTranslate }) {
 }
 Object.assign(window, { TpPushBanner, TpSingleQuestion });
 
-// ui_kits/tidepool-webui/board-screen.jsx
+// webui/board-screen.jsx
 function BoardScreen({ data, onOpenTask }) {
   const { FadeScroll, TaskCard } = window.TidepoolDesignSystem_8a0ead;
   const cols = ["todo", "in_progress", "blocked", "done"];

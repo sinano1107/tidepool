@@ -11,7 +11,7 @@ function isSingleGrapheme(value) {
 
 // The board's own mark (issue #261) — inlined rather than an <img src="/favicon.svg">
 // so this component stays free of the app's asset paths (ADR 0050: it must
-// render standalone in ui_kits and Claude Design previews). Kept in sync by
+// render standalone in the preview board and Claude Design previews). Kept in sync by
 // hand with public/favicon.svg / public/icon.svg — this is the path's 3rd copy.
 const BOARD_MARK_VIEWBOX = '76 76 360 360';
 const BOARD_MARK_PATH =

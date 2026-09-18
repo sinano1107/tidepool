@@ -1,7 +1,7 @@
 # WebUI E2E ハーネス — 実ブラウザで `public/index.html` を駆動する
 
-自動テストはサーバー境界で止める(ADR 0027)。`webui/app.jsx` と
-`ui_kits/tidepool-webui/*.jsx` の React 配線層は TypeScript の型検査が効かない唯一の層で、
+自動テストはサーバー境界で止める(ADR 0027)。`webui/*.jsx` の React 配線層は
+TypeScript の型検査が効かない唯一の層で、
 ここは生成された `public/app.js` を実ブラウザで駆動して確かめる。かつては人間の受け入れ確認に委ねていたが、いまはエージェントが
 Playwright でこの確認まで担う(ADR 0029)。この doc は、その確認を回すための土台の型と、
 過去に溶かしたハマりどころをまとめたもの。
@@ -92,8 +92,8 @@ Playwright への移行で **消えた**もの:
 
 原則 `getByRole` / `getByLabel` などユーザー可視のロールベース。文言依存の取得は避ける
 (日本語 UI コピーは変わりうる)。クリティカルな導線で壊れやすい要素にだけ
-所有する JSX (`webui/app.jsx`、共有部品なら `design-system/components/`、kit 固有なら
-`ui_kits/`) に `data-testid` を足して文言変更に強くする。Design System の掴み方:
+所有する JSX (`webui/*.jsx`、共有部品なら `design-system/components/`)
+に `data-testid` を足して文言変更に強くする。Design System の掴み方:
 `Select` は native `<select>`(`selectOption`)、`Input` は placeholder 付き native `<input>`。
 
 ## 参照
