@@ -1,5 +1,9 @@
 import { rm, writeFile } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
+import {
+  FAILED_TEARDOWN_QUESTION_TITLE,
+  quarantineFailedTeardown,
+} from "../src/failed-teardown.js";
 import { markTeardown } from "../src/teardown.js";
 import { FakeContainerRuntime } from "./fakes.js";
 import {
@@ -48,6 +52,8 @@ it.each([false, true])("restart recovers cap teardown without a failure question
   await writeFile(`${ws.path}/wip.txt`, "unfinished work\n");
   // Setup the durable state at the instant the adapter observed a 429 exit.
   markTeardown(t.db, task.id, t.clock.now());
+  // 上限到達による中断の経路: 行は `in_progress` のまま残る(ADR 0113 決定2)
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.settlement).toBe("interrupted");
   await t.stopServer();
   if (failPreflight) {
     const runtime = new FakeContainerRuntime();
@@ -125,6 +131,8 @@ it("decompose と escalate も同じ —— 枠を握っているのは task で
     });
     expect(result.isError ?? false).toBe(false);
     await client.close();
+    // エスカレーション・分解の経路: タスクは queue へ戻り、行は `todo` である
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.settlement).toBe("released");
 
     await t.clock.advance(HOUR);
     expect(started()).toEqual([first.id]);
@@ -206,7 +214,9 @@ it("「今なぜ pickup が起きないか」の読み口が後始末を報せ�
   const pause = (await api(t.baseUrl, "GET", "/api/pause")).json;
   expect(pause.halts).toEqual([]);
   expect(pause.teardown.taskId).toBe(task.id);
-  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown.taskId).toBe(task.id);
+  const teardown = (await api(t.baseUrl, "GET", "/api/queue")).json.teardown;
+  expect(teardown.taskId).toBe(task.id);
+  expect(teardown.settlement).toBe("completed");
 
   t.containers.fireEmpty(task.id);
   await settle();
@@ -263,6 +273,36 @@ it("前提検査が通らなければ後始末は走らず、pickup は止まっ
 
   // 証明の前に進めば、生き残った process の居る workspace を盤面が書く
   expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  await registerWork(t, "two");
+  await t.clock.advance(HOUR);
+  expect(started()).toEqual([]);
+});
+
+it("落ちた後始末の question を残したまま再起動しても、起動時復旧は撃ち直さず偽の Containment question も刷られない", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = await registerWork(t, "one");
+  await t.clock.advance(HOUR);
+  commitWork(ws.path, "deliverable.txt", "the real work\n");
+  t.containers.hold(task.id);
+  await completeViaMcp(t, task.id);
+  // 盤面自身のコードが投げた瞬間の durable な状態(ADR 0112)。門は行に持つので再起動を越える
+  quarantineFailedTeardown(t.db, task.id, new Error("resolve exploded"), t.clock.now());
+  await t.stopServer();
+
+  t = await bootTidepool({ dir: t.dir, workspace: ws });
+  await settle();
+  await t.clock.advance(HOUR);
+
+  // 撃ち直していない —— 撃てば同じ所で落ちて無言に戻る
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  const raised = (await questions(t)).map((q: any) => q.title);
+  expect(raised).toContain(FAILED_TEARDOWN_QUESTION_TITLE);
+  expect(raised.some((title: string) => title.includes("containment"))).toBe(false);
+  // 停止の列挙が「なぜ pickup が起きないか」に1回で答える
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([
+    { kind: "failedTeardown" },
+  ]);
   await registerWork(t, "two");
   await t.clock.advance(HOUR);
   expect(started()).toEqual([]);

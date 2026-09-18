@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { TIERS } from "./execution-setting.js";
 import {
   authedGitBounded,
@@ -70,6 +71,12 @@ export interface AgentDefinition {
    *  in the adapter (ADR 0005). */
   skills: string[];
   systemPrompt: string;
+  /** 組み込み agent の印(ADR 0117 決定2)。`parseAgentFile` は決して立てない ——
+   *  立てるのは `loadRegistry` が名前の不在を見て synthesize する1箇所だけで、
+   *  同名の registry ファイルがあればそれが勝ち、印は付かない(shadowing)。
+   *  表示の built-in / shadows built-in はこの印から読み取り時に導出され、
+   *  保存されない。 */
+  builtin?: true;
 }
 
 /** An authority profile: `authority/<profile>.yaml` in the registry clone.
@@ -101,7 +108,7 @@ export interface AgentDefinition {
  *  fields stay optional on this TS type only because `AuthorityProfile`
  *  values are also hand-built in code paths that never go through the
  *  registry loader — the read-only reviewer floor (`REVIEWER_AUTHORITY_PROFILE`
- *  in mcp.ts, ADR 0013) and per-task `resolveAuthority` overrides in tests —
+ *  below, ADR 0013) and per-task `resolveAuthority` overrides in tests —
  *  where omission legitimately still means unrestricted / inert; issue #41 and
  *  ADR 0079 are registry-side profile hygiene only, not a change to that
  *  code-side shape.
@@ -117,6 +124,31 @@ export interface AuthorityProfile {
   allowed_workspaces?: string[];
   merge?: MergeDial;
 }
+
+/** The reviewer profile (ADR 0013 / issue #15 layer 2): read-only is a
+ *  property of the `review` task type, not of whoever executes it, so this
+ *  code constant overrides whatever authority profile the executing agent
+ *  would otherwise carry — the one place in the authority model where task
+ *  type overrides profile. A code constant, not a registry entry, so the
+ *  enforcement floor itself sits outside what Condensation's registry-edit
+ *  loop could ever propose a diff against. `allowed_workspaces: []` blocks
+ *  every explicit workspace target; `assignable_to: []` blocks every
+ *  explicit assignee except the one structural exception decomposeTask
+ *  carves out for a review's own repair children (the reviewed task's own
+ *  assignee — ADR 0013). The same "task type overrides profile" line reaches
+ *  both spawn layers: ADR 0056's system-prompt assembly imports this exact
+ *  profile for `## Authority`, while the CLI harness's `reviewToolDenials`
+ *  (claude-worker.ts) reads `task.type` directly because the deny needs to
+ *  exist before spawn resolves an authority profile — same task-type-not-agent
+ *  principle, adapter-side enforcement primitive (ADR 0005). */
+export const REVIEWER_AUTHORITY_PROFILE: AuthorityProfile = {
+  name: "reviewer",
+  guidance:
+    "You are reviewing read-only. Never fix directly — findings become repair tasks.\n" +
+    "Assign a repair to the worker in your roster: they executed the task you are reviewing.",
+  assignable_to: [],
+  allowed_workspaces: [],
+};
 
 /** The merge dial's values, one source for both the schema below and every TS
  *  union that spells them (same shape as MERGE_QUESTION_OPTIONS in tasks.ts) —
@@ -209,6 +241,36 @@ export const PROVIDER_OPTIONS: readonly { value: Provider; label: string }[] = [
 export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filter(
   (provider) => CANONICAL_ROUTES[provider].advisor,
 );
+
+/** 組み込み agent の定義(CONTEXT.md「組み込み agent」/ ADR 0117 決定1): 盤面の
+ *  code が frontmatter 相当を運び、registry にファイルを持たない。名前は Auditor
+ *  ポインタの既定と**同じ1つの定数**から組む —— 組み込みの名前と既定の指し先は
+ *  drift できない。`provider` は省略の展開そのもの(ADR 0116 決定1)で、非空の
+ *  `skills` を満たす正準経路だけが残る。`authority` は ADR 0013 の reviewer 定数の
+ *  名前だが、profile map は引かれない(`resolveExecutionAgent` の1分岐)——
+ *  組み込みは授権を増やさないので、profile を registry にも map にも生やさない。
+ *  `version` は registry の刻印ではないので固定文字列で、spawn 記録の
+ *  `definition_version` がこれを運ぶ(当時版は registry commit に無い、ADR 0020)。 */
+const BUILT_IN_AUDITOR_SKILLS = ["@workspace"];
+const BUILT_IN_AUDITOR: AgentDefinition = {
+  name: DEFAULT_AUDITOR_NAME,
+  version: "built-in",
+  authority: REVIEWER_AUTHORITY_PROFILE.name,
+  description: "Reviews work independently against its completion criteria.",
+  provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
+  retiredFields: [],
+  icon: "🐡",
+  skills: BUILT_IN_AUDITOR_SKILLS,
+  systemPrompt: "",
+  builtin: true,
+};
+
+/** その名前を組み込みが持っているか(ADR 0117 決定2)。registry に同名の
+ *  エントリがあるかどうかとは独立 —— 「shadow している」を言えるのは、この
+ *  述語と loaded map の印の2つが揃ったときだけである。 */
+export function isBuiltInAgentName(name: string): boolean {
+  return name === BUILT_IN_AUDITOR.name;
+}
 
 /** 定義が成立していない(ADR 0097 決定3 / ADR 0110 決定1): provider が列挙の外、
  *  advisor を提供しない正準経路に advisor が宣言されている、ティアが列挙の外、
@@ -915,7 +977,10 @@ export function assertValidAgentName(registry: Registry, name: string): void {
   if (RESERVED_REGISTRY_NAMES.has(name) || !REGISTRY_NAME_PATTERN.test(name)) {
     throw new InvalidAgentNameError(name, NAME_CHARSET_REASON);
   }
-  if (Object.hasOwn(registry.agents, name)) {
+  // 組み込みのエントリは不在として扱う(ADR 0117 決定2): 気に入った名前で自作の
+  // Auditor を持てるよう、作成の扉は同名を拒まない —— 拒む代わりに shadow を告げる
+  const existing = ownEntry(registry.agents, name);
+  if (existing && existing.builtin !== true) {
     throw new InvalidAgentNameError(name, "an agent with this name already exists");
   }
 }
@@ -974,6 +1039,12 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
     const agent = parseAgentFile(basename(path, ".md"), gitShowFile(dir, ref, path));
     agents[agent.name] = agent;
   }
+  // 名前の解決は registry が先、無ければ組み込み(ADR 0117 決定2 の shadowing)。
+  // ここで1つの map に畳むので、下流(assignee 候補・review_by 検査・roster・
+  // spawn)は名前の解決では分岐を持たない。唯一の分岐は profile の解決
+  // (`resolveExecutionAgent`)—— 組み込みの profile は registry に無いので、
+  // そこだけが印を読む。
+  if (!Object.hasOwn(agents, BUILT_IN_AUDITOR.name)) agents[BUILT_IN_AUDITOR.name] = BUILT_IN_AUDITOR;
   const authority: Record<string, AuthorityProfile> = {};
   for (const path of gitListDir(dir, ref, "authority")) {
     if (!path.endsWith(".yaml")) continue;

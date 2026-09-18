@@ -363,7 +363,7 @@ function openProposalsPinning(db: Db, entryId: number): string[] {
 /** pin 検査(ADR 0120 決定4): candidate が未無効化の Behavior candidate(invalidate op は target の版が一致し未無効化)で、
  *  replaces の版が現在と一致し未無効化。
  *  approve も reject も、見せた状態に対してだけ適用する。 */
-export function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRow {
+function assertProposalFresh(db: Db, proposal: QuestionProposal): EntryRow {
   const unchanged = ({ id, version }: { id: number; version: number | null }) => {
     const row = requireEntry(db, id);
     return row.version === version && row.invalidation_reason === null;
@@ -1145,7 +1145,7 @@ export function isMetaReviewOf(db: Db, taskId: string, subject: MetaReviewSubjec
   return db.prepare("SELECT 1 FROM tasks WHERE id = ? AND meta_review_subject = ?").get(taskId, subject) !== undefined;
 }
 
-/** 主題の meta-review を盤面名義で登録する(周期と scratchpad の振り分けの両方が通る1本、due は見ない)。 */
+/** 主題の meta-review を盤面名義で登録する(周期が通る1本、due は見ない)。 */
 export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
   db.transaction(() => {
     const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject], meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");

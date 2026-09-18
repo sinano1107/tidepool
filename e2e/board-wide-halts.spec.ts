@@ -1,5 +1,3 @@
-import { quarantineCliAuth } from "../src/cli-auth.js";
-import { openDb } from "../src/db.js";
 import { FakeContainerRuntime, usagePanelText } from "../tests/fakes.js";
 import { api, HOUR, queueWork, registerWork } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
@@ -52,23 +50,6 @@ test("registry remote に到達できなければ slot と queue ↑ の toast �
   await expect(page.getByText("registry remote unreachable · nothing starts")).toBeVisible();
   await page.getByRole("button", { name: "↑", exact: true }).click();
   await expect(page.getByText("registry remote is unreachable")).toBeVisible();
-});
-
-test("Claude 認証が失効したら slot と queue ↑ の toast が同じ停止理由を示す(ADR 0070)", async ({
-  boot,
-  page,
-}) => {
-  const t = await boot();
-  const db = openDb(`${t.dir}/board.sqlite`);
-  quarantineCliAuth(db, t.clock.now());
-  db.close();
-  await registerWork(t, "waits for Claude authentication repair");
-
-  await page.goto(t.baseUrl);
-  await page.getByRole("button", { name: "Queue" }).click();
-  await expect(page.getByText("Claude authentication unavailable · nothing starts")).toBeVisible();
-  await page.getByRole("button", { name: "↑", exact: true }).click();
-  await expect(page.getByText("Claude authentication is unavailable")).toBeVisible();
 });
 
 test("usage 観測が遅い queue ↑ は pickup 成功を名乗らず、再評価中を slot と toast に示す(ADR 0058)", async ({

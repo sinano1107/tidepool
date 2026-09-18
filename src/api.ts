@@ -3,6 +3,7 @@ import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
+  BuiltInAgentNotEditableError,
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
@@ -76,6 +77,7 @@ import {
   InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
+  isBuiltInAgentName,
   PROVIDER_OPTIONS,
   PROVIDER_VALUES,
   type Provider,
@@ -110,7 +112,7 @@ import {
   presentTask,
   type Task,
 } from "./tasks.js";
-import { sessionInTeardown } from "./teardown.js";
+import { type FailedTeardownCheck, sessionInTeardown } from "./teardown.js";
 import {
   getProviderUsage,
   getThrottleState,
@@ -151,6 +153,7 @@ import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
+  LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   OrphanCheckoutMismatchError,
   RegistrySelfDeleteError,
@@ -278,7 +281,13 @@ const createWorkspaceCommon = z.object({
   protected: z.boolean().optional(),
 });
 const createWorkspaceSchema = z.discriminatedUnion("mode", [
-  createWorkspaceCommon.extend({ mode: z.literal("register"), path: z.string().min(1) }),
+  // confirm は register だけが持つ(issue #383): 信号の同意であって、危険な値
+  // (ADR 0061 / CONTEXT.md「危険な値」)の族ではない
+  createWorkspaceCommon.extend({
+    mode: z.literal("register"),
+    path: z.string().min(1),
+    confirm: z.boolean().optional(),
+  }),
   createWorkspaceCommon.extend({ mode: z.literal("clone"), repo: z.string().min(1) }),
   createWorkspaceCommon.extend({ mode: z.literal("create") }),
 ]);
@@ -500,7 +509,7 @@ const closeSchema = z.object({
     .array(
       z.object({
         id: z.number().int().positive(),
-        disposition: z.enum(["meta_review", "task", "register", "discard"]),
+        disposition: z.enum(["task", "register", "discard"]),
       }),
     )
     .default([]),
@@ -565,11 +574,12 @@ export interface ApiRouterDeps {
   reclaim?: PendingReclaim;
   /** ADR 0052: re-runs refresh before accepting a registry quarantine answer. */
   registryReachability?: RegistryReachabilityCheck;
-  /** ADR 0070: re-runs the auth probe before accepting a cliAuth answer. */
-  cliAuth?: CliAuthCheck;
+  /** ADR 0112 決定3: re-runs the throwing teardown before accepting a failed-teardown
+   *  answer — the check *is* the release gate. */
+  teardownQuarantine?: FailedTeardownCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
-   *  a provider-auth Confirmation answer (the resource-scoped sibling of
-   *  `cliAuth` above — the board's own provider stays on `cliAuth`). */
+   *  a provider-auth Confirmation answer. Resource-scoped for every provider,
+   *  the board's own included (ADR 0098 決定6). */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
    *  the given providers — the pickup exclusion set the queue view's `skipped`
@@ -688,7 +698,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     harnessContainment,
     reclaim,
     registryReachability,
-    cliAuth,
+    teardownQuarantine,
     providerCliAuth,
     vapidPublicKey,
     auditorName,
@@ -861,6 +871,19 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         err instanceof OrphanCheckoutMismatchError
       ) {
         res.status(400).json({ error: err.message });
+      } else if (err instanceof LiveCheckoutSignalsError) {
+        // issue #383: 危険な値の 409 と同じラウンドトリップ(WebUI の
+        // useDangerousSave がそのまま乗る)。ただし理由コードの欄は分ける ——
+        // この信号は CONTEXT.md「危険な値」の族ではなく、同じ欄に載せると
+        // ADR 0088 の「確認は WebUI 専用」がここまで及ぶと読める。
+        // `clone_landing` はサーバが合成した着地先で、origin を持たない
+        // checkout では null —— 出せる代替の入口が無いことを、空文字ではなく null で言う
+        res.status(409).json({
+          error: err.message,
+          confirm_required: true,
+          live_checkout_signals: err.reasons,
+          clone_landing: err.cloneLanding,
+        });
       } else {
         res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
       }
@@ -967,7 +990,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     try {
       await agentAdmin.create(parsed.data);
-      res.status(201).json({});
+      // 静かな shadow は作らない(ADR 0117 決定2): 同名を拒まない代わりに、
+      // 作成の扉が「組み込みを shadow した」ことを告げる。真のときだけ載せる
+      res.status(201).json(isBuiltInAgentName(parsed.data.name) ? { shadows_built_in: true } : {});
     } catch (err) {
       // same posture as /workspaces' create: the human's own synchronous
       // request fails fast on a bad input (400), anything else — including a
@@ -1036,6 +1061,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } catch (err) {
       if (err instanceof UnknownAgentError) {
         res.status(404).json({ error: err.message });
+      } else if (err instanceof BuiltInAgentNotEditableError) {
+        // 削除の `blocked` と同じ器(ADR 0117 決定2): 確認では買えず、出し直しても
+        // 通らない —— が、盤面の自己拒否ではないので 403 ではない
+        res.status(409).json({ error: err.message, blocked: true });
       } else if (
         err instanceof UnknownAuthorityProfileError ||
         err instanceof InvalidAgentIconError ||
@@ -1403,7 +1432,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           harnessContainment,
           reclaim,
           registryReachability,
-          cliAuth,
+          teardownQuarantine,
           providerCliAuth,
           boardState,
           attributionClient,
@@ -1767,10 +1796,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   }
 
   // ADR 0109 決定2 / CONTEXT.md「後始末」: 「今なぜ pickup が起きないか」に答える
-  // 読み口は、盤面全体の停止の列挙と**並べて**後始末を報せる。**列挙そのものには
-  // 加えない** —— 後始末は停止ではなく、枠がまだ空いていない状態である。人間から
+  // 読み口は、盤面全体の停止の列挙と**並べて**後始末を報せる。想定どおり走っている
+  // 後始末は停止ではなく枠がまだ空いていないだけなので、列挙には入らない —— 人間から
   // 見れば「タスクは done なのに次が始まらない」であり、説明が無ければ古い停止と
-  // 誤読される。
+  // 誤読される。**落ちた**後始末だけは列挙の側にも `failedTeardown` として現れ
+  // (ADR 0112 決定1)、同じ session について2つが同時に出る —— このフィールドが言う
+  // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、別の事実である
+  // (把握して受け入れた重複)。
   function teardownJson() {
     const teardown = sessionInTeardown(db);
     return teardown ? { teardown } : {};

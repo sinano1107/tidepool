@@ -14,6 +14,12 @@ When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the 
 
 Edit the right-hand column to match whatever vocabulary you actually use.
 
+A `needs-info` issue waits on an observation, so where it goes when the observation lands depends on
+what the observation showed: it **closes** when the observation is the answer, and takes
+`needs-triage` only when the observation leaves something to decide. This is the general rule, not a
+property of `verify:production` below — a confirmation issue whose venue is CI or the Lima VM closes
+the same way.
+
 ## Priority labels
 
 Orthogonal to the five roles above: a `ready-for-agent` issue additionally carries at most one `priority:*` label, ranking it for pickup. The 2026-07-17 triage ranked by what unblocks Tidepool developing Tidepool itself (deliverable integrity and trust foundations first, guardrails and tooling next, ops/UX last).
@@ -42,6 +48,11 @@ Absent means completion needs something outside the cloud container: hardware th
 
 Absent is the point: an open issue with no `verify:*` label is work not yet done, so the open set
 reads as a queue. The label comes off when the observation lands, and the issue closes with it.
+
+**It rides the issue that holds the confirmation, not the implementation one.** Implementation issues
+close at merge (ADR 0126), so the issue still waiting on production is the derived one — the row whose
+whole content is "watch for X". Putting the label on a merged implementation issue would reopen a
+question its own close already answered.
 
 **A label, not a comment.** The queue is read as a list — `gh issue list`, the web list — and a
 comment only speaks once the issue is already open. Filter the queue with

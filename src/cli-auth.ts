@@ -2,7 +2,6 @@ import type { Db } from "./db.js";
 import type { Provider } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
-export const CLI_AUTH_QUESTION_TITLE = "Claude authentication is unavailable — pickup is stopped";
 export const CLI_AUTH_EXPIRY_WARNING_TITLE = "Claude authentication token expires soon";
 
 export type CliAuthResult =
@@ -89,51 +88,6 @@ export function quarantineCliAuthFailure(
   if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, provider, now);
 }
 
-/** The open Confirmation question is the durable half of the board-wide
- * authentication quarantine. Recovery alone never resumes pickup without
- * human acknowledgement. */
-export function openCliAuthQuestion(db: Db): { id: string } | undefined {
-  return db
-    .prepare(
-      `SELECT id FROM tasks
-       WHERE question_quarantine_cli_auth IS NOT NULL AND status = 'todo'`,
-    )
-    .get() as { id: string } | undefined;
-}
-
-export function quarantineCliAuth(db: Db, now: Date): void {
-  if (openCliAuthQuestion(db)) return;
-  registerTask(
-    db,
-    {
-      type: "question",
-      title: CLI_AUTH_QUESTION_TITLE,
-      purpose:
-        "The Claude CLI returned an authentication failure, so the board has stopped all agent " +
-        "pickup. Restore authentication on the Pi:\n\n" +
-        "1. Run `claude setup-token` and complete the browser authorization.\n" +
-        "2. Update `CLAUDE_CODE_OAUTH_TOKEN` in `/etc/default/tidepool`. You may also set " +
-        "`TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT` to enable an advance expiry warning.\n" +
-        "3. Restart the service with `sudo systemctl restart tidepool`.\n" +
-        "4. Return to this question and answer it.\n\n" +
-        "The board checks authentication again before accepting the answer and resumes pickup " +
-        "only after the check succeeds.",
-      completion_criteria: "Claude authentication has been restored",
-      question: [
-        {
-          title: "Has Claude authentication been restored?",
-          options: ["authentication restored"],
-          recommendation: "authentication restored",
-        },
-      ],
-      quarantine_cli_auth: true,
-    },
-    now,
-    BOARD_WORKER_ID,
-    "board",
-  );
-}
-
 /** ADR 0098: the machine classification of a 401 routes by the spawn/call-time
  * Provider fact, never by parsing prose from an error. Every Provider is a
  * resource-scoped quarantine; unrelated Provider workers continue. */
@@ -142,8 +96,8 @@ export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Da
 }
 
 /** The open Confirmation question is the durable half of a provider-scoped
- *  authentication quarantine — same "1 resource, at most 1 open question"
- *  dedup as the board-wide one above. */
+ *  authentication quarantine — 1 resource, at most 1 open question. Recovery
+ *  alone never resumes that provider's pickup without human acknowledgement. */
 function openProviderAuthQuestion(db: Db, provider: Provider): { id: string } | undefined {
   return db
     .prepare(
@@ -155,8 +109,8 @@ function openProviderAuthQuestion(db: Db, provider: Provider): { id: string } | 
 
 /** The providers whose authentication is currently quarantined resource-wide
  *  (ADR 0097 決定2) — the scheduler's pickup gate skips exactly the agents
- *  speaking one of these. The board-wide cliAuth halt is not in this list:
- *  it stops everything through the boardHalts enumeration instead. */
+ *  speaking one of these. Every provider is resource-scoped, the board's own
+ *  included (ADR 0098 決定6), so no authentication failure reaches boardHalts. */
 export function quarantinedAuthProviders(db: Db): Provider[] {
   return (
     db

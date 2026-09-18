@@ -16,7 +16,7 @@ worker container contract, so the board uses the Linux one unchanged (ADR 0100).
 Node, the `claude` CLI, `gh` and your git identity all live **inside the VM**. Nothing but Lima
 is installed on the Mac, and nothing below asks you to open a shell in the VM until stage two.
 
-This document was measured with Lima 2.2.0, Lima's default Ubuntu 26.04 image and `claude` 2.1.243
+This document was measured with Lima 2.2.0, Lima's default Ubuntu 26.04 image and `claude` 2.1.273
 — a newer Lima, Ubuntu image or CLI is a reason to walk it again.
 
 ## Run the installer

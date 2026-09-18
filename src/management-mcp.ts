@@ -4,6 +4,7 @@ import { z } from "zod";
 import { UnknownAgentError } from "./agent.js";
 import {
   type AgentAdmin,
+  BuiltInAgentNotEditableError,
   InvalidAgentIconError,
   UnknownAuthorityProfileError,
 } from "./agent-create.js";
@@ -62,6 +63,7 @@ import {
   InvalidReviewAllowedCommandError,
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
+  isBuiltInAgentName,
   MERGE_DIAL_VALUES,
   type Provider,
   type RegistryReachabilityCheck,
@@ -82,7 +84,7 @@ import {
   listQueue,
   listYourTasks,
 } from "./tasks.js";
-import { sessionInTeardown } from "./teardown.js";
+import { type FailedTeardownCheck, sessionInTeardown } from "./teardown.js";
 import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -90,6 +92,7 @@ import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
+  LiveCheckoutSignalsError,
   NotAGitRepositoryError,
   RegistrySelfPublishError,
   RegistrySelfUnprotectError,
@@ -120,7 +123,8 @@ export interface ManagementMcpDeps {
   /** ADR 0099 決定3: 回収済み観測を待つ slot の門(WebUI 側と同じ配線)。 */
   reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
-  cliAuth?: CliAuthCheck;
+  /** ADR 0112 決定3: 落ちた後始末の受理の門(WebUI 側と同じ配線)。 */
+  teardownQuarantine?: FailedTeardownCheck;
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   boardState?: BoardStatePath[];
   fableAgents?: () => string[];
@@ -196,6 +200,9 @@ function registryToolError(err: unknown) {
     err instanceof RegistrySelfPublishError ||
     err instanceof InvalidAgentNameError ||
     err instanceof UnknownAgentError ||
+    // ADR 0117 決定2 の「組み込みは編集できない」—— 入口の拒否であって上流の失敗
+    // ではないので、`registry upstream error` の器に落としてはいけない
+    err instanceof BuiltInAgentNotEditableError ||
     err instanceof UnknownAuthorityProfileError ||
     err instanceof InvalidAgentIconError ||
     err instanceof InvalidSkillAllowlistError ||
@@ -261,7 +268,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     entryExclusionPredicate(deps.db, deps.taskExecutionCandidates);
 
   server.registerTool("list_queue", { description: "List the execution queue and pickup state." }, async () => {
-    // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない
+    // 停止ではないが pickup を待たせているもの(ADR 0109 決定2)。列挙には加えない ——
+    // ただし**落ちた**後始末は列挙の側にも出る(ADR 0112 決定1)。このフィールドが言う
+    // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、同時に出る重複は
+    // 承知の上である
     const teardown = sessionInTeardown(deps.db);
     return toolResult({
       halts: boardHalts(deps.db, deps.throttleRevalidating),
@@ -309,7 +319,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // landing place has to be readable before (the description) and after
       // (the result) — the WebUI's "see it, then decide" has no MCP shape.
       description:
-        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default.",
+        "Create a workspace in the human-managed registry. clone / create land at <workspaces dir>/<name> — read list_workspaces first for that directory and whether it is configured or the default. register goes through even when the path looks like a checkout a human is working in; the result then carries a notice naming what was observed and where the clone entrance would have landed instead.",
       inputSchema: createWorkspaceSchema,
     },
     async (input) => {
@@ -317,6 +327,32 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       try {
         return toolResult({ path: await deps.workspaceAdmin.create(input) });
       } catch (err) {
+        // issue #383: 「人間の生きた dev checkout」の信号は、ここでは拒否にしない
+        // (ADR 0082 決定1 — 1回の呼び出しで登録まで進む面に「見せてから決める」形は
+        // 無い)。通したうえで、観測した信号と clone 入口の提案を結果に載せる。
+        // ADR 0088 の形(拒んで WebUI へ案内)は採らない: この信号はエージェントの
+        // 権限を広げず、拒めば今日 MCP から通っている dirty checkout の register を
+        // 通らなくする = issue が「やらないこと」に挙げた自動拒否そのものになる。
+        // スキーマに `confirm` は生やさず、ここで内部的に立てる — 確認をエージェントに
+        // 肩代わりさせる経路は作らない。信号の**判定**は domain が唯一の正本(ADR 0027)
+        // だが、**文面**はこの扉が自分で綴る: `err.message` は HTTP の扉宛てで
+        // 「confirm: true で出し直せ」と言っており、ここの読み手にとっては既に済んだ
+        // 操作の指示であり、かつ渡す手段の無い引数の名指しである。
+        if (err instanceof LiveCheckoutSignalsError && input.mode === "register") {
+          try {
+            const path = await deps.workspaceAdmin.create({ ...input, confirm: true });
+            return toolResult({
+              path,
+              notice:
+                `registered as asked. This path looks like a checkout a human is working in (${err.reasons.join(", ")})` +
+                (err.cloneLanding === null
+                  ? ". Tell the human what was observed."
+                  : `. The clone entrance would have given the board its own checkout at ${err.cloneLanding} instead — tell the human, who may prefer that.`),
+            });
+          } catch (retried) {
+            return registryToolError(retried);
+          }
+        }
         return registryToolError(err);
       }
     },
@@ -390,7 +426,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       if (!deps.agentAdmin?.create) return toolError("agent administration is not configured");
       try {
         await deps.agentAdmin.create({ ...input, systemPrompt: system_prompt });
-        return toolResult({});
+        // 静かな shadow は作らない(ADR 0117 決定2) —— WebUI の 201 と同じ通知を
+        // この扉にも置く。真のときだけ載せる
+        return toolResult(isBuiltInAgentName(input.name) ? { shadows_built_in: true } : {});
       } catch (err) {
         return registryToolError(err);
       }
@@ -641,8 +679,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
             assignee: z.string().optional(),
             workspace: z.string().optional(),
             review_flag: z.boolean().optional(),
+            tier: z.string().optional().describe(TIER_FIELD_DESCRIPTION),
             review_by: z.array(z.string().min(1)).optional(),
             review_tier: z.string().optional(),
+            priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
           }),
         ),
       },
@@ -771,7 +811,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               harnessContainment: deps.harnessContainment,
               reclaim: deps.reclaim,
               registryReachability: deps.registryReachability,
-              cliAuth: deps.cliAuth,
+              teardownQuarantine: deps.teardownQuarantine,
               providerCliAuth: deps.providerCliAuth,
               boardState: deps.boardState,
               attributionClient: deps.attributionClient,

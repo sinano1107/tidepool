@@ -76,7 +76,7 @@ function makeTask(
     question_quarantine_agent: null,
     question_quarantine_sandbox: null,
     question_quarantine_registry: null,
-    question_quarantine_cli_auth: null,
+    question_quarantine_teardown: null,
     question_quarantine_provider_auth: null,
     question_quarantine_harness: null,
     question_cli_auth_expiry_warning: null,
@@ -1970,6 +1970,9 @@ describe("ClaudeCodeWorker", () => {
       `${JSON.stringify({
         type: "result",
         result: "done",
+        // 実 CLI の正常完了行は is_error: false を運ぶ。ここが欠けていると
+        // 「is_error 欄があるだけで捨てる」実装も緑になる(issue #534 code review)
+        is_error: false,
         total_cost_usd: 0.1234,
         usage: {
           input_tokens: 100,
@@ -2049,6 +2052,60 @@ describe("ClaudeCodeWorker", () => {
     );
     expect(() => emitExit(0, null)).not.toThrow();
     const exited = listEvents(db, "task-malformed-usage").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ usage: null });
+  });
+
+  it("is_error の result 行は usage の自己申告ではない — 途中で止まった session は欠測(issue #534)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-aborted-streaming");
+    // 2.1.241 を SIGINT で止めたときの実測(2026-09-12 のトリアージ)から、
+    // 読まれる欄だけを写したもの。主モデルの出力は実際に流れているのに
+    // envelope は全ゼロで、形検査は通る。
+    stdout.write(
+      `${JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        terminal_reason: "aborted_streaming",
+        duration_ms: 11623,
+        num_turns: 2,
+        total_cost_usd: 0,
+        usage: {
+          input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          output_tokens: 0,
+          iterations: [],
+        },
+        modelUsage: {},
+      })}\n`,
+    );
+    emitExit(1, null);
+    const exited = listEvents(db, "task-aborted-streaming").find((e) => e.kind === "worker_exited");
+    expect(exited?.payload).toMatchObject({ usage: null });
+  });
+
+  it("total_cost_usd が非ゼロでも is_error なら usage null — 判定はゼロではなく is_error 一点(issue #534)", async () => {
+    const { start, stdout, emitExit, db } = await makeWorker();
+    start("task-aborted-nonzero-cost");
+    // 2.1.269 の形: helper モデル分だけコストが乗った「ゼロではないが誤り」の envelope
+    stdout.write(
+      `${JSON.stringify({
+        type: "result",
+        is_error: true,
+        total_cost_usd: 0.001,
+        usage: {
+          input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          output_tokens: 0,
+        },
+      })}\n`,
+    );
+    emitExit(1, null);
+    const exited = listEvents(db, "task-aborted-nonzero-cost").find(
+      (e) => e.kind === "worker_exited",
+    );
     expect(exited?.payload).toMatchObject({ usage: null });
   });
 
@@ -3306,7 +3363,8 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
     const events = listEvents(db, task.id);
     const exited = events.find((e) => e.kind === "worker_exited")!;
-    expect(exited.payload).toMatchObject({ kind: "worker_exited", exit_code: 1 });
+    // 429 の envelope は usage 欄の形を満たすが自己申告ではない(issue #534)
+    expect(exited.payload).toMatchObject({ kind: "worker_exited", exit_code: 1, usage: null });
     const interrupted = events.find((e) => e.kind === "cap_interrupted")!;
     expect(interrupted.origin).toBe("board");
     expect(interrupted.worker_id).toBe("tidepool");
@@ -3399,7 +3457,11 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     stdout.write(CAP_STREAM);
 
     emitExit(1, null);
-    expect(sessionInTeardown(db)).toEqual({ taskId: task.id, startedAt: new FakeClock().now().toISOString() });
+    expect(sessionInTeardown(db)).toEqual({
+      taskId: task.id,
+      startedAt: new FakeClock().now().toISOString(),
+      settlement: "interrupted",
+    });
     expect(slot.inTeardown).toBe(true);
     await new Promise((resolve) => setImmediate(resolve));
 

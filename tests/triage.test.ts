@@ -335,20 +335,24 @@ it("scratchpad 行はセッションを開かず共有され、commit で振り�
   const pad = (await api(t.baseUrl, "GET", "/api/triage")).json.scratchpad;
   expect(pad.map((x: any) => x.line)).toEqual(lines);
 
-  await api(t.baseUrl, "POST", "/api/triage/close", {
+  // meta_review は振り分けから廃止済み(ADR 0123) —— closeSchema の enum 外で 400 になる
+  const rejected = await api(t.baseUrl, "POST", "/api/triage/close", {
     scratchpad: [
       { id: ids[0], disposition: "meta_review" },
       { id: ids[1], disposition: "task" },
       { id: ids[2], disposition: "discard" },
     ],
   });
+  expect(rejected.status).toBe(400);
+
+  await api(t.baseUrl, "POST", "/api/triage/close", {
+    scratchpad: [
+      { id: ids[1], disposition: "task" },
+      { id: ids[2], disposition: "discard" },
+    ],
+  });
 
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  // meta_review の振り分けは周期と同じ登録関数で主題 memory の meta-review を刻む(due は見ない、issue #618)
-  const metaReview = board.find((x: any) => x.meta_review_subject === "memory");
-  expect(metaReview).toMatchObject({ type: "review", workspace: null });
-  const registered = (await api(t.baseUrl, "GET", `/api/tasks/${metaReview.id}/events`)).json.filter((e: any) => e.kind === "meta_review_registered");
-  expect(registered).toMatchObject([{ payload: { subject: "memory" } }]);
   const task = board.find((x: any) => x.title === "fix the flaky seed script");
   expect(task.type).toBe("work");
   expect(board.some((x: any) => x.title === "just grumbling")).toBe(false);

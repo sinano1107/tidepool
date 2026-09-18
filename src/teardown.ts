@@ -1,9 +1,10 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
+import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
-import { getTask, returnForCapInterruption, type Task } from "./tasks.js";
+import { DomainError, getTask, returnForCapInterruption, type Task } from "./tasks.js";
 import {
   ensureWorkspaceToken,
   releaseWorkspace,
@@ -43,9 +44,6 @@ export interface TeardownDeps {
 
 /** 経路ごとに違うのはここに挙げたものだけである。 */
 export interface TeardownStep {
-  /** ツリー規律の**前**に走る記録 —— watchdog の failure question がこれ(自分の
-   *  escalate を真似て、記録を先に置く)。 */
-  record?: (task: Task, now: Date) => void;
   /** ツリー規律の**後**の状態遷移 —— 上限到達による中断の todo 復帰がこれ。完了経路は
    *  タスクが既に決着しているので持たない。 */
   transition?: (task: Task, now: Date) => void;
@@ -63,17 +61,25 @@ export interface TeardownStep {
   workspace?: WorkspaceConfig | null;
 }
 
-/** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・
- *  回収済み観測は同じ規則を通す。経路を表す別の永続事実は持たない。 */
+type Settlement = "completed" | "released" | "interrupted";
+
+/** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・回収済み
+ *  観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す永続事実は持たないので、
+ *  対応表がここ以外に増えたらそれは写しである。 */
+function settlementOf(status: Task["status"] | undefined): Settlement {
+  if (status === "in_progress") return "interrupted";
+  return status === "done" ? "completed" : "released";
+}
+
 export function teardownStep(db: Db, taskId: string): TeardownStep {
-  const task = getTask(db, taskId);
-  if (task?.status === "in_progress") {
+  const settlement = settlementOf(getTask(db, taskId)?.status);
+  if (settlement === "interrupted") {
     return {
       ready: (current) => current.status === "in_progress",
       transition: (current, now) => returnForCapInterruption(db, current, now),
     };
   }
-  return { completion: task?.status === "done" };
+  return { completion: settlement === "completed" };
 }
 
 /** 後始末の一撃(ADR 0109 決定1): tree rule → 状態遷移 → slot 解放。
@@ -90,8 +96,14 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
  *  MCP 呼び出しの返り値になったが、今ここで投げれば unhandled rejection として盤面
  *  ごと落ち、しかも未了は行に残るので次の起動でも同じ所で落ちる。個々の失敗は
  *  すでにそれぞれの位置で quarantine に落ちている(`releaseWorkspace`)ので、ここへ
- *  届くのは想定外だけである: 記録して流し、枠は握られたまま「後始末待ち」として
- *  読み口に残す(ADR 0083 追記2 と同じ姿勢)。 */
+ *  届くのは想定外だけである。そこで止まった後始末は**盤面全体の停止**である
+ *  (ADR 0112 決定1): 枠がまだ空いていないのではなく空かないので、確認 question を
+ *  1枚立てて停止の列挙に載せ、解放の門を後始末の再実行そのものにする
+ *  (`acceptTeardownQuarantine`)。
+ *
+ *  枠を握ったままの throw だけがその停止である。`slot.release()` より後 —— 着地 ——
+ *  で投げた例外は枠も行も既に空いており、盤面は次へ進める: 再実行すべき後始末が
+ *  無いので question は立てない。 */
 export async function runTeardown(
   deps: TeardownDeps,
   taskId: string,
@@ -101,10 +113,48 @@ export async function runTeardown(
     await teardown(deps, taskId, step);
   } catch (err) {
     console.error(`[teardown] task ${taskId}:`, err);
+    if (deps.slot.currentTaskId === taskId) {
+      quarantineFailedTeardown(deps.db, taskId, err, deps.clock.now());
+    }
   }
 }
 
-async function teardown(deps: TeardownDeps, taskId: string, step: TeardownStep): Promise<void> {
+/** 落ちた後始末の受理の門(ADR 0112 決定3)。隣の門(`ContainmentCheck` /
+ *  `RegistryReachabilityCheck`)と違い可否を返さない —— 検査が後始末の再実行そのもの
+ *  なので、答えは「通った」か「投げた」しかない。 */
+export type FailedTeardownCheck = (taskId: string) => Promise<void>;
+
+/** 落ちた後始末の解放の門(ADR 0112 決定3)。他の quarantine 族が受理の直前に資源を
+ *  検証するのと同じ位置で走るが、検証すべき資源が無いので検査は後始末の再実行そのもの
+ *  に一致する —— 通れば受理へ進み、まだ投げるなら `DomainError` で回答を拒む。
+ *
+ *  再起動を跨いだ受理では枠が空いている(起動時復旧は落ちた後始末を撃ち直さず、枠も
+ *  占めない)。その枠をここで取り直すのは、後始末の門である `slot.currentTaskId` の
+ *  再観測を満たすためである —— 満たさなければ早期 return で静かに受理され、tree rule が
+ *  走っていない workspace のまま question だけが閉じる(issue #382 の形)。 */
+export async function acceptTeardownQuarantine(deps: TeardownDeps, taskId: string): Promise<void> {
+  if (deps.slot.currentTaskId === null) {
+    deps.slot.occupy(taskId);
+    deps.slot.enterTeardown();
+  }
+  try {
+    await teardown(deps, taskId, teardownStep(deps.db, taskId));
+  } catch (err) {
+    throw new DomainError(
+      `the teardown for task ${taskId} threw again: ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
+}
+
+/** 投げる後始末。捕まえる版が `runTeardown` で、受理の検査はこちらを走らせる
+ *  (ADR 0112 決定3: フラグ引数で分岐を型に持ち込まない)。ファイル外に呼び手は
+ *  無いので export しない(ADR 0107 決定5)。 */
+async function teardown(
+  deps: TeardownDeps,
+  taskId: string,
+  step: TeardownStep,
+): Promise<void> {
   const { db, clock, slot } = deps;
   // 解放してよいか。枠の主がまだこの session であること(回収済み観測は非同期に届く)と、
   // 梯子の底で保留されていないこと(ADR 0099 決定3)の2つを1点から読む。
@@ -133,7 +183,6 @@ async function teardown(deps: TeardownDeps, taskId: string, step: TeardownStep):
   // その await を跨ぐ間に枠の主が変わる / 梯子の底へ落ちることがありうるので、門をもう一度読む
   if (!releasable()) return;
   const now = clock.now();
-  step.record?.(task, now);
   if (workspace) {
     releaseWorkspace(
       db,
@@ -190,12 +239,21 @@ function clearTeardown(db: Db, taskId: string): void {
 
 /** 後始末が未了の session(あれば)。concurrency = 1 なので高々1つである。
  *  起動時の復旧・後始末の時限・「今なぜ pickup が起きないか」の読み口が共有する。 */
-export function sessionInTeardown(db: Db): { taskId: string; startedAt: string } | undefined {
+export function sessionInTeardown(
+  db: Db,
+): { taskId: string; startedAt: string; settlement: Settlement } | undefined {
   const row = db
     .prepare(
-      "SELECT id, teardown_started_at FROM tasks WHERE teardown_started_at IS NOT NULL " +
+      "SELECT id, status, teardown_started_at FROM tasks WHERE teardown_started_at IS NOT NULL " +
         "ORDER BY teardown_started_at LIMIT 1",
     )
-    .get() as { id: string; teardown_started_at: string } | undefined;
-  return row && { taskId: row.id, startedAt: row.teardown_started_at };
+    .get() as { id: string; status: Task["status"]; teardown_started_at: string } | undefined;
+  return (
+    row && {
+      taskId: row.id,
+      startedAt: row.teardown_started_at,
+      // 読み手が行の status から経路を導き直さないように、ここで写像を1度だけ当てる
+      settlement: settlementOf(row.status),
+    }
+  );
 }

@@ -319,7 +319,6 @@ function TpScratchpad({ lines, onAdd, onRemove }) {
 }
 const TP_SCRATCH_KINDS = [
   { key: "task", label: "task" },
-  { key: "meta_review", label: "meta-review" },
   { key: "register", label: "register" },
   { key: "discard", label: "discard" }
 ];
@@ -891,7 +890,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       githubIssueNumber: t.github_issue_number
     });
   }
-  const running = board.find((t) => t.status === "in_progress");
+  const running = board.find((t) => t.status === "in_progress" && t.id !== teardown?.taskId);
   const throttled = !!throttle?.throttled;
   const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
   const hitLines = ["session", "week", "fable"].filter((w) => throttleWindows[w]?.throttled);
@@ -918,17 +917,19 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       "moved to front \u2014 pickup blocked",
       "worker containment is not established"
     ),
+    // ADR 0112 決定1: 盤面自身のコードが投げた後始末。想定どおり走っている後始末を
+    // 報せる下の待ちの行と違い、これは止まっている
+    failedTeardown: () => halt(
+      { color: "var(--coral-4)", line: "board teardown failed \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "the board's own teardown failed"
+    ),
     registryReachability: () => halt(
       { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null },
       "warn",
       "moved to front \u2014 pickup blocked",
       "registry remote is unreachable"
-    ),
-    cliAuth: () => halt(
-      { color: "var(--coral-4)", line: "Claude authentication unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null },
-      "warn",
-      "moved to front \u2014 pickup blocked",
-      "Claude authentication is unavailable"
     ),
     // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
     // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
@@ -970,6 +971,11 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     }
   };
   const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+  const TEARDOWN_META = {
+    completed: "waiting for this session's processes to exit",
+    interrupted: "usage limit hit \xB7 task returns to the queue once processes exit",
+    released: "task released \xB7 waiting for this session's processes to exit"
+  };
   const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : teardown ? {
     // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
     // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
@@ -977,7 +983,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     color: "var(--sun-4)",
     taskId: teardown.taskId,
     line: "session teardown \xB7 nothing new starts",
-    meta: `waiting for this session's processes to exit \xB7 since ${fmtTime(teardown.startedAt)}`
+    meta: `${TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
   } : fableThrottled ? {
     // fable line only (ADR 0030): the board keeps flowing — fable-model
     // tasks alone wait for their catch-up
@@ -1272,7 +1278,7 @@ function PortalDialog(props) {
 }
 function RecordCardHead({ children, editing, onEdit }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
-  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, children, !editing && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: onEdit }, "Edit")));
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, minHeight: 26 } }, children, !editing && onEdit && /* @__PURE__ */ React.createElement("div", { style: { marginLeft: "auto" } }, /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: onEdit }, "Edit")));
 }
 function EditActions({ dirty = true, ok = true, busy, saveLabel, onSave, onCancel }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
@@ -1576,7 +1582,14 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement(AgentChip, { name: agent.name, icon: open ? draft.icon : agent.icon ?? "" })), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "description", kind: agent.description ? "text" : "unset", value: agent.description ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: agent.builtin ? void 0 : startEdit }, /* @__PURE__ */ React.createElement(AgentChip, { name: agent.name, icon: open ? draft.icon : agent.icon ?? "" })), !open && (agent.builtin || agent.shadowsBuiltIn) && /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "definition",
+      kind: "text",
+      value: agent.builtin ? "built-in \u2014 no registry file; create an agent with this name to shadow it" : "shadows built-in \u2014 this entry wins; delete it to fall back to the board's own"
+    }
+  ), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "description", kind: agent.description ? "text" : "unset", value: agent.description ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "specialty",
@@ -1623,6 +1636,12 @@ const DANGEROUS_REASON_LABEL = {
   unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
   review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.",
   allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains."
+};
+const LIVE_CHECKOUT_SIGNAL_LABEL = {
+  uncommitted_changes: "The checkout has uncommitted changes or untracked files \u2014 someone is working in this tree right now.",
+  worktree_unreadable: "The checkout has no readable working tree \u2014 the board could not tell whether work is in progress there.",
+  claude_settings_local: "The checkout has .claude/settings.local.json \u2014 host-local state a human put there for their own sessions.",
+  claude_settings_hooks: "The checkout's .claude/settings.json carries hooks \u2014 the shape of a development checkout, not a disposable one."
 };
 const MERGE_OPTIONS = [
   { value: "", label: "choose one \u2014 the dial is required" },
@@ -1777,7 +1796,7 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
     section.singular
   )), dialog);
 }
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = "dangerous_values", labels = DANGEROUS_REASON_LABEL }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState(null);
@@ -1791,10 +1810,10 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         await onDone(result);
       } catch (err) {
         if (err.status === 409 && err.detail?.confirm_required) {
-          setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
+          setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say("danger", `${noun} ${verb} failed`, String(err.message || err));
+          say("danger", `${noun} not ${verb}${failDetail ? ` \u2014 ${failDetail}` : ""}`, String(err.message || err));
         }
       }
       setBusy(false);
@@ -1810,7 +1829,8 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       footer: /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", disabled: busy, onClick: () => setConfirm(null) }, "Cancel"), /* @__PURE__ */ React.createElement(Button, { variant: "danger", disabled: busy, onClick: () => confirm && confirm.resend() }, confirmLabel ?? "Save anyway"))
     },
     /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 8px", fontSize: "var(--text-sm)" } }, dialogLead),
-    /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, fontSize: "var(--text-sm)", display: "flex", flexDirection: "column", gap: 6 } }, (confirm?.reasons ?? []).map((r) => /* @__PURE__ */ React.createElement("li", { key: r }, DANGEROUS_REASON_LABEL[r] ?? r)))
+    /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, fontSize: "var(--text-sm)", display: "flex", flexDirection: "column", gap: 6 } }, (confirm?.reasons ?? []).map((r) => /* @__PURE__ */ React.createElement("li", { key: r }, labels[r] ?? r))),
+    confirm && dialogNote?.(confirm.detail)
   );
   return { busy, save, dialog };
 }
@@ -1928,6 +1948,32 @@ function GitHubLoginCard({ loggedIn }) {
       unsetLabel: "not logged in"
     }
   ), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the board acts on GitHub as tidepool[bot], and reaches only the repositories the Tidepool App is installed on. run ", /* @__PURE__ */ React.createElement("code", null, "npm run github-login"), " in a terminal on this host to log in \u2014 the same command re-logs in, and the board picks it up without a restart."));
+}
+function TranslateUsageCard({ records }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  const last = records?.at(-1);
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "translation spend"), last ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "translations", kind: "mono", value: `${records.length} generated` }), /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "estimated cost",
+      kind: "mono",
+      value: `$${records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`
+    }
+  ), /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "last call",
+      kind: "mono",
+      value: `${last.usage.input_tokens} in / ${last.usage.output_tokens} out`
+    }
+  )) : /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "translations",
+      kind: "unset",
+      unsetLabel: records ? "none generated yet" : "usage unavailable"
+    }
+  ));
 }
 function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
   const { Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -2421,29 +2467,33 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const [path, setPath] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [prot, setProt] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
   const ok = registryNameOk(name) && (mode === "clone" ? !!repo.trim() : mode === "register" ? !!path.trim() : true);
   const dirty = mode !== "clone" || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
-  const submit = async () => {
-    setBusy(true);
-    try {
-      await api("/api/workspaces", {
-        mode,
-        name: name.trim(),
-        ...mode === "clone" ? { repo: repo.trim() } : {},
-        ...mode === "register" ? { path: path.trim() } : {},
-        ...notes.trim() ? { notes: notes.trim() } : {},
-        ...prot ? { protected: true } : {}
-      });
-      say("success", "workspace added \u2014 committed to the registry", name.trim());
-      edit.close();
-      await onCreated();
-    } catch (err) {
-      say("danger", "workspace creation failed \u2014 safe to retry as-is", String(err.message || err));
-    }
-    setBusy(false);
-  };
+  const { busy, save, dialog } = useDangerousSave(say, async () => {
+    edit.close();
+    await onCreated();
+  }, {
+    noun: "workspace",
+    confirmKey: "confirm",
+    dialogTitle: "Register a checkout someone is working in?",
+    dialogLead: "This path looks like a human's live development checkout:",
+    dialogNote: (detail) => detail?.clone_landing ? /* @__PURE__ */ React.createElement("p", { style: { margin: "8px 0 0", fontSize: "var(--text-sm)" } }, "The clone entrance would give the board its own checkout at", " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, detail.clone_landing), " instead \u2014 one repository, two checkouts.") : null,
+    confirmLabel: "Register anyway",
+    reasonsKey: "live_checkout_signals",
+    labels: LIVE_CHECKOUT_SIGNAL_LABEL,
+    // creation is idempotent server-side — a failed attempt leaves only
+    // orphans the registry never saw, so "just press it again" is honest
+    failDetail: "safe to retry as-is"
+  });
+  const submit = () => save("/api/workspaces", "POST", {
+    mode,
+    name: name.trim(),
+    ...mode === "clone" ? { repo: repo.trim() } : {},
+    ...mode === "register" ? { path: path.trim() } : {},
+    ...notes.trim() ? { notes: notes.trim() } : {},
+    ...prot ? { protected: true } : {}
+  }, "added", name.trim());
   const modeOptions = [
     { value: "clone", label: "clone a repository" },
     { value: "create", label: "create a new local checkout" },
@@ -2495,7 +2545,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
       onSave: submit,
       onCancel: () => edit.close()
     }
-  ));
+  ), dialog);
 }
 function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
@@ -2513,8 +2563,12 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   const submit = async () => {
     setBusy(true);
     try {
-      await api("/api/agents", { name: name.trim(), ...agentBody(draft) });
-      say("success", "agent added \u2014 committed to the registry", name.trim());
+      const created = await api("/api/agents", { name: name.trim(), ...agentBody(draft) });
+      say(
+        "success",
+        "agent added \u2014 committed to the registry",
+        created?.shadows_built_in ? `${name.trim()} \u2014 shadows the board's built-in agent of the same name` : name.trim()
+      );
       edit.close();
       await onCreated();
     } catch (err) {
@@ -2657,6 +2711,11 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
   React.useEffect(() => {
     api("/api/settings/github", void 0, "GET").then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn)).catch(() => setGithubLoggedIn(null));
+  }, []);
+  const [translateUsage, setTranslateUsage] = React.useState(null);
+  const [translateUsageFailed, setTranslateUsageFailed] = React.useState(false);
+  React.useEffect(() => {
+    api("/api/translate/usage", void 0, "GET").then(({ records }) => setTranslateUsage(records)).catch(() => setTranslateUsageFailed(true));
   }, []);
   const [workspaces, setWorkspaces] = React.useState(null);
   const [baseDir, setBaseDir] = React.useState(null);
@@ -2802,7 +2861,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       footnote: "edits commit to agents/<name>.md in the registry",
       indexSummary: (items) => `${items.length} agents`,
       rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? "" }),
-      rowSummary: (a) => a.authority,
+      // the built-in / shadows built-in mark (ADR 0117 決定2) — server-derived
+      // (GET /api/agents), never decided here: the display only mirrors which
+      // fugu the machine resolves. A built-in has no registry profile to show.
+      rowSummary: (a) => a.builtin ? "built-in" : a.shadowsBuiltIn ? `${a.authority} \xB7 shadows built-in` : a.authority,
       record: (rec) => /* @__PURE__ */ React.createElement(
         AgentRecord,
         {
@@ -2924,7 +2986,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         onSaved: loadQuietHours,
         edit
       }
-    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
+    ), paceOffsets && /* @__PURE__ */ React.createElement(PaceOffsetsCard, { offsets: paceOffsets, say, onSaved: loadPaceOffsets, edit }), executionSettings && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(ExecutionDefaultsCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit }), /* @__PURE__ */ React.createElement(ExecutionTableCard, { settings: executionSettings, say, onSaved: loadExecutionSettings, edit })), memorySettings && /* @__PURE__ */ React.createElement(MemorySettingsCard, { settings: memorySettings, say, onSaved: loadMemorySettings, edit }), displayLanguageLoaded && /* @__PURE__ */ React.createElement(MemoryEntriesCard, { workspaceNames, language: displayLanguage, say, edit }), githubLoggedIn !== null && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }), (!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {
@@ -2953,7 +3015,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         meta: rec ? `${sec.singular} \xB7 ${idx + 1} of ${items.length}` : sec.singular,
         onBack: () => go([sectionKey])
       }
-    ), !rec && sec.items === null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), !rec && sec.items !== null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "no longer in the registry \u2014 it may have been removed outside the board"), rec && sec.record(rec), rec && editing === null && /* @__PURE__ */ React.createElement(
+    ), !rec && sec.items === null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), !rec && sec.items !== null && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "no longer in the registry \u2014 it may have been removed outside the board"), rec && sec.record(rec), rec && editing === null && !rec.builtin && /* @__PURE__ */ React.createElement(
       DeleteRecord,
       {
         section: sec,

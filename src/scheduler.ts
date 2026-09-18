@@ -210,8 +210,9 @@ async function checkThrottle(
 ): Promise<{ decision: ThrottleDecision; snapshot: UsageSnapshot }> {
   const resultText = await worker.checkUsage();
   // `null` is deliberately ambiguous (modal, renderer, marker, auth, …).
-  // Preserve fail-closed throttle, and raise cliAuth only if a second probe
-  // produces the definitive structured 401 evidence (ADR 0070).
+  // Preserve fail-closed throttle, and quarantine the provider's authentication
+  // only if a second probe produces the definitive structured 401 evidence
+  // (ADR 0070; the halt is resource-scoped since ADR 0098 決定6).
   if (resultText === null && cliAuth) {
     try {
       const auth = await cliAuth();
@@ -616,7 +617,9 @@ export function startScheduler(deps: {
           status: "observed",
           plan: result.plan,
           cliVersion: result.cliVersion,
-          windows: result.windows.map((window) => ({
+          // 使用率 0% の窓は未開始(Idle)—— 観測できた不在で、ペース線を持たず絞らない。
+          // 判別は使用率だけで reset 時刻は見ない(ADR 0128 決定1・2)。
+          windows: result.windows.filter((window) => window.usedPercent !== 0).map((window) => ({
             window: window.name,
             model: window.model,
             usedPercent: window.usedPercent,

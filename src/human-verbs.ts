@@ -38,6 +38,7 @@ import {
   type Task,
   taskIdForPr,
 } from "./tasks.js";
+import type { FailedTeardownCheck } from "./teardown.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import {
@@ -186,7 +187,7 @@ export async function addIssueCommentThroughHumanDoor(
   }
 }
 
-export function assertAssigneeKnown(
+function assertAssigneeKnown(
   agentRegistered: ((name: string) => boolean) | undefined,
   assignee: string | undefined,
 ): void {
@@ -368,10 +369,15 @@ export interface SubmitAnswerDeps {
    *  持たない盤面(回収を待っている slot が存在しない)。 */
   reclaim?: PendingReclaim;
   registryReachability?: RegistryReachabilityCheck;
-  cliAuth?: CliAuthCheck;
+  /** ADR 0112 決定3: 落ちた後始末の受理の門。検証すべき資源が無いので、検査は後始末を
+   *  **投げる版で**もう一度走らせることに一致する —— 通れば受理へ進み、まだ投げるなら
+   *  `DomainError` で回答を拒む。合成 root が `acceptTeardownQuarantine` を束ねて渡す
+   *  (人間 verb 側は後始末の deps 一式を知らない)。Absent → 後始末を持たない盤面。 */
+  teardownQuarantine?: FailedTeardownCheck;
   /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
-   *  a provider-auth Confirmation answer — same "検証つきで解除" as `cliAuth`,
-   *  scoped to the provider the question stands in for. */
+   *  a provider-auth Confirmation answer — the board never takes the human's
+   *  "repaired" at face value. Keyed by the provider the question stands in
+   *  for; absent that entry → the answer cannot be verified and is refused. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
@@ -399,7 +405,7 @@ function resolveWorkspaceForAnswer(
  *  provider quarantines from the db and maps them to agent names through the
  *  caller's registry seam — computed here once so the WebUI and MCP cancel
  *  routes can't drift apart. */
-export function humanCancelDefaults(
+function humanCancelDefaults(
   db: Db,
   workspace: WorkspaceConfig | undefined,
   defaultAgentName: string | undefined,
@@ -436,7 +442,7 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
 }
 
 /** A settled child can make its parent immediately pickable on either human surface. */
-export function pollIfParentUnblocked(db: Db, task: Task, pollNow: () => void): void {
+function pollIfParentUnblocked(db: Db, task: Task, pollNow: () => void): void {
   if (!task.parent_id) return;
   const parent = getTask(db, task.parent_id);
   if (parent && parent.status === "todo" && !hasUnfinishedChildren(db, parent.id)) {
@@ -756,6 +762,15 @@ export async function submitAnswer(
     }
   }
 
+  // 停止の列挙と同じ順で containment の直後(ADR 0112 決定1)。検査そのものが後始末の
+  // 再実行なので、投げれば question は開いたまま残り、人間は直してもう一度答えられる。
+  if (task.question_quarantine_teardown !== null) {
+    if (!deps.teardownQuarantine) {
+      throw new DomainError("the failed teardown cannot be re-run on this board");
+    }
+    await deps.teardownQuarantine(task.question_quarantine_teardown);
+  }
+
   if (task.question_quarantine_registry !== null && deps.registryReachability) {
     const reachability = await deps.registryReachability();
     if (!reachability.available) {
@@ -765,18 +780,9 @@ export async function submitAnswer(
     }
   }
 
-  if (task.question_quarantine_cli_auth !== null) {
-    if (!deps.cliAuth) throw new DomainError("Claude authentication cannot be verified");
-    const result = await deps.cliAuth();
-    if (result.status !== "authenticated") {
-      throw new DomainError(`Claude authentication is still unavailable: ${result.reason}`);
-    }
-  }
-
   if (task.question_quarantine_provider_auth !== null) {
     // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
-    // 再検証を回答受理の直前に撃つ — 盤面全体の cliAuth と同じ検証つき解除を
-    // 資源単位に写した形。
+    // 再検証を回答受理の直前に撃つ(CONTEXT.md「Quarantine」の検証つき解除)。
     const provider = task.question_quarantine_provider_auth as Provider;
     const check = deps.providerCliAuth?.[provider];
     if (!check) throw new DomainError(`${provider} authentication cannot be verified`);

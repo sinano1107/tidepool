@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
-import { quarantineCliAuth } from "../src/cli-auth.js";
 import { quarantineContainment } from "../src/containment.js";
 import { openDb } from "../src/db.js";
+import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { setPaused } from "../src/pause.js";
 import { quarantineRegistryReachability } from "../src/registry-reachability.js";
 import { reportThrottle } from "../src/throttle.js";
@@ -15,13 +15,14 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     expect(boardHalts(openDb(":memory:"))).toEqual([]);
   });
 
-  it("6つすべてが同時に立っていれば cliAuth はレジストリ到達性の後・throttle の前に並ぶ", () => {
+  it("6つすべてが同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に並ぶ", () => {
     const db = openDb(":memory:");
     startTriage(db, NOW);
     setPaused(db, true);
     quarantineContainment(db, "no sandbox", NOW);
+    // ADR 0112 決定1: 両方立ったときに先に直すべきはホスト全体の側である
+    quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
     quarantineRegistryReachability(db, "origin is unreachable", NOW);
-    quarantineCliAuth(db, NOW);
     reportThrottle(
       db,
       {
@@ -36,8 +37,8 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
       "triage",
       "pause",
       "containment",
+      "failedTeardown",
       "registryReachability",
-      "cliAuth",
       "throttle",
     ]);
   });

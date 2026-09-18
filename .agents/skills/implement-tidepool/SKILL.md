@@ -1,13 +1,13 @@
 ---
 name: implement-tidepool
-description: Build a ready-for-agent tidepool issue end to end — branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, and a PR that records how every review finding was handled. Use this instead of /implement in this repo.
+description: Build a ready-for-agent tidepool issue end to end — branch, TDD and ponytail-review in a sub-agent at the decided model, two-axis code review, one commit per stage, a PR that records how every review finding was handled, and the filing of what the run found along the way. Use this instead of /implement in this repo.
 disable-model-invocation: true
 argument-hint: "<issue> [decision already taken]"
 ---
 
 # Implement (tidepool)
 
-A tidepool-local derivative of `/implement`. Upstream `/implement` is deliberately left untouched, so skills that route to it — `ask-matt`, `to-tickets` — keep pointing at the canonical one. In this repo, reach for this skill instead: it adds the branch, the ponytail beats, the code-review follow-through, and the pull request — all of which upstream leaves to the human — and takes the delegation decision when one has not been made yet.
+A tidepool-local derivative of `/implement`. Upstream `/implement` is deliberately left untouched, so skills that route to it — `ask-matt`, `to-tickets` — keep pointing at the canonical one. In this repo, reach for this skill instead: it adds the branch, the ponytail beats, the code-review follow-through, the filing of what the run found, and the pull request — all of which upstream leaves to the human — and takes the delegation decision when one has not been made yet.
 
 `$ARGUMENTS` is the issue number, optionally followed by a delegation decision already taken — written however `/implementation-delegation` phrased it, e.g. `378 Opus 5 / high, review at Fable 5.1`.
 
@@ -31,7 +31,7 @@ Stay in this thread for all three:
 
 1. Read the issue, its resolving comments, and every ADR it references. `CONTEXT.md` supplies the vocabulary for test names and interfaces.
 2. Create the branch: `issue-<n>-<slug>`. Upstream `/implement` does not create one and commits wherever `HEAD` happens to be.
-3. Name the seams the work will be tested at and confirm them with the user. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask — so the agreement has to exist before the dispatch, and the agreed seams travel in the prompt.
+3. Name the seams the work will be tested at and confirm them with the user. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask — so the agreement has to exist before the dispatch, and the agreed seams travel in the prompt. Handing a criterion to an existing test instead is a claim, and ADR 0107 決定3 makes it the attractive one — break the implementation and watch the test you named go red before you name it. One that stays green was never the evidence.
 
 ## The implementation sub-agent
 
@@ -42,11 +42,26 @@ Dispatch one sub-agent at the implementation model, carrying the issue number, t
 
 A stage with no diff produces no commit. Never amend: keeping the stages apart is what makes each applied change reviewable and revertible on its own.
 
+Alongside the commits, it returns the problems it found and left alone: anything outside the issue's scope it would otherwise have fixed or worked around. For each, what and where (a file and line, or the test that shows it), whether it was observed or only suspected, and the existing issue it seems to belong to, if any. Filing happens in this thread, below.
+
 ## Code review
 
-Back in this thread, run `/code-review` on both axes (Standards + Spec) against the commit this branch started from, then apply the findings that should be applied and commit them as the third stage.
+Back in this thread, run `/code-review` on both axes (Standards + Spec) against this branch's merge-base with `main`, then apply the findings that should be applied and commit them as the third stage.
+
+Add one line to each sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
 
 Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. Every other call is yours, and it is accountable because it goes in the pull request.
+
+## Filing what the run found
+
+Before opening the PR, gather everything the run surfaced, wherever it came from: the sub-agent's report, the review sub-agents' notes on what the diff did not cause, every review finding you left unapplied because it lies outside the issue, and what you noticed yourself — reading the issue and ADRs, agreeing the seams, applying findings. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
+
+- **Belongs to an existing issue** — comment there. A closed hit means "not worth an issue", and the reason cites it.
+- **New, and observed** — `gh issue create --label needs-triage`, the body citing the originating issue and where the observation is (file, test, commit on this branch). It enters `/triage` like any other filed issue.
+- **New, but only suspected** — file it `needs-info`, saying what observation would settle it. An issue is not an observation (ADR 0102).
+- **Not worth an issue** — say so in the PR, with a reason held to the same bar as a review finding.
+
+One more, and it comes from the originating issue rather than from the run: **its subject is a symptom observed in the real environment** ("the Codex route's worker cannot start", not "add a preflight row"). The change removes a suspected cause and merging will close the issue (ADR 0126), so file a confirmation issue, `needs-info`, naming the venue and the observation that would settle it. Merging is not that observation, and neither is a green suite — the symptom was observed outside both. When the run already filed an issue that blocks the venue check, say there that it carries the confirmation too, rather than opening a second row.
 
 ## The pull request
 
@@ -64,6 +79,8 @@ List **every** finding `/ponytail-review` and `/code-review` raised — the appl
 
 Completeness is the whole point of the section. A list that quietly drops the findings you chose not to act on is worse than no list, because it reads as though review found nothing there.
 
+A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the sub-agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
+
 ## Where this stops
 
-At the open pull request. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human runs the final verification and merges.
+At the open pull request. Do not merge it, do not close the issue, do not tick its acceptance criteria. The human merges, and the PR's `Closes #<issue>` closes the issue with it (ADR 0126) — no confirmation of yours gates that. What survives a symptom issue's close is the confirmation issue the filing step filed.

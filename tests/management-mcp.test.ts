@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { BuiltInAgentNotEditableError } from "../src/agent-create.js";
 import type { CreateProfileInput, UpdateProfileInput } from "../src/profile-create.js";
 import { ProfileConfirmationRequiredError } from "../src/profile-create.js";
 import { InvalidAllowedDomainError, InvalidWorkspaceNameError } from "../src/registry.js";
@@ -7,7 +8,9 @@ import { RepoAccessMissingError } from "../src/repo-access.js";
 import { registerTask } from "../src/tasks.js";
 import {
   BoardStateOverlapError,
+  type CreateWorkspaceInput,
   GitHubIdentityMissingError,
+  LiveCheckoutSignalsError,
   type PublishWorkspaceInput,
   type UpdateWorkspaceInput,
   WorkspaceAlreadyPublishedError,
@@ -358,6 +361,36 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
     expect(readToolPayload(await client.callTool({ name: "list_profiles", arguments: {} }))).toEqual({ profiles: [] });
     expect(readToolPayload(await client.callTool({ name: "update_profile", arguments: profile }))).toEqual({});
     expect(updateProfile).toHaveBeenCalledWith(profile);
+  } finally {
+    await client.close();
+  }
+});
+
+it("管理MCP の update_agent も組み込みを編集できない —— 入口の拒否であって上流の失敗ではない(ADR 0117 決定2)", async () => {
+  const update = vi.fn(async () => {
+    throw new BuiltInAgentNotEditableError("fugu");
+  });
+  t = await bootTidepool({
+    agentAdmin: { create: async () => {}, list: () => [], update, authorityProfiles: () => [] },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const denied: any = await client.callTool({
+      name: "update_agent",
+      arguments: {
+        name: "fugu",
+        authority: "standard",
+        provider: "anthropic",
+        description: "my own auditor",
+        skills: ["@workspace"],
+        system_prompt: "",
+      },
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.content[0].text).toContain("built-in");
+    // fallback の "registry upstream error" は盤面側の障害の顔 —— そこへ落ちると
+    // 「同名を作れば shadow できる」という次の一手が読み取れない
+    expect(denied.content[0].text).not.toContain("registry upstream error");
   } finally {
     await client.close();
   }
@@ -960,6 +993,48 @@ it("管理MCP に registry リソースの削除 verb は無い(ADR 0088 / issue
     const { tools } = await client.listTools();
     // 扉は WebUI のみ —— 配線されていても MCP には現れない
     expect(tools.map((tool) => tool.name).filter((name) => name.startsWith("delete_"))).toEqual([]);
+  } finally {
+    await client.close();
+  }
+});
+
+it("create_workspace は生きた dev checkout の信号でも登録を通し、信号と clone 入口の提案を結果に載せる(issue #383)", async () => {
+  const calls: CreateWorkspaceInput[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      create: async (input) => {
+        calls.push(input);
+        if (input.mode === "register" && input.confirm !== true) {
+          throw new LiveCheckoutSignalsError(
+            input.path,
+            ["uncommitted_changes", "claude_settings_hooks"],
+            "/mnt/workspaces/tidepool",
+          );
+        }
+        return "/home/masaki/tidepool";
+      },
+    },
+  });
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    // 確認をエージェントに肩代わりさせる経路は作らない: スキーマに `confirm` が
+    // 無いので、エージェントが送っても届かない(下の calls[0] が undefined)
+    const create: any = await client.callTool({
+      name: "create_workspace",
+      arguments: { name: "tidepool", mode: "register", path: "/home/masaki/tidepool", confirm: true },
+    });
+
+    // 拒否ではない —— 登録は通る(issue #383 の「やらないこと」: 自動拒否)
+    expect(create.isError ?? false).toBe(false);
+    const payload: any = readToolPayload(create);
+    expect(payload.path).toBe("/home/masaki/tidepool");
+    expect(payload.notice).toContain("uncommitted_changes, claude_settings_hooks");
+    expect(payload.notice).toContain("/mnt/workspaces/tidepool");
+    // 文面はこの扉が綴る: HTTP の扉宛ての「confirm: true で出し直せ」を写すと、
+    // 既に済んだ操作の指示になり、かつスキーマに無い引数を名指しすることになる
+    expect(payload.notice).not.toContain("confirm");
+    // adapter が内部で立てた2回目だけが confirm を持つ
+    expect(calls.map((c) => (c as any).confirm)).toEqual([undefined, true]);
   } finally {
     await client.close();
   }

@@ -2,6 +2,10 @@ import { rm, writeFile } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
+import {
+  FAILED_TEARDOWN_QUESTION_TITLE,
+  quarantineFailedTeardown,
+} from "../src/failed-teardown.js";
 import type { Landing } from "../src/landing.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, escalateTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
@@ -218,10 +222,26 @@ it("最終 verb 着地後に root が exit しないまま時限を超えると�
 
   const containment = questions(f.db).find((q) => q.title.includes("containment"));
   expect(containment?.purpose).toContain("is settled");
+  // ADR 0112: 同じ観測に対する断言の強さを盤面の中で揃える —— `in_progress` 側と同じ
+  // 「残っているかもしれない」であって、「残っている」とは断言しない
+  expect(containment?.purpose).toContain("may still be running");
   // タスクの決着は host 側の事情で覆らない
   expect(questions(f.db).some((q) => q.title.includes("watchdog killed"))).toBe(false);
   expect(getTask(f.db, f.task.id)?.status).toBe("done");
   expect(boardHalts(f.db)).toEqual([{ kind: "containment" }]);
+});
+
+it("落ちた後始末の question が開いている間、後始末の時限は強制回収を撃たない", async () => {
+  const f = await sessionInTeardown();
+  // 盤面自身のコードが投げた = 容器はもう空である。ここで梯子に入れると、no-op の強制
+  // 回収に続いて「プロセスが残っている」と断言する偽の Containment question が立つ
+  quarantineFailedTeardown(f.db, f.task.id, new Error("resolve exploded"), f.clock.now());
+
+  await f.clock.advance(60 * MIN);
+
+  expect(f.runtime.forceReclaims).toEqual([]);
+  expect(questions(f.db).map((q) => q.title)).toEqual([FAILED_TEARDOWN_QUESTION_TITLE]);
+  expect(boardHalts(f.db)).toEqual([{ kind: "failedTeardown" }]);
 });
 
 it("梯子の底まで落ちた完了済み session でも、確認回答で後始末が完走して着地まで走る", async () => {

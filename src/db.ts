@@ -101,16 +101,17 @@ const TASKS_TABLE_DDL = `
       -- question standing in for registry remote reachability. Board-wide,
       -- but distinct from worker containment; never set via MCP or JSON API.
       question_quarantine_registry INTEGER,
-      -- system-internal only (ADR 0070): 1 on the single Confirmation
-      -- question standing in for Claude CLI authentication. Board-wide;
-      -- never set via MCP or JSON API.
-      question_quarantine_cli_auth INTEGER,
+      -- system-internal only (ADR 0112): the id of the task whose teardown
+      -- threw. Borrows the quarantine family's mechanism only — what became
+      -- unrunnable is the board's own code, not a resource — so it names a
+      -- task rather than a resource. Set only by quarantineFailedTeardown;
+      -- never via MCP or the JSON API.
+      question_quarantine_teardown TEXT,
       -- system-internal only (ADR 0097 決定2 / issue #446): the provider
       -- name a provider-scoped authentication quarantine Confirmation
-      -- question stands in for. Resource-scoped (only that provider's
-      -- agents stop), unlike the board-wide cli_auth flag above — the
-      -- board's own provider keeps using that one. Never set via MCP or
-      -- JSON API.
+      -- question stands in for. Resource-scoped — only that provider's
+      -- agents stop, the board's own provider included (ADR 0098 決定6).
+      -- Never set via MCP or JSON API.
       question_quarantine_provider_auth TEXT,
       -- system-internal only (ADR 0098): the canonical Harness whose
       -- containment capability is unavailable. Resource-scoped, never a
@@ -686,7 +687,6 @@ export function openDb(path: string): Db {
     "github_issue_number",
     "question_quarantine_sandbox",
     "question_quarantine_registry",
-    "question_quarantine_cli_auth",
     "question_cli_auth_expiry_warning",
   ]) {
     if (!cols.includes(col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} INTEGER`);

@@ -9,6 +9,7 @@ import {
   assertValidAgentDefinition,
   assertValidAgentName,
   assertValidSkillAllowlist,
+  isBuiltInAgentName,
   isSingleTwemojiGrapheme,
   loadRegistry,
   normalizeProviderEntries,
@@ -59,6 +60,17 @@ export interface CreateAgentInput {
  *  is also thrown by profile-create.ts's updateProfile, re-exported here so
  *  existing imports of this module keep working. */
 export { UnknownAuthorityProfileError };
+
+/** 組み込み agent に編集の扉は無い(ADR 0117 決定2): 定義は盤面の code にあり、
+ *  registry のファイルではない。ここを通すと、編集フォームの保存が**静かに**
+ *  同名の shadow エントリを書くことになる —— shadow は作成の扉が告げた上でだけ
+ *  生まれる。削除側の `built_in` 理由と同じ拒否で、どちらも「無い」ではない。 */
+export class BuiltInAgentNotEditableError extends Error {
+  constructor(public readonly agentName: string) {
+    super(`agent "${agentName}" is built-in and cannot be edited — create a same-named registry entry to shadow it`);
+    this.name = "BuiltInAgentNotEditableError";
+  }
+}
 
 /** The input's icon fails ADR 0026's structural check (a single
  *  Twemoji-covered emoji grapheme). Caught at the entrance, not left to the
@@ -123,6 +135,7 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps)
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const existing = ownEntry(registry.agents, input.name);
   if (!existing) throw new UnknownAgentError(input.name);
+  if (existing.builtin) throw new BuiltInAgentNotEditableError(input.name);
   assertKnownAuthority(registry, input.authority);
   assertValidIcon(input.icon);
   assertValidSkillAllowlist(input.skills);
@@ -211,6 +224,10 @@ function sameSkills(existing: string[], input: string[]): boolean {
 export interface AgentView extends Omit<AgentDefinition, "provider"> {
   provider: string;
   advisor: boolean;
+  /** 同名の組み込みを shadow している registry エントリか(ADR 0117 決定2)。
+   *  `builtin`(定義の側の印)との2つで、表示は機械の解決をそのまま映す ——
+   *  **読み取り時に導出**され、保存されない。 */
+  shadowsBuiltIn?: true;
 }
 
 export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
@@ -219,6 +236,7 @@ export function listAgentViews(deps: AgentAdminDeps): AgentView[] {
       ...definition,
       provider: definition.provider.map((entry) => entry.name).join(", "),
       advisor: definition.provider.every((entry) => entry.advisor),
+      ...(definition.builtin !== true && isBuiltInAgentName(definition.name) && { shadowsBuiltIn: true as const }),
     }),
   );
 }
@@ -256,15 +274,30 @@ export async function deleteAgent(
 ): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
-  if (!ownEntry(registry.agents, input.name)) throw new UnknownAgentError(input.name);
+  const existing = ownEntry(registry.agents, input.name);
+  if (!existing) throw new UnknownAgentError(input.name);
+  // 組み込みは registry のエントリではないので、参照の検査に進まない(ADR 0117
+  // 決定2): 「消せない」が答えのすべてであり、Auditor ポインタを他所へ向けても
+  // 未決着タスクが decay しても、この理由は変わらない
+  if (existing.builtin) {
+    throw new DeletionBlockedError("agent", input.name, [{ code: "built_in" }]);
+  }
   // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序)。profile の
   // `assignable_to` に名前が並んでいるだけは参照ではない(ADR 0087 決定2)
   const reasons: DeletionBlockedReason[] = [];
-  if (deps.unsettledTaskCount > 0) {
+  // 組み込みを shadow しているエントリだけは、ポインタの指す先でも参照されていても
+  // 消せる —— CONTEXT.md「削除」が「消せない」と数え上げた全体に対する唯一の例外で
+  // ある(ADR 0117 決定2。ADR 0117 が名指すのは ADR 0087 決定3 だが、緩むのは決定2 の
+  // 未決着タスク検査も同じで、根拠も同じ「消えても壊れない」である): 消えれば名前は
+  // 組み込みへ落ちるだけで、`assignee: fugu` も `review_by: ["fugu"]` も解決し続ける
+  // —— ただし work タスクの授権は組み込みの reviewer profile へ**狭まる**(ADR 0013)。
+  // `board_default` は緩めない —— 既定 agent は registry に残る(ADR 0117 決定3)。
+  const shadowsBuiltIn = isBuiltInAgentName(input.name);
+  if (deps.unsettledTaskCount > 0 && !shadowsBuiltIn) {
     reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
   }
   if (deps.defaultAgentName === input.name) reasons.push({ code: "board_default" });
-  if (deps.auditorName === input.name) reasons.push({ code: "board_auditor" });
+  if (deps.auditorName === input.name && !shadowsBuiltIn) reasons.push({ code: "board_auditor" });
   if (reasons.length > 0) throw new DeletionBlockedError("agent", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("agent", input.name);
   commitToRegistry(

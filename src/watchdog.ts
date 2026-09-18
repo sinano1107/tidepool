@@ -1,6 +1,7 @@
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
+import { openFailedTeardownQuestion } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
 import type { Slot } from "./slot.js";
@@ -232,26 +233,38 @@ export function startWatchdog(deps: {
   let pending: string | null = null;
 
   /** 容器が空になった観測。ここで初めて failure question と slot 解放へ進む ——
-   *  通る型は通常完了・上限到達による中断と同じ後始末である(ADR 0109 決定1)。 */
+   *  通る型は通常完了・上限到達による中断と同じ後始末である(ADR 0109 決定1)。
+   *
+   *  記録は後始末の**前**に置く —— `spawnFailureHandler`(ADR 0118)・`onReclaimTimeout`・
+   *  cap と同じ順であり、escalate verb の順でもある。後始末の中(ツリー規律の前に走る
+   *  記録)に置くと、後始末がそこへ届く前に投げたとき failure question が立たないまま
+   *  status が `in_progress` で残り、落ちた後始末の受理は `teardownStep`(ADR 0113 決定3)に
+   *  cap 経路と読まれる —— watchdog が殺したタスクが retry / abandon の問いなしに queue head
+   *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
+   *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, limit: number): void {
     if (settled.has(taskId)) return;
     // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。
     if (sessionInTeardown(db)?.taskId === taskId) return;
-    void runTeardown(teardown, taskId, {
-      ready: (task) => task.status === "in_progress",
-      record: (task, now) => {
-        settled.add(taskId);
-        registerFailureQuestion(
-          db,
-          task,
-          `watchdog killed task: ${task.title}`,
-          `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
-            `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
-            "No self-report is possible.",
-          now,
-        );
-      },
-    });
+    // 後始末が持っていた門を、記録が先へ出た分だけこちらで読む —— 枠の主が変わっていれば
+    // 他人の session に failure question を立ててしまう(梯子の底での保留は `settled` が兼ねる)
+    if (slot.currentTaskId !== taskId || slot.inTeardown) return;
+    const task = getTask(db, taskId);
+    if (task?.status !== "in_progress") return;
+    const now = clock.now();
+    settled.add(taskId);
+    registerFailureQuestion(
+      db,
+      task,
+      `watchdog killed task: ${task.title}`,
+      `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
+        `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
+        "No self-report is possible.",
+      now,
+    );
+    markTeardown(db, taskId, now);
+    slot.enterTeardown();
+    void runTeardown(teardown, taskId, teardownStep(db, taskId));
   }
 
   /** 空を観測できないまま timeout。失敗の記録は残すが slot は解放しない —
@@ -326,6 +339,13 @@ export function startWatchdog(deps: {
   function tick(): void {
     const taskId = slot.currentTaskId;
     if (taskId === null) return;
+    // ADR 0112 決定4: 落ちた後始末は梯子(強制回収 → 回収 timeout → Containment
+    // quarantine)に入らない。原因を知らないハンドラに文面を書かせると偽の断言になる
+    // —— 容器はもう空なので強制回収は no-op で、続く Containment question は
+    // 「その session のプロセスがこのホストに残っている」と断言するが実際には残って
+    // いない。門は**行**に持つ: in-memory の門は再起動を越えないので、越えなければ
+    // 起動のたびに偽の question を1枚ずつ刷る。
+    if (openFailedTeardownQuestion(db)) return;
     const task = getTask(db, taskId);
     if (!task) return;
     const pickup = pickedUpAt(db, taskId);

@@ -238,7 +238,10 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       githubIssueNumber: t.github_issue_number,
     });
   }
-  const running = board.find((t) => t.status === 'in_progress');
+  // 後始末中の session の行は「走っている」ではない (issue #561 / ADR 0113 決定2) ——
+  // 上限到達による中断では行が `in_progress` のまま残る。concurrency=1 なのでその行は
+  // teardown の taskId そのもの。queue 画面の slot 状態も `data.running` 経由でここに従う
+  const running = board.find((t) => t.status === 'in_progress' && t.id !== teardown?.taskId);
   const throttled = !!throttle?.throttled;
   // ADR 0030: which pace line is hit (session/week), and the fable line's own
   // per-task state — resets_at is now the catch-up ("resumes") instant, and a
@@ -263,12 +266,14 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     containment: () => halt(
       { color: 'var(--coral-4)', line: 'worker containment unavailable · nothing starts', meta: 'see the repair question', taskId: null },
       'warn', 'moved to front — pickup blocked', 'worker containment is not established'),
+    // ADR 0112 決定1: 盤面自身のコードが投げた後始末。想定どおり走っている後始末を
+    // 報せる下の待ちの行と違い、これは止まっている
+    failedTeardown: () => halt(
+      { color: 'var(--coral-4)', line: 'board teardown failed · nothing starts', meta: 'see the repair question', taskId: null },
+      'warn', 'moved to front — pickup blocked', "the board's own teardown failed"),
     registryReachability: () => halt(
       { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
       'warn', 'moved to front — pickup blocked', 'registry remote is unreachable'),
-    cliAuth: () => halt(
-      { color: 'var(--coral-4)', line: 'Claude authentication unavailable · nothing starts', meta: 'see the repair question', taskId: null },
-      'warn', 'moved to front — pickup blocked', 'Claude authentication is unavailable'),
     // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
     // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
     // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
@@ -305,6 +310,14 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     },
   };
   const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+  // 後始末行は1本のまま、待っている理由だけが経路で変わる。経路を導くのはサーバ
+  // (`teardown.settlement`、ADR 0113 決定3)で、ここは HALT_COPY と同じ値 → コピーの
+  // 写像だけを持つ —— 行の status から導き直せば写しが2本になる
+  const TEARDOWN_META = {
+    completed: "waiting for this session's processes to exit",
+    interrupted: 'usage limit hit · task returns to the queue once processes exit',
+    released: "task released · waiting for this session's processes to exit",
+  };
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
@@ -327,7 +340,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
         // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
         color: 'var(--sun-4)', taskId: teardown.taskId,
         line: 'session teardown · nothing new starts',
-        meta: `waiting for this session's processes to exit · since ${fmtTime(teardown.startedAt)}`,
+        meta: `${TEARDOWN_META[teardown.settlement]} · since ${fmtTime(teardown.startedAt)}`,
       }
     : fableThrottled
     ? {
@@ -783,7 +796,7 @@ function RecordCardHead({ children, editing, onEdit }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 26 }}>
       {children}
-      {!editing && (
+      {!editing && onEdit && (
         <div style={{ marginLeft: 'auto' }}>
           <Button variant="ghost" size="sm" onClick={onEdit}>Edit</Button>
         </div>
@@ -1160,11 +1173,20 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <RecordCardHead editing={open} onEdit={startEdit}>
+      {/* a built-in has no registry file to edit (ADR 0117 決定2) — the door
+          is left out rather than offered and refused; creating a same-named
+          agent is how it gets shadowed, and that door announces itself */}
+      <RecordCardHead editing={open} onEdit={agent.builtin ? undefined : startEdit}>
         {/* while editing, the chip previews the draft icon — picking one
             confirms itself immediately, as it did on the flat surface */}
         <AgentChip name={agent.name} icon={open ? draft.icon : (agent.icon ?? '')} />
       </RecordCardHead>
+      {!open && (agent.builtin || agent.shadowsBuiltIn) && (
+        <FieldRow label="definition" kind="text"
+          value={agent.builtin
+            ? 'built-in — no registry file; create an agent with this name to shadow it'
+            : 'shadows built-in — this entry wins; delete it to fall back to the board\'s own'} />
+      )}
       {!open && (
         <React.Fragment>
           <FieldRow label="description" kind={agent.description ? 'text' : 'unset'} value={agent.description ?? ''} unsetLabel="—" />
@@ -1216,6 +1238,22 @@ const DANGEROUS_REASON_LABEL = {
     'Review-allowed commands is non-empty — review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.',
   allowed_domains_set:
     'Allowed domains is non-empty — worker sessions in this workspace gain an external data-transfer path to those domains.',
+};
+
+// issue #383 の信号コード。DANGEROUS_REASON_LABEL とは別の表である — この族は
+// エージェントの権限を1ミリも広げず、守っているのは人間自身の作業ツリーのほう
+// なので、CONTEXT.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
+// 「確認は WebUI 専用」がこの族まで及ぶと読める)。訳すだけという性質は同じで、
+// 判定はサーバ単一正本(ADR 0027)。
+const LIVE_CHECKOUT_SIGNAL_LABEL = {
+  uncommitted_changes:
+    'The checkout has uncommitted changes or untracked files — someone is working in this tree right now.',
+  worktree_unreadable:
+    'The checkout has no readable working tree — the board could not tell whether work is in progress there.',
+  claude_settings_local:
+    'The checkout has .claude/settings.local.json — host-local state a human put there for their own sessions.',
+  claude_settings_hooks:
+    'The checkout\'s .claude/settings.json carries hooks — the shape of a development checkout, not a disposable one.',
 };
 
 // The merge dial (registry.ts): required and three-valued since ADR 0079, so
@@ -1430,9 +1468,12 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
   );
 }
 
-// The two-phase dangerous-value save (issue #78, #55 phase 3; generalized to
-// workspaces by ADR 0061 決定1), shared by every door that can carry a
-// dangerous value. The first attempt omits the confirm flag; when the payload
+// The two-phase confirmed save (issue #78, #55 phase 3; generalized to
+// workspaces by ADR 0061 決定1), shared by every door whose first attempt can
+// come back 409 `confirm_required`. Most of those doors carry a dangerous
+// value; issue #383's register gate does not (it shows the human what their
+// own checkout looks like), which is why the reason codes and their labels are
+// per-door rather than one table. The first attempt omits the confirm flag; when the payload
 // grants broad power the server answers 409 confirm_required with the machine
 // reason codes (issue #77). We surface those in a dialog and, once the human
 // accepts, resend the very same body with the flag set. The board makes no
@@ -1441,10 +1482,10 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
 // workspaces — ADR 0061 決定1 kept the workspace door's existing flag name
 // rather than adding a second boolean). Returns the busy flag, the save
 // entrypoint, and the dialog element the caller renders inline.
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel }) {
+function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = 'dangerous_values', labels = DANGEROUS_REASON_LABEL }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
-  const [confirm, setConfirm] = React.useState(null); // { reasons, resend } | null while safe
+  const [confirm, setConfirm] = React.useState(null); // { reasons, detail, resend } | null while safe
   const save = async (path, method, body, verb, name) => {
     const attempt = async (confirmed) => {
       setBusy(true);
@@ -1460,10 +1501,12 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         // (bad input, a push that never landed — ADR 0052 決定1) by its
         // confirm_required flag — only that one opens the dialog for a resend
         if (err.status === 409 && err.detail?.confirm_required) {
-          setConfirm({ reasons: err.detail.dangerous_values ?? [], resend: () => attempt(true) });
+          setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
-          say('danger', `${noun} ${verb} failed`, String(err.message || err));
+          // `not ${verb}` であって `${verb} failed` ではない — verb は過去分詞
+          // (added / deleted / updated)なので、後者は「workspace added failed」に崩れる
+          say('danger', `${noun} not ${verb}${failDetail ? ` — ${failDetail}` : ''}`, String(err.message || err));
         }
       }
       setBusy(false);
@@ -1481,9 +1524,12 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>{dialogLead}</p>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 6 }}>
         {(confirm?.reasons ?? []).map((r) => (
-          <li key={r}>{DANGEROUS_REASON_LABEL[r] ?? r}</li>
+          <li key={r}>{labels[r] ?? r}</li>
         ))}
       </ul>
+      {/* 理由コードの列挙の下に、その扉だけが持つ一行(issue #383 の clone 入口の
+          着地先など)。出せるものが無ければ何も描かない */}
+      {confirm && dialogNote?.(confirm.detail)}
     </PortalDialog>
   );
   return { busy, save, dialog };
@@ -1618,6 +1664,33 @@ function GitHubLoginCard({ loggedIn }) {
         this host to log in — the same command re-logs in, and the board picks it up without
         a restart.
       </p>
+    </Card>
+  );
+}
+
+// Translation spend (issue #273). The last call's in/out is where a regression
+// in ADR 0062's env would show — compared against that ADR, not against a
+// second copy of its numbers kept here.
+// `records` null means the read failed: a face put here to catch a silent
+// regression must not itself go silent, so the card stays and says so.
+function TranslateUsageCard({ records }) {
+  const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
+  const last = records?.at(-1);
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <span style={settingsCardLabel}>translation spend</span>
+      {last ? (
+        <React.Fragment>
+          <FieldRow label="translations" kind="mono" value={`${records.length} generated`} />
+          <FieldRow label="estimated cost" kind="mono"
+            value={`$${records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`} />
+          <FieldRow label="last call" kind="mono"
+            value={`${last.usage.input_tokens} in / ${last.usage.output_tokens} out`} />
+        </React.Fragment>
+      ) : (
+        <FieldRow label="translations" kind="unset"
+          unsetLabel={records ? 'none generated yet' : 'usage unavailable'} />
+      )}
     </Card>
   );
 }
@@ -2226,31 +2299,41 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const [path, setPath] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [prot, setProt] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
   const ok = registryNameOk(name) && (mode === 'clone' ? !!repo.trim() : mode === 'register' ? !!path.trim() : true);
   const dirty = mode !== 'clone' || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
 
-  const submit = async () => {
-    setBusy(true);
-    try {
-      await api('/api/workspaces', {
-        mode, name: name.trim(),
-        ...(mode === 'clone' ? { repo: repo.trim() } : {}),
-        ...(mode === 'register' ? { path: path.trim() } : {}),
-        ...(notes.trim() ? { notes: notes.trim() } : {}),
-        ...(prot ? { protected: true } : {}),
-      });
-      say('success', 'workspace added — committed to the registry', name.trim());
-      edit.close();
-      await onCreated();
-    } catch (err) {
-      // creation is idempotent server-side — a failed attempt leaves only
-      // orphans the registry never saw, so "just press it again" is honest
-      say('danger', 'workspace creation failed — safe to retry as-is', String(err.message || err));
-    }
-    setBusy(false);
-  };
+  // issue #383: register の門が「人間の生きた dev checkout に見える」と言ったら
+  // 409 が返り、ダイアログで受け入れると同じ body が confirm 付きで再送される —
+  // 危険な値・削除と同じ二段扉(判定はサーバ単一正本、ADR 0027)
+  const { busy, save, dialog } = useDangerousSave(say, async () => { edit.close(); await onCreated(); }, {
+    noun: 'workspace',
+    confirmKey: 'confirm',
+    dialogTitle: 'Register a checkout someone is working in?',
+    dialogLead: 'This path looks like a human\'s live development checkout:',
+    dialogNote: (detail) =>
+      detail?.clone_landing ? (
+        <p style={{ margin: '8px 0 0', fontSize: 'var(--text-sm)' }}>
+          The clone entrance would give the board its own checkout at{' '}
+          <span style={{ fontFamily: 'var(--font-mono)' }}>{detail.clone_landing}</span> instead —
+          one repository, two checkouts.
+        </p>
+      ) : null,
+    confirmLabel: 'Register anyway',
+    reasonsKey: 'live_checkout_signals',
+    labels: LIVE_CHECKOUT_SIGNAL_LABEL,
+    // creation is idempotent server-side — a failed attempt leaves only
+    // orphans the registry never saw, so "just press it again" is honest
+    failDetail: 'safe to retry as-is',
+  });
+  const submit = () =>
+    save('/api/workspaces', 'POST', {
+      mode, name: name.trim(),
+      ...(mode === 'clone' ? { repo: repo.trim() } : {}),
+      ...(mode === 'register' ? { path: path.trim() } : {}),
+      ...(notes.trim() ? { notes: notes.trim() } : {}),
+      ...(prot ? { protected: true } : {}),
+    }, 'added', name.trim());
   const modeOptions = [
     { value: 'clone', label: 'clone a repository' },
     { value: 'create', label: 'create a new local checkout' },
@@ -2293,6 +2376,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
       <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
       <EditActions ok={ok} busy={busy} saveLabel="Add workspace — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
+      {dialog}
     </Card>
   );
 }
@@ -2319,8 +2403,12 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   const submit = async () => {
     setBusy(true);
     try {
-      await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
-      say('success', 'agent added — committed to the registry', name.trim());
+      const created = await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
+      // 静かな shadow は作らない(ADR 0117 決定2): 告げるのは応答で、判定ではない
+      say('success', 'agent added — committed to the registry',
+        created?.shadows_built_in
+          ? `${name.trim()} — shadows the board's built-in agent of the same name`
+          : name.trim());
       edit.close();
       await onCreated();
     } catch (err) {
@@ -2450,6 +2538,18 @@ function SettingsScreen({ say, registerLeaveGuard }) {
     api('/api/settings/github', undefined, 'GET')
       .then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn))
       .catch(() => setGithubLoggedIn(null));
+  }, []);
+
+  // issue #273: 末尾の loading… カスケードには足さない —— これが読めなくても残りの
+  // 設定は読めるので、board 全体を loading… に張り付かせない([] は「生成ゼロ」)
+  const [translateUsage, setTranslateUsage] = React.useState(null); // null → still loading
+  // 失敗はカードを消さずに面へ出す —— 読めなかったことが見えないと、この顔を
+  // 足した理由(記録があることと検知されることは別)がそのまま欠ける
+  const [translateUsageFailed, setTranslateUsageFailed] = React.useState(false);
+  React.useEffect(() => {
+    api('/api/translate/usage', undefined, 'GET')
+      .then(({ records }) => setTranslateUsage(records))
+      .catch(() => setTranslateUsageFailed(true));
   }, []);
 
 
@@ -2607,7 +2707,11 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       footnote: 'edits commit to agents/<name>.md in the registry',
       indexSummary: (items) => `${items.length} agents`,
       rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
-      rowSummary: (a) => a.authority,
+      // the built-in / shadows built-in mark (ADR 0117 決定2) — server-derived
+      // (GET /api/agents), never decided here: the display only mirrors which
+      // fugu the machine resolves. A built-in has no registry profile to show.
+      rowSummary: (a) =>
+        a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
       record: (rec) => (
         <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions}
           hostSkills={hostSkills}
@@ -2727,6 +2831,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
           <MemoryEntriesCard workspaceNames={workspaceNames} language={displayLanguage} say={say} edit={edit} />
         )}
         {githubLoggedIn !== null && <GitHubLoginCard loggedIn={githubLoggedIn} />}
+        {(translateUsage !== null || translateUsageFailed) && <TranslateUsageCard records={translateUsage} />}
         {(!displayLanguageLoaded || !quietHoursLoaded || !paceOffsets || !executionSettings || !memorySettings) && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>
         )}
@@ -2795,7 +2900,9 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         {rec && sec.record(rec)}
         {/* 編集中は出さない: 未保存のカードを開いたまま消せると、破棄の問い
             (決定4)を素通りする */}
-        {rec && editing === null && (
+        {/* 組み込みは registry のエントリではないので削除の扉も出さない
+            (ADR 0117 決定2)— サーバ側の門は残るが、通らない扉は見せない */}
+        {rec && editing === null && !rec.builtin && (
           <DeleteRecord section={sec} sectionKey={sectionKey} name={recordName} say={say}
             onDeleted={async () => { await sec.reload(); go([sectionKey]); }} />
         )}
