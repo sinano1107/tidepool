@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
   CODEX_DEVELOPER_MARKER,
+  CODEX_FEATURE_SNAPSHOT,
   type CodexCapabilityObservation,
   checkCodexCapability,
   observedDeveloperMarkers,
@@ -40,27 +41,7 @@ const VALID: CodexCapabilityObservation = {
   skills: [],
   hooks: [BOARD_HOOK_REGISTRATION],
   permissions: ["tidepool-work", "tidepool-review"],
-  closedFeatures: [
-    "apps",
-    "auth_elicitation",
-    "browser_use",
-    "browser_use_external",
-    "browser_use_full_cdp_access",
-    "computer_use",
-    "goals",
-    "image_generation",
-    "in_app_browser",
-    "memories",
-    "multi_agent",
-    "plugins",
-    "recommended_plugins",
-    "remote_plugin",
-    "skill_mcp_dependency_install",
-    "skill_search",
-    "tool_suggest",
-    "view_image",
-    "workspace_dependencies",
-  ],
+  features: CODEX_FEATURE_SNAPSHOT,
   developerMarkers: [CODEX_DEVELOPER_MARKER],
 };
 
@@ -79,7 +60,6 @@ it.each([
   ["hook (別 source)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, source: "userConfig" }] }],
   ["hook (別の command)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, command: "/tmp/someone-elses-hook.mjs" }] }],
   ["permission", { permissions: ["tidepool-work"] }],
-  ["feature", { closedFeatures: VALID.closedFeatures.slice(1) }],
   // 盤面の文面が developer 層に届かなかった3つの形(ADR 0124 決定4): 鍵が無視された、
   // 別の層に載った、item の構造が変わった
   ["developer instructions (空)", { developerMarkers: [] }],
@@ -89,6 +69,31 @@ it.each([
   const capability = await checkCodexCapability(async () => ({ ...VALID, ...changed }), BOARD_HOOK_PATH);
   expect(capability.available).toBe(false);
   if (!capability.available) expect(capability.reason).toContain("Codex containment preflight");
+});
+
+it.each([
+  [
+    "ベンダーが増やした未知の名前",
+    { ...CODEX_FEATURE_SNAPSHOT, vendor_new_thing: "true" },
+    "vendor_new_thing (expected absent, observed true)",
+  ],
+  [
+    "既存の名前が false から true へ転ぶ",
+    { ...CODEX_FEATURE_SNAPSHOT, code_mode: "true" },
+    "code_mode (expected false, observed true)",
+  ],
+  [
+    "期待していた名前が面から消える",
+    Object.fromEntries(Object.entries(CODEX_FEATURE_SNAPSHOT).filter(([name]) => name !== "computer_use")),
+    "computer_use (expected false, observed absent)",
+  ],
+] as const)("feature 面の%sは preflight を倒し、reason は差分だけを載せる", async (_, features, expected) => {
+  const capability = await checkCodexCapability(async () => ({ ...VALID, features }), BOARD_HOOK_PATH);
+  expect(capability.available).toBe(false);
+  if (!capability.available) {
+    expect(capability.reason).toContain(expected);
+    expect(capability.reason).not.toContain("apply_patch_freeform");
+  }
 });
 
 it("届かなかった理由は期待値と観測値の両方を名指す(ADR 0124 決定4)", async () => {
