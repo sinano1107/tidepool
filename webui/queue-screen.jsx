@@ -2,7 +2,8 @@
 
 // Reorderable queue list — pointer-driven drag & drop with tidal FLIP animations.
 // Reused by QueueScreen and the triage queue-check step.
-function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6 }) {
+function TpQueueList({ tasks, onReorder, onFront, headId }) {
+  const gap = 6;
   const { QueueItem } = window.TidepoolDesignSystem_8a0ead;
   const itemEls = React.useRef(new Map());
   const lastTops = React.useRef(new Map());
@@ -93,7 +94,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6
           const [moved] = next.splice(d.index, 1);
           next.splice(d.projected, 0, moved);
           skipFlip.current = true;
-          onReorder(next, d.id, baseIndex + d.projected + 1);
+          onReorder(next, d.id, d.projected + 1);
         }
       }, reduced() ? 0 : 310);
     };
@@ -122,10 +123,9 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6
         >
           {/* only the head row's button is "run now" (an immediate-poll trigger, issue #82 follow-up)
              — every other row's button is pure reordering, color-coded distinctly so the two never look alike.
-             isHead is an id match against the true queue head, not a position/baseIndex computation: a sliced
-             view (e.g. the triage preview's previewQueue, offset by baseIndex) would otherwise mislabel the
-             actual head whenever it isn't rendered at index 0 of *this* slice. */}
-          <QueueItem position={baseIndex + i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
+             isHead is an id match against the true queue head, not a position computation: the triage
+             preview renders this same list without a headId, and a position match would crown its first row. */}
+          <QueueItem position={i + 1} task={t} skipped={t.skipped} frontInserted={t.frontInserted} flash={t.flash} isHead={t.id === headId} draggable={!!onReorder} onFront={onFront ? () => onFront(t.id) : undefined} />
         </div>
       ))}
     </div>

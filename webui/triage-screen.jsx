@@ -467,7 +467,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     const signal = logTranslateAbort.current.signal;
     for (const entry of renderedLogEntries) {
       const k = entry.id;
-      if (entry.id == null || logTranslateRequested.current.has(k)) continue;
+      if (logTranslateRequested.current.has(k)) continue;
       logTranslateRequested.current.add(k);
       runTranslate(onTranslate, { type: 'log_entry', event_id: entry.id },
         (result) => setLogTranslations((prev) => ({ ...prev, [k]: result })),
@@ -494,12 +494,12 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // kit already holds — no new wiring. Not a progress bar (7.4s/entry is too
   // coarse to read as motion, and it can't distinguish "stalled" from "slow").
   const logTranslateTotal = logTranslateOn
-    ? renderedLogEntries.filter((entry) => entry.id != null).length
+    ? renderedLogEntries.length
     : 0;
   const logTranslateDone = logTranslateOn
     ? renderedLogEntries.filter((entry) => {
         const v = logTranslations[entry.id];
-        return entry.id != null && v && v.status !== 'loading';
+        return v && v.status !== 'loading';
       }).length
     : 0;
   // iOS Safari has no CSS overflow-anchor: revealing an older batch inserts
@@ -537,7 +537,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     if (handoffOpen[k]) { setHandoffOpen((prev) => ({ ...prev, [k]: false })); return; }
     if (handoffCache.current[k] == null) {
       try {
-        handoffCache.current[k] = entry.handoff != null ? entry.handoff : await loadHandoff(entry);
+        handoffCache.current[k] = await loadHandoff(entry);
       } catch {
         handoffCache.current[k] = '(handoff doc failed to load)';
       }
@@ -599,9 +599,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         // every group's revealed-read and unread rows below
         const renderLogRow = (l) => {
           const k = l.id;
-          const hasHandoff = l.kind === 'completion' && (l.handoff != null || l.handoffPresent);
+          const hasHandoff = l.kind === 'completion' && l.handoffPresent;
           return (
-            <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
+            <div key={k} data-entry-id={l.unread ? l.id : undefined}>
               <LogEntry
                 entry={{
                   ...l,

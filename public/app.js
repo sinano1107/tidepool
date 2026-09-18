@@ -1,5 +1,6 @@
 // webui/queue-screen.jsx
-function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6 }) {
+function TpQueueList({ tasks, onReorder, onFront, headId }) {
+  const gap = 6;
   const { QueueItem } = window.TidepoolDesignSystem_8a0ead;
   const itemEls = React.useRef(/* @__PURE__ */ new Map());
   const lastTops = React.useRef(/* @__PURE__ */ new Map());
@@ -96,7 +97,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6
           const [moved] = next.splice(d.index, 1);
           next.splice(d.projected, 0, moved);
           skipFlip.current = true;
-          onReorder(next, d.id, baseIndex + d.projected + 1);
+          onReorder(next, d.id, d.projected + 1);
         }
       }, reduced() ? 0 : 310);
     };
@@ -122,7 +123,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6
         opacity: t.blocked ? 0.55 : void 0
       }
     },
-    /* @__PURE__ */ React.createElement(QueueItem, { position: baseIndex + i + 1, task: t, skipped: t.skipped, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
+    /* @__PURE__ */ React.createElement(QueueItem, { position: i + 1, task: t, skipped: t.skipped, frontInserted: t.frontInserted, flash: t.flash, isHead: t.id === headId, draggable: !!onReorder, onFront: onFront ? () => onFront(t.id) : void 0 })
   )));
 }
 function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }) {
@@ -458,7 +459,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     const signal = logTranslateAbort.current.signal;
     for (const entry of renderedLogEntries) {
       const k = entry.id;
-      if (entry.id == null || logTranslateRequested.current.has(k)) continue;
+      if (logTranslateRequested.current.has(k)) continue;
       logTranslateRequested.current.add(k);
       runTranslate(
         onTranslate,
@@ -480,10 +481,10 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     }
   }, [logTranslateOn, renderedLogEntries]);
   const logThrottled = logTranslateOn && Object.values(logTranslations).some((v) => v && v.status === "throttled");
-  const logTranslateTotal = logTranslateOn ? renderedLogEntries.filter((entry) => entry.id != null).length : 0;
+  const logTranslateTotal = logTranslateOn ? renderedLogEntries.length : 0;
   const logTranslateDone = logTranslateOn ? renderedLogEntries.filter((entry) => {
     const v = logTranslations[entry.id];
-    return entry.id != null && v && v.status !== "loading";
+    return v && v.status !== "loading";
   }).length : 0;
   const scrollContainer = () => logListRef.current && logListRef.current.closest(".tp-scroll");
   const pendingScrollFix = React.useRef(null);
@@ -515,7 +516,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     }
     if (handoffCache.current[k] == null) {
       try {
-        handoffCache.current[k] = entry.handoff != null ? entry.handoff : await loadHandoff(entry);
+        handoffCache.current[k] = await loadHandoff(entry);
       } catch {
         handoffCache.current[k] = "(handoff doc failed to load)";
       }
@@ -551,8 +552,8 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   return /* @__PURE__ */ React.createElement("div", { key: section, style: { padding: "20px 16px 28px" } }, /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 } }, cur.step), /* @__PURE__ */ React.createElement("h1", { className: "tp-rise", style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 4px", lineHeight: 1.15, animationDelay: "60ms" } }, cur.title), /* @__PURE__ */ React.createElement("p", { className: "tp-rise", style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 20px", animationDelay: "120ms" } }, cur.sub), section === S_QUESTIONS ? /* @__PURE__ */ React.createElement(TpSegmentGauge, { total: nQuestions, filled: answered }) : /* @__PURE__ */ React.createElement(TpWaterline, { progress }), /* @__PURE__ */ React.createElement("div", { style: { height: 20 } }), section === S_QUESTIONS && /* @__PURE__ */ React.createElement("div", null, generalQuestions.map((q, i) => /* @__PURE__ */ React.createElement("div", { key: q.id, className: "tp-rise", style: { animationDelay: `${180 + i * 90}ms` } }, /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: answers[q.id], onAnswer: (a) => answerQ(q, a), locked: !!answers[q.id], onTranslate })))), section === S_LOG && (() => {
     const renderLogRow = (l) => {
       const k = l.id;
-      const hasHandoff = l.kind === "completion" && (l.handoff != null || l.handoffPresent);
-      return /* @__PURE__ */ React.createElement("div", { key: k, "data-entry-id": l.unread && l.id != null ? l.id : void 0 }, /* @__PURE__ */ React.createElement(
+      const hasHandoff = l.kind === "completion" && l.handoffPresent;
+      return /* @__PURE__ */ React.createElement("div", { key: k, "data-entry-id": l.unread ? l.id : void 0 }, /* @__PURE__ */ React.createElement(
         LogEntry,
         {
           entry: {
