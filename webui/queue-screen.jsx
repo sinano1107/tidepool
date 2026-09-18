@@ -132,24 +132,15 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6
   );
 }
 
-// The slot line reflects the four states of the single execution slot. 盤面
-// 全体の停止は行に降りない — 面が1回言う(ADR 0068 決定7)。
-const TP_SLOT_STATES = {
-  busy: { color: 'var(--tide-4)', line: 'tp-0142 · Queue reorder — fractional sort keys', meta: 'next poll 08:00' },
-  free: { color: 'var(--rock-3)', line: 'slot free — nothing running', meta: 'next poll 08:00' },
-  warning: { color: 'var(--sun-4)', line: 'close to limit · finishing tp-0142, starting nothing new', meta: 'per Anthropic threshold' },
-  limit: { color: 'var(--coral-4)', line: 'usage limit · nothing starts', meta: 'resumes 06:12 · immediate poll at reset' },
-};
-
-function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false, onTogglePause, spendDown = { session: null, week: null }, onSpendDown, onFront, onDoneHuman, onReorder }) {
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — scripts/build-webui-bundle.mjs concatenates these files into one bundle
+function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
-  // real deployments pass live slot content via data.slot; the canned states
-  // remain for the mock. Pause は行を作り直さない — 停止の並び順はサーバの列挙が
-  // 持ち(ADR 0068 決定1)、この画面はその答えをそのまま描く。`paused` がここに
+  // 行の中身はサーバが導いた slot をそのまま描く。盤面全体の停止は行に降りない ——
+  // 面が1回言う(ADR 0068 決定7)。Pause は行を作り直さない — 停止の並び順はサーバの
+  // 列挙が持ち(ADR 0068 決定1)、この画面はその答えをそのまま描く。`paused` がここに
   // 残るのは pause ボタン・波線・文字色といった pause の操作面のためである。
-  const slot = data.slot || TP_SLOT_STATES[slotState] || TP_SLOT_STATES.busy;
-  const alert = wsAlert ? data.workspaceAlert : null;
-  const activeSpendDown = ['session', 'week'].filter((window) => spendDown?.[window]);
+  const slot = data.slot;
+  const activeSpendDown = ['session', 'week'].filter((window) => spendDown[window]);
   const providerUsage = data.providerUsage ?? [];
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
@@ -162,29 +153,26 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
 
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 10, minHeight: 30 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: slot.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>slot</span>
-        {/* real deployments only */}
         {slot.taskId && (
           <IdChip id={slot.taskId} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', flexShrink: 0 }} />
         )}
         <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: !paused && slotState === 'free' ? 'var(--text-muted)' : 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{slot.line}</span>
-        {onTogglePause && (
-          <button onClick={onTogglePause} aria-pressed={paused}
-            aria-label={paused ? 'resume pickup' : 'pause pickup'}
-            title={paused ? 'resume pickup — fires an immediate poll' : 'pause pickup — running task finishes, nothing new starts'}
-            style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              width: 28, height: 28,
-              color: paused ? '#fff' : 'var(--tide-4)',
-              background: paused ? 'var(--tide-4)' : 'var(--surface-card)',
-              border: 'none', borderRadius: 'var(--radius-full)', padding: 0,
-              boxShadow: paused ? 'var(--shadow-primary)' : 'var(--shadow-card)', cursor: 'pointer',
-              transition: 'background 120ms var(--ease-tidal), color 120ms var(--ease-tidal)',
-            }}>
-            <span key={paused ? 'play' : 'pause'} style={{ display: 'inline-flex', width: 13, height: 13 }}>
-              <i data-lucide={paused ? 'play' : 'pause'} style={{ width: 13, height: 13 }}></i>
-            </span>
-          </button>
-        )}
+        <button onClick={onTogglePause} aria-pressed={paused}
+          aria-label={paused ? 'resume pickup' : 'pause pickup'}
+          title={paused ? 'resume pickup — fires an immediate poll' : 'pause pickup — running task finishes, nothing new starts'}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            width: 28, height: 28,
+            color: paused ? '#fff' : 'var(--tide-4)',
+            background: paused ? 'var(--tide-4)' : 'var(--surface-card)',
+            border: 'none', borderRadius: 'var(--radius-full)', padding: 0,
+            boxShadow: paused ? 'var(--shadow-primary)' : 'var(--shadow-card)', cursor: 'pointer',
+            transition: 'background 120ms var(--ease-tidal), color 120ms var(--ease-tidal)',
+          }}>
+          <span key={paused ? 'play' : 'pause'} style={{ display: 'inline-flex', width: 13, height: 13 }}>
+            <i data-lucide={paused ? 'play' : 'pause'} style={{ width: 13, height: 13 }}></i>
+          </span>
+        </button>
         {/* meta always drops to its own row (issue #396) — placed after the
            button in DOM order so row 1 is slot/IdChip/line/button and only
            meta (flexBasis 100%) wraps to row 2; before the button it would
@@ -229,39 +217,26 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
 
       {/* Spend-down (ADR 0091): each window is an independent target and
          expires at its own reset. week also carries fable on the server. */}
-      {onSpendDown && (
-        <div style={{ padding: '8px 12px', marginBottom: 14, background: activeSpendDown.length ? 'var(--sun-1)' : 'transparent', border: activeSpendDown.length ? '1px solid var(--sun-2)' : '1px solid transparent', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            {activeSpendDown.length > 0 && <span style={{ display: 'inline-flex', width: 13, height: 13, color: 'var(--sun-4)', flexShrink: 0 }}><i data-lucide="flame" style={{ width: 13, height: 13 }}></i></span>}
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: activeSpendDown.length ? 'var(--text-body)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-              spend-down{activeSpendDown.length ? ` · ${activeSpendDown.join(' + ')}` : ''}
-            </span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {['session', 'week'].map((window) => (
-            <div key={window} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 30 }}>
-              <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-xs)', color: spendDown?.[window] ? 'var(--text-body)' : 'var(--text-muted)' }}>
-                {spendDown?.[window] ? `${window} · 100% cap · expires at reset` : `${window} · pace line on`}
-              </span>
-              <Button variant="secondary" size="sm" onClick={() => onSpendDown(window, !spendDown?.[window])}>
-                {spendDown?.[window] ? `cancel ${window}` : `arm ${window}`}
-              </Button>
-            </div>
-          ))}
-          </div>
+      <div style={{ padding: '8px 12px', marginBottom: 14, background: activeSpendDown.length ? 'var(--sun-1)' : 'transparent', border: activeSpendDown.length ? '1px solid var(--sun-2)' : '1px solid transparent', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          {activeSpendDown.length > 0 && <span style={{ display: 'inline-flex', width: 13, height: 13, color: 'var(--sun-4)', flexShrink: 0 }}><i data-lucide="flame" style={{ width: 13, height: 13 }}></i></span>}
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: activeSpendDown.length ? 'var(--text-body)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            spend-down{activeSpendDown.length ? ` · ${activeSpendDown.join(' + ')}` : ''}
+          </span>
         </div>
-      )}
-
-      {alert && (
-        <Card style={{ background: 'var(--coral-1)', border: '1px solid var(--coral-2)', padding: '12px 14px', marginBottom: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--coral-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>workspace needs human</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>{alert.workspace}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {['session', 'week'].map((window) => (
+          <div key={window} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 30 }}>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-xs)', color: spendDown[window] ? 'var(--text-body)' : 'var(--text-muted)' }}>
+              {spendDown[window] ? `${window} · 100% cap · expires at reset` : `${window} · pace line on`}
+            </span>
+            <Button variant="secondary" size="sm" onClick={() => onSpendDown(window, !spendDown[window])}>
+              {spendDown[window] ? `cancel ${window}` : `arm ${window}`}
+            </Button>
           </div>
-          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-body)', marginBottom: 4 }}>{alert.reason}</div>
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>pickup paused for {alert.held.join(', ')} · see question {alert.question}</div>
-        </Card>
-      )}
+        ))}
+        </div>
+      </div>
 
       <div style={{ marginBottom: 28 }}>
         <TpQueueList tasks={data.queue} onReorder={onReorder} onFront={onFront} headId={headId} />
@@ -283,5 +258,3 @@ function QueueScreen({ data, slotState = 'busy', wsAlert = false, paused = false
     </div>
   );
 }
-
-Object.assign(window, { QueueScreen, TpQueueList });

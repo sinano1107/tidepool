@@ -1,34 +1,13 @@
-// Single-question push flow — the deep-link target of a daytime push
-// notification. TpPushBanner simulates the notification inside the app
-// (demo only; the real notification is the OS/browser's own). TpSingleQuestion
-// is the one-question(-bundle) answer screen a push tap opens straight into:
-// no triage transaction. Reuses TpQuestionCard (triage-screen.jsx), which
-// owns the atomic submit itself (issue #30) — the card fires onAnswer once
-// every item in the bundle has a pick, same one-tap-through model as triage.
-// Loaded as a text/babel script from index.html; components read from the DS
-// bundle at render time.
-
-function TpPushBanner({ q, onOpen, onDismiss }) {
-  const headline = q.items.length > 1 ? `${q.items.length} questions` : q.items[0].title;
-  return (
-    <button onClick={onOpen}
-      style={{
-        position: 'absolute', top: 10, left: 12, right: 12, zIndex: 55, cursor: 'pointer', textAlign: 'left',
-        display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
-        background: 'var(--rock-6)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-card)',
-      }}>
-      <i data-lucide="bell" style={{ width: 16, height: 16, flexShrink: 0 }}></i>
-      <span style={{ flex: 1, fontSize: 'var(--text-sm)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        <b>{q.agent}</b> asks: {headline}
-      </span>
-      <span onClick={(e) => { e.stopPropagation(); onDismiss(); }} style={{ fontSize: 'var(--text-sm)', opacity: 0.7, padding: '0 2px' }}>×</span>
-    </button>
-  );
-}
+// Single-question push flow — TpSingleQuestion is the one-question(-bundle)
+// answer screen a daytime push tap opens straight into: no triage transaction.
+// Reuses TpQuestionCard (triage-screen.jsx), which owns the atomic submit
+// itself (issue #30) — the card fires onAnswer once every item in the bundle
+// has a pick, same one-tap-through model as triage.
 
 // onAnswer(answers) receives one array entry per item, in item order, fired
 // by TpQuestionCard the instant the bundle is fully answered — a live caller
 // POSTs that array straight to /api/tasks/:id/answer.
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — scripts/build-webui-bundle.mjs concatenates these files into one bundle
 function TpSingleQuestion({ q, onAnswer, onClose, onTranslate }) {
   const heading = q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : 'One answer, then back to your day.';
   return (
@@ -45,5 +24,3 @@ function TpSingleQuestion({ q, onAnswer, onClose, onTranslate }) {
     </div>
   );
 }
-
-Object.assign(window, { TpPushBanner, TpSingleQuestion });
