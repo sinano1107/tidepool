@@ -945,9 +945,6 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
-    // empty until its domain slice exists: the agent registry — the kit section
-    // renders empty
-    agents: [],
     slot,
     pickupHalt,
     running: !!running,
