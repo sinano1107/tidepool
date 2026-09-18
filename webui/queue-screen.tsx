@@ -201,7 +201,7 @@ interface QueueScreenProps {
   onReorder: (next: QueueScreenTask[], id: string, position: number) => void;
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
 function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }: QueueScreenProps) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   // 行の中身はサーバが導いた slot をそのまま描く。盤面全体の停止は行に降りない ——

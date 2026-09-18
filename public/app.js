@@ -169,7 +169,7 @@ function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpen
   } }), providerUsage.length > 0 && /* @__PURE__ */ React.createElement(Card, { "data-testid": "provider-usage", style: { padding: "10px 12px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 } }, "provider usage"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } }, providerUsage.map((usage) => /* @__PURE__ */ React.createElement("div", { key: usage.provider, "data-testid": `provider-usage-${usage.provider}` }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-body)" } }, usage.provider), /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-xs)", color: usage.status === "observed" ? "var(--tide-5)" : "var(--coral-4)" } }, usage.status), usage.plan && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, usage.plan), usage.observedAt && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, "observed ", new Date(usage.observedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))), usage.reason && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 3, fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, usage.reason), usage.windows.map((window2) => /* @__PURE__ */ React.createElement("div", { key: `${window2.window}:${window2.model ?? ""}`, style: { marginTop: 3, fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: window2.throttled ? "var(--coral-4)" : "var(--text-muted)" } }, window2.window, window2.model ? ` \xB7 ${window2.model}` : "", " \xB7 ", window2.usedPercent ?? "?", "% \xB7 offset ", window2.offset, "pt \xB7 ", window2.throttled ? `paced${window2.resumesAt ? ` until ${new Date(window2.resumesAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}` : "on pace")))))), /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 12px", marginBottom: 14, background: activeSpendDown.length ? "var(--sun-1)" : "transparent", border: activeSpendDown.length ? "1px solid var(--sun-2)" : "1px solid transparent", borderRadius: "var(--radius-md)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } }, activeSpendDown.length > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", width: 13, height: 13, color: "var(--sun-4)", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "flame", style: { width: 13, height: 13 } })), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: activeSpendDown.length ? "var(--text-body)" : "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "spend-down", activeSpendDown.length ? ` \xB7 ${activeSpendDown.join(" + ")}` : "")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, ["session", "week"].map((window2) => /* @__PURE__ */ React.createElement("div", { key: window2, style: { display: "flex", alignItems: "center", gap: 8, minHeight: 30 } }, /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-xs)", color: spendDown[window2] ? "var(--text-body)" : "var(--text-muted)" } }, spendDown[window2] ? `${window2} \xB7 100% cap \xB7 expires at reset` : `${window2} \xB7 pace line on`), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onSpendDown(window2, !spendDown[window2]) }, spendDown[window2] ? `cancel ${window2}` : `arm ${window2}`))))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(TpQueueList, { tasks: data.queue, onReorder, onFront, headId })), /* @__PURE__ */ React.createElement("h2", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, "Your tasks"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 12px" } }, "outside the queue \u2014 you have your own scheduler"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, data.humanTasks.length === 0 && /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0 } }, "none."), data.humanTasks.map((t) => /* @__PURE__ */ React.createElement(Card, { key: t.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, t.id), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-heading)" } }, t.title), t.blocking && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--sun-4)" } }, "blocks ", t.blocking), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", onClick: () => onDoneHuman(t.id) }, "Done")))));
 }
 
-// webui/triage-screen.jsx
+// webui/triage-screen.tsx
 function TpWaterline({ progress }) {
   return /* @__PURE__ */ React.createElement("div", { style: { height: 2, background: "var(--rock-2)", position: "relative", borderRadius: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: "0 auto 0 0", width: `${progress * 100}%`, background: "var(--tide-4)", borderRadius: 1, transition: "width var(--duration-slow) var(--ease-tidal)" } }));
 }
@@ -233,7 +233,7 @@ function TpTranslationNote({ result }) {
   }
   return /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, result.message);
 }
-function TpQuestionCard({ q, answer, onAnswer, locked, onTranslate }) {
+function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }) {
   const { Card, AgentChip, Switch } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
   const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
@@ -637,7 +637,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
 // webui/single-question-view.tsx
 function TpSingleQuestion({ q, onAnswer, onClose, onTranslate }) {
   const heading = q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : "One answer, then back to your day.";
-  return /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { position: "absolute", inset: 0, zIndex: 56, background: "var(--surface-page)", display: "flex", flexDirection: "column", padding: "20px 16px", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase" } }, "push \u2192 ", q.items.length > 1 ? `${q.items.length} questions` : "one question"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { marginLeft: "auto", background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-lg)", cursor: "pointer", padding: 0 } }, "\xD7")), /* @__PURE__ */ React.createElement("h1", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 16px", lineHeight: 1.15 } }, heading), /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: null, onAnswer, locked: false, onTranslate }), /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, q.parent ? `answering sends ${q.parent} to the front \xB7 ` : "", "applies immediately \xB7 immediate poll if slot free \xB7 no transaction needed"));
+  return /* @__PURE__ */ React.createElement("div", { className: "tp-rise", style: { position: "absolute", inset: 0, zIndex: 56, background: "var(--surface-page)", display: "flex", flexDirection: "column", padding: "20px 16px", overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", letterSpacing: "0.08em", textTransform: "uppercase" } }, "push \u2192 ", q.items.length > 1 ? `${q.items.length} questions` : "one question"), /* @__PURE__ */ React.createElement("button", { onClick: onClose, style: { marginLeft: "auto", background: "none", border: "none", color: "var(--text-muted)", fontSize: "var(--text-lg)", cursor: "pointer", padding: 0 } }, "\xD7")), /* @__PURE__ */ React.createElement("h1", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", fontWeight: 400, color: "var(--tide-5)", margin: "0 0 16px", lineHeight: 1.15 } }, heading), /* @__PURE__ */ React.createElement(TpQuestionCard, { q, answer: null, onAnswer, onTranslate }), /* @__PURE__ */ React.createElement("p", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textAlign: "center", marginTop: 12 } }, q.parent ? `answering sends ${q.parent} to the front \xB7 ` : "", "applies immediately \xB7 immediate poll if slot free \xB7 no transaction needed"));
 }
 
 // webui/board-screen.tsx
@@ -760,12 +760,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
         });
       }
       resetContent();
-      if (childMode) onClose();
+      if (childMode) onClose?.();
     } catch (rawErr) {
-      const err = rawErr;
-      if (err.status === 422 && err.detail) {
+      if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
         setGate({
-          ...err.detail,
+          ...rawErr.detail,
           workspace: f.workspace,
           github_issue_number: f.github_issue_number
         });
@@ -873,7 +872,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   ), gate && /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10, marginTop: 14, borderColor: "var(--coral-3, var(--rock-3))" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600 } }, "the issue fails the registration gate"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, gate.missing), gate.suggested_comment && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)" } }, "suggested comment \u2014 posting it to the issue is your approval:"), /* @__PURE__ */ React.createElement("pre", { style: { whiteSpace: "pre-wrap", fontSize: "var(--text-sm)", background: "var(--surface-sunken, rgba(0,0,0,0.06))", borderRadius: 8, padding: 10, margin: 0 } }, gate.suggested_comment), /* @__PURE__ */ React.createElement(Button, { variant: "primary", full: true, disabled: busy, onClick: approveComment }, "Approve \u2014 post to issue & retry"))));
 }
 
-// webui/settings-screen.jsx
+// webui/settings-screen.tsx
 function registryNameOk(name) {
   const v = name.trim();
   return /^[A-Za-z0-9._-]+$/.test(v) && ![".", ".."].includes(v);
@@ -1414,7 +1413,7 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         say("success", `${noun} ${verb} \u2014 committed to the registry`, successDetail ? successDetail(result, name) : name);
         await onDone(result);
       } catch (err) {
-        if (err.status === 409 && err.detail?.confirm_required) {
+        if (err instanceof ApiError && err.status === 409 && err.detail?.confirm_required) {
           setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
@@ -2075,9 +2074,9 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const ok = registryNameOk(name) && (mode === "clone" ? !!repo.trim() : mode === "register" ? !!path.trim() : true);
   const dirty = mode !== "clone" || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
-  const { busy, save, dialog } = useDangerousSave(say, async () => {
+  const { busy, save, dialog } = useDangerousSave(say, async (result) => {
     edit.close();
-    await onCreated();
+    await onCreated(result);
   }, {
     noun: "workspace",
     confirmKey: "confirm",
@@ -2651,7 +2650,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   ));
 }
 
-// webui/app.jsx
+// webui/app.tsx
 const WASH_MS = 1250;
 const tabs = [
   { key: "triage", label: "Triage", icon: "sunrise" },
@@ -2660,6 +2659,15 @@ const tabs = [
   { key: "register", label: "Register", icon: "plus" },
   { key: "settings", label: "Settings", icon: "settings" }
 ];
+class ApiError extends Error {
+  status;
+  detail;
+  constructor(message, status, detail) {
+    super(message);
+    this.status = status;
+    this.detail = detail;
+  }
+}
 async function api(path, body, method = "POST") {
   const res = await fetch(path, {
     method,
@@ -2668,10 +2676,7 @@ async function api(path, body, method = "POST") {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    const e = new Error(typeof err.error === "string" ? err.error : res.statusText);
-    e.status = res.status;
-    e.detail = err;
-    throw e;
+    throw new ApiError(typeof err.error === "string" ? err.error : res.statusText, res.status, err);
   }
   return res.json();
 }
@@ -2807,8 +2812,9 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   }
   const cols = { todo: [], in_progress: [], blocked: [], done: [] };
   for (const t of board) {
-    if (!cols[t.status]) continue;
-    cols[t.status].push({
+    const col = t.status;
+    if (!cols[col]) continue;
+    cols[col].push({
       id: t.id,
       title: liveTitle(t),
       type: t.type,
@@ -2909,8 +2915,10 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
         entry.failClosed ? "usage check unavailable \u2014 nothing starts until a fresh reading arrives" : `usage limit \xB7 resumes ${resumes}`
       );
     }
+    // 門そのもの (ADR 0133 決定3 / #749 User Story 8): HALT_KINDS に1つ足して
+    // ここを更新しないと typecheck が落ちる。これがあるので下の引きに `?.` は要らない
   };
-  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind](halts[0]);
   const TEARDOWN_META = {
     completed: "waiting for this session's processes to exit",
     interrupted: "usage limit hit \xB7 task returns to the queue once processes exit",
@@ -3525,7 +3533,7 @@ function App() {
         say("info", "registered \u2014 appended to queue tail", t.id);
       });
     } catch (err) {
-      if (err.status !== 422) say("danger", "registration failed", String(err.message || err));
+      if (!(err instanceof ApiError) || err.status !== 422) say("danger", "registration failed", String(err.message || err));
       throw err;
     }
   };

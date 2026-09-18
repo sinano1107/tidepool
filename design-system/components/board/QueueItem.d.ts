@@ -7,7 +7,7 @@
 export interface QueueItemProps {
   /** 1-based queue position. */
   position?: number;
-  task?: { id?: string; title?: string; assignee?: string; risk?: boolean };
+  task?: { id?: string; title?: string; assignee?: string; assigneeIcon?: string; risk?: boolean };
   /** This row's own resource cannot take it right now — dashed. */
   skipped?: boolean;
   /** Optional reason appended after `skipped ·`. Omit it when the reason

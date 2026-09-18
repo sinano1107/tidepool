@@ -20,5 +20,7 @@ export interface NavRowProps {
   last?: boolean;
   onClick?: () => void;
   style?: React.CSSProperties;
+  /** `data-testid` on the row. */
+  testId?: string;
 }
 export declare function NavRow(props: NavRowProps): JSX.Element;

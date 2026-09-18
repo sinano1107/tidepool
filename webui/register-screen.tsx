@@ -49,10 +49,11 @@ interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
   /** 子追加モード —— 未設定ならルート登録。 */
   parentTask?: { id: string; title: string } | null;
-  onClose: () => void;
+  /** 子追加のときだけ呼ばれる —— ルート登録は画面に留まるので渡されない。 */
+  onClose?: () => void;
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
 function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
@@ -184,17 +185,16 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       resetContent();
       // a root registration stays on the screen for the next dump; a child
       // add is a one-shot dialog action — close it once it lands
-      if (childMode) onClose();
+      if (childMode) onClose?.();
     } catch (rawErr) {
       // a gate rejection carries the fix; anything else the toast reported.
       // The inspected reference is burned into the gate state so a later
       // edit of the form fields can't repoint the approved comment (or the
       // retry) at a different issue than the one that was inspected.
-      // webui/app.jsx の api() が status / detail を生やして投げる
-      const err = rawErr as { status?: number; detail?: RegisterScreenGate };
-      if (err.status === 422 && err.detail) {
+      // webui/app.tsx の api() が投げる ApiError —— status / detail はここで開く
+      if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
         setGate({
-          ...err.detail,
+          ...(rawErr.detail as RegisterScreenGate),
           workspace: f.workspace,
           github_issue_number: f.github_issue_number,
         });

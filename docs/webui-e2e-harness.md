@@ -46,7 +46,7 @@ test("空ボードが triage 空状態を実ブラウザで描く", async ({ boo
 });
 ```
 
-`scripts/build-webui-bundle.mjs` は kit 4本と `webui/app.jsx` を esbuild で事前変換し、
+`scripts/build-webui-bundle.mjs` は `webui/*.tsx` 7本を esbuild で事前変換し、
 `public/app.js` に現在の script 順で連結する。React / ReactDOM / lucide も `public/vendor/` から
 same-origin 配信され、盤面の実行コードは外部 CDN に依存しない。Google Fonts は従来どおり
 外部配信で、失敗時は CSS の fallback font に落ちる。待ちは引き続き `networkidle` ではなく

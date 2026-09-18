@@ -7,5 +7,7 @@ export interface CheckboxProps {
   disabled?: boolean;
   onChange?: (e: React.ChangeEvent) => void;
   style?: React.CSSProperties;
+  /** `data-testid` on the label. */
+  testId?: string;
 }
 export declare function Checkbox(props: CheckboxProps): JSX.Element;

@@ -3,7 +3,72 @@
 // 流し読みの前に merge を答えれば異議の機会が失われ、後に答えても修理子がまだ無い。
 // Loaded as a text/babel script from index.html; components read from the DS bundle at render time.
 
-function TpWaterline({ progress }) {
+// この画面が扱う形 —— 画面内で閉じた型で、集合ごとのサーバ型の移送は issue #352 が持つ。
+
+/** 質問カード1枚が読む形。作るのは webui/app.tsx の toQuestionCardShape で、
+ *  あちらの戻り値型がこれである(写しを2本持たない)。 */
+interface TpQuestionItem {
+  title: string;
+  detail?: string | null;
+  options: { label: string; recommended: boolean }[];
+}
+interface TpQuestion {
+  id: string;
+  parent?: string | null;
+  agent: string;
+  agentIcon?: string;
+  board: boolean;
+  context: string;
+  items: TpQuestionItem[];
+  /** カードは受け取れば描くが、今日これを載せる呼び手は居ない。 */
+  kind?: string;
+  note?: string;
+}
+/** トリアージが受け取る question —— 着地 question だけが `landing` を持つ
+ *  (ADR 0092 決定4)。判定は盤面側で、ここは描画だけ。 */
+interface TpTriageQuestion extends TpQuestion {
+  landing?: { blocked_by: string | null } | null;
+}
+/** POST /api/translate の対象(ADR 0015)と、その答えの4状態。`translated` の
+ *  中身は対象ごとに違う欄に載る —— 呼び手が自分の欄だけを読む。 */
+type TpTranslateTarget =
+  | { type: 'question' | 'handoff'; task_id: string }
+  | { type: 'log_entry'; event_id: number }
+  | { type: 'memory_entry'; entry_id: number }
+  | { type: 'to_english' | 'back_translation'; text: string };
+type TpTranslateFn = (
+  target: TpTranslateTarget,
+  opts?: { signal?: AbortSignal },
+) => Promise<TpTranslation>;
+type TpTranslation =
+  | { status: 'loading' }
+  | { status: 'throttled' }
+  | { status: 'error'; message: string }
+  | {
+      status: 'translated';
+      purpose?: string;
+      items?: { title: string; detail?: string }[];
+      text?: string;
+      doc?: string;
+    };
+/** 流し読みの1行 —— LogEntry が受け取る形 + この画面が読む欄。 */
+type TpLogEntry = NonNullable<import('../design-system/components/board/LogEntry').LogEntryProps['entry']> & {
+  id: number;
+  taskId: string;
+  unread: boolean;
+  kind: 'completion' | 'decision';
+  handoffPresent: boolean;
+  workspace?: string | null;
+  pendingObjections?: string[];
+  bundledObjections?: string[];
+};
+/** scratchpad の1行(サーバが id を振る)。 */
+interface TpScratchLine {
+  id: number;
+  text: string;
+}
+
+function TpWaterline({ progress }: { progress: number }) {
   return (
     <div style={{ height: 2, background: 'var(--rock-2)', position: 'relative', borderRadius: 1 }}>
       <div style={{ position: 'absolute', inset: '0 auto 0 0', width: `${progress * 100}%`, background: 'var(--tide-4)', borderRadius: 1, transition: 'width var(--duration-slow) var(--ease-tidal)' }}></div>
@@ -11,7 +76,7 @@ function TpWaterline({ progress }) {
   );
 }
 
-function TpSegmentGauge({ total, filled }) {
+function TpSegmentGauge({ total, filled }: { total: number; filled: number }) {
   return (
     <div style={{ display: 'flex', gap: 5 }}>
       {Array.from({ length: total }).map((_, i) => (
@@ -30,7 +95,14 @@ function TpSegmentGauge({ total, filled }) {
 // line under each original — the options below never take a translated
 // variant (CONTEXT.md's scope exclusion: a mistranslated option is a
 // 30-second decision an agent reads back).
-function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
+function TpQuestionItemPicker({ item, value, locked, onChange, translated }: {
+  item: TpQuestionItem;
+  /** 未選択は null / undefined のどちらでも来る(呼び手は配列の添字)。 */
+  value?: string | null;
+  locked: boolean;
+  onChange: (value: string | null) => void;
+  translated?: { title: string; detail?: string } | null;
+}) {
   const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState('');
@@ -67,7 +139,7 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
         )}
         {locked ? null : override
           ? <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-              <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText(e.target.value)} style={{ flex: 1 }} />
+              <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText((e.target as HTMLInputElement).value)} style={{ flex: 1 }} />
               <Button variant="secondary" size="sm" disabled={!overrideText.trim()} onClick={() => { onChange(overrideText.trim()); setOverride(false); setOverrideText(''); }}>Set</Button>
             </div>
           : <button onClick={() => setOverride(true)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 'var(--text-xs)', cursor: 'pointer', textAlign: 'left', padding: '2px 0' }}>override with free text…</button>}
@@ -84,7 +156,12 @@ function TpQuestionItemPicker({ item, value, locked, onChange, translated }) {
 // the log skim passes one, along with `opts.onAbort` to unwind its own
 // bookkeeping when a not-yet-sent request is cancelled instead of folding
 // the cancellation into `setState` as a 5th state.
-function runTranslate(onTranslate, target, setState, opts) {
+function runTranslate(
+  onTranslate: TpTranslateFn,
+  target: TpTranslateTarget,
+  setState: (result: TpTranslation) => void,
+  opts?: { signal?: AbortSignal; onAbort?: () => void },
+) {
   setState({ status: 'loading' });
   onTranslate(target, opts && opts.signal ? { signal: opts.signal } : undefined)
     .then(setState)
@@ -100,7 +177,7 @@ function runTranslate(onTranslate, target, setState, opts) {
 // The non-'translated' states of a translation result (issue #47) — the
 // 'translated' state renders differently per caller (a string vs a
 // purpose+items bundle vs a doc), so callers render that one themselves.
-function TpTranslationNote({ result }) {
+function TpTranslationNote({ result }: { result: Exclude<TpTranslation, { status: 'translated' }> }) {
   if (result.status === 'loading') return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>…</span>;
   if (result.status === 'throttled') {
     return <span style={{ fontSize: 'var(--text-xs)', color: 'var(--sun-4)' }}>いまは usage limit で訳を添えられません — 原文のみ</span>;
@@ -124,22 +201,30 @@ function TpTranslationNote({ result }) {
 // render this same card. The question card's own toggle (one of the 3
 // switches ADR 0063's table enumerates): translates `purpose`/items'
 // title+detail, never the options an answer is picked from.
-function TpQuestionCard({ q, answer, onAnswer, locked, onTranslate }) {
+function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate }: {
+  q: TpQuestion;
+  /** 盤面が確定した回答 —— 未回答は null(呼び手は id 引きの map)。 */
+  answer?: string[] | null;
+  onAnswer: (answers: string[]) => void;
+  /** 回答済みのカードは選び直せない。 */
+  locked?: boolean;
+  onTranslate?: TpTranslateFn;
+}) {
   const { Card, AgentChip, Switch } = window.TidepoolDesignSystem_8a0ead;
   const items = q.items;
-  const [draft, setDraft] = React.useState(() => answer ?? items.map(() => null));
+  const [draft, setDraft] = React.useState<(string | null)[]>(() => answer ?? items.map(() => null));
   // a server-confirmed answer (locked) always wins over in-progress local picks
   React.useEffect(() => { if (answer) setDraft(answer); }, [answer]);
-  const setItemAnswer = (i, value) => {
+  const setItemAnswer = (i: number, value: string | null) => {
     const next = draft.slice();
     next[i] = value;
     setDraft(next);
-    if (next.every(Boolean)) onAnswer(next);
+    if (next.every(Boolean)) onAnswer(next as string[]);
   };
   const answeredCount = draft.filter(Boolean).length;
 
   const [translateOn, setTranslateOn] = React.useState(false);
-  const [translation, setTranslation] = React.useState(null);
+  const [translation, setTranslation] = React.useState<TpTranslation | null>(null);
   const translateRequested = React.useRef(false);
   React.useEffect(() => {
     if (!translateOn || !onTranslate || translateRequested.current) return;
@@ -190,7 +275,11 @@ function TpQuestionCard({ q, answer, onAnswer, locked, onTranslate }) {
 
 // Shared scratchpad — pain capture across all triage sections. Free text is
 // allowed here by design: human steering information is itself the payload.
-function TpScratchpad({ lines, onAdd, onRemove }) {
+function TpScratchpad({ lines, onAdd, onRemove }: {
+  lines: TpScratchLine[];
+  onAdd: (text: string) => void;
+  onRemove: (index: number) => void;
+}) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
   const [open, setOpen] = React.useState(false);
   const [draft, setDraft] = React.useState('');
@@ -221,7 +310,7 @@ function TpScratchpad({ lines, onAdd, onRemove }) {
             </div>
           ))}
           <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-            <Input multiline rows={1} placeholder="jot the irritation — triaged at commit" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
+            <Input multiline rows={1} placeholder="jot the irritation — triaged at commit" value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} style={{ flex: 1 }} />
             <Button variant="secondary" size="sm" disabled={!draft.trim()} onClick={add}>Add</Button>
           </div>
         </div>
@@ -256,7 +345,7 @@ const S_COMMIT = 4;
 // 済んでいるので、ここは描画だけ(ADR 0092 決定4)。"held" とは呼ばない —
 // CONTEXT.md の Held は祖先の未回答 question による導出状態で「question 自身は held の
 // 影響を受けない」と定義されており、同じ画面の `hold` 回答とも読み違えられる。
-const TP_LANDING_BLOCKED = {
+const TP_LANDING_BLOCKED: Record<string, string> = {
   attached_children: 'attached children unsettled',
   objections: 'objections await commit',
 };
@@ -271,12 +360,12 @@ const NO_WORKSPACE_LABEL = 'no workspace';
 // the server verdict rather than inferred as two sides of the cursor.
 //
 // Ordering inside a group is the entry's own id, which ascends with time.
-function groupLogEntries(entries) {
-  const byWorkspace = new Map();
+function groupLogEntries(entries: TpLogEntry[]) {
+  const byWorkspace = new Map<string, TpLogEntry[]>();
   entries.forEach((l) => {
     const key = l.workspace || '';
     if (!byWorkspace.has(key)) byWorkspace.set(key, []);
-    byWorkspace.get(key).push(l);
+    byWorkspace.get(key)!.push(l);
   });
   const groups = [...byWorkspace.entries()].map(([key, groupEntries]) => {
     const sorted = groupEntries.slice().sort((a, b) => a.id - b.id);
@@ -295,7 +384,7 @@ function groupLogEntries(entries) {
   });
   groups.sort((a, b) => {
     if ((a.unreadCount > 0) !== (b.unreadCount > 0)) return a.unreadCount > 0 ? -1 : 1;
-    return a.unreadCount > 0 ? b.mostRecentUnread - a.mostRecentUnread : b.mostRecent - a.mostRecent;
+    return a.unreadCount > 0 ? b.mostRecentUnread! - a.mostRecentUnread! : b.mostRecent - a.mostRecent;
   });
   return groups;
 }
@@ -303,15 +392,15 @@ function groupLogEntries(entries) {
 // Multiple objections on one entry render as a bullet list, matching the
 // server's own bundling (renderObjectionPairs in src/triage.ts); a single
 // objection keeps its original plain-text look (issue #251).
-const objectionBadge = (comments) =>
-  comments?.length > 1 ? comments.map((c) => `- ${c}`).join('\n') : comments?.[0];
+const objectionBadge = (comments?: string[] | null) =>
+  (comments?.length)! > 1 ? comments!.map((c) => `- ${c}`).join('\n') : comments?.[0];
 
 // The entry keys with a commit-pending objection (ADR 0085): the union of
 // this tab's own immediate reflection (`localObjections`, populated the
 // moment Object is tapped) and the server-delivered entries whose
 // objections already resolved as commit-pending. Shared by TriageScreen's
-// own nObjections and webui/app.jsx's commit summary — the same count.
-function commitPendingObjectionKeys(log, localObjections) {
+// own nObjections and webui/app.tsx's commit summary — the same count.
+function commitPendingObjectionKeys(log: TpLogEntry[], localObjections: Record<string, string[]>) {
   return new Set([
     ...Object.keys(localObjections),
     ...log.filter((l) => l.pendingObjections?.length).map((l) => String(l.id)),
@@ -322,8 +411,23 @@ function commitPendingObjectionKeys(log, localObjections) {
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
 // staged S3 queue, loadLanding re-reads the landing questions' answerability.
 // onCommit always closes the flow.
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
-function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }) {
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
+function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }: {
+  data: { questions: TpTriageQuestion[]; log: TpLogEntry[]; scratchpad?: TpScratchLine[] };
+  onCommit: (
+    answers: Record<string, string[]>,
+    objections: Record<string, string[]>,
+    scratch: { id: number; text: string; kind: string }[],
+  ) => void;
+  loadHandoff: (entry: TpLogEntry) => Promise<string>;
+  onAnswer: (q: TpTriageQuestion, answers: string[]) => Promise<void>;
+  onObject: (entry: TpLogEntry, comment: string) => Promise<void>;
+  onScratchAdd: (text: string) => Promise<TpScratchLine>;
+  onDisplayed: (entries: TpLogEntry[]) => void;
+  loadPreview: () => Promise<QueueScreenTask[]>;
+  loadLanding: () => Promise<Record<string, { blocked_by: string | null }>>;
+  onTranslate?: TpTranslateFn;
+}) {
   const { Button, Input, LogEntry, Switch } = window.TidepoolDesignSystem_8a0ead;
   // 着地 question(`landing` を持つ行)は merge 判断ステップの持ち物 — 先頭の質問
   // ステップが数えるのも描くのも一般 question だけ(ADR 0092 決定4)
@@ -332,36 +436,36 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   const nQuestions = generalQuestions.length;
   // no questions overnight → the flow still exists for the log skim; start at the log
   const [section, setSection] = React.useState(nQuestions ? S_QUESTIONS : S_LOG);
-  const [answers, setAnswers] = React.useState({});
-  const [objections, setObjections] = React.useState({});
-  const [objecting, setObjecting] = React.useState(null);
+  const [answers, setAnswers] = React.useState<Record<string, string[]>>({});
+  const [objections, setObjections] = React.useState<Record<string, string[]>>({});
+  const [objecting, setObjecting] = React.useState<number | null>(null);
   const [draft, setDraft] = React.useState('');
   const [scratch, setScratch] = React.useState(data.scratchpad ?? []); // [{ id, text }]
-  const [dropped, setDropped] = React.useState([]);       // persisted lines removed in-UI → discard at commit
-  const [scratchKinds, setScratchKinds] = React.useState({}); // keyed by line id
-  const [preview, setPreview] = React.useState(null);
-  // data.questions はフロー1回分の凍結 snapshot(webui/app.jsx の refresh)なので、
+  const [dropped, setDropped] = React.useState<TpScratchLine[]>([]);       // persisted lines removed in-UI → discard at commit
+  const [scratchKinds, setScratchKinds] = React.useState<Record<number, string>>({}); // keyed by line id
+  const [preview, setPreview] = React.useState<QueueScreenTask[] | null>(null);
+  // data.questions はフロー1回分の凍結 snapshot(webui/app.tsx の refresh)なので、
   // 流し読みで打った異議はそこに映らない。merge 判断に入る瞬間に盤面へ回答可否を
   // 訊き直す — 判定は盤面側のまま、UI は今の答えを引くだけ(ADR 0092 決定4/決定5)。
-  const [landingNow, setLandingNow] = React.useState(null); // { [questionId]: { blocked_by } }
+  const [landingNow, setLandingNow] = React.useState<Record<string, { blocked_by: string | null }> | null>(null); // { [questionId]: { blocked_by } }
 
   // live answers are one-way: a persisted answer cannot be untapped or replaced
-  const answerQ = async (q, a) => {
+  const answerQ = async (q: TpTriageQuestion, a: string[] | null) => {
     if (!a || answers[q.id]) return;
     try { await onAnswer(q, a); } catch { return; }
     setAnswers((prev) => ({ ...prev, [q.id]: a }));
   };
 
-  const addScratch = async (text) => {
-    let entry;
+  const addScratch = async (text: string) => {
+    let entry: TpScratchLine;
     try { entry = await onScratchAdd(text); } catch { return; }
     setScratch((prev) => [...prev, entry]);
   };
-  const removeScratch = (i) => {
+  const removeScratch = (i: number) => {
     const entry = scratch[i];
     setScratch((prev) => prev.filter((_, j) => j !== i));
     // a server-persisted line cannot be unwritten — it is dispositioned as discard at commit
-    setDropped((prev) => [...prev, entry]);
+    setDropped((prev) => [...prev, entry!]);
   };
 
   React.useEffect(() => {
@@ -373,19 +477,19 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // "displayed" is an event: the objection-rate denominator counts only what
   // was actually put in front of the human — an entry reports once it is
   // genuinely in the viewport, not merely because the skim section mounted
-  const logListRef = React.useRef(null);
-  const displayedSeen = React.useRef(new Set());
+  const logListRef = React.useRef<HTMLDivElement | null>(null);
+  const displayedSeen = React.useRef(new Set<string>());
   React.useEffect(() => {
     if (section !== S_LOG || !logListRef.current) return;
     const byId = new Map(data.log.filter((l) => l.unread).map((l) => [String(l.id), l]));
     const io = new IntersectionObserver((observed) => {
-      const shown = [];
+      const shown: TpLogEntry[] = [];
       for (const o of observed) {
         if (!o.isIntersecting) continue;
-        const id = o.target.dataset.entryId;
+        const id = (o.target as HTMLElement).dataset.entryId!;
         if (byId.has(id) && !displayedSeen.current.has(id)) {
           displayedSeen.current.add(id);
-          shown.push(byId.get(id));
+          shown.push(byId.get(id)!);
         }
       }
       if (shown.length) onDisplayed(shown);
@@ -404,7 +508,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // the section-wide toggle below flips it into view — the one control that
   // makes every workspace reachable; its own read entries still fold same as
   // any other group's, one more tap away.
-  const [revealedRead, setRevealedRead] = React.useState({});
+  const [revealedRead, setRevealedRead] = React.useState<Record<string, number>>({});
   const [showFullyReadWorkspaces, setShowFullyReadWorkspaces] = React.useState(false);
   const allLogGroups = React.useMemo(() => groupLogEntries(data.log), [data.log]);
   const fullyReadGroups = allLogGroups.filter((g) => g.unreadCount === 0);
@@ -424,10 +528,10 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // exactly what the two .map calls below actually paint (visible-read +
   // unread, per group).
   const [logTranslateOn, setLogTranslateOn] = React.useState(false);
-  const [logTranslations, setLogTranslations] = React.useState({});
-  const logTranslateRequested = React.useRef(new Set());
+  const [logTranslations, setLogTranslations] = React.useState<Record<number, TpTranslation>>({});
+  const logTranslateRequested = React.useRef(new Set<number>());
   const renderedLogEntries = React.useMemo(() => {
-    const rendered = [];
+    const rendered: TpLogEntry[] = [];
     for (const g of logGroups) {
       const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
       const hiddenCount = g.readCount - revealed;
@@ -450,7 +554,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // not. The fanout effect below reads the current controller via a ref and
   // carries no cleanup of its own — re-running it on a re-render is harmless
   // (it just skips already-requested keys).
-  const logTranslateAbort = React.useRef(null);
+  const logTranslateAbort = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
     if (!logTranslateOn) return;
     const controller = new AbortController();
@@ -464,7 +568,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // re-requests it and the row stays on 'loading' forever.
   React.useEffect(() => {
     if (!logTranslateOn || !onTranslate) return;
-    const signal = logTranslateAbort.current.signal;
+    const signal = logTranslateAbort.current!.signal;
     for (const entry of renderedLogEntries) {
       const k = entry.id;
       if (logTranslateRequested.current.has(k)) continue;
@@ -509,7 +613,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // `<main class="tp-scroll">` (public/index.html) is the actual scrolling
   // element — this list's own div is just a layout container inside it.
   const scrollContainer = () => logListRef.current && logListRef.current.closest('.tp-scroll');
-  const pendingScrollFix = React.useRef(null);
+  const pendingScrollFix = React.useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
   React.useLayoutEffect(() => {
     const fix = pendingScrollFix.current;
     pendingScrollFix.current = null;
@@ -517,23 +621,23 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     if (!fix || !container) return;
     container.scrollTop = fix.scrollTop + (container.scrollHeight - fix.scrollHeight);
   });
-  const expandRead = (groupKey) => {
+  const expandRead = (groupKey: string) => {
     const container = scrollContainer();
     pendingScrollFix.current = container
       ? { scrollTop: container.scrollTop, scrollHeight: container.scrollHeight }
       : null;
     setRevealedRead((prev) => ({ ...prev, [groupKey]: (prev[groupKey] || 0) + LOG_READ_BATCH }));
   };
-  const [handoffOpen, setHandoffOpen] = React.useState({});
-  const handoffCache = React.useRef({});
+  const [handoffOpen, setHandoffOpen] = React.useState<Record<number, boolean>>({});
+  const handoffCache = React.useRef<Record<number, string>>({});
   // the handoff expansion's own toggle (one of the 3 switches ADR 0063's
   // table enumerates, issue #47) — one instance per expanded entry (its own
   // on/off + cached result), keyed the same as handoffOpen.
-  const [handoffTranslateOn, setHandoffTranslateOn] = React.useState({});
-  const [handoffTranslations, setHandoffTranslations] = React.useState({});
-  const handoffTranslateRequested = React.useRef(new Set());
-  const toggleObjecting = (k) => { setObjecting(objecting === k ? null : k); setDraft(''); };
-  const toggleHandoff = async (k, entry) => {
+  const [handoffTranslateOn, setHandoffTranslateOn] = React.useState<Record<number, boolean>>({});
+  const [handoffTranslations, setHandoffTranslations] = React.useState<Record<number, TpTranslation>>({});
+  const handoffTranslateRequested = React.useRef(new Set<number>());
+  const toggleObjecting = (k: number) => { setObjecting(objecting === k ? null : k); setDraft(''); };
+  const toggleHandoff = async (k: number, entry: TpLogEntry) => {
     if (handoffOpen[k]) { setHandoffOpen((prev) => ({ ...prev, [k]: false })); return; }
     if (handoffCache.current[k] == null) {
       try {
@@ -544,7 +648,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     }
     setHandoffOpen((prev) => ({ ...prev, [k]: true }));
   };
-  const setHandoffTranslate = (k, entry, next) => {
+  const setHandoffTranslate = (k: number, entry: TpLogEntry, next: boolean) => {
     setHandoffTranslateOn((prev) => ({ ...prev, [k]: next }));
     if (!next || !onTranslate || handoffTranslateRequested.current.has(k)) return;
     handoffTranslateRequested.current.add(k);
@@ -557,7 +661,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   const progress = (section + (section === S_QUESTIONS ? answered / Math.max(1, nQuestions) : 0)) / (S_COMMIT + 1);
   // 回答可否は盤面が言う(`landing.blocked_by`)。merge 判断に入ったときの読み直しが
   // あればそれを、無ければ凍結 snapshot の注釈を使う。回答済みは locked のまま残す。
-  const landingBlockOf = (q) => (landingNow?.[q.id] ?? q.landing).blocked_by;
+  const landingBlockOf = (q: TpTriageQuestion) => (landingNow?.[q.id] ?? q.landing)!.blocked_by;
   const landingReady = landingQuestions.filter((q) => answers[q.id] || landingBlockOf(q) === null);
   const landingBlocked = landingQuestions.filter((q) => !answers[q.id] && landingBlockOf(q) !== null);
 
@@ -570,7 +674,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   ];
   // 段数の出所は S_COMMIT ひとつ — ラベルに番号を焼き込むと段を足すたびに全部書き直す
   const heads = steps.map((head, i) => ({ ...head, step: `${i + 1} / ${S_COMMIT + 1} — ${head.step}` }));
-  const cur = heads[section];
+  const cur = heads[section]!;
   const scratchResolved = () => [
     ...scratch.map((s) => ({ id: s.id, text: s.text, kind: scratchKinds[s.id] || 'task' })),
     ...dropped.map((s) => ({ id: s.id, text: s.text, kind: 'discard' })),
@@ -597,7 +701,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
       {section === S_LOG && (() => {
         // renders one entry row + its handoff/objection expansion — shared by
         // every group's revealed-read and unread rows below
-        const renderLogRow = (l) => {
+        const renderLogRow = (l: TpLogEntry) => {
           const k = l.id;
           const hasHandoff = l.kind === 'completion' && l.handoffPresent;
           return (
@@ -645,7 +749,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
               )}
               {objecting === k && (
                 <div style={{ padding: '10px 12px', background: 'var(--coral-1)', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                  <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
+                  <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} style={{ flex: 1 }} />
                   <Button variant="danger" size="sm" disabled={!draft.trim()} onClick={async () => {
                     // the annotation is persisted the moment it is raised
                     try { await onObject(l, draft); } catch { return; }

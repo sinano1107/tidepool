@@ -2,14 +2,27 @@
 // the workspace / agent / profile create forms — the name becomes a directory
 // or a file name in the registry, so the three share one rule. It drives the
 // disabled state only; the server's assertValid*Name stays the authority.
-function registryNameOk(name) {
+/** 設定面が扱う形 —— レジストリの record はサーバ JSON そのままで、集合ごとの型の
+ *  移送は issue #352 が持つ。
+ *
+ *  面全体で編集中のカードは高々1枚(issue #204 決定4)。その1枠を配る口。 */
+interface SettingsEditSlot {
+  isOpen: (id: string) => boolean;
+  /** `prime` は下書きを record から満たす。parked なら人間が答えるまで走らない。 */
+  open: (id: string, prime?: () => void) => boolean;
+  close: () => void;
+  requestClose: () => boolean;
+  setDirty: (dirty: boolean) => void;
+}
+
+function registryNameOk(name: string) {
   const v = name.trim();
   return /^[A-Za-z0-9._-]+$/.test(v) && !['.', '..'].includes(v);
 }
 
 // ADR 0018 の規約(基点 + 名前)を表示のために合成する。ADR 0082 決定1: 解決その
 // ものは server 側の1点に残り、ここは「その1本の規約を読み上げる」だけである。
-function landingPath(baseDir, name) {
+function landingPath(baseDir: { path: string }, name: string) {
   return `${baseDir.path.replace(/\/+$/, '')}/${name.trim()}`;
 }
 
@@ -17,7 +30,11 @@ function landingPath(baseDir, name) {
 // right while viewing. At most one card on the settings surface is in edit mode
 // at a time, so the button asks the screen for that slot rather than flipping
 // local state.
-function RecordCardHead({ children, editing, onEdit }) {
+function RecordCardHead({ children, editing, onEdit }: {
+  children: React.ReactNode;
+  editing: boolean;
+  onEdit?: () => void;
+}) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 26 }}>
@@ -34,7 +51,14 @@ function RecordCardHead({ children, editing, onEdit }) {
 // Every edit and create form on the settings surface ends the same way (issue
 // #204 決定6): Save always present but inert until the draft is both changed
 // and sendable, Cancel always available so an opened card is never a trap.
-function EditActions({ dirty = true, ok = true, busy, saveLabel, onSave, onCancel }) {
+function EditActions({ dirty = true, ok = true, busy, saveLabel, onSave, onCancel }: {
+  dirty?: boolean;
+  ok?: boolean;
+  busy: boolean;
+  saveLabel: string;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   return (
     <React.Fragment>
@@ -49,7 +73,7 @@ function EditActions({ dirty = true, ok = true, busy, saveLabel, onSave, onCance
 // Keeps the screen's single edit slot informed of this card's draft state, so
 // anything that would leave it — another card, a back, a tab switch — can ask
 // before discarding (issue #204 決定4).
-function useDirtySignal(edit, open, dirty) {
+function useDirtySignal(edit: SettingsEditSlot, open: boolean, dirty: boolean) {
   React.useEffect(() => { if (open) edit.setDirty(dirty); }, [open, dirty]);
 }
 
@@ -61,6 +85,12 @@ function FreeEntryAllowlistInput({
   label = 'Review allowed commands',
   description = 'command prefixes a review session in this workspace may run beyond the read-only default. Empty means review stays read-only (confirmed on save if non-empty).',
   placeholder = 'command prefix — e.g. "npm test"',
+}: {
+  values: string[];
+  onChange: (values: string[]) => void;
+  label?: string;
+  description?: string;
+  placeholder?: string;
 }) {
   const { Input, Button, Tag } = window.TidepoolDesignSystem_8a0ead;
   const [free, setFree] = React.useState('');
@@ -90,7 +120,7 @@ function FreeEntryAllowlistInput({
       )}
       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
-          <Input value={free} mono onChange={(e) => { setFree(e.target.value); }}
+          <Input value={free} mono onChange={(e) => { setFree((e.target as HTMLInputElement).value); }}
             placeholder={placeholder} />
         </div>
         <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
@@ -104,7 +134,11 @@ function FreeEntryAllowlistInput({
 // widens nothing an agent may do — and the destination being a URL the human
 // types every time is itself the shape of consent. The board creates nothing
 // on GitHub: the repository is one the human prepared and invited the bot to.
-function PublishWorkspace({ ws, say, onPublished }) {
+function PublishWorkspace({ ws, say, onPublished }: {
+  ws: ServerJson;
+  say: AppSay;
+  onPublished: () => Promise<void> | void;
+}) {
   const { Button, Input } = window.TidepoolDesignSystem_8a0ead;
   const [repo, setRepo] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -120,7 +154,7 @@ function PublishWorkspace({ ws, say, onPublished }) {
       // a failed publish leaves no trace (the board rolls its own `remote add`
       // back), so "fix the cause and press it again" is honest — the refusal's
       // message already carries the one-line repair when it is an access one
-      say('danger', 'publish failed — nothing landed, safe to retry', String(err.message || err));
+      say('danger', 'publish failed — nothing landed, safe to retry', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -132,7 +166,7 @@ function PublishWorkspace({ ws, say, onPublished }) {
         give this purely-local workspace a remote source of truth — every branch is pushed to an
         empty repository you created and invited the bot to. The board creates nothing on GitHub.
       </p>
-      <Input value={repo} onChange={(e) => setRepo(e.target.value)}
+      <Input value={repo} onChange={(e) => setRepo((e.target as HTMLInputElement).value)}
         placeholder="the destination repository URL — must be empty" />
       <Button variant="secondary" size="sm" disabled={busy || !repo.trim()} onClick={submit}>
         Publish — pushes every branch, then commits to the registry
@@ -146,7 +180,13 @@ function PublishWorkspace({ ws, say, onPublished }) {
 // no longer PATCHes the moment it is touched. path/repo/branch re-point the
 // entry at a different checkout, which stays a manual registry edit, so they
 // are shown but never editable here.
-function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
+function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
+  ws: ServerJson;
+  baseDir: ServerJson;
+  say: AppSay;
+  onChanged: () => Promise<void>;
+  edit: SettingsEditSlot;
+}) {
   const { Card, FieldRow, Input, Switch, Tag } = window.TidepoolDesignSystem_8a0ead;
   // ADR 0066 決定2: publish は編集ではなく状態遷移なので、Edit の下書きには入らない
   // — purely-local な workspace だけがこの扉を持ち、registry clone 自身は持たない
@@ -174,7 +214,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
   // untouched fields must stay absent for pure-payload confirmation judgment
   // (ADR 0061 決定2 / ADR 0072).
   const save = () => {
-    const body = { notes: notes.trim() };
+    const body: ServerJson = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
@@ -215,7 +255,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }) {
       )}
       {open && (
         <React.Fragment>
-          <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
+          <Input label="Notes" value={notes} onChange={(e) => setNotes((e.target as HTMLInputElement).value)}
             placeholder="setup hints for humans — e.g. run npm install before first use" />
           {/* the board's own registry clone never offers the off position —
               the server refuses it too (ADR 0013), this just keeps the UI honest */}
@@ -245,7 +285,7 @@ const AGENT_ICON_LAND = ['🦦', '🐕', '🐈', '🦊', '🐻', '🐼', '🐨',
 // "加えて任意の絵文字の自由入力欄") — #52's loader already enforces the
 // single-Twemoji-grapheme shape server-side, so this stays a plain text
 // field rather than duplicating that check in the browser.
-function AgentIconPicker({ value, onChange }) {
+function AgentIconPicker({ value, onChange }: { value?: string; onChange: (icon: string) => void }) {
   const { Input } = window.TidepoolDesignSystem_8a0ead;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -265,7 +305,7 @@ function AgentIconPicker({ value, onChange }) {
           </button>
         ))}
       </div>
-      <Input label="Custom icon" value={value ?? ''} onChange={(e) => onChange(e.target.value)}
+      <Input label="Custom icon" value={value ?? ''} onChange={(e) => onChange((e.target as HTMLInputElement).value)}
         placeholder="paste any single emoji, or pick one above" />
     </div>
   );
@@ -275,7 +315,26 @@ function AgentIconPicker({ value, onChange }) {
 // UpdateAgentInput), pulled off a record as one draft. `name` is absent on
 // purpose: it is the file name, offered at creation and never editable
 // afterwards (parent issue #54).
-function agentDraftOf(agent) {
+/** 編集・作成が出し入れするエージェントの下書き(agent-create.ts の
+ *  UpdateAgentInput)。`name` はファイル名なので入っていない(親 issue #54)。 */
+interface AgentDraft {
+  icon: string;
+  description: string;
+  systemPrompt: string;
+  authority: string;
+  provider: string;
+  tier: string;
+  advisor: boolean;
+  skills: string[];
+}
+type AgentDraftValue = AgentDraft[keyof AgentDraft];
+/** Select が受け取る選択肢(サーバが返す value+label)。 */
+interface SettingsOption {
+  value: string;
+  label: string;
+}
+
+function agentDraftOf(agent: ServerJson): AgentDraft {
   return {
     icon: agent.icon ?? '', description: agent.description ?? '',
     systemPrompt: agent.systemPrompt ?? '', authority: agent.authority ?? '',
@@ -289,14 +348,14 @@ function agentDraftOf(agent) {
 // ADR 0025 決定7 / issue #106: the default agent (tako) is ["@workspace"], so a
 // new agent starts there too — a visible field, not a hidden default: the
 // author sees it and edits it before creating.
-const NEW_AGENT_DRAFT = {
+const NEW_AGENT_DRAFT: AgentDraft = {
   icon: '', description: '', systemPrompt: '', authority: '',
   provider: '', tier: '', advisor: false, skills: ['@workspace'],
 };
 
 // The API body those fields make. The optional ones drop out when blank, so a
 // cleared field round-trips to absent rather than to an empty string.
-function agentBody(d) {
+function agentBody(d: AgentDraft) {
   return {
     authority: d.authority,
     description: d.description.trim(),
@@ -312,7 +371,7 @@ function agentBody(d) {
 // Whether the draft differs from what it was primed with. The skills
 // comparison is order-sensitive (sameStrings, matching the server's no-op
 // detection) — a reorder is a real edit.
-function agentDraftDirty(d, base) {
+function agentDraftDirty(d: AgentDraft, base: AgentDraft) {
   return d.icon !== base.icon
     || d.description.trim() !== base.description
     || d.systemPrompt !== base.systemPrompt
@@ -344,20 +403,27 @@ const TIER_OPTIONS = [
 
 // Those fields as controls, shared by the record card and the create form so
 // the two never drift — the agent analogue of ProfileFields.
-function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }) {
+function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }: {
+  draft: AgentDraft;
+  set: (key: keyof AgentDraft, value: AgentDraftValue) => void;
+  authorityOptions: SettingsOption[];
+  providerOptions: SettingsOption[];
+  hostSkills: string[];
+  hostSkillsDegraded: boolean;
+}) {
   const { Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return (
     <React.Fragment>
       <AgentIconPicker value={draft.icon} onChange={(v) => set('icon', v)} />
-      <Input label="Description" value={draft.description} onChange={(e) => set('description', e.target.value)}
+      <Input label="Description" value={draft.description} onChange={(e) => set('description', (e.target as HTMLInputElement).value)}
         placeholder="when a delegating agent should pick this one" />
       <Input label="Specialty — persona, perspective, or this agent's own steps (optional; the worker protocol itself is injected separately, not written here)"
-        multiline rows={4} value={draft.systemPrompt} onChange={(e) => set('systemPrompt', e.target.value)} />
+        multiline rows={4} value={draft.systemPrompt} onChange={(e) => set('systemPrompt', (e.target as HTMLInputElement).value)} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', e.target.value)} />
-        <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', e.target.value)} />
+        <Select label="Authority" options={authorityOptions} value={draft.authority} onChange={(e) => set('authority', (e.target as HTMLInputElement).value)} />
+        <Select label="Provider" options={[PROVIDER_PLACEHOLDER, ...providerOptions]} value={draft.provider} onChange={(e) => set('provider', (e.target as HTMLInputElement).value)} />
       </div>
-      <Select label="Default tier" options={TIER_OPTIONS} value={draft.tier} onChange={(e) => set('tier', e.target.value)} />
+      <Select label="Default tier" options={TIER_OPTIONS} value={draft.tier} onChange={(e) => set('tier', (e.target as HTMLInputElement).value)} />
       <Checkbox testId="agent-advisor" label="advisor — this agent may consult a stronger model at decision points"
         checked={draft.advisor} onChange={() => set('advisor', !draft.advisor)} />
       <SkillListInput candidates={hostSkills} degraded={hostSkillsDegraded} values={draft.skills} onChange={(v) => set('skills', v)} />
@@ -369,13 +435,22 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
 // WorkspaceRecord's twin: read-only until Edit, and then the draft above,
 // prefilled from the GET /api/agents list. `name` is shown via AgentChip only —
 // renaming isn't offered here at all (it's the file name, parent issue #54).
-function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onChanged, edit }) {
+function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
+  agent: ServerJson;
+  authorityProfiles: ServerJson[];
+  providerOptions: SettingsOption[];
+  hostSkills: string[];
+  hostSkillsDegraded: boolean;
+  say: AppSay;
+  onChanged: () => Promise<void>;
+  edit: SettingsEditSlot;
+}) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const { AgentChip } = window.TidepoolDesignSystem_8a0ead;
   const id = `agent:${agent.name}`;
   const open = edit.isOpen(id);
   const [draft, setDraft] = React.useState(() => agentDraftOf(agent));
-  const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
+  const set = (key: keyof AgentDraft, value: AgentDraftValue) => setDraft((d) => ({ ...d, [key]: value }) as AgentDraft);
   const [busy, setBusy] = React.useState(false);
 
   const dirty = agentDraftDirty(draft, agentDraftOf(agent));
@@ -392,7 +467,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
       edit.close();
       await onChanged();
     } catch (err) {
-      say('danger', 'agent update failed', String(err.message || err));
+      say('danger', 'agent update failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -451,7 +526,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
 // single-sourced on the server (ADR 0027). An unrecognized code (server added
 // a reason the WebUI hasn't caught up to) falls back to the raw string rather
 // than being dropped — see DANGEROUS_REASON_LABEL[r] ?? r below.
-const DANGEROUS_REASON_LABEL = {
+const DANGEROUS_REASON_LABEL: Record<string, string> = {
   merge_auto_if_ci_green:
     'Merge is auto_if_ci_green — a PR under this authority merges unattended once CI is green, with no human in the loop.',
   assignable_to_wildcard:
@@ -471,7 +546,7 @@ const DANGEROUS_REASON_LABEL = {
 // なので、CONTEXT.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
 // 「確認は WebUI 専用」がこの族まで及ぶと読める)。訳すだけという性質は同じで、
 // 判定はサーバ単一正本(ADR 0027)。
-const LIVE_CHECKOUT_SIGNAL_LABEL = {
+const LIVE_CHECKOUT_SIGNAL_LABEL: Record<string, string> = {
   uncommitted_changes:
     'The checkout has uncommitted changes or untracked files — someone is working in this tree right now.',
   worktree_unreadable:
@@ -495,7 +570,7 @@ const MERGE_OPTIONS = [
 // Order-sensitive content equality — the profile save payload's arrays compare
 // by contents, not reference (mirrors profile-create.ts's sameStringArray so
 // the edit card's dirty flag and the server's no-op detection agree).
-function sameStrings(a, b) {
+function sameStrings(a: string[], b: string[]) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
@@ -507,7 +582,14 @@ function sameStrings(a, b) {
 // judgment is left to the save-time dialog. Values already on the profile are
 // shown even when absent from `candidates` (an entry can outlive the agent or
 // workspace it named) — the picker only constrains what you can newly add.
-function ProfileListInput({ label, hint, candidates, wildcardHint, values, onChange }) {
+function ProfileListInput({ label, hint, candidates, wildcardHint, values, onChange }: {
+  label: string;
+  hint?: string;
+  candidates: string[];
+  wildcardHint: string;
+  values: string[];
+  onChange: (values: string[]) => void;
+}) {
   const { Select, Tag } = window.TidepoolDesignSystem_8a0ead;
   // the wildcard is an addable option too — the placeholder must count it, or
   // it reads "no more to add" while `*` still sits selectable below
@@ -518,7 +600,7 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
     ...addable.map((c) => ({ value: c, label: c })),
     ...(wildcardAddable ? [{ value: '*', label: `* — ${wildcardHint}` }] : []),
   ];
-  const pick = (e) => { if (e.target.value) onChange([...values, e.target.value]); };
+  const pick = (e: React.ChangeEvent) => { if ((e.target as HTMLInputElement).value) onChange([...values, (e.target as HTMLInputElement).value]); };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -552,7 +634,7 @@ function ProfileListInput({ label, hint, candidates, wildcardHint, values, onCha
 // assertValidSkillAllowlist stays the authority; this only spares the round
 // trip on the two mistakes that are obvious at input time. Returns an error
 // string, or null when the entry may be added.
-function skillAddError(entry, existing) {
+function skillAddError(entry: string, existing: string[]) {
   const v = entry.trim();
   if (!v) return 'empty skill name';
   if (existing.includes(v)) return 'already added';
@@ -574,10 +656,15 @@ function skillAddError(entry, existing) {
 // scope words and the "*" wildcard are this component's own additions. When the
 // enumeration degraded, `degraded` shows a one-line note — the scope words and
 // free entry still work, so the picker never hard-fails.
-function SkillListInput({ candidates, degraded, values, onChange }) {
+function SkillListInput({ candidates, degraded, values, onChange }: {
+  candidates: string[];
+  degraded: boolean;
+  values: string[];
+  onChange: (values: string[]) => void;
+}) {
   const { Input, Button, Select, Tag } = window.TidepoolDesignSystem_8a0ead;
   const [free, setFree] = React.useState('');
-  const [freeError, setFreeError] = React.useState(null);
+  const [freeError, setFreeError] = React.useState<string | null>(null);
   // scope words first, then the enumerated @host skills, then the bare wildcard
   // — offer only entries the grammar would currently accept (this drops "*"
   // once anything else is selected, drops everything once "*" is, and hides
@@ -589,7 +676,7 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
     { value: '', label: offerable.length ? 'add a scope or skill…' : 'no more to add' },
     ...offerable.map((c) => ({ value: c, label: c === '*' ? '* — every skill' : c })),
   ];
-  const pick = (e) => { if (e.target.value) onChange([...values, e.target.value]); };
+  const pick = (e: React.ChangeEvent) => { if ((e.target as HTMLInputElement).value) onChange([...values, (e.target as HTMLInputElement).value]); };
   const addFree = () => {
     const err = skillAddError(free, values);
     if (err) { setFreeError(err); return; }
@@ -624,7 +711,7 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
       <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
         <div style={{ flex: 1 }}>
           <Input value={free} mono error={freeError || undefined}
-            onChange={(e) => { setFree(e.target.value); setFreeError(null); }}
+            onChange={(e) => { setFree((e.target as HTMLInputElement).value); setFreeError(null); }}
             placeholder='free entry — e.g. a workspace skill name or "plugin-name:*"' />
         </div>
         <Button variant="secondary" disabled={!free.trim()} onClick={addFree}>Add</Button>
@@ -636,12 +723,23 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
 // The four editable profile fields, shared by the edit card and the create
 // form so the two never drift (the profile analogue of the duplication the
 // agent card and its create form carry field-by-field).
-function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assignableTo, setAssignableTo, allowedWorkspaces, setAllowedWorkspaces, merge, setMerge }) {
+function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assignableTo, setAssignableTo, allowedWorkspaces, setAllowedWorkspaces, merge, setMerge }: {
+  agentNames: string[];
+  workspaceNames: string[];
+  guidance: string;
+  setGuidance: (guidance: string) => void;
+  assignableTo: string[];
+  setAssignableTo: (names: string[]) => void;
+  allowedWorkspaces: string[];
+  setAllowedWorkspaces: (names: string[]) => void;
+  merge: string;
+  setMerge: (merge: string) => void;
+}) {
   const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return (
     <React.Fragment>
       <Input label="Guidance — prose injected into the agent's system prompt at spawn"
-        multiline rows={4} value={guidance} onChange={(e) => setGuidance(e.target.value)}
+        multiline rows={4} value={guidance} onChange={(e) => setGuidance((e.target as HTMLInputElement).value)}
         hint={'name the act you want stopped — offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, or in a protected workspace — never in a flag, which declares rather than gates'}
         placeholder="how an agent carrying this authority should act" />
       <ProfileListInput label="Assignable to"
@@ -653,7 +751,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
         hint={'which workspaces this authority may act in — pick a registered workspace, or "*" for every one (confirmed on save)'}
         candidates={workspaceNames} wildcardHint="every workspace"
         values={allowedWorkspaces} onChange={setAllowedWorkspaces} />
-      <Select label="Merge authority" options={MERGE_OPTIONS} value={merge} onChange={(e) => setMerge(e.target.value)} />
+      <Select label="Merge authority" options={MERGE_OPTIONS} value={merge} onChange={(e) => setMerge((e.target as HTMLInputElement).value)} />
     </React.Fragment>
   );
 }
@@ -666,7 +764,20 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
 // confirmation can buy (referenced by unsettled tasks, the board's default, the
 // registry clone itself); it lands on the ordinary failure toast, whose message
 // already spells out the count / agent names the server counted.
-function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
+/** 削除カードが読む section の欄だけ(SECTIONS の1エントリが構造的に満たす)。 */
+interface SettingsSectionDelete {
+  singular: string;
+  deleteNote: string;
+  deleteLead: string;
+  deleteDetail?: (result: ServerJson, name: string) => string;
+}
+function DeleteRecord({ section, sectionKey, name, say, onDeleted }: {
+  section: SettingsSectionDelete;
+  sectionKey: string;
+  name: string;
+  say: AppSay;
+  onDeleted: (result: ServerJson) => Promise<void> | void;
+}) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const { busy, save, dialog } = useDangerousSave(say, onDeleted, {
     noun: section.singular,
@@ -708,12 +819,29 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
 // workspaces — ADR 0061 決定1 kept the workspace door's existing flag name
 // rather than adding a second boolean). Returns the busy flag, the save
 // entrypoint, and the dialog element the caller renders inline.
-function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = 'dangerous_values', labels = DANGEROUS_REASON_LABEL }) {
+/** 409 confirm_required を開く扉ごとの文言と旗の名前。 */
+interface DangerousSaveOptions {
+  noun: string;
+  confirmKey: string;
+  dialogTitle: string;
+  dialogLead: string;
+  successDetail?: (result: ServerJson, name: string) => string;
+  confirmLabel?: string;
+  dialogNote?: (detail: ServerJson) => React.ReactNode;
+  failDetail?: string;
+  reasonsKey?: string;
+  labels?: Record<string, string>;
+}
+function useDangerousSave(
+  say: AppSay,
+  onDone: (result: ServerJson) => Promise<void> | void,
+  { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = 'dangerous_values', labels = DANGEROUS_REASON_LABEL }: DangerousSaveOptions,
+) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
-  const [confirm, setConfirm] = React.useState(null); // { reasons, detail, resend } | null while safe
-  const save = async (path, method, body, verb, name) => {
-    const attempt = async (confirmed) => {
+  const [confirm, setConfirm] = React.useState<{ reasons: string[]; detail: ServerJson; resend: () => void } | null>(null); // null while safe
+  const save = async (path: string, method: string, body: ServerJson, verb: string, name: string) => {
+    const attempt = async (confirmed: boolean) => {
       setBusy(true);
       try {
         // 応答は捨てない: workspace の削除だけは「残る checkout の場所」を
@@ -726,13 +854,13 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
         // the #77 confirmation 409 is distinguished from any other failure
         // (bad input, a push that never landed — ADR 0052 決定1) by its
         // confirm_required flag — only that one opens the dialog for a resend
-        if (err.status === 409 && err.detail?.confirm_required) {
+        if (err instanceof ApiError && err.status === 409 && err.detail?.confirm_required) {
           setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
         } else {
           setConfirm(null);
           // `not ${verb}` であって `${verb} failed` ではない — verb は過去分詞
           // (added / deleted / updated)なので、後者は「workspace added failed」に崩れる
-          say('danger', `${noun} not ${verb}${failDetail ? ` — ${failDetail}` : ''}`, String(err.message || err));
+          say('danger', `${noun} not ${verb}${failDetail ? ` — ${failDetail}` : ''}`, String((err as Error).message || err));
         }
       }
       setBusy(false);
@@ -749,7 +877,7 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
       }>
       <p style={{ margin: '0 0 8px', fontSize: 'var(--text-sm)' }}>{dialogLead}</p>
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)', display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {(confirm?.reasons ?? []).map((r) => (
+        {(confirm?.reasons ?? []).map((r: string) => (
           <li key={r}>{labels[r] ?? r}</li>
         ))}
       </ul>
@@ -761,7 +889,7 @@ function useDangerousSave(say, onDone, { noun, confirmKey, dialogTitle, dialogLe
   return { busy, save, dialog };
 }
 
-function useProfileSave(say, onDone) {
+function useProfileSave(say: AppSay, onDone: (result: ServerJson) => Promise<void> | void) {
   return useDangerousSave(say, onDone, {
     noun: 'profile', confirmKey: 'confirmDangerous',
     dialogTitle: 'Save a profile with broad power?',
@@ -776,7 +904,7 @@ function useProfileSave(say, onDone) {
 // itself, which is exactly the single-source-on-the-server posture ADR 0027
 // and DANGEROUS_REASON_LABEL's own comment rule out. Every dangerous save now
 // round-trips through the same 409 the direct API gets.
-function useWorkspaceSave(say, onDone) {
+function useWorkspaceSave(say: AppSay, onDone: (result: ServerJson) => Promise<void> | void) {
   return useDangerousSave(say, onDone, {
     noun: 'workspace', confirmKey: 'confirm',
     dialogTitle: 'Save a change that widens what agents may do?',
@@ -789,7 +917,15 @@ function useWorkspaceSave(say, onDone) {
 // prefilled from GET /api/profiles. `name` is the file name
 // (authority/<name>.yaml), not renameable here, same as agents. No delete: an
 // agent referencing this profile would break at spawn (parent issue #55).
-function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }) {
+function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }: {
+  profile: ServerJson;
+  agentNames: string[];
+  agentIcons: Record<string, string>;
+  workspaceNames: string[];
+  say: AppSay;
+  onChanged: () => Promise<void>;
+  edit: SettingsEditSlot;
+}) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const id = `profile:${profile.name}`;
   const open = edit.isOpen(id);
@@ -819,7 +955,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   });
 
   const submit = () => {
-    const body = {};
+    const body: ServerJson = {};
     if (changed.guidance) body.guidance = guidance;
     if (changed.assignable_to) body.assignable_to = assignableTo;
     if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
@@ -877,7 +1013,7 @@ const settingsCardLabel = {
 // GitHub login state (ADR 0093 決定5). Read-only on purpose: logging in writes a
 // credential, and that door stays on the terminal — this card only says whether
 // the board has one, and names the command that makes it.
-function GitHubLoginCard({ loggedIn }) {
+function GitHubLoginCard({ loggedIn }: { loggedIn: boolean | null }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -899,7 +1035,7 @@ function GitHubLoginCard({ loggedIn }) {
 // second copy of its numbers kept here.
 // `records` null means the read failed: a face put here to catch a silent
 // regression must not itself go silent, so the card stays and says so.
-function TranslateUsageCard({ records }) {
+function TranslateUsageCard({ records }: { records: ServerJson[] | null }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const last = records?.at(-1);
   return (
@@ -907,9 +1043,9 @@ function TranslateUsageCard({ records }) {
       <span style={settingsCardLabel}>translation spend</span>
       {last ? (
         <React.Fragment>
-          <FieldRow label="translations" kind="mono" value={`${records.length} generated`} />
+          <FieldRow label="translations" kind="mono" value={`${records!.length} generated`} />
           <FieldRow label="estimated cost" kind="mono"
-            value={`$${records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`} />
+            value={`$${records!.reduce((sum: number, r: ServerJson) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`} />
           <FieldRow label="last call" kind="mono"
             value={`${last.usage.input_tokens} in / ${last.usage.output_tokens} out`} />
         </React.Fragment>
@@ -921,7 +1057,13 @@ function TranslateUsageCard({ records }) {
   );
 }
 
-function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
+function DisplayLanguageCard({ language, options, say, onSaved, edit }: {
+  language: string;
+  options: string[];
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:language';
   const open = edit.isOpen(id);
@@ -940,7 +1082,7 @@ function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
       edit.close();
       await onSaved();
     } catch (err) {
-      say('danger', 'display language save failed', String(err.message || err));
+      say('danger', 'display language save failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -956,7 +1098,7 @@ function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
           {/* options come straight from GET (display-language.ts's canonical
               list) — the UI never hardcodes the language list, so a board that
               adds a language needs no WebUI change (issue #115) */}
-          <Select label="Language" options={options} value={draft} onChange={(e) => setDraft(e.target.value)} />
+          <Select label="Language" options={options} value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} />
           <EditActions dirty={dirty} ok={!!draft} busy={busy} saveLabel="Save display language"
             onSave={save} onCancel={() => edit.close()} />
         </React.Fragment>
@@ -968,7 +1110,14 @@ function DisplayLanguageCard({ language, options, say, onSaved, edit }) {
 // Quiet hours (issue #64) as a record card: start/end only — tz is shown but is
 // only ever changed via POST /api/settings/timezone (ADR 0022), which this card
 // never calls.
-function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
+function QuietHoursCard({ start, end, tz, say, onSaved, edit }: {
+  start: string;
+  end: string;
+  tz: string;
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:quiet-hours';
   const open = edit.isOpen(id);
@@ -987,7 +1136,7 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
       edit.close();
       await onSaved();
     } catch (err) {
-      say('danger', 'quiet hours save failed', String(err.message || err));
+      say('danger', 'quiet hours save failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1009,8 +1158,8 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
       {open && (
         <React.Fragment>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input label="Start" mono value={draftStart} onChange={(e) => setDraftStart(e.target.value)} placeholder="HH:MM" />
-            <Input label="End" mono value={draftEnd} onChange={(e) => setDraftEnd(e.target.value)} placeholder="HH:MM" />
+            <Input label="Start" mono value={draftStart} onChange={(e) => setDraftStart((e.target as HTMLInputElement).value)} placeholder="HH:MM" />
+            <Input label="End" mono value={draftEnd} onChange={(e) => setDraftEnd((e.target as HTMLInputElement).value)} placeholder="HH:MM" />
           </div>
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             start after end wraps past midnight (e.g. 23:00–07:00) — that's valid, not an error.
@@ -1027,11 +1176,16 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }) {
 // Pace offsets (issue #126 / ADR 0030) as a record card: the human's reserved
 // share (pt) per usage window — the board runs this far behind the elapsed-time
 // pace.
-function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
+function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
+  offsets: ServerJson[];
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:provider-pace-offsets';
   const open = edit.isOpen(id);
-  const asDraft = (values) => Object.fromEntries(
+  const asDraft = (values: ServerJson[]): Record<string, ServerJson> => Object.fromEntries(
     values.map((value) => [`${value.provider}:${value.window}`, value.offset]),
   );
   const [draft, setDraft] = React.useState(() => asDraft(offsets));
@@ -1041,7 +1195,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
   const dirty = keys.some((key) => String(draft[key]) !== String(current[key]));
   // the API rejects non-integers / out-of-range at the entry (ADR 0030) — the
   // form mirrors that check so the button only enables on a sendable value
-  const validOffset = (v) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
+  const validOffset = (v: ServerJson) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
   const ok = keys.every((key) => validOffset(draft[key]));
   useDirtySignal(edit, open, dirty);
 
@@ -1061,7 +1215,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
       edit.close();
       await onSaved();
     } catch (err) {
-      say('danger', 'pace offsets save failed', String(err.message || err));
+      say('danger', 'pace offsets save failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1084,7 +1238,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
             {offsets.map((value) => {
               const key = `${value.provider}:${value.window}`;
               return <Input key={key} label={`${value.provider} · ${value.window}`} mono value={String(draft[key])}
-                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} placeholder={String(value.offset)} />;
+                onChange={(e) => setDraft({ ...draft, [key]: (e.target as HTMLInputElement).value })} placeholder={String(value.offset)} />;
             })}
           </div>
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
@@ -1101,7 +1255,12 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }) {
 
 // Memory (issue #592 / spec #586 C) as a record card: the token cap on the
 // memory section injected into a worker at spawn.
-function MemorySettingsCard({ settings, say, onSaved, edit }) {
+function MemorySettingsCard({ settings, say, onSaved, edit }: {
+  settings: ServerJson;
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:memory';
   const open = edit.isOpen(id);
@@ -1126,7 +1285,7 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
       edit.close();
       await onSaved();
     } catch (err) {
-      say('danger', 'memory settings save failed', String(err.message || err));
+      say('danger', 'memory settings save failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1140,11 +1299,11 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
       {!open && <FieldRow label="meta-review period" kind="mono" value={`${period} days`} />}
       {open && (
         <React.Fragment>
-          <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={cap} />
+          <Input label="Injection cap (tokens)" mono value={draft} onChange={(e) => setDraft((e.target as HTMLInputElement).value)} placeholder={cap} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             the most memory a worker is handed at spawn. past the cap, entry text is dropped first, then the index gets shallower, then relevant entries go one at a time from the bottom.
           </p>
-          <Input label="Meta-review period (days)" mono value={periodDraft} onChange={(e) => setPeriodDraft(e.target.value)} placeholder={period} />
+          <Input label="Meta-review period (days)" mono value={periodDraft} onChange={(e) => setPeriodDraft((e.target as HTMLInputElement).value)} placeholder={period} />
           <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
             the fewest days between two memory meta-reviews. once past it, the board registers one as soon as there is something new to review.
           </p>
@@ -1162,13 +1321,18 @@ function MemorySettingsCard({ settings, say, onSaved, edit }) {
 // a failed or throttled one just stays untranslated. There is no approve action —
 // approval only goes through a question.
 const MEMORY_INVALIDATION_REASONS = ['superseded', 'path_moved', 'capability', 'environment', 'requirement_change'];
-const needsSuccessor = (reason) => reason === 'superseded' || reason === 'path_moved';
+const needsSuccessor = (reason: string) => reason === 'superseded' || reason === 'path_moved';
 
-function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
+function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
+  workspaceNames: string[];
+  language: string;
+  say: AppSay;
+  edit: SettingsEditSlot;
+}) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: '', kind: '', state: '' });
-  const [entries, setEntries] = React.useState(null); // null → still loading
-  const [translations, setTranslations] = React.useState({});
+  const [entries, setEntries] = React.useState<ServerJson[] | null>(null); // null → still loading
+  const [translations, setTranslations] = React.useState<Record<number, ServerJson>>({});
   const load = async () => {
     const query = new URLSearchParams();
     if (filter.workspace === '(board)') query.set('board_wide', 'true');
@@ -1179,54 +1343,59 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       const loaded = (await api(`/api/settings/memory/entries?${query}`, undefined, 'GET')).entries;
       setEntries(loaded);
       if (language === 'English') return;
-      for (const entry of loaded.filter((e) => e.original === null)) {
+      for (const entry of loaded.filter((e: ServerJson) => e.original === null)) {
         translateTarget({ type: 'memory_entry', entry_id: entry.id })
           .then((out) => out.status === 'translated' && setTranslations((t) => ({ ...t, [entry.id]: out })))
           .catch(() => {});
       }
     } catch (err) {
-      say('danger', 'memory entries load failed', String(err.message || err));
+      say('danger', 'memory entries load failed', String((err as Error).message || err));
     }
   };
   React.useEffect(() => { load(); }, [filter.workspace, filter.kind, filter.state]);
 
-  const setFilterField = (key) => (e) => setFilter({ ...filter, [key]: e.target.value });
+  const setFilterField = (key: string) => (e: React.ChangeEvent) => setFilter({ ...filter, [key]: (e.target as HTMLInputElement).value });
   const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
 
   // the write form: one edit slot, like every settings card
   const writeId = 'board:memory-write';
   const writing = edit.isOpen(writeId);
-  const blank = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '' };
+  /** 記憶エントリの下書き。`backTranslation` は「読み返しのために今だけ持つ」訳
+   *  (ADR 0015) なので欄ごとの map か null。 */
+  const blank: {
+    kind: string; workspace: string; path: string; originalTitle: string; originalText: string;
+    title: string; text: string; backTranslation: Record<string, string> | null; supersedes: string;
+  } = { kind: 'knowledge', workspace: '', path: '', originalTitle: '', originalText: '', title: '', text: '', backTranslation: null, supersedes: '' };
   const [draft, setDraft] = React.useState(blank);
   const [busy, setBusy] = React.useState(false);
-  const setDraftField = (key) => (e) => setDraft({ ...draft, [key]: e.target.value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}) });
+  const setDraftField = (key: string) => (e: React.ChangeEvent) => setDraft({ ...draft, [key]: (e.target as HTMLInputElement).value, ...(key === 'title' || key === 'text' ? { backTranslation: null } : {}) });
   useDirtySignal(edit, writing, [draft.originalTitle, draft.originalText, draft.title, draft.text].some((v) => v.trim() !== ''));
   const translatable = language !== 'English';
   // a definition is one line with no title: its original and English are the text alone (ADR 0015)
-  const fields = draft.kind === 'knowledge' ? ['title', 'text'] : ['text'];
-  const originalOf = { title: draft.originalTitle, text: draft.originalText };
+  const fields: ('title' | 'text')[] = draft.kind === 'knowledge' ? ['title', 'text'] : ['text'];
+  const originalOf: Record<'title' | 'text', string> = { title: draft.originalTitle, text: draft.originalText };
 
   // Translate fills both English fields from the original title + text; Back-translate re-checks English the
   // human edited by hand (ADR 0015: the English is saved after the human reads its back-translation, never stored)
-  const runTranslation = async (toEnglish) => {
+  const runTranslation = async (toEnglish: boolean) => {
     setBusy(true);
     try {
-      const english = {};
-      const back = {};
+      const english: Record<string, string> = {};
+      const back: Record<string, string> = {};
       for (const key of fields) {
         english[key] = draft[key];
         if (toEnglish) {
-          const out = await translateTarget({ type: 'to_english', text: originalOf[key] });
+            const out = await translateTarget({ type: 'to_english', text: originalOf[key] });
           if (out.status !== 'translated') throw new Error('translation is throttled right now');
-          english[key] = out.text;
+          english[key] = out.text!;
         }
-        const out = await translateTarget({ type: 'back_translation', text: english[key] });
+        const out = await translateTarget({ type: 'back_translation', text: english[key]! });
         if (out.status !== 'translated') throw new Error('translation is throttled right now');
-        back[key] = out.text;
+        back[key] = out.text!;
       }
       setDraft({ ...draft, ...english, backTranslation: back });
     } catch (err) {
-      say('danger', 'translate failed', String(err.message || err));
+      say('danger', 'translate failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1243,25 +1412,25 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
       edit.close();
       await load();
     } catch (err) {
-      say('danger', `${draft.kind} save failed`, String(err.message || err));
+      say('danger', `${draft.kind} save failed`, String((err as Error).message || err));
     }
     setBusy(false);
   };
 
   // invalidation: one entry at a time, reason + successor when the reason needs one
-  const [invalidating, setInvalidating] = React.useState(null); // { id, reason, successor }
+  const [invalidating, setInvalidating] = React.useState<{ id: number; reason: string; successor: string } | null>(null);
   const invalidate = async () => {
     setBusy(true);
     try {
-      await api(`/api/settings/memory/entries/${invalidating.id}/invalidate`, {
-        reason: invalidating.reason,
-        ...(needsSuccessor(invalidating.reason) ? { successor_id: Number(invalidating.successor) } : {}),
+      await api(`/api/settings/memory/entries/${invalidating!.id}/invalidate`, {
+        reason: invalidating!.reason,
+        ...(needsSuccessor(invalidating!.reason) ? { successor_id: Number(invalidating!.successor) } : {}),
       });
-      say('success', 'entry invalidated', `#${invalidating.id} · ${invalidating.reason}`);
+      say('success', 'entry invalidated', `#${invalidating!.id} · ${invalidating!.reason}`);
       setInvalidating(null);
       await load();
     } catch (err) {
-      say('danger', 'invalidate failed', String(err.message || err));
+      say('danger', 'invalidate failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1300,7 +1469,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
             <Button variant="secondary" size="sm" disabled={busy || fields.some((key) => !draft[key].trim())} onClick={() => runTranslation(false)}>Back-translate</Button>
           )}
           {draft.backTranslation && (
-            <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation[key]).join(' — ')}</p>
+            <p style={muted} data-testid="memory-back-translation">back in {language}: {fields.map((key) => draft.backTranslation![key]).join(' — ')}</p>
           )}
           <EditActions ok={fields.every((key) => draft[key].trim() !== '')} busy={busy} saveLabel={`Save ${draft.kind}`}
             onSave={save} onCancel={() => edit.close()} />
@@ -1337,15 +1506,15 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
           )}
           {invalidating?.id === entry.id && (
             <React.Fragment>
-              <Select label="Reason" value={invalidating.reason} options={MEMORY_INVALIDATION_REASONS}
-                onChange={(e) => setInvalidating({ ...invalidating, reason: e.target.value })} />
-              {needsSuccessor(invalidating.reason) && (
-                <Input label="Successor (entry id)" mono value={invalidating.successor}
-                  onChange={(e) => setInvalidating({ ...invalidating, successor: e.target.value })} />
+              <Select label="Reason" value={invalidating!.reason} options={MEMORY_INVALIDATION_REASONS}
+                onChange={(e) => setInvalidating({ ...invalidating!, reason: (e.target as HTMLInputElement).value })} />
+              {needsSuccessor(invalidating!.reason) && (
+                <Input label="Successor (entry id)" mono value={invalidating!.successor}
+                  onChange={(e) => setInvalidating({ ...invalidating!, successor: (e.target as HTMLInputElement).value })} />
               )}
               <div style={{ display: 'flex', gap: 8 }}>
                 <Button variant="danger" size="sm" onClick={invalidate}
-                  disabled={busy || (needsSuccessor(invalidating.reason) && !/^[1-9]\d*$/.test(invalidating.successor))}>
+                  disabled={busy || (needsSuccessor(invalidating!.reason) && !/^[1-9]\d*$/.test(invalidating!.successor))}>
                   Invalidate #{entry.id}
                 </Button>
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => setInvalidating(null)}>Cancel</Button>
@@ -1362,7 +1531,12 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }) {
 // Execution defaults (issue #545 / ADR 0110 決定5) as a record card: Provider
 // rank, the default priority and the frontier-advisor flag. Each differing
 // value is one POST — the API takes one change per request.
-function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
+function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
+  settings: ServerJson;
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, Checkbox, FieldRow, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-defaults';
   const open = edit.isOpen(id);
@@ -1389,7 +1563,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
       edit.close();
       await onSaved();
     } catch (err) {
-      say('danger', 'execution defaults save failed', String(err.message || err));
+      say('danger', 'execution defaults save failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1410,13 +1584,13 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
         {open && (
           <React.Fragment>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-              {draft.rank.map((provider, i) => (
+              {draft.rank.map((provider: string, i: number) => (
                 <Select key={i} label={`Rank ${i + 1}`} options={settings.providers} value={provider}
-                  onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => (j === i ? e.target.value : p)) })} />
+                  onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p: string, j: number) => (j === i ? (e.target as HTMLInputElement).value : p)) })} />
               ))}
             </div>
             <Select label="Default priority" options={settings.priorities} value={draft.priority}
-              onChange={(e) => setDraft({ ...draft, priority: e.target.value })} />
+              onChange={(e) => setDraft({ ...draft, priority: (e.target as HTMLInputElement).value })} />
             <Checkbox testId="execution-frontier-advisor" checked={draft.advisor}
               label="frontier advisor — an advisor may use the frontier row even when the main model is a lower tier"
               onChange={() => setDraft({ ...draft, advisor: !draft.advisor })} />
@@ -1436,23 +1610,28 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }) {
 // The execution-setting table (issue #545 / ADR 0114 決定2) as a record card:
 // model rows keyed by provider + model. Save diffs the draft against the
 // current table — rows gone → delete_row, rows new or changed → row upsert.
-function ExecutionTableCard({ settings, say, onSaved, edit }) {
+function ExecutionTableCard({ settings, say, onSaved, edit }: {
+  settings: ServerJson;
+  say: AppSay;
+  onSaved: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-table';
   const open = edit.isOpen(id);
-  const rowKey = (row) => `${row.provider}:${row.model}`;
-  const asDraft = (table) => table.map((row) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
+  const rowKey = (row: ServerJson) => `${row.provider}:${row.model}`;
+  const asDraft = (table: ServerJson[]) => table.map((row: ServerJson) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
-  const current = new Map(settings.table.map((row) => [rowKey(row), row]));
-  const toRow = (d) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
-  const same = (a, b) => a && b && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
+  const current = new Map<string, ServerJson>(settings.table.map((row: ServerJson) => [rowKey(row), row]));
+  const toRow = (d: ServerJson) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const same = (a: ServerJson, b: ServerJson) => a && b && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
   const upserts = draft.map(toRow).filter((row) => !same(current.get(rowKey(row)), row));
-  const deletes = [...current.values()].filter((row) => !draft.some((d) => rowKey(toRow(d)) === rowKey(row)));
+  const deletes = [...current.values()].filter((row) => !draft.some((d: ServerJson) => rowKey(toRow(d)) === rowKey(row)));
   const dirty = upserts.length > 0 || deletes.length > 0;
-  const validPrice = (v) => /^\d+(\.\d+)?$/.test(String(v).trim());
-  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out))
-    && new Set(draft.map((d) => rowKey(toRow(d)))).size === draft.length;
+  const validPrice = (v: ServerJson) => /^\d+(\.\d+)?$/.test(String(v).trim());
+  const ok = draft.every((d: ServerJson) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out))
+    && new Set(draft.map((d: ServerJson) => rowKey(toRow(d)))).size === draft.length;
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
@@ -1464,11 +1643,11 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
       edit.close();
       await onSaved();
     } catch (err) {
-      say('danger', 'execution table save failed', String(err.message || err));
+      say('danger', 'execution table save failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
-  const update = (i, patch) => setDraft(draft.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  const update = (i: number, patch: ServerJson) => setDraft(draft.map((d: ServerJson, j: number) => (j === i ? { ...d, ...patch } : d)));
   const addRow = () => setDraft([...draft, {
     key: 'new', provider: settings.providers[0].value, tier: settings.tiers[0], model: '', effort: 'high', price_in: '', price_out: '',
   }]);
@@ -1479,7 +1658,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
         <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(asDraft(settings.table)))}>
           <span style={settingsCardLabel}>execution table</span>
         </RecordCardHead>
-        {!open && settings.table.map((row) => (
+        {!open && settings.table.map((row: ServerJson) => (
           <div key={rowKey(row)} style={{ display: 'flex', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
             <span style={{ color: 'var(--text-muted)', minWidth: 140 }}>{row.provider} · {row.tier}</span>
             <span>{row.model} · {row.effort} · ${row.price_in} / ${row.price_out}</span>
@@ -1487,15 +1666,15 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
         ))}
         {open && (
           <React.Fragment>
-            {draft.map((d, i) => (
+            {draft.map((d: ServerJson, i: number) => (
               <div key={d.key} data-testid={`execution-row-${d.key}`}
                 style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end', paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
-                <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: e.target.value })} />
-                <Select label="Tier" options={settings.tiers} value={d.tier} onChange={(e) => update(i, { tier: e.target.value })} />
-                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="alias or model id" />
-                <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: e.target.value })} placeholder="high" />
-                <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
-                <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
+                <Select label="Provider" options={settings.providers.map((p: SettingsOption) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: (e.target as HTMLInputElement).value })} />
+                <Select label="Tier" options={settings.tiers} value={d.tier} onChange={(e) => update(i, { tier: (e.target as HTMLInputElement).value })} />
+                <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: (e.target as HTMLInputElement).value })} placeholder="alias or model id" />
+                <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: (e.target as HTMLInputElement).value })} placeholder="high" />
+                <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: (e.target as HTMLInputElement).value })} placeholder="USD / MTok" />
+                <Input label="Price out" mono value={d.price_out} onChange={(e) => update(i, { price_out: (e.target as HTMLInputElement).value })} placeholder="USD / MTok" />
                 <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))}>Remove</Button>
               </div>
             ))}
@@ -1517,7 +1696,12 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
 // The workspace create form (issue #57 phase 3), behind Add on the Workspaces
 // screen (#204 決定7) — it takes the same single edit slot a record card does,
 // and saves and cancels by the same rules.
-function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
+function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
+  baseDir: ServerJson;
+  say: AppSay;
+  onCreated: (result: ServerJson) => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [mode, setMode] = React.useState('clone');
   const [name, setName] = React.useState('');
@@ -1532,7 +1716,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   // issue #383: register の門が「人間の生きた dev checkout に見える」と言ったら
   // 409 が返り、ダイアログで受け入れると同じ body が confirm 付きで再送される —
   // 危険な値・削除と同じ二段扉(判定はサーバ単一正本、ADR 0027)
-  const { busy, save, dialog } = useDangerousSave(say, async () => { edit.close(); await onCreated(); }, {
+  const { busy, save, dialog } = useDangerousSave(say, async (result: ServerJson) => { edit.close(); await onCreated(result); }, {
     noun: 'workspace',
     confirmKey: 'confirm',
     dialogTitle: 'Register a checkout someone is working in?',
@@ -1574,9 +1758,9 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add a workspace</span>
-      <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode(e.target.value)} />
+      <Select label="Mode" options={modeOptions} value={mode} onChange={(e) => setMode((e.target as HTMLInputElement).value)} />
       <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>{modeHint}</p>
-      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+      <Input label="Name" value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)}
         placeholder="letters, digits, - _ . — safe as a directory and a repo name" />
       {/* ADR 0082 決定1: 規約導出の2モードは着地先を人間に一度も見せずに決めていた。
           基点は一覧が返し、名前は区切り文字を含まない検証を既に通っているので、
@@ -1590,14 +1774,14 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
         </p>
       )}
       {mode === 'clone' && (
-        <Input label="Repository" value={repo} onChange={(e) => setRepo(e.target.value)}
+        <Input label="Repository" value={repo} onChange={(e) => setRepo((e.target as HTMLInputElement).value)}
           placeholder="anything git clone accepts — recorded on the entry" />
       )}
       {mode === 'register' && (
-        <Input label="Path" value={path} onChange={(e) => setPath(e.target.value)}
+        <Input label="Path" value={path} onChange={(e) => setPath((e.target as HTMLInputElement).value)}
           placeholder="an existing checkout on this host" />
       )}
-      <Input label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)}
+      <Input label="Notes" value={notes} onChange={(e) => setNotes((e.target as HTMLInputElement).value)}
         placeholder="setup hints for humans — optional" />
       <Checkbox label="protected — changes here always need human approval" checked={prot} onChange={() => setProt(!prot)} />
       <EditActions ok={ok} busy={busy} saveLabel="Add workspace — commits to the registry"
@@ -1610,11 +1794,19 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
 // The agent create form (issue #72), NewWorkspaceForm's twin. `name` is its own
 // field — it becomes agents/<name>.md and is never editable afterwards; the
 // rest is the same draft the record card edits.
-function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }) {
+function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
+  authorityProfiles: ServerJson[];
+  providerOptions: SettingsOption[];
+  hostSkills: string[];
+  hostSkillsDegraded: boolean;
+  say: AppSay;
+  onCreated: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState('');
   const [draft, setDraft] = React.useState(() => ({ ...NEW_AGENT_DRAFT }));
-  const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
+  const set = (key: keyof AgentDraft, value: AgentDraftValue) => setDraft((d) => ({ ...d, [key]: value }) as AgentDraft);
   const [busy, setBusy] = React.useState(false);
   const ok = registryNameOk(name) && !!draft.description.trim() && !!draft.authority && !!draft.provider;
   const dirty = !!name.trim() || agentDraftDirty(draft, NEW_AGENT_DRAFT);
@@ -1639,7 +1831,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
       await onCreated();
     } catch (err) {
       // creation is idempotent server-side, same posture as workspace creation
-      say('danger', 'agent creation failed — safe to retry as-is', String(err.message || err));
+      say('danger', 'agent creation failed — safe to retry as-is', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -1647,7 +1839,7 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add an agent</span>
-      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+      <Input label="Name" value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)}
         placeholder="letters, digits, - _ . — becomes agents/<name>.md, not renameable later" />
       <AgentFields draft={draft} set={set} authorityOptions={authorityCreateOptions}
         providerOptions={providerOptions}
@@ -1660,12 +1852,18 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
 
 // The authority profile create form (issue #55 phase 3) — the 409
 // confirm_required round trip rides on useProfileSave, same as the edit card.
-function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
+function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
+  agentNames: string[];
+  workspaceNames: string[];
+  say: AppSay;
+  onCreated: () => Promise<void> | void;
+  edit: SettingsEditSlot;
+}) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState('');
   const [guidance, setGuidance] = React.useState('');
-  const [assignableTo, setAssignableTo] = React.useState([]);
-  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState([]);
+  const [assignableTo, setAssignableTo] = React.useState<string[]>([]);
+  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState<string[]>([]);
   const [merge, setMerge] = React.useState('');
   const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onCreated(); });
   const dirty = !!name.trim() || !!guidance.trim() || assignableTo.length > 0
@@ -1682,7 +1880,7 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <span style={settingsCardLabel}>add an authority profile</span>
-      <Input label="Name" value={name} onChange={(e) => setName(e.target.value)}
+      <Input label="Name" value={name} onChange={(e) => setName((e.target as HTMLInputElement).value)}
         placeholder="letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later" />
       <ProfileFields
         agentNames={agentNames} workspaceNames={workspaceNames}
@@ -1702,8 +1900,11 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
 // record that opens read-only. Board (display language #46, quiet hours #64,
 // pace offsets #126) is the SQLite-backed half; workspaces, agents (#72) and
 // authority profiles (#55) are the registry-backed half.
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
-function SettingsScreen({ say, registerLeaveGuard }) {
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
+function SettingsScreen({ say, registerLeaveGuard }: {
+  say: AppSay;
+  registerLeaveGuard: (guard: ((move: () => void) => boolean) | null) => void;
+}) {
   const { Button, Card, NavRow, ScreenHeader } = window.TidepoolDesignSystem_8a0ead;
 
   // The three board-wide preferences (display language #46, quiet hours #64,
@@ -1713,7 +1914,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   // options come straight from GET (display-language.ts's canonical list) —
   // the UI never hardcodes the language list, so a board that adds a language
   // needs no WebUI change (issue #115).
-  const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState([]);
+  const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState<string[]>([]);
   const [displayLanguageLoaded, setDisplayLanguageLoaded] = React.useState(false);
   const loadDisplayLanguage = async () => {
     const { language, options } = await api('/api/settings/display-language', undefined, 'GET');
@@ -1738,7 +1939,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   };
   React.useEffect(() => { loadQuietHours(); }, []);
 
-  const [paceOffsets, setPaceOffsets] = React.useState(null); // null → still loading
+  const [paceOffsets, setPaceOffsets] = React.useState<ServerJson[] | null>(null); // null → still loading
   const loadPaceOffsets = async () => {
     const result = await api('/api/settings/provider-pace-offsets', undefined, 'GET');
     setPaceOffsets(result.offsets);
@@ -1746,13 +1947,13 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   React.useEffect(() => { loadPaceOffsets(); }, []);
 
   // execution settings (issue #545): table + defaults + the option lists, one GET
-  const [executionSettings, setExecutionSettings] = React.useState(null); // null → still loading
+  const [executionSettings, setExecutionSettings] = React.useState<ServerJson>(null); // null → still loading
   const loadExecutionSettings = async () => {
     setExecutionSettings(await api('/api/settings/execution', undefined, 'GET'));
   };
   React.useEffect(() => { loadExecutionSettings(); }, []);
 
-  const [memorySettings, setMemorySettings] = React.useState(null); // null → still loading
+  const [memorySettings, setMemorySettings] = React.useState<ServerJson>(null); // null → still loading
   const loadMemorySettings = async () => {
     setMemorySettings(await api('/api/settings/memory', undefined, 'GET'));
   };
@@ -1760,7 +1961,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
 
   // ADR 0093 決定5: read-only. null → still loading; the card only appears once
   // the board has answered, so "not logged in" is never shown speculatively.
-  const [githubLoggedIn, setGithubLoggedIn] = React.useState(null);
+  const [githubLoggedIn, setGithubLoggedIn] = React.useState<boolean | null>(null);
   React.useEffect(() => {
     api('/api/settings/github', undefined, 'GET')
       .then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn))
@@ -1769,7 +1970,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
 
   // issue #273: 末尾の loading… カスケードには足さない —— これが読めなくても残りの
   // 設定は読めるので、board 全体を loading… に張り付かせない([] は「生成ゼロ」)
-  const [translateUsage, setTranslateUsage] = React.useState(null); // null → still loading
+  const [translateUsage, setTranslateUsage] = React.useState<ServerJson[] | null>(null); // null → still loading
   // 失敗はカードを消さずに面へ出す —— 読めなかったことが見えないと、この顔を
   // 足した理由(記録があることと検知されることは別)がそのまま欠ける
   const [translateUsageFailed, setTranslateUsageFailed] = React.useState(false);
@@ -1780,10 +1981,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   }, []);
 
 
-  const [workspaces, setWorkspaces] = React.useState(null); // null → still loading
+  const [workspaces, setWorkspaces] = React.useState<ServerJson[] | null>(null); // null → still loading
   // ADR 0082 決定1: 規約導出の着地先を合成するための基点 — { path, source }。
   // 読めていないうち(ロード中・503)は null で、着地先は一切見せない
-  const [baseDir, setBaseDir] = React.useState(null);
+  const [baseDir, setBaseDir] = React.useState<ServerJson>(null);
   const [unavailable, setUnavailable] = React.useState(false); // 503 — no registry configured
   const load = async () => {
     try {
@@ -1799,11 +2000,11 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   };
   React.useEffect(() => { load(); }, []);
 
-  const [agents, setAgents] = React.useState(null); // null → still loading
-  const [authorityProfiles, setAuthorityProfiles] = React.useState([]);
+  const [agents, setAgents] = React.useState<ServerJson[] | null>(null); // null → still loading
+  const [authorityProfiles, setAuthorityProfiles] = React.useState<ServerJson[]>([]);
   // the provider select's value+label options, server-supplied on the same GET
   // (registry.ts's PROVIDER_OPTIONS) so the client never hard-codes the enum
-  const [providerOptions, setProviderOptions] = React.useState([]);
+  const [providerOptions, setProviderOptions] = React.useState<SettingsOption[]>([]);
   const [agentsUnavailable, setAgentsUnavailable] = React.useState(false);
   const loadAgents = async () => {
     try {
@@ -1818,7 +2019,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   };
   React.useEffect(() => { loadAgents(); }, []);
 
-  const [profiles, setProfiles] = React.useState(null); // null → still loading
+  const [profiles, setProfiles] = React.useState<ServerJson[] | null>(null); // null → still loading
   const [profilesUnavailable, setProfilesUnavailable] = React.useState(false);
   const loadProfiles = async () => {
     try {
@@ -1860,19 +2061,19 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const workspaceNames = (workspaces ?? []).map((w) => w.name);
 
   // name → icon, for rendering an assignable_to entry as the agent's own chip
-  const agentIcons = {};
-  (agents ?? []).forEach((a) => { if (a.icon) agentIcons[a.name] = a.icon; });
+  const agentIcons: Record<string, string> = {};
+  (agents ?? []).forEach((a: ServerJson) => { if (a.icon) agentIcons[a.name] = a.icon; });
 
   // --- drilldown navigation (issue #204) ----------------------------------
   // stack: [] the index · ['board'] · ['<section>'] · ['<section>', '<name>'].
   // A record is addressed by name, not by list position: the lists reload on
   // every commit, and an index would silently re-point at a different entry.
-  const [stack, setStack] = React.useState([]);
+  const [stack, setStack] = React.useState<string[]>([]);
   // at most one card — record or create form — is in edit mode across the whole
   // surface (決定4): `editing` holds its id, `dirty` whether it has unsaved work
-  const [editing, setEditing] = React.useState(null);
+  const [editing, setEditing] = React.useState<string | null>(null);
   const [dirty, setDirty] = React.useState(false);
-  const [pending, setPending] = React.useState(null); // a move parked behind the discard dialog
+  const [pending, setPending] = React.useState<{ move: () => void } | null>(null); // a move parked behind the discard dialog
   // read inside `guard`, which the tab guard below keeps across renders
   const unsaved = React.useRef(false);
   unsaved.current = editing !== null && dirty;
@@ -1880,7 +2081,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   // Runs `move` now, or parks it behind the discard dialog when the open card
   // has unsaved changes. Returns true when it parked it — the tab guard reads
   // that to hold the tab switch until the human answers.
-  const guard = (move) => {
+  const guard = (move: () => void) => {
     if (unsaved.current) { setPending({ move }); return true; }
     move();
     return false;
@@ -1888,11 +2089,11 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   const closeEdit = () => { setEditing(null); setDirty(false); };
   // the one edit slot, handed to every card that can enter edit mode
   const edit = {
-    isOpen: (id) => editing === id,
+    isOpen: (id: string) => editing === id,
     // `prime` fills the card's draft from the record. It runs with the open,
     // not before it, so a parked open (another card holds unsaved work) primes
     // only once the human has answered the discard dialog.
-    open: (id, prime) => guard(() => { if (prime) prime(); setEditing(id); setDirty(false); }),
+    open: (id: string, prime?: () => void) => guard(() => { if (prime) prime(); setEditing(id); setDirty(false); }),
     // `close` is the deliberate discard behind Cancel and the exit after a
     // successful save; `requestClose` is for a control that merely folds the
     // card away (the Add toggle), which must not drop a draft silently
@@ -1900,7 +2101,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
     requestClose: () => guard(closeEdit),
     setDirty,
   };
-  const go = (next) => guard(() => { setStack(next); closeEdit(); });
+  const go = (next: string[]) => guard(() => { setStack(next); closeEdit(); });
 
   // a tab switch unmounts this screen, so it has to ask too (決定4)
   React.useEffect(() => {
@@ -1916,30 +2117,30 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       title: 'Workspaces', singular: 'workspace', note: 'where tasks run',
       items: workspaces, unavailable,
       footnote: 'edits commit to the registry',
-      indexSummary: (items) => `${items.length} · ${items.filter((w) => w.protected).length} protected`,
-      rowIdentity: (w) => ({ label: w.name }),
-      rowSummary: (w) => w.repo || w.path || '—',
-      record: (rec) => <WorkspaceRecord ws={rec} baseDir={baseDir} say={say} onChanged={load} edit={edit} />,
+      indexSummary: (items: ServerJson[]) => `${items.length} · ${items.filter((w: ServerJson) => w.protected).length} protected`,
+      rowIdentity: (w: ServerJson) => ({ label: w.name }),
+      rowSummary: (w: ServerJson) => w.repo || w.path || '—',
+      record: (rec: ServerJson) => <WorkspaceRecord ws={rec} baseDir={baseDir} say={say} onChanged={load} edit={edit} />,
       createForm: () => <NewWorkspaceForm baseDir={baseDir} say={say} onCreated={load} edit={edit} />,
       reload: load,
       deleteNote: 'removes the registry entry only — the checkout on this host is left where it is',
       deleteLead:
         'This workspace is being removed from the registry. The checkout on the host is left untouched — the board just stops knowing about it.',
       // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
-      deleteDetail: (result, name) => (result?.checkout ? `checkout remains at ${result.checkout}` : name),
+      deleteDetail: (result: ServerJson, name: string) => (result?.checkout ? `checkout remains at ${result.checkout}` : name),
     },
     agents: {
       title: 'Agents', singular: 'agent', note: 'who does the work',
       items: agents, unavailable: agentsUnavailable,
       footnote: 'edits commit to agents/<name>.md in the registry',
-      indexSummary: (items) => `${items.length} agents`,
-      rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
+      indexSummary: (items: ServerJson[]) => `${items.length} agents`,
+      rowIdentity: (a: ServerJson) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
       // the built-in / shadows built-in mark (ADR 0117 決定2) — server-derived
       // (GET /api/agents), never decided here: the display only mirrors which
       // fugu the machine resolves. A built-in has no registry profile to show.
-      rowSummary: (a) =>
+      rowSummary: (a: ServerJson) =>
         a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
-      record: (rec) => (
+      record: (rec: ServerJson) => (
         <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions}
           hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} edit={edit} />
@@ -1959,10 +2160,10 @@ function SettingsScreen({ say, registerLeaveGuard }) {
       note: 'what the work is allowed to do',
       items: profiles, unavailable: profilesUnavailable,
       footnote: 'edits commit to authority/<name>.yaml in the registry',
-      indexSummary: (items) => `${items.length} profiles`,
-      rowIdentity: (p) => ({ label: p.name }),
-      rowSummary: (p) => (p.assignable_to ?? []).join(', ') || '—',
-      record: (rec) => (
+      indexSummary: (items: ServerJson[]) => `${items.length} profiles`,
+      rowIdentity: (p: ServerJson) => ({ label: p.name }),
+      rowSummary: (p: ServerJson) => (p.assignable_to ?? []).join(', ') || '—',
+      record: (rec: ServerJson) => (
         <ProfileRecord profile={rec} agentNames={agentNames} agentIcons={agentIcons}
           workspaceNames={workspaceNames} say={say} onChanged={refreshAfterProfile} edit={edit} />
       ),
@@ -1978,14 +2179,16 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   };
   // one cascade for "unreachable / still loading / here is the count", read by
   // the index (which counts its own way per section) and by each section header
-  const sectionSummary = (s, count = (items) => `${items.length} registered`) =>
+  type SettingsSectionKey = keyof typeof SECTIONS;
+  type SettingsSection = (typeof SECTIONS)[SettingsSectionKey];
+  const sectionSummary = (s: SettingsSection, count: (items: ServerJson[]) => string = (items) => `${items.length} registered`) =>
     s.unavailable ? 'no registry configured'
       : s.items === null ? 'loading…'
         : count(s.items);
 
-  const sectionKey = stack[0];
-  const recordName = stack[1];
-  const sec = SECTIONS[sectionKey];
+  const sectionKey = stack[0]!;
+  const recordName = stack[1]!;
+  const sec = SECTIONS[sectionKey as SettingsSectionKey];
   const addId = `new:${sectionKey}`;
   const adding = editing === addId;
 
@@ -1994,14 +2197,14 @@ function SettingsScreen({ say, registerLeaveGuard }) {
   if (stack.length === 0) {
     // --- level 1: the index. Each row states its section's current state, so
     // the whole surface reads without opening anything.
-    const rows = [
+    const rows: { key: string; label: string; summary: string; alert?: boolean }[] = [
       {
         key: 'board', label: 'Board',
         summary: displayLanguageLoaded && quietHoursLoaded
           ? `${displayLanguage} · ${quietHoursStart}–${quietHoursEnd}`
           : 'loading…',
       },
-      ...Object.keys(SECTIONS).map((key) => ({
+      ...(Object.keys(SECTIONS) as SettingsSectionKey[]).map((key) => ({
         key, label: SECTIONS[key].title,
         summary: sectionSummary(SECTIONS[key], SECTIONS[key].indexSummary),
         alert: SECTIONS[key].unavailable,
@@ -2098,7 +2301,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
             {sec.items.map((it, i) => (
               <NavRow key={it.name} {...sec.rowIdentity(it)} summary={sec.rowSummary(it)}
                 testId={`settings-record-${sectionKey}-${it.name}`}
-                divider={i > 0} first={i === 0} last={i === sec.items.length - 1}
+                divider={i > 0} first={i === 0} last={i === sec.items!.length - 1}
                 onClick={() => go([sectionKey, it.name])} />
             ))}
           </Card>
@@ -2145,7 +2348,7 @@ function SettingsScreen({ say, registerLeaveGuard }) {
         footer={
           <React.Fragment>
             <Button variant="secondary" onClick={() => setPending(null)}>Keep editing</Button>
-            <Button variant="danger" onClick={() => { const p = pending; setPending(null); closeEdit(); p.move(); }}>
+            <Button variant="danger" onClick={() => { const p = pending; setPending(null); closeEdit(); p!.move(); }}>
               Discard
             </Button>
           </React.Fragment>
