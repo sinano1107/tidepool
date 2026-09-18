@@ -1,6 +1,7 @@
 import { openContainmentQuestion } from "./containment.js";
 import type { Db } from "./db.js";
 import { openFailedTeardownQuestion } from "./failed-teardown.js";
+import type { HaltKind } from "./halt-kind.js";
 import { isPaused } from "./pause.js";
 import { openRegistryReachabilityQuestion } from "./registry-reachability.js";
 import { getThrottleState } from "./throttle.js";
@@ -26,14 +27,7 @@ import { activeTriageSession } from "./triage.js";
  *  人間が来るまで終わらないので「枠が空かない」であり、停止そのものである。並ぶのは
  *  containment の直後 —— 両方立ったときに先に直すべきはホスト全体の側である。 */
 export type BoardHalt =
-  | {
-      kind:
-        | "triage"
-        | "pause"
-        | "containment"
-        | "failedTeardown"
-        | "registryReachability";
-    }
+  | { kind: Exclude<HaltKind, "throttle"> }
   | {
       kind: "throttle";
       revalidating: boolean;
@@ -41,6 +35,10 @@ export type BoardHalt =
       resumesAt: string | null;
       observedAt: string | null;
     };
+
+/** 綴りの正本は依存ゼロの leaf module にある(WebUI がインライン import 型で引くため、
+ *  ADR 0133 決定3)。サーバ側から見た語彙の住所はこの module のままである。 */
+export { HALT_KINDS, type HaltKind } from "./halt-kind.js";
 
 /** 盤面全体の停止の**順序つき**列挙 — 読み口(`GET /pause`・`GET /api/queue`・
  *  `list_queue`)と scheduler の同期プレフィックスが共有する唯一の場所

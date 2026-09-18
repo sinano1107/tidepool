@@ -16,17 +16,28 @@
 // draft as context (point 4).
 // この画面がサーバとやりとりする形 —— 画面内で閉じた型で、集合ごとの移送は
 // issue #352 が持つ。POST /api/tasks の本文(登録の門が読む)。
-interface RegisterScreenFields {
+/** 2経路は必須欄が違う —— 全欄 optional の1つに潰すと `{ type: 'work' }` だけの
+ *  登録が型として通ってしまう。issue 由来は内容の正本が GitHub なので盤面は参照
+ *  だけを持ち(issue #49)、手入力は内容そのものを持つ(issue #65 / 子追加 #129)。 */
+type RegisterScreenFields = RegisterScreenIssueFields | RegisterScreenManualFields;
+interface RegisterScreenIssueFields {
+  /** issue 由来は常に work。 */
+  type: 'work';
+  workspace: string;
+  github_issue_number: number;
+}
+interface RegisterScreenManualFields {
   /** 画面が出すのはこの2つだけ(子追加は常に work)。 */
   type: 'work' | 'review';
-  title?: string;
-  purpose?: string;
-  completion_criteria?: string;
-  risk_flag?: boolean;
-  review_flag?: boolean;
+  title: string;
+  purpose: string;
+  completion_criteria: string;
+  risk_flag: boolean;
+  review_flag: boolean;
   assignee?: string;
   workspace?: string;
-  github_issue_number?: number;
+  /** issue 由来の経路にしか無い —— 不在を型で明示して union を絞れるようにする。 */
+  github_issue_number?: never;
   parent_id?: string;
   decompose_reason?: string;
 }
@@ -49,10 +60,11 @@ interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
   /** 子追加モード —— 未設定ならルート登録。 */
   parentTask?: { id: string; title: string } | null;
-  onClose: () => void;
+  /** 子追加のときだけ呼ばれる —— ルート登録は画面に留まるので渡されない。 */
+  onClose?: () => void;
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
 function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
@@ -78,7 +90,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // registry-sourced assignee/workspace candidates (issue #12/#65) — fetched
   // once per screen visit; RegisterScreen remounts fresh each tab entry (the
   // shell's key={tab}), so this never goes stale within a sitting
-  const [candidates, setCandidates] = React.useState<{ assignees: string[]; workspaces: string[] }>({ assignees: [], workspaces: [] });
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
   React.useEffect(() => {
     fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
   }, []);
@@ -184,17 +196,16 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       resetContent();
       // a root registration stays on the screen for the next dump; a child
       // add is a one-shot dialog action — close it once it lands
-      if (childMode) onClose();
+      if (childMode) onClose?.();
     } catch (rawErr) {
       // a gate rejection carries the fix; anything else the toast reported.
       // The inspected reference is burned into the gate state so a later
       // edit of the form fields can't repoint the approved comment (or the
       // retry) at a different issue than the one that was inspected.
-      // webui/app.jsx の api() が status / detail を生やして投げる
-      const err = rawErr as { status?: number; detail?: RegisterScreenGate };
-      if (err.status === 422 && err.detail) {
+      // webui/app.tsx の api() が投げる ApiError —— status / detail はここで開く
+      if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
         setGate({
-          ...err.detail,
+          ...rawErr.detail,
           workspace: f.workspace,
           github_issue_number: f.github_issue_number,
         });
@@ -219,10 +230,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     setBusy(false);
     // the comment is now part of the issue thread — re-register the same
     // inspected reference so the gate re-reads it, comment included
+    // gate が立つのは issue 由来の 422 だけなので、検査した参照は必ず載っている
     await submitFields({
       type: 'work',
-      workspace: gate.workspace,
-      github_issue_number: gate.github_issue_number,
+      workspace: gate.workspace!,
+      github_issue_number: gate.github_issue_number!,
     });
   };
   const draftFields = async () => {

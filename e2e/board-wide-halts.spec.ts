@@ -124,7 +124,7 @@ test("triage と Pause が同時なら slot はサーバ順序の先頭(triage)�
 });
 
 // Pause だけは実行中タスクの上でも喋る — 言うことがそのタスクの行く末だから
-// (issue #34)。pausedSlot から app.jsx へ移した分岐の pin。
+// (issue #34)。pausedSlot から app.tsx へ移した分岐の pin。
 test("実行中に Pause すると slot が「完走して後が続かない」と言う(issue #34)", async ({
   boot,
   page,

@@ -18,20 +18,10 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
-    // 移行中だけ真。残りの .jsx を素通しにする。最終状態は allowJs: false で、
-    // そのとき include の .jsx 3行も消える(ADR 0133 決定5)。
-    "allowJs": true,
-    "checkJs": false
+    // 移行は終わり(ADR 0133 決定5)—— .js / .jsx はもうプログラムに入らない。
+    "allowJs": false
   },
-  "include": [
-    "webui/globals.d.ts",
-    "webui/board-screen.tsx",
-    "webui/single-question-view.tsx",
-    "webui/queue-screen.tsx",
-    "webui/register-screen.tsx",
-    // 未変換の残件 —— ここが空になったら allowJs: false にする。
-    "webui/triage-screen.jsx",
-    "webui/app.jsx",
-    "webui/settings-screen.jsx"
-  ]
+  // webui ごと。ここがファイル一覧を持たない限り、scripts/build-webui-bundle.mjs の
+  // SOURCES にだけ足して型検査から漏れる(出荷されるが未検査)は起こらない。
+  "include": ["webui"]
 }

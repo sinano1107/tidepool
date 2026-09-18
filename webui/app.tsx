@@ -8,7 +8,62 @@ const tabs = [
   { key: 'settings', label: 'Settings', icon: 'settings' },
 ];
 
-async function api(path, body, method = 'POST') {
+// 盤面全体の停止の kind 語彙はサーバの leaf module が正本 (ADR 0133 決定3)。
+// `import type` **文**にしないこと —— このファイルがモジュールになり、トップレベルが
+// グローバルから消えて他の .tsx からの参照が全部壊れる。
+type HaltKind = import('../src/halt-kind').HaltKind;
+/** 検査していないサーバ応答。集合ごとの型の移送は issue #352 が持つ —— ここでは
+ *  「まだ形を知らない」ことを名前で言うに留める。 */
+type ServerJson = any;
+/** assignee 名 → アイコン(GET /api/registry/candidates、issue #52)。 */
+type AppIcons = Record<string, string | undefined>;
+/** スロット行が読む停止 entry。属性を持つのは throttle だけ(ADR 0068 決定2)。 */
+interface AppBoardHalt {
+  kind: HaltKind;
+  revalidating?: boolean;
+  failClosed?: boolean;
+  resumesAt?: string | null;
+  observedAt?: string | null;
+}
+/** キュー画面のスロット行 —— 停止・後始末・空きが同じ1本を書き換える。 */
+interface AppSlot {
+  color: string;
+  line: string;
+  meta: string;
+  taskId: string | null;
+}
+type AppToastKind = NonNullable<import('../design-system/components/surfaces/Toast').ToastProps['kind']>;
+/** 画面が出す一言。`detail` は JSX も来る(pause の IdChip)。 */
+interface AppToast {
+  kind: AppToastKind;
+  msg: string;
+  detail?: React.ReactNode;
+  leaving?: boolean;
+}
+type AppData = ReturnType<typeof mapData>;
+/** 画面が一言を出す口 —— App が配り、各ダイアログが呼ぶ。 */
+type AppSay = (kind: AppToastKind, msg: string, detail?: React.ReactNode) => void;
+/** レジストリ由来の候補(issue #52 の GET /api/registry/candidates)。 */
+interface AppCandidates {
+  assignees: string[];
+  workspaces: string[];
+}
+
+/** api() が 4xx/5xx で投げるエラー。catch (e) は unknown なので、素の Error に
+ *  プロパティを生やす形では呼び手が `status` を撃たれない(#749 User Story 6)——
+ *  instanceof で開ける class にしてある。`detail` はサーバの JSON 本文そのもので、
+ *  形は端点ごとに違う(集合ごとの型は issue #352)。 */
+class ApiError extends Error {
+  status: number;
+  detail: ServerJson;
+  constructor(message: string, status: number, detail: ServerJson) {
+    super(message);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function api(path: string, body?: unknown, method = 'POST') {
   const res = await fetch(path, {
     method,
     headers: { 'content-type': 'application/json' },
@@ -16,12 +71,9 @@ async function api(path, body, method = 'POST') {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    const e = new Error(typeof err.error === 'string' ? err.error : res.statusText);
     // the registration gate's 422 (issue #49) carries structure beyond the
     // message (missing / suggested_comment) — keep it for the caller
-    e.status = res.status;
-    e.detail = err;
-    throw e;
+    throw new ApiError(typeof err.error === 'string' ? err.error : res.statusText, res.status, err);
   }
   return res.json();
 }
@@ -34,14 +86,14 @@ async function api(path, body, method = 'POST') {
 // kit still fires N calls; this queues them to MAX_CONCURRENT_TRANSLATIONS.
 const MAX_CONCURRENT_TRANSLATIONS = 2;
 let translationsInFlight = 0;
-const translationQueue = [];
+const translationQueue: (() => void)[] = [];
 // ADR 0063 決定4: a queued (not yet dispatched) call cancels on `signal` abort
 // and is never sent — a dispatched one is past this gate and always runs to
 // completion (its paid tokens shouldn't be thrown away). The listener is
 // removed the instant a call dispatches, so aborting after dispatch is a
 // no-op — exactly the "sent keeps running" half of the decision.
-function paceTranslation(run, signal) {
-  return new Promise((resolve, reject) => {
+function paceTranslation(run: () => Promise<TpTranslation>, signal?: AbortSignal) {
+  return new Promise<TpTranslation>((resolve, reject) => {
     const dispatch = () => {
       if (signal) signal.removeEventListener('abort', onAbort);
       translationsInFlight += 1;
@@ -73,11 +125,11 @@ function paceTranslation(run, signal) {
 // each toggle's own catch renders inline. `signal` (ADR 0063 決定4) is
 // optional — only the log skim's fan-out passes one, to cancel unsent
 // requests when its switch is toggled off.
-const translateTarget = (target, { signal } = {}) => paceTranslation(() => api('/api/translate', target), signal);
+const translateTarget: TpTranslateFn = (target, { signal } = {}) => paceTranslation(() => api('/api/translate', target), signal);
 
 // Web Push (issue #14): applicationServerKey wants raw bytes, the server
 // hands back the VAPID public key as URL-safe base64.
-function urlBase64ToUint8Array(base64String) {
+function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   const raw = atob(base64);
@@ -93,7 +145,7 @@ async function registerServiceWorker() {
 // all (a null publicKey means no VAPID keys set — push stays off). Reusing
 // an existing subscription rather than always minting a fresh one keeps a
 // re-visit from silently orphaning the previous device registration.
-async function subscribeToPush(registration) {
+async function subscribeToPush(registration: ServiceWorkerRegistration | undefined) {
   const { publicKey } = await fetch('/api/push/vapid-public-key').then((r) => r.json());
   if (!publicKey || !registration) return null;
   const existing = await registration.pushManager.getSubscription();
@@ -107,7 +159,7 @@ async function subscribeToPush(registration) {
 
 // transient "just moved to the front" ids — presentation only, never persisted
 const RECENT_FRONTS = new Set();
-function markFront(id) {
+function markFront(id: string) {
   RECENT_FRONTS.add(id);
   setTimeout(() => RECENT_FRONTS.delete(id), 4000);
 }
@@ -116,7 +168,7 @@ function markFront(id) {
 // 0016's UI use-moment), carries issue_live_state: suffix the title so
 // cached-but-old (stale) and never-fetched (unavailable) are visible at a
 // glance. Ordinary tasks have no issue_live_state and pass through as-is.
-function liveTitle(t) {
+function liveTitle(t: ServerJson) {
   if (t.issue_live_state === 'stale') return `${t.title} (out of sync)`;
   if (t.issue_live_state === 'unavailable') return `${t.title} (unavailable)`;
   return t.title;
@@ -124,7 +176,7 @@ function liveTitle(t) {
 
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
-function toQuestionCardShape(q, icons) {
+function toQuestionCardShape(q: ServerJson, icons: AppIcons): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
   // (never human: a question only ever comes from a non-human registrant)
   const isBoard = q.registrant === 'tidepool';
@@ -136,9 +188,9 @@ function toQuestionCardShape(q, icons) {
     context: q.purpose,
     // 1-4 items, each with its own title/detail/options (issue #30) — a
     // single-item bundle is the degenerate, most common case
-    items: (q.question_items ?? []).map((item) => ({
+    items: (q.question_items ?? []).map((item: ServerJson) => ({
       title: item.title, detail: item.detail,
-      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation })),
+      options: item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation })),
     })),
   };
 }
@@ -150,10 +202,18 @@ function toQuestionCardShape(q, icons) {
 // { halts, tasks } (ADR 0068 決定6): rows and board-wide halts come from the
 // same read at the same instant, so no gap between two fetches can make the
 // rows and the slot line disagree.
-function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }, yourTasks = []) {
+function mapData(
+  board: ServerJson[],
+  log: ServerJson,
+  pause: ServerJson,
+  icons: AppIcons = {},
+  triage: ServerJson = {},
+  queueEnvelope: ServerJson = { halts: [], tasks: [] },
+  yourTasks: ServerJson[] = [],
+) {
   // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
   // ブラウザは並べ替えず、先頭を読んで kind 別コピーに写すだけ
-  const halts = queueEnvelope.halts;
+  const halts: AppBoardHalt[] = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === 'pause');
   // 資源単位の表示に要る完全な throttle(windows / fable 詳細)は /pause から —
   // halts の throttle entry と一部重複するが、把握して受け入れた重複である
@@ -162,11 +222,11 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   // 状態であって、盤面全体の停止ではない
   const teardown = queueEnvelope.teardown;
   const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
-  const fmtTime = (iso) => {
+  const fmtTime = (iso: string) => {
     const d = new Date(iso);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   };
-  const questions = board
+  const questions: TpTriageQuestion[] = board
     .filter((t) => t.status === 'todo' && t.type === 'question')
     .map((q) => ({
       ...toQuestionCardShape(q, icons),
@@ -177,12 +237,12 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     }));
   // newest first for the skim; unread is the server's cursor + authorship
   // decision. workspace grouping/fold (issue #44) is pure view derivation the
-  // kit does itself from this flat, order-independent list — see triage-screen.jsx.
+  // kit does itself from this flat, order-independent list — see triage-screen.tsx.
   // ADR 0085: the read model's own `objections` (every one ever raised) is
   // split here by whether it belongs to the currently open session — the
   // sole fact `session_id` carries — into commit-pending vs. already-bundled.
   const openSessionId = triage.session?.id ?? null;
-  const logEntries = [...log.entries].reverse().map((e) => ({
+  const logEntries: TpLogEntry[] = [...log.entries].reverse().map((e: ServerJson) => ({
     id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
     agentIcon: icons[e.worker_id], human: e.worker_id === 'human',
     kind: e.kind === 'task_completed' ? 'completion' : 'decision',
@@ -191,8 +251,8 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
     cause: e.cause ?? null,
-    pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
-    bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
+    pendingObjections: (e.objections ?? []).filter((o: ServerJson) => o.session_id === openSessionId).map((o: ServerJson) => o.comment),
+    bundledObjections: (e.objections ?? []).filter((o: ServerJson) => o.session_id !== openSessionId).map((o: ServerJson) => o.comment),
   }));
   // the queue is the todo order the slot walks, straight from /api/queue (ADR
   // 0068 決定6) — the server's own row set and its resource-scoped `skipped`,
@@ -200,9 +260,9 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   // sort_key position (the slot skips them until the children finish), so they
   // stay visible — hiding them would make the displayed order lie about where a
   // drag actually lands. held rows stay out, same as before.
-  const queue = queueEnvelope.tasks
-    .filter((t) => t.status === 'todo' || t.status === 'blocked' || t.status === 'skipped')
-    .map((t) => ({
+  const queue: QueueScreenTask[] = queueEnvelope.tasks
+    .filter((t: ServerJson) => t.status === 'todo' || t.status === 'blocked' || t.status === 'skipped')
+    .map((t: ServerJson) => ({
       id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked',
@@ -211,17 +271,18 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       skipped: t.status === 'skipped',
       frontInserted: RECENT_FRONTS.has(t.id), flash: RECENT_FRONTS.has(t.id),
     }));
-  const openChildren = {};
+  const openChildren: Record<string, number> = {};
   for (const t of board) {
     // cancelled never reaches here (server-side board filter, issue #35)
     if (t.parent_id && t.status !== 'done') {
       openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
     }
   }
-  const cols = { todo: [], in_progress: [], blocked: [], done: [] };
+  const cols: Record<BoardScreenColumn, BoardScreenTask[]> = { todo: [], in_progress: [], blocked: [], done: [] };
   for (const t of board) {
-    if (!cols[t.status]) continue; // e.g. held/skipped have no column of their own
-    cols[t.status].push({
+    const col = t.status as BoardScreenColumn;
+    if (!cols[col]) continue; // e.g. held/skipped have no column of their own
+    cols[col].push({
       id: t.id, title: liveTitle(t), type: t.type,
       assignee: t.assignee === 'human' ? 'you' : t.assignee ?? undefined,
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined,
@@ -252,7 +313,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
   const fableThrottled = !!fableWindow?.throttled;
   const fableResumesAt =
     fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
-  const halt = (slot, kind, msg, detail) => ({ slot, toast: { kind, msg, detail } });
+  const halt = (slot: AppSlot, kind: AppToastKind, msg: string, detail?: string) => ({ slot, toast: { kind, msg, detail } });
   // ADR 0068 決定1/決定7: the display priority now lives in the server's ordered
   // enumeration, not in a ternary chain here — this is a plain kind → copy map
   // over its head. A new board-wide halt adds one entry, not a new arm.
@@ -277,7 +338,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
     // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
     // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
-    throttle: (entry) => {
+    throttle: (entry: AppBoardHalt) => {
       const observed = entry.observedAt ? fmtTime(entry.observedAt) : null;
       const resumes = entry.resumesAt ? fmtTime(entry.resumesAt) : null;
       if (entry.revalidating) {
@@ -308,12 +369,14 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
           ? 'usage check unavailable — nothing starts until a fresh reading arrives'
           : `usage limit · resumes ${resumes}`);
     },
-  };
-  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+    // 門そのもの (ADR 0133 決定3 / #749 User Story 8): HALT_KINDS に1つ足して
+    // ここを更新しないと typecheck が落ちる。これがあるので下の引きに `?.` は要らない
+  } satisfies Record<HaltKind, (entry: AppBoardHalt) => { slot: AppSlot; toast: AppToast }>;
+  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind](halts[0]);
   // 後始末行は1本のまま、待っている理由だけが経路で変わる。経路を導くのはサーバ
   // (`teardown.settlement`、ADR 0113 決定3)で、ここは HALT_COPY と同じ値 → コピーの
   // 写像だけを持つ —— 行の status から導き直せば写しが2本になる
-  const TEARDOWN_META = {
+  const TEARDOWN_META: Record<string, string> = {
     completed: "waiting for this session's processes to exit",
     interrupted: 'usage limit hit · task returns to the queue once processes exit',
     released: "task released · waiting for this session's processes to exit",
@@ -358,11 +421,11 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       };
   return {
     questions, log: logEntries, queue, board: cols, icons,
-    scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
+    scratchpad: (triage.scratchpad ?? []).map((line: ServerJson): TpScratchLine => ({ id: line.id, text: line.line })),
     // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
-    humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
+    humanTasks: yourTasks.map((t) => ({ id: t.id as string, title: liveTitle(t), blocking: t.blocking as string | null })),
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
@@ -389,7 +452,7 @@ async function fetchData() {
 }
 
 // Full-screen tide wash overlay. Covers, holds a beat with a serif line, drains.
-function TpTideWash({ label, emoji, duration = 1250 }) {
+function TpTideWash({ label, emoji, duration = 1250 }: { label: string; emoji?: string; duration?: number }) {
   const dur = `${duration}ms`;
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 60, overflow: 'hidden', pointerEvents: 'none' }} aria-hidden="true">
@@ -415,7 +478,7 @@ function TpTideWash({ label, emoji, duration = 1250 }) {
 // "fixed" onto the full scrollable page instead of the viewport, parking the
 // dialog at the page middle. Rendering outside the app subtree pins it back to
 // the viewport. One wrapper so the workaround (and its reason) lives once.
-function PortalDialog(props) {
+function PortalDialog(props: import('../design-system/components/surfaces/Dialog').DialogProps) {
   const { Dialog } = window.TidepoolDesignSystem_8a0ead;
   return ReactDOM.createPortal(<Dialog {...props} />, document.body);
 }
@@ -425,12 +488,16 @@ function PortalDialog(props) {
 // single-question-view.tsx) is the same screen the kit demo simulates a push
 // into; answering it here POSTs to the real /api/tasks/:id/answer instead of
 // touching mock data, so front-insert + the immediate poll fire for real.
-function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
+function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
+  questionId: string;
+  onDone: (answeredTask: ServerJson | null) => void;
+  onTranslate?: TpTranslateFn;
+}) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
-  const [q, setQ] = React.useState(undefined); // undefined = loading, null = gone
-  const [rawTask, setRawTask] = React.useState(null);
+  const [q, setQ] = React.useState<TpQuestion | null | undefined>(undefined); // undefined = loading, null = gone
+  const [rawTask, setRawTask] = React.useState<ServerJson>(null);
   const [busy, setBusy] = React.useState(false);
-  const [err, setErr] = React.useState(null);
+  const [err, setErr] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -447,7 +514,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
     return () => { cancelled = true; };
   }, [questionId]);
 
-  const answer = async (answers) => {
+  const answer = async (answers: string[]) => {
     if (busy) return; // guards the design component's button against a double-tap
     setBusy(true);
     setErr(null);
@@ -455,7 +522,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
       await api(`/api/tasks/${questionId}/answer`, { answers });
       onDone(rawTask);
     } catch (e) {
-      setErr(String(e.message || e));
+      setErr(String((e as Error).message || e));
       setBusy(false);
     }
   };
@@ -502,7 +569,13 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
 // registered, unsettled, not in_progress) is enforced server-side on each
 // action; this sheet only offers them, and each action surfaces the domain
 // error as a toast if the line isn't met.
-function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }) {
+function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
+  task: BoardScreenTask;
+  onAddChild: () => void;
+  onEdit: () => void;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   return (
     <div style={{ padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -522,12 +595,27 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }) {
 // and workspace (immutable — the source of truth is its GitHub issue); type
 // and parent link are never shown (not editable). The server (editTask) is the
 // real gate — this form just avoids offering the forbidden edits.
-function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
+/** 編集できる欄だけを持つフォームの状態(type と parent link は編集不可)。 */
+interface EditTaskFields {
+  title: string;
+  purpose: string;
+  completion_criteria: string;
+  assignee: string;
+  workspace: string;
+  risk_flag: boolean;
+  review_flag: boolean;
+}
+function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
+  taskCard: BoardScreenTask;
+  onSaved: () => Promise<void> | void;
+  onClose: () => void;
+  say: AppSay;
+}) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
-  const [full, setFull] = React.useState(null);
+  const [full, setFull] = React.useState<ServerJson>(null);
   const [busy, setBusy] = React.useState(false);
-  const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
-  const [fields, setFields] = React.useState(null);
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
+  const [fields, setFields] = React.useState<EditTaskFields | null>(null);
   React.useEffect(() => {
     fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
     api(`/api/tasks/${taskCard.id}`, undefined, 'GET').then((t) => {
@@ -537,18 +625,18 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
         assignee: t.assignee ?? '', workspace: t.workspace ?? '',
         risk_flag: !!t.risk_flag, review_flag: !!t.review_flag,
       });
-    }).catch((err) => say('danger', 'could not load task', String(err.message || err)));
+    }).catch((err) => say('danger', 'could not load task', String((err as Error).message || err)));
   }, [taskCard.id]);
   if (!full || !fields) {
     return <div style={{ padding: '24px 16px', color: 'var(--text-muted)' }}>loading…</div>;
   }
   const issueBacked = full.github_issue_number != null;
-  const set = (k, v) => setFields((f) => ({ ...f, [k]: v }));
-  const withPlaceholder = (label, names) => [{ value: '', label }, ...names.map((n) => ({ value: n, label: n }))];
+  const set = (k: keyof EditTaskFields, v: string | boolean) => setFields((f) => ({ ...f!, [k]: v }) as EditTaskFields);
+  const withPlaceholder = (label: string, names: string[]) => [{ value: '', label }, ...names.map((n) => ({ value: n, label: n }))];
   // only the fields that actually changed — an unchanged submission is a no-op
   // server-side, but sending a minimal patch keeps the intent clear
   const changed = () => {
-    const out = {};
+    const out: Partial<EditTaskFields> = {};
     if (!issueBacked) {
       if (fields.title !== (full.title ?? '')) out.title = fields.title;
       if (fields.purpose !== (full.purpose ?? '')) out.purpose = fields.purpose;
@@ -570,7 +658,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
       await onSaved();
       onClose();
     } catch (err) {
-      say('danger', 'edit failed', String(err.message || err));
+      say('danger', 'edit failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -585,15 +673,15 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!issueBacked && (
           <React.Fragment>
-            <Input label="Title" value={fields.title} onChange={(e) => set('title', e.target.value)} />
-            <Input label="Purpose" multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', e.target.value)} />
-            <Input label="Completion criteria" multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', e.target.value)} />
+            <Input label="Title" value={fields.title} onChange={(e) => set('title', (e.target as HTMLInputElement).value)} />
+            <Input label="Purpose" multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', (e.target as HTMLInputElement).value)} />
+            <Input label="Completion criteria" multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', (e.target as HTMLInputElement).value)} />
           </React.Fragment>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: issueBacked ? '1fr' : '1fr 1fr', gap: 12 }}>
-          <Select label="Assignee" options={withPlaceholder('(default agent)', candidates.assignees)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
+          <Select label="Assignee" options={withPlaceholder('(default agent)', candidates.assignees)} value={fields.assignee} onChange={(e) => set('assignee', (e.target as HTMLInputElement).value)} />
           {!issueBacked && (
-            <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
+            <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', (e.target as HTMLInputElement).value)} />
           )}
         </div>
         <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
@@ -609,7 +697,12 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
 // the target and its unfinished descendants go cancelled together (道連れ),
 // enforced server-side. An open Tidepool question over the subtree gates it —
 // the domain error surfaces as a toast.
-function CancelTaskDialog({ task, onCancelled, onClose, say }) {
+function CancelTaskDialog({ task, onCancelled, onClose, say }: {
+  task: BoardScreenTask;
+  onCancelled: () => Promise<void> | void;
+  onClose: () => void;
+  say: AppSay;
+}) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -621,7 +714,7 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
       await onCancelled();
       onClose();
     } catch (err) {
-      say('danger', 'cancel failed', String(err.message || err));
+      say('danger', 'cancel failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -632,7 +725,7 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
         cancels "{task.title}" and its unfinished descendants — the record is kept, never erased
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="left blank, only the fact of the cancel is recorded" />
+        <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason((e.target as HTMLInputElement).value)} placeholder="left blank, only the fact of the cancel is recorded" />
         <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Cancel this task</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Keep it</Button>
       </Card>
@@ -649,7 +742,7 @@ const HANDOFF_FIELDS = [
   ['dead_ends', 'dead ends'],
   ['resume_context', 'context to resume'],
   ['known_issues', 'known issues (no task)'],
-];
+] as const;
 
 // issue #13's handoff assist, wired by issue #301: completing a human task that
 // blocks a parent. Free-text dump → the LLM drafts the six fields → the human
@@ -658,11 +751,16 @@ const HANDOFF_FIELDS = [
 // completes. The draft is optional in the other direction too: no draft client
 // (or an unreachable one) is always a 503, and like the register gate's own
 // dump → draft → confirm, that just leaves the fields blank to type into.
-function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
+function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
+  task: { id: string; title: string; blocking: string | null };
+  onCompleted: () => Promise<void> | void;
+  onClose: () => void;
+  say: AppSay;
+}) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [dump, setDump] = React.useState('');
-  const [fields, setFields] = React.useState({});
-  const [missing, setMissing] = React.useState([]);
+  const [fields, setFields] = React.useState<Record<string, string>>({});
+  const [missing, setMissing] = React.useState<string[]>([]);
   const [drafting, setDrafting] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const draft = async () => {
@@ -672,7 +770,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
       setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ''])));
       setMissing(d.missing ?? []);
     } catch (err) {
-      say('info', 'no draft — fill it in yourself', String(err.message || err));
+      say('info', 'no draft — fill it in yourself', String((err as Error).message || err));
     }
     setDrafting(false);
   };
@@ -687,7 +785,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
       await onCompleted();
       onClose();
     } catch (err) {
-      say('danger', 'complete failed', String(err.message || err));
+      say('danger', 'complete failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -700,7 +798,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         "{task.title}" blocks {task.blocking} — the handoff is what that parent reads when it resumes
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 14 }}>
-        <Input label="How did it go?" multiline rows={3} value={dump} onChange={(e) => setDump(e.target.value)}
+        <Input label="How did it go?" multiline rows={3} value={dump} onChange={(e) => setDump((e.target as HTMLInputElement).value)}
           placeholder="dump it — the LLM structures it into the six fields below" />
         <Button variant="secondary" size="lg" full disabled={!dump.trim() || drafting} onClick={draft}>
           {drafting ? 'Drafting…' : 'Draft handoff'}
@@ -712,7 +810,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
         {HANDOFF_FIELDS.map(([field, label]) => (
           <div key={field}>
             <Input label={label} multiline rows={2} value={fields[field] ?? ''}
-              onChange={(e) => setFields((f) => ({ ...f, [field]: e.target.value }))} />
+              onChange={(e) => setFields((f) => ({ ...f, [field]: (e.target as HTMLInputElement).value }))} />
             {missing.includes(field) && (
               <span style={{ display: 'block', marginTop: 5, fontSize: 'var(--text-xs)', color: 'var(--sun-4)' }}>
                 ⚠ the draft found nothing for this — optional
@@ -729,23 +827,23 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
 
 function App() {
   const { Toast, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
-  const [data, setData] = React.useState(null);
+  const [data, setData] = React.useState<AppData | null>(null);
   const [tab, setTabRaw] = React.useState('triage');
   const [tabDir, setTabDir] = React.useState('right');
-  const [toast, setToast] = React.useState(null);
-  const [wash, setWash] = React.useState(null);
+  const [toast, setToast] = React.useState<AppToast | null>(null);
+  const [wash, setWash] = React.useState<{ label: string; emoji?: string } | null>(null);
   // human decompose (issue #129): the board task an "Add child" dialog is
   // open for, or null when closed — set from a board task-card tap
-  const [addChildParent, setAddChildParent] = React.useState(null);
+  const [addChildParent, setAddChildParent] = React.useState<BoardScreenTask | null>(null);
   // issue #130: a board task-card tap opens an action chooser (add child /
   // edit / cancel) for a plausibly-eligible task; the edit and cancel dialogs
   // each track their own open task
-  const [actionsTask, setActionsTask] = React.useState(null);
-  const [editTaskCard, setEditTaskCard] = React.useState(null);
-  const [cancelTaskCard, setCancelTaskCard] = React.useState(null);
+  const [actionsTask, setActionsTask] = React.useState<BoardScreenTask | null>(null);
+  const [editTaskCard, setEditTaskCard] = React.useState<BoardScreenTask | null>(null);
+  const [cancelTaskCard, setCancelTaskCard] = React.useState<BoardScreenTask | null>(null);
   // issue #301: the your-tasks row whose completion dialog is open (a row that
   // blocks a parent), or null when closed
-  const [completeHumanCard, setCompleteHumanCard] = React.useState(null);
+  const [completeHumanCard, setCompleteHumanCard] = React.useState<AppData['humanTasks'][number] | null>(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get('question'),
   );
@@ -806,14 +904,14 @@ function App() {
         say('success', 'notifications enabled', 'questions outside quiet hours arrive immediately');
       }
     } catch (err) {
-      say('danger', 'failed to enable notifications', String(err.message || err));
+      say('danger', 'failed to enable notifications', String((err as Error).message || err));
     }
   };
 
   const refreshFull = () => fetchData().then(setData).catch(() => {});
 
   // every tab entry takes a fresh snapshot; screens remount per tab (key)
-  const applyTab = (next) => {
+  const applyTab = (next: string) => {
     setTabRaw((prev) => {
       if (next !== prev) setTabDir(tabOrder.indexOf(next) > tabOrder.indexOf(prev) ? 'right' : 'left');
       return next;
@@ -823,8 +921,8 @@ function App() {
   // a tab switch unmounts the screen it leaves, so a screen holding an open
   // editor with unsaved changes gets to ask first (issue #204 決定4). The guard
   // returns true when it parked the switch behind its own dialog.
-  const leaveGuard = React.useRef(null);
-  const setTab = (next) => {
+  const leaveGuard = React.useRef<((move: () => void) => boolean) | null>(null);
+  const setTab = (next: string) => {
     // the guard runs the move itself when there is nothing to discard, so the
     // switch must not also be applied here — it only reports whether it parked
     if (leaveGuard.current) { leaveGuard.current(() => applyTab(next)); return; }
@@ -864,10 +962,10 @@ function App() {
     const t = setTimeout(dismissToast, 3200);
     return () => clearTimeout(t);
   }, [toast, dismissToast]);
-  const say = (kind, msg, detail) => setToast({ kind, msg, detail });
+  const say: AppSay = (kind, msg, detail) => setToast({ kind, msg, detail });
 
   // Cover the screen with the tide, apply the state change while covered, drain.
-  const runWash = (label, emoji, apply) => {
+  const runWash = (label: string, emoji: string, apply: () => void) => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { apply(); return; }
     setWash({ label, emoji });
     setTimeout(apply, WASH_MS * 0.4);
@@ -901,38 +999,38 @@ function App() {
   // S1 — the last tap in a bundle persists every item's answer atomically;
   // the unblocked parent is staged server-side (issue #30: `a` is one answer
   // per item, in item order)
-  const answerNow = async (q, a) => {
+  const answerNow = async (q: TpTriageQuestion, a: string[]) => {
     try {
       await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true });
     } catch (err) {
-      say('danger', 'answer failed', String(err.message || err));
+      say('danger', 'answer failed', String((err as Error).message || err));
       throw err;
     }
   };
 
   // S2 — the objection annotation lands on the log entry the moment it is raised
-  const objectNow = async (entry, direction) => {
+  const objectNow = async (entry: TpLogEntry, direction: string) => {
     try {
       await api('/api/triage/objection', { entry_id: entry.id, comment: direction });
     } catch (err) {
-      say('danger', 'objection failed', String(err.message || err));
+      say('danger', 'objection failed', String((err as Error).message || err));
       throw err;
     }
   };
 
-  const scratchAdd = async (text) => {
+  const scratchAdd = async (text: string) => {
     try {
       const l = await api('/api/triage/scratchpad', { line: text });
       return { id: l.id, text: l.line };
     } catch (err) {
-      say('danger', 'scratchpad failed', String(err.message || err));
+      say('danger', 'scratchpad failed', String((err as Error).message || err));
       throw err;
     }
   };
 
   // an entry never displayed is unobserved — report each skimmed entry once
-  const displayedReported = React.useRef(new Set());
-  const reportDisplayed = (entries) => {
+  const displayedReported = React.useRef(new Set<number>());
+  const reportDisplayed = (entries: TpLogEntry[]) => {
     const ids = entries.map((e) => e.id)
       .filter((id) => typeof id === 'number' && !displayedReported.current.has(id));
     if (!ids.length) return;
@@ -947,9 +1045,9 @@ function App() {
     const res = await fetch('/api/triage');
     if (!res.ok) throw new Error(res.statusText);
     const { queue } = await res.json();
-    return (queue ?? []).map((t) => ({
+    return (queue ?? []).map((t: ServerJson): QueueScreenTask => ({
       id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
-      assigneeIcon: t.assignee ? data.icons[t.assignee] : undefined, risk: !!t.risk_flag,
+      assigneeIcon: t.assignee ? data!.icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked', frontInserted: t.front_inserted,
     }));
   };
@@ -962,7 +1060,7 @@ function App() {
     if (!res.ok) throw new Error(res.statusText);
     const board = await res.json();
     return Object.fromEntries(
-      board.filter((t) => t.type === 'question' && t.landing).map((t) => [t.id, t.landing]));
+      board.filter((t: ServerJson) => t.type === 'question' && t.landing).map((t: ServerJson) => [t.id, t.landing]));
   };
 
   // Commit = close + cursor (ADR 0065 decision 2 / consequences): two calls,
@@ -971,9 +1069,13 @@ function App() {
   // fire the immediate poll. The read cursor is the second call, advanced
   // after: a failed close never marks the skimmed lines as read, and a
   // failed cursor advance never masquerades as a failed commit.
-  const closeTriage = (body) => api('/api/triage/close', body);
+  const closeTriage = (body: ServerJson) => api('/api/triage/close', body);
 
-  const commitTriage = async (answers, objections, scratch) => {
+  const commitTriage = async (
+    answers: Record<string, string[]>,
+    objections: Record<string, string[]>,
+    scratch: { id: number; text: string; kind: string }[],
+  ) => {
     let result;
     try {
       result = await closeTriage({
@@ -985,25 +1087,25 @@ function App() {
     } catch (err) {
       refresh();
       say('danger', 'triage commit failed — nothing applied, cursor NOT advanced',
-        String(err.message || err));
+        String((err as Error).message || err));
       return;
     }
     for (const [qid, a] of Object.entries(answers)) {
       if (!a) continue;
-      const q = data.questions.find((x) => x.id === qid);
+      const q = data!.questions.find((x) => x.id === qid);
       if (q && q.parent) markFront(q.parent);
     }
     let cursorNote = '';
     try {
-      if (data.lastLogId != null) await api('/api/log/cursor', { last_read: data.lastLogId });
+      if (data!.lastLogId != null) await api('/api/log/cursor', { last_read: data!.lastLogId });
     } catch {
       cursorNote = ' · read cursor NOT advanced (retry from the log)';
     }
     const answered = Object.values(answers).filter(Boolean).length;
-    const repairTasks = new Set([...commitPendingObjectionKeys(data.log, objections)]
-      .map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId)
+    const repairTasks = new Set([...commitPendingObjectionKeys(data!.log, objections)]
+      .map((k) => data!.log.find((e) => String(e.id) === String(k))?.taskId)
       .filter(Boolean)).size;
-    const summary = [`${data.log.filter((entry) => entry.unread).length} read`];
+    const summary = [`${data!.log.filter((entry) => entry.unread).length} read`];
     if (answered) summary.push(`${answered} answered`);
     if (repairTasks) summary.push(`${repairTasks} repair`);
     if (scratch.length) summary.push(`${scratch.length} scratchpad applied`);
@@ -1041,7 +1143,7 @@ function App() {
         say('info', 'triage session was already closed', 'pickup was not stopped');
       }
     } catch (err) {
-      say('danger', 'failed to close triage session', String(err.message || err));
+      say('danger', 'failed to close triage session', String((err as Error).message || err));
     }
   };
 
@@ -1052,12 +1154,12 @@ function App() {
   // already told the human which one they clicked (queue-screen.tsx); the
   // toast just has to describe honestly what actually happened rather than
   // always claiming success (#79's lesson, ADR 0028).
-  const moveFront = async (id) => {
+  const moveFront = async (id: string) => {
     // the *pickable* head, the same predicate the server fires on (issue
     // #299) — not `queue[0]`, which can be a row the slot could never take.
     // held / question / human rows never reach `data.queue` at all (mapData
     // above), so what is left to skip here is blocked and skipped.
-    const wasHead = data.queue.find((r) => !r.blocked && !r.skipped)?.id === id;
+    const wasHead = data!.queue.find((r) => !r.blocked && !r.skipped)?.id === id;
     try {
       await api(`/api/tasks/${id}/move`, { after: null });
       markFront(id);
@@ -1071,7 +1173,7 @@ function App() {
         say('success', 'moved to front — immediate poll fired', id);
       }
     } catch (err) {
-      say('danger', 'move failed', String(err.message || err));
+      say('danger', 'move failed', String((err as Error).message || err));
     }
   };
 
@@ -1081,15 +1183,15 @@ function App() {
   // in completeTask), one that blocks a parent opens the handoff dialog first —
   // the parent picks that doc up when it resumes. Unblocking the parent and the
   // immediate poll are the server's job; the browser only refetches.
-  const doneHuman = async (id) => {
-    const task = data.humanTasks.find((t) => t.id === id);
+  const doneHuman = async (id: string) => {
+    const task = data!.humanTasks.find((t) => t.id === id);
     if (task?.blocking) { setCompleteHumanCard(task); return; }
     try {
       await api(`/api/tasks/${id}/complete`, {});
       say('success', 'task completed', id);
       await refreshFull();
     } catch (err) {
-      say('danger', 'complete failed', String(err.message || err));
+      say('danger', 'complete failed', String((err as Error).message || err));
     }
   };
 
@@ -1099,27 +1201,27 @@ function App() {
   // (explorations/Pause Pickup.html's PausePickupApp.togglePause): a running
   // task finishes before anything new starts, an empty slot just stays empty.
   const togglePause = async () => {
-    const next = !data.paused;
+    const next = !data!.paused;
     try {
       await api('/api/pause', { paused: next });
       await refresh();
       say(next ? 'info' : 'success', next ? 'pickup paused' : 'pickup resumed',
         next
-          ? (data.slot?.taskId
+          ? (data!.slot?.taskId
               ? <>
-                  <IdChip id={data.slot.taskId} style={{ display: 'inline-block', verticalAlign: 'bottom' }} />
+                  <IdChip id={data!.slot.taskId} style={{ display: 'inline-block', verticalAlign: 'bottom' }} />
                   {' finishes · nothing new starts'}
                 </>
               : 'nothing starts until resumed')
           : 'immediate poll fired');
     } catch (err) {
-      say('danger', 'pause toggle failed', String(err.message || err));
+      say('danger', 'pause toggle failed', String((err as Error).message || err));
     }
   };
 
   // Spend-down (ADR 0091) — pause と同格の盤面状態。有効化は
   // サーバー側が即時 poll を発火する(残りを今すぐ燃やす操作なので)。
-  const setSpendDown = async (window, active) => {
+  const setSpendDown = async (window: string, active: boolean) => {
     try {
       await api('/api/spend-down', { window, active });
       await refresh();
@@ -1129,35 +1231,35 @@ function App() {
           ? 'pace line off — burns to the 100% cap, expires at the window reset'
           : 'pace line back on');
     } catch (err) {
-      say('danger', 'spend-down failed', String(err.message || err));
+      say('danger', 'spend-down failed', String((err as Error).message || err));
     }
   };
 
-  const reorder = async (next, movedId, pos) => {
+  const reorder = async (next: QueueScreenTask[], movedId: string, pos: number) => {
     try {
       const idx = next.findIndex((t) => t.id === movedId);
-      const after = idx <= 0 ? null : next[idx - 1].id;
-      setData((d) => ({ ...d, queue: next })); // optimistic: the rows already sit in the new order
+      const after = idx <= 0 ? null : next[idx - 1]!.id;
+      setData((d) => ({ ...d!, queue: next })); // optimistic: the rows already sit in the new order
       await api(`/api/tasks/${movedId}/move`, { after });
       await refresh();
       say('info', 'queue reordered', `${movedId} → position ${pos}`);
     } catch (err) {
       await refresh();
-      say('danger', 'reorder failed', String(err.message || err));
+      say('danger', 'reorder failed', String((err as Error).message || err));
     }
   };
 
   // a completion entry unfolds its handoff doc in place — the log's link back
   // to the deliverable (issue #5). a failed fetch surfaces in the expansion
   // via the kit's catch, not as a silent no-op.
-  const loadHandoff = async (entry) => {
+  const loadHandoff = async (entry: TpLogEntry) => {
     const res = await fetch(`/api/tasks/${entry.taskId}`);
     if (!res.ok) throw new Error(res.statusText);
     const task = await res.json();
     return task.handoff_doc ?? '(no handoff doc)';
   };
 
-  const register = async (fields) => {
+  const register = async (fields: RegisterScreenFields) => {
     try {
       const t = await api('/api/tasks', fields);
       runWash('Into the pool.', '🫧', () => {
@@ -1167,7 +1269,7 @@ function App() {
     } catch (err) {
       // a gate rejection (422, issue #49) renders inline in the register
       // screen — a toast would bury the suggested comment it carries
-      if (err.status !== 422) say('danger', 'registration failed', String(err.message || err));
+      if (!(err instanceof ApiError) || err.status !== 422) say('danger', 'registration failed', String((err as Error).message || err));
       throw err;
     }
   };
@@ -1181,7 +1283,7 @@ function App() {
   // human-registered for edit/cancel) need event history the board payload
   // doesn't carry, so they're left to the API's own gates to reject on submit.
   // An ineligible tap keeps the plain info toast this used to always show.
-  const openTask = (t) => {
+  const openTask = (t: BoardScreenTask) => {
     const settled = t.status === 'done';
     const othersInProgress = t.status === 'in_progress' && t.rawAssignee !== 'human';
     if (settled || othersInProgress) {
@@ -1196,7 +1298,7 @@ function App() {
   // child (or, on a risk/protected-workspace conversion, the approval
   // question it produced instead — same status code, humanDecomposeTask's
   // own union) shows up at once.
-  const addChild = async (fields) => {
+  const addChild = async (fields: RegisterScreenFields) => {
     try {
       const t = await api('/api/tasks', fields);
       say(
@@ -1206,7 +1308,7 @@ function App() {
       );
       await refreshFull();
     } catch (err) {
-      say('danger', 'add child failed', String(err.message || err));
+      say('danger', 'add child failed', String((err as Error).message || err));
       throw err;
     }
   };
@@ -1278,7 +1380,7 @@ function App() {
         {tab === 'board' && <BoardScreen data={data} onOpenTask={openTask} />}
         {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={doneHuman} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
-        {tab === 'settings' && <SettingsScreen say={say} registerLeaveGuard={(fn) => { leaveGuard.current = fn; }} />}
+        {tab === 'settings' && <SettingsScreen say={say} registerLeaveGuard={(fn: ((move: () => void) => boolean) | null) => { leaveGuard.current = fn; }} />}
         </div>
       </main>
 
@@ -1359,10 +1461,13 @@ function App() {
 // Wait for the DS bundle before mounting — a slow bundle load must not white-screen the page.
 (function mountWhenReady(tries) {
   if (window.TidepoolDesignSystem_8a0ead) {
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    // @types/react-dom は createRoot を react-dom/client 側に置くが、public/vendor の
+    // UMD グローバルは持っている(ADR 0055)
+    (ReactDOM as unknown as { createRoot(el: Element): { render(node: React.ReactNode): void } })
+      .createRoot(document.getElementById('root')!).render(<App />);
   } else if (tries > 0) {
     setTimeout(() => mountWhenReady(tries - 1), 100);
   } else {
-    document.getElementById('root').innerHTML = '<p style="padding:24px;font-family:monospace;font-size:12px;color:#5c6b66">_ds_bundle.js failed to load — recompile the design system.</p>';
+    document.getElementById('root')!.innerHTML = '<p style="padding:24px;font-family:monospace;font-size:12px;color:#5c6b66">_ds_bundle.js failed to load — recompile the design system.</p>';
   }
 })(50);

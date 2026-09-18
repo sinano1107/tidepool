@@ -185,7 +185,7 @@ interface QueueScreenProviderUsage {
 interface QueueScreenProps {
   data: {
     /** 色も行も meta もサーバが導いた答えをそのまま描く(ADR 0068 決定1)。 */
-    slot: { color: string; line: string; meta: string; taskId: string | null };
+    slot: AppSlot;
     queue: QueueScreenTask[];
     humanTasks: Array<{ id: string; title: string; blocking: string | null }>;
     providerUsage?: QueueScreenProviderUsage[];
@@ -201,7 +201,7 @@ interface QueueScreenProps {
   onReorder: (next: QueueScreenTask[], id: string, position: number) => void;
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
 function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }: QueueScreenProps) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   // 行の中身はサーバが導いた slot をそのまま描く。盤面全体の停止は行に降りない ——
