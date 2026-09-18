@@ -318,8 +318,8 @@ assert_contains "resume: restarts a stopped VM by name only" "limactl start tide
 
 # --- re-run on a finished setup ---------------------------------------------
 # Usable as a "check my setup" command: nothing that creates or changes state
-# runs. The trust seed is the deliberate exception — it is idempotent and
-# cheap, so it is not state-checked (#442).
+# runs. Preparing the Claude CLI config is the deliberate exception — it is
+# idempotent and cheap, so it is not state-checked (#442 / #682).
 
 reset_case
 LIMA_INSTALLED=1
