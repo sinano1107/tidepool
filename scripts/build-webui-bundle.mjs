@@ -7,11 +7,11 @@ import * as esbuild from "esbuild";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SOURCES = [
-  "webui/queue-screen.jsx",
+  "webui/queue-screen.tsx",
   "webui/triage-screen.jsx",
-  "webui/single-question-view.jsx",
-  "webui/board-screen.jsx",
-  "webui/register-screen.jsx",
+  "webui/single-question-view.tsx",
+  "webui/board-screen.tsx",
+  "webui/register-screen.tsx",
   "webui/settings-screen.jsx",
   "webui/app.jsx",
 ];
@@ -19,7 +19,7 @@ const SOURCES = [
 function compile(relPath) {
   const source = readFileSync(join(ROOT, relPath), "utf8");
   const { code } = esbuild.transformSync(source, {
-    loader: "jsx",
+    loader: relPath.endsWith(".tsx") ? "tsx" : "jsx",
     jsx: "transform",
     jsxFactory: "React.createElement",
     jsxFragment: "React.Fragment",

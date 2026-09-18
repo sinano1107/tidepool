@@ -1,24 +1,49 @@
 // TODO queue — ordering + manual intervention live here, plus "your tasks" (human list)
 
+// 行が持つ契約は QueueItem が受け取る形 + この画面が読む並びのフラグ —— コンポーネント
+// 側は正本から引き、写しを書かない。集合ごとのサーバ型の移送は issue #352 が持つ。
+type QueueScreenTask = NonNullable<import('../design-system/components/board/QueueItem').QueueItemProps['task']> & {
+  id: string;
+  /** 子が open なので枠が飛ばす行(行の位置は保たれる)。 */
+  blocked?: boolean;
+  skipped?: boolean;
+  frontInserted?: boolean;
+  flash?: boolean;
+};
+interface QueueScreenDrag {
+  id: string;
+  index: number;
+  projected: number;
+  startY: number;
+  shift: number;
+}
+interface TpQueueListProps {
+  tasks: QueueScreenTask[];
+  /** 省略時は並べ替え不能(triage のプレビューがこの形で使う)。 */
+  onReorder?: (next: QueueScreenTask[], id: string, position: number) => void;
+  onFront?: (id: string) => void;
+  headId?: string | null;
+}
+
 // Reorderable queue list — pointer-driven drag & drop with tidal FLIP animations.
 // Reused by QueueScreen and the triage queue-check step.
-function TpQueueList({ tasks, onReorder, onFront, headId }) {
+function TpQueueList({ tasks, onReorder, onFront, headId }: TpQueueListProps) {
   const gap = 6;
   const { QueueItem } = window.TidepoolDesignSystem_8a0ead;
-  const itemEls = React.useRef(new Map());
-  const lastTops = React.useRef(new Map());
+  const itemEls = React.useRef(new Map<string, HTMLDivElement>());
+  const lastTops = React.useRef(new Map<string, number>());
   const skipFlip = React.useRef(false);
-  const drag = React.useRef(null);
-  const [draggingId, setDraggingId] = React.useState(null);
+  const drag = React.useRef<QueueScreenDrag | null>(null);
+  const [draggingId, setDraggingId] = React.useState<string | null>(null);
   const orderKey = tasks.map((t) => t.id).join('|');
   const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  const setRef = (id) => (el) => { if (el) itemEls.current.set(id, el); else itemEls.current.delete(id); };
-  const clearStyles = (el) => { el.style.transition = ''; el.style.transform = ''; el.style.zIndex = ''; el.style.filter = ''; el.style.pointerEvents = ''; };
+  const setRef = (id: string) => (el: HTMLDivElement | null) => { if (el) itemEls.current.set(id, el); else itemEls.current.delete(id); };
+  const clearStyles = (el: HTMLElement) => { el.style.transition = ''; el.style.transform = ''; el.style.zIndex = ''; el.style.filter = ''; el.style.pointerEvents = ''; };
 
   // FLIP on order change — animates move-to-front, front-inserts, drag commits.
   React.useLayoutEffect(() => {
-    const tops = new Map();
+    const tops = new Map<string, number>();
     tasks.forEach((t) => {
       const el = itemEls.current.get(t.id);
       if (el) tops.set(t.id, el.getBoundingClientRect().top);
@@ -31,8 +56,9 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
       tasks.forEach((t) => {
         const el = itemEls.current.get(t.id);
         const last = lastTops.current.get(t.id);
-        if (!el || last === undefined) return;
-        const dy = last - tops.get(t.id);
+        const top = tops.get(t.id);
+        if (!el || last === undefined || top === undefined) return;
+        const dy = last - top;
         if (Math.abs(dy) < 1) return;
         el.style.transition = 'none';
         el.style.transform = `translateY(${dy}px)`;
@@ -45,7 +71,7 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
     lastTops.current = tops;
   }, [orderKey]);
 
-  const applyShifts = (d) => {
+  const applyShifts = (d: QueueScreenDrag) => {
     tasks.forEach((t, j) => {
       if (j === d.index) return;
       const el = itemEls.current.get(t.id);
@@ -56,21 +82,21 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
     });
   };
 
-  const onPointerDown = (e, index, id) => {
-    if (!onReorder || e.target.closest('button') || e.button > 0 || drag.current) return;
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>, index: number, id: string) => {
+    if (!onReorder || (e.target as Element).closest('button') || e.button > 0 || drag.current) return;
     const el = itemEls.current.get(id);
     if (!el) return;
     e.preventDefault();
     const d = { id, index, projected: index, startY: e.clientY, shift: el.getBoundingClientRect().height + gap };
     drag.current = d;
     setDraggingId(id);
-    el.style.zIndex = 5;
+    el.style.zIndex = '5';
     el.style.transition = 'none';
     el.style.filter = 'drop-shadow(0 6px 14px rgba(23,33,30,0.22))';
     // rows sliding under the cursor mid-drag must not take hover
     itemEls.current.forEach((other, oid) => { if (oid !== id) other.style.pointerEvents = 'none'; });
 
-    const onMove = (ev) => {
+    const onMove = (ev: PointerEvent) => {
       const dy = ev.clientY - d.startY;
       el.style.transform = `translateY(${dy}px) scale(1.02)`;
       const p = Math.max(0, Math.min(tasks.length - 1, Math.round(d.index + dy / d.shift)));
@@ -91,7 +117,8 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
           itemEls.current.forEach(clearStyles);
         } else {
           const next = tasks.slice();
-          const [moved] = next.splice(d.index, 1);
+          // d.index は tasks の実在位置なので splice は必ず1件返す
+          const moved = next.splice(d.index, 1)[0]!;
           next.splice(d.projected, 0, moved);
           skipFlip.current = true;
           onReorder(next, d.id, d.projected + 1);
@@ -132,15 +159,52 @@ function TpQueueList({ tasks, onReorder, onFront, headId }) {
   );
 }
 
+type QueueScreenSpendWindow = 'session' | 'week';
+// 画面が読む分だけの provider usage(サーバ側の正本は src/throttle.ts の
+// DisplayProviderUsage)。集合ごとの移送は issue #352 が持つ。
+interface QueueScreenProviderUsage {
+  provider: string;
+  status: string;
+  plan: string | null;
+  reason?: string;
+  observedAt: string | null;
+  windows: Array<{
+    window: string;
+    model: string | null;
+    usedPercent: number | null;
+    offset: number;
+    throttled: boolean;
+    resumesAt: string | null;
+  }>;
+}
+interface QueueScreenProps {
+  data: {
+    /** 色も行も meta もサーバが導いた答えをそのまま描く(ADR 0068 決定1)。 */
+    slot: { color: string; line: string; meta: string; taskId: string | null };
+    queue: QueueScreenTask[];
+    humanTasks: Array<{ id: string; title: string; blocking: string | null }>;
+    providerUsage?: QueueScreenProviderUsage[];
+  };
+  slotState: 'busy' | 'limit' | 'free';
+  paused: boolean;
+  onTogglePause: () => void;
+  /** window ごとに独立 —— null は未武装。 */
+  spendDown: Record<QueueScreenSpendWindow, { activatedAt: string } | null>;
+  onSpendDown: (window: QueueScreenSpendWindow, armed: boolean) => void;
+  onFront: (id: string) => void;
+  onDoneHuman: (id: string) => void;
+  onReorder: (next: QueueScreenTask[], id: string, position: number) => void;
+}
+
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
-function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }) {
+function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }: QueueScreenProps) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   // 行の中身はサーバが導いた slot をそのまま描く。盤面全体の停止は行に降りない ——
   // 面が1回言う(ADR 0068 決定7)。Pause は行を作り直さない — 停止の並び順はサーバの
   // 列挙が持ち(ADR 0068 決定1)、この画面はその答えをそのまま描く。`paused` がここに
   // 残るのは pause ボタン・波線・文字色といった pause の操作面のためである。
   const slot = data.slot;
-  const activeSpendDown = ['session', 'week'].filter((window) => spendDown[window]);
+  const activeSpendDown = (['session', 'week'] as const).filter((window) => spendDown[window]);
   const providerUsage = data.providerUsage ?? [];
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
@@ -225,7 +289,7 @@ function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpen
           </span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {['session', 'week'].map((window) => (
+        {(['session', 'week'] as const).map((window) => (
           <div key={window} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 30 }}>
             <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-xs)', color: spendDown[window] ? 'var(--text-body)' : 'var(--text-muted)' }}>
               {spendDown[window] ? `${window} · 100% cap · expires at reset` : `${window} · pace line on`}

@@ -1,0 +1,37 @@
+{
+  // ブラウザ側の連結方式(ADR 0055)を TypeScript にするための2本目のプログラム
+  // (ADR 0133 決定2)。ルートの tsconfig.json は types: ["node"]・DOM lib 無し・
+  // jsx 未設定なので、そこへ webui を足すのではなく独立した設定として持つ。
+  // strict / noUncheckedIndexedAccess はルートと同じ値 —— 水準を2つ持たない。
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    // 連結方式のファイルは import を書かないが、design-system の型を
+    // typeof import("../design-system/...") で拡張子なしに引くため bundler を使う。
+    "moduleResolution": "bundler",
+    "jsx": "react",
+    // どのファイルも react を import しないので、この指定が無いと @types/react が
+    // プログラムに読まれず JSX が1つも解決しない。
+    "types": ["react", "react-dom"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // 移行中だけ真。残りの .jsx を素通しにする。最終状態は allowJs: false で、
+    // そのとき include の .jsx 3行も消える(ADR 0133 決定5)。
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": [
+    "webui/globals.d.ts",
+    "webui/board-screen.tsx",
+    "webui/single-question-view.tsx",
+    "webui/queue-screen.tsx",
+    "webui/register-screen.tsx",
+    // 未変換の残件 —— ここが空になったら allowJs: false にする。
+    "webui/triage-screen.jsx",
+    "webui/app.jsx",
+    "webui/settings-screen.jsx"
+  ]
+}
