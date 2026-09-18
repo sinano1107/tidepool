@@ -132,7 +132,7 @@ function TpQueueList({ tasks, baseIndex = 0, onReorder, onFront, headId, gap = 6
   );
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — scripts/build-webui-bundle.mjs concatenates these files into one bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
 function QueueScreen({ data, slotState, paused, onTogglePause, spendDown, onSpendDown, onFront, onDoneHuman, onReorder }) {
   const { Card, Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   // 行の中身はサーバが導いた slot をそのまま描く。盤面全体の停止は行に降りない ——

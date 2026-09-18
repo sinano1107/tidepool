@@ -1,6 +1,6 @@
 // Kanban board — progress overview. skipped is never shown here.
 // Fills available height; each column scrolls vertically on overflow.
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — scripts/build-webui-bundle.mjs concatenates these files into one bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
 function BoardScreen({ data, onOpenTask }) {
   const { FadeScroll, TaskCard } = window.TidepoolDesignSystem_8a0ead;
   const cols = ['todo', 'in_progress', 'blocked', 'done'];

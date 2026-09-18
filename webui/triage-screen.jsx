@@ -322,7 +322,7 @@ function commitPendingObjectionKeys(log, localObjections) {
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
 // staged S3 queue, loadLanding re-reads the landing questions' answerability.
 // onCommit always closes the flow.
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — scripts/build-webui-bundle.mjs concatenates these files into one bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
 function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }) {
   const { Button, Input, LogEntry, Switch } = window.TidepoolDesignSystem_8a0ead;
   // 着地 question(`landing` を持つ行)は merge 判断ステップの持ち物 — 先頭の質問
@@ -364,10 +364,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     setDropped((prev) => [...prev, entry]);
   };
 
-  const refreshPreview = () => {
-    loadPreview().then(setPreview).catch(() => {});
-  };
-  React.useEffect(() => { if (section === S_QUEUE) refreshPreview(); }, [section]);
+  React.useEffect(() => {
+    if (section === S_QUEUE) loadPreview().then(setPreview).catch(() => {});
+  }, [section]);
   React.useEffect(() => {
     if (section === S_MERGE) loadLanding().then(setLandingNow).catch(() => {});
   }, [section]);

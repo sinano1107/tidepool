@@ -398,12 +398,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     setScratch((prev) => prev.filter((_, j) => j !== i));
     setDropped((prev) => [...prev, entry]);
   };
-  const refreshPreview = () => {
-    loadPreview().then(setPreview).catch(() => {
-    });
-  };
   React.useEffect(() => {
-    if (section === S_QUEUE) refreshPreview();
+    if (section === S_QUEUE) loadPreview().then(setPreview).catch(() => {
+    });
   }, [section]);
   React.useEffect(() => {
     if (section === S_MERGE) loadLanding().then(setLandingNow).catch(() => {

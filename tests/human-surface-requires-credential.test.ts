@@ -119,9 +119,8 @@ it("bearer ヘッダを持つ道具は通る(issue #153)", async () => {
   expect(res.status).toBe(200);
 });
 
-// キットのデモ面は畳んだ(ADR 0132)。credential を持っていても画面が返らない
-// ことは 401 では言えない —— 上の allowlist は credential の有無しか見ないので、
-// 「そもそも配信していない」はここでしか言えない(issue #246)。
+// キットのデモ面は畳んだ(ADR 0132)。上の allowlist は credential の有無しか
+// 見ないので、「そもそも配信していない」はここでしか言えない(issue #246)。
 it("キットのデモ面は credential 付きでも返らない(ADR 0132 / issue #246)", async () => {
   t = await bootTidepool();
   const res = await fetch(`${t.baseUrl}/kit/index.html`, {

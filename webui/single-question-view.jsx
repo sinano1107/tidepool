@@ -7,7 +7,7 @@
 // onAnswer(answers) receives one array entry per item, in item order, fired
 // by TpQuestionCard the instant the bundle is fully answered — a live caller
 // POSTs that array straight to /api/tasks/:id/answer.
-// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — scripts/build-webui-bundle.mjs concatenates these files into one bundle
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
 function TpSingleQuestion({ q, onAnswer, onClose, onTranslate }) {
   const heading = q.items.length > 1 ? `${q.items.length} answers, then back to your day.` : 'One answer, then back to your day.';
   return (

@@ -745,8 +745,6 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   mcpApp.use("/mcp", createMcpRouter(mcpDeps));
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   app.use(express.static(join(root, "public")));
-  // tokens ship straight out of design-system/; the compiled component bundle
-  // they feed is `/_ds_bundle.js` below
   app.use("/tokens", express.static(join(root, "design-system", "tokens")));
   // sendFile with the `root` option (not a pre-joined absolute path): Express's
   // `send` then dotfile-checks only the URL's relative segment, so a board booted
