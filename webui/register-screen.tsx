@@ -36,8 +36,6 @@ interface RegisterScreenGate {
   workspace?: string;
   github_issue_number?: number;
 }
-/** webui/app.jsx の api() が投げるエラー。status / detail を生やしている。 */
-type RegisterScreenApiError = Error & { status?: number; detail?: RegisterScreenGate };
 interface RegisterScreenIssue {
   number: number;
   title: string;
@@ -191,7 +189,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       // The inspected reference is burned into the gate state so a later
       // edit of the form fields can't repoint the approved comment (or the
       // retry) at a different issue than the one that was inspected.
-      const err = rawErr as RegisterScreenApiError;
+      // webui/app.jsx の api() が status / detail を生やして投げる
+      const err = rawErr as { status?: number; detail?: RegisterScreenGate };
       if (err.status === 422 && err.detail) {
         setGate({
           ...err.detail,
