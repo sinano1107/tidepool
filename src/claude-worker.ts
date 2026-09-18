@@ -1537,21 +1537,17 @@ const CTRL_C = "\x03";
 // drop the flag and that gate comes back (claude 2.1.273, ADR 0131 決定2).
 const USAGE_TUI_SETTINGS = JSON.stringify({ tui: "fullscreen" });
 
-// Strip ANSI/OSC escapes, leaving the whitespace alone.
-function stripEscapes(text: string): string {
-  return text
-    .replace(/\x1b\][^\x07]*\x07/g, "")
-    .replace(/\x1b[@-_][0-9;?]*[A-Za-z]?/g, "")
-    .replace(/\x1b[=>78]/g, "");
-}
-
 // Strip ANSI/OSC escapes and all whitespace. The CLI positions words with
 // cursor-move escapes, not spaces, so a marker like "Current session" is never
 // a contiguous substring of the raw stream; matching against this squashed
 // view ("Currentsession") is robust across renderers and terminal widths. The
 // captured raw is still returned verbatim — this view is only for matching.
 function squash(text: string): string {
-  return stripEscapes(text).replace(/\s+/g, "");
+  return text
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[@-_][0-9;?]*[A-Za-z]?/g, "")
+    .replace(/\x1b[=>78]/g, "")
+    .replace(/\s+/g, "");
 }
 
 /** Space-insensitive (but case-sensitive) substring match against the squashed
@@ -1561,6 +1557,18 @@ function squash(text: string): string {
  *  parseUsage (#80) returns null on a capture that isn't a real panel. */
 function seen(buffer: string, marker: string): boolean {
   return squash(buffer).includes(squash(marker));
+}
+
+/** The composed screen's readable part, for the stuck-screen trace: rows that
+ *  are pure ASCII art or rules carry no letters, and dropping them is what
+ *  keeps the dialog's own words inside USAGE_TRACE_CHARS (#738). */
+function gates(screen: string): string {
+  return screen
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /[A-Za-z]/.test(line))
+    .join(" | ")
+    .slice(0, USAGE_TRACE_CHARS);
 }
 
 function hasUsagePanel(buffer: string): boolean {
@@ -2539,16 +2547,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         void composeTerminalScreen(capture, PTY_COLS, PTY_ROWS).then(resolve, () => resolve(null));
       };
 
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。fail-closed に
-        // 畳まれると痕跡が残らないので、止まった画面だけ1行残す(ADR 0131 決定3)。squash は
-        // 照合用の view で語間が潰れるため、読ませる側は空白を1つに畳むだけにする。
-        // ponytail: 画面ではなく stream 順。読み違えるようなら composeTerminalScreen へ。
+        // 畳まれると痕跡が残らないので、止まった画面を1行残す(ADR 0131 決定3)。生 stream の
+        // 先頭はスプラッシュのバナーと ASCII アートで、門を名指しする文字列はその 17 行下に
+        // あるため、合成画面(ADR 0074)から文字を含む行だけを繋ぐ —— #738 の実測。
+        // 合成を待ってから畳む —— 呼び手が観測不能を記録するより先に痕跡を出す
         if (!promptSeen) {
-          const screen = stripEscapes(buffer).replace(/\s+/g, " ").trim();
-          console.warn(
-            `[usage] timed out before the CLI prompt: ${screen.slice(0, USAGE_TRACE_CHARS)}`,
-          );
+          const screen = await composeTerminalScreen(buffer, PTY_COLS, PTY_ROWS).catch(() => "");
+          console.warn(`[usage] timed out before the CLI prompt: ${gates(screen)}`);
         }
         finish(hasUsagePanel(buffer) ? buffer : null);
       }, USAGE_TIMEOUT_MS);

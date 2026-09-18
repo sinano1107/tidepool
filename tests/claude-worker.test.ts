@@ -1901,18 +1901,37 @@ describe("ClaudeCodeWorker", () => {
       const worker = await makeUsageWorker(rec.pty);
       const pending = worker.checkUsage();
 
-      // 初回対話(テーマ選択)が REPL より手前に出て、プロンプトに一度も着かない
+      // 初回対話(テーマ選択)が REPL より手前に出て、プロンプトに一度も着かない。
+      // #738 の実測どおり、門を名指しする行はスプラッシュの ASCII アートの下にある
       rec.emitData(
-        `\x1b[2J\x1b[H  Choose the text style\r\n  that looks best ${"x".repeat(400)} TAIL_BEYOND_CAP`,
+        [
+          "\x1b[2J\x1b[H Welcome to Claude Code v2.1.276",
+          " ..........................................................",
+          "      *                                       █████▓▓░",
+          "             ░░░░░░                        ███▓░",
+          "    ░░░░░░░░░░░░░░░░░░░    *                ██▓░░      ▓",
+          " .......█ █   █ █..........................................",
+          "",
+          " Let's get started.",
+          "",
+          " Choose the text style that looks best with your terminal",
+          " To change this later, run /theme",
+          "",
+          "   1. Auto (match terminal)",
+          " ❯ 2. Dark mode ✔",
+          `   3. TAIL_BEYOND_CAP ${"x".repeat(400)}`,
+        ].join("\r\n"),
       );
       await vi.advanceTimersByTimeAsync(60_000);
 
       await expect(pending).resolves.toBeNull();
-      // どの画面で止まったかが人間に読める —— 語間が潰れない(cli-auth の1行しか
-      // 残らなかったのが #682)。エスケープは落ち、先頭の余白も落ちる
+      // どの門で止まったかが人間に読める(cli-auth の1行しか残らなかったのが #682)。
+      // アートと罫線の行は落ち、ダイアログ自身の語が 200 文字の内側に入る
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining(
-          "[usage] timed out before the CLI prompt: Choose the text style that looks best x",
+          "[usage] timed out before the CLI prompt: Welcome to Claude Code v2.1.276 | " +
+            "Let's get started. | Choose the text style that looks best with your terminal | " +
+            "To change this later, run /theme",
         ),
       );
       // 長さは固定 —— 画面全体を盤面ログに流し込まない
