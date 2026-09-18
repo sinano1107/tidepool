@@ -4,6 +4,8 @@
 // 側は正本から引き、写しを書かない。集合ごとのサーバ型の移送は issue #352 が持つ。
 type QueueScreenTask = NonNullable<import('../design-system/components/board/QueueItem').QueueItemProps['task']> & {
   id: string;
+  /** 行の見出し —— 常にある。 */
+  title: string;
   /** 子が open なので枠が飛ばす行(行の位置は保たれる)。 */
   blocked?: boolean;
   skipped?: boolean;
@@ -163,8 +165,11 @@ type QueueScreenSpendWindow = 'session' | 'week';
 // 画面が読む分だけの provider usage(サーバ側の正本は src/throttle.ts の
 // DisplayProviderUsage)。集合ごとの移送は issue #352 が持つ。
 interface QueueScreenProviderUsage {
+  // provider の正本は src/provider.ts の Provider。ここは画面が綴りを読まない
+  // 素通しなので写しを増やさず string のまま —— 移送は issue #352 が持つ。
   provider: string;
-  status: string;
+  /** この画面が `=== 'observed'` で分岐するので綴りを閉じる(src/throttle.ts)。 */
+  status: 'observed' | 'unauthorized' | 'unobservable' | 'absent';
   plan: string | null;
   reason?: string;
   observedAt: string | null;

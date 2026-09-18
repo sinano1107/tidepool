@@ -1,8 +1,16 @@
 // Kanban board — progress overview. skipped is never shown here.
 // Fills available height; each column scrolls vertically on overflow.
-// この画面がタスクについて持つ契約は TaskCard が受け取る形そのもの —— 正本を
-// 引くだけで写しを作らない。集合ごとのサーバ型の移送は issue #352 が持つ。
-type BoardScreenTask = NonNullable<import('../design-system/components/board/TaskCard').TaskCardProps['task']>;
+// 行の形は TaskCard が受け取る形 + app.jsx の mapData が載せる3つ —— TaskCard の
+// 「入力」は、この画面が onOpenTask で外へ返す行の契約ではない(戻す先の openTask は
+// rawAssignee を読む)。集合ごとのサーバ型の移送は issue #352 が持つ。
+type BoardScreenTask = NonNullable<import('../design-system/components/board/TaskCard').TaskCardProps['task']> & {
+  id: string;
+  title: string;
+  /** 解決前の assignee —— 表示用の `assignee` と別枠(app.jsx の mapData)。 */
+  rawAssignee?: string | null;
+  githubIssueNumber?: number | null;
+  assigneeIcon?: string;
+};
 type BoardScreenColumn = 'todo' | 'in_progress' | 'blocked' | 'done';
 interface BoardScreenProps {
   data: { board: Record<BoardScreenColumn, BoardScreenTask[]> };

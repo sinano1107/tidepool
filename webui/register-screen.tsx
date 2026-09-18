@@ -17,7 +17,8 @@
 // この画面がサーバとやりとりする形 —— 画面内で閉じた型で、集合ごとの移送は
 // issue #352 が持つ。POST /api/tasks の本文(登録の門が読む)。
 interface RegisterScreenFields {
-  type: string;
+  /** 画面が出すのはこの2つだけ(子追加は常に work)。 */
+  type: 'work' | 'review';
   title?: string;
   purpose?: string;
   completion_criteria?: string;
@@ -55,8 +56,8 @@ interface RegisterScreenProps {
 function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
-  const [source, setSource] = React.useState('manual');
-  const [type, setType] = React.useState('work');
+  const [source, setSource] = React.useState<'manual' | 'github issue'>('manual');
+  const [type, setType] = React.useState<'work' | 'review'>('work');
   const [title, setTitle] = React.useState('');
   const [purpose, setPurpose] = React.useState('');
   const [criteria, setCriteria] = React.useState('');
@@ -306,7 +307,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!childMode && (
           <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
-            setSource(targetValue(e)); setGate(null);
+            setSource(targetValue(e) === 'github issue' ? 'github issue' : 'manual'); setGate(null);
             // switching away from the pending-dump's own manual content: a
             // later registration (e.g. an unrelated issue reference) must not
             // consume a dump it was never built from
@@ -354,7 +355,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(targetValue(e))} placeholder="sloppy completion criteria are the expensive kind" />
             {/* a decompose child is always type work (decomposeTask's own ChildSpec has no type field) */}
             {!childMode && (
-              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(targetValue(e))} />
+              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(targetValue(e) === 'review' ? 'review' : 'work')} />
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(targetValue(e))} />
