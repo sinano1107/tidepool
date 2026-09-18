@@ -97,11 +97,12 @@ ensure_claude_login() {
   vm 'claude auth login'
 }
 
-# Without this the board's `claude --safe-mode` usage scrape stops at the
-# folder-trust dialog and the board silently picks nothing up (#442). The seed
-# is idempotent, so it runs on every pass rather than being state-checked.
-seed_trust() {
-  vm 'cd ~/tidepool && node scripts/seed-claude-trust.mjs ~/tidepool'
+# Without this the board's `claude --safe-mode` usage scrape stops at one of the
+# CLI's first-run dialogs — folder trust (#442) or onboarding (#682) — and the
+# board silently picks nothing up. Idempotent, so it runs on every pass rather
+# than being state-checked.
+prepare_claude_cli() {
+  vm 'cd ~/tidepool && node scripts/prepare-claude-cli.mjs ~/tidepool'
 }
 
 fetch_github_user() {
@@ -171,7 +172,7 @@ main() {
   ensure_vm
   ensure_gh_login
   ensure_claude_login
-  seed_trust
+  prepare_claude_cli
   fetch_github_user
   ensure_git_identity
   ensure_registry

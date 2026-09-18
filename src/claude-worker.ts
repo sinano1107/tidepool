@@ -1529,7 +1529,9 @@ const CTRL_C = "\x03";
 // 36%used" and parseUsage (#80) can't read it. The fullscreen renderer emits
 // real spaces, keeping the raw parseable. Passed via --settings, which is
 // honored even under --safe-mode (verified on the Pi board). This is the one
-// piece of state checkUsage pins rather than inheriting from the host.
+// piece of state checkUsage pins rather than inheriting from the host. It also
+// happens to clear a fresh install's `Try the new fullscreen renderer?` gate —
+// drop the flag and that gate comes back (claude 2.1.273, ADR 0131 決定2).
 const USAGE_TUI_SETTINGS = JSON.stringify({ tui: "fullscreen" });
 
 // Strip ANSI/OSC escapes and all whitespace. The CLI positions words with
@@ -2528,10 +2530,16 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         void composeTerminalScreen(capture, PTY_COLS, PTY_ROWS).then(resolve, () => resolve(null));
       };
 
-      const timer = setTimeout(
-        () => finish(hasUsagePanel(buffer) ? buffer : null),
-        USAGE_TIMEOUT_MS,
-      );
+      const timer = setTimeout(() => {
+        // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。観測不能は
+        // fail-closed に畳まれて痕跡が残らないので、どの画面で止まったかを1行だけ
+        // 残す(ADR 0028 の可視化側 / ADR 0131 決定3)。squash 済みの先頭 200 文字に
+        // 切って、画面全体を盤面ログへ流し込まない。
+        if (!promptSeen) {
+          console.warn(`[usage] timed out before the CLI prompt: ${squash(buffer).slice(0, 200)}`);
+        }
+        finish(hasUsagePanel(buffer) ? buffer : null);
+      }, USAGE_TIMEOUT_MS);
 
       session.onExit(() => finish(hasUsagePanel(buffer) ? buffer : null));
 

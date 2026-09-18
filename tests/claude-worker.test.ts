@@ -1841,6 +1841,7 @@ describe("ClaudeCodeWorker", () => {
     const rec = recordingPty();
     const worker = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const pending = worker.checkUsage();
       rec.emitData(PROMPT_READY_MARKER);
@@ -1861,13 +1862,17 @@ describe("ClaudeCodeWorker", () => {
 
       await expect(pending).resolves.toContain("Current session");
       expect(rec.kills).toContain("SIGKILL");
+      // パネルは見えている = 列挙漏れではないので、画面を盤面ログに流さない
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
+      warnSpy.mockRestore();
       vi.useRealTimers();
     }
   });
 
   it("checkUsage はパネル未描画のままタイムアウトしたら kill して null を返す(fail-closed・孤児を残さない)", async () => {
     vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const rec = recordingPty();
       const worker = await makeUsageWorker(rec.pty);
@@ -1880,7 +1885,35 @@ describe("ClaudeCodeWorker", () => {
       await expect(pending).resolves.toBeNull();
       // 孤児を残さない: 捕捉不可な SIGKILL で確実に落とす
       expect(rec.kills).toContain("SIGKILL");
+      // REPL には着いている = 初回対話で止まってはいないので、画面は残さない
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage は REPL に着かないままタイムアウトしたら、画面の先頭だけを盤面ログに1行残す(ADR 0131 決定3)", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rec = recordingPty();
+      const worker = await makeUsageWorker(rec.pty);
+      const pending = worker.checkUsage();
+
+      // 初回対話(テーマ選択)が REPL より手前に出て、プロンプトに一度も着かない
+      rec.emitData(`Choose the text style that looks best ${"x".repeat(400)} TAIL_BEYOND_CAP`);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await expect(pending).resolves.toBeNull();
+      const logged = warnSpy.mock.calls.map((args) => args.join(" ")).join("\n");
+      expect(logged).toContain("[usage]");
+      // どの画面で止まったかが読める(cli-auth の1行しか残らなかったのが #682)
+      expect(logged).toContain("Choosethetextstylethatlooksbest");
+      // 長さは固定 —— 画面全体を盤面ログに流し込まない
+      expect(logged).not.toContain("TAIL_BEYOND_CAP");
+    } finally {
+      warnSpy.mockRestore();
       vi.useRealTimers();
     }
   });

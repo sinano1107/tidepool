@@ -261,7 +261,7 @@ vm(tidepool) gh auth login --git-protocol https --web
 vm(tidepool) gh auth setup-git
 vm(tidepool) claude auth status --json
 vm(tidepool) claude auth login
-vm(tidepool) cd ~/tidepool && node scripts/seed-claude-trust.mjs ~/tidepool
+vm(tidepool) cd ~/tidepool && node scripts/prepare-claude-cli.mjs ~/tidepool
 vm(tidepool) gh api user --jq '[.login, .id, (.name // \"\")] | @tsv'
 vm(tidepool) git config --global user.name && git config --global user.email
 vm(tidepool) git config --global user.name Test\\ \\\$User
@@ -300,7 +300,7 @@ assert_not_contains "resume: skips creating the registry repository" "gh repo cr
 assert_not_contains "resume: skips cloning the registry" "git clone" "$log"
 assert_contains "resume: still sets up git credentials (a run may have stopped between login and setup-git)" "gh auth setup-git" "$log"
 assert_not_contains "resume: leaves the existing git identity alone" "user.name Test" "$log"
-assert_contains "resume: still seeds trust" "node scripts/seed-claude-trust.mjs" "$log"
+assert_contains "resume: still prepares the Claude CLI config" "node scripts/prepare-claude-cli.mjs" "$log"
 assert_contains "resume: still seeds the unseeded registry" "npm run init-registry" "$log"
 
 reset_case

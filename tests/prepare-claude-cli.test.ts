@@ -26,16 +26,16 @@ afterEach(() => {
 });
 
 function fakeHome() {
-  home = mkdtempSync(join(tmpdir(), "tidepool-seed-claude-trust-"));
+  home = mkdtempSync(join(tmpdir(), "tidepool-prepare-claude-cli-"));
   return home;
 }
 
-function execSeed(
+function execScript(
   homeDir: string | undefined,
   cwdArg: string | undefined,
   options: { cwd?: string } = {},
 ) {
-  const args = ["scripts/seed-claude-trust.mjs", ...(cwdArg === undefined ? [] : [cwdArg])];
+  const args = ["scripts/prepare-claude-cli.mjs", ...(cwdArg === undefined ? [] : [cwdArg])];
   const { HOME: _ignored, ...envWithoutHome } = process.env;
   return spawnSync("node", args, {
     cwd: options.cwd ?? ROOT,
@@ -44,30 +44,89 @@ function execSeed(
   });
 }
 
-function runSeed(cwdArg: string | undefined, options: { cwd?: string } = {}) {
+function runScript(cwdArg: string | undefined, options: { cwd?: string } = {}) {
   const homeDir = fakeHome();
-  const result = execSeed(homeDir, cwdArg, options);
+  const result = execScript(homeDir, cwdArg, options);
   return { result, home: homeDir, claudeJsonPath: join(homeDir, ".claude.json") };
 }
 
-describe("node scripts/seed-claude-trust.mjs", () => {
+describe("node scripts/prepare-claude-cli.mjs", () => {
   it("fails with a non-zero exit and an English stderr message when the cwd argument is missing", () => {
-    const { result, claudeJsonPath } = runSeed(undefined);
+    const { result, claudeJsonPath } = runScript(undefined);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/^Error: /);
     expect(existsSync(claudeJsonPath)).toBe(false);
   });
 
-  it("creates ~/.claude.json with the project marked trusted when none exists yet", () => {
+  it("creates ~/.claude.json with both flags when none exists yet", () => {
     const projectCwd = "/home/masaki/tidepool";
-    const { result, claudeJsonPath } = runSeed(projectCwd);
+    const { result, claudeJsonPath } = runScript(projectCwd);
 
     expect(result.status, result.stderr).toBe(0);
     const written = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
     expect(written).toEqual({
+      hasCompletedOnboarding: true,
       projects: { [projectCwd]: { hasTrustDialogAccepted: true } },
     });
+  });
+
+  it("writes both flags into an empty ~/.claude.json", () => {
+    const projectCwd = "/home/masaki/tidepool";
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
+    writeFileSync(claudeJsonPath, "{}\n");
+
+    const result = execScript(home, projectCwd);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(claudeJsonPath, "utf8"))).toEqual({
+      hasCompletedOnboarding: true,
+      projects: { [projectCwd]: { hasTrustDialogAccepted: true } },
+    });
+  });
+
+  it("adds the onboarding flag when only the project's trust flag is set", () => {
+    const projectCwd = "/home/masaki/tidepool";
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
+    writeFileSync(
+      claudeJsonPath,
+      JSON.stringify({ projects: { [projectCwd]: { hasTrustDialogAccepted: true } } }, null, 2),
+    );
+
+    const result = execScript(home, projectCwd);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(claudeJsonPath, "utf8"))).toEqual({
+      hasCompletedOnboarding: true,
+      projects: { [projectCwd]: { hasTrustDialogAccepted: true } },
+    });
+  });
+
+  it("adds the project's trust flag when only the onboarding flag is set", () => {
+    const projectCwd = "/home/masaki/tidepool";
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
+    writeFileSync(claudeJsonPath, JSON.stringify({ hasCompletedOnboarding: true }, null, 2));
+
+    const result = execScript(home, projectCwd);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(claudeJsonPath, "utf8"))).toEqual({
+      hasCompletedOnboarding: true,
+      projects: { [projectCwd]: { hasTrustDialogAccepted: true } },
+    });
+  });
+
+  it("leaves the file byte-for-byte unchanged when both flags are already set", () => {
+    const projectCwd = "/home/masaki/tidepool";
+    const claudeJsonPath = join(fakeHome(), ".claude.json");
+    // 独自の整形のまま残ることが、書き直しではなく早期 return の証拠になる
+    const existing = `{"hasCompletedOnboarding":true,"projects":{"${projectCwd}":{"hasTrustDialogAccepted":true}}}`;
+    writeFileSync(claudeJsonPath, existing);
+
+    const result = execScript(home, projectCwd);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(claudeJsonPath, "utf8")).toBe(existing);
   });
 
   it("preserves other top-level keys, other project entries, and other keys under the same project", () => {
@@ -83,7 +142,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     };
     writeFileSync(claudeJsonPath, JSON.stringify(existing, null, 2));
 
-    const result = execSeed(home, projectCwd);
+    const result = execScript(home, projectCwd);
 
     expect(result.status, result.stderr).toBe(0);
     const written = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
@@ -99,22 +158,23 @@ describe("node scripts/seed-claude-trust.mjs", () => {
 
   it("leaves the file byte-for-byte unchanged on a second run", () => {
     const projectCwd = "/home/masaki/tidepool";
-    const { result: first, claudeJsonPath, home: seededHome } = runSeed(projectCwd);
+    const { result: first, claudeJsonPath, home: seededHome } = runScript(projectCwd);
     expect(first.status, first.stderr).toBe(0);
     const afterFirst = readFileSync(claudeJsonPath, "utf8");
 
-    const second = execSeed(seededHome, projectCwd);
+    const second = execScript(seededHome, projectCwd);
 
     expect(second.status, second.stderr).toBe(0);
     expect(readFileSync(claudeJsonPath, "utf8")).toBe(afterFirst);
   });
 
   it("resolves a relative cwd argument against the process's own working directory", () => {
-    const { result, claudeJsonPath } = runSeed("some/relative/dir", { cwd: ROOT });
+    const { result, claudeJsonPath } = runScript("some/relative/dir", { cwd: ROOT });
 
     expect(result.status, result.stderr).toBe(0);
     const written = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
     expect(written).toEqual({
+      hasCompletedOnboarding: true,
       projects: { [join(ROOT, "some/relative/dir")]: { hasTrustDialogAccepted: true } },
     });
   });
@@ -123,7 +183,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     const claudeJsonPath = join(fakeHome(), ".claude.json");
     writeFileSync(claudeJsonPath, "not json");
 
-    const result = execSeed(home, "/home/masaki/tidepool");
+    const result = execScript(home, "/home/masaki/tidepool");
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/^Error: /);
@@ -135,7 +195,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     writeFileSync(claudeJsonPath, "{}");
     chmodSync(claudeJsonPath, 0o600);
 
-    const result = execSeed(home, "/home/masaki/tidepool");
+    const result = execScript(home, "/home/masaki/tidepool");
 
     expect(result.status, result.stderr).toBe(0);
     expect(statSync(claudeJsonPath).mode & 0o777).toBe(0o600);
@@ -148,7 +208,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     writeFileSync(realPath, "{}");
     symlinkSync(realPath, join(homeDir, ".claude.json"));
 
-    const result = execSeed(homeDir, "/home/masaki/tidepool");
+    const result = execScript(homeDir, "/home/masaki/tidepool");
 
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(readFileSync(realPath, "utf8")).projects["/home/masaki/tidepool"]).toEqual({
@@ -164,7 +224,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     const claudeJsonPath = join(fakeHome(), ".claude.json");
     writeFileSync(claudeJsonPath, content);
 
-    const result = execSeed(home, "/home/masaki/tidepool");
+    const result = execScript(home, "/home/masaki/tidepool");
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/^Error: /);
@@ -172,7 +232,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
   });
 
   it("fails with an English stderr message when HOME is not set", () => {
-    const result = execSeed(undefined, "/home/masaki/tidepool");
+    const result = execScript(undefined, "/home/masaki/tidepool");
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/^Error: /);
@@ -182,7 +242,7 @@ describe("node scripts/seed-claude-trust.mjs", () => {
     const homeDir = fakeHome();
     chmodSync(homeDir, 0o500);
 
-    const result = execSeed(homeDir, "/home/masaki/tidepool");
+    const result = execScript(homeDir, "/home/masaki/tidepool");
 
     chmodSync(homeDir, 0o700);
     expect(result.status).not.toBe(0);

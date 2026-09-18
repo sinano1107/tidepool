@@ -147,7 +147,8 @@ same screen takes a description in your own words and **Draft fields** turns it 
 What you should see: the task is picked up, the worker finishes, and a merge question titled
 `land completed task: Create the trial README` appears for you to answer. The worker runs in a
 bubblewrap sandbox inside a container the board makes per worker session in the VM — the installer
-put both there, nothing more to do. If nothing is picked up, the WebUI shows why.
+put both there, nothing more to do. If nothing is picked up, the WebUI shows which Provider is
+holding the board back; the reason it is stuck is printed in the terminal running `vm-board.sh`.
 
 ## Keeping the VM's login alive
 
