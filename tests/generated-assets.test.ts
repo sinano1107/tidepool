@@ -9,6 +9,7 @@ describe("生成済みアセット", () => {
   it.each([
     ["WebUI", "public/app.js", "scripts/build-webui-bundle.mjs"],
     ["Design System", "_ds_bundle.js", "scripts/build-ds-bundle.mjs"],
+    ["WebUI グローバル型宣言", "webui/globals.d.ts", "scripts/build-ds-bundle.mjs"],
     ["ADR Index", "docs/adr/README.md", "scripts/build-adr-index.mjs"],
   ])("%s の --check は fresh / stale を判定して書き換えない", (_name, output, script) => {
     const outputPath = join(ROOT, output);

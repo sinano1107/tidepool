@@ -120,7 +120,7 @@ function TpTranslationNote({ result }) {
 // onTranslate(target): the display-time translation seam (issue #47 / ADR
 // 0015), a POST /api/translate caller — absent in the standalone kit (no
 // toggle rendered), passed through by both TriageScreen (section 0) and
-// TpSingleQuestion (single-question-view.jsx)'s push-answer flow, since both
+// TpSingleQuestion (single-question-view.tsx)'s push-answer flow, since both
 // render this same card. The question card's own toggle (one of the 3
 // switches ADR 0063's table enumerates): translates `purpose`/items'
 // title+detail, never the options an answer is picked from.

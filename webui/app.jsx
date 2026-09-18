@@ -422,7 +422,7 @@ function PortalDialog(props) {
 
 // A push notification tapped outside quiet hours deep-links straight here
 // (?question=<id>, issue #14) — TpSingleQuestion (design-synced,
-// single-question-view.jsx) is the same screen the kit demo simulates a push
+// single-question-view.tsx) is the same screen the kit demo simulates a push
 // into; answering it here POSTs to the real /api/tasks/:id/answer instead of
 // touching mock data, so front-insert + the immediate poll fire for real.
 function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
@@ -1049,7 +1049,7 @@ function App() {
   // follow-up): a todo already at the head, moved to the head again, is an
   // explicit "run now" (immediate-poll trigger); promoting a different task
   // is pure reordering and fires nothing on its own. The button's color
-  // already told the human which one they clicked (queue-screen.jsx); the
+  // already told the human which one they clicked (queue-screen.tsx); the
   // toast just has to describe honestly what actually happened rather than
   // always claiming success (#79's lesson, ADR 0028).
   const moveFront = async (id) => {
