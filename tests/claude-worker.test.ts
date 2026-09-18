@@ -1841,6 +1841,7 @@ describe("ClaudeCodeWorker", () => {
     const rec = recordingPty();
     const worker = await makeUsageWorker(rec.pty);
     vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const pending = worker.checkUsage();
       rec.emitData(PROMPT_READY_MARKER);
@@ -1861,13 +1862,17 @@ describe("ClaudeCodeWorker", () => {
 
       await expect(pending).resolves.toContain("Current session");
       expect(rec.kills).toContain("SIGKILL");
+      // パネルは見えている = 列挙漏れではないので、画面を盤面ログに流さない
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
+      warnSpy.mockRestore();
       vi.useRealTimers();
     }
   });
 
   it("checkUsage はパネル未描画のままタイムアウトしたら kill して null を返す(fail-closed・孤児を残さない)", async () => {
     vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const rec = recordingPty();
       const worker = await makeUsageWorker(rec.pty);
@@ -1880,7 +1885,59 @@ describe("ClaudeCodeWorker", () => {
       await expect(pending).resolves.toBeNull();
       // 孤児を残さない: 捕捉不可な SIGKILL で確実に落とす
       expect(rec.kills).toContain("SIGKILL");
+      // REPL には着いている = 初回対話で止まってはいないので、画面は残さない
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("checkUsage は REPL に着かないままタイムアウトしたら、画面の先頭だけを盤面ログに1行残す(ADR 0131 決定3)", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rec = recordingPty();
+      const worker = await makeUsageWorker(rec.pty);
+      const pending = worker.checkUsage();
+
+      // 初回対話(テーマ選択)が REPL より手前に出て、プロンプトに一度も着かない。
+      // #738 の実測どおり、門を名指しする行はスプラッシュの ASCII アートの下にある
+      rec.emitData(
+        [
+          "\x1b[2J\x1b[H Welcome to Claude Code v2.1.276",
+          " ..........................................................",
+          "      *                                       █████▓▓░",
+          "             ░░░░░░                        ███▓░",
+          "    ░░░░░░░░░░░░░░░░░░░    *                ██▓░░      ▓",
+          " .......█ █   █ █..........................................",
+          "",
+          " Let's get started.",
+          "",
+          " Choose the text style that looks best with your terminal",
+          " To change this later, run /theme",
+          "",
+          "   1. Auto (match terminal)",
+          " ❯ 2. Dark mode ✔",
+          `   3. TAIL_BEYOND_CAP ${"x".repeat(400)}`,
+        ].join("\r\n"),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await expect(pending).resolves.toBeNull();
+      // どの門で止まったかが人間に読める(cli-auth の1行しか残らなかったのが #682)。
+      // アートと罫線の行は落ち、ダイアログ自身の語が 200 文字の内側に入る
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[usage] timed out before the CLI prompt: Welcome to Claude Code v2.1.276 | " +
+            "Let's get started. | Choose the text style that looks best with your terminal | " +
+            "To change this later, run /theme",
+        ),
+      );
+      // 長さは固定 —— 画面全体を盤面ログに流し込まない
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("TAIL_BEYOND_CAP"));
+    } finally {
+      warnSpy.mockRestore();
       vi.useRealTimers();
     }
   });

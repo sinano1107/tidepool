@@ -1515,6 +1515,9 @@ const PANEL_QUIET_MS = 2_000;
 // that measured observation window; normal completion still happens on the
 // 2s quiet debounce, so this is only the runaway ceiling.
 const USAGE_TIMEOUT_MS = 30_000;
+// How much of the stuck screen the timeout trace carries (ADR 0131 決定3). One
+// log line's worth — enough to name the dialog, not the whole 200x50 screen.
+const USAGE_TRACE_CHARS = 200;
 // Wide enough that "Current session …" never wraps at 80 columns (ADR 0028).
 const PTY_COLS = 200;
 const PTY_ROWS = 50;
@@ -1529,7 +1532,9 @@ const CTRL_C = "\x03";
 // 36%used" and parseUsage (#80) can't read it. The fullscreen renderer emits
 // real spaces, keeping the raw parseable. Passed via --settings, which is
 // honored even under --safe-mode (verified on the Pi board). This is the one
-// piece of state checkUsage pins rather than inheriting from the host.
+// piece of state checkUsage pins rather than inheriting from the host. It also
+// happens to clear a fresh install's `Try the new fullscreen renderer?` gate —
+// drop the flag and that gate comes back (claude 2.1.273, ADR 0131 決定2).
 const USAGE_TUI_SETTINGS = JSON.stringify({ tui: "fullscreen" });
 
 // Strip ANSI/OSC escapes and all whitespace. The CLI positions words with
@@ -1552,6 +1557,18 @@ function squash(text: string): string {
  *  parseUsage (#80) returns null on a capture that isn't a real panel. */
 function seen(buffer: string, marker: string): boolean {
   return squash(buffer).includes(squash(marker));
+}
+
+/** The composed screen's readable part, for the stuck-screen trace: rows that
+ *  are pure ASCII art or rules carry no letters, and dropping them is what
+ *  keeps the dialog's own words inside USAGE_TRACE_CHARS (#738). */
+function gates(screen: string): string {
+  return screen
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /[A-Za-z]/.test(line))
+    .join(" | ")
+    .slice(0, USAGE_TRACE_CHARS);
 }
 
 function hasUsagePanel(buffer: string): boolean {
@@ -2465,8 +2482,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  screen; parseUsage reads that plain text (ADR 0074). Spawn failure or exit
    *  before the panel appears resolves null so the scheduler fails closed. A
    *  timeout after panel observation returns the latest composed screen as a
-   *  best effort. The session is always torn down (Ctrl-C×2 then kill) so no
-   *  orphan is left behind. `--settings` pins the fullscreen renderer (see
+   *  best effort. A timeout *before* the CLI prompt ever renders also leaves the
+   *  head of the stuck screen in the board log, since that fail-closed null is
+   *  otherwise traceless (ADR 0131 決定3). The session is always torn down
+   *  (Ctrl-C×2 then kill) so no orphan is left behind. `--settings` pins the fullscreen renderer (see
    *  USAGE_TUI_SETTINGS) so the panel stays parseable regardless of the host's
    *  own TUI setting.
    *
@@ -2528,10 +2547,18 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         void composeTerminalScreen(capture, PTY_COLS, PTY_ROWS).then(resolve, () => resolve(null));
       };
 
-      const timer = setTimeout(
-        () => finish(hasUsagePanel(buffer) ? buffer : null),
-        USAGE_TIMEOUT_MS,
-      );
+      const timer = setTimeout(async () => {
+        // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。fail-closed に
+        // 畳まれると痕跡が残らないので、止まった画面を1行残す(ADR 0131 決定3)。生 stream の
+        // 先頭はスプラッシュのバナーと ASCII アートで、門を名指しする文字列はその 17 行下に
+        // あるため、合成画面(ADR 0074)から文字を含む行だけを繋ぐ —— #738 の実測。
+        // 合成を待ってから畳む —— 呼び手が観測不能を記録するより先に痕跡を出す
+        if (!promptSeen) {
+          const screen = await composeTerminalScreen(buffer, PTY_COLS, PTY_ROWS).catch(() => "");
+          console.warn(`[usage] timed out before the CLI prompt: ${gates(screen)}`);
+        }
+        finish(hasUsagePanel(buffer) ? buffer : null);
+      }, USAGE_TIMEOUT_MS);
 
       session.onExit(() => finish(hasUsagePanel(buffer) ? buffer : null));
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Seeds Claude Code workspace trust for a given board cwd into ~/.claude.json,
-// so the interactive `claude --safe-mode` usage scrape (ADR 0028) never hits the
-// folder-trust dialog. Merges without disturbing any other content in the file.
-// No dependencies (node only — the Pi has no jq).
+// Writes the config the board's Claude CLI needs to reach the REPL unattended
+// into ~/.claude.json, so the interactive `claude --safe-mode` usage scrape
+// (ADR 0028) never stops at a first-run dialog: the folder-trust gate for the
+// given board cwd, and the onboarding gate (theme / login method), which a
+// fresh install shows before the prompt (ADR 0131). Merges without disturbing
+// any other content in the file. No dependencies (node only — the Pi has no jq).
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -53,12 +55,16 @@ function main(argv, env, cwd) {
     }
   }
 
-  if (data.projects?.[projectCwd]?.hasTrustDialogAccepted === true) {
+  if (
+    data.projects?.[projectCwd]?.hasTrustDialogAccepted === true &&
+    data.hasCompletedOnboarding === true
+  ) {
     return 0;
   }
 
   const next = {
     ...data,
+    hasCompletedOnboarding: true,
     projects: {
       ...data.projects,
       [projectCwd]: { ...data.projects?.[projectCwd], hasTrustDialogAccepted: true },
