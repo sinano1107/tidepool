@@ -1387,7 +1387,7 @@ function App() {
       {toast && (
         <div style={{ position: 'fixed', bottom: 86, left: '50%', transform: 'translateX(-50%)', zIndex: 50, width: 'calc(100% - 32px)', maxWidth: 408 }}>
           <div className={toast.leaving ? 'tp-toast-out' : 'tp-toast-in'}>
-            <Toast kind={toast.kind} detail={toast.detail as string} onDismiss={dismissToast}>{toast.msg}</Toast>
+            <Toast kind={toast.kind} detail={toast.detail} onDismiss={dismissToast}>{toast.msg}</Toast>
           </div>
         </div>
       )}

@@ -16,17 +16,28 @@
 // draft as context (point 4).
 // この画面がサーバとやりとりする形 —— 画面内で閉じた型で、集合ごとの移送は
 // issue #352 が持つ。POST /api/tasks の本文(登録の門が読む)。
-interface RegisterScreenFields {
+/** 2経路は必須欄が違う —— 全欄 optional の1つに潰すと `{ type: 'work' }` だけの
+ *  登録が型として通ってしまう。issue 由来は内容の正本が GitHub なので盤面は参照
+ *  だけを持ち(issue #49)、手入力は内容そのものを持つ(issue #65 / 子追加 #129)。 */
+type RegisterScreenFields = RegisterScreenIssueFields | RegisterScreenManualFields;
+interface RegisterScreenIssueFields {
+  /** issue 由来は常に work。 */
+  type: 'work';
+  workspace: string;
+  github_issue_number: number;
+}
+interface RegisterScreenManualFields {
   /** 画面が出すのはこの2つだけ(子追加は常に work)。 */
   type: 'work' | 'review';
-  title?: string;
-  purpose?: string;
-  completion_criteria?: string;
-  risk_flag?: boolean;
-  review_flag?: boolean;
+  title: string;
+  purpose: string;
+  completion_criteria: string;
+  risk_flag: boolean;
+  review_flag: boolean;
   assignee?: string;
   workspace?: string;
-  github_issue_number?: number;
+  /** issue 由来の経路にしか無い —— 不在を型で明示して union を絞れるようにする。 */
+  github_issue_number?: never;
   parent_id?: string;
   decompose_reason?: string;
 }
@@ -194,7 +205,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       // webui/app.tsx の api() が投げる ApiError —— status / detail はここで開く
       if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
         setGate({
-          ...(rawErr.detail as RegisterScreenGate),
+          ...rawErr.detail,
           workspace: f.workspace,
           github_issue_number: f.github_issue_number,
         });
@@ -219,10 +230,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     setBusy(false);
     // the comment is now part of the issue thread — re-register the same
     // inspected reference so the gate re-reads it, comment included
+    // gate が立つのは issue 由来の 422 だけなので、検査した参照は必ず載っている
     await submitFields({
       type: 'work',
-      workspace: gate.workspace,
-      github_issue_number: gate.github_issue_number,
+      workspace: gate.workspace!,
+      github_issue_number: gate.github_issue_number!,
     });
   };
   const draftFields = async () => {

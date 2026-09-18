@@ -6,7 +6,8 @@ export interface ToastProps {
   kind?: 'info' | 'success' | 'warn' | 'danger';
   children?: React.ReactNode;
   /** Mono second line — task id, timestamp. */
-  detail?: string;
+  /** Second line under the message; rendered as-is, so nodes are fine. */
+  detail?: React.ReactNode;
   onDismiss?: () => void;
   style?: React.CSSProperties;
 }

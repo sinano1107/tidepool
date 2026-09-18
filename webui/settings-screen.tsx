@@ -1699,7 +1699,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
 function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   baseDir: ServerJson;
   say: AppSay;
-  onCreated: (result: ServerJson) => Promise<void> | void;
+  onCreated: () => Promise<void> | void;
   edit: SettingsEditSlot;
 }) {
   const { Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
@@ -1716,7 +1716,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
   // issue #383: register の門が「人間の生きた dev checkout に見える」と言ったら
   // 409 が返り、ダイアログで受け入れると同じ body が confirm 付きで再送される —
   // 危険な値・削除と同じ二段扉(判定はサーバ単一正本、ADR 0027)
-  const { busy, save, dialog } = useDangerousSave(say, async (result: ServerJson) => { edit.close(); await onCreated(result); }, {
+  const { busy, save, dialog } = useDangerousSave(say, async () => { edit.close(); await onCreated(); }, {
     noun: 'workspace',
     confirmKey: 'confirm',
     dialogTitle: 'Register a checkout someone is working in?',

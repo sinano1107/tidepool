@@ -2074,9 +2074,9 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }) {
   const ok = registryNameOk(name) && (mode === "clone" ? !!repo.trim() : mode === "register" ? !!path.trim() : true);
   const dirty = mode !== "clone" || !!name.trim() || !!repo.trim() || !!path.trim() || !!notes.trim() || prot;
   useDirtySignal(edit, true, dirty);
-  const { busy, save, dialog } = useDangerousSave(say, async (result) => {
+  const { busy, save, dialog } = useDangerousSave(say, async () => {
     edit.close();
-    await onCreated(result);
+    await onCreated();
   }, {
     noun: "workspace",
     confirmKey: "confirm",
