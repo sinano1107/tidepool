@@ -2531,10 +2531,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       };
 
       const timer = setTimeout(() => {
-        // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。観測不能は
-        // fail-closed に畳まれて痕跡が残らないので、どの画面で止まったかを1行だけ
-        // 残す(ADR 0028 の可視化側 / ADR 0131 決定3)。squash 済みの先頭 200 文字に
-        // 切って、画面全体を盤面ログへ流し込まない。
+        // REPL に一度も着いていない = CLI の初回対話で止まっている見込み。fail-closed に
+        // 畳まれると痕跡が残らないので、止まった画面だけ1行残す(ADR 0131 決定3)。
         if (!promptSeen) {
           console.warn(`[usage] timed out before the CLI prompt: ${squash(buffer).slice(0, 200)}`);
         }

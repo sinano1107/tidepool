@@ -1906,12 +1906,12 @@ describe("ClaudeCodeWorker", () => {
       await vi.advanceTimersByTimeAsync(60_000);
 
       await expect(pending).resolves.toBeNull();
-      const logged = warnSpy.mock.calls.map((args) => args.join(" ")).join("\n");
-      expect(logged).toContain("[usage]");
       // どの画面で止まったかが読める(cli-auth の1行しか残らなかったのが #682)
-      expect(logged).toContain("Choosethetextstylethatlooksbest");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[usage] timed out before the CLI prompt: Choosethetext"),
+      );
       // 長さは固定 —— 画面全体を盤面ログに流し込まない
-      expect(logged).not.toContain("TAIL_BEYOND_CAP");
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("TAIL_BEYOND_CAP"));
     } finally {
       warnSpy.mockRestore();
       vi.useRealTimers();
