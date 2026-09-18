@@ -270,22 +270,16 @@ const NO_WORKSPACE_LABEL = 'no workspace';
 // entries are read regardless of their id, so the two sets are partitioned by
 // the server verdict rather than inferred as two sides of the cursor.
 //
-// Each entry is stamped with `chronoKey` (its sort order) and `sourceIndex`
-// (its position in the input array) — `logKey` below falls back to
-// `sourceIndex` for the standalone kit's mock data, which has no `id`.
+// Ordering inside a group is the entry's own id, which ascends with time.
 function groupLogEntries(entries) {
   const byWorkspace = new Map();
-  entries.forEach((l, i) => {
-    // real entries always carry an id (ascending = chronological); the
-    // standalone kit's mock data doesn't, so its own (newest-first) array
-    // order stands in instead
-    const withKeys = { ...l, chronoKey: l.id != null ? l.id : -i, sourceIndex: i };
+  entries.forEach((l) => {
     const key = l.workspace || '';
     if (!byWorkspace.has(key)) byWorkspace.set(key, []);
-    byWorkspace.get(key).push(withKeys);
+    byWorkspace.get(key).push(l);
   });
   const groups = [...byWorkspace.entries()].map(([key, groupEntries]) => {
-    const sorted = groupEntries.slice().sort((a, b) => a.chronoKey - b.chronoKey);
+    const sorted = groupEntries.slice().sort((a, b) => a.id - b.id);
     const unreadEntries = sorted.filter((l) => l.unread);
     const readEntries = sorted.filter((l) => !l.unread);
     return {
@@ -295,8 +289,8 @@ function groupLogEntries(entries) {
       unreadEntries,
       unreadCount: unreadEntries.length,
       readCount: readEntries.length,
-      mostRecentUnread: unreadEntries.length ? Math.max(...unreadEntries.map((l) => l.chronoKey)) : null,
-      mostRecent: Math.max(...sorted.map((l) => l.chronoKey)),
+      mostRecentUnread: unreadEntries.length ? Math.max(...unreadEntries.map((l) => l.id)) : null,
+      mostRecent: Math.max(...sorted.map((l) => l.id)),
     };
   });
   groups.sort((a, b) => {
@@ -324,13 +318,13 @@ function commitPendingObjectionKeys(log, localObjections) {
   ]);
 }
 
-// Live-mode props (all optional — absent, the screen runs standalone on mock
-// data): onAnswer / onObject / onScratchAdd persist immediately (中断安全),
+// onAnswer / onObject / onScratchAdd persist immediately (中断安全),
 // onDisplayed records the skimmed entries, loadPreview fetches the server's
 // staged S3 queue, loadLanding re-reads the landing questions' answerability.
 // onCommit always closes the flow.
-function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }) {
-  const { Button, Input, LogEntry, QueueItem, Switch } = window.TidepoolDesignSystem_8a0ead;
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
+function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScratchAdd, onDisplayed, loadPreview, loadLanding, onTranslate }) {
+  const { Button, Input, LogEntry, Switch } = window.TidepoolDesignSystem_8a0ead;
   // 着地 question(`landing` を持つ行)は merge 判断ステップの持ち物 — 先頭の質問
   // ステップが数えるのも描くのも一般 question だけ(ADR 0092 決定4)
   const generalQuestions = data.questions.filter((q) => !q.landing);
@@ -345,7 +339,6 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const [scratch, setScratch] = React.useState(data.scratchpad ?? []); // [{ id, text }]
   const [dropped, setDropped] = React.useState([]);       // persisted lines removed in-UI → discard at commit
   const [scratchKinds, setScratchKinds] = React.useState({}); // keyed by line id
-  const scratchSeq = React.useRef(0);
   const [preview, setPreview] = React.useState(null);
   // data.questions はフロー1回分の凍結 snapshot(webui/app.jsx の refresh)なので、
   // 流し読みで打った異議はそこに映らない。merge 判断に入る瞬間に盤面へ回答可否を
@@ -354,33 +347,28 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
 
   // live answers are one-way: a persisted answer cannot be untapped or replaced
   const answerQ = async (q, a) => {
-    if (onAnswer) {
-      if (!a || answers[q.id]) return;
-      try { await onAnswer(q, a); } catch { return; }
-    }
+    if (!a || answers[q.id]) return;
+    try { await onAnswer(q, a); } catch { return; }
     setAnswers((prev) => ({ ...prev, [q.id]: a }));
   };
 
   const addScratch = async (text) => {
-    let entry = { id: `pad-${scratchSeq.current++}`, text };
-    if (onScratchAdd) {
-      try { entry = await onScratchAdd(text); } catch { return; }
-    }
+    let entry;
+    try { entry = await onScratchAdd(text); } catch { return; }
     setScratch((prev) => [...prev, entry]);
   };
   const removeScratch = (i) => {
     const entry = scratch[i];
     setScratch((prev) => prev.filter((_, j) => j !== i));
     // a server-persisted line cannot be unwritten — it is dispositioned as discard at commit
-    if (onScratchAdd) setDropped((prev) => [...prev, entry]);
+    setDropped((prev) => [...prev, entry]);
   };
 
-  const refreshPreview = () => {
-    if (loadPreview) loadPreview().then(setPreview).catch(() => {});
-  };
-  React.useEffect(() => { if (section === S_QUEUE) refreshPreview(); }, [section]);
   React.useEffect(() => {
-    if (section === S_MERGE && loadLanding) loadLanding().then(setLandingNow).catch(() => {});
+    if (section === S_QUEUE) loadPreview().then(setPreview).catch(() => {});
+  }, [section]);
+  React.useEffect(() => {
+    if (section === S_MERGE) loadLanding().then(setLandingNow).catch(() => {});
   }, [section]);
   // "displayed" is an event: the objection-rate denominator counts only what
   // was actually put in front of the human — an entry reports once it is
@@ -388,7 +376,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   const logListRef = React.useRef(null);
   const displayedSeen = React.useRef(new Set());
   React.useEffect(() => {
-    if (section !== S_LOG || !onDisplayed || !logListRef.current) return;
+    if (section !== S_LOG || !logListRef.current) return;
     const byId = new Map(data.log.filter((l) => l.unread).map((l) => [String(l.id), l]));
     const io = new IntersectionObserver((observed) => {
       const shown = [];
@@ -406,13 +394,9 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     return () => io.disconnect();
   }, [section]);
   // completion rows carry a handoff doc behind their own chevron. Row taps
-  // always open the same objection path, regardless of entry kind.
-  // per-entry state is keyed by the entry's stable id (falling back to
-  // `sourceIndex` for id-less mock data) so a log refresh can't retarget an
-  // objection at a different line, and grouping/reordering can't either.
-  // Only ever called on group-derived entries (groupLogEntries stamps
-  // `sourceIndex` on every entry it returns) — never on a raw `data.log` row.
-  const logKey = (entry) => (entry.id != null ? entry.id : entry.sourceIndex);
+  // always open the same objection path, regardless of entry kind. Per-entry
+  // state below is keyed by the entry's own id, so a log refresh can't retarget
+  // an objection at a different line, and grouping/reordering can't either.
   // one fold per workspace group (issue #44): how many of a group's read
   // entries are revealed, keyed by group key, growing by LOG_READ_BATCH per
   // tap starting from the most recent (closest to the unread boundary) and
@@ -435,7 +419,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   // the log skim's own toggle (one of the 3 switches ADR 0063's table
   // enumerates, issue #47): one switch governs every entry currently
   // rendered in this section — not
-  // just unread — keyed by logKey so a fold/reveal never re-requests an
+  // just unread — keyed by entry id so a fold/reveal never re-requests an
   // entry already translated this session. `renderedLogEntries` mirrors
   // exactly what the two .map calls below actually paint (visible-read +
   // unread, per group).
@@ -482,8 +466,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     if (!logTranslateOn || !onTranslate) return;
     const signal = logTranslateAbort.current.signal;
     for (const entry of renderedLogEntries) {
-      const k = logKey(entry);
-      if (entry.id == null || logTranslateRequested.current.has(k)) continue;
+      const k = entry.id;
+      if (logTranslateRequested.current.has(k)) continue;
       logTranslateRequested.current.add(k);
       runTranslate(onTranslate, { type: 'log_entry', event_id: entry.id },
         (result) => setLogTranslations((prev) => ({ ...prev, [k]: result })),
@@ -510,21 +494,20 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
   // kit already holds — no new wiring. Not a progress bar (7.4s/entry is too
   // coarse to read as motion, and it can't distinguish "stalled" from "slow").
   const logTranslateTotal = logTranslateOn
-    ? renderedLogEntries.filter((entry) => entry.id != null).length
+    ? renderedLogEntries.length
     : 0;
   const logTranslateDone = logTranslateOn
     ? renderedLogEntries.filter((entry) => {
-        const v = logTranslations[logKey(entry)];
-        return entry.id != null && v && v.status !== 'loading';
+        const v = logTranslations[entry.id];
+        return v && v.status !== 'loading';
       }).length
     : 0;
   // iOS Safari has no CSS overflow-anchor: revealing an older batch inserts
   // content above the reader's current position, which would otherwise jump
   // the viewport by the inserted height. Captured synchronously in the click
   // handler (before the reveal), applied in the same frame the reveal paints.
-  // `<main class="tp-scroll">` (index.html, both the live app and the
-  // standalone kit preview) is the actual scrolling element — this list's
-  // own div is just a layout container inside it.
+  // `<main class="tp-scroll">` (public/index.html) is the actual scrolling
+  // element — this list's own div is just a layout container inside it.
   const scrollContainer = () => logListRef.current && logListRef.current.closest('.tp-scroll');
   const pendingScrollFix = React.useRef(null);
   React.useLayoutEffect(() => {
@@ -554,7 +537,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     if (handoffOpen[k]) { setHandoffOpen((prev) => ({ ...prev, [k]: false })); return; }
     if (handoffCache.current[k] == null) {
       try {
-        handoffCache.current[k] = entry.handoff != null ? entry.handoff : await loadHandoff(entry);
+        handoffCache.current[k] = await loadHandoff(entry);
       } catch {
         handoffCache.current[k] = '(handoff doc failed to load)';
       }
@@ -582,7 +565,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     { step: 'questions', title: `The tide brought ${nQuestions} question${nQuestions === 1 ? '' : 's'}.`, sub: 'answers persist at once; unblocked parents surface at the front on commit.', next: answered === nQuestions ? 'Log skim' : `Log skim (${nQuestions - answered} unanswered)` },
     { step: nQuestions ? 'decision log' : 'decision log · no questions today', title: `${unread.length} decisions made overnight.`, sub: 'silence is consent — tap an entry to object.', next: 'Merge decisions' },
     { step: 'merge decisions', title: `${landingReady.length} branch${landingReady.length === 1 ? '' : 'es'} ready to land.`, sub: 'you have read the decisions behind these — merge or hold.', next: 'Queue check' },
-    { step: 'queue', title: 'The tide is going out.', sub: loadPreview ? 'front-inserted by this session highlighted. read-only — reorder on the Queue screen. applies at commit.' : 'front-inserted by this session highlighted. reorder is optional.', next: 'Wrap up' },
+    { step: 'queue', title: 'The tide is going out.', sub: 'front-inserted by this session highlighted. read-only — reorder on the Queue screen. applies at commit.', next: 'Wrap up' },
     { step: 'commit', title: 'One last sort.', sub: 'lines you leave unsorted carry over to the next triage.', next: 'Commit' },
   ];
   // 段数の出所は S_COMMIT ひとつ — ラベルに番号を焼き込むと段を足すたびに全部書き直す
@@ -605,7 +588,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         <div>
           {generalQuestions.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!onAnswer && !!answers[q.id]} onTranslate={onTranslate} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!answers[q.id]} onTranslate={onTranslate} />
             </div>
           ))}
         </div>
@@ -615,10 +598,10 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         // renders one entry row + its handoff/objection expansion — shared by
         // every group's revealed-read and unread rows below
         const renderLogRow = (l) => {
-          const k = logKey(l);
-          const hasHandoff = l.kind === 'completion' && (l.handoff != null || (loadHandoff && l.handoffPresent));
+          const k = l.id;
+          const hasHandoff = l.kind === 'completion' && l.handoffPresent;
           return (
-            <div key={k} data-entry-id={l.unread && l.id != null ? l.id : undefined}>
+            <div key={k} data-entry-id={l.unread ? l.id : undefined}>
               <LogEntry
                 entry={{
                   ...l,
@@ -664,10 +647,8 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
                 <div style={{ padding: '10px 12px', background: 'var(--coral-1)', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                   <Input multiline rows={2} placeholder="direction — steering, not rollback" value={draft} onChange={(e) => setDraft(e.target.value)} style={{ flex: 1 }} />
                   <Button variant="danger" size="sm" disabled={!draft.trim()} onClick={async () => {
-                    // live mode: the annotation is persisted the moment it is raised
-                    if (onObject) {
-                      try { await onObject(l, draft); } catch { return; }
-                    }
+                    // the annotation is persisted the moment it is raised
+                    try { await onObject(l, draft); } catch { return; }
                     setObjections({ ...objections, [k]: [...(objections[k] ?? []), draft] });
                     setObjecting(null);
                   }}>Object</Button>
@@ -732,7 +713,7 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         <div>
           {landingReady.map((q, i) => (
             <div key={q.id} className="tp-rise" style={{ animationDelay: `${180 + i * 90}ms` }}>
-              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!onAnswer && !!answers[q.id]} onTranslate={onTranslate} />
+              <TpQuestionCard q={q} answer={answers[q.id]} onAnswer={(a) => answerQ(q, a)} locked={!!answers[q.id]} onTranslate={onTranslate} />
             </div>
           ))}
           {/* 回答不能な着地 question は件数と理由の1行だけ — 押せば必ず 409 になる
@@ -749,38 +730,16 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
         </div>
       )}
 
-      {section === S_QUEUE && (() => {
-        // live mode: the server's staged preview is the truth — this session's
-        // front-inserts arrive on top, already highlighted. Read-only: nothing
-        // touches the queue before commit (a mid-session reorder would break
-        // the "abandoning triage never changes the queue" guarantee), so
-        // reorder/front stay on the queue screen.
-        if (loadPreview) {
-          return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <TpQueueList tasks={preview ?? []} />
-            </div>
-          );
-        }
-        const pending = Object.entries(answers).filter(([, a]) => a)
-          .map(([qid]) => data.questions.find((x) => x.id === qid))
-          .filter((q) => q.parent)
-          .map((q) => ({ id: q.parent, title: `unblocked by ${q.id}`, assignee: q.agent, assigneeIcon: q.agentIcon, frontInserted: true }));
-        if (nObjections > 0) {
-          pending.push({ id: 'tp-0151', title: `repair task — ${nObjections} objection${nObjections > 1 ? 's' : ''} bundled`, assignee: 'reef-crab', frontInserted: true });
-        }
-        // a pending front-insert may already sit in the queue as a blocked row — show it once, up top
-        const previewQueue = data.queue.filter((t) => !pending.some((p) => p.id === t.id));
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {pending.map((t, i) => <QueueItem key={t.id} position={i + 1} task={t} frontInserted />)}
-            {/* headId is the true queue head, not previewQueue[0] — pending's front-inserts sit
-               above this list, so previewQueue[0] can still be the actual head even though it
-               isn't rendered at this list's own index 0 (issue #82 follow-up) */}
-            <TpQueueList tasks={previewQueue} baseIndex={pending.length} onReorder={onReorderQueue} onFront={onFront} headId={data.queue[0]?.id} />
-          </div>
-        );
-      })()}
+      {/* the server's staged preview is the truth — this session's front-inserts
+         arrive on top, already highlighted. Read-only: nothing touches the queue
+         before commit (a mid-session reorder would break the "abandoning triage
+         never changes the queue" guarantee), so reorder/front stay on the queue
+         screen. */}
+      {section === S_QUEUE && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <TpQueueList tasks={preview ?? []} />
+        </div>
+      )}
 
       {section === S_COMMIT && (() => {
         // 振り分けと束ねの件数は終端に置く(CONTEXT.md の Scratchpad / Objection) —
@@ -833,5 +792,3 @@ function TriageScreen({ data, onCommit, onReorderQueue, onFront, loadHandoff, on
     </div>
   );
 }
-
-Object.assign(window, { TriageScreen, TpQuestionCard, TpQuestionItemPicker, TpWaterline, TpSegmentGauge });

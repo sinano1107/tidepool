@@ -363,9 +363,6 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
-    // empty until its domain slice exists: the agent registry — the kit section
-    // renders empty
-    agents: [],
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
@@ -3151,8 +3148,8 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   );
 }
 
-// The six handoff fields (src/tasks.ts's HANDOFF_FIELDS) under the kit's own
-// labels for them (ui_kits/tidepool-webui/index.html's TP_HANDOFF_FIELDS).
+// The six handoff fields (src/tasks.ts's HANDOFF_FIELDS) under the labels this
+// screen shows them by — the field names are the server's, the wording is not.
 const HANDOFF_FIELDS = [
   ['outcome', 'outcome vs criteria'],
   ['deliverables', 'deliverable location'],
@@ -3778,7 +3775,7 @@ function App() {
       <main className="tp-scroll" style={{ flex: 1, minHeight: 0, overflowY: tab === 'board' ? 'hidden' : 'auto', paddingBottom: tab === 'board' ? 56 : 76, boxSizing: 'border-box' }}>
         <div key={tab} className={tabDir === 'right' ? 'tp-tab-right' : 'tp-tab-left'} style={tab === 'board' ? { height: '100%' } : { minHeight: '100%' }}>
         {tab === 'triage' && (data.questions.length || unreadCount || data.scratchpad.length || data.triageActive
-          ? <TriageScreen data={data} onCommit={commitTriage} onReorderQueue={reorder} onFront={moveFront} loadHandoff={loadHandoff}
+          ? <TriageScreen data={data} onCommit={commitTriage} loadHandoff={loadHandoff}
               onAnswer={answerNow} onObject={objectNow} onScratchAdd={scratchAdd} onDisplayed={reportDisplayed} loadPreview={loadPreview} loadLanding={loadLanding}
               onTranslate={onTranslateProp} />
           : <div style={{ padding: '64px 24px', textAlign: 'center' }}>

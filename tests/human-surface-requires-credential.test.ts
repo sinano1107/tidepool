@@ -73,7 +73,6 @@ const STATIC_PATHS = [
   "/favicon.svg",
   "/icon.svg",
   "/apple-touch-icon.png",
-  "/kit/index.html",
   "/tokens/colors.css",
 ];
 
@@ -118,6 +117,17 @@ it("bearer ヘッダを持つ道具は通る(issue #153)", async () => {
     headers: { authorization: `Bearer ${TEST_TOKEN}` },
   });
   expect(res.status).toBe(200);
+});
+
+// キットのデモ面は畳んだ(ADR 0132)。上の allowlist は credential の有無しか
+// 見ないので、「そもそも配信していない」はここでしか言えない(issue #246)。
+it("キットのデモ面は credential 付きでも返らない(ADR 0132 / issue #246)", async () => {
+  t = await bootTidepool();
+  const res = await fetch(`${t.baseUrl}/kit/index.html`, {
+    headers: { authorization: `Bearer ${TEST_TOKEN}` },
+  });
+  await res.text();
+  expect(res.status).toBe(404);
 });
 
 // manifest はブラウザの別機構が取りに行き、既定では credential を付けない

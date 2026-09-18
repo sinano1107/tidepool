@@ -7,10 +7,10 @@ import * as esbuild from "esbuild";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SOURCES = [
-  "ui_kits/tidepool-webui/queue-screen.jsx",
-  "ui_kits/tidepool-webui/triage-screen.jsx",
-  "ui_kits/tidepool-webui/single-question-view.jsx",
-  "ui_kits/tidepool-webui/board-screen.jsx",
+  "webui/queue-screen.jsx",
+  "webui/triage-screen.jsx",
+  "webui/single-question-view.jsx",
+  "webui/board-screen.jsx",
   "webui/app.jsx",
 ];
 

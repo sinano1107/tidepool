@@ -745,10 +745,6 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   mcpApp.use("/mcp", createMcpRouter(mcpDeps));
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   app.use(express.static(join(root, "public")));
-  // the WebUI is the design-synced UI kit: screens come straight from the kit
-  // (single source, the /kit mock stays runnable), tokens and the compiled
-  // component bundle from design-system/ at the repo root
-  app.use("/kit", express.static(join(root, "ui_kits", "tidepool-webui")));
   app.use("/tokens", express.static(join(root, "design-system", "tokens")));
   // sendFile with the `root` option (not a pre-joined absolute path): Express's
   // `send` then dotfile-checks only the URL's relative segment, so a board booted

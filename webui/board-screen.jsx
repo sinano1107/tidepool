@@ -1,5 +1,6 @@
 // Kanban board — progress overview. skipped is never shown here.
 // Fills available height; each column scrolls vertically on overflow.
+// biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.jsx — one concatenated bundle
 function BoardScreen({ data, onOpenTask }) {
   const { FadeScroll, TaskCard } = window.TidepoolDesignSystem_8a0ead;
   const cols = ['todo', 'in_progress', 'blocked', 'done'];
@@ -19,7 +20,7 @@ function BoardScreen({ data, onOpenTask }) {
               </div>
               <FadeScroll style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
                 {data.board[key].map((t) => (
-                  <TaskCard key={t.id} task={{ ...t, status: key }} onClick={() => onOpenTask && onOpenTask(t)} style={{ flexShrink: 0 }} />
+                  <TaskCard key={t.id} task={{ ...t, status: key }} onClick={() => onOpenTask(t)} style={{ flexShrink: 0 }} />
                 ))}
               </FadeScroll>
             </div>
@@ -29,5 +30,3 @@ function BoardScreen({ data, onOpenTask }) {
     </div>
   );
 }
-
-Object.assign(window, { BoardScreen });
