@@ -11,6 +11,8 @@ const SOURCES = [
   "webui/triage-screen.jsx",
   "webui/single-question-view.jsx",
   "webui/board-screen.jsx",
+  "webui/register-screen.jsx",
+  "webui/settings-screen.jsx",
   "webui/app.jsx",
 ];
 

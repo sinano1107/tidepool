@@ -646,336 +646,7 @@ function BoardScreen({ data, onOpenTask }) {
   return /* @__PURE__ */ React.createElement("div", { style: { height: "100%", display: "flex", flexDirection: "column", minHeight: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px 0" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Board"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "progress overview \xB7 queue order lives in the queue")), /* @__PURE__ */ React.createElement("div", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowX: "auto", display: "flex" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "inline-flex", gap: 12, alignItems: "stretch", padding: "0 16px 16px", minHeight: "100%", boxSizing: "border-box" } }, cols.map((key) => /* @__PURE__ */ React.createElement("div", { key, style: { width: 210, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, background: "var(--surface-recessed)", borderRadius: "var(--radius-md)", padding: 10, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 6, padding: "2px 4px 10px", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--text-secondary)" } }, key), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, data.board[key].length)), /* @__PURE__ */ React.createElement(FadeScroll, { style: { flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 } }, data.board[key].map((t) => /* @__PURE__ */ React.createElement(TaskCard, { key: t.id, task: { ...t, status: key }, onClick: () => onOpenTask(t), style: { flexShrink: 0 } }))))))));
 }
 
-// webui/app.jsx
-const WASH_MS = 1250;
-const tabs = [
-  { key: "triage", label: "Triage", icon: "sunrise" },
-  { key: "board", label: "Board", icon: "columns-3" },
-  { key: "queue", label: "Queue", icon: "list-ordered" },
-  { key: "register", label: "Register", icon: "plus" },
-  { key: "settings", label: "Settings", icon: "settings" }
-];
-async function api(path, body, method = "POST") {
-  const res = await fetch(path, {
-    method,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    const e = new Error(typeof err.error === "string" ? err.error : res.statusText);
-    e.status = res.status;
-    e.detail = err;
-    throw e;
-  }
-  return res.json();
-}
-const MAX_CONCURRENT_TRANSLATIONS = 2;
-let translationsInFlight = 0;
-const translationQueue = [];
-function paceTranslation(run, signal) {
-  return new Promise((resolve, reject) => {
-    const dispatch = () => {
-      if (signal) signal.removeEventListener("abort", onAbort);
-      translationsInFlight += 1;
-      run().then(resolve, reject).finally(() => {
-        translationsInFlight -= 1;
-        const next = translationQueue.shift();
-        if (next) next();
-      });
-    };
-    const onAbort = () => {
-      const i = translationQueue.indexOf(dispatch);
-      if (i !== -1) translationQueue.splice(i, 1);
-      reject(new DOMException("translation cancelled", "AbortError"));
-    };
-    if (translationsInFlight < MAX_CONCURRENT_TRANSLATIONS) {
-      dispatch();
-    } else {
-      if (signal) signal.addEventListener("abort", onAbort);
-      translationQueue.push(dispatch);
-    }
-  });
-}
-const translateTarget = (target, { signal } = {}) => paceTranslation(() => api("/api/translate", target), signal);
-function urlBase64ToUint8Array(base64String) {
-  const padding = "=".repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(base64);
-  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
-}
-async function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) return void 0;
-  return navigator.serviceWorker.register("/sw.js");
-}
-async function subscribeToPush(registration) {
-  const { publicKey } = await fetch("/api/push/vapid-public-key").then((r) => r.json());
-  if (!publicKey || !registration) return null;
-  const existing = await registration.pushManager.getSubscription();
-  const subscription = existing ?? await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(publicKey)
-  });
-  await api("/api/push/subscribe", subscription.toJSON());
-  return subscription;
-}
-const RECENT_FRONTS = /* @__PURE__ */ new Set();
-function markFront(id) {
-  RECENT_FRONTS.add(id);
-  setTimeout(() => RECENT_FRONTS.delete(id), 4e3);
-}
-function liveTitle(t) {
-  if (t.issue_live_state === "stale") return `${t.title} (out of sync)`;
-  if (t.issue_live_state === "unavailable") return `${t.title} (unavailable)`;
-  return t.title;
-}
-function toQuestionCardShape(q, icons) {
-  const isBoard = q.registrant === "tidepool";
-  return {
-    id: q.id,
-    parent: q.parent_id,
-    agent: q.registrant,
-    agentIcon: isBoard ? void 0 : icons[q.registrant],
-    board: isBoard,
-    context: q.purpose,
-    // 1-4 items, each with its own title/detail/options (issue #30) — a
-    // single-item bundle is the degenerate, most common case
-    items: (q.question_items ?? []).map((item) => ({
-      title: item.title,
-      detail: item.detail,
-      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation }))
-    }))
-  };
-}
-function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }, yourTasks = []) {
-  const halts = queueEnvelope.halts;
-  const paused = halts.some((h) => h.kind === "pause");
-  const throttle = pause.throttle;
-  const teardown = queueEnvelope.teardown;
-  const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
-  const fmtTime = (iso) => {
-    const d = new Date(iso);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  };
-  const questions = board.filter((t) => t.status === "todo" && t.type === "question").map((q) => ({
-    ...toQuestionCardShape(q, icons),
-    // 着地 question(purely-local の land question / PR の merge question)は
-    // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
-    // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
-    landing: q.landing ?? null
-  }));
-  const openSessionId = triage.session?.id ?? null;
-  const logEntries = [...log.entries].reverse().map((e) => ({
-    id: e.id,
-    time: fmtTime(e.created_at),
-    taskId: e.task_id,
-    agent: e.worker_id,
-    agentIcon: icons[e.worker_id],
-    human: e.worker_id === "human",
-    kind: e.kind === "task_completed" ? "completion" : "decision",
-    text: e.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
-    unread: e.unread,
-    handoffPresent: e.kind === "task_completed" && !!e.payload.handoff_present,
-    workspace: e.workspace ?? null,
-    cause: e.cause ?? null,
-    pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
-    bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
-  }));
-  const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
-    id: t.id,
-    title: liveTitle(t),
-    assignee: t.assignee ?? void 0,
-    assigneeIcon: t.assignee ? icons[t.assignee] : void 0,
-    risk: !!t.risk_flag,
-    blocked: t.status === "blocked",
-    // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
-    // fable 線(ADR 0068 決定4)。盤面全体の停止はスロット行が1回で言う
-    skipped: t.status === "skipped",
-    frontInserted: RECENT_FRONTS.has(t.id),
-    flash: RECENT_FRONTS.has(t.id)
-  }));
-  const openChildren = {};
-  for (const t of board) {
-    if (t.parent_id && t.status !== "done") {
-      openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
-    }
-  }
-  const cols = { todo: [], in_progress: [], blocked: [], done: [] };
-  for (const t of board) {
-    if (!cols[t.status]) continue;
-    cols[t.status].push({
-      id: t.id,
-      title: liveTitle(t),
-      type: t.type,
-      assignee: t.assignee === "human" ? "you" : t.assignee ?? void 0,
-      assigneeIcon: t.assignee ? icons[t.assignee] : void 0,
-      human: t.assignee === "human",
-      risk: !!t.risk_flag,
-      children: openChildren[t.id],
-      // the card's raw column status + assignee (issue #129's Add-child
-      // dialog gates on these client-side — a display convenience only, the
-      // API's own assertHumanDecomposable is the real gate) — kept separate
-      // from `assignee` above, which is resolved for display and would
-      // misrepresent an unset assignee here
-      status: t.status,
-      rawAssignee: t.raw_assignee,
-      // issue #130: the edit form hides content/workspace for an issue-backed
-      // task (immutable — the source of truth is GitHub); a display cue only,
-      // editTask on the server is the real gate
-      githubIssueNumber: t.github_issue_number
-    });
-  }
-  const running = board.find((t) => t.status === "in_progress" && t.id !== teardown?.taskId);
-  const throttled = !!throttle?.throttled;
-  const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
-  const hitLines = ["session", "week", "fable"].filter((w) => throttleWindows[w]?.throttled);
-  const fableWindow = throttleWindows.fable;
-  const fableThrottled = !!fableWindow?.throttled;
-  const fableResumesAt = fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
-  const halt = (slot2, kind, msg, detail) => ({ slot: slot2, toast: { kind, msg, detail } });
-  const HALT_COPY = {
-    triage: () => halt(
-      { color: "var(--sun-4)", line: "triage in progress \xB7 nothing starts", meta: "close triage session to resume", taskId: null },
-      "warn",
-      "moved to front \u2014 pickup blocked",
-      "triage in progress \u2014 close the session to resume"
-    ),
-    pause: () => halt(
-      { color: "var(--rock-4)", line: "pickup paused \u2014 nothing starts until resumed", meta: "poll idle", taskId: null },
-      "warn",
-      "moved to front \u2014 pickup is paused",
-      "resume to run it"
-    ),
-    containment: () => halt(
-      { color: "var(--coral-4)", line: "worker containment unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null },
-      "warn",
-      "moved to front \u2014 pickup blocked",
-      "worker containment is not established"
-    ),
-    // ADR 0112 決定1: 盤面自身のコードが投げた後始末。想定どおり走っている後始末を
-    // 報せる下の待ちの行と違い、これは止まっている
-    failedTeardown: () => halt(
-      { color: "var(--coral-4)", line: "board teardown failed \xB7 nothing starts", meta: "see the repair question", taskId: null },
-      "warn",
-      "moved to front \u2014 pickup blocked",
-      "the board's own teardown failed"
-    ),
-    registryReachability: () => halt(
-      { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null },
-      "warn",
-      "moved to front \u2014 pickup blocked",
-      "registry remote is unreachable"
-    ),
-    // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
-    // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
-    // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
-    throttle: (entry) => {
-      const observed = entry.observedAt ? fmtTime(entry.observedAt) : null;
-      const resumes = entry.resumesAt ? fmtTime(entry.resumesAt) : null;
-      if (entry.revalidating) {
-        return halt(
-          {
-            color: "var(--sun-4)",
-            line: "usage re-evaluation in progress \xB7 nothing starts",
-            taskId: null,
-            meta: observed ? `last observed ${observed}` : "no observation yet"
-          },
-          "info",
-          "moved to front \u2014 usage is being re-evaluated",
-          "waiting for a fresh observation"
-        );
-      }
-      return halt(
-        {
-          color: "var(--coral-4)",
-          taskId: null,
-          ...entry.failClosed ? {
-            line: "usage check unavailable \xB7 nothing starts",
-            meta: `fail-closed \u2014 check usage check logs${observed ? ` \xB7 observed ${observed}` : ""}`
-          } : {
-            line: "usage pace \xB7 nothing starts",
-            // which line is hit (ADR 0030) — an old pre-window row (no
-            // windows persisted yet) falls back to the plain resume text
-            meta: `${hitLines.length ? `${hitLines.join(" + ")} line \xB7 ` : ""}resumes ${resumes}${observed ? ` \xB7 observed ${observed}` : ""}`
-          }
-        },
-        "warn",
-        "moved to front \u2014 pickup blocked",
-        entry.failClosed ? "usage check unavailable \u2014 nothing starts until a fresh reading arrives" : `usage limit \xB7 resumes ${resumes}`
-      );
-    }
-  };
-  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
-  const TEARDOWN_META = {
-    completed: "waiting for this session's processes to exit",
-    interrupted: "usage limit hit \xB7 task returns to the queue once processes exit",
-    released: "task released \xB7 waiting for this session's processes to exit"
-  };
-  const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : teardown ? {
-    // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
-    // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
-    // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
-    color: "var(--sun-4)",
-    taskId: teardown.taskId,
-    line: "session teardown \xB7 nothing new starts",
-    meta: `${TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
-  } : fableThrottled ? {
-    // fable line only (ADR 0030): the board keeps flowing — fable-model
-    // tasks alone wait for their catch-up
-    color: "var(--rock-3)",
-    taskId: null,
-    line: "slot free \u2014 fable tasks paced",
-    meta: fableResumesAt ? `fable line \xB7 resumes ${fableResumesAt}` : "fable line"
-  } : {
-    color: "var(--rock-3)",
-    line: "slot free \u2014 nothing running",
-    taskId: null,
-    // fable の観測状態を常時可視化 (ADR 0030): per-model 行の書式変更で
-    // 観測が黙って落ちたとき、Max プランの人間がここで気づける
-    meta: `concurrency=1 \xB7 fable ${fableWindow ? "on pace" : "not observed"}`
-  };
-  return {
-    questions,
-    log: logEntries,
-    queue,
-    board: cols,
-    icons,
-    scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
-    // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
-    // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
-    // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
-    humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
-    slot,
-    pickupHalt,
-    running: !!running,
-    paused: !!paused,
-    triageActive: halts.some((h) => h.kind === "triage"),
-    // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
-    spendDown: pause.spendDown ?? { session: null, week: null },
-    providerUsage,
-    throttled,
-    throttleRevalidating: !!throttle?.revalidating,
-    fableThrottled,
-    fableResumesAt,
-    lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null
-  };
-}
-async function fetchData() {
-  const [board, log, pause, candidates, triage, queue, yourTasks] = await Promise.all([
-    fetch("/api/tasks").then((r) => r.json()),
-    fetch("/api/log").then((r) => r.json()),
-    fetch("/api/pause").then((r) => r.json()),
-    fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} })),
-    fetch("/api/triage").then((r) => r.json()),
-    fetch("/api/queue").then((r) => r.json()),
-    fetch("/api/your-tasks").then((r) => r.json())
-  ]);
-  return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);
-}
-function TpTideWash({ label, emoji, duration = 1250 }) {
-  const dur = `${duration}ms`;
-  return /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, zIndex: 60, overflow: "hidden", pointerEvents: "none" }, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("div", { className: "tp-wash-water", style: { position: "absolute", inset: "-40px 0 0 0", animationDuration: dur } }, /* @__PURE__ */ React.createElement("div", { style: { animation: `tp-bob ${dur} ease-in-out both` } }, /* @__PURE__ */ React.createElement("svg", { width: "calc(100% + 36px)", height: "40", viewBox: "0 0 476 40", preserveAspectRatio: "none", style: { display: "block" } }, /* @__PURE__ */ React.createElement("path", { d: "M0 24 Q30 10 60 22 T120 22 T180 20 T240 24 T300 18 T360 22 T420 20 T476 22 L476 40 L0 40 Z", fill: "var(--tide-4)", opacity: "0.92" }), /* @__PURE__ */ React.createElement("path", { d: "M0 30 Q40 18 80 28 T160 28 T240 30 T320 26 T400 30 T476 28 L476 40 L0 40 Z", fill: "var(--tide-3)", opacity: "0.5" }))), /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", top: 39, left: 0, right: 0, bottom: -80, background: "var(--tide-4)", opacity: 0.94 } }), /* @__PURE__ */ React.createElement("div", { className: "tp-wash-label", style: { position: "absolute", top: "36%", left: 0, right: 0, textAlign: "center", padding: "0 24px", animationDuration: dur } }, emoji && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 44, marginBottom: 12 } }, emoji), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", lineHeight: 1.2, color: "#fff" } }, label))));
-}
+// webui/register-screen.jsx
 function RegisterScreen({ onRegister, parentTask, onClose }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
@@ -1197,16 +868,14 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     plainFormActive ? "\u2190 back to brain dump" : "LLM unavailable? use the plain form"
   ), gate && /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10, marginTop: 14, borderColor: "var(--coral-3, var(--rock-3))" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600 } }, "the issue fails the registration gate"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, gate.missing), gate.suggested_comment && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)" } }, "suggested comment \u2014 posting it to the issue is your approval:"), /* @__PURE__ */ React.createElement("pre", { style: { whiteSpace: "pre-wrap", fontSize: "var(--text-sm)", background: "var(--surface-sunken, rgba(0,0,0,0.06))", borderRadius: 8, padding: 10, margin: 0 } }, gate.suggested_comment), /* @__PURE__ */ React.createElement(Button, { variant: "primary", full: true, disabled: busy, onClick: approveComment }, "Approve \u2014 post to issue & retry"))));
 }
+
+// webui/settings-screen.jsx
 function registryNameOk(name) {
   const v = name.trim();
   return /^[A-Za-z0-9._-]+$/.test(v) && ![".", ".."].includes(v);
 }
 function landingPath(baseDir, name) {
   return `${baseDir.path.replace(/\/+$/, "")}/${name.trim()}`;
-}
-function PortalDialog(props) {
-  const { Dialog } = window.TidepoolDesignSystem_8a0ead;
-  return ReactDOM.createPortal(/* @__PURE__ */ React.createElement(Dialog, { ...props }), document.body);
 }
 function RecordCardHead({ children, editing, onEdit }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
@@ -2976,6 +2645,341 @@ function SettingsScreen({ say, registerLeaveGuard }) {
     },
     /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-sm)" } }, "The card you're editing has changes that were never saved. Leaving now drops them.")
   ));
+}
+
+// webui/app.jsx
+const WASH_MS = 1250;
+const tabs = [
+  { key: "triage", label: "Triage", icon: "sunrise" },
+  { key: "board", label: "Board", icon: "columns-3" },
+  { key: "queue", label: "Queue", icon: "list-ordered" },
+  { key: "register", label: "Register", icon: "plus" },
+  { key: "settings", label: "Settings", icon: "settings" }
+];
+async function api(path, body, method = "POST") {
+  const res = await fetch(path, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const e = new Error(typeof err.error === "string" ? err.error : res.statusText);
+    e.status = res.status;
+    e.detail = err;
+    throw e;
+  }
+  return res.json();
+}
+const MAX_CONCURRENT_TRANSLATIONS = 2;
+let translationsInFlight = 0;
+const translationQueue = [];
+function paceTranslation(run, signal) {
+  return new Promise((resolve, reject) => {
+    const dispatch = () => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      translationsInFlight += 1;
+      run().then(resolve, reject).finally(() => {
+        translationsInFlight -= 1;
+        const next = translationQueue.shift();
+        if (next) next();
+      });
+    };
+    const onAbort = () => {
+      const i = translationQueue.indexOf(dispatch);
+      if (i !== -1) translationQueue.splice(i, 1);
+      reject(new DOMException("translation cancelled", "AbortError"));
+    };
+    if (translationsInFlight < MAX_CONCURRENT_TRANSLATIONS) {
+      dispatch();
+    } else {
+      if (signal) signal.addEventListener("abort", onAbort);
+      translationQueue.push(dispatch);
+    }
+  });
+}
+const translateTarget = (target, { signal } = {}) => paceTranslation(() => api("/api/translate", target), signal);
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return void 0;
+  return navigator.serviceWorker.register("/sw.js");
+}
+async function subscribeToPush(registration) {
+  const { publicKey } = await fetch("/api/push/vapid-public-key").then((r) => r.json());
+  if (!publicKey || !registration) return null;
+  const existing = await registration.pushManager.getSubscription();
+  const subscription = existing ?? await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey)
+  });
+  await api("/api/push/subscribe", subscription.toJSON());
+  return subscription;
+}
+const RECENT_FRONTS = /* @__PURE__ */ new Set();
+function markFront(id) {
+  RECENT_FRONTS.add(id);
+  setTimeout(() => RECENT_FRONTS.delete(id), 4e3);
+}
+function liveTitle(t) {
+  if (t.issue_live_state === "stale") return `${t.title} (out of sync)`;
+  if (t.issue_live_state === "unavailable") return `${t.title} (unavailable)`;
+  return t.title;
+}
+function toQuestionCardShape(q, icons) {
+  const isBoard = q.registrant === "tidepool";
+  return {
+    id: q.id,
+    parent: q.parent_id,
+    agent: q.registrant,
+    agentIcon: isBoard ? void 0 : icons[q.registrant],
+    board: isBoard,
+    context: q.purpose,
+    // 1-4 items, each with its own title/detail/options (issue #30) — a
+    // single-item bundle is the degenerate, most common case
+    items: (q.question_items ?? []).map((item) => ({
+      title: item.title,
+      detail: item.detail,
+      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation }))
+    }))
+  };
+}
+function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }, yourTasks = []) {
+  const halts = queueEnvelope.halts;
+  const paused = halts.some((h) => h.kind === "pause");
+  const throttle = pause.throttle;
+  const teardown = queueEnvelope.teardown;
+  const providerUsage = pause.providerUsage ?? queueEnvelope.providerUsage ?? [];
+  const fmtTime = (iso) => {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const questions = board.filter((t) => t.status === "todo" && t.type === "question").map((q) => ({
+    ...toQuestionCardShape(q, icons),
+    // 着地 question(purely-local の land question / PR の merge question)は
+    // `landing` を持ち、その blocked_by が回答可否 — 一般 question は null
+    // (ADR 0092 決定4)。判定は盤面側、triage-screen は描画だけ
+    landing: q.landing ?? null
+  }));
+  const openSessionId = triage.session?.id ?? null;
+  const logEntries = [...log.entries].reverse().map((e) => ({
+    id: e.id,
+    time: fmtTime(e.created_at),
+    taskId: e.task_id,
+    agent: e.worker_id,
+    agentIcon: icons[e.worker_id],
+    human: e.worker_id === "human",
+    kind: e.kind === "task_completed" ? "completion" : "decision",
+    text: e.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
+    unread: e.unread,
+    handoffPresent: e.kind === "task_completed" && !!e.payload.handoff_present,
+    workspace: e.workspace ?? null,
+    cause: e.cause ?? null,
+    pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+    bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
+  }));
+  const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
+    id: t.id,
+    title: liveTitle(t),
+    assignee: t.assignee ?? void 0,
+    assigneeIcon: t.assignee ? icons[t.assignee] : void 0,
+    risk: !!t.risk_flag,
+    blocked: t.status === "blocked",
+    // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
+    // fable 線(ADR 0068 決定4)。盤面全体の停止はスロット行が1回で言う
+    skipped: t.status === "skipped",
+    frontInserted: RECENT_FRONTS.has(t.id),
+    flash: RECENT_FRONTS.has(t.id)
+  }));
+  const openChildren = {};
+  for (const t of board) {
+    if (t.parent_id && t.status !== "done") {
+      openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
+    }
+  }
+  const cols = { todo: [], in_progress: [], blocked: [], done: [] };
+  for (const t of board) {
+    if (!cols[t.status]) continue;
+    cols[t.status].push({
+      id: t.id,
+      title: liveTitle(t),
+      type: t.type,
+      assignee: t.assignee === "human" ? "you" : t.assignee ?? void 0,
+      assigneeIcon: t.assignee ? icons[t.assignee] : void 0,
+      human: t.assignee === "human",
+      risk: !!t.risk_flag,
+      children: openChildren[t.id],
+      // the card's raw column status + assignee (issue #129's Add-child
+      // dialog gates on these client-side — a display convenience only, the
+      // API's own assertHumanDecomposable is the real gate) — kept separate
+      // from `assignee` above, which is resolved for display and would
+      // misrepresent an unset assignee here
+      status: t.status,
+      rawAssignee: t.raw_assignee,
+      // issue #130: the edit form hides content/workspace for an issue-backed
+      // task (immutable — the source of truth is GitHub); a display cue only,
+      // editTask on the server is the real gate
+      githubIssueNumber: t.github_issue_number
+    });
+  }
+  const running = board.find((t) => t.status === "in_progress" && t.id !== teardown?.taskId);
+  const throttled = !!throttle?.throttled;
+  const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
+  const hitLines = ["session", "week", "fable"].filter((w) => throttleWindows[w]?.throttled);
+  const fableWindow = throttleWindows.fable;
+  const fableThrottled = !!fableWindow?.throttled;
+  const fableResumesAt = fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
+  const halt = (slot2, kind, msg, detail) => ({ slot: slot2, toast: { kind, msg, detail } });
+  const HALT_COPY = {
+    triage: () => halt(
+      { color: "var(--sun-4)", line: "triage in progress \xB7 nothing starts", meta: "close triage session to resume", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "triage in progress \u2014 close the session to resume"
+    ),
+    pause: () => halt(
+      { color: "var(--rock-4)", line: "pickup paused \u2014 nothing starts until resumed", meta: "poll idle", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup is paused",
+      "resume to run it"
+    ),
+    containment: () => halt(
+      { color: "var(--coral-4)", line: "worker containment unavailable \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "worker containment is not established"
+    ),
+    // ADR 0112 決定1: 盤面自身のコードが投げた後始末。想定どおり走っている後始末を
+    // 報せる下の待ちの行と違い、これは止まっている
+    failedTeardown: () => halt(
+      { color: "var(--coral-4)", line: "board teardown failed \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "the board's own teardown failed"
+    ),
+    registryReachability: () => halt(
+      { color: "var(--coral-4)", line: "registry remote unreachable \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "registry remote is unreachable"
+    ),
+    // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
+    // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
+    // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
+    throttle: (entry) => {
+      const observed = entry.observedAt ? fmtTime(entry.observedAt) : null;
+      const resumes = entry.resumesAt ? fmtTime(entry.resumesAt) : null;
+      if (entry.revalidating) {
+        return halt(
+          {
+            color: "var(--sun-4)",
+            line: "usage re-evaluation in progress \xB7 nothing starts",
+            taskId: null,
+            meta: observed ? `last observed ${observed}` : "no observation yet"
+          },
+          "info",
+          "moved to front \u2014 usage is being re-evaluated",
+          "waiting for a fresh observation"
+        );
+      }
+      return halt(
+        {
+          color: "var(--coral-4)",
+          taskId: null,
+          ...entry.failClosed ? {
+            line: "usage check unavailable \xB7 nothing starts",
+            meta: `fail-closed \u2014 check usage check logs${observed ? ` \xB7 observed ${observed}` : ""}`
+          } : {
+            line: "usage pace \xB7 nothing starts",
+            // which line is hit (ADR 0030) — an old pre-window row (no
+            // windows persisted yet) falls back to the plain resume text
+            meta: `${hitLines.length ? `${hitLines.join(" + ")} line \xB7 ` : ""}resumes ${resumes}${observed ? ` \xB7 observed ${observed}` : ""}`
+          }
+        },
+        "warn",
+        "moved to front \u2014 pickup blocked",
+        entry.failClosed ? "usage check unavailable \u2014 nothing starts until a fresh reading arrives" : `usage limit \xB7 resumes ${resumes}`
+      );
+    }
+  };
+  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]?.(halts[0]);
+  const TEARDOWN_META = {
+    completed: "waiting for this session's processes to exit",
+    interrupted: "usage limit hit \xB7 task returns to the queue once processes exit",
+    released: "task released \xB7 waiting for this session's processes to exit"
+  };
+  const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : teardown ? {
+    // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
+    // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
+    // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
+    color: "var(--sun-4)",
+    taskId: teardown.taskId,
+    line: "session teardown \xB7 nothing new starts",
+    meta: `${TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
+  } : fableThrottled ? {
+    // fable line only (ADR 0030): the board keeps flowing — fable-model
+    // tasks alone wait for their catch-up
+    color: "var(--rock-3)",
+    taskId: null,
+    line: "slot free \u2014 fable tasks paced",
+    meta: fableResumesAt ? `fable line \xB7 resumes ${fableResumesAt}` : "fable line"
+  } : {
+    color: "var(--rock-3)",
+    line: "slot free \u2014 nothing running",
+    taskId: null,
+    // fable の観測状態を常時可視化 (ADR 0030): per-model 行の書式変更で
+    // 観測が黙って落ちたとき、Max プランの人間がここで気づける
+    meta: `concurrency=1 \xB7 fable ${fableWindow ? "on pace" : "not observed"}`
+  };
+  return {
+    questions,
+    log: logEntries,
+    queue,
+    board: cols,
+    icons,
+    scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
+    // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
+    // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
+    // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
+    humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
+    slot,
+    pickupHalt,
+    running: !!running,
+    paused: !!paused,
+    triageActive: halts.some((h) => h.kind === "triage"),
+    // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
+    spendDown: pause.spendDown ?? { session: null, week: null },
+    providerUsage,
+    throttled,
+    throttleRevalidating: !!throttle?.revalidating,
+    fableThrottled,
+    fableResumesAt,
+    lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null
+  };
+}
+async function fetchData() {
+  const [board, log, pause, candidates, triage, queue, yourTasks] = await Promise.all([
+    fetch("/api/tasks").then((r) => r.json()),
+    fetch("/api/log").then((r) => r.json()),
+    fetch("/api/pause").then((r) => r.json()),
+    fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} })),
+    fetch("/api/triage").then((r) => r.json()),
+    fetch("/api/queue").then((r) => r.json()),
+    fetch("/api/your-tasks").then((r) => r.json())
+  ]);
+  return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);
+}
+function TpTideWash({ label, emoji, duration = 1250 }) {
+  const dur = `${duration}ms`;
+  return /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, zIndex: 60, overflow: "hidden", pointerEvents: "none" }, "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("div", { className: "tp-wash-water", style: { position: "absolute", inset: "-40px 0 0 0", animationDuration: dur } }, /* @__PURE__ */ React.createElement("div", { style: { animation: `tp-bob ${dur} ease-in-out both` } }, /* @__PURE__ */ React.createElement("svg", { width: "calc(100% + 36px)", height: "40", viewBox: "0 0 476 40", preserveAspectRatio: "none", style: { display: "block" } }, /* @__PURE__ */ React.createElement("path", { d: "M0 24 Q30 10 60 22 T120 22 T180 20 T240 24 T300 18 T360 22 T420 20 T476 22 L476 40 L0 40 Z", fill: "var(--tide-4)", opacity: "0.92" }), /* @__PURE__ */ React.createElement("path", { d: "M0 30 Q40 18 80 28 T160 28 T240 30 T320 26 T400 30 T476 28 L476 40 L0 40 Z", fill: "var(--tide-3)", opacity: "0.5" }))), /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", top: 39, left: 0, right: 0, bottom: -80, background: "var(--tide-4)", opacity: 0.94 } }), /* @__PURE__ */ React.createElement("div", { className: "tp-wash-label", style: { position: "absolute", top: "36%", left: 0, right: 0, textAlign: "center", padding: "0 24px", animationDuration: dur } }, emoji && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 44, marginBottom: 12 } }, emoji), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", lineHeight: 1.2, color: "#fff" } }, label))));
+}
+function PortalDialog(props) {
+  const { Dialog } = window.TidepoolDesignSystem_8a0ead;
+  return ReactDOM.createPortal(/* @__PURE__ */ React.createElement(Dialog, { ...props }), document.body);
 }
 function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
