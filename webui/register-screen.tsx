@@ -79,7 +79,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // registry-sourced assignee/workspace candidates (issue #12/#65) — fetched
   // once per screen visit; RegisterScreen remounts fresh each tab entry (the
   // shell's key={tab}), so this never goes stale within a sitting
-  const [candidates, setCandidates] = React.useState<{ assignees: string[]; workspaces: string[] }>({ assignees: [], workspaces: [] });
+  const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
   React.useEffect(() => {
     fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
   }, []);

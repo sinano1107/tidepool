@@ -185,7 +185,7 @@ interface QueueScreenProviderUsage {
 interface QueueScreenProps {
   data: {
     /** 色も行も meta もサーバが導いた答えをそのまま描く(ADR 0068 決定1)。 */
-    slot: { color: string; line: string; meta: string; taskId: string | null };
+    slot: AppSlot;
     queue: QueueScreenTask[];
     humanTasks: Array<{ id: string; title: string; blocking: string | null }>;
     providerUsage?: QueueScreenProviderUsage[];
