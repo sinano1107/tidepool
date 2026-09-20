@@ -633,10 +633,9 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   // である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
   const reclaim: PendingReclaim = {
     pendingReclaim: () => watchdog?.pendingReclaim() ?? boardCalls.pendingReclaim(),
-    acceptReclaimed: () => {
-      watchdog?.acceptReclaimed();
-      boardCalls.acceptReclaimed();
-    },
+    // 受理が動かすのは slot だけなので watchdog にしか用は無い —— Board call の
+    // 未回収は `pendingReclaim` が容器を読み直した時点で解ける。
+    acceptReclaimed: () => watchdog?.acceptReclaimed(),
   };
   // the auto_if_ci_green poll (issue #11): independent of the scheduler's
   // pickup poll, since it watches external CI state rather than the queue.

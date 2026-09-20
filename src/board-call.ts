@@ -1,6 +1,5 @@
 import type { Clock } from "./clock.js";
 import type { ContainedProcess, ProcessContainers } from "./process-container.js";
-import type { PendingReclaim } from "./watchdog.js";
 
 /** 1回の Board call の注文(ADR 0136 決定4)。「何を・どの cwd で・どの env で
  *  起こすか」と「時間上限」「結果をいつ返すか」だけを言い、容器・force・観測の
@@ -37,11 +36,14 @@ export type BoardCall = <T>(
   read: (proc: ContainedProcess) => () => T | null,
 ) => Promise<T | null>;
 
-/** 口そのもの。`PendingReclaim` は Containment quarantine の回答受理側(human-verbs)
- *  が読む門で、watchdog のものと同じ形で並ぶ —— 未回収の容器は worker session の
- *  ものだけとは限らない。 */
-export interface BoardCalls extends PendingReclaim {
+/** 口そのもの。`pendingReclaim` は Containment quarantine の回答受理側
+ *  (human-verbs)が読む門で、watchdog のものと並べて合成される —— 未回収の容器は
+ *  worker session のものだけとは限らない。受理側の `acceptReclaimed` は持たない:
+ *  解放するものを持つのは slot を握る worker session だけである。 */
+export interface BoardCalls {
   call: BoardCall;
+  /** まだ空を観測できていない Board call の容器を名乗る一句、無ければ undefined。 */
+  pendingReclaim: () => string | undefined;
 }
 
 /** 容器 id の頭。**task id と衝突させない**: `ProcessContainers.open` は既知の
@@ -136,17 +138,13 @@ export function createBoardCalls(deps: {
   return {
     call,
     // 容器の側を毎回読み直す(watchdog と同じ posture): 遅れて空になった容器は
-    // もう保留ではない。
+    // もう保留ではないので、その場で帳簿から落とす。
     pendingReclaim: () => {
       for (const [id, kind] of unreclaimed) {
         if (deps.containers.pendingReclaim(id)) return subject(kind);
+        unreclaimed.delete(id);
       }
       return undefined;
-    },
-    acceptReclaimed: () => {
-      for (const id of [...unreclaimed.keys()]) {
-        if (!deps.containers.pendingReclaim(id)) unreclaimed.delete(id);
-      }
     },
   };
 }
