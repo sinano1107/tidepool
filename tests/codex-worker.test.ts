@@ -180,6 +180,7 @@ describe("CodexWorker (ADR 0098)", () => {
     // snapshot が "true" の名前を盤面は書かない —— 開ける名前は書けば版の宣言になり(ADR 0134 決定2)、
     // `=false` が届かない名前は書いても届かない(ADR 0135 決定4)。例外の2つだけ別経路で明示している:
     // network_proxy は closedSurfaceConfig()、hooks は hookConfig()。
+    expect(config).toContain("features.network_proxy=true");
     const unwritten = Object.entries(CODEX_FEATURE_SNAPSHOT)
       .filter(([name, state]) => state === "true" && name !== "network_proxy" && name !== "hooks");
     expect(unwritten.filter(([name]) => config.includes(`features.${name}=`)).map(([name]) => name)).toEqual([]);
