@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
 import { boardHalts } from "../src/board-halt.js";
@@ -20,19 +19,25 @@ import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
 import { listEpisodes } from "../src/precedent.js";
+import { ProcessContainers } from "../src/process-container.js";
 import { refreshRegistry } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, nextSlotTask, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { getThrottleState, reportThrottle } from "../src/throttle.js";
 import { capInterruptionHandler } from "../src/watchdog.js";
-import { type ContainerSpawn, WorkerContainers } from "../src/worker-container.js";
 import {
   prepareWorkspaceAtPickup,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
-import { FakeClock, FakeContainerRuntime, passthroughContainers } from "./fakes.js";
+import {
+  containerHarness,
+  FakeClock,
+  FakeContainerRuntime,
+  passthroughContainers,
+  recordingSpawn,
+} from "./fakes.js";
 import { git, makeWorkspace } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
@@ -85,13 +90,6 @@ function makeTask(
   };
 }
 
-interface SpawnCall {
-  command: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-}
-
 /** Events reference tasks by FK, so a started task must exist on the board. */
 function insertTask(db: ReturnType<typeof openDb>, task: Task): void {
   db.prepare(
@@ -121,55 +119,6 @@ function registryGit(cwd: string) {
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd })
       .toString()
       .trim();
-}
-
-/** Scripted stand-in at the process boundary: records the spawn recipe. */
-function recordingSpawn() {
-  const calls: SpawnCall[] = [];
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  const killed: NodeJS.Signals[] = [];
-  const exitListeners: Array<
-    Array<(code: number | null, signal: NodeJS.Signals | null) => void>
-  > = [];
-  const errorListeners: Array<(err: Error) => void> = [];
-  const spawn: ContainerSpawn = (command, args, opts) => {
-    calls.push({ command, args, cwd: opts.cwd, env: opts.env });
-    const processExitListeners: Array<
-      (code: number | null, signal: NodeJS.Signals | null) => void
-    > = [];
-    exitListeners.push(processExitListeners);
-    return {
-      stdout,
-      stderr,
-      kill: (signal) => killed.push(signal),
-      on: (
-        event: "exit" | "error",
-        listener:
-          | ((code: number | null, signal: NodeJS.Signals | null) => void)
-          | ((err: Error) => void),
-      ) => {
-        if (event === "exit") {
-          processExitListeners.push(
-            listener as (code: number | null, signal: NodeJS.Signals | null) => void,
-          );
-        }
-        if (event === "error") errorListeners.push(listener as (err: Error) => void);
-      },
-    };
-  };
-  const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    for (const processListeners of exitListeners) {
-      for (const listener of processListeners) listener(code, signal);
-    }
-  };
-  const emitExitAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
-    for (const listener of exitListeners[index] ?? []) listener(code, signal);
-  };
-  const emitError = (err: Error) => {
-    for (const listener of errorListeners) listener(err);
-  };
-  return { calls, stdout, stderr, killed, spawn, emitExit, emitExitAt, emitError };
 }
 
 /** Scripted stand-in at the PTY boundary (issue #81 / ADR 0028): the test
@@ -226,7 +175,7 @@ async function makeUsageWorker(pty: PtyFn) {
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
-    containers: passthroughContainers(recordingSpawn().spawn),
+    ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
     pty,
   });
 }
@@ -244,6 +193,10 @@ async function makeWorker(
   const clock = new FakeClock();
   const slot = new Slot();
   const recorder = recordingSpawn();
+  // 容器 supervisor はテストが差し替えうる。Board call の口は**その**supervisor
+  // から組む —— 既定から組むと、テストが hold した容器と launch の門が見る帳簿が
+  // ずれて、門が効いていなくてもテストが緑になる。
+  const containers = extraOptions.containers ?? passthroughContainers(recorder.spawn);
   const worker = new ClaudeCodeWorker({
     db,
     clock,
@@ -252,7 +205,7 @@ async function makeWorker(
     workspace: "tidepool",
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
-    containers: passthroughContainers(recorder.spawn),
+    ...containerHarness(containers, clock),
     onCapInterrupted: capInterruptionHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => {} }),
     ...extraOptions,
   });
@@ -272,7 +225,7 @@ async function makeWorker(
     worker.start(task);
     return task;
   };
-  return { worker, start, logDir, db, slot, registryDir, ...recorder };
+  return { worker, start, logDir, db, slot, registryDir, containers, ...recorder };
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -1022,6 +975,65 @@ describe("ClaudeCodeWorker", () => {
     expect(deny).not.toContain("Skill(code-review)");
   });
 
+  // ADR 0136 決定5 / issue #767: skill 列挙は Board call の口を1回通る。ここは
+  // whole-probe の fake(`EnumerateSkillsFn`)を**外して**、実物の列挙を fake の
+  // 容器機構の上で走らせる唯一の場所である —— 門が立っていることは probe の中身
+  // ではなく「容器が空になるまで launch の spawn が1本も起きない」で現れる。
+  // issue #767 の AC はこれをサーバー境界と書いているが、adapter の export で
+  // 全部見えるので ADR 0107 の最下位 seam であるここに置く。
+  const skillEnumOnFakeContainers = async () => {
+    const recorder = recordingSpawn();
+    const runtime = new FakeContainerRuntime(recorder.spawn);
+    const worker = await makeWorker(
+      { "agents/deckhand.md": skilledMd("  - code-review\n") },
+      { containers: new ProcessContainers(runtime) },
+    );
+    return { ...worker, recorder, runtime };
+  };
+  const skillsInit = (skills: string[]) =>
+    `${JSON.stringify({ type: "system", subtype: "init", skills })}\n`;
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("skill 列挙の容器が空になるまで worker は launch されない(ADR 0136 決定5)", async () => {
+    const { start, recorder, runtime } = await skillEnumOnFakeContainers();
+    start("task-skill-gate", null, "deckhand", "work");
+
+    // 1本目の spawn は skill 列挙の probe。その容器は worker のものとは別である
+    await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
+    const probeContainer = runtime.created[0]!;
+    expect(probeContainer).not.toBe("task-skill-gate");
+    runtime.hold(probeContainer); // force だけでは空にならないホスト
+
+    recorder.stdout.write(skillsInit(["code-review", "tdd"]));
+    await settle();
+    recorder.emitExitAt(0, 0, null);
+    await settle();
+
+    // root の exit で force は撃たれるが、結果はまだ返らない —— launch も起きない
+    expect(runtime.forceReclaims).toEqual([probeContainer]);
+    expect(recorder.calls).toHaveLength(1);
+    // 自前の timeout + root への SIGKILL は消えた: 回収は容器の側ひとつである
+    expect(recorder.killed).toEqual([]);
+  });
+
+  it("skill 列挙の容器が空になったら launch が進む(門は回収済み観測ひとつ)", async () => {
+    const { start, recorder, runtime } = await skillEnumOnFakeContainers();
+    start("task-skill-gate-open", null, "deckhand", "work");
+    await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
+    const probeContainer = runtime.created[0]!;
+    runtime.hold(probeContainer);
+    recorder.stdout.write(skillsInit(["code-review", "tdd"]));
+    await settle();
+    recorder.emitExitAt(0, 0, null);
+    await settle();
+
+    runtime.fireEmpty(probeContainer);
+
+    await vi.waitFor(() => expect(recorder.calls).toHaveLength(2));
+    // 列挙の答えはそのまま deny になる(口を通しても probe の意味は変わらない)
+    expect(disallowedTools(recorder.calls[1]!.args)).toContain("Skill(tdd)");
+  });
+
   it("列挙 ping が失敗(null)したら spawn 失敗として扱い、deny 未解決のまま spawn しない(fail-open にしない・ADR 0025 point 6)", async () => {
     const rec = recordingEnumerator(null);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1390,7 +1402,7 @@ describe("ClaudeCodeWorker", () => {
     // adapter が signal を直に撃たないことまで含めてここで測る。
     const recorder = recordingSpawn();
     const runtime = new FakeContainerRuntime(recorder.spawn);
-    const { start } = await makeWorker({}, { containers: new WorkerContainers(runtime) });
+    const { start } = await makeWorker({}, { containers: new ProcessContainers(runtime) });
     const task = start("task-init-container-kill", null, "deckhand", "work");
     recorder.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     await vi.waitFor(() => expect(runtime.forceReclaims).toEqual([task.id]));
@@ -1564,7 +1576,7 @@ describe("ClaudeCodeWorker", () => {
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:4589/mcp",
         logDir: "worker-logs",
-        containers: passthroughContainers(recorder.spawn),
+        ...containerHarness(passthroughContainers(recorder.spawn)),
       });
       await mkdir(join(base, "worker-logs"), { recursive: true });
       const task = makeTask("task-rel");
@@ -1678,7 +1690,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
-          containers: passthroughContainers(recordingSpawn().spawn),
+          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown effort level/);
   });
@@ -1700,7 +1712,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "tidepool",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
-          containers: passthroughContainers(recordingSpawn().spawn),
+          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown effort level/);
   });
@@ -1720,7 +1732,7 @@ describe("ClaudeCodeWorker", () => {
           workspace: "no-such-workspace",
           mcpUrl: "http://127.0.0.1:4589/mcp",
           logDir,
-          containers: passthroughContainers(recordingSpawn().spawn),
+          ...containerHarness(passthroughContainers(recordingSpawn().spawn)),
         }),
     ).toThrow(/unknown workspace/);
   });
@@ -2342,7 +2354,7 @@ describe("ClaudeCodeWorker", () => {
       workspace: "tidepool",
       mcpUrl: "http://127.0.0.1:4589/mcp",
       logDir: await mkdtemp(join(tmpdir(), "tidepool-worker-logs-")),
-      containers: passthroughContainers(recorder.spawn),
+      ...containerHarness(passthroughContainers(recorder.spawn)),
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
     insertTask(db, task);
@@ -3498,7 +3510,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     const ws = await makeWorkspace([], "cap-ws");
     const { start, db, slot } = await makeWorker(
       {},
-      { containers: new WorkerContainers(runtime) },
+      { containers: new ProcessContainers(runtime) },
       () => ws,
     );
     const task = start("task-capped-ordering");

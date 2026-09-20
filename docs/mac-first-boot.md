@@ -2,8 +2,8 @@
 
 This covers a purely-local board on your own Apple Silicon Mac, ending with your first task
 completed against a local `trial` workspace. The board itself runs inside a Linux VM on the Mac
-(Lima, with its default Ubuntu template): macOS has no worker container mechanism that passes the
-worker container contract, so the board uses the Linux one unchanged (ADR 0100). Budget about
+(Lima, with its default Ubuntu template): macOS has no container mechanism that passes the
+container contract, so the board uses the Linux one unchanged (ADR 0100). Budget about
 30 minutes, most of it the VM image download (941 MB).
 
 ## What you need

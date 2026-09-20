@@ -7,6 +7,7 @@ import type { AllocationClient } from "./allocation-review.js";
 import { createApiRouter } from "./api.js";
 import type { AttributionClient, BehaviorDraftClient } from "./attribution.js";
 import { createHumanSurfaceAuth, type HumanCredential } from "./auth.js";
+import { type BoardCall, createBoardCalls } from "./board-call.js";
 import { type BoardStatePath, sweepBoardStateOverlap } from "./board-state.js";
 import {
   CLI_AUTH_EXPIRY_WARNING_INTERVAL_MS,
@@ -35,6 +36,7 @@ import { createLanding } from "./landing.js";
 import { createManagementMcpRouter } from "./management-mcp.js";
 import { createMcpRouter } from "./mcp.js";
 import { ensureMemoryIndex } from "./memory.js";
+import { type ContainerRuntime, ProcessContainers } from "./process-container.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
 import type { Harness } from "./registry.js";
@@ -54,9 +56,17 @@ import { DEFAULT_AUDITOR_NAME, getTask, type Task } from "./tasks.js";
 import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
-import { capInterruptionHandler, failTask, spawnFailureHandler, startWatchdog, type Watchdog, type WatchdogConfig } from "./watchdog.js";
+import {
+  capInterruptionHandler,
+  failTask,
+  type PendingReclaim,
+  RECLAIM_TIMEOUT,
+  spawnFailureHandler,
+  startWatchdog,
+  type Watchdog,
+  type WatchdogConfig,
+} from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
-import { type ContainerRuntime, WorkerContainers } from "./worker-container.js";
 import {
   buildWorkspaceResolver,
   pathIsRegistryClone,
@@ -155,7 +165,10 @@ function rebaselineAfter<A extends unknown[], R>(
 export type WorkerFactory = (deps: {
   db: Db;
   clock: Clock;
-  containers: WorkerContainers;
+  containers: ProcessContainers;
+  /** Board call の口(ADR 0136)。skill 列挙はここを通る —— 容器と Clock は
+   *  `startServer` にしか無いので、口もここで組んで adapter へ配る。 */
+  boardCall: BoardCall;
   /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
    *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
   onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
@@ -309,9 +322,9 @@ export interface ServerOptions {
    *  the /api/profiles routes report 503. */
   profileAdmin?: Partial<ProfileAdmin>;
   /** The skills picker's candidate source (issue #106 / ADR 0025 点4), bound by
-   *  main.ts to the adapter's neutral-cwd /usage ping. Absent → GET /api/skills
+   *  server-options.ts to the adapter's neutral-cwd /usage ping. Absent → GET /api/skills
    *  degrades to an empty candidate set (never 503). */
-  hostSkills?: () => Promise<string[] | null>;
+  hostSkills?: (call: BoardCall) => Promise<string[] | null>;
   /** The display-time translation seam (issue #47 / ADR 0015). Absent →
    *  POST /api/translate reports the LLM as unreachable. */
   translationClient?: TranslationClient;
@@ -352,7 +365,18 @@ export interface TidepoolServer {
 export async function startServer(options: ServerOptions): Promise<TidepoolServer> {
   const { db } = options;
   const slot = new Slot();
-  const containers = new WorkerContainers(options.containerRuntime);
+  const containers = new ProcessContainers(options.containerRuntime);
+  // ADR 0136: Board call は呼び出しごとの容器の中で起きる。口は容器の supervisor と
+  // 時計しか要らないが、その2つが揃うのがここだけなので組み立てもここに置く。
+  // 回収済み観測の不成立は worker session の回収失敗と同じ Containment quarantine へ
+  // 落とす(新しい quarantine 族は立てない — 決定6)。回収 timeout は watchdog と
+  // 同じ既定を共有する —— `options.watchdog` は任意なので定数のほうから取る。
+  const boardCalls = createBoardCalls({
+    containers,
+    clock: options.clock,
+    reclaimTimeout: options.watchdog?.reclaimTimeout ?? RECLAIM_TIMEOUT,
+    onReclaimTimeout: (reason) => quarantineContainment(db, reason, options.clock.now()),
+  });
   // ADR 0099 決定5: boot 時の機構前提検査。不成立の platform を黙って弱い回収へ
   // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
   // 同じ検査は封じ込め能力の合成(下)にも入り、pickup と quarantine 回答時に
@@ -468,7 +492,14 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
   const onCapInterrupted = capInterruptionHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
-  const worker = options.worker({ db, clock: options.clock, containers, onCapInterrupted, onSpawnFailed });
+  const worker = options.worker({
+    db,
+    clock: options.clock,
+    containers,
+    boardCall: boardCalls.call,
+    onCapInterrupted,
+    onSpawnFailed,
+  });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
     ...(options.cliAuth && { anthropic: options.cliAuth }),
     ...options.providerCliAuth,
@@ -597,6 +628,15 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         config: options.watchdog,
       })
     : undefined;
+  // ADR 0099 決定3 / ADR 0136: 回収済み観測を待って止まっている容器の門。単位は
+  // 2つ(worker session と Board call)なので、回答受理側が読む口もその2つの合成
+  // である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
+  const reclaim: PendingReclaim = {
+    pendingReclaim: () => watchdog?.pendingReclaim() ?? boardCalls.pendingReclaim(),
+    // 受理が動かすのは slot だけなので watchdog にしか用は無い —— Board call の
+    // 未回収は `pendingReclaim` が容器を読み直した時点で解ける。
+    acceptReclaimed: () => watchdog?.acceptReclaimed(),
+  };
   // the auto_if_ci_green poll (issue #11): independent of the scheduler's
   // pickup poll, since it watches external CI state rather than the queue.
   // A no-op tick while pending_auto_merges is empty, same shape as the
@@ -681,7 +721,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       harnessContainment,
       // ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。確認回答の
       // 受理時に容器の空を再観測し、空なら tree rule を走らせて slot を解放する。
-      reclaim: watchdog,
+      reclaim,
       registryReachability,
       teardownQuarantine,
       providerCliAuth,
@@ -690,7 +730,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       workspaceAdmin,
       agentAdmin,
       profileAdmin,
-      hostSkills: options.hostSkills,
+      hostSkills: options.hostSkills && (() => options.hostSkills!(boardCalls.call)),
       githubTokenFile: options.githubTokenFile,
       translationClient: options.translationClient,
       attributionClient: options.attributionClient,
@@ -724,7 +764,7 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
       isProtectedWorkspace: options.isProtectedWorkspace,
       containment,
       harnessContainment,
-      reclaim: watchdog,
+      reclaim,
       registryReachability,
       teardownQuarantine,
       providerCliAuth,

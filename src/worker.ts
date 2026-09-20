@@ -8,7 +8,7 @@ import type { Task } from "./tasks.js";
  *
  *  終了の語彙のうち adapter が持つのは**畳み込み停止だけ**である(ADR 0099
  *  決定1/2): 強制回収と回収済み観測は worker 容器への操作であり、盤面側の
- *  supervisor(`WorkerContainers`)が1度だけ書く。 */
+ *  supervisor(`ProcessContainers`)が1度だけ書く。 */
 export interface WorkerAdapter {
   /** The board's default agent name (ADR 0012 / issue #36) — a pointer to
    *  whichever registry agent an unspecified assignee resolves to, not "the

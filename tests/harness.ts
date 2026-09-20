@@ -14,6 +14,7 @@ import {
   type HumanCredential,
   hashToken,
 } from "../src/auth.js";
+import type { BoardCall } from "../src/board-call.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import { moonshotKeyAbsence } from "../src/claude-worker.js";
 import type { CliAuthCheck } from "../src/cli-auth.js";
@@ -180,7 +181,7 @@ export interface BootOptions {
   /** The skills picker's candidate source (issue #106 / ADR 0025 点4) — faked
    *  here so GET /api/skills is exercised without a real `claude` CLI (ADR
    *  0027). Absent → the route degrades to an empty candidate set. */
-  hostSkills?: () => Promise<string[] | null>;
+  hostSkills?: (call: BoardCall) => Promise<string[] | null>;
   /** Agent names whose registry model is fable (ADR 0030) — read fresh every poll
    *  by the scheduler's fable line and the queue view. Absent → no fable
    *  model resolution, so the fable line never skips anything. */

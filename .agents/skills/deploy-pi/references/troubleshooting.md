@@ -32,10 +32,14 @@ ssh masaki@100.78.52.97 'cat > /opt/tidepool/_cu.mjs <<"EOF"
 import { mkdtempSync } from "node:fs"; import { tmpdir } from "node:os"; import { join } from "node:path";
 import { ClaudeCodeWorker } from "./src/claude-worker.ts"; import { openDb } from "./src/db.ts";
 import { SystemClock } from "./src/clock.ts"; import { parseUsage } from "./src/usage.ts";
-import { WorkerContainers } from "./src/worker-container.ts";
+import { ProcessContainers } from "./src/process-container.ts";
 import { containerRuntimeFor } from "./src/cgroup-container.ts";
-const w = new ClaudeCodeWorker({ db: openDb(":memory:"), clock: new SystemClock(),
-  containers: new WorkerContainers(containerRuntimeFor(process.platform)),
+import { createBoardCalls } from "./src/board-call.ts"; import { RECLAIM_TIMEOUT } from "./src/watchdog.ts";
+const clock = new SystemClock();
+const containers = new ProcessContainers(containerRuntimeFor(process.platform));
+const w = new ClaudeCodeWorker({ db: openDb(":memory:"), clock, containers,
+  boardCall: createBoardCalls({ containers, clock, reclaimTimeout: RECLAIM_TIMEOUT,
+    onReclaimTimeout: (reason) => console.error(reason) }).call,
   registry: { dir: "/mnt/ssd/tidepool-registry", mode: "remote" },
   agent: "tako", workspace: "sandbox", workspacesDir: "/mnt/workspaces",
   mcpUrl: "http://127.0.0.1:4590/mcp", logDir: mkdtempSync(join(tmpdir(),"cu-")) });

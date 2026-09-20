@@ -4,6 +4,7 @@ import type { Db } from "./db.js";
 import { openFailedTeardownQuestion } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { Landing } from "./landing.js";
+import type { ProcessContainers } from "./process-container.js";
 import type { Slot } from "./slot.js";
 import { abandonConsequence, escalateTask, getTask, type Task, type TaskType } from "./tasks.js";
 import {
@@ -15,7 +16,6 @@ import {
   teardownStep,
 } from "./teardown.js";
 import type { WorkerAdapter } from "./worker.js";
-import type { WorkerContainers } from "./worker-container.js";
 import { BOARD_WORKER_ID, buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
@@ -23,7 +23,7 @@ export const WATCHDOG_TICK = 60 * 1000;
 /** 強制回収を送ってから回収済み観測を諦めるまで(ADR 0099 決定3)。tick 1本より
  *  十分長く取る — 猶予と同じく「待つ時間」であって、機構の性質ではない。後始末の
  *  backstop(ADR 0109 決定5)も同じ尺度なので、待つ時間はこの1つである。 */
-const RECLAIM_TIMEOUT = 5 * 60 * 1000;
+export const RECLAIM_TIMEOUT = 5 * 60 * 1000;
 
 export interface WatchdogConfig {
   /** Absolute wall-clock limit per task type, measured from pickup. A type
@@ -37,11 +37,13 @@ export interface WatchdogConfig {
   reclaimTimeout?: number;
 }
 
-/** 回収済み観測の不成立(CONTEXT.md「Worker 容器」)で止まっている slot の門
+/** 回収済み観測の不成立(CONTEXT.md「容器」)で止まっている slot の門
  *  (ADR 0099 決定3)。Containment quarantine の確認回答の受理側(human-verbs)
  *  だけがこれを読む。 */
 export interface PendingReclaim {
-  /** 空をまだ観測できていない task id、無ければ undefined。 */
+  /** 空をまだ観測できていない容器を名乗る一句(例: "the container for task 42")、
+   *  無ければ undefined。id ではなく一句なのは、単位が worker session と Board call の
+   *  2つあり(ADR 0136)、読み手の文面が単位ごとに違うからである。 */
   pendingReclaim: () => string | undefined;
   /** 空を再観測できた回収を受理する: slot-release tree rule を走らせ、
    *  slot を解放する。待っている回収が無い / まだ populated なら no-op。 */
@@ -152,7 +154,7 @@ export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, rec
  *  なので、容器は空のまま強制回収を撃つ。 */
 export function spawnFailureHandler(
   deps: TeardownDeps,
-  containers: WorkerContainers,
+  containers: ProcessContainers,
 ): (taskId: string, failure: { error_code: string | null; message: string }) => void {
   return (taskId, failure) => {
     if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
@@ -192,7 +194,7 @@ export function startWatchdog(deps: {
   slot: Slot;
   worker: WorkerAdapter;
   /** 盤面側 supervisor(ADR 0099 決定2)。force と reclaimed はここだけを通る。 */
-  containers: WorkerContainers;
+  containers: ProcessContainers;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task fails against the
@@ -257,7 +259,7 @@ export function startWatchdog(deps: {
       db,
       task,
       `watchdog killed task: ${task.title}`,
-      `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
+      `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
         `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
         "No self-report is possible.",
       now,
@@ -277,7 +279,7 @@ export function startWatchdog(deps: {
       db,
       task,
       `watchdog killed task: ${task.title}`,
-      `the task hit its ${task.type} time limit (${limit}ms) and its worker container was ` +
+      `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
         `force-reclaimed, but the board could not observe the container going empty within ` +
         `${reclaimTimeout}ms. No self-report is possible.`,
       // tree rule はここでは走らない: slot が解放される瞬間 — 確認 question の
@@ -287,7 +289,7 @@ export function startWatchdog(deps: {
     );
     quarantineContainment(
       db,
-      `the worker container for task ${task.id} was force-reclaimed but never observed empty, ` +
+      `the container for task ${task.id} was force-reclaimed but never observed empty, ` +
         "so processes from that session may still be running against this host and its " +
         "workspaces (ADR 0099). The execution slot stays occupied until this is answered",
       clock.now(),
@@ -392,7 +394,10 @@ export function startWatchdog(deps: {
   return {
     stop: cancel,
     heldForContainment: (taskId) => pending === taskId,
-    pendingReclaim: () => (pending !== null && containers.pendingReclaim(pending) ? pending : undefined),
+    pendingReclaim: () =>
+      pending !== null && containers.pendingReclaim(pending)
+        ? `the container for task ${pending}`
+        : undefined,
     acceptReclaimed: () => {
       if (pending === null) return;
       // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の

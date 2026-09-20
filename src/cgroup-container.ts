@@ -13,8 +13,8 @@ import {
   type ContainerRuntimeCapability,
   defaultSpawn,
   isSpawnFailure,
-  type WorkerContainer,
-} from "./worker-container.js";
+  type ProcessContainer,
+} from "./process-container.js";
 
 /** cgroupfs の読み書き先。既定は実カーネルの2つのパスで、テストは temp dir を
  *  渡して外部挙動だけを観測する(実カーネルの証明は #464 の contract suite が担う —
@@ -28,7 +28,7 @@ export interface CgroupPaths {
 
 const DEFAULT_PATHS: CgroupPaths = { mount: "/sys/fs/cgroup", selfCgroup: "/proc/self/cgroup" };
 
-/** このホストの worker をどの容器機構で封じるか(ADR 0099 決定2/5)。platform の
+/** このホストの process をどの容器機構で封じるか(ADR 0099 決定2/5)。platform の
  *  判定は `checkSandboxCapability` と同じ層に立つ — 実測した機構を持たない
  *  platform は黙って弱い回収へ落ちず、preflight が不成立を返して pickup を止める。 */
 export function containerRuntimeFor(
@@ -50,8 +50,8 @@ const unavailable = (reason: string): ContainerRuntimeCapability => ({ available
  *  壊れている。 */
 function unmeasuredContainerRuntime(platform: NodeJS.Platform): ContainerRuntime {
   const capability = unavailable(
-    `no worker container mechanism on platform "${platform}" passes the worker container contract — ` +
-      "worker pickup stays stopped here" +
+    `no container mechanism on platform "${platform}" passes the container contract — ` +
+      "worker pickup and Board calls stay stopped here" +
       (platform === "darwin"
         ? ". On a Mac the board runs inside a Linux VM instead — see docs/mac-first-boot.md"
         : ""),
@@ -59,7 +59,7 @@ function unmeasuredContainerRuntime(platform: NodeJS.Platform): ContainerRuntime
   return {
     preflight: () => capability,
     create: () => {
-      throw new Error(`no worker container mechanism on platform "${platform}"`);
+      throw new Error(`no container mechanism on platform "${platform}"`);
     },
   };
 }
@@ -67,7 +67,7 @@ function unmeasuredContainerRuntime(platform: NodeJS.Platform): ContainerRuntime
 /** 容器の cgroup ディレクトリ名の頭。前提検査の残骸掃除がこの頭で自分の作った
  *  ものだけを見分けるので、盤面の cgroup を他と共有していても掃除は自分の分に
  *  留まる。 */
-const CONTAINER_PREFIX = "worker-";
+const CONTAINER_PREFIX = "container-";
 
 /** 盤面自身が居る cgroup のディレクトリ。cgroup v2 の統一階層は
  *  `/proc/self/cgroup` の `0::` 行1本で表される(v1 / hybrid にはこの行が無い)。 */
@@ -92,7 +92,7 @@ function isEmpty(dir: string): boolean {
   }
 }
 
-/** Linux の容器機構: worker session ごとの cgroup v2。controller は1つも有効化
+/** Linux の容器機構: 単位1つごとの cgroup v2。controller は1つも有効化
  *  しない — 要るのは core の `cgroup.kill` と `cgroup.events` だけで、有効化すると
  *  cgroup v2 の "no internal processes" 規則が盤面自身の process を締め出す。 */
 function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
@@ -104,7 +104,7 @@ function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
       if (!existsSync(join(paths.mount, "cgroup.controllers"))) {
         return unavailable(
           `cgroup v2 is not mounted at ${paths.mount} (no cgroup.controllers there) — ` +
-            "the worker container mechanism needs the unified cgroup v2 hierarchy",
+            "the container mechanism needs the unified cgroup v2 hierarchy",
         );
       }
       const own = boardCgroup();
@@ -117,12 +117,12 @@ function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
       // 再起動境界(#463): 帳簿は in-memory なので、前回の run の容器が populated の
       // まま残っていたら「回収済み観測の不成立」が再起動をまたいで残っている。空の
       // 残骸は掃除して進み、populated な残骸は pickup を止める(fail-closed)。稼働中に
-      // 読み直されるときは、帳簿にある session の容器は残骸ではない。
+      // 読み直されるときは、帳簿にある id の容器は残骸ではない。
       for (const dir of leftoverContainers(own, live)) {
         if (!isEmpty(dir)) {
           return unavailable(
-            `a worker container from a previous run of the board is still populated: ${dir} — ` +
-              "its processes were never reclaimed and would share this host with the next worker. " +
+            `a container from a previous run of the board is still populated: ${dir} — ` +
+              "its processes were never reclaimed and would share this host with the next worker session or Board call. " +
               `Kill what is left in it (echo 1 > ${dir}/cgroup.kill), then start the board again`,
           );
         }
@@ -138,18 +138,18 @@ function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
         rmdirSync(probe);
       } catch (err) {
         return unavailable(
-          `the board cannot create worker containers under its own cgroup ${own} ` +
+          `the board cannot create containers under its own cgroup ${own} ` +
             `(${(err as Error).message}) — run the board under a systemd unit with ` +
             "Delegate=yes so that the cgroup subtree belongs to it",
         );
       }
       return { available: true };
     },
-    create: (sessionId) => {
+    create: (id) => {
       const own = boardCgroup();
       // preflight が成立していれば起こらない(不成立なら pickup が止まっている)
       if (own === undefined) throw new Error(`cannot read the board's own cgroup from ${paths.selfCgroup}`);
-      return createCgroup(own, sessionId);
+      return createCgroup(own, id);
     },
   };
 }
@@ -163,8 +163,8 @@ function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
  *  文字列結合は無く、command も引数も引用の必要が無い。 */
 const ENTER_AND_EXEC = 'echo $$ > "$0" && exec "$@"';
 
-function createCgroup(own: string, sessionId: string): WorkerContainer {
-  const dir = join(own, CONTAINER_PREFIX + sessionId);
+function createCgroup(own: string, id: string): ProcessContainer {
+  const dir = join(own, CONTAINER_PREFIX + id);
   mkdirSync(dir, { recursive: true });
 
   let markEmpty!: () => void;

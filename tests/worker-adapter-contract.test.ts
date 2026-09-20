@@ -7,7 +7,7 @@ import { CODEX_CLI_VERSION, CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { LoggingWorker } from "../src/server-options.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, passthroughContainers, ScriptedWorker } from "./fakes.js";
+import { containerHarness, FakeClock, passthroughContainers, ScriptedWorker } from "./fakes.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 /** 公開 contract の共通テスト(ADR 0099 決定1)。**adapter が持つ終了の語彙は
@@ -62,7 +62,7 @@ workerAdapterContract("ClaudeCodeWorker", async () => {
     mcpUrl: "http://127.0.0.1:4589/mcp",
     logDir,
     pty: deadPty,
-    containers: passthroughContainers(),
+    ...containerHarness(passthroughContainers()),
   });
 });
 
@@ -82,6 +82,6 @@ workerAdapterContract("CodexWorker", async () => {
     codexHome,
     cliVersion: CODEX_CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
-    containers: passthroughContainers(),
+    ...containerHarness(passthroughContainers()),
   });
 });

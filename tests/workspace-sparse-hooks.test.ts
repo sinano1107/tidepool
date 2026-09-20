@@ -109,7 +109,7 @@ it("再起動時に前 worker の不在を証明できなければ sparse settin
   git(workspace.path, "commit", "-m", "share project hooks");
   excludeWorkspaceProjectHooks(workspace);
   const containers = new FakeContainerRuntime();
-  containers.scriptPreflight("a previous worker container is still populated");
+  containers.scriptPreflight("a container from a previous run is still populated");
 
   tidepool = await bootTidepool({
     workspace,

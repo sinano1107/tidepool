@@ -28,7 +28,7 @@ Grill and spec in a design session; ticket and build in a build one.
 
 ## Linux dev/test in the Lima VM
 
-Worker-facing dev/test (worker containers, reclaim, Containment) — the contract suite and running
+Worker-facing dev/test (containers, reclaim, Containment) — the contract suite and running
 the board for real — happens on the Mac in the Lima VM, not on the Pi. Creating the VM and installing
 its tools is [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't repeat it here.
 

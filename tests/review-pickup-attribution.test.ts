@@ -6,12 +6,12 @@ import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import type { ContainerSpawn } from "../src/process-container.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { Slot } from "../src/slot.js";
 import { DEFAULT_AUDITOR_NAME, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import type { ContainerSpawn } from "../src/worker-container.js";
 import {
   FakeClock,
   FakeContainerRuntime,
@@ -83,7 +83,7 @@ You are Fugu.
     clock,
     auditorName: "fugu",
     containerRuntime: new FakeContainerRuntime(spawn),
-    worker: ({ db, containers }): WorkerAdapter => {
+    worker: ({ db, containers, boardCall }): WorkerAdapter => {
       const worker = new ClaudeCodeWorker({
         db,
         clock,
@@ -94,6 +94,7 @@ You are Fugu.
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
         containers,
+        boardCall,
       });
       return {
         id: worker.id,

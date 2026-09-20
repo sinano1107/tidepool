@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type CgroupPaths, containerRuntimeFor } from "../src/cgroup-container.js";
-import type { ContainerRuntimeCapability } from "../src/worker-container.js";
+import type { ContainerRuntimeCapability } from "../src/process-container.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -36,7 +36,7 @@ it("容器機構を実測していない platform は fail-closed — 黙って�
   const capability = containerRuntimeFor("darwin").preflight();
 
   expect(reason(capability)).toContain("darwin");
-  expect(reason(capability)).toContain("passes the worker container contract");
+  expect(reason(capability)).toContain("passes the container contract");
   // Mac の盤面は Linux VM の中で動く(ADR 0100)。理由文がその道を名指ししなければ、
   // 止まった盤面の前で人間は「Tidepool が壊れている」と読む
   expect(reason(capability)).toContain("docs/mac-first-boot.md");
@@ -78,14 +78,14 @@ it("自分の cgroup 配下に容器を作れなければ不成立 — 理由は
 
 /** kernel の代わりに `cgroup.events` を書く(容器は create 済みであること)。 */
 function events(paths: CgroupPaths & { own: string }, sessionId: string, populated: 0 | 1): string {
-  const file = join(paths.own, `worker-${sessionId}`, "cgroup.events");
+  const file = join(paths.own, `container-${sessionId}`, "cgroup.events");
   writeFileSync(file, `populated ${populated}\nfrozen 0\n`);
   return file;
 }
 
 /** 前回の run が残した容器。 */
 function leftover(paths: CgroupPaths & { own: string }, sessionId: string, populated: 0 | 1): string {
-  const dir = join(paths.own, `worker-${sessionId}`);
+  const dir = join(paths.own, `container-${sessionId}`);
   mkdirSync(dir);
   events(paths, sessionId, populated);
   return dir;
@@ -137,14 +137,14 @@ it("容器の中への spawn は exec の前に自分自身を容器へ入れる
   const child = container.spawn("/bin/echo", ["hi"], { cwd: paths.mount, env: process.env });
 
   expect((await collect(child.stdout)).trim()).toBe("hi");
-  const procs = join(paths.own, "worker-task-7", "cgroup.procs");
+  const procs = join(paths.own, "container-task-7", "cgroup.procs");
   expect(readFileSync(procs, "utf8").trim()).toMatch(/^\d+$/);
 });
 
 it("容器へ入れなければ CLI は走らない — 入場の失敗が spawn の成功に見えない", async () => {
   const paths = await fakeCgroupfs();
   const container = linux(paths).create("task-12");
-  const procs = join(paths.own, "worker-task-12", "cgroup.procs");
+  const procs = join(paths.own, "container-task-12", "cgroup.procs");
   writeFileSync(procs, "");
   chmodSync(procs, 0o444); // kernel が入場を拒む形(EBUSY / EACCES)の代わり
 
@@ -193,7 +193,7 @@ it("強制回収は cgroup.kill への 1 の書き込み — 容器ごと落と�
 
   container.forceReclaim();
 
-  expect(readFileSync(join(paths.own, "worker-task-10", "cgroup.kill"), "utf8")).toBe("1");
+  expect(readFileSync(join(paths.own, "container-task-10", "cgroup.kill"), "utf8")).toBe("1");
 });
 
 it("force の送達は空の観測ではない — 生きている子が居る間は populated 0 を読みにいかない", async () => {

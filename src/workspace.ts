@@ -367,7 +367,7 @@ export function materializeWorkspaceProjectSettings(workspace: WorkspaceConfig):
 }
 
 /** Recover a sparse exclusion left by a previous board process. The caller
- *  must first prove that the old worker-container set is empty; otherwise
+ *  must first prove that the old container set is empty; otherwise
  *  restoring hooks would expose them to a process that survived the restart. */
 export function restoreWorkspaceProjectSettingsAtBoot(
   db: Db,
