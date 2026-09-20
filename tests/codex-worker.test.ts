@@ -164,7 +164,6 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("features.plugins=false");
     expect(config).toContain("features.skill_search=false");
     expect(config).toContain("features.apps=false");
-    expect(config).toContain("features.multi_agent=false");
     expect(config).toContain('forced_login_method="chatgpt"');
     expect(config).toContain("project_doc_max_bytes=0");
     expect(config).toContain('web_search="disabled"');
@@ -172,6 +171,9 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("get_current_task");
     expect(config).toContain("mcp_servers.tidepool.required=true");
     expect(config).toContain('mcp_servers.tidepool.default_tools_approval_mode="approve"');
+    expect(config).toContain("agents.max_concurrent_threads_per_session=3");
+    // 版は宣言しない(ADR 0134 決定2)—— 閉じるのをやめた multi_agent も v2 も盤面は書かない
+    expect(config).not.toContain("features.multi_agent");
     expect(config).toContain("skills.config=");
     expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
     expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md"));
@@ -235,6 +237,7 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(developer).toContain("## Authority");
       expect(developer).toContain("Use only the tidepool MCP verbs to report board decisions and completion.");
       expect(developer).toContain("Board verbs are main-thread only");
+      expect(developer).toContain('Spawn subagents with fork_turns: "none"; this session keeps no rollout, so forking the parent thread\'s history always fails.');
       expect(developer).toContain("declare a premise breach");
       expect(developer).not.toContain(value.title);
       expect(developer).not.toContain(value.purpose);
