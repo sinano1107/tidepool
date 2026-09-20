@@ -65,10 +65,11 @@ const BOARD_HOOK_MATCHER = "mcp__tidepool__.*";
 export const CODEX_DEVELOPER_MARKER = "tidepool-containment-probe: developer layer canary";
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
 /** 盤面が開ける feature —— 既定拒否の例外(ADR 0135 決定1)。ここに名前の無い feature は
- *  closedSurfaceConfig() が `=false` で閉じるので、vendor が stable で足した feature は閉じたまま入ってくる。
+ *  closedSurfaceConfig() が `=false` で閉じる。vendor が版の途中で足した名前は snapshot に無いので
+ *  `=false` も渡らないが、その版へ pin を上げる前に featureDrift() が preflight を倒す。
  *  feature ごとに vendor source を読んだ表と `file:line` は #571 のコメント。 */
 const OPEN_FEATURES = [
-  // サンドボックスの egress を濾す proxy —— workspace の domain allowlist が載る面(ADR 0072)
+  // サンドボックスの egress を濾す proxy —— 閉じると濾しが消える。#453 から明示で開けている
   "network_proxy",
   // subagent から盤面 verb を deny する門が hook —— 宣言は hookConfig() が出す(ADR 0130 決定1)
   "hooks",
@@ -76,7 +77,8 @@ const OPEN_FEATURES = [
   "multi_agent",
   // 閉じると shell tool 自体が Disabled になり、unified_exec も道連れに落ちる
   "shell_tool",
-  // code mode の session provider —— 盤面の model は metadata が code_mode_only で Direct へ落ちない(#762)
+  // code mode の session provider —— pin 同梱の gpt-5.6 系は metadata が code_mode_only と読め、
+  // 閉じると Direct への fallback が無い(source 読み、runtime は #762)
   "code_mode_host",
   // 閉じると ShellCommand へ降格するだけ —— 必須機能の実装の切り替え(ADR 0135 決定2)
   "unified_exec",

@@ -177,11 +177,12 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("mcp_servers.tidepool.required=true");
     expect(config).toContain('mcp_servers.tidepool.default_tools_approval_mode="approve"');
     expect(config).toContain("agents.max_concurrent_threads_per_session=3");
-    // 開ける名前は盤面が書かない —— 開ける側を書くのは版の宣言に当たる(ADR 0134 決定2)。
-    // 例外の2つは別経路で明示している: network_proxy は closedSurfaceConfig()、hooks は hookConfig()。
-    const open = Object.entries(CODEX_FEATURE_SNAPSHOT)
+    // snapshot が "true" の名前を盤面は書かない —— 開ける名前は書けば版の宣言になり(ADR 0134 決定2)、
+    // `=false` が届かない名前は書いても届かない(ADR 0135 決定4)。例外の2つだけ別経路で明示している:
+    // network_proxy は closedSurfaceConfig()、hooks は hookConfig()。
+    const unwritten = Object.entries(CODEX_FEATURE_SNAPSHOT)
       .filter(([name, state]) => state === "true" && name !== "network_proxy" && name !== "hooks");
-    expect(open.filter(([name]) => config.includes(`features.${name}=`)).map(([name]) => name)).toEqual([]);
+    expect(unwritten.filter(([name]) => config.includes(`features.${name}=`)).map(([name]) => name)).toEqual([]);
     expect(config).toContain("skills.config=");
     expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
     expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md"));
