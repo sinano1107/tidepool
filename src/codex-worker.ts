@@ -75,8 +75,6 @@ const CLOSED_FEATURES = [
   "image_generation",
   "in_app_browser",
   "memories",
-  // ADR 0129 決定2: Codex route の「subagent から盤面 verb 禁止」の床はこの feature を閉じること
-  "multi_agent",
   "plugins",
   "recommended_plugins",
   "remote_plugin",
@@ -159,7 +157,7 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
   mcp_2026_07_28: "false",
   memories: "false",
   mentions_v2: "true",
-  multi_agent: "false",
+  multi_agent: "true",
   multi_agent_mode: "false",
   multi_agent_v2: "false",
   network_proxy: "true",
@@ -355,7 +353,9 @@ function tomlInline(value: Record<string, unknown>): string {
 function developerInstructions(memorySection: string | null, systemPrompt: string, authority: string): string {
   return `${memorySection ? `${memorySection}\n\n` : ""}${systemPrompt}\n\n## Authority\n\n${authority}\n\n` +
     "Use only the tidepool MCP verbs to report board decisions and completion. " +
-    "Board verbs are main-thread only; if a subagent needs one, call it from the main thread.\n\n" +
+    "Board verbs are main-thread only; if a subagent needs one, call it from the main thread. " +
+    // ADR 0134 決定4: --ephemeral は rollout を保存しないので既定の fork は必ず失敗する
+    "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.\n\n" +
     `${PREMISE_BREACH_PROTOCOL}\n\n`;
 }
 
@@ -837,6 +837,8 @@ export class CodexWorker implements WorkerAdapter {
       "mcp_servers.tidepool.required=true",
       // ADR 0129 決定1: 答える人の居ない exec では承認の問いは Cancel にしかならない。verb の権限は盤面側が縛る
       'mcp_servers.tidepool.default_tools_approval_mode="approve"',
+      // ADR 0134 決定3: この key は版に依らず効く —— 絞るのではなく本数の意味を固定する
+      "agents.max_concurrent_threads_per_session=3",
       skillConfig(this.options.codexHome, workspace.path),
       ...hookConfig(hook),
     ];
