@@ -172,6 +172,8 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("mcp_servers.tidepool.required=true");
     expect(config).toContain('mcp_servers.tidepool.default_tools_approval_mode="approve"');
     expect(config).toContain("agents.max_concurrent_threads_per_session=3");
+    // 版は宣言しない(ADR 0134 決定2)—— 閉じるのをやめた multi_agent も v2 も盤面は書かない
+    expect(config).not.toContain("features.multi_agent");
     expect(config).toContain("skills.config=");
     expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
     expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md"));
