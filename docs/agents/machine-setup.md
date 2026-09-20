@@ -37,8 +37,9 @@ its tools is [docs/mac-first-boot.md](../mac-first-boot.md); use that, don't rep
 - Run `npm run canary:container` under a `Delegate=yes` user scope
   (`systemd-run --user --scope -p Delegate=yes -- npm run canary:container`); a bare `limactl shell`
   session stops at the preflight check.
-- `npm test` already runs on Linux in CI, so there's no need to run it in the VM too — the VM is
-  for what CI doesn't cover: the contract suite, a real worker run, real CLI login.
+- The VM covers what CI never runs — the contract suite, a real worker run, real CLI login — and
+  `npm test` when a failure shows up on Linux but not on the Mac: CI reruns green and keeps no
+  transcript, while the VM repeats it and takes instrumentation (#773).
 - The Pi stays production-only: the real deploy (`docs/real-environment-trial.md`) and the contract
   suite re-run the deploy-pi skill does after a kernel / systemd / CLI update on the Pi (ADR 0099
   決定5 — that is production validation, not dev/test). Don't make checkouts there to test a change.
