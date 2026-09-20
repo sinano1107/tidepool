@@ -432,7 +432,7 @@ function permissionConfig(
 
 /** 閉じる名前は導出する(ADR 0135 決定1): snapshot の全名 − 開ける名前 − `=false` が届かない名前。
  *  既定が false のものにも明示的に `=false` を渡す。開ける側を `-c` に書かないのは、それが版の宣言に
- *  当たるからである(ADR 0134 決定2)—— network_proxy だけは明示、hooks は hookConfig() が出す。 */
+ *  当たるからである(ADR 0134 決定2)。 */
 function closedSurfaceConfig(): string[] {
   const stays = new Set<string>([...OPEN_FEATURES, ...UNSETTABLE_FEATURES]);
   return [

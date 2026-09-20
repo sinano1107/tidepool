@@ -178,7 +178,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('mcp_servers.tidepool.default_tools_approval_mode="approve"');
     expect(config).toContain("agents.max_concurrent_threads_per_session=3");
     // 開ける名前は盤面が書かない —— 開ける側を書くのは版の宣言に当たる(ADR 0134 決定2)。
-    // network_proxy は permission の網が載る面、hooks は hookConfig() が出す門。
+    // 例外の2つは別経路で明示している: network_proxy は closedSurfaceConfig()、hooks は hookConfig()。
     const open = Object.entries(CODEX_FEATURE_SNAPSHOT)
       .filter(([name, state]) => state === "true" && name !== "network_proxy" && name !== "hooks");
     expect(open.filter(([name]) => config.includes(`features.${name}=`)).map(([name]) => name)).toEqual([]);
