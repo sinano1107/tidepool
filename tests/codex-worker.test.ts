@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { quarantinedAuthProviders } from "../src/cli-auth.js";
-import { type CodexSpawnFn, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
+import {
+  CODEX_FEATURE_SNAPSHOT,
+  type CodexSpawnFn,
+  CodexWorker,
+  resolveCodexExecutable,
+} from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { buildMemoryInjection, recordKnowledge } from "../src/memory.js";
@@ -161,9 +166,9 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('\":root\"=\"deny\"');
     expect(config).toContain('\":slash_tmp\"=\"deny\"');
     expect(config).toContain("permissions.tidepool-work.workspace_roots=");
-    expect(config).toContain("features.plugins=false");
-    expect(config).toContain("features.skill_search=false");
-    expect(config).toContain("features.apps=false");
+    // 既定拒否(ADR 0135 決定1): snapshot が "false" の名前は全部 `-c` に載る
+    const closed = Object.entries(CODEX_FEATURE_SNAPSHOT).filter(([, state]) => state === "false");
+    expect(closed.filter(([name]) => !config.includes(`features.${name}=false`)).map(([name]) => name)).toEqual([]);
     expect(config).toContain('forced_login_method="chatgpt"');
     expect(config).toContain("project_doc_max_bytes=0");
     expect(config).toContain('web_search="disabled"');
@@ -172,8 +177,11 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("mcp_servers.tidepool.required=true");
     expect(config).toContain('mcp_servers.tidepool.default_tools_approval_mode="approve"');
     expect(config).toContain("agents.max_concurrent_threads_per_session=3");
-    // 版は宣言しない(ADR 0134 決定2)—— 閉じるのをやめた multi_agent も v2 も盤面は書かない
-    expect(config).not.toContain("features.multi_agent");
+    // 開ける名前は盤面が書かない —— 開ける側を書くのは版の宣言に当たる(ADR 0134 決定2)。
+    // network_proxy は permission の網が載る面、hooks は hookConfig() が出す門。
+    const open = Object.entries(CODEX_FEATURE_SNAPSHOT)
+      .filter(([name, state]) => state === "true" && name !== "network_proxy" && name !== "hooks");
+    expect(open.filter(([name]) => config.includes(`features.${name}=`)).map(([name]) => name)).toEqual([]);
     expect(config).toContain("skills.config=");
     expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
     expect(config).toContain(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md"));

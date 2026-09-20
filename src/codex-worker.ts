@@ -64,50 +64,69 @@ const BOARD_HOOK_MATCHER = "mcp__tidepool__.*";
  *  送らないので、この marker がモデルに届くことはない。 */
 export const CODEX_DEVELOPER_MARKER = "tidepool-containment-probe: developer layer canary";
 const CODEX_PERMISSIONS = ["tidepool-work", "tidepool-review"] as const;
-const CLOSED_FEATURES = [
-  "apps",
-  "auth_elicitation",
-  "browser_use",
-  "browser_use_external",
-  "browser_use_full_cdp_access",
-  "computer_use",
-  "goals",
-  "image_generation",
-  "in_app_browser",
-  "memories",
-  "plugins",
-  "recommended_plugins",
-  "remote_plugin",
-  "skill_mcp_dependency_install",
-  "skill_search",
-  "tool_suggest",
-  "view_image",
-  "workspace_dependencies",
+/** 盤面が開ける feature —— 既定拒否の例外(ADR 0135 決定1)。ここに名前の無い feature は
+ *  closedSurfaceConfig() が `=false` で閉じるので、vendor が stable で足した feature は閉じたまま入ってくる。
+ *  feature ごとに vendor source を読んだ表と `file:line` は #571 のコメント。 */
+const OPEN_FEATURES = [
+  // サンドボックスの egress を濾す proxy —— workspace の domain allowlist が載る面(ADR 0072)
+  "network_proxy",
+  // subagent から盤面 verb を deny する門が hook —— 宣言は hookConfig() が出す(ADR 0130 決定1)
+  "hooks",
+  // 床が hook の門へ移り、閉じる根拠が無くなった(ADR 0134 決定1)
+  "multi_agent",
+  // 閉じると shell tool 自体が Disabled になり、unified_exec も道連れに落ちる
+  "shell_tool",
+  // code mode の session provider —— 盤面の model は metadata が code_mode_only で Direct へ落ちない(#762)
+  "code_mode_host",
+  // 閉じると ShellCommand へ降格するだけ —— 必須機能の実装の切り替え(ADR 0135 決定2)
+  "unified_exec",
+  // remote compaction の V2 / V1 の選択。閉じても local compaction にはならない
+  "remote_compaction_v2",
+  // thread ごとの login shell 環境 snapshot —— 実装の切り替え
+  "shell_snapshot",
+  // ModelClient の転送圧縮 —— 実装の切り替え
+  "enable_request_compression",
+] as const;
+/** `=false` が届かない名前(ADR 0135 決定4)。vendor の `apply_map` が手書きの skip list で
+ *  `disable()` の前に読み飛ばすため、閉じても `features list` は true を返し続ける。stage `removed` で
+ *  読む箇所は無い —— 面ではないが、導出から除かないと snapshot と食い違う。 */
+const UNSETTABLE_FEATURES = [
+  "tui_app_server",
+  "tool_search_always_defer_mcp_tools",
+  "resize_all_images",
+  "item_ids",
+  "terminal_resize_reflow",
 ] as const;
 /** `codex features list` の全量(name → effective state)の写し。stage 列は含めない —— 面は state。
  * CODEX_CLI_VERSION に**従属する**期待値で、pin を上げたら下の手順で採り直す。採り直さない限り
- * feature 差分で preflight が倒れ続けるので、pin 更新時の CLOSED_FEATURES 読み直しをこの定数が
- * コードで強制する(ADR 0108 追記、issue #532)。型が CLOSED_FEATURES の全名を `"false"` に縛るので、
- * 採り直しで閉じたはずの名前が転んでいれば、テストではなくコンパイルが先に落ちる。
+ * feature 差分で preflight が倒れ続けるので、pin 更新時の読み直しをこの定数がコードで強制する
+ * (ADR 0108 追記、issue #532)。
  *
  * 採取条件(pin の版で実測。採り直しも必ず pin と同じ版で): venue は Lima VM `tidepool`
  * (Linux aarch64 musl) —— preflight が走るのはそちら。Mac(darwin arm64)の出力と1行も違わず、
  * CODEX_HOME が新規の空でもログイン済みでも同一(auth 非依存)。`skillConfig()` の有無でも同一なので
- * 採取時は付けていない(probe は付ける)。`-c` は closedSurfaceConfig() と同じもので、FEATS は
- * CLOSED_FEATURES の全名 —— どちらかを動かしたらこの定数も動く。
+ * 採取時は付けていない(probe は付ける)。`-c` は closedSurfaceConfig() と同じ導出 —— どちらかを
+ * 動かしたらこの定数も動く。
+ *
+ * pin を上げるときは、採り直しに加えて vendor source で2点を読み直す(ADR 0135 決定5): model metadata が
+ * features に勝つ欄(今日は `multi_agent_version` —— ADR 0134、`tool_mode` —— #762)と、`apply_map` の
+ * 読み飛ばし(UNSETTABLE_FEATURES が増減しうる)。
  *
  * ```bash
  * CODEX_HOME=$(mktemp -d)
- * FEATS=(<CLOSED_FEATURES の全名>)
+ * OPEN=(<OPEN_FEATURES の全名>)
+ * UNSETTABLE=(<UNSETTABLE_FEATURES の全名>)
+ * SKIP=" ${OPEN[*]} ${UNSETTABLE[*]} "
  * ARGS=(-c features.network_proxy=true)
- * for f in "${FEATS[@]}"; do ARGS+=(-c "features.$f=false"); done
+ * while read -r name; do
+ *   case "$SKIP" in *" $name "*) continue;; esac
+ *   ARGS+=(-c "features.$name=false")
+ * done < <(codex features list | awk '{print $1}')
  * ARGS+=(-c 'web_search="disabled"' -c tools.web_search=false -c project_doc_max_bytes=0)
  * codex features list "${ARGS[@]}" | awk '{print $1, $NF}'
  * ```
  */
-export const CODEX_FEATURE_SNAPSHOT: Readonly<
-  Record<(typeof CLOSED_FEATURES)[number], "false"> & Record<string, "true" | "false">
-> = {
+const FEATURE_STATES = {
   apply_patch_freeform: "false",
   apply_patch_streaming_events: "false",
   apps: "false",
@@ -123,7 +142,7 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
   code_mode_host: "true",
   code_mode_only: "false",
   codex_git_commit: "false",
-  collaboration_modes: "true",
+  collaboration_modes: "false",
   computer_use: "false",
   concurrent_reasoning_summaries: "false",
   current_time_reminder: "false",
@@ -140,31 +159,31 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
   experimental_windows_sandbox: "false",
   external_agent_memory_import: "false",
   external_migration: "false",
-  fast_mode: "true",
+  fast_mode: "false",
   goals: "false",
-  guardian_approval: "true",
+  guardian_approval: "false",
   guardianv2: "false",
   hooks: "true",
   image_detail_original: "false",
   image_generation: "false",
   image_resize_notice: "false",
   in_app_browser: "false",
-  in_app_updates: "true",
+  in_app_updates: "false",
   item_ids: "true",
   js_repl: "false",
   js_repl_tools_only: "false",
   local_thread_store_compression: "false",
   mcp_2026_07_28: "false",
   memories: "false",
-  mentions_v2: "true",
+  mentions_v2: "false",
   multi_agent: "true",
   multi_agent_mode: "false",
   multi_agent_v2: "false",
   network_proxy: "true",
   non_prefixed_mcp_tool_names: "false",
-  personality: "true",
+  personality: "false",
   plugin_hooks: "false",
-  plugin_sharing: "true",
+  plugin_sharing: "false",
   plugins: "false",
   prevent_idle_sleep: "false",
   realtime_conversation: "false",
@@ -189,13 +208,13 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
   skill_env_var_dependency_prompt: "false",
   skill_mcp_dependency_install: "false",
   skill_search: "false",
-  sqlite: "true",
+  sqlite: "false",
   standalone_web_search: "false",
-  steer: "true",
+  steer: "false",
   terminal_resize_reflow: "true",
   terminal_visualization_instructions: "false",
   token_budget: "false",
-  tool_call_mcp_elicitation: "true",
+  tool_call_mcp_elicitation: "false",
   tool_search: "false",
   tool_search_always_defer_mcp_tools: "true",
   tool_suggest: "false",
@@ -212,7 +231,18 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
   web_search_request: "false",
   workspace_dependencies: "false",
   workspace_owner_usage_nudge: "false",
-};
+} as const;
+/** 型が縛るのは「開ける名前と `=false` が届かない名前だけが true」。採り直しで他の名前が転んでいれば、
+ *  テストではなくコンパイルが先に落ちる。`& Record<string, …>` は featureDrift() が string で引くため。 */
+export const CODEX_FEATURE_SNAPSHOT: Readonly<
+  {
+    [K in keyof typeof FEATURE_STATES]: K extends
+      | (typeof OPEN_FEATURES)[number]
+      | (typeof UNSETTABLE_FEATURES)[number]
+      ? "true"
+      : "false";
+  } & Record<string, "true" | "false">
+> = FEATURE_STATES;
 const SYSTEM_SKILLS = ["imagegen", "openai-docs", "plugin-creator", "skill-creator", "skill-installer"];
 const SECRET_ENV = [
   "OPENAI_API_KEY",
@@ -400,10 +430,16 @@ function permissionConfig(
   ];
 }
 
+/** 閉じる名前は導出する(ADR 0135 決定1): snapshot の全名 − 開ける名前 − `=false` が届かない名前。
+ *  既定が false のものにも明示的に `=false` を渡す。開ける側を `-c` に書かないのは、それが版の宣言に
+ *  当たるからである(ADR 0134 決定2)—— network_proxy だけは明示、hooks は hookConfig() が出す。 */
 function closedSurfaceConfig(): string[] {
+  const stays = new Set<string>([...OPEN_FEATURES, ...UNSETTABLE_FEATURES]);
   return [
     "features.network_proxy=true",
-    ...CLOSED_FEATURES.map((feature) => `features.${feature}=false`),
+    ...Object.keys(CODEX_FEATURE_SNAPSHOT)
+      .filter((name) => !stays.has(name))
+      .map((name) => `features.${name}=false`),
     'web_search="disabled"',
     "tools.web_search=false",
     "project_doc_max_bytes=0",
