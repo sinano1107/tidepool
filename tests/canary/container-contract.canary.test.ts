@@ -8,14 +8,14 @@ import { containerRuntimeFor } from "../../src/cgroup-container.js";
 import {
   type ContainedProcess,
   type ContainerRuntime,
-  type WorkerContainer,
-  WorkerContainers,
-} from "../../src/worker-container.js";
+  type ProcessContainer,
+  ProcessContainers,
+} from "../../src/process-container.js";
 import { liveGroups, processGroupContainerRuntime } from "./process-group-container.js";
 
-/** Worker 容器の contract suite(ADR 0099 決定5 / issue #464)。実カーネルの
+/** 容器の contract suite(ADR 0099 決定5 / issue #464)。実カーネルの
  *  容器機構の上で、**公開 seam だけ**を通して敵対的子孫を回収する:
- *  `WorkerContainers` の `open` / `spawn` / `forceReclaim` / `reclaimed` /
+ *  `ProcessContainers` の `open` / `spawn` / `forceReclaim` / `reclaimed` /
  *  `preflight`。内部関数は import しない。
  *
  *  `npm test` の対象外(ADR 0027 の線 — 実 process を起こし、delegated な cgroup
@@ -120,7 +120,7 @@ if (probe === undefined) {
   );
 }
 
-const containers = new WorkerContainers(probe.runtime);
+const containers = new ProcessContainers(probe.runtime);
 
 let residueAtStart: string[] = [];
 
@@ -129,14 +129,14 @@ beforeAll(() => {
   // 「敵対的子孫を実カーネルで測った」という主張を空手形で出すことになる。
   if (process.platform !== probe.platform) {
     throw new Error(
-      `the "${probeName}" worker container mechanism is measured on ${probe.platform} only ` +
+      `the "${probeName}" container mechanism is measured on ${probe.platform} only ` +
         `(this host is "${process.platform}")`,
     );
   }
   const capability = containers.preflight();
   if (!capability.available) {
     throw new Error(
-      `this host cannot hold worker containers, so nothing here would be measured: ${capability.reason}`,
+      `this host cannot hold containers, so nothing here would be measured: ${capability.reason}`,
     );
   }
   residueAtStart = probe.residue();
@@ -163,14 +163,14 @@ afterEach(async () => {
   rmSync(work, { recursive: true, force: true });
 });
 
-function open(sessionId: string): WorkerContainer {
+function open(sessionId: string): ProcessContainer {
   opened.push(sessionId);
   return containers.open(sessionId);
 }
 
 /** 敵対的 process を容器の中へ1つ起こす。script は `$CANARY_PIDS` に自分の PID を
  *  追記する(`>>` は O_APPEND なので、孫が同時に書いても行は混ざらない)。 */
-function hostile(container: WorkerContainer, script: string): ContainedProcess {
+function hostile(container: ProcessContainer, script: string): ContainedProcess {
   return container.spawn("/bin/sh", ["-c", script], {
     cwd: work,
     env: { ...process.env, CANARY_PIDS: pidsFile },
@@ -186,7 +186,7 @@ const recordedPids = (): number[] =>
 
 /** 回収済み観測が**今この瞬間に**立っているか。force の送達より先に空が
  *  観測されないこと(= 送達を回収と数えていないこと)を測るために要る。 */
-function emptyObserved(container: WorkerContainer): () => boolean {
+function emptyObserved(container: ProcessContainer): () => boolean {
   let observed = false;
   void container.reclaimed.then(() => {
     observed = true;

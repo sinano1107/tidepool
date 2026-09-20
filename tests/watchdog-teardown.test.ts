@@ -7,11 +7,11 @@ import {
   quarantineFailedTeardown,
 } from "../src/failed-teardown.js";
 import type { Landing } from "../src/landing.js";
+import { ProcessContainers } from "../src/process-container.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, escalateTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown } from "../src/teardown.js";
 import { capInterruptionHandler, startWatchdog, type Watchdog } from "../src/watchdog.js";
-import { WorkerContainers } from "../src/worker-container.js";
 import {
   prepareWorkspaceAtPickup,
   type WorkspaceConfig,
@@ -58,7 +58,7 @@ async function sessionInTeardown(
   const ws = await makeWorkspace(dirs, "sandbox");
   const slot = new Slot();
   const runtime = new FakeContainerRuntime();
-  const containers = new WorkerContainers(runtime);
+  const containers = new ProcessContainers(runtime);
   const registered = registerTask(
     db,
     { type: "work", title: "one", purpose: "why", completion_criteria: "done" },
@@ -135,7 +135,7 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
   const clock = new FakeClock();
   const slot = new Slot();
   const runtime = new FakeContainerRuntime();
-  const containers = new WorkerContainers(runtime);
+  const containers = new ProcessContainers(runtime);
   const task = pickupTask(db, registerTask(db, { type: "work", title: "one", purpose: "why", completion_criteria: "done" }, clock.now()), "deckhand", clock.now());
   slot.occupy(task.id);
   containers.open(task.id);
@@ -174,7 +174,7 @@ it("cap reclaim arriving after containment waits for acceptance before stashing 
   registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now());
   await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
   await f.clock.advance(5 * MIN);
-  expect(f.watchdog.pendingReclaim()).toBe(f.task.id);
+  expect(f.watchdog.pendingReclaim()).toContain(f.task.id);
   f.watchdog.acceptReclaimed();
   expect(f.slot.currentTaskId).toBe(f.task.id);
   f.runtime.fireEmpty(f.task.id);

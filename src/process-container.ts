@@ -34,8 +34,8 @@ export type ContainerSpawn = (
  *  reason の文面が担うのであって、型ではない)。 */
 export type ContainerRuntimeCapability = SandboxCapability;
 
-/** 1つの worker session ぶんの容器(CONTEXT.md「Worker 容器」)。 */
-export interface WorkerContainer {
+/** 1つの単位(worker session、または Board call 1回)ぶんの容器(CONTEXT.md「容器」)。 */
+export interface ProcessContainer {
   /** 容器の中への spawn。session に属する process は全部この中で生きる。 */
   spawn: ContainerSpawn;
   /** 強制回収(force reclaim): 容器ごと全 process を終了させる操作。**送達で
@@ -58,15 +58,15 @@ export interface ContainerRuntime {
    *  が今持っている session — 稼働中の容器を前回の run の残骸と読み違えないため。 */
   preflight(live?: ReadonlySet<string>): ContainerRuntimeCapability;
   /** worker session 1つぶんの容器を作る。 */
-  create(sessionId: string): WorkerContainer;
+  create(sessionId: string): ProcessContainer;
 }
 
 /** 盤面側 supervisor(ADR 0099 決定2)。seam ではなく共通 module であり、
  *  「どの session の容器か」の帳簿と、force / reclaimed の唯一の呼び口を持つ。
  *  watchdog も tool-surface drift の kill もここを通るので、Harness が増えても
  *  回収は再実装されない。 */
-export class WorkerContainers {
-  private readonly live = new Map<string, { container: WorkerContainer; forced: boolean }>();
+export class ProcessContainers {
+  private readonly live = new Map<string, { container: ProcessContainer; forced: boolean }>();
 
   constructor(private readonly runtime: ContainerRuntime) {}
 
@@ -77,7 +77,7 @@ export class WorkerContainers {
   /** 盤面が worker session ごとに**先に**作る(pickup 時)。adapter はここで
    *  作られた容器の中へ spawn するだけである。2度目の open は同じ容器を返す —
    *  scheduler を通らずに直接 adapter を動かす経路でも器が1つに保たれる。 */
-  open(sessionId: string): WorkerContainer {
+  open(sessionId: string): ProcessContainer {
     const existing = this.live.get(sessionId);
     if (existing) return existing.container;
     const container = this.runtime.create(sessionId);

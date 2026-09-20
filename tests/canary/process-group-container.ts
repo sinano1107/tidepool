@@ -2,8 +2,8 @@ import { spawn as nodeSpawn } from "node:child_process";
 import {
   type ContainerRuntime,
   isSpawnFailure,
-  type WorkerContainer,
-} from "../../src/worker-container.js";
+  type ProcessContainer,
+} from "../../src/process-container.js";
 
 /** **採用されていない候補**(issue #465)。macOS には cgroup v2 が無いので、
  *  `containerRuntimeFor` が darwin に返す fail-closed の unmeasured runtime の
@@ -49,7 +49,7 @@ export const processGroupContainerRuntime: ContainerRuntime = {
   create: createProcessGroup,
 };
 
-function createProcessGroup(): WorkerContainer {
+function createProcessGroup(): ProcessContainer {
   const groups: number[] = [];
   let forced = false;
   let live = 0;

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { PassThrough } from "node:stream";
 import type {
   AllocationClient,
   AllocationJudgment,
@@ -12,6 +13,7 @@ import type {
   BehaviorDraftClient,
   BehaviorDraftInput,
 } from "../src/attribution.js";
+import { type BoardCall, createBoardCalls } from "../src/board-call.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import type {
@@ -36,10 +38,6 @@ import type {
   RepoSlug,
 } from "../src/github.js";
 import type { Landing } from "../src/landing.js";
-import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
-import type { Task } from "../src/tasks.js";
-import type { TranslationClient, TranslationResult } from "../src/translate.js";
-import type { WorkerAdapter } from "../src/worker.js";
 import {
   type ContainedProcess,
   type ContainerRuntime,
@@ -47,9 +45,14 @@ import {
   type ContainerSpawn,
   defaultSpawn,
   isSpawnFailure,
-  type WorkerContainer,
-  WorkerContainers,
-} from "../src/worker-container.js";
+  type ProcessContainer,
+  ProcessContainers,
+} from "../src/process-container.js";
+import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
+import type { Task } from "../src/tasks.js";
+import type { TranslationClient, TranslationResult } from "../src/translate.js";
+import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
+import type { WorkerAdapter } from "../src/worker.js";
 
 /** Required landing dependency for tests whose exercised door cannot reach a
  * landing path. A mistaken land call fails loudly; ancestor re-fire is a
@@ -179,7 +182,7 @@ export class ScriptedWorker implements WorkerAdapter {
   readonly startedSettings: (ExecutionSetting | undefined)[] = [];
   readonly gracefulStops: string[] = [];
   readonly exits: string[] = [];
-  private containers: WorkerContainers | undefined;
+  private containers: ProcessContainers | undefined;
   private startFailure: Error | undefined;
   /** 盤面が factory で渡す「worker が1度も走らなかった」の一撃(ADR 0118)。 */
   onSpawnFailed: ((taskId: string, failure: { error_code: string | null; message: string }) => void) | undefined;
@@ -216,7 +219,7 @@ export class ScriptedWorker implements WorkerAdapter {
   }
 
   /** 盤面側 supervisor を渡す(本番の adapter が factory で受け取るのと同じもの)。 */
-  useContainers(containers: WorkerContainers): void {
+  useContainers(containers: ProcessContainers): void {
     this.containers = containers;
   }
 
@@ -253,6 +256,12 @@ export class ScriptedWorker implements WorkerAdapter {
  *  で好きな瞬間に「空になった signal」を撃つ。 */
 export class FakeContainerRuntime implements ContainerRuntime {
   readonly forceReclaims: string[] = [];
+  /** 作られた容器の id を作られた順に。Board call の容器 id は口が振るので、
+   *  テストはここから読む(`board-call-1` のような綴りに結び付けない)。 */
+  readonly created: string[] = [];
+  /** 機構前提検査に渡った「今生きている容器」の記録。ADR 0136 決定: 稼働中の
+   *  Board call の容器を前回の run の残骸と読み違えないため、ここに載る。 */
+  readonly preflightLive: Array<ReadonlySet<string>> = [];
   private readonly held = new Set<string>();
   private readonly markEmpty = new Map<string, () => void>();
   private capability: ContainerRuntimeCapability = { available: true };
@@ -278,11 +287,13 @@ export class FakeContainerRuntime implements ContainerRuntime {
     this.markEmpty.get(sessionId)?.();
   }
 
-  preflight(): ContainerRuntimeCapability {
+  preflight(live: ReadonlySet<string> = new Set()): ContainerRuntimeCapability {
+    this.preflightLive.push(live);
     return this.capability;
   }
 
-  create(sessionId: string): WorkerContainer {
+  create(sessionId: string): ProcessContainer {
+    this.created.push(sessionId);
     let markEmpty!: () => void;
     const reclaimed = new Promise<void>((resolve) => {
       markEmpty = resolve;
@@ -695,8 +706,8 @@ export class FakeBehaviorDraftClient implements BehaviorDraftClient {
 
 /** 盤面側 supervisor を fake の容器機構の上に1行で組む — scheduler / watchdog を
  *  直に呼ぶテストが毎回2行書かないための口。 */
-export function fakeContainers(runtime: FakeContainerRuntime = new FakeContainerRuntime()): WorkerContainers {
-  return new WorkerContainers(runtime);
+export function fakeContainers(runtime: FakeContainerRuntime = new FakeContainerRuntime()): ProcessContainers {
+  return new ProcessContainers(runtime);
 }
 
 /** 容器 = CLI root process 1本 の容器機構: force は root への SIGKILL、空の観測は
@@ -734,10 +745,30 @@ function passthroughContainerRuntime(spawn: ContainerSpawn): ContainerRuntime {
   };
 }
 
+/** 実 adapter1台ぶんの容器まわり: 容器 supervisor と、その上に載る Board call の
+ *  口(ADR 0136)。**2つを別々に組ませない** —— 口を別の supervisor から組むと、
+ *  skill 列挙の容器を `hold` しても launch が止まらない(門が別の帳簿を読む)。
+ *  `onReclaimTimeout` は既定で捨てる: 回収 timeout の写像を測るのはサーバー境界の
+ *  テストで、adapter のテストではない。 */
+export function containerHarness(
+  containers: ProcessContainers,
+  clock: Clock = new FakeClock(),
+): { containers: ProcessContainers; boardCall: BoardCall } {
+  return {
+    containers,
+    boardCall: createBoardCalls({
+      containers,
+      clock,
+      reclaimTimeout: RECLAIM_TIMEOUT,
+      onReclaimTimeout: () => {},
+    }).call,
+  };
+}
+
 /** 実 adapter に渡す supervisor を process 境界1つから組む。`spawn` を省くと実
  *  process を起こす(実 CLI は起こさない — ADR 0027)。 */
-export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): WorkerContainers {
-  return new WorkerContainers(passthroughContainerRuntime(spawn));
+export function passthroughContainers(spawn: ContainerSpawn = defaultSpawn): ProcessContainers {
+  return new ProcessContainers(passthroughContainerRuntime(spawn));
 }
 
 /** 健全な openai の usage probe(ADR 0116 決定4): openai は観測が健全でないと pickup で
@@ -759,3 +790,60 @@ export const healthyOpenai = async (now: Date): Promise<CodexAppServerProbeResul
     },
   ],
 });
+
+/** 1回の spawn の記録(command / args / cwd / env)。 */
+export interface SpawnCall {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}
+/** Scripted stand-in at the process boundary: records the spawn recipe.
+ *  容器の中で走る process の代わりで、stdout / exit / error をテストが撃つ。 */
+export function recordingSpawn() {
+  const calls: SpawnCall[] = [];
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const killed: NodeJS.Signals[] = [];
+  const exitListeners: Array<
+    Array<(code: number | null, signal: NodeJS.Signals | null) => void>
+  > = [];
+  const errorListeners: Array<(err: Error) => void> = [];
+  const spawn: ContainerSpawn = (command, args, opts) => {
+    calls.push({ command, args, cwd: opts.cwd, env: opts.env });
+    const processExitListeners: Array<
+      (code: number | null, signal: NodeJS.Signals | null) => void
+    > = [];
+    exitListeners.push(processExitListeners);
+    return {
+      stdout,
+      stderr,
+      kill: (signal) => killed.push(signal),
+      on: (
+        event: "exit" | "error",
+        listener:
+          | ((code: number | null, signal: NodeJS.Signals | null) => void)
+          | ((err: Error) => void),
+      ) => {
+        if (event === "exit") {
+          processExitListeners.push(
+            listener as (code: number | null, signal: NodeJS.Signals | null) => void,
+          );
+        }
+        if (event === "error") errorListeners.push(listener as (err: Error) => void);
+      },
+    };
+  };
+  const emitExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    for (const processListeners of exitListeners) {
+      for (const listener of processListeners) listener(code, signal);
+    }
+  };
+  const emitExitAt = (index: number, code: number | null, signal: NodeJS.Signals | null) => {
+    for (const listener of exitListeners[index] ?? []) listener(code, signal);
+  };
+  const emitError = (err: Error) => {
+    for (const listener of errorListeners) listener(err);
+  };
+  return { calls, stdout, stderr, killed, spawn, emitExit, emitExitAt, emitError };
+}

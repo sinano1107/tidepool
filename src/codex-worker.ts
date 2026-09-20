@@ -29,10 +29,10 @@ import {
   recordMemoryInjection,
   WORKER_MEMORY_VERBS,
 } from "./memory.js";
+import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { DEFAULT_AUDITOR_NAME, resolveTaskAgent, type Task } from "./tasks.js";
 import type { WorkerAdapter } from "./worker.js";
-import type { ContainerSpawn, WorkerContainers } from "./worker-container.js";
 import {
   quarantineWorkspace,
   resolveExecutionWorkspace,
@@ -275,7 +275,7 @@ export interface CodexWorkerOptions {
   /** Absolute executable established by the same preflight; spawn never relies on PATH. */
   executable: string;
   /** Board-owned worker-session container supervisor (ADR 0099). */
-  containers: WorkerContainers;
+  containers: ProcessContainers;
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
@@ -800,7 +800,7 @@ function consumeJsonl(
 /** The OpenAI vendor adapter. The board selects it only for `provider: openai`. */
 export class CodexWorker implements WorkerAdapter {
   readonly id: string;
-  private readonly containers: WorkerContainers;
+  private readonly containers: ProcessContainers;
   private readonly logDir: string;
   private readonly workspacesDir: string;
   private readonly running = new Map<string, { kill(signal: NodeJS.Signals): void }>();
@@ -990,7 +990,7 @@ export class CodexWorker implements WorkerAdapter {
     });
   }
 
-  /** Codex folds up on SIGINT; force/reclaimed belong to WorkerContainers. */
+  /** Codex folds up on SIGINT; force/reclaimed belong to ProcessContainers. */
   gracefulStop(taskId: string): void {
     this.running.get(taskId)?.kill("SIGINT");
   }

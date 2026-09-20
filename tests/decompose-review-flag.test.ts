@@ -399,10 +399,11 @@ it.each([
         kill() {},
         on() {},
       })),
-      workerAdapter: ({ db, containers }) => {
+      workerAdapter: ({ db, containers, boardCall }) => {
         const worker = new ClaudeCodeWorker({
           db,
           containers,
+          boardCall,
           clock: new FakeClock(),
           registry: { dir: registryDir, mode: "purely-local" },
           agent: "tako",

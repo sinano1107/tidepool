@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
+import type { BoardCall } from "./board-call.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import {
   isCapInterruptionEnvelope,
@@ -22,6 +23,7 @@ import {
 } from "./execution-setting.js";
 import { buildMemoryInjection, recordMemoryInjection } from "./memory.js";
 import { projectAndPersist } from "./precedent.js";
+import type { ProcessContainers } from "./process-container.js";
 import {
   type AgentDefinition,
   agentBodyAtCommit,
@@ -52,7 +54,6 @@ import {
 } from "./tasks.js";
 import { composeTerminalScreen } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
-import type { WorkerContainers } from "./worker-container.js";
 import {
   excludeWorkspaceProjectHooks,
   guardRegistryDefaultBranch,
@@ -1117,7 +1118,11 @@ export interface ClaudeWorkerOptions {
    *  容器の中で起き、force / reclaimed もここを通る。**省略できない** — adapter が
    *  自前の既定容器を持つと、そこだけ回収の弱い経路が生える(ADR 0027 の fake
    *  注入は容器機構の側でやる)。 */
-  containers: WorkerContainers;
+  containers: ProcessContainers;
+  /** Board call の口(ADR 0136 決定2/4)。skill 列挙はこの中で起き、容器・時間上限・
+   *  強制回収・回収済み観測は口の側にある。`containers` と同じく**省略できない** ——
+   *  既定を持たせると、配線を1本忘れた盤面の Board call だけが容器の外で起きる。 */
+  boardCall: BoardCall;
   /** issue #81 / ADR 0028: the PTY boundary checkUsage scrapes /usage at.
    *  Injected so the scrape orchestration runs without a real PTY in tests. */
   pty?: PtyFn;
@@ -1209,18 +1214,21 @@ const SKILL_ENUM_ARGS = [
 
 // The /usage ping exits naturally in ~2s (ADR 0025); this is the fail-closed
 // backstop for a CLI that hangs (auth stall, missing exit) so a wedged probe
-// can neither block the spawn forever nor leave an orphan — same "no orphan"
-// posture as checkUsage (ADR 0028), reached by SIGKILL on timeout.
+// can neither block the spawn forever nor leave an orphan. 値は据え置きで、
+// 数える側と force を撃つ側は Board call の口へ移った(ADR 0136 決定4)——
+// 上限は口の契約の一部なので、ここが渡すのは値だけである。
 const SKILL_ENUM_TIMEOUT_MS = 15_000;
 
-/** The `/usage` ping's spawn options. Extracted as a pure function purely so
- *  the Board call env (ADR 0044) is **observable**: unlike the other four board
- *  calls, these two pings sit below their injection seam — `EnumerateSkillsFn`
- *  and `EnumerateToolsFn` are faked at the whole-probe level (ADR 0027), so a
- *  test can never see what `runInitPing` handed to the child. Naming the
- *  options makes the one thing worth asserting assertable, and leaves only the
- *  one-line wiring below to review — the same residue `SKILL_ENUM_ARGS` itself
- *  already has. */
+/** The tool-surface probe's spawn options. Extracted as a pure function purely
+ *  so the Board call env (ADR 0044) is **observable**: this ping sits below its
+ *  injection seam — `EnumerateToolsFn` is faked at the whole-probe level (ADR
+ *  0027), so a test can never see what `runInitPing` handed to the child.
+ *  Naming the options makes the one thing worth asserting assertable, and
+ *  leaves only the one-line wiring below to review — the same residue
+ *  `SKILL_ENUM_ARGS` itself already has.
+ *
+ *  skill 列挙のほうはもう通らない: あちらは Board call の口を通るので、渡した
+ *  cwd と env は容器機構の fake が記録する(#767)。 */
 export function initPingSpawnOptions(cwd: string): {
   cwd: string;
   stdio: ["ignore", "pipe", "ignore"];
@@ -1229,22 +1237,68 @@ export function initPingSpawnOptions(cwd: string): {
   return { cwd, stdio: ["ignore", "pipe", "ignore"], env: boardCallEnv() };
 }
 
-/** One `/usage` init-report ping: run the CLI at `cwd`, hand each stdout line's
- *  decoded form to `project`, and return what it read off the init event — or
- *  null if the ping never produced one it could read. Two callers — ADR 0025's
- *  skill enumeration and ADR 0039's tool-surface probe — which is the whole
- *  reason the ADR could say "tools も見るだけの小改造で済む": this is already the
- *  mechanism that takes an init event and hands it back.
+/** init 行の読み取り: stdout の各行の decode 済みの形を `project` に渡し、
+ *  「今までに観測した答え」を返す関数を渡す(末尾の未改行分は最後の1回で読む)。
+ *  2つの spawn 経路 — 口を通る skill 列挙と、まだ口を通らない tool-surface probe
+ *  (#768 が移す) — が共有するのはこの読み取りだけである。
  *
- *  It takes a **projector** rather than a field name because the tool-surface
- *  probe reads two things off the one init line (ADR 0108 決定2). A field name
- *  can only answer with one array, and this ping runs at boot and on every
- *  pickup, so a second read must not cost a second ping. */
+ *  **projector** を取るのは、tool-surface probe が1本の init 行から2つ読むため
+ *  (ADR 0108 決定2)。field 名では1つの配列しか答えられず、この ping は起動時と
+ *  pickup ごとに走るので、2つ目の読みが2本目の ping を要してはならない。 */
+function readInitReport<T>(
+  stdout: NodeJS.ReadableStream | null,
+  project: (parsed: Record<string, unknown> | null) => T | null,
+): () => T | null {
+  let buffered = "";
+  let observed: T | null = null;
+  stdout?.on("data", (chunk: Buffer | string) => {
+    buffered += chunk.toString();
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) observed = project(parseStreamLine(line)) ?? observed;
+  });
+  return () => {
+    observed = project(parseStreamLine(buffered)) ?? observed;
+    return observed;
+  };
+}
+
+/** ADR 0025 の skill 列挙: Board call の口を1回通す。容器・上限(15s)・root の
+ *  exit での強制回収・回収済み観測はすべて口の側にあり、ここが渡すのは注文だけ
+ *  である(ADR 0136 決定4)。
+ *
+ *  `awaitReclaimed` は cwd で決まる: workspace を cwd にする呼び出しだけが回収済み
+ *  観測のあとに返り、skill 列挙の結果を待ってから launch する既存の流れがそのまま
+ *  門になる —— workspace が持ち込んだ MCP server の残存が、次にその workspace で
+ *  走る worker と同居しない(ADR 0136 決定5)。neutral cwd の列挙(skills picker)は
+ *  待つ相手を持たないので既定のまま root の exit で返る。 */
+function enumerateSkillsThrough(
+  call: BoardCall,
+  cwd: string,
+  awaitReclaimed: boolean,
+): Promise<string[] | null> {
+  return call(
+    {
+      kind: "skill enumeration",
+      command: "claude",
+      args: SKILL_ENUM_ARGS,
+      cwd,
+      env: boardCallEnv(),
+      limitMs: SKILL_ENUM_TIMEOUT_MS,
+      awaitReclaimed,
+    },
+    (proc) => readInitReport(proc.stdout, (parsed) => readInitField(parsed, "skills")),
+  );
+}
+
+/** ADR 0039 の tool-surface probe が使う、口を通らない spawn 経路(自前の timeout と
+ *  root への SIGKILL つき)。**#768 が口へ移すまでの一時的な2経路目**である —— 移せば
+ *  この関数ごと消える。 */
 function runInitPing<T>(
   cwd: string,
   extraArgs: string[],
   project: (parsed: Record<string, unknown> | null) => T | null,
-  timeoutMs: number = SKILL_ENUM_TIMEOUT_MS,
+  timeoutMs: number,
 ): Promise<T | null> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof nodeSpawn>;
@@ -1254,8 +1308,6 @@ function runInitPing<T>(
       resolve(null);
       return;
     }
-    let buffered = "";
-    let observed: T | null = null;
     let settled = false;
     const finish = (result: T | null) => {
       if (settled) return;
@@ -1271,23 +1323,12 @@ function runInitPing<T>(
       }
       finish(null);
     }, timeoutMs);
-    child.stdout?.on("data", (chunk: Buffer | string) => {
-      buffered += chunk.toString();
-      const lines = buffered.split("\n");
-      buffered = lines.pop() ?? "";
-      for (const line of lines) observed = project(parseStreamLine(line)) ?? observed;
-    });
+    const observed = readInitReport(child.stdout, project);
     // an unlistened "error" (missing binary) would crash the board process
     child.on("error", () => finish(null));
-    child.on("exit", () => {
-      observed = project(parseStreamLine(buffered)) ?? observed;
-      finish(observed);
-    });
+    child.on("exit", () => finish(observed()));
   });
 }
-
-const defaultEnumerateSkills: EnumerateSkillsFn = (cwd) =>
-  runInitPing(cwd, [], (parsed) => readInitField(parsed, "skills"));
 
 /** A ping at a *neutral* cwd: a fresh empty directory, so nothing a checkout
  *  carries takes part in what the CLI resolves. Cleaned up only AFTER the probe
@@ -1436,10 +1477,10 @@ export async function probeToolSurfaceCapability(
  *  spawn against whichever checkout the task runs in, never a fixed list picked
  *  here. A workspace-specific individual name is added by free entry instead
  *  (an allowlist is a reference, not a claim of stock — ADR 0023). Null on a
- *  failed probe, same fail-closed shape as `defaultEnumerateSkills`; the route
+ *  failed probe, same fail-closed shape as the spawn-time enumeration; the route
  *  degrades that to an empty candidate set rather than a spawn failure. */
-export const enumerateHostSkills = (): Promise<string[] | null> =>
-  atNeutralCwd("tidepool-skills-", defaultEnumerateSkills);
+export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =>
+  atNeutralCwd("tidepool-skills-", (cwd) => enumerateSkillsThrough(call, cwd, false));
 
 /** The checkout's own skills (issue #56 / ADR 0025): the directory names under
  *  `<workspace>/.claude/skills/`. This one-directory scan is the only discovery
@@ -1618,7 +1659,7 @@ const defaultPty: PtyFn = (command, args, opts) => {
 export class ClaudeCodeWorker implements WorkerAdapter {
   readonly id: string;
   private readonly options: ClaudeWorkerOptions;
-  private readonly containers: WorkerContainers;
+  private readonly containers: ProcessContainers;
   private readonly pty: PtyFn;
   private readonly enumerateSkills: EnumerateSkillsFn;
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
@@ -1641,7 +1682,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.options = options;
     this.containers = options.containers;
     this.pty = options.pty ?? defaultPty;
-    this.enumerateSkills = options.enumerateSkills ?? defaultEnumerateSkills;
+    this.enumerateSkills =
+      options.enumerateSkills ?? ((cwd) => enumerateSkillsThrough(options.boardCall, cwd, true));
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse

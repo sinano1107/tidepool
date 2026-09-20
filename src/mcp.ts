@@ -29,6 +29,7 @@ import {
   recordKnowledge,
   searchMemory,
 } from "./memory.js";
+import type { ProcessContainers } from "./process-container.js";
 import { type AuthorityProfile, REVIEWER_AUTHORITY_PROFILE, type RosterAgent } from "./registry.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -54,7 +55,6 @@ import {
   taskHistory,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
-import type { WorkerContainers } from "./worker-container.js";
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,
@@ -95,7 +95,7 @@ export interface McpDeps {
   /** 盤面側 supervisor(ADR 0099 決定2)。最終 verb の着地後、後始末はこの
    *  **回収済み観測**の後ろでしか走らない(ADR 0109 決定1)。Absent → 容器を
    *  持たない盤面なので、観測は即座に解決したものとして扱う。 */
-  containers?: WorkerContainers;
+  containers?: ProcessContainers;
   pollNow: () => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /

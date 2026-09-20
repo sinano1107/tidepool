@@ -9,6 +9,7 @@ import {
   updateAgent,
 } from "./agent-create.js";
 import type { HumanCredential } from "./auth.js";
+import type { BoardCall } from "./board-call.js";
 import type { BoardStatePath } from "./board-state.js";
 import { containerRuntimeFor } from "./cgroup-container.js";
 import { ClaudeAllocationClient } from "./claude-allocation-client.js";
@@ -39,6 +40,7 @@ import {
 } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
+import type { ProcessContainers } from "./process-container.js";
 import {
   createProfile,
   deleteProfile,
@@ -68,9 +70,7 @@ import type { ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task } from "./tasks.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
-
 import { CanonicalWorkerRouter, type WorkerAdapter } from "./worker.js";
-import type { WorkerContainers } from "./worker-container.js";
 import {
   listRegisteredWorkspaces,
   resolveExecutionWorkspace,
@@ -223,7 +223,8 @@ export function buildWorkerOptions(
   session: {
     db: Db;
     clock: Clock;
-    containers: WorkerContainers;
+    containers: ProcessContainers;
+    boardCall: BoardCall;
     onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   },
@@ -231,9 +232,12 @@ export function buildWorkerOptions(
   return {
     db: session.db,
     clock: session.clock,
-    // ADR 0099 決定2: 盤面が1つだけ持つ worker 容器の supervisor。adapter は
+    // ADR 0099 決定2: 盤面が1つだけ持つ容器の supervisor。adapter は
     // その中へ spawn し、watchdog は同じ帳簿へ force / reclaimed を撃つ。
     containers: session.containers,
+    // ADR 0136: skill 列挙が通る Board call の口。容器・上限・force・回収済み観測は
+    // 口の側にあり、adapter は注文するだけである。
+    boardCall: session.boardCall,
     // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
     // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
     // 「人間の merge を通った内容が spawn に効く」は成立しない。
@@ -268,7 +272,7 @@ export function buildWorkerOptions(
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, containers, onCapInterrupted, onSpawnFailed }) => {
+  return ({ db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed }) => {
     const resolveHarness = harnessResolver(board, db)!;
     const registry = { dir: registryDir, mode: board.registryMode } as const;
     return new CanonicalWorkerRouter({
@@ -278,7 +282,7 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
         "claude-code": new ClaudeCodeWorker(
           buildWorkerOptions(
             { ...board, registryDir },
-            { db, clock, containers, onCapInterrupted, onSpawnFailed },
+            { db, clock, containers, boardCall, onCapInterrupted, onSpawnFailed },
           ),
         ),
         codex: new CodexWorker({

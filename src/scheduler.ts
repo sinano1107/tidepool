@@ -30,6 +30,7 @@ import {
 import { recordShadow } from "./learner.js";
 import { registerDueMetaReviews } from "./memory.js";
 import { getProviderPaceOffset } from "./pace-offsets.js";
+import type { ProcessContainers } from "./process-container.js";
 import {
   canonicalHarness,
   type Harness,
@@ -69,7 +70,6 @@ import {
   type UsageSnapshot,
 } from "./usage.js";
 import type { WorkerAdapter } from "./worker.js";
-import type { WorkerContainers } from "./worker-container.js";
 import {
   BOARD_WORKER_ID,
   buildWorkspaceResolver,
@@ -291,7 +291,7 @@ export function startScheduler(deps: {
   slot: Slot;
   worker: WorkerAdapter;
   /** 盤面側 supervisor(ADR 0099 決定2): pickup が worker session の容器を作る。 */
-  containers: WorkerContainers;
+  containers: ProcessContainers;
   /** ADR 0118: `start` が同期で投げた pickup の記録と後始末(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   workspace?: WorkspaceConfig;
