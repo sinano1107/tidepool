@@ -842,10 +842,17 @@ export async function startServer(options: ServerOptions): Promise<TidepoolServe
         stopCliAuthExpiryWarning?.();
         watchdog?.stop();
         scheduler.stop();
+        // 止まる盤面は peer の都合を待たない(issue #773)。`close()` の callback は
+        // 残った接続が消えるまで発火せず、`close()` が内部で撃つ
+        // `closeIdleConnections()` は ServerResponse が付いたままの socket を飛ばす
+        // ので、peer がそれを手放すまで(実測 3.3-4.0s)停止が返らない。撃つ順が
+        // close → closeAllConnections なのは、逆だと両者の間に入った接続が生き残るため。
         listener.close((err) => {
           if (err) return reject(err);
           mcpListener.close((err2) => (err2 ? reject(err2) : resolve()));
+          mcpListener.closeAllConnections();
         });
+        listener.closeAllConnections();
         db.close();
       }),
   };
