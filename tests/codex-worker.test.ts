@@ -171,7 +171,6 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain("get_current_task");
     expect(config).toContain("mcp_servers.tidepool.required=true");
     expect(config).toContain('mcp_servers.tidepool.default_tools_approval_mode="approve"');
-    // ADR 0134 決定3: 本数の意味は盤面が宣言する —— 版の既定に依らない
     expect(config).toContain("agents.max_concurrent_threads_per_session=3");
     expect(config).toContain("skills.config=");
     expect(config).toContain(join(f.codexHome, "skills", ".system", "openai-docs", "SKILL.md"));
@@ -236,7 +235,6 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(developer).toContain("## Authority");
       expect(developer).toContain("Use only the tidepool MCP verbs to report board decisions and completion.");
       expect(developer).toContain("Board verbs are main-thread only");
-      // ADR 0134 決定4: 機構ではなく文面で置く(vendor に fork の既定を替える key が無い)
       expect(developer).toContain('Spawn subagents with fork_turns: "none"; this session keeps no rollout, so forking the parent thread\'s history always fails.');
       expect(developer).toContain("declare a premise breach");
       expect(developer).not.toContain(value.title);

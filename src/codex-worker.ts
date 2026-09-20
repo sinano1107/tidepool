@@ -354,7 +354,6 @@ function developerInstructions(memorySection: string | null, systemPrompt: strin
   return `${memorySection ? `${memorySection}\n\n` : ""}${systemPrompt}\n\n## Authority\n\n${authority}\n\n` +
     "Use only the tidepool MCP verbs to report board decisions and completion. " +
     "Board verbs are main-thread only; if a subagent needs one, call it from the main thread. " +
-    // ADR 0134 決定4: --ephemeral は rollout を保存しないので既定の fork は必ず失敗する
     "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.\n\n" +
     `${PREMISE_BREACH_PROTOCOL}\n\n`;
 }
