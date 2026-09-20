@@ -1,5 +1,7 @@
 # Codex の subagent 門は hook が `agent_id` で持ち、床は閉じた feature が開け直しの受け入れで門を証明するまで残る
 
+**Status 追記: 決定2 は [ADR 0134](0134-the-codex-subagent-floor-is-the-hook-gate-because-model-metadata-overrode-the-closed-feature.md) が supersede(2026-09-20)。** 床は決定1 の hook の門だけになり、閉じた feature は残らない。決定2 が #730 に預けた開け直しの受け入れ観測は、その grilling の中で取れている。決定1・3・4 は不変。
+
 2026-09-17 の grilling(issue #725)で決定。issue は「PreToolUse の matcher `mcp__tidepool__.*` が実物に当たらず、subagent
 からの盤面 verb を止める門が fail-open している」と観測を報告し、ADR 0129 決定2 はその観測を根拠に床を `multi_agent` を閉じる
 ことへ移した。vendor source(`rust-v0.147.0`)を登録 → 選択 → stdin まで読み、Lima VM で盤面抜きの `codex exec`(spawn フラグは

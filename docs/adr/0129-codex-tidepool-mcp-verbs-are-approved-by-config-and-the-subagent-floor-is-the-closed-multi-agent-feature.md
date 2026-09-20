@@ -1,5 +1,7 @@
 # Codex の tidepool MCP verb は承認モード approve で開け、subagent の床は multi_agent を閉じることで置く
 
+**Status 追記: 決定2 は [ADR 0134](0134-the-codex-subagent-floor-is-the-hook-gate-because-model-metadata-overrode-the-closed-feature.md) が supersede(2026-09-20)。** 床は hook の門に移り、`multi_agent` は `CLOSED_FEATURES` から外れた —— 決定2 の閉じは model の metadata に上書きされており、置いた日から効いていなかった(#730 の実測)。決定1・3・4 は不変。
+
 2026-09-17 の grilling(issue #724)で決定。Codex route の worker は tidepool MCP の verb をすべて `user cancelled MCP tool call`
 で落とし、task が `in_progress` のまま残っていた。根は Codex の MCP tool 承認(`AppToolApproval`、既定 `Auto`)で、annotations の
 無い tool は承認要求に倒れ、`codex exec` には答える人が居ないので Cancel になる。`--ask-for-approval never` が MCP を自動承認する
