@@ -174,7 +174,7 @@ it("cap reclaim arriving after containment waits for acceptance before stashing 
   registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now());
   await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");
   await f.clock.advance(5 * MIN);
-  expect(f.watchdog.pendingReclaim()).toContain(f.task.id);
+  expect(f.watchdog.pendingReclaim()).toBe(`the container for task ${f.task.id}`);
   f.watchdog.acceptReclaimed();
   expect(f.slot.currentTaskId).toBe(f.task.id);
   f.runtime.fireEmpty(f.task.id);

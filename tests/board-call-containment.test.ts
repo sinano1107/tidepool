@@ -50,7 +50,7 @@ it("Board call の容器が回収 timeout まで空にならなければ、盤�
   expect(quarantine.question_items[0].options).toEqual(["repaired by hand"]);
   // 文面から「Board call の容器であること」と「呼び出しの種類」が読める —— 原因が
   // worker なのか probe なのかを区別できるために(ADR 0136)
-  expect(quarantine.purpose).toContain("board call");
+  expect(quarantine.purpose).toContain("Board call");
   expect(quarantine.purpose).toContain("skill enumeration");
   // Tidepool 名義(盤面自身の判断であってエージェントの失敗ではない)
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${quarantine.id}/events`)).json;

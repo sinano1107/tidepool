@@ -1275,7 +1275,7 @@ function readInitReport<T>(
 function enumerateSkillsThrough(
   call: BoardCall,
   cwd: string,
-  awaitReclaimed: boolean,
+  { awaitReclaimed }: { awaitReclaimed: boolean },
 ): Promise<string[] | null> {
   return call(
     {
@@ -1480,7 +1480,7 @@ export async function probeToolSurfaceCapability(
  *  failed probe, same fail-closed shape as the spawn-time enumeration; the route
  *  degrades that to an empty candidate set rather than a spawn failure. */
 export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =>
-  atNeutralCwd("tidepool-skills-", (cwd) => enumerateSkillsThrough(call, cwd, false));
+  atNeutralCwd("tidepool-skills-", (cwd) => enumerateSkillsThrough(call, cwd, { awaitReclaimed: false }));
 
 /** The checkout's own skills (issue #56 / ADR 0025): the directory names under
  *  `<workspace>/.claude/skills/`. This one-directory scan is the only discovery
@@ -1683,7 +1683,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.containers = options.containers;
     this.pty = options.pty ?? defaultPty;
     this.enumerateSkills =
-      options.enumerateSkills ?? ((cwd) => enumerateSkillsThrough(options.boardCall, cwd, true));
+      options.enumerateSkills ??
+      ((cwd) => enumerateSkillsThrough(options.boardCall, cwd, { awaitReclaimed: true }));
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse

@@ -259,8 +259,8 @@ export class FakeContainerRuntime implements ContainerRuntime {
   /** 作られた容器の id を作られた順に。Board call の容器 id は口が振るので、
    *  テストはここから読む(`board-call-1` のような綴りに結び付けない)。 */
   readonly created: string[] = [];
-  /** 機構前提検査に渡った「今生きている容器」の記録。ADR 0136 決定: 稼働中の
-   *  Board call の容器を前回の run の残骸と読み違えないため、ここに載る。 */
+  /** 機構前提検査に渡った「今生きている容器」の記録(ADR 0099 決定5)。稼働中の
+   *  Board call の容器を前回の run の残骸と読み違えないため、単位を問わずここに載る。 */
   readonly preflightLive: Array<ReadonlySet<string>> = [];
   private readonly held = new Set<string>();
   private readonly markEmpty = new Map<string, () => void>();
@@ -276,15 +276,15 @@ export class FakeContainerRuntime implements ContainerRuntime {
     this.capability = reason === undefined ? { available: true } : { available: false, reason };
   }
 
-  /** この session の容器は強制回収では空にならない — 空の観測は `fireEmpty`
+  /** この id の容器は強制回収では空にならない — 空の観測は `fireEmpty`
    *  だけが起こす。 */
-  hold(sessionId: string): void {
-    this.held.add(sessionId);
+  hold(id: string): void {
+    this.held.add(id);
   }
 
   /** 「容器が空になった」signal を撃つ。 */
-  fireEmpty(sessionId: string): void {
-    this.markEmpty.get(sessionId)?.();
+  fireEmpty(id: string): void {
+    this.markEmpty.get(id)?.();
   }
 
   preflight(live: ReadonlySet<string> = new Set()): ContainerRuntimeCapability {
@@ -292,21 +292,21 @@ export class FakeContainerRuntime implements ContainerRuntime {
     return this.capability;
   }
 
-  create(sessionId: string): ProcessContainer {
-    this.created.push(sessionId);
+  create(id: string): ProcessContainer {
+    this.created.push(id);
     let markEmpty!: () => void;
     const reclaimed = new Promise<void>((resolve) => {
       markEmpty = resolve;
     });
-    this.markEmpty.set(sessionId, markEmpty);
+    this.markEmpty.set(id, markEmpty);
     return {
       spawn: (command, args, opts): ContainedProcess => {
         if (!this.spawn) throw new Error("fake container runtime: no spawn scripted");
         return this.spawn(command, args, opts);
       },
       forceReclaim: () => {
-        this.forceReclaims.push(sessionId);
-        if (!this.held.has(sessionId)) markEmpty();
+        this.forceReclaims.push(id);
+        if (!this.held.has(id)) markEmpty();
       },
       reclaimed,
     };

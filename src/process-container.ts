@@ -36,7 +36,7 @@ export type ContainerRuntimeCapability = SandboxCapability;
 
 /** 1つの単位(worker session、または Board call 1回)ぶんの容器(CONTEXT.md「容器」)。 */
 export interface ProcessContainer {
-  /** 容器の中への spawn。session に属する process は全部この中で生きる。 */
+  /** 容器の中への spawn。その単位に属する process は全部この中で生きる。 */
   spawn: ContainerSpawn;
   /** 強制回収(force reclaim): 容器ごと全 process を終了させる操作。**送達で
    *  あって回収の完了ではない** — 完了は `reclaimed` だけが言う。 */
@@ -55,14 +55,17 @@ export interface ContainerRuntime {
   /** 機構前提検査(ADR 0099 決定5)。boot 時だけでなく pickup と quarantine 回答時
    *  にも読み直される(CONTEXT.md「Containment capability」)。毎回の live kill
    *  canary は行わない — ここで見るのは前提の存在だけである。`live` は supervisor
-   *  が今持っている session — 稼働中の容器を前回の run の残骸と読み違えないため。 */
+   *  が今持っている単位の id — 稼働中の容器を前回の run の残骸と読み違えないため。 */
   preflight(live?: ReadonlySet<string>): ContainerRuntimeCapability;
-  /** worker session 1つぶんの容器を作る。 */
-  create(sessionId: string): ProcessContainer;
+  /** 単位1つぶん(worker session 1つ、または Board call 1回)の容器を作る。 */
+  create(id: string): ProcessContainer;
 }
 
 /** 盤面側 supervisor(ADR 0099 決定2)。seam ではなく共通 module であり、
- *  「どの session の容器か」の帳簿と、force / reclaimed の唯一の呼び口を持つ。
+ *  「どの単位の容器か」の帳簿と、force / reclaimed の唯一の呼び口を持つ。単位は
+ *  worker session と Board call 1回の2つで(ADR 0136 決定10)、帳簿はどちらも同じ
+ *  id 空間に並べる —— 機構前提検査へ渡る「今生きている容器」が片方だけになると、
+ *  もう片方の稼働中の容器が前回の run の残骸に読み違えられる。
  *  watchdog も tool-surface drift の kill もここを通るので、Harness が増えても
  *  回収は再実装されない。 */
 export class ProcessContainers {
@@ -74,45 +77,48 @@ export class ProcessContainers {
     return this.runtime.preflight(new Set(this.live.keys()));
   }
 
-  /** 盤面が worker session ごとに**先に**作る(pickup 時)。adapter はここで
-   *  作られた容器の中へ spawn するだけである。2度目の open は同じ容器を返す —
-   *  scheduler を通らずに直接 adapter を動かす経路でも器が1つに保たれる。 */
-  open(sessionId: string): ProcessContainer {
-    const existing = this.live.get(sessionId);
+  /** 盤面が単位ごとに**先に**作る —— worker session なら pickup 時、Board call
+   *  なら呼び出しの口が1回ごとに。adapter も口もここで作られた容器の中へ spawn
+   *  するだけである。2度目の open は同じ容器を返す — scheduler を通らずに直接
+   *  adapter を動かす経路でも器が1つに保たれる。**id は単位をまたいで衝突させない**:
+   *  衝突すれば Board call が worker session の容器の中に入る(ADR 0136 決定3 が
+   *  置かないと決めた例外そのもの)。 */
+  open(id: string): ProcessContainer {
+    const existing = this.live.get(id);
     if (existing) return existing.container;
-    const container = this.runtime.create(sessionId);
-    this.live.set(sessionId, { container, forced: false });
-    // 空になった容器は帳簿から消える。通常終了の session もここを通るので、
+    const container = this.runtime.create(id);
+    this.live.set(id, { container, forced: false });
+    // 空になった容器は帳簿から消える。通常終了の単位もここを通るので、
     // 残るのは「まだ空になっていない容器」だけになる。
-    void container.reclaimed.then(() => this.live.delete(sessionId));
+    void container.reclaimed.then(() => this.live.delete(id));
     return container;
   }
 
-  /** 強制回収の唯一の呼び口。知らない session への force は no-op(既に空)。 */
-  forceReclaim(sessionId: string): void {
-    const entry = this.live.get(sessionId);
+  /** 強制回収の唯一の呼び口。知らない id への force は no-op(既に空)。 */
+  forceReclaim(id: string): void {
+    const entry = this.live.get(id);
     if (!entry) return;
     entry.forced = true;
     entry.container.forceReclaim();
   }
 
-  /** その session の容器が空になった signal。知らない session は既に空である —
+  /** その単位の容器が空になった signal。知らない id は既に空である —
    *  帳簿は in-memory なので、再起動をまたいだ「空」は platform supervisor の
    *  保証(ADR 0099 決定6、Pi では systemd の control-group kill)である。保証が
    *  破れて容器が populated のまま残っていた場合は、boot 時の機構前提検査が
    *  それを見つけて pickup を止める(#463 — 帳簿ではなく容器機構が答える)。 */
-  reclaimed(sessionId: string): Promise<void> {
-    return this.live.get(sessionId)?.container.reclaimed ?? Promise.resolve();
+  reclaimed(id: string): Promise<void> {
+    return this.live.get(id)?.container.reclaimed ?? Promise.resolve();
   }
 
   /** 強制回収を送ったのに、まだ空を観測できていない容器か。ADR 0109 決定4 で force は
    *  **root process の exit ごとに常態化した**ので、これ単独では回収済み観測の不成立を
-   *  意味しない —— 正常に終わった session も、exit から容器が空になるまでの一瞬ここを
-   *  通る。不成立と言えるのは、梯子の底(回収 timeout)まで落ちた session だけをここへ
-   *  渡す watchdog の `pending` 経由の読みであり、Containment quarantine の解除は
-   *  それを読み直す。 */
-  pendingReclaim(sessionId: string): boolean {
-    return this.live.get(sessionId)?.forced ?? false;
+   *  意味しない —— 正常に終わった単位も、exit から容器が空になるまでの一瞬ここを
+   *  通る。不成立と言えるのは、梯子の底(回収 timeout)まで落ちた id だけをここへ渡す
+   *  読み —— worker session なら watchdog の `pending`、Board call なら口の
+   *  `unreclaimed` —— であり、Containment quarantine の解除はその両方を読み直す。 */
+  pendingReclaim(id: string): boolean {
+    return this.live.get(id)?.forced ?? false;
   }
 }
 

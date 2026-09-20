@@ -65,10 +65,12 @@ export function createBoardCalls(deps: {
   /** 回収 timeout まで空を観測できなかった容器 id → 呼び出しの種類。 */
   const unreclaimed = new Map<string, string>();
 
-  const subject = (kind: string): string => `the container for the ${kind} board call`;
+  const subject = (kind: string): string => `the container for the ${kind} Board call`;
 
-  /** 強制回収を撃ったあと、空の観測を回収 timeout まで待つ。true = 空を観測した。 */
-  async function awaitEmpty(id: string, kind: string): Promise<boolean> {
+  /** 強制回収を撃ったあと、空の観測を回収 timeout まで待つ。true = 空を観測した。
+   *  **副作用を持たない**: 報告は下の `report` が別に撃つ —— 報告が投げたときに
+   *  口の契約(null = fail-closed)まで一緒に壊れないためである。 */
+  async function awaitEmpty(id: string): Promise<boolean> {
     let cancel!: () => void;
     const observed = await Promise.race([
       deps.containers.reclaimed(id).then(() => true),
@@ -80,14 +82,19 @@ export function createBoardCalls(deps: {
       }),
     ]);
     cancel();
-    if (!observed) {
-      unreclaimed.set(id, kind);
-      deps.onReclaimTimeout(
-        `${subject(kind)} was force-reclaimed but never observed empty, so processes from ` +
-          "that call may still be running against this host and its workspaces (ADR 0136)",
-      );
-    }
     return observed;
+  }
+
+  /** 空を観測できなかったことの報告。結果の promise とは別に撃つので、
+   *  `onReclaimTimeout` が投げたときの上がり方は結果の待ち方(既定 / 回収済み観測)に
+   *  依らず同じ —— watchdog の tick(`watchdog.ts` の `onReclaimTimeout`)と同じく
+   *  盤面へ上がる。ここで握り潰すと Containment quarantine の失敗が黙って消える。 */
+  function report(id: string, kind: string): void {
+    unreclaimed.set(id, kind);
+    deps.onReclaimTimeout(
+      `${subject(kind)} was force-reclaimed but never observed empty, so processes from ` +
+        "that call may still be running against this host and its workspaces (ADR 0136)",
+    );
   }
 
   const call: BoardCall = async <T>(
@@ -109,6 +116,11 @@ export function createBoardCalls(deps: {
         cancelLimit();
         resolve(value);
       };
+      // 時間上限。`Clock` は `setTimeout` を持たないので、1度撃って自分で止める
+      // interval で数える(注入された時計で数えることが要点 —— 実時間で数えると
+      // FakeClock の前進で上限が発火しない)。spawn より先に張る —— あとで張ると、
+      // 先に settle した呼び出しが止められない interval を残す。
+      cancelLimit = deps.clock.setInterval(() => settle(() => null), spec.limitMs);
       let proc: ContainedProcess;
       try {
         proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env });
@@ -122,15 +134,14 @@ export function createBoardCalls(deps: {
       // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
       proc.on("exit", () => settle(observed));
       proc.on("error", () => settle(() => null));
-      // 時間上限。`Clock` は `setTimeout` を持たないので、1度撃って自分で止める
-      // interval で数える(注入された時計で数えることが要点 —— 実時間で数えると
-      // FakeClock の前進で上限が発火しない)。
-      cancelLimit = deps.clock.setInterval(() => settle(() => null), spec.limitMs);
     });
 
     // 2つ目の force の契機(上限到達)も1つ目(root の exit)も、ここ1箇所を通る。
     deps.containers.forceReclaim(id);
-    const empty = awaitEmpty(id, spec.kind);
+    const empty = awaitEmpty(id);
+    void empty.then((observed) => {
+      if (!observed) report(id, spec.kind);
+    });
     if (!spec.awaitReclaimed) return finish();
     return (await empty) ? finish() : null;
   };

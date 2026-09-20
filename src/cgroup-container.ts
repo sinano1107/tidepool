@@ -117,7 +117,7 @@ function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
       // 再起動境界(#463): 帳簿は in-memory なので、前回の run の容器が populated の
       // まま残っていたら「回収済み観測の不成立」が再起動をまたいで残っている。空の
       // 残骸は掃除して進み、populated な残骸は pickup を止める(fail-closed)。稼働中に
-      // 読み直されるときは、帳簿にある session の容器は残骸ではない。
+      // 読み直されるときは、帳簿にある id の容器は残骸ではない。
       for (const dir of leftoverContainers(own, live)) {
         if (!isEmpty(dir)) {
           return unavailable(
@@ -145,11 +145,11 @@ function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
       }
       return { available: true };
     },
-    create: (sessionId) => {
+    create: (id) => {
       const own = boardCgroup();
       // preflight が成立していれば起こらない(不成立なら pickup が止まっている)
       if (own === undefined) throw new Error(`cannot read the board's own cgroup from ${paths.selfCgroup}`);
-      return createCgroup(own, sessionId);
+      return createCgroup(own, id);
     },
   };
 }
@@ -163,8 +163,8 @@ function cgroupContainerRuntime(paths: CgroupPaths): ContainerRuntime {
  *  文字列結合は無く、command も引数も引用の必要が無い。 */
 const ENTER_AND_EXEC = 'echo $$ > "$0" && exec "$@"';
 
-function createCgroup(own: string, sessionId: string): ProcessContainer {
-  const dir = join(own, CONTAINER_PREFIX + sessionId);
+function createCgroup(own: string, id: string): ProcessContainer {
+  const dir = join(own, CONTAINER_PREFIX + id);
   mkdirSync(dir, { recursive: true });
 
   let markEmpty!: () => void;

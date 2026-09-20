@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { type BoardCallSpec, createBoardCalls } from "../src/board-call.js";
 import type { ContainedProcess } from "../src/process-container.js";
 import { ProcessContainers } from "../src/process-container.js";
+import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import { FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
 
 /** Board call の口(ADR 0136)のドメイン層。容器機構は fake、process は scripted、
@@ -9,7 +10,6 @@ import { FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
  *  実 CLI も実カーネルも要らない。 */
 
 const LIMIT = 15_000;
-const RECLAIM_TIMEOUT = 5 * 60 * 1000;
 
 const spec: BoardCallSpec = {
   kind: "skill enumeration",
@@ -157,7 +157,7 @@ it("強制回収のあと回収 timeout まで空を観測できなければ、�
 
   // 文面から「Board call の容器であること」と「呼び出しの種類」が読める
   expect(t.quarantined).toHaveLength(1);
-  expect(t.quarantined[0]).toContain("board call");
+  expect(t.quarantined[0]).toContain("Board call");
   expect(t.quarantined[0]).toContain("skill enumeration");
   // 回答時の再検査が読む口も同じことを答える
   expect(t.calls.pendingReclaim()).toContain("skill enumeration");
