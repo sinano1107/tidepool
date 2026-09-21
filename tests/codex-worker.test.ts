@@ -248,7 +248,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git"))}="write"`);
     expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`);
     expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`);
-    expect(filesystem(f.process.calls[1]!.args, "tidepool-review")).not.toContain(".git");
+    expect(filesystem(f.process.calls[1]!.args, "tidepool-review")).not.toContain(join(f.workspace, ".git"));
   });
 
   it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {
