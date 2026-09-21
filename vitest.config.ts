@@ -12,7 +12,14 @@ const canary = process.env.TIDEPOOL_CANARY !== undefined;
 export default defineConfig({
   test: {
     // docs/experiments/ の review 対象は欠陥を仕込んだ教材で、node:test 形式。盤面のテストではない。
-    exclude: [...configDefaults.exclude, "e2e/**", "docs/experiments/**", ...(canary ? [] : ["tests/canary/**"])],
+    // .claude/worktrees/ は並行実装中の別 checkout で、拾うと main の実行が worktree の数だけ重くなる。
+    exclude: [
+      ...configDefaults.exclude,
+      "e2e/**",
+      "docs/experiments/**",
+      ".claude/worktrees/**",
+      ...(canary ? [] : ["tests/canary/**"]),
+    ],
     // 実 process の canary は敵対的な子孫の生存確認に秒単位で待つので、時限もここで一緒に切り替える
     ...(canary ? { testTimeout: 60_000, hookTimeout: 60_000 } : {}),
   },
