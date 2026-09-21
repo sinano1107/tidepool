@@ -1,7 +1,7 @@
 import type { Db } from "./db.js";
 import type { HaltKind } from "./halt-kind.js";
 import { isPaused } from "./pause.js";
-import { openQuarantineQuestion, openQuarantineValues } from "./quarantine.js";
+import { openQuarantineValues, QUARANTINES } from "./quarantine.js";
 import { getThrottleState } from "./throttle.js";
 import { activeTriageSession } from "./triage.js";
 
@@ -58,10 +58,11 @@ export function boardHalts(
   const halts: BoardHalt[] = [];
   if (activeTriageSession(db)) halts.push({ kind: "triage" });
   if (isPaused(db)) halts.push({ kind: "pause" });
-  if (openQuarantineQuestion(db, "containment", null)) halts.push({ kind: "containment" });
-  // 後始末のタスクごとに1枚。1枚でも開いていれば停止(ADR 0137 Consequences)
-  if (openQuarantineValues(db, "failedTeardown").length > 0) halts.push({ kind: "failedTeardown" });
-  if (openQuarantineQuestion(db, "registryReachability", null)) halts.push({ kind: "registryReachability" });
+  // 表のうち盤面全体の行を表の並びで(ADR 0137 決定6)。1枚でも開いていれば停止 ——
+  // failedTeardown は後始末のタスクごとに1枚立つ
+  for (const row of QUARANTINES) {
+    if (row.scope === "board" && openQuarantineValues(db, row.kind).length > 0) halts.push({ kind: row.kind });
+  }
   const throttle = getThrottleState(db);
   const revalidating = throttleRevalidating();
   if (throttle.throttled || revalidating) {

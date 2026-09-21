@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { quarantineStops } from "../src/quarantine.js";
 import { nextSlotTask, registerTask } from "../src/tasks.js";
 import { quarantineTestAgent } from "./harness.js";
 
@@ -30,7 +31,7 @@ describe("nextSlotTask の per-task agent ゲート(ADR 0012 / issue #36)", () =
       new Date(1),
     );
 
-    const head = nextSlotTask(db, undefined, "deckhand");
+    const head = nextSlotTask(db, undefined, "deckhand", undefined, quarantineStops(db));
     expect(head?.id).toBe(runnable.id);
     expect(head?.id).not.toBe(stuck.id);
   });
@@ -44,7 +45,7 @@ describe("nextSlotTask の per-task agent ゲート(ADR 0012 / issue #36)", () =
       new Date(0),
     );
 
-    expect(nextSlotTask(db, undefined, "deckhand")).toBeUndefined();
+    expect(nextSlotTask(db, undefined, "deckhand", undefined, quarantineStops(db))).toBeUndefined();
   });
 
   it("defaultAgentName を渡さないときはゲートが働かない", () => {
@@ -56,7 +57,7 @@ describe("nextSlotTask の per-task agent ゲート(ADR 0012 / issue #36)", () =
       new Date(0),
     );
 
-    expect(nextSlotTask(db)?.id).toBe(task.id);
+    expect(nextSlotTask(db, undefined, undefined, undefined, quarantineStops(db))?.id).toBe(task.id);
   });
 
   it("review type かつ assignee 未設定のタスクは、defaultAgentName が健全でも auditorName の quarantine で pickup を止める(issue #42)", () => {
@@ -73,7 +74,7 @@ describe("nextSlotTask の per-task agent ゲート(ADR 0012 / issue #36)", () =
       new Date(1),
     );
 
-    const head = nextSlotTask(db, undefined, "deckhand", "auditor");
+    const head = nextSlotTask(db, undefined, "deckhand", "auditor", quarantineStops(db));
     expect(head?.id).toBe(work.id);
     expect(head?.id).not.toBe(review.id);
   });

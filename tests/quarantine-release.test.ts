@@ -3,12 +3,7 @@ import { agentNeedsHuman, quarantineAgent } from "../src/agent.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import {
-  openQuarantineQuestion,
-  QUARANTINES,
-  type QuarantineChecks,
-  registerQuarantine,
-} from "../src/quarantine.js";
+import { openQuarantineQuestion, QUARANTINES, type QuarantineChecks, quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { DomainError, getTask, nextSlotTask, registerTask } from "../src/tasks.js";
 import { quarantineWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
 import { unusedLanding } from "./fakes.js";
@@ -89,12 +84,12 @@ describe("question が回答済みなら、その資源のタスクは pickup �
     const task = registerTask(db, { ...work, workspace: "prod" }, now());
     quarantineWorkspace(db, "prod", "tree rule failed", now());
     expect(workspaceNeedsHuman(db, "prod")).toBe(true);
-    expect(nextSlotTask(db, "sandbox")).toBeUndefined();
+    expect(nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db))).toBeUndefined();
 
     await accept("workspace", "prod", db);
 
     expect(workspaceNeedsHuman(db, "prod")).toBe(false);
-    expect(nextSlotTask(db, "sandbox")?.id).toBe(task.id);
+    expect(nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db))?.id).toBe(task.id);
   });
 
   it("agent 名", async () => {
@@ -102,11 +97,11 @@ describe("question が回答済みなら、その資源のタスクは pickup �
     const task = registerTask(db, { ...work, assignee: "navigator" }, now());
     quarantineAgent(db, "navigator", "unknown agent", now());
     expect(agentNeedsHuman(db, "navigator")).toBe(true);
-    expect(nextSlotTask(db, undefined, "deckhand")).toBeUndefined();
+    expect(nextSlotTask(db, undefined, "deckhand", undefined, quarantineStops(db))).toBeUndefined();
 
     await accept("agent", "navigator", db);
 
     expect(agentNeedsHuman(db, "navigator")).toBe(false);
-    expect(nextSlotTask(db, undefined, "deckhand")?.id).toBe(task.id);
+    expect(nextSlotTask(db, undefined, "deckhand", undefined, quarantineStops(db))?.id).toBe(task.id);
   });
 });

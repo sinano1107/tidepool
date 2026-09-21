@@ -50,9 +50,8 @@ import {
   TOKENIZER,
 } from "./memory.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
-import type { QuarantineChecks } from "./quarantine.js";
+import type { QuarantineChecks, QuarantineResolvers } from "./quarantine.js";
 import {
-  type Harness,
   InvalidAgentDefinitionError,
   InvalidAgentNameError,
   InvalidAllowedDomainError,
@@ -62,12 +61,11 @@ import {
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
   MERGE_DIAL_VALUES,
-  type Provider,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import {
   entryExclusionPredicate,
-  pickupExcludedAssignees,
+  pickupStops,
   type TaskExecutionCandidates,
 } from "./scheduler.js";
 import { createStatelessMcpRouter } from "./stateless-mcp.js";
@@ -119,11 +117,9 @@ export interface ManagementMcpDeps {
   /** ADR 0137 決定5: 解除の門の map(WebUI 側と同じ配線)。 */
   quarantineChecks?: QuarantineChecks;
   fableAgents?: () => string[];
-  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
-   *  the given providers — the pickup exclusion set `list_queue`'s `skipped`
-   *  display shares with the scheduler's gate. */
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名 —— `list_queue` の `skipped`
+   *  表示が scheduler のゲートと同じ集合を見るための口。 */
+  quarantineResolvers?: QuarantineResolvers;
   /** ADR 0110 決定1/3 / issue #544: queue の skipped 表示が scheduler のゲートと
    *  同じ式を通るための口(api.ts と同じもの)。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
@@ -272,12 +268,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         deps.workspace?.name,
         deps.defaultAgentName,
         deps.auditorName,
-        pickupExcludedAssignees(
+        pickupStops(
           deps.db,
           isFablePickupBlocked(deps.db, deps.clock.now()),
           deps.fableAgents,
-          deps.taskExecutionCandidates ? undefined : deps.agentsSpeakingProviders,
-          deps.taskExecutionCandidates ? undefined : deps.agentsUsingHarnesses,
+          deps.taskExecutionCandidates ? {} : deps.quarantineResolvers,
         ),
         skippedByEntries(deps),
       ),

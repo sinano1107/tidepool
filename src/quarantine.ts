@@ -9,7 +9,7 @@ import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import type { Provider } from "./registry.js";
-import { BOARD_WORKER_ID, type QuestionItem, registerTask } from "./tasks.js";
+import { BOARD_WORKER_ID, type QuestionItem, type ResourceStops, registerTask } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 
@@ -101,6 +101,7 @@ export const QUARANTINES = [
   {
     kind: "agent",
     scope: "assignees",
+    resolveAssignees: (names: string[]) => names,
     prose: (name: string | null, reason: string): QuarantineProse => ({
       title: `agent ${name} needs human attention`,
       purpose:
@@ -151,6 +152,9 @@ export const QUARANTINES = [
   kind: string;
   /** 止まる範囲: 盤面全体 / その workspace のタスク / 値が指す assignee 群のタスク。 */
   scope: "board" | "workspace" | "assignees";
+  /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
+   *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */
+  resolveAssignees?: (values: string[]) => string[];
   prose: (value: string | null, reason: string) => QuarantineProse;
 }>;
 
@@ -159,6 +163,25 @@ export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
 /** 解除の門(ADR 0137 決定5): kind → 受理の直前に撃ち直す検査。不成立なら理由つきで
  *  投げる。合成 root が組み、その kind の検査が無い盤面では回答を拒む。 */
 export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null) => Promise<void>>>;
+
+/** kind → 値の集合を agent 名の集合へ写す resolver。合成 root が registry から組む。
+ *  無い kind の値は誰も止めない。 */
+export type QuarantineResolvers = Partial<Record<QuarantineKind, (values: string[]) => string[]>>;
+
+/** 開いた quarantine が止めるもの(ADR 0137 決定6)。資源単位の行を停止範囲で畳む:
+ *  workspace 単位は開いている値そのもの、assignee 群単位は値を写した agent 名。
+ *  pickup 述語・キューの skipped・直接 cancel の門はこの1つの答えを受け取る。 */
+export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): ResourceStops {
+  const stops: ResourceStops = { workspaces: [], assignees: [] };
+  for (const row of QUARANTINES) {
+    if (row.scope === "board") continue;
+    const values = openQuarantineValues(db, row.kind) as string[];
+    if (values.length === 0) continue;
+    if (row.scope === "workspace") stops.workspaces.push(...values);
+    else stops.assignees.push(...(("resolveAssignees" in row ? row.resolveAssignees : resolvers[row.kind])?.(values) ?? []));
+  }
+  return stops;
+}
 
 /** その鍵の開いた確認型 question。NULL の value は `IS` でしか一致しない。 */
 export function openQuarantineQuestion(

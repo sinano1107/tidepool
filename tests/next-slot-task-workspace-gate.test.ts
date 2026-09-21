@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { quarantineStops } from "../src/quarantine.js";
 import { nextSlotTask, registerTask } from "../src/tasks.js";
 import { quarantineWorkspace } from "../src/workspace.js";
 
@@ -34,7 +35,7 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
       new Date(1),
     );
 
-    const head = nextSlotTask(db, "sandbox");
+    const head = nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db));
     expect(head?.id).toBe(runnable.id);
     expect(head?.id).not.toBe(stuck.id);
   });
@@ -48,7 +49,7 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
       new Date(0),
     );
 
-    expect(nextSlotTask(db, "sandbox")).toBeUndefined();
+    expect(nextSlotTask(db, "sandbox", undefined, undefined, quarantineStops(db))).toBeUndefined();
   });
 
   it("defaultWorkspaceName を渡さない(workspaceless board)ときはゲートが働かない", () => {
@@ -60,6 +61,6 @@ describe("nextSlotTask の per-task workspace ゲート", () => {
       new Date(0),
     );
 
-    expect(nextSlotTask(db)?.id).toBe(task.id);
+    expect(nextSlotTask(db, undefined, undefined, undefined, quarantineStops(db))?.id).toBe(task.id);
   });
 });

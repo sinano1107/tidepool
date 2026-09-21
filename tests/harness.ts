@@ -290,7 +290,14 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
-    agentsSpeakingProviders: options.agentsSpeakingProviders,
+    // 合成 root(server-options.ts の quarantineResolvers)と同じ形に畳む
+    quarantineResolvers: {
+      providerAuth:
+        options.agentsSpeakingProviders &&
+        ((values) => options.agentsSpeakingProviders!(values as Provider[])),
+      harnessContainment:
+        options.agentsUsingHarnesses && ((values) => options.agentsUsingHarnesses!(values as Harness[])),
+    },
     openaiUsage: options.openaiUsage,
     credentialAbsence: {
       ...(options.moonshotApiKeyFile && { moonshot: () => moonshotKeyAbsence(options.moonshotApiKeyFile) }),
@@ -299,7 +306,6 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     taskExecutionCandidates: options.taskExecutionCandidates,
     resolveHarness: options.resolveHarness,
     harnessContainment: options.harnessContainment,
-    agentsUsingHarnesses: options.agentsUsingHarnesses,
     providerCliAuth: options.providerCliAuth,
     registryReachability: options.registryReachability,
     cliAuth: options.cliAuth,

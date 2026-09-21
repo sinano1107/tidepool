@@ -39,7 +39,7 @@ import { ensureMemoryIndex } from "./memory.js";
 import { type ContainerRuntime, ProcessContainers } from "./process-container.js";
 import type { ProfileAdmin } from "./profile-create.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import { openQuarantineValues } from "./quarantine.js";
+import { openQuarantineValues, type QuarantineResolvers } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
@@ -259,10 +259,10 @@ export interface ServerOptions {
    *  the scheduler's fable line and the queue view. Absent → no registry
    *  configured, so the fable line can't attribute tasks and skips nothing. */
   fableAgents?: () => string[];
-  /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
-   *  the given providers, read fresh by the scheduler's provider-auth gate.
-   *  Absent → no registry configured, so no provider quarantine skips anything. */
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(provider / Harness は
+   *  registry を読む)。pickup・queue の skipped・直接 cancel の門へ渡す。Absent →
+   *  registry を持たない盤面なので、agent 名の行のほかは何も止めない。 */
+  quarantineResolvers?: QuarantineResolvers;
   openaiUsage?: CodexAppServerProbe;
   /** ADR 0116 決定4: Provider → 資格情報の不在の理由。scheduler へそのまま渡す。 */
   credentialAbsence?: Partial<Record<Provider, () => string | undefined>>;
@@ -271,7 +271,6 @@ export interface ServerOptions {
    *  同じ1つの式を共有するための口。Absent → Provider ごとの usage 観測を持たない
    *  盤面(legacy: 盤面全体の Claude usage と fable 線だけ)。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
   resolveHarness?: (task: Task) => Harness;
   /** Adapter-owned sandbox/tool-surface check. Its presence also arms the
    *  shared container and live human-surface check. Their common result is
@@ -617,8 +616,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     auditorName,
     github: options.github,
     fableAgents: options.fableAgents,
-    agentsSpeakingProviders: options.agentsSpeakingProviders,
-    agentsUsingHarnesses: options.agentsUsingHarnesses,
+    quarantineResolvers: options.quarantineResolvers,
     openaiUsage: options.openaiUsage,
     credentialAbsence: options.credentialAbsence,
     taskExecutionCandidates: options.taskExecutionCandidates,
@@ -769,8 +767,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       attributionClient: options.attributionClient,
       behaviorDraftClient: options.behaviorDraftClient,
       fableAgents: options.fableAgents,
-      agentsSpeakingProviders: options.agentsSpeakingProviders,
-      agentsUsingHarnesses: options.agentsUsingHarnesses,
+      quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
       isProtectedWorkspace: options.isProtectedWorkspace,
     }),
@@ -795,8 +792,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       reclaim,
       quarantineChecks: checks,
       fableAgents: options.fableAgents,
-      agentsSpeakingProviders: options.agentsSpeakingProviders,
-      agentsUsingHarnesses: options.agentsUsingHarnesses,
+      quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,
       throttleRevalidating: () => scheduler.isThrottleRevalidating(),
       workspaceAdmin,

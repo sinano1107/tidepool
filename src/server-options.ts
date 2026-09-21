@@ -60,6 +60,7 @@ import {
   updateProfile,
 } from "./profile-create.js";
 import { type VapidConfig, WebPushClient } from "./push.js";
+import type { QuarantineResolvers } from "./quarantine.js";
 import {
   type AuthorityProfile,
   assertValidAgentDefinition,
@@ -530,6 +531,17 @@ function agentsSpeakingProvidersResolver(
       .map((agent) => agent.name);
 }
 
+/** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。provider / Harness の行だけが
+ *  registry を読む写像を要る(agent 名の行は表が自分で持つ)。registry なし → 写さない。 */
+function quarantineResolvers(board: BoardComposition): QuarantineResolvers {
+  const speaking = agentsSpeakingProvidersResolver(board);
+  const using = agentsUsingHarnessesResolver(board);
+  return {
+    providerAuth: speaking && ((values) => speaking(values as Provider[])),
+    harnessContainment: using && ((values) => using(values as Harness[])),
+  };
+}
+
 /** Resolves the executing task's own agent's authority profile (ADR 0012 /
  *  issue #36), read fresh against the registry every call from the task's own
  *  `assignee` (null → the board's default agent, `TIDEPOOL_AGENT`) — the
@@ -784,13 +796,12 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,
     fableAgents: fableAgentsResolver(board, db),
-    agentsSpeakingProviders: agentsSpeakingProvidersResolver(board),
+    quarantineResolvers: quarantineResolvers(board),
     credentialAbsence: {
       moonshot: () => moonshotKeyAbsence(board.moonshotApiKeyFile),
       openai: () => codexLoginAbsence(board.codexHome),
     },
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
-    agentsUsingHarnesses: agentsUsingHarnessesResolver(board),
     resolveHarness: harnessResolver(board, db),
     registryReachability: registryReachabilityCheck(board),
     cliAuthExpiresAt: board.cliAuthExpiresAt,

@@ -1023,22 +1023,24 @@ function cancelTask(
   }, origin);
 }
 
+/** What open quarantines stop, folded by `quarantine.ts`'s `quarantineStops`
+ *  from each table row's scope (ADR 0137 決定6): execution workspaces, and the
+ *  agent names an assignee-scoped row resolves to. Passed in because the
+ *  dependency runs quarantine.ts → this module, never back (ADR 0137 決定1). */
+export interface ResourceStops {
+  workspaces: string[];
+  assignees: string[];
+}
+
 /** The pointers the direct-cancel question gate's quarantine half resolves an
  *  unset workspace/assignee against (issue #130), same fallbacks the pickup
- *  gate uses (ADR 0009 / issue #36 / issue #42). */
+ *  gate uses (ADR 0009 / issue #36 / issue #42), plus what open quarantines
+ *  stop. Absent `quarantined` → no quarantine gates any cancel. */
 export interface CancelDefaults {
   defaultWorkspaceName?: string;
   defaultAgentName?: string;
   auditorName?: string;
-  /** ADR 0097 決定2 / issue #446: the names of the agents speaking a provider
-   *  whose authentication quarantine is currently open — the gate's third
-   *  resource kind. The agent→provider mapping is registry knowledge the SQL
-   *  can't see, so the caller computes the list fresh (same shape as the
-   *  pickup gate's `excludedAssignees`). Absent → no provider quarantine gates
-   *  any cancel. */
-  providerAuthQuarantinedAgents?: string[];
-  /** Agents whose canonical Harness has an open containment Confirmation. */
-  harnessQuarantinedAgents?: string[];
+  quarantined?: ResourceStops;
 }
 
 /** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
@@ -1051,11 +1053,8 @@ export interface CancelDefaults {
  *     subtree. Abandon cancels its decision scope, so direct cancel would
  *     strand the question. PR-promotion failures are excluded: their target
  *     is already done and they carry no cancel option.
- *   - a **quarantine Confirmation** whose resource is used by a subtree task,
- *     marked by `question_quarantine_kind` `workspace`, `agent`, or — the
- *     provider- and Harness-scoped kinds (ADR 0097 決定2 / issue #446,
- *     ADR 0098) — `providerAuth` / `harnessContainment`, matched through the
- *     names of the agents speaking that provider / using that Harness. */
+ *   - a **quarantine Confirmation** whose resource is used by a subtree task:
+ *     the task's workspace or resolved assignee is in `defaults.quarantined`. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
   const subtree = subtreeSql("@root");
   const failure = db
@@ -1077,21 +1076,10 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
   const quarantine = db
     .prepare(
       `${subtree}
-       SELECT 1 FROM tasks q, tasks x
+       SELECT 1 FROM tasks x
        WHERE x.id IN (SELECT id FROM subtree)
-         AND q.type = 'question' AND q.status = 'todo'
-         AND ((q.question_quarantine_kind = 'workspace'
-               AND q.question_quarantine_value = COALESCE(x.workspace, @defaultWorkspaceName))
-           OR (q.question_quarantine_kind = 'agent'
-               AND q.question_quarantine_value = COALESCE(x.assignee, ${fallback}))
-           OR (q.question_quarantine_kind = 'providerAuth'
-               AND @providerAuthQuarantinedAgents IS NOT NULL
-               AND COALESCE(x.assignee, ${fallback}) IN (
-                 SELECT value FROM json_each(@providerAuthQuarantinedAgents)))
-           OR (q.question_quarantine_kind = 'harnessContainment'
-               AND @harnessQuarantinedAgents IS NOT NULL
-               AND COALESCE(x.assignee, ${fallback}) IN (
-                 SELECT value FROM json_each(@harnessQuarantinedAgents))))
+         AND (COALESCE(x.workspace, @defaultWorkspaceName) IN (SELECT value FROM json_each(@workspaces))
+           OR COALESCE(x.assignee, ${fallback}) IN (SELECT value FROM json_each(@assignees)))
        LIMIT 1`,
     )
     .get({
@@ -1099,12 +1087,8 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
       defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
       defaultAgentName: defaults.defaultAgentName ?? null,
       auditorName: defaults.auditorName ?? null,
-      providerAuthQuarantinedAgents: defaults.providerAuthQuarantinedAgents
-        ? JSON.stringify(defaults.providerAuthQuarantinedAgents)
-        : null,
-      harnessQuarantinedAgents: defaults.harnessQuarantinedAgents
-        ? JSON.stringify(defaults.harnessQuarantinedAgents)
-        : null,
+      workspaces: JSON.stringify(defaults.quarantined?.workspaces ?? []),
+      assignees: JSON.stringify(defaults.quarantined?.assignees ?? []),
     });
   if (quarantine) {
     throw new DomainError(
@@ -2256,34 +2240,6 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
   return n;
 }
 
-/** The one SQL shape of "this task's execution workspace is quarantined"
- *  (issue #26 / ADR 0009), shared by `nextSlotTask`'s pickup gate and
- *  `listQueue`'s skipped display — both gate on the same
- *  `task.workspace ?? the board's default` fallback and must never drift
- *  apart. `taskWorkspaceRef` is the SQL expression holding the candidate
- *  task's `workspace` column; `defaultRef` is the SQL expression (a bound
- *  param, named or positional) holding the board's default workspace name. */
-function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: string): string {
-  return `EXISTS (SELECT 1 FROM tasks qq
-            WHERE qq.question_quarantine_kind = 'workspace' AND qq.status = 'todo'
-              AND qq.question_quarantine_value = COALESCE(${taskWorkspaceRef}, ${defaultRef}))`;
-}
-
-/** The agent-name generalization of `workspaceQuarantinedSql` (ADR 0012 /
- *  issue #36): "this task's assignee is quarantined", shared the same way by
- *  `nextSlotTask`'s pickup gate and `listQueue`'s skipped display, gating on
- *  the same `task.assignee ?? the board's default agent` fallback
- *  (CONTEXT.md's Assignee). `taskAssigneeRef` is the SQL expression holding
- *  the candidate task's `assignee` column; `defaultRef` is the SQL expression
- *  holding the board's default agent name. A task's assignee is never
- *  literally `human` when this runs (the caller excludes it beforehand), so
- *  no separate carve-out is needed here. */
-function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string): string {
-  return `EXISTS (SELECT 1 FROM tasks qq
-            WHERE qq.question_quarantine_kind = 'agent' AND qq.status = 'todo'
-              AND qq.question_quarantine_value = COALESCE(${taskAssigneeRef}, ${defaultRef}))`;
-}
-
 /** Resolve the execution agent for a task that can enter the slot
  * (CONTEXT.md's Assignee/Auditor). Questions are answered by a human and have
  * no execution agent; accepting one here would hide a broken execution path. */
@@ -2296,13 +2252,12 @@ export function resolveTaskAgent(
   return task.assignee ?? (task.type === "review" ? auditorName : defaultAgentName);
 }
 
-/** The type-aware execution fallback pointer behind `agentQuarantinedSql`'s
- *  `defaultRef` (issue #42 / #242 / CONTEXT.md's Auditor): a question has no
- *  executor, an unset review resolves to the Auditor pointer, and an unset
+/** The type-aware execution fallback pointer the assignee gates COALESCE an
+ *  unset assignee to (issue #42 / #242 / CONTEXT.md's Auditor): a question has
+ *  no executor, an unset review resolves to the Auditor pointer, and an unset
  *  work task resolves to the board's default agent. Absent pointers evaluate
- *  to NULL, which `agentQuarantinedSql`'s COALESCE/`=` already treats as "no
- *  fallback, gate only an explicit assignee" — no separate null-guard needed
- *  here. */
+ *  to NULL, which the gates' COALESCE/`IN` already treats as "no fallback,
+ *  gate only an explicit assignee" — no separate null-guard needed here. */
 function typeAwareDefaultAgentSql(
   taskTypeRef: string,
   defaultAgentRef: string,
@@ -2520,19 +2475,10 @@ export function listBoard(
  *  while the condition holds. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
  *  gate (issue #26 / ADR 0009: `task.workspace ?? the board's default`) —
  *  absent, no workspace tracking exists and the gate is skipped entirely.
- *  `defaultAgentName`/`auditorName` are the same gate over the agent-name
- *  generalization of quarantine (ADR 0012 / issue #36: `task.assignee ?? the
- *  board's default agent`), made type-aware (issue #42 / CONTEXT.md's
- *  Auditor): a `review` task's unset assignee falls back to `auditorName`, a
- *  `work` task to `defaultAgentName`, and a `question` has no fallback —
- *  `nextSlotTask`'s own
- *  `typeAwareDefaultAgentSql`, bound the same way via named `@auditorName`/
- *  `@defaultAgentName` params (better-sqlite3 allows mixing named params into
- *  an otherwise-positional statement) so the fragment can be spliced into the
- *  query twice — the not-configured skip check, then inside
- *  `agentQuarantinedSql` itself — without a second, positionally-paired copy
- *  of the params to keep in sync by hand. Either pointer absent skips this
- *  gate for the rows that would have fallen back to it. A `human`-assignee
+ *  `defaultAgentName`/`auditorName` resolve an unset assignee the same
+ *  type-aware way (`typeAwareDefaultAgentSql`, issue #42 / CONTEXT.md's
+ *  Auditor) before it is matched against `stopped.assignees`; an absent
+ *  pointer leaves the rows that would have fallen back to it ungated. A `human`-assignee
  *  task never appears here at all (issue #13): it lives outside the
  *  execution queue entirely, in the your-tasks list (`listYourTasks`), not
  *  merely marked skipped within it. */
@@ -2541,12 +2487,11 @@ export function listQueue(
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
   auditorName?: string,
-  /** 資源単位の skip で候補から外れる assignee 名 — fable 線 (ADR 0030) と
-   *  provider 認証の quarantine (ADR 0097 決定2) の合成集合。`nextSlotTask` の
-   *  `excludedAssignees` と同じ1つの式(scheduler.ts の
-   *  `pickupExcludedAssignees`)から渡す。該当タスクだけが skipped 表示になる
-   *  (盤面全体の throttled とは独立)。 */
-  skippedAssignees?: string[],
+  /** 資源単位の skip で候補から外れる workspace / assignee 名 — 開いた quarantine
+   *  (ADR 0137 決定6)と fable 線 (ADR 0030) の合成。`nextSlotTask` の `stopped` と
+   *  同じ1つの式(scheduler.ts の `pickupStops`)から渡す。該当タスクだけが skipped
+   *  表示になる(盤面全体の throttled とは独立)。Absent → 何も skip しない。 */
+  stopped?: ResourceStops,
   /** 実行設定の entry がすべて除外されている task(ADR 0110 決定3 / issue #544)。
    *  SQL の後で当てるのは、判定に task の要求ティアが要るから —— agent 名では
    *  引けない。`nextSlotTask` の `excludedTaskIds` と同じ1つの式
@@ -2557,11 +2502,9 @@ export function listQueue(
   const rows = boardRows(
     db,
     `WHEN status = 'todo' AND type <> 'question' AND (
-       (? IS NOT NULL AND ${workspaceQuarantinedSql("tasks.workspace", "?")})
-         OR (${fallback} IS NOT NULL AND ${agentQuarantinedSql("tasks.assignee", fallback)})
-         OR (@skippedAssignees IS NOT NULL
-           AND COALESCE(tasks.assignee, ${fallback}) IN (
-             SELECT value FROM json_each(@skippedAssignees)))
+       (? IS NOT NULL AND COALESCE(tasks.workspace, ?) IN (
+           SELECT value FROM json_each(@stoppedWorkspaces)))
+         OR COALESCE(tasks.assignee, ${fallback}) IN (SELECT value FROM json_each(@stoppedAssignees))
      ) THEN 'skipped'`,
     [
       defaultWorkspaceName ?? null,
@@ -2569,7 +2512,8 @@ export function listQueue(
       {
         defaultAgentName: defaultAgentName ?? null,
         auditorName: auditorName ?? null,
-        skippedAssignees: skippedAssignees ? JSON.stringify(skippedAssignees) : null,
+        stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
+        stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
       },
     ],
   );
@@ -2798,38 +2742,33 @@ export function listChildren(db: Db, parentId: string): Task[] {
  *  takes the same slot — `human` is the one assignee that always sits outside
  *  it (issue #13's your tasks), never resolved against the registry at all.
  *
- *  `defaultWorkspaceName` gates on quarantine per the task's own execution
- *  workspace (issue #26 / ADR 0009: `task.workspace ?? the board's default`)
- *  — a needs-human todo is skipped in favor of the next runnable one, so
+ *  `stopped.workspaces` is matched against the task's own execution workspace
+ *  (issue #26 / ADR 0009: `task.workspace ?? defaultWorkspaceName`) — a
+ *  quarantined todo is skipped in favor of the next runnable one, so
  *  quarantine halts only the workspace it's on, never the whole board.
- *  Absent (a workspaceless board with no registered workspace at all) skips
- *  the gate entirely, same as no workspace tracking existing.
+ *  Absent `defaultWorkspaceName` (a workspaceless board) skips the workspace
+ *  gate entirely, same as no workspace tracking existing.
  *
- *  `defaultAgentName` is the same gate over the agent-name generalization of
- *  quarantine (ADR 0012 / issue #36: `task.assignee ?? the board's default
- *  agent`) — a resource-scoped halt, never the whole board. Absent (no agent
- *  registry tracking configured) skips this gate entirely too.
- *
- *  `auditorName` is the same gate, but for the fallback a `review` task's
- *  unset `assignee` actually resolves to (issue #42 / CONTEXT.md's Auditor):
- *  a review task never falls back to `defaultAgentName`, even when that
- *  pointer is healthy — `typeAwareDefaultAgentSql` picks the pointer per row
- *  by `t.type`. Absent, review tasks skip this gate too (same "not
- *  configured" fallback as `defaultAgentName`). */
+ *  `stopped.assignees` is matched against `task.assignee ??` the type-aware
+ *  fallback (ADR 0012 / issue #36 / issue #42 / CONTEXT.md's Auditor): an
+ *  unset review resolves to `auditorName`, an unset work task to
+ *  `defaultAgentName` — `typeAwareDefaultAgentSql` picks the pointer per row
+ *  by `t.type`. An absent pointer leaves the rows that would have fallen back
+ *  to it ungated. */
 export function nextSlotTask(
   db: Db,
   defaultWorkspaceName?: string,
   defaultAgentName?: string,
   auditorName?: string,
-  /** fable 線の超過中だけ渡される、fable モデルに解決される agent 名の集合
-   *  (ADR 0030)。該当タスクは workspace/agent quarantine と同じ「資源単位の
-   *  skip」で候補から外れ、他のタスクは流れ続ける。 */
-  excludedAssignees?: string[],
+  /** 資源単位の skip で候補から外れる workspace / assignee 名 —— 開いた quarantine
+   *  (ADR 0137 決定6)と、超過中の fable 線(ADR 0030)。該当タスクだけが候補から
+   *  外れ、他のタスクは流れ続ける。Absent → 何も外さない。 */
+  stopped?: ResourceStops,
   /** モデル固有の窓が超過中のタスクそのもの(ADR 0110 決定3)。要求ティアが
    *  task ごとに違う以上、**agent 単位の除外では広すぎる** —— 同じ agent の
    *  要求なしタスクは別のモデルで走るのに、先頭の1本が窓に当たっただけで
    *  一緒に止まる(「全 entry が除外されて初めて skipped」に反する)。
-   *  provider 全体の窓は今も agent 単位(`excludedAssignees`)—— そちらは
+   *  provider 全体の窓は今も agent 単位(`stopped`)—— そちらは
    *  その agent のどのタスクも走れないので、広さが実態と一致する。 */
   excludedTaskIds?: string[],
 ): Task | undefined {
@@ -2843,15 +2782,12 @@ export function nextSlotTask(
          AND t.assignee IS NOT @humanWorkerId
          AND (NOT ${unfinishedChildSql("t.id")} OR ${earlyIntegrationReturnSql("t.id")})
          AND NOT ${heldSql("t.id")}
-         AND (@defaultWorkspaceName IS NULL OR NOT ${workspaceQuarantinedSql(
-           "t.workspace",
-           "@defaultWorkspaceName",
-         )})
-         AND (${fallback} IS NULL OR NOT ${agentQuarantinedSql("t.assignee", fallback)})
-         AND (@excludedAssignees IS NULL
-           OR COALESCE(t.assignee, ${fallback}) IS NULL
+         AND (@defaultWorkspaceName IS NULL
+           OR COALESCE(t.workspace, @defaultWorkspaceName) NOT IN (
+             SELECT value FROM json_each(@stoppedWorkspaces)))
+         AND (COALESCE(t.assignee, ${fallback}) IS NULL
            OR COALESCE(t.assignee, ${fallback}) NOT IN (
-             SELECT value FROM json_each(@excludedAssignees)))
+             SELECT value FROM json_each(@stoppedAssignees)))
          AND (@excludedTaskIds IS NULL
            OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,
@@ -2861,7 +2797,8 @@ export function nextSlotTask(
       defaultAgentName: defaultAgentName ?? null,
       auditorName: auditorName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
-      excludedAssignees: excludedAssignees ? JSON.stringify(excludedAssignees) : null,
+      stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
+      stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
       excludedTaskIds: excludedTaskIds?.length ? JSON.stringify(excludedTaskIds) : null,
     }) as TaskRow | undefined;
   return row && rowToTask(row);

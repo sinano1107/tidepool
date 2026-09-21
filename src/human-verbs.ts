@@ -1,17 +1,16 @@
 import { verifyAgentRepaired } from "./agent.js";
 import { type AttributionClient, attributeAfterRca, type BehaviorDraftClient } from "./attribution.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { type CliAuthCheck, quarantineCliAuthFailure, quarantinedAuthProviders } from "./cli-auth.js";
+import { type CliAuthCheck, quarantineCliAuthFailure } from "./cli-auth.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin } from "./events.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { HarnessContainmentCheck } from "./harness-containment.js";
-import { quarantinedHarnesses } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, rejectMemoryProposal } from "./memory.js";
-import type { QuarantineChecks, QuarantineKind } from "./quarantine.js";
+import { type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
@@ -524,29 +523,20 @@ function resolveWorkspaceForAnswer(
   }
 }
 
-/** Shared human-surface defaults for direct cancel's quarantine-question gate.
- *  The provider-auth half (ADR 0097 決定2 / issue #446) resolves the open
- *  provider quarantines from the db and maps them to agent names through the
- *  caller's registry seam — computed here once so the WebUI and MCP cancel
- *  routes can't drift apart. */
+/** Shared human-surface defaults for direct cancel's quarantine-question gate,
+ *  computed here once so the WebUI and MCP cancel routes can't drift apart. */
 function humanCancelDefaults(
   db: Db,
   workspace: WorkspaceConfig | undefined,
   defaultAgentName: string | undefined,
   auditorName: string | undefined,
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[],
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[],
+  quarantineResolvers?: QuarantineResolvers,
 ): CancelDefaults {
-  const quarantinedProviders = quarantinedAuthProviders(db);
   return {
     defaultWorkspaceName: workspace?.name,
     defaultAgentName,
     auditorName,
-    providerAuthQuarantinedAgents:
-      quarantinedProviders.length > 0 && agentsSpeakingProviders
-        ? agentsSpeakingProviders(quarantinedProviders)
-        : undefined,
-    harnessQuarantinedAgents: agentsUsingHarnesses?.(quarantinedHarnesses(db)),
+    quarantined: quarantineStops(db, quarantineResolvers),
   };
 }
 
@@ -604,8 +594,7 @@ export interface CancelThroughHumanDoorDeps {
   workspace?: WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  quarantineResolvers?: QuarantineResolvers;
 }
 
 export interface EditThroughHumanDoorDeps {
@@ -703,8 +692,7 @@ export async function cancelThroughHumanDoor(
         deps.workspace,
         deps.defaultAgentName,
         deps.auditorName,
-        deps.agentsSpeakingProviders,
-        deps.agentsUsingHarnesses,
+        deps.quarantineResolvers,
       ),
       origin,
     );

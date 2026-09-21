@@ -5,10 +5,11 @@ import {
   openQuarantineQuestion,
   QUARANTINES,
   type QuarantineKind,
+  quarantineStops,
   quarantineUnlessClear,
   registerQuarantine,
 } from "../src/quarantine.js";
-import { listBoard } from "../src/tasks.js";
+import { cancelTaskDirectly, listBoard, registerTask } from "../src/tasks.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
@@ -69,5 +70,34 @@ describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (ki
     expect(questions(db)).toHaveLength(1);
     expect(await quarantineUnlessClear(db, kind, value, passing, NOW)).toBe(true);
     expect(fired).toBe(2);
+  });
+});
+
+/** 止まるタスクの写像(ADR 0137 決定6): 資源単位の行は、停止範囲の比べ方だけで直接 cancel の
+ *  門に掛かる。assignee 群の値は resolver が agent 名へ写す(agent 名は自分自身)。 */
+describe.each(QUARANTINES.filter((row) => row.scope !== "board"))("資源単位の種類 $kind", (row) => {
+  it("開いた確認が subtree のタスクの使う資源に立っている間、直接 cancel は拒まれる", () => {
+    const db = openDb(":memory:");
+    const value = SAMPLE[row.kind][0]!;
+    const task = registerTask(
+      db,
+      {
+        type: "work",
+        title: "uses the quarantined resource",
+        purpose: "p",
+        completion_criteria: "c",
+        ...(row.scope === "workspace" ? { workspace: value } : { assignee: "deckhand" }),
+      },
+      NOW,
+    );
+    registerQuarantine(db, row.kind, value, "cause", NOW);
+    const stops = quarantineStops(db, {
+      providerAuth: () => ["deckhand"],
+      harnessContainment: () => ["deckhand"],
+    });
+
+    expect(() => cancelTaskDirectly(db, task, null, NOW, { quarantined: stops })).toThrow(
+      /open quarantine confirmation/,
+    );
   });
 });
