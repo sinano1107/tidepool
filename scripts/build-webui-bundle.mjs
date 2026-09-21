@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const require = createRequire(import.meta.url);
+
+// UMD files aren't in package "exports"; resolve the package dir via
+// package.json (which is exported) and read the file relative to it.
+function readVendorFile(pkg, relPath) {
+  const pkgDir = dirname(require.resolve(`${pkg}/package.json`));
+  return readFileSync(join(pkgDir, relPath));
+}
 const SOURCES = [
   "webui/queue-screen.tsx",
   "webui/triage-screen.tsx",
@@ -30,9 +39,9 @@ function compile(relPath) {
 const out = SOURCES.map(compile).join("\n");
 const outputs = new Map([
   ["public/app.js", Buffer.from(out)],
-  ["public/vendor/react.js", readFileSync(join(ROOT, "node_modules/react/umd/react.production.min.js"))],
-  ["public/vendor/react-dom.js", readFileSync(join(ROOT, "node_modules/react-dom/umd/react-dom.production.min.js"))],
-  ["public/vendor/lucide.js", readFileSync(join(ROOT, "node_modules/lucide/dist/umd/lucide.min.js"))],
+  ["public/vendor/react.js", readVendorFile("react", "umd/react.production.min.js")],
+  ["public/vendor/react-dom.js", readVendorFile("react-dom", "umd/react-dom.production.min.js")],
+  ["public/vendor/lucide.js", readVendorFile("lucide", "dist/umd/lucide.min.js")],
 ]);
 
 if (process.argv.includes("--check")) {
