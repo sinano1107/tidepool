@@ -21,6 +21,18 @@
 			}
 		}
 	},
+	"overrides": [
+		{
+			"includes": ["webui/**"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noExplicitAny": "error"
+					}
+				}
+			}
+		}
+	],
 	"assist": {
 		"enabled": true,
 		"actions": {
