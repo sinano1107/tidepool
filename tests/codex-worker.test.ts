@@ -233,6 +233,24 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
   });
 
+  it("work task の filesystem 表は workspace の .git を write、.git/hooks と .git/config を read にし、review task の表には .git の行が無い(issue #849 / ADR 0033)", async () => {
+    const f = await fixture();
+    f.worker.start(task(f.db));
+    f.worker.start(registerTask(
+      f.db,
+      { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
+      new Date("2026-08-24T00:00:00.000Z"),
+    ));
+
+    const filesystem = (args: string[], name: string) =>
+      args.find((arg, index) => args[index - 1] === "-c" && arg.startsWith(`permissions.${name}.filesystem=`))!;
+    const work = filesystem(f.process.calls[0]!.args, "tidepool-work");
+    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git"))}="write"`);
+    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`);
+    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`);
+    expect(filesystem(f.process.calls[1]!.args, "tidepool-review")).not.toContain(".git");
+  });
+
   it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {
     const f = await fixture();
     f.worker.start(task(f.db));

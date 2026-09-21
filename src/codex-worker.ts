@@ -430,6 +430,13 @@ function permissionConfig(
     ":slash_tmp": "deny",
     ":workspace_roots": { ".": access },
     [workspace]: access,
+    // issue #849: Linux の bwrap は書ける root 直下の .git を ro で重ねるので、work は明示して書けるようにする。
+    // hooks と config は Claude 側の床と同じく読むだけ(ADR 0033)
+    ...(taskType === "review" ? {} : {
+      [join(workspace, ".git")]: "write",
+      [join(workspace, ".git", "hooks")]: "read",
+      [join(workspace, ".git", "config")]: "read",
+    }),
     [taskTemp]: "write",
     [dirname(process.execPath)]: "read",
     [dirname(executable)]: "read",
