@@ -136,10 +136,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     refreshPendingDumps();
   };
   const issueListHintStyle = { fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' };
-  // design-system の onChange は React.ChangeEvent(総称引数の既定は Element)を渡すので
-  // .value が生えていない。宣言を締めるのは design-system 側の仕事で、このスライスは
-  // .d.ts を正本として読むだけ —— 呼び出し側で1箇所に寄せる。
-  const targetValue = (e: React.ChangeEvent) => (e.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value;
   // the Input doubles as the list's filter (issue #67): a number or a
   // title substring narrows the rows, tapping a row confirms the number
   const filteredIssues = issueNumber.trim()
@@ -288,7 +284,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           <Input
             label="Reason for splitting this"
             value={reason}
-            onChange={(e) => setReason(targetValue(e))}
+            onChange={(e) => setReason(e.target.value)}
             placeholder="why this work is being split"
           />
         </Card>
@@ -313,7 +309,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!childMode && (
           <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
-            setSource(targetValue(e) === 'github issue' ? 'github issue' : 'manual'); setGate(null);
+            setSource(e.target.value === 'github issue' ? 'github issue' : 'manual'); setGate(null);
             // switching away from the pending-dump's own manual content: a
             // later registration (e.g. an unrelated issue reference) must not
             // consume a dump it was never built from
@@ -322,8 +318,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         )}
         {issueMode && (
           <React.Fragment>
-            <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(targetValue(e))} />
-            <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(targetValue(e))} placeholder="content stays on GitHub; the board keeps only this reference" />
+            <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+            <Input label="Issue number" value={issueNumber} onChange={(e) => setIssueNumber(e.target.value)} placeholder="content stays on GitHub; the board keeps only this reference" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
               {!workspace.trim() && (
                 <span style={issueListHintStyle}>select a workspace to browse its open issues</span>
@@ -349,23 +345,23 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           </React.Fragment>
         )}
         {!issueMode && !plainFormActive && !drafted && (
-          <Input multiline rows={4} placeholder="what needs doing, in your own words — sloppy is fine here, sloppy completion criteria are not" value={dump} onChange={(e) => setDump(targetValue(e))} />
+          <Input multiline rows={4} placeholder="what needs doing, in your own words — sloppy is fine here, sloppy completion criteria are not" value={dump} onChange={(e) => setDump(e.target.value)} />
         )}
         {!issueMode && (plainFormActive || drafted) && (
           <React.Fragment>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: drafted ? 'var(--tide-4)' : 'var(--sun-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               {drafted ? 'drafted — edit freely' : 'plain form — same fields, no draft'}
             </span>
-            <Input label="Title" value={title} onChange={(e) => setTitle(targetValue(e))} />
-            <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(targetValue(e))} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
-            <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(targetValue(e))} placeholder="sloppy completion criteria are the expensive kind" />
+            <Input label="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <Input label="Purpose" multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
+            <Input label="Completion criteria" multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
             {/* a decompose child is always type work (decomposeTask's own ChildSpec has no type field) */}
             {!childMode && (
-              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(targetValue(e) === 'review' ? 'review' : 'work')} />
+              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => setType(e.target.value === 'review' ? 'review' : 'work')} />
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(targetValue(e))} />
-              <Select label="Workspace" options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(targetValue(e))} />
+              <Select label="Assignee" options={assigneeOptions} value={assignee} onChange={(e) => setAssignee(e.target.value)} />
+              <Select label="Workspace" options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
             </div>
             <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />
             <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />

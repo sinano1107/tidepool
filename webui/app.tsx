@@ -704,15 +704,15 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!issueBacked && (
           <React.Fragment>
-            <Input label="Title" value={fields.title} onChange={(e) => set('title', (e.target as HTMLInputElement).value)} />
-            <Input label="Purpose" multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', (e.target as HTMLInputElement).value)} />
-            <Input label="Completion criteria" multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', (e.target as HTMLInputElement).value)} />
+            <Input label="Title" value={fields.title} onChange={(e) => set('title', e.target.value)} />
+            <Input label="Purpose" multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', e.target.value)} />
+            <Input label="Completion criteria" multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', e.target.value)} />
           </React.Fragment>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: issueBacked ? '1fr' : '1fr 1fr', gap: 12 }}>
-          <Select label="Assignee" options={withPlaceholder('(default agent)', candidates.assignees)} value={fields.assignee} onChange={(e) => set('assignee', (e.target as HTMLInputElement).value)} />
+          <Select label="Assignee" options={withPlaceholder('(default agent)', candidates.assignees)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
           {!issueBacked && (
-            <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', (e.target as HTMLInputElement).value)} />
+            <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
           )}
         </div>
         <Checkbox label="risk flag — this task has irreversible external effects" checked={fields.risk_flag} onChange={() => set('risk_flag', !fields.risk_flag)} />
@@ -756,7 +756,7 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }: {
         cancels "{task.title}" and its unfinished descendants — the record is kept, never erased
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason((e.target as HTMLInputElement).value)} placeholder="left blank, only the fact of the cancel is recorded" />
+        <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="left blank, only the fact of the cancel is recorded" />
         <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Cancel this task</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Keep it</Button>
       </Card>
@@ -829,7 +829,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
         "{task.title}" blocks {task.blocking} — the handoff is what that parent reads when it resumes
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 14 }}>
-        <Input label="How did it go?" multiline rows={3} value={dump} onChange={(e) => setDump((e.target as HTMLInputElement).value)}
+        <Input label="How did it go?" multiline rows={3} value={dump} onChange={(e) => setDump(e.target.value)}
           placeholder="dump it — the LLM structures it into the six fields below" />
         <Button variant="secondary" size="lg" full disabled={!dump.trim() || drafting} onClick={draft}>
           {drafting ? 'Drafting…' : 'Draft handoff'}
@@ -841,7 +841,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
         {HANDOFF_FIELDS.map(([field, label]) => (
           <div key={field}>
             <Input label={label} multiline rows={2} value={fields[field] ?? ''}
-              onChange={(e) => setFields((f) => ({ ...f, [field]: (e.target as HTMLInputElement).value }))} />
+              onChange={(e) => setFields((f) => ({ ...f, [field]: e.target.value }))} />
             {missing.includes(field) && (
               <span style={{ display: 'block', marginTop: 5, fontSize: 'var(--text-xs)', color: 'var(--sun-4)' }}>
                 ⚠ the draft found nothing for this — optional
