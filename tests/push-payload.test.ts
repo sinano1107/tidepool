@@ -25,8 +25,8 @@ function questionTask(overrides: Partial<Task> = {}): Task {
     question_cancel_option: null,
     question_pending_child: null,
     question_pending_merge_pr: null,
-    question_quarantine_workspace: null,
-    question_quarantine_agent: null,
+    question_quarantine_kind: null,
+    question_quarantine_value: null,
     created_at: new Date(0).toISOString(),
     ...overrides,
   } as Task;

@@ -4,8 +4,8 @@ import { openDb } from "../src/db.js";
 import { answerQuestion, BOARD_WORKER_ID, DomainError, registerTask } from "../src/tasks.js";
 import { quarantineAgentRow } from "./harness.js";
 
-describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
-  it("quarantine_agent 付きの question は1択(workspace 版と同じ緩和)で登録できる", () => {
+describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
+  it("agent の quarantine 付きの question は1択(workspace 版と同じ緩和)で登録できる", () => {
     const db = openDb(":memory:");
     const question = registerTask(
       db,
@@ -21,15 +21,15 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
             recommendation: "repaired by hand",
           },
         ],
-        quarantine_agent: "navigator",
+        quarantine: { kind: "agent", value: "navigator" },
       },
       new Date(0),
       BOARD_WORKER_ID,
     );
-    expect(question.question_quarantine_agent).toBe("navigator");
+    expect(question).toMatchObject({ question_quarantine_kind: "agent", question_quarantine_value: "navigator" });
   });
 
-  it("quarantine_agent も quarantine_workspace も付かない question は通常どおり2択以上を要求する", () => {
+  it("quarantine の付かない question は通常どおり2択以上を要求する", () => {
     const db = openDb(":memory:");
     expect(() =>
       registerTask(
@@ -46,7 +46,7 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
     ).toThrow(DomainError);
   });
 
-  it("quarantine_agent の question に回答すると agent_state.needs_human が解除され、pickupResumed が立つ", () => {
+  it("agent の quarantine の question に回答すると agent_state.needs_human が解除され、pickupResumed が立つ", () => {
     const db = openDb(":memory:");
     quarantineAgentRow(db, "navigator");
     const question = registerTask(
@@ -63,7 +63,7 @@ describe("quarantine_agent(ADR 0012 / issue #36: workspace 版の agent 名一�
             recommendation: "repaired by hand",
           },
         ],
-        quarantine_agent: "navigator",
+        quarantine: { kind: "agent", value: "navigator" },
       },
       new Date(0),
       BOARD_WORKER_ID,

@@ -43,7 +43,7 @@ async function complete(board: Tidepool, taskId: string): Promise<void> {
 
 async function quarantineQuestion(board: Tidepool): Promise<any> {
   const list = (await api(board.baseUrl, "GET", "/api/tasks")).json;
-  return list.find((x: any) => x.question_quarantine_workspace !== null);
+  return list.find((x: any) => x.question_quarantine_kind === "workspace");
 }
 
 function commitOn(path: string, file: string, body: string, message: string): void {

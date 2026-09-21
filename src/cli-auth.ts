@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import { openQuarantineValues, registerQuarantine } from "./quarantine.js";
 import type { Provider } from "./registry.js";
 import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
@@ -92,19 +93,7 @@ export function quarantineCliAuthFailure(
  * Provider fact, never by parsing prose from an error. Every Provider is a
  * resource-scoped quarantine; unrelated Provider workers continue. */
 export function quarantineCliAuthForProvider(db: Db, provider: Provider, now: Date): void {
-  quarantineProviderAuth(db, provider, now);
-}
-
-/** The open Confirmation question is the durable half of a provider-scoped
- *  authentication quarantine — 1 resource, at most 1 open question. Recovery
- *  alone never resumes that provider's pickup without human acknowledgement. */
-function openProviderAuthQuestion(db: Db, provider: Provider): { id: string } | undefined {
-  return db
-    .prepare(
-      `SELECT id FROM tasks
-       WHERE question_quarantine_provider_auth = ? AND status = 'todo'`,
-    )
-    .get(provider) as { id: string } | undefined;
+  registerQuarantine(db, "providerAuth", provider, "authentication failure", now);
 }
 
 /** The providers whose authentication is currently quarantined resource-wide
@@ -112,69 +101,7 @@ function openProviderAuthQuestion(db: Db, provider: Provider): { id: string } | 
  *  speaking one of these. Every provider is resource-scoped, the board's own
  *  included (ADR 0098 決定6), so no authentication failure reaches boardHalts. */
 export function quarantinedAuthProviders(db: Db): Provider[] {
-  return (
-    db
-      .prepare(
-        `SELECT DISTINCT question_quarantine_provider_auth AS provider FROM tasks
-         WHERE question_quarantine_provider_auth IS NOT NULL AND status = 'todo'`,
-      )
-      .all() as Array<{ provider: Provider }>
-  ).map((row) => row.provider);
-}
-
-/** Exhaustive repair guidance: adding a Provider is a compile error until its
- * own credential recovery path is written. */
-const PROVIDER_AUTH_REPAIR_GUIDANCE: Record<Provider, string> = {
-  anthropic:
-    "Run `claude setup-token`, update `CLAUDE_CODE_OAUTH_TOKEN` in " +
-    "`/etc/default/tidepool`, and restart the service.",
-  moonshot:
-    "Place a valid Moonshot Platform API key in the board's key file " +
-    "(`~/.tidepool/moonshot-api-key`, or the path `TIDEPOOL_MOONSHOT_API_KEY_FILE` " +
-    "points at), mode 600.",
-  openai:
-    "Sign in to ChatGPT with `codex login` using the board worker's isolated " +
-    "`CODEX_HOME`; API keys are not accepted for the canonical Codex route (ADR 0098).",
-};
-
-function quarantineProviderAuth(
-  db: Db,
-  provider: Provider,
-  now: Date,
-): void {
-  if (openProviderAuthQuestion(db, provider)) return;
-  registerTask(
-    db,
-    {
-      type: "question",
-      title: providerAuthQuestionTitle(provider),
-      purpose:
-        `A worker session or Board call returned an authentication failure while speaking the ${provider} ` +
-        `provider, so the board has stopped pickup of the agents declared with ` +
-        `\`provider: ${provider}\`. Workers and board calls on other providers are unaffected. ` +
-        "Restore the credential:\n\n" +
-        `1. ${PROVIDER_AUTH_REPAIR_GUIDANCE[provider]}\n` +
-        "2. Return to this question and answer it.\n\n" +
-        "The board checks authentication again before accepting the answer and resumes " +
-        "pickup only after the check succeeds.",
-      completion_criteria: `${provider} authentication has been restored`,
-      question: [
-        {
-          title: `Has ${provider} authentication been restored?`,
-          options: ["authentication restored"],
-          recommendation: "authentication restored",
-        },
-      ],
-      quarantine_provider_auth: provider,
-    },
-    now,
-    BOARD_WORKER_ID,
-    "board",
-  );
-}
-
-function providerAuthQuestionTitle(provider: Provider): string {
-  return `${provider} authentication is unavailable — pickup of ${provider}-speaking agents is stopped`;
+  return openQuarantineValues(db, "providerAuth") as Provider[];
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {

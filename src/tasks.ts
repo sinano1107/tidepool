@@ -125,34 +125,13 @@ export interface Task {
   /** System-internal only (issue #66): the completed work task whose failed
    *  PR promotion this failure question can retry. */
   question_pending_pr_promotion_task_id: string | null;
-  /** System-internal only (issue #21): the workspace name a quarantine
-   *  Confirmation question stands in for, set only by quarantineWorkspace —
-   *  never set via MCP or the JSON API. */
-  question_quarantine_workspace: string | null;
-  /** System-internal only (ADR 0012 / issue #36): the agent name a quarantine
-   *  Confirmation question stands in for, set only by quarantineAgent — the
-   *  agent-name generalization of the workspace field above. Never set via
-   *  MCP or the JSON API. */
-  question_quarantine_agent: string | null;
-  /** System-internal only (issue #60 / ADR 0033): 1 on the Confirmation
-   *  question standing in for an unusable worker sandbox on this host, set
-   *  only by quarantineSandbox. Unlike the two fields above it names no
-   *  resource — the sandbox belongs to the host, not to a workspace or an
-   *  agent — so pickup stops board-wide while it stands. Never set via MCP or
-   *  the JSON API. */
-  question_quarantine_sandbox: number | null;
-  /** System-internal only (ADR 0052): registry reachability quarantine. */
-  question_quarantine_registry: number | null;
-  /** System-internal only (ADR 0112): the id of the task whose teardown threw.
-   *  Borrows the quarantine family's mechanism only — it names a task because
-   *  what became unrunnable is the board's own code, not a resource. */
-  question_quarantine_teardown: string | null;
-  /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
-   *  provider-scoped authentication quarantine stands in for — resource-scoped
-   *  (only that provider's agents stop), never board-wide. */
-  question_quarantine_provider_auth: string | null;
-  /** System-internal only (ADR 0098): Harness-scoped containment quarantine. */
-  question_quarantine_harness: string | null;
+  /** System-internal only (ADR 0137 決定2): the Quarantine kind this
+   *  Confirmation question stands in for and the value it is keyed on (null
+   *  for a board-wide kind that names nothing). Typed as an open string here
+   *  because the vocabulary lives in the Quarantine module, which depends on
+   *  this one and never the reverse. Never set via MCP or the JSON API. */
+  question_quarantine_kind: string | null;
+  question_quarantine_value: string | null;
   /** System-internal only (ADR 0075): warned configured-expiry epoch. */
   question_cli_auth_expiry_warning: number | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -284,7 +263,7 @@ export function rowToTask(row: TaskRow): Task {
  *  form. `detail` holds implications specific to this item — the shared
  *  situation goes on the question task's `purpose` instead, so a triage
  *  reader isn't re-reading the same context once per item. */
-interface QuestionItem {
+export interface QuestionItem {
   title: string;
   detail?: string;
   options: string[];
@@ -336,30 +315,10 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   /** System-internal only (issue #66): the completed work task whose failed
    *  PR promotion this question can retry. */
   pending_pr_promotion_task_id?: string;
-  /** System-internal only (issue #21): the workspace name a quarantine
-   *  Confirmation question stands in for. Never set via MCP or the JSON
-   *  API — only quarantineWorkspace sets this. */
-  quarantine_workspace?: string;
-  /** System-internal only (ADR 0012 / issue #36): the agent name a
-   *  quarantine Confirmation question stands in for. Never set via MCP or
-   *  the JSON API — only quarantineAgent sets this. */
-  quarantine_agent?: string;
-  /** System-internal only (issue #60 / ADR 0033): marks the Confirmation
-   *  question that stands in for an unusable worker sandbox. Never set via
-   *  MCP or the JSON API — only quarantineSandbox sets this. */
-  quarantine_sandbox?: boolean;
-  /** System-internal only (ADR 0052): registry reachability Confirmation. */
-  quarantine_registry?: boolean;
-  /** System-internal only (ADR 0112): the id of the task whose teardown threw.
-   *  Never set via MCP or the JSON API — only quarantineFailedTeardown sets this. */
-  quarantine_teardown?: string;
-  /** System-internal only (ADR 0097 決定2 / issue #446): the provider a
-   *  provider-scoped authentication Confirmation question stands in for.
-   *  Never set via MCP or the JSON API — only the cli-auth classification
-   *  sets this. */
-  quarantine_provider_auth?: string;
-  /** System-internal only (ADR 0098): Harness-scoped containment Confirmation. */
-  quarantine_harness?: string;
+  /** System-internal only (ADR 0137 決定2): the Quarantine this
+   *  Confirmation question stands in for. Never set via MCP or the JSON API —
+   *  only the Quarantine module's registration sets this. */
+  quarantine?: { kind: string; value: string | null };
   /** System-internal only (ADR 0075): the warned configured expiry epoch. */
   cli_auth_expiry_warning?: number;
   /** Board-internal only (ADR 0120 決定2 / issue #618): この task が主題の周期 meta-review であること。
@@ -391,18 +350,16 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
  *  safety valve (#17).
  *
  *  An item's option floor relaxes to 1 only for an actual quarantine
- *  Confirmation question (issue #21, CONTEXT.md) — `quarantine_workspace` or
- *  (ADR 0012 / issue #36) `quarantine_agent` set, which only
- *  quarantineWorkspace / quarantineAgent themselves ever do: it asks for a
+ *  Confirmation question (issue #21, CONTEXT.md) — `quarantine` set, which
+ *  only the Quarantine module's registration ever does: it asks for a
  *  completion confirmation, not a choice, and a fake second option would be
- *  filler with no effect of its own. This is deliberately keyed on those
- *  fields rather than the registering `workerId` (e.g. `=== BOARD_WORKER_ID`):
- *  a worker's id is operator-configured and could collide with
- *  BOARD_WORKER_ID by accident, which would otherwise let an ordinary agent
- *  question sneak past the 2-4 floor. `quarantine_workspace`/
- *  `quarantine_agent` are never reachable from MCP or the JSON API (unlike an
- *  assignee/worker id), so this floor can't be gamed the same way — an
- *  agent's question is always a real 2-4-way choice. */
+ *  filler with no effect of its own. This is deliberately keyed on that field
+ *  rather than the registering `workerId` (e.g. `=== BOARD_WORKER_ID`): a
+ *  worker's id is operator-configured and could collide with BOARD_WORKER_ID
+ *  by accident, which would otherwise let an ordinary agent question sneak
+ *  past the 2-4 floor. `quarantine` is never reachable from MCP or the JSON
+ *  API (unlike an assignee/worker id), so this floor can't be gamed the same
+ *  way — an agent's question is always a real 2-4-way choice. */
 function assertQuestionSpec(input: RegisterTaskInput): void {
   if (input.type !== "question") {
     if (input.question) throw new DomainError("only a question task carries options");
@@ -413,16 +370,7 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   if (!items || items.length < 1 || items.length > 4) {
     throw new DomainError("a question carries 1 to 4 items");
   }
-  const minOptions =
-    input.quarantine_workspace !== undefined ||
-    input.quarantine_agent !== undefined ||
-    input.quarantine_sandbox !== undefined ||
-    input.quarantine_registry !== undefined ||
-    input.quarantine_teardown !== undefined ||
-    input.quarantine_provider_auth !== undefined ||
-    input.quarantine_harness !== undefined
-      ? 1
-      : 2;
+  const minOptions = input.quarantine ? 1 : 2;
   for (const item of items) {
     if (!item.title.trim()) throw new DomainError("a question item carries a title");
     if (item.options.length < minOptions || item.options.length > 4) {
@@ -692,13 +640,8 @@ export function registerTask(
     question_pending_merge_pr: input.pending_merge_pr ?? null,
     question_pending_local_merge_task_id: input.pending_local_merge_task_id ?? null,
     question_pending_pr_promotion_task_id: input.pending_pr_promotion_task_id ?? null,
-    question_quarantine_workspace: input.quarantine_workspace ?? null,
-    question_quarantine_agent: input.quarantine_agent ?? null,
-    question_quarantine_sandbox: input.quarantine_sandbox ? 1 : null,
-    question_quarantine_registry: input.quarantine_registry ? 1 : null,
-    question_quarantine_teardown: input.quarantine_teardown ?? null,
-    question_quarantine_provider_auth: input.quarantine_provider_auth ?? null,
-    question_quarantine_harness: input.quarantine_harness ?? null,
+    question_quarantine_kind: input.quarantine?.kind ?? null,
+    question_quarantine_value: input.quarantine?.value ?? null,
     question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ?? null,
     github_issue_number: input.github_issue_number ?? null,
     created_at: now.toISOString(),
@@ -708,13 +651,13 @@ export function registerTask(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, review_by, review_tier, tier, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
-         question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_workspace,
-         question_quarantine_agent, question_quarantine_sandbox, question_quarantine_registry, question_quarantine_teardown, question_quarantine_provider_auth, question_quarantine_harness, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
+         question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
+         question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, @review_tier, @tier, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
-         @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_workspace,
-         @question_quarantine_agent, @question_quarantine_sandbox, @question_quarantine_registry, @question_quarantine_teardown, @question_quarantine_provider_auth, @question_quarantine_harness, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
+         @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
+         @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
     ).run({
       ...task,
       review_by: task.review_by && JSON.stringify(task.review_by),
@@ -1109,10 +1052,10 @@ export interface CancelDefaults {
  *     strand the question. PR-promotion failures are excluded: their target
  *     is already done and they carry no cancel option.
  *   - a **quarantine Confirmation** whose resource is used by a subtree task,
- *     marked by `question_quarantine_workspace`, `_agent`, or — the
- *     provider-scoped kind (ADR 0097 決定2 / issue #446) —
- *     `_provider_auth`, matched through the names of the agents speaking
- *     that provider. */
+ *     marked by `question_quarantine_kind` `workspace`, `agent`, or — the
+ *     provider- and Harness-scoped kinds (ADR 0097 決定2 / issue #446,
+ *     ADR 0098) — `providerAuth` / `harnessContainment`, matched through the
+ *     names of the agents speaking that provider / using that Harness. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
   const subtree = subtreeSql("@root");
   const failure = db
@@ -1137,15 +1080,15 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
        SELECT 1 FROM tasks q, tasks x
        WHERE x.id IN (SELECT id FROM subtree)
          AND q.type = 'question' AND q.status = 'todo'
-         AND ((q.question_quarantine_workspace IS NOT NULL
-               AND q.question_quarantine_workspace = COALESCE(x.workspace, @defaultWorkspaceName))
-           OR (q.question_quarantine_agent IS NOT NULL
-               AND q.question_quarantine_agent = COALESCE(x.assignee, ${fallback}))
-           OR (q.question_quarantine_provider_auth IS NOT NULL
+         AND ((q.question_quarantine_kind = 'workspace'
+               AND q.question_quarantine_value = COALESCE(x.workspace, @defaultWorkspaceName))
+           OR (q.question_quarantine_kind = 'agent'
+               AND q.question_quarantine_value = COALESCE(x.assignee, ${fallback}))
+           OR (q.question_quarantine_kind = 'providerAuth'
                AND @providerAuthQuarantinedAgents IS NOT NULL
                AND COALESCE(x.assignee, ${fallback}) IN (
                  SELECT value FROM json_each(@providerAuthQuarantinedAgents)))
-           OR (q.question_quarantine_harness IS NOT NULL
+           OR (q.question_quarantine_kind = 'harnessContainment'
                AND @harnessQuarantinedAgents IS NOT NULL
                AND COALESCE(x.assignee, ${fallback}) IN (
                  SELECT value FROM json_each(@harnessQuarantinedAgents))))
@@ -1270,7 +1213,7 @@ export function assertAnswerable(question: Task, answers: string[]): void {
  *  queue head only when no unfinished children it waits for remain, as before.
  *
  *  Quarantine resolution (issue #21): a Confirmation question (declared by
- *  `question_quarantine_workspace`, system-internal) takes any answer at all
+ *  `question_quarantine_kind`, system-internal) takes any answer at all
  *  as a repair confirmation — the caller has already verified the workspace's
  *  tree is clean before this runs (see human-verbs.ts). needs_human clears at once,
  *  reported back as `pickupResumed` so the caller fires the immediate poll,
@@ -1317,8 +1260,9 @@ export function answerQuestion(
       at: now,
     });
 
-    if (question.question_quarantine_workspace !== null) {
-      const wsName = question.question_quarantine_workspace;
+    const quarantineValue = question.question_quarantine_value;
+    if (question.question_quarantine_kind === "workspace") {
+      const wsName = quarantineValue!;
       db.prepare("UPDATE workspace_state SET needs_human = 0 WHERE name = ?").run(wsName);
       appendEvent(db, {
         taskId: question.id,
@@ -1333,8 +1277,8 @@ export function answerQuestion(
 
     // the agent-name generalization of the workspace branch above (ADR 0012 /
     // issue #36)
-    if (question.question_quarantine_agent !== null) {
-      const agentName = question.question_quarantine_agent;
+    if (question.question_quarantine_kind === "agent") {
+      const agentName = quarantineValue!;
       db.prepare("UPDATE agent_state SET needs_human = 0 WHERE name = ?").run(agentName);
       appendEvent(db, {
         taskId: question.id,
@@ -1352,7 +1296,7 @@ export function answerQuestion(
     // presence, so answering *is* the clearance (the caller has already re-run
     // the check and refused the answer if it still fails, same posture as the
     // tree-clean verification above).
-    if (question.question_quarantine_sandbox !== null) {
+    if (question.question_quarantine_kind === "containment") {
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
@@ -1364,7 +1308,7 @@ export function answerQuestion(
       return;
     }
 
-    if (question.question_quarantine_registry !== null) {
+    if (question.question_quarantine_kind === "registryReachability") {
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
@@ -1378,7 +1322,7 @@ export function answerQuestion(
 
     // ADR 0112 決定3: 解放の門は後始末の再実行そのものである。ここへ来た時点でそれは
     // 完走している —— 呼び出し側が受理の直前に走らせ、まだ投げるなら回答を拒んでいる。
-    if (question.question_quarantine_teardown !== null) {
+    if (question.question_quarantine_kind === "failedTeardown") {
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
@@ -1390,14 +1334,14 @@ export function answerQuestion(
       return;
     }
 
-    if (question.question_quarantine_provider_auth !== null) {
+    if (question.question_quarantine_kind === "providerAuth") {
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
         origin,
         payload: {
           kind: "provider_auth_reinstated",
-          provider: question.question_quarantine_provider_auth,
+          provider: quarantineValue!,
         },
         at: now,
       });
@@ -1405,14 +1349,14 @@ export function answerQuestion(
       return;
     }
 
-    if (question.question_quarantine_harness !== null) {
+    if (question.question_quarantine_kind === "harnessContainment") {
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
         origin,
         payload: {
           kind: "harness_reinstated",
-          harness: question.question_quarantine_harness as "claude-code" | "codex",
+          harness: quarantineValue as "claude-code" | "codex",
         },
         at: now,
       });

@@ -3,13 +3,13 @@ import { lstatSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
   type GitHubAuth,
   originRepo,
 } from "./github-auth.js";
+import { registerQuarantine } from "./quarantine.js";
 import {
   ownEntry,
   REGISTRY_BRANCH,
@@ -20,10 +20,8 @@ import {
 } from "./registry.js";
 import { SANDBOX_SHADOW_PATHS, workspaceSettingsDisposition } from "./sandbox.js";
 import {
-  BOARD_WORKER_ID,
   getTask,
   issueRefPlaceholder,
-  registerTask,
   type Task,
 } from "./tasks.js";
 
@@ -852,32 +850,6 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
   return row?.needs_human === 1;
 }
 
-/** その workspace の開いている確認 question に1行 append する。question が無ければ
- *  何もせず false を返す —— 呼び出し元はそれを「まだ立っていない」と読む。
- *
- *  1 workspace = at most 1 open Confirmation question (CONTEXT.md's Quarantine):
- *  a re-fire before the human answers just adds to the record of why, on the
- *  question already standing。 */
-export function noteOnWorkspaceQuarantine(
-  db: Db,
-  workspaceName: string,
-  note: string,
-  now: Date,
-): boolean {
-  const existing = db
-    .prepare(`SELECT id FROM tasks WHERE question_quarantine_workspace = ? AND status = 'todo'`)
-    .get(workspaceName) as { id: string } | undefined;
-  if (!existing) return false;
-  appendEvent(db, {
-    taskId: existing.id,
-    workerId: BOARD_WORKER_ID,
-    origin: "board",
-    payload: { kind: "quarantine_refired", cause: note },
-    at: now,
-  });
-  return true;
-}
-
 /** Tree-rule failure containment (quarantine, CONTEXT.md): mark the workspace
  *  needs-human (its tasks stay out of the slot) and put the repair in front of
  *  the human as a 1-choice Confirmation question (issue #21) — the answer
@@ -897,29 +869,12 @@ export function quarantineWorkspace(
     `INSERT INTO workspace_state (name, needs_human) VALUES (?, 1)
      ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
   ).run(workspaceName);
-  const causeMessage = cause instanceof Error ? cause.message : String(cause);
-  // 1 workspace = at most 1 open Confirmation question (CONTEXT.md's
-  // Quarantine): a re-fire before the human answers just adds to the record
-  // of why, on the question already standing.
-  if (noteOnWorkspaceQuarantine(db, workspaceName, causeMessage, now)) return;
-  const title = `workspace ${workspaceName} needs human attention`;
-  registerTask(
+  registerQuarantine(
     db,
-    {
-      type: "question",
-      title,
-      purpose:
-        `${causeMessage}. ` +
-        "Tasks in this workspace stay out of the slot until it is repaired. " +
-        "Answering confirms the repair — the board verifies the tree is " +
-        "clean before it resumes pickup; any answer text is kept as a repair note.",
-      completion_criteria: "the workspace is repaired by hand",
-      question: [{ title, options: ["repaired by hand"], recommendation: "repaired by hand" }],
-      quarantine_workspace: workspaceName,
-    },
+    "workspace",
+    workspaceName,
+    cause instanceof Error ? cause.message : String(cause),
     now,
-    BOARD_WORKER_ID,
-    "board",
   );
 }
 

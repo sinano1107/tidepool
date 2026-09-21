@@ -48,7 +48,7 @@ it("Claude Harness の能力検査が不成立ならその pickup が止まり�
 
   const open = await questions(t);
   expect(open).toHaveLength(1);
-  expect(open[0].question_quarantine_harness).toBe("claude-code");
+  expect(open[0]).toMatchObject({ question_quarantine_kind: "harnessContainment", question_quarantine_value: "claude-code" });
   // 1択の確認型 — quarantine と同じ形(選択ではなく完了確認)
   expect(open[0].question_items[0].options).toEqual(["repaired by hand"]);
   // なぜ止まっているかが question 本文に残る

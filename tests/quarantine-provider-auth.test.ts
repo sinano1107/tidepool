@@ -159,11 +159,11 @@ it("OpenAI の unauthorized は OpenAI だけの確認を立て、HTTP 回答時
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((task) => task.id)).toEqual([claude.id]);
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
-  const question = tasks.find((task) => task.question_quarantine_provider_auth === "openai");
+  const question = tasks.find((task) => (task.question_quarantine_kind === "providerAuth" && task.question_quarantine_value === "openai"));
   expect(question?.title).toBe(
     "openai authentication is unavailable — pickup of openai-speaking agents is stopped",
   );
-  expect(tasks.filter((task) => task.question_quarantine_provider_auth !== null)).toHaveLength(1);
+  expect(tasks.filter((task) => task.question_quarantine_kind === "providerAuth")).toHaveLength(1);
 
   const refused = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["authentication restored"],
@@ -207,7 +207,7 @@ it("codexHome に auth.json が無い openai は probe を撃たずに absent �
   await t.clock.advance(HOUR);
   const authQuestions = async () =>
     ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter(
-      (task) => task.question_quarantine_provider_auth === "openai",
+      (task) => (task.question_quarantine_kind === "providerAuth" && task.question_quarantine_value === "openai"),
     );
   const openai = (await api(t.baseUrl, "GET", "/api/pause")).json.providerUsage.find(
     (usage: any) => usage.provider === "openai",

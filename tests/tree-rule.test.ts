@@ -245,7 +245,7 @@ it("sandbox shadow の削除失敗は workspace を quarantine し、後続 pick
   }
 
   const list = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const question = list.find((x: any) => x.question_quarantine_workspace === "sandbox");
+  const question = list.find((x: any) => (x.question_quarantine_kind === "workspace" && x.question_quarantine_value === "sandbox"));
   expect(question?.purpose).toContain("unlink");
 
   await registerWork(t, "must wait for workspace repair");

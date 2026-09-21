@@ -2,12 +2,10 @@ import { rm, writeFile } from "node:fs/promises";
 import { afterEach, expect, it } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
-import {
-  FAILED_TEARDOWN_QUESTION_TITLE,
-  quarantineFailedTeardown,
-} from "../src/failed-teardown.js";
+import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import type { Landing } from "../src/landing.js";
 import { ProcessContainers } from "../src/process-container.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, escalateTask, getTask, listBoard, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { markTeardown, runTeardown } from "../src/teardown.js";

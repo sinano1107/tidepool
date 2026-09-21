@@ -695,8 +695,10 @@ export async function submitAnswer(
   // Quarantine confirmation is never taken on faith: resolve the named
   // workspace fresh, then verify both its Git tree and its separation from
   // the board's own state immediately before accepting the answer.
-  const quarantineWorkspaceName = task.question_quarantine_workspace;
-  if (quarantineWorkspaceName !== null) {
+  const quarantineKind = task.question_quarantine_kind;
+  const quarantineValue = task.question_quarantine_value;
+  if (quarantineKind === "workspace") {
+    const quarantineWorkspaceName = quarantineValue!;
     const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     let target: WorkspaceConfig;
     try {
@@ -729,8 +731,8 @@ export async function submitAnswer(
     }
   }
 
-  const quarantineAgentName = task.question_quarantine_agent;
-  if (quarantineAgentName !== null) {
+  if (quarantineKind === "agent") {
+    const quarantineAgentName = quarantineValue!;
     try {
       verifyAgentRepaired(
         deps.db,
@@ -742,7 +744,7 @@ export async function submitAnswer(
     }
   }
 
-  if (task.question_quarantine_sandbox !== null) {
+  if (quarantineKind === "containment") {
     const capability = await deps.containment?.();
     if (capability && !capability.available) {
       throw new DomainError(
@@ -765,14 +767,14 @@ export async function submitAnswer(
 
   // 停止の列挙と同じ順で containment の直後(ADR 0112 決定1)。検査そのものが後始末の
   // 再実行なので、投げれば question は開いたまま残り、人間は直してもう一度答えられる。
-  if (task.question_quarantine_teardown !== null) {
+  if (quarantineKind === "failedTeardown") {
     if (!deps.teardownQuarantine) {
       throw new DomainError("the failed teardown cannot be re-run on this board");
     }
-    await deps.teardownQuarantine(task.question_quarantine_teardown);
+    await deps.teardownQuarantine(quarantineValue!);
   }
 
-  if (task.question_quarantine_registry !== null && deps.registryReachability) {
+  if (quarantineKind === "registryReachability" && deps.registryReachability) {
     const reachability = await deps.registryReachability();
     if (!reachability.available) {
       throw new DomainError(
@@ -781,10 +783,10 @@ export async function submitAnswer(
     }
   }
 
-  if (task.question_quarantine_provider_auth !== null) {
+  if (quarantineKind === "providerAuth") {
     // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
     // 再検証を回答受理の直前に撃つ(CONTEXT.md「Quarantine」の検証つき解除)。
-    const provider = task.question_quarantine_provider_auth as Provider;
+    const provider = quarantineValue as Provider;
     const check = deps.providerCliAuth?.[provider];
     if (!check) throw new DomainError(`${provider} authentication cannot be verified`);
     const result = await check();
@@ -793,8 +795,8 @@ export async function submitAnswer(
     }
   }
 
-  if (task.question_quarantine_harness !== null) {
-    const harness = task.question_quarantine_harness as Harness;
+  if (quarantineKind === "harnessContainment") {
+    const harness = quarantineValue as Harness;
     if (!deps.harnessContainment) {
       throw new DomainError(`${harness} Harness containment cannot be verified`);
     }
@@ -863,7 +865,7 @@ export async function submitAnswer(
   // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
   // 解放と対で走る。待っている回収を持たない Containment quarantine(ツール面のずれ
   // など)では no-op。
-  if (task.question_quarantine_sandbox !== null) deps.reclaim?.acceptReclaimed();
+  if (quarantineKind === "containment") deps.reclaim?.acceptReclaimed();
   // An unblocked parent or reinstated quarantined resource can make the queue
   // head pickable immediately. During triage, staging keeps both flags false.
   if (parentUnblocked || pickupResumed) deps.pollNow();

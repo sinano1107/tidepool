@@ -49,7 +49,7 @@ function releaseAfterCompletion(db: Db, ws: WorkspaceConfig, task: Task): void {
 
 /** 隔離の確認 question の本文(CONTEXT.md の Quarantine)、無ければ undefined。 */
 const quarantineReason = (db: Db): string | undefined =>
-  listBoard(db).find((t) => t.question_quarantine_workspace !== null)?.purpose;
+  listBoard(db).find((t) => t.question_quarantine_kind === "workspace")?.purpose;
 
 it("完了の報告の後に書かれたものは成果ではない —— WIP も merge-back も無く workspace が quarantine に落ちる", async () => {
   const { db, task, ws } = await pickedUpSession();

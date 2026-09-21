@@ -14,8 +14,8 @@
  *  コードを信じるだけだが、後者は listen したリスナー・ミドルウェアの順序・
  *  credential の解決までを一度に測る。 */
 import type { Db } from "./db.js";
+import { quarantineUnlessClear, registerQuarantine } from "./quarantine.js";
 import { CAPABILITY_PROBE_TIMEOUT_MS, type SandboxCapability } from "./sandbox.js";
-import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 /** 成立か、不成立ならその理由か。fs 検査(`SandboxCapability`)と同じ形を使う —
  *  「どの問いが成立していないか」は reason の文面が担うのであって、型では
@@ -102,63 +102,19 @@ export async function checkHumanSurfaceRefusesAnonymous(
  *  pickup を止め(封じ込めはホストと盤面自身の性質なので、止められるより狭い
  *  資源が存在しない)、Tidepool 名義の確認型 question を1枚立てる。 */
 export function quarantineContainment(db: Db, reason: string, now: Date): void {
-  // 呼び出し側のゲートも先に見ているが、await を挟む非同期の検査になった以上、
-  // 2つの poll が同時にすり抜ける窓が原理的に開く。1資源につき確認は最大1枚
-  // (CONTEXT.md)なので、登録の直前でもう一度見る。
-  if (openContainmentQuestion(db)) return;
-  const title = "worker containment is not established — pickup is stopped";
-  registerTask(
-    db,
-    {
-      type: "question",
-      title,
-      purpose:
-        `${reason}. ` +
-        "No agent task is picked up while this stands: a worker that believes it is contained " +
-        "but is not is worse than no containment at all, so the board refuses to run one bare " +
-        "(ADR 0033 / ADR 0036). Repair the host, then answer — the board re-runs the capability " +
-        "check before it accepts the answer, and any answer text is kept as a repair note. " +
-        "If the human surface is the broken half, run `npm run token` on the board and open the " +
-        "bootstrap URL it prints on this device *before* answering: rotating the token kills the " +
-        "cookie you are reading this with.",
-      completion_criteria: "the host's worker containment is repaired by hand",
-      question: [{ title, options: ["repaired by hand"], recommendation: "repaired by hand" }],
-      quarantine_sandbox: true,
-    },
-    now,
-    BOARD_WORKER_ID,
-    "board",
-  );
-}
-
-/** 立っている封じ込めの確認 question。その存在がゲートの半分である: workspace の
- *  quarantine と同じく、直っただけでは pickup は再開せず、人間の確認回答だけが
- *  唯一の門になる — 一過性の破れが誰も見ないまま盤面を黙って再開させない。
- *
- *  列名 `question_quarantine_sandbox` は ADR 0033 当時のもので、検査が
- *  「サンドボックスに入れるか」から「封じ込めが成立しているか」に広がった今も
- *  そのまま使う(問いが広がっただけで、止まる資源も question も1つのまま)。 */
-export function openContainmentQuestion(db: Db): { id: string } | undefined {
-  return db
-    .prepare(
-      `SELECT id FROM tasks WHERE question_quarantine_sandbox IS NOT NULL AND status = 'todo'`,
-    )
-    .get() as { id: string } | undefined;
+  registerQuarantine(db, "containment", null, reason, now);
 }
 
 /** pickup ゲート: worker を1枚も spawn してよくない間 true。検査が初めて落ちた
- *  ときにだけ確認 question を登録する(立っている question が手前で短絡する)。
+ *  ときにだけ確認 question を登録する(立っている question が手前で短絡する —— 直った
+ *  だけでは pickup は再開せず、人間の確認回答だけが唯一の門になる)。
  *
  *  **pickup ゲートは fail-closed、人間面は fail-open**(auth.ts)。この非対称は
  *  ADR 0036 の意図であって取りこぼしではない — 「統一」しないこと。 */
-export async function containmentPickupBlocked(
+export function containmentPickupBlocked(
   db: Db,
   capability: ContainmentCheck,
   now: Date,
 ): Promise<boolean> {
-  if (openContainmentQuestion(db)) return true;
-  const result = await capability();
-  if (result.available) return false;
-  quarantineContainment(db, result.reason, now);
-  return true;
+  return quarantineUnlessClear(db, "containment", null, capability, now);
 }

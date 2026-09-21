@@ -33,7 +33,7 @@ const openQuestion = async (t: Tidepool) =>
   await vi.waitFor(async () => {
     const open = await questions(t);
     expect(open).toHaveLength(2);
-    const claude = open.find((item) => item.question_quarantine_harness === "claude-code");
+    const claude = open.find((item) => (item.question_quarantine_kind === "harnessContainment" && item.question_quarantine_value === "claude-code"));
     expect(claude).toBeDefined();
     return claude;
   });
@@ -59,9 +59,9 @@ it("自己検査は listen 後に走る — 起動時点で各 Harness の quest
   // ポートを撃つので、そのままでは測る相手がいない。
   t = await bootTidepool({ ...HARNESS_OPTIONS, credential: NO_CREDENTIAL });
 
-  expect((await questions(t)).map((item) => item.question_quarantine_harness).sort()).toEqual([
-    "claude-code",
-    "codex",
+  expect((await questions(t)).map((item) => [item.question_quarantine_kind, item.question_quarantine_value]).sort()).toEqual([
+    ["harnessContainment", "claude-code"],
+    ["harnessContainment", "codex"],
   ]);
 });
 

@@ -2,12 +2,9 @@ import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
-import {
-  FAILED_TEARDOWN_QUESTION_TITLE,
-  openFailedTeardownQuestion,
-} from "../src/failed-teardown.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import type { Landing } from "../src/landing.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import {
   BOARD_WORKER_ID,
@@ -127,7 +124,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
 }
 
 /** 立っている落ちた後始末の question。 */
-const openQuestion = (f: Fixture) => getTask(f.db, openFailedTeardownQuestion(f.db)!.id)!;
+const openQuestion = (f: Fixture) => getTask(f.db, openQuarantineQuestion(f.db, "failedTeardown", f.task.id)!.id)!;
 
 const answer = (f: Fixture, question: Task, deps: TeardownDeps = f.deps) =>
   submitAnswer(
@@ -246,7 +243,7 @@ it("受理の検査が投げれば回答が拒まれ、question は開いたま�
   await expect(answer(f, question)).rejects.toThrow("resolve exploded");
 
   expect(getTask(f.db, question.id)?.status).toBe("todo");
-  expect(openFailedTeardownQuestion(f.db)?.id).toBe(question.id);
+  expect(openQuarantineQuestion(f.db, "failedTeardown", f.task.id)?.id).toBe(question.id);
   expect(boardHalts(f.db)).toEqual([{ kind: "failedTeardown" }]);
   expect(f.slot.currentTaskId).toBe(f.task.id);
 });

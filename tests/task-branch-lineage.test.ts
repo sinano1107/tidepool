@@ -508,7 +508,7 @@ it("merge back が conflict すると完了は維持したまま workspace を q
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(done.status).toBe("done");
   expect(
-    board.find((task: any) => task.question_quarantine_workspace !== null)?.title,
+    board.find((task: any) => task.question_quarantine_kind === "workspace")?.title,
   ).toContain("lineage-conflict");
   expect(git(workspace.path, "status", "--porcelain")).toContain("UU shared.txt");
   expect(t.github.requests).toEqual([]);

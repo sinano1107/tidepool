@@ -48,6 +48,21 @@ it("tree rule 失敗時の question は1択の確認型(repaired by hand)であ�
   expect(question.question_items[0].recommendation).toBe("repaired by hand");
 });
 
+it("task の応答は quarantine を kind と value の2欄で運び、種類ごとの quarantine 欄は無い(ADR 0137 決定2)", async () => {
+  const ws = await makeWorkspace(dirs, "sandbox");
+  t = await bootTidepool({ workspace: ws });
+  await triggerQuarantine(t, ws, "doomed work");
+
+  const question = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
+    (x: any) => x.type === "question",
+  );
+  expect(question).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: ws.name });
+  expect(Object.keys(question).filter((k) => k.startsWith("question_quarantine_")).sort()).toEqual([
+    "question_quarantine_kind",
+    "question_quarantine_value",
+  ]);
+});
+
 // v1 has one board workspace and slot concurrency 1 (CONTEXT.md), so a
 // second tree-rule failure on an already-quarantined workspace can never
 // arise through the ordinary scheduler/HTTP/MCP path — the pickup gate
@@ -68,7 +83,7 @@ it("同一 workspace への2度目の quarantine は quarantine question を増�
   quarantineWorkspace(db, ws.name, new Error("second, unrelated tree-rule failure"), t.clock.now());
 
   const after = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(after.filter((x: any) => x.question_quarantine_workspace === ws.name)).toHaveLength(1);
+  expect(after.filter((x: any) => (x.question_quarantine_kind === "workspace" && x.question_quarantine_value === ws.name))).toHaveLength(1);
   expect(after.find((x: any) => x.id === question.id).status).toBe("todo");
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
@@ -135,7 +150,7 @@ it("ツリーがクリーンだと確認されれば needs_human が解除され
 // 衝突しうる — その場合、衝突した worker が担当する普通のタスクからの
 // MCP escalate が1択の question を人間の確認なしにすり抜けてしまう
 // (盤面名義の形式的確認で人間を呼ぶ道を開かないという設計合意②に反する)。
-// 判定を quarantine_workspace の有無(MCP/JSON API からは絶対に設定でき
+// 判定を quarantine の有無(MCP/JSON API からは絶対に設定でき
 // ない system-internal フィールド)に変えたことで、この衝突が実害を持た
 // ないことを直接確認する。衝突は worker id の設定次第で起こるため、
 // tests/worker-failure.test.ts と同様に db を直接いじってシミュレートする。

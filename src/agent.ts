@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { registerQuarantine } from "./quarantine.js";
 import {
   type AgentDefinition,
   type AuthorityProfile,
@@ -9,7 +9,6 @@ import {
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
 } from "./registry.js";
-import { BOARD_WORKER_ID, registerTask } from "./tasks.js";
 
 /** An assignee (or the board's default) resolved against the registry —
  *  the agent's own definition and its authority profile together, since spawn
@@ -81,39 +80,7 @@ export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: 
     `INSERT INTO agent_state (name, needs_human) VALUES (?, 1)
      ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
   ).run(agentName);
-  const causeMessage = cause instanceof Error ? cause.message : String(cause);
-  const existing = db
-    .prepare(`SELECT id FROM tasks WHERE question_quarantine_agent = ? AND status = 'todo'`)
-    .get(agentName) as { id: string } | undefined;
-  if (existing) {
-    appendEvent(db, {
-      taskId: existing.id,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
-      payload: { kind: "quarantine_refired", cause: causeMessage },
-      at: now,
-    });
-    return;
-  }
-  const title = `agent ${agentName} needs human attention`;
-  registerTask(
-    db,
-    {
-      type: "question",
-      title,
-      purpose:
-        `${causeMessage}. ` +
-        "Tasks assigned to this agent stay out of the slot until it is repaired. " +
-        "Answering confirms the repair — the board verifies before it resumes " +
-        "pickup; any answer text is kept as a repair note.",
-      completion_criteria: "the agent is repaired by hand",
-      question: [{ title, options: ["repaired by hand"], recommendation: "repaired by hand" }],
-      quarantine_agent: agentName,
-    },
-    now,
-    BOARD_WORKER_ID,
-    "board",
-  );
+  registerQuarantine(db, "agent", agentName, cause instanceof Error ? cause.message : String(cause), now);
 }
 
 /** The agent-name generalization of workspace.ts's resolveOrQuarantine (ADR
