@@ -722,10 +722,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     );
     if (!result.ok) {
       const { kind, ...body } = result.failure;
+      // 登録の門の 422 だけは WebUI が本文を読む —— body は failure から kind を除いただけ
+      if (result.failure.kind === "issue_rejected") result.failure satisfies WireContract["POST /api/tasks 422"];
       res.status(gateFailureStatus(kind)).json(body);
       return;
     }
-    res.status(201).json(result.task);
+    res.status(201).json(result.task satisfies WireContract["POST /api/tasks"]);
   });
 
   // Appends a human-approved comment to a GitHub issue (issue #49 設計点4:
@@ -789,7 +791,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     try {
       const issues = await github.listIssues({ path });
-      res.json({ issues, truncated: issues.length === OPEN_ISSUES_LIMIT });
+      res.json({ issues, truncated: issues.length === OPEN_ISSUES_LIMIT } satisfies WireContract["GET /api/github-issues"]);
     } catch {
       res.status(502).json({ error: "could not fetch open issues" });
     }
@@ -1232,7 +1234,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         };
       }
       const draft = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db), context);
-      res.json(draft);
+      res.json(draft satisfies WireContract["POST /api/tasks/draft"]);
     } catch (err) {
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx
       // rule: any failure surfacing through the DraftClient seam — timeout,
@@ -1460,7 +1462,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     try {
       const draft = await draftClient.draftHandoff(parsed.data.dump, getDisplayLanguage(db));
       const missing = HANDOFF_FIELDS.filter((f) => !draft[f]?.trim());
-      res.json({ ...draft, missing });
+      res.json({ ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
     } catch (err) {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
@@ -1504,7 +1506,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else {
         outcome = await translateHandoff(db, translationClient, target.task_id, language, clock.now());
       }
-      res.json(outcome);
+      res.json(outcome satisfies WireContract["POST /api/translate"]);
     } catch (err) {
       if (err instanceof TranslationTargetError) {
         res.status(404).json({ error: err.message });
@@ -1533,7 +1535,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // to, but it is never new information to that same single human.
       unread: entry.worker_id !== HUMAN_WORKER_ID && entry.id > cursor,
     }));
-    res.json({ entries, cursor });
+    res.json({ entries, cursor } satisfies WireContract["GET /api/log"]);
   });
 
   router.post("/log/cursor", (req, res) => {
@@ -1546,7 +1548,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/push/vapid-public-key", (_req, res) => {
-    res.json({ publicKey: vapidPublicKey ?? null });
+    res.json({ publicKey: vapidPublicKey ?? null } satisfies WireContract["GET /api/push/vapid-public-key"]);
   });
 
   router.post("/push/subscribe", (req, res) => {
@@ -1694,7 +1696,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   );
 
   router.get("/settings/timezone", (_req, res) => {
-    res.json({ tz: getQuietHours(db).tz });
+    res.json({ tz: getQuietHours(db).tz } satisfies WireContract["GET /api/settings/timezone"]);
   });
 
   router.post("/settings/timezone", (req, res) => {
@@ -1719,7 +1721,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/settings/display-language", (_req, res) => {
-    res.json({ language: getDisplayLanguage(db), options: SUPPORTED_DISPLAY_LANGUAGES });
+    res.json({ language: getDisplayLanguage(db), options: SUPPORTED_DISPLAY_LANGUAGES } satisfies WireContract["GET /api/settings/display-language"]);
   });
 
   router.post("/settings/display-language", (req, res) => {
@@ -1743,8 +1745,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   }
 
   // 返り値型は wire の契約から —— 呼び手は spread で合成するので、ここで照らさないと
-  // 欄の改名が satisfies をすり抜ける(spread された欄は excess property 検査の外)
-  function providerUsageJson(): Pick<WireContract["GET /api/queue"], "providerUsage"> {
+  // 欄の改名が satisfies をすり抜ける(spread された欄は excess property 検査の外)。
+  // queue と pause の両方が spread するので、両方の行に照らす
+  function providerUsageJson(): Pick<WireContract["GET /api/queue"], "providerUsage"> &
+    Pick<WireContract["GET /api/pause"], "providerUsage"> {
     const providerUsage = getProviderUsage(db);
     return providerUsage.length === 0 ? {} : { providerUsage };
   }
@@ -1773,7 +1777,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       throttle: { ...throttle, resumesAt, revalidating: throttleRevalidating() },
       spendDown: spendDownJson(),
       ...providerUsageJson(),
-    });
+    } satisfies WireContract["GET /api/pause"]);
   });
 
   router.post("/spend-down", (req, res) => {
@@ -1818,7 +1822,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       session: session ?? null,
       queue: triagePreview(db, session?.id, defaultAgentName, auditorName),
       scratchpad: listScratchpad(db),
-    });
+    } satisfies WireContract["GET /api/triage"]);
   });
 
   router.post("/triage/scratchpad", (req, res) => {
@@ -1828,7 +1832,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      res.status(201).json(addScratchpadLine(db, parsed.data.line, clock.now()));
+      res.status(201).json(addScratchpadLine(db, parsed.data.line, clock.now()) satisfies WireContract["POST /api/triage/scratchpad"]);
     } catch (err) {
       if (err instanceof TriageError) {
         res.status(409).json({ error: err.message });
@@ -1903,7 +1907,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // stopped it, so its terminal commit is not a "run now" trigger — but a
       // disposition that created a task is a registration (ADR 0119 決定2).
       if (result.outcome === "closed_now" || result.created_tasks > 0) pollNow();
-      res.json(result);
+      res.json(result satisfies WireContract["POST /api/triage/close"]);
     } catch (err) {
       if (err instanceof TriageError) {
         res.status(409).json({ error: err.message });
@@ -1918,7 +1922,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // a task is registered from the line (client-driven) or an explicit
   // discard. No PATCH/update: a pending dump is either still waiting or gone.
   router.get("/pending-dumps", (_req, res) => {
-    res.json(listPendingDumps(db));
+    res.json(listPendingDumps(db) satisfies WireContract["GET /api/pending-dumps"]);
   });
 
   router.delete("/pending-dumps/:id", (req, res) => {
@@ -1932,7 +1936,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   });
 
   router.get("/registry/candidates", (_req, res) => {
-    res.json(registryCandidates?.() ?? { assignees: [], workspaces: [], icons: {} });
+    res.json((registryCandidates?.() ?? { assignees: [], workspaces: [], icons: {} }) satisfies WireContract["GET /api/registry/candidates"]);
   });
 
   // UI display is one of ADR 0016's use-moments: issue-backed rows expand
@@ -1964,7 +1968,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     res.json(
       board.map((task) =>
         task.type === "question" ? { ...task, landing: landingAnnotation(db, task) } : task,
-      ),
+      ) satisfies WireContract["GET /api/tasks"],
     );
   });
 
@@ -1973,7 +1977,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // every other board read口 (issue #301) — an issue-backed human task must
   // show the issue's own title, not the "#N" placeholder.
   router.get("/your-tasks", async (_req, res) => {
-    res.json(await presentLive(listYourTasks(db)));
+    res.json((await presentLive(listYourTasks(db))) satisfies WireContract["GET /api/your-tasks"]);
   });
 
   // the queue view (#10): an envelope (ADR 0068 決定3) — `halts` says why the
@@ -2011,7 +2015,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(404).json({ error: "task not found" });
       return;
     }
-    res.json((await presentLive([presentTask(db, task)]))[0]);
+    res.json((await presentLive([presentTask(db, task)]))[0]! satisfies WireContract["GET /api/tasks/:id"]);
   });
 
   return router;

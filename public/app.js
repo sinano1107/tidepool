@@ -670,7 +670,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const [draftBusy, setDraftBusy] = React.useState(false);
   const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
   React.useEffect(() => {
-    fetch("/api/registry/candidates").then((r) => r.json()).then(setCandidates).catch(() => {
+    api("GET /api/registry/candidates").then(setCandidates).catch(() => {
     });
   }, []);
   const issueMode = !childMode && source === "github issue";
@@ -683,14 +683,14 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setIssuesFailed(false);
     setTruncated(false);
     if (!issueMode || !workspace.trim()) return;
-    api(`/api/github-issues?workspace=${encodeURIComponent(workspace.trim())}`, void 0, "GET").then((d) => {
+    api("GET /api/github-issues", { query: { workspace: workspace.trim() } }).then((d) => {
       setIssues(d.issues);
       setTruncated(d.truncated);
     }).catch(() => setIssuesFailed(true));
   }, [issueMode, workspace]);
   const [pendingDumps, setPendingDumps] = React.useState([]);
   const [selectedDumpId, setSelectedDumpId] = React.useState(null);
-  const refreshPendingDumps = () => fetch("/api/pending-dumps").then((r) => r.json()).then(setPendingDumps).catch(() => {
+  const refreshPendingDumps = () => api("GET /api/pending-dumps").then(setPendingDumps).catch(() => {
   });
   React.useEffect(() => {
     refreshPendingDumps();
@@ -763,8 +763,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
       if (childMode) onClose?.();
     } catch (rawErr) {
       if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
+        const detail = rawErr.detail;
         setGate({
-          ...rawErr.detail,
+          ...detail,
           workspace: f.workspace,
           github_issue_number: f.github_issue_number
         });
@@ -796,7 +797,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const draftFields = async () => {
     setDraftBusy(true);
     try {
-      const d = await api("/api/tasks/draft", { dump: dump.trim(), ...childExtras() });
+      const d = await api("POST /api/tasks/draft", { body: { dump: dump.trim(), ...childExtras() } });
       setTitle(d.title);
       setPurpose(d.purpose);
       setCriteria(d.completion_criteria);
@@ -2668,8 +2669,15 @@ class ApiError extends Error {
     this.detail = detail;
   }
 }
-async function api(pathOrKey, body, method = "POST") {
-  const [verb, path] = pathOrKey.startsWith("/") ? [method, pathOrKey] : pathOrKey.split(" ");
+async function api(pathOrKey, bodyOrOpts, method = "POST") {
+  let [verb, path, body] = [method, pathOrKey, bodyOrOpts];
+  if (!pathOrKey.startsWith("/")) {
+    const { params = {}, query, body: optsBody } = bodyOrOpts ?? {};
+    [verb, path] = pathOrKey.split(" ");
+    path = path.replace(/:(\w+)/g, (_, name) => encodeURIComponent(params[name]));
+    if (query) path += `?${new URLSearchParams(query)}`;
+    body = optsBody;
+  }
   const res = await fetch(path, {
     method: verb,
     headers: { "content-type": "application/json" },
@@ -2708,7 +2716,7 @@ function paceTranslation(run, signal) {
     }
   });
 }
-const translateTarget = (target, { signal } = {}) => paceTranslation(() => api("/api/translate", target), signal);
+const translateTarget = (target, { signal } = {}) => paceTranslation(() => api("POST /api/translate", { body: target }), signal);
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - base64String.length % 4) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -2720,7 +2728,7 @@ async function registerServiceWorker() {
   return navigator.serviceWorker.register("/sw.js");
 }
 async function subscribeToPush(registration) {
-  const { publicKey } = await fetch("/api/push/vapid-public-key").then((r) => r.json());
+  const { publicKey } = await api("GET /api/push/vapid-public-key");
   if (!publicKey || !registration) return null;
   const existing = await registration.pushManager.getSubscription();
   const subscription = existing ?? await registration.pushManager.subscribe({
@@ -2741,12 +2749,13 @@ function liveTitle(t) {
   return t.title;
 }
 function toQuestionCardShape(q, icons) {
-  const isBoard = q.registrant === "tidepool";
+  const registrant = q.registrant;
+  const isBoard = registrant === "tidepool";
   return {
     id: q.id,
     parent: q.parent_id,
-    agent: q.registrant,
-    agentIcon: isBoard ? void 0 : icons[q.registrant],
+    agent: registrant,
+    agentIcon: isBoard ? void 0 : icons[registrant],
     board: isBoard,
     context: q.purpose,
     // 1-4 items, each with its own title/detail/options (issue #30) — a
@@ -2758,7 +2767,7 @@ function toQuestionCardShape(q, icons) {
     }))
   };
 }
-function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { halts: [], tasks: [] }, yourTasks = []) {
+function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
   const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === "pause");
   const throttle = pause.throttle;
@@ -2783,14 +2792,14 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     agent: e.worker_id,
     agentIcon: icons[e.worker_id],
     human: e.worker_id === "human",
-    kind: e.kind === "task_completed" ? "completion" : "decision",
-    text: e.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
+    kind: e.payload.kind === "task_completed" ? "completion" : "decision",
+    text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
     unread: e.unread,
-    handoffPresent: e.kind === "task_completed" && !!e.payload.handoff_present,
+    handoffPresent: e.payload.kind === "task_completed" && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
-    cause: e.cause ?? null,
-    pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
-    bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
+    cause: e.cause ?? void 0,
+    pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+    bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
   }));
   const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
     id: t.id,
@@ -2829,7 +2838,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
       // API's own assertHumanDecomposable is the real gate) — kept separate
       // from `assignee` above, which is resolved for display and would
       // misrepresent an unset assignee here
-      status: t.status,
+      status: col,
       rawAssignee: t.raw_assignee,
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
@@ -2954,7 +2963,7 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     queue,
     board: cols,
     icons,
-    scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
+    scratchpad: triage.scratchpad.map((line) => ({ id: line.id, text: line.line })),
     // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
@@ -2971,18 +2980,18 @@ function mapData(board, log, pause, icons = {}, triage = {}, queueEnvelope = { h
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled,
     fableResumesAt,
-    lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null
+    lastLogId: log.entries.at(-1)?.id ?? null
   };
 }
 async function fetchData() {
   const [board, log, pause, candidates, triage, queue, yourTasks] = await Promise.all([
-    fetch("/api/tasks").then((r) => r.json()),
-    fetch("/api/log").then((r) => r.json()),
-    fetch("/api/pause").then((r) => r.json()),
-    fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} })),
-    fetch("/api/triage").then((r) => r.json()),
+    api("GET /api/tasks"),
+    api("GET /api/log"),
+    api("GET /api/pause"),
+    api("GET /api/registry/candidates").catch(() => ({ icons: {} })),
+    api("GET /api/triage"),
     api("GET /api/queue"),
-    fetch("/api/your-tasks").then((r) => r.json())
+    api("GET /api/your-tasks")
   ]);
   return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);
 }
@@ -3004,8 +3013,8 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }) {
     let cancelled = false;
     (async () => {
       const [task, candidates] = await Promise.all([
-        fetch(`/api/tasks/${questionId}`).then((r) => r.ok ? r.json() : null),
-        fetch("/api/registry/candidates").then((r) => r.json()).catch(() => ({ icons: {} }))
+        api("GET /api/tasks/:id", { params: { id: questionId } }).catch(() => null),
+        api("GET /api/registry/candidates").catch(() => ({ icons: {} }))
       ]);
       if (cancelled) return;
       if (!task || task.type !== "question" || task.status !== "todo") return setQ(null);
@@ -3054,9 +3063,9 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const [candidates, setCandidates] = React.useState({ assignees: [], workspaces: [] });
   const [fields, setFields] = React.useState(null);
   React.useEffect(() => {
-    fetch("/api/registry/candidates").then((r) => r.json()).then(setCandidates).catch(() => {
+    api("GET /api/registry/candidates").then(setCandidates).catch(() => {
     });
-    api(`/api/tasks/${taskCard.id}`, void 0, "GET").then((t) => {
+    api("GET /api/tasks/:id", { params: { id: taskCard.id } }).then((t) => {
       setFull(t);
       setFields({
         title: t.title ?? "",
@@ -3143,9 +3152,9 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
   const draft = async () => {
     setDrafting(true);
     try {
-      const d = await api(`/api/tasks/${task.id}/complete/draft`, { dump: dump.trim() });
+      const d = await api("POST /api/tasks/:id/complete/draft", { params: { id: task.id }, body: { dump: dump.trim() } });
       setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ""])));
-      setMissing(d.missing ?? []);
+      setMissing(d.missing);
     } catch (err) {
       say("info", "no draft \u2014 fill it in yourself", String(err.message || err));
     }
@@ -3211,7 +3220,7 @@ function App() {
   );
   const [translationEnabled, setTranslationEnabled] = React.useState(true);
   React.useEffect(() => {
-    api("/api/settings/display-language", void 0, "GET").then(({ language }) => setTranslationEnabled(language !== "English")).catch(() => {
+    api("GET /api/settings/display-language").then(({ language }) => setTranslationEnabled(language !== "English")).catch(() => {
     });
   }, []);
   const onTranslateProp = translationEnabled ? translateTarget : void 0;
@@ -3228,7 +3237,7 @@ function App() {
     });
   }, []);
   React.useEffect(() => {
-    fetch("/api/settings/timezone").then((r) => r.json()).then(({ tz }) => {
+    api("GET /api/settings/timezone").then(({ tz }) => {
       const observed = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (observed && observed !== tz) return api("/api/settings/timezone", { tz: observed });
     }).catch(() => {
@@ -3341,7 +3350,7 @@ function App() {
   };
   const scratchAdd = async (text) => {
     try {
-      const l = await api("/api/triage/scratchpad", { line: text });
+      const l = await api("POST /api/triage/scratchpad", { body: { line: text } });
       return { id: l.id, text: l.line };
     } catch (err) {
       say("danger", "scratchpad failed", String(err.message || err));
@@ -3358,10 +3367,8 @@ function App() {
     });
   };
   const loadPreview = async () => {
-    const res = await fetch("/api/triage");
-    if (!res.ok) throw new Error(res.statusText);
-    const { queue } = await res.json();
-    return (queue ?? []).map((t) => ({
+    const { queue } = await api("GET /api/triage");
+    return queue.map((t) => ({
       id: t.id,
       title: liveTitle(t),
       assignee: t.assignee ?? void 0,
@@ -3372,14 +3379,12 @@ function App() {
     }));
   };
   const loadLanding = async () => {
-    const res = await fetch("/api/tasks");
-    if (!res.ok) throw new Error(res.statusText);
-    const board = await res.json();
+    const board = await api("GET /api/tasks");
     return Object.fromEntries(
       board.filter((t) => t.type === "question" && t.landing).map((t) => [t.id, t.landing])
     );
   };
-  const closeTriage = (body) => api("/api/triage/close", body);
+  const closeTriage = (body) => api("POST /api/triage/close", { body });
   const commitTriage = async (answers, objections, scratch) => {
     let result;
     try {
@@ -3521,14 +3526,12 @@ function App() {
     }
   };
   const loadHandoff = async (entry) => {
-    const res = await fetch(`/api/tasks/${entry.taskId}`);
-    if (!res.ok) throw new Error(res.statusText);
-    const task = await res.json();
+    const task = await api("GET /api/tasks/:id", { params: { id: entry.taskId } });
     return task.handoff_doc ?? "(no handoff doc)";
   };
   const register = async (fields) => {
     try {
-      const t = await api("/api/tasks", fields);
+      const t = await api("POST /api/tasks", { body: fields });
       runWash("Into the pool.", "\u{1FAE7}", () => {
         setTab("queue");
         say("info", "registered \u2014 appended to queue tail", t.id);
@@ -3549,7 +3552,7 @@ function App() {
   };
   const addChild = async (fields) => {
     try {
-      const t = await api("/api/tasks", fields);
+      const t = await api("POST /api/tasks", { body: fields });
       say(
         "info",
         t.type === "question" ? "sent for approval" : "child added \u2014 appended to queue tail",

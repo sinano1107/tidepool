@@ -480,6 +480,8 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise
 export interface LogEntry extends EventRow {
   /** every HUMAN_FACING_KIND is task-scoped, so the join below never leaves this null */
   task_id: string;
+  /** 下の SQL が HUMAN_FACING_KINDS に絞っている */
+  payload: Extract<EventPayload, { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
   workspace: string | null;
   objections: { comment: string; session_id: number }[];
   cause: Cause | null;
@@ -528,7 +530,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   }
   return rows.map((r) => ({
     ...r,
-    payload: JSON.parse(r.payload) as EventPayload,
+    payload: JSON.parse(r.payload) as LogEntry["payload"],
     objections: objectionsByEntry.get(r.id) ?? [],
     cause: causesByEntry.get(r.id) ?? null,
   }));

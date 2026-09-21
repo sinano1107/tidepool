@@ -48,14 +48,6 @@ interface RegisterScreenGate {
   workspace?: string;
   github_issue_number?: number;
 }
-interface RegisterScreenIssue {
-  number: number;
-  title: string;
-}
-interface RegisterScreenPendingDump {
-  id: number;
-  line: string;
-}
 interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
   /** 子追加モード —— 未設定ならルート登録。 */
@@ -92,7 +84,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // shell's key={tab}), so this never goes stale within a sitting
   const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
   React.useEffect(() => {
-    fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
+    api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
   }, []);
   const issueMode = !childMode && source === 'github issue';
   // the parent_id/decompose_reason pair every childMode request (draft and
@@ -108,13 +100,13 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // `truncated` comes from the server (which owns the `--limit` it asked
   // `gh` for) rather than the UI comparing issues.length against a
   // hardcoded 100 of its own.
-  const [issues, setIssues] = React.useState<RegisterScreenIssue[]>([]);
+  const [issues, setIssues] = React.useState<WireContract['GET /api/github-issues']['issues']>([]);
   const [issuesFailed, setIssuesFailed] = React.useState(false);
   const [truncated, setTruncated] = React.useState(false);
   React.useEffect(() => {
     setIssues([]); setIssuesFailed(false); setTruncated(false);
     if (!issueMode || !workspace.trim()) return;
-    api(`/api/github-issues?workspace=${encodeURIComponent(workspace.trim())}`, undefined, 'GET')
+    api('GET /api/github-issues', { query: { workspace: workspace.trim() } })
       .then((d) => { setIssues(d.issues); setTruncated(d.truncated); })
       .catch(() => setIssuesFailed(true));
   }, [issueMode, workspace]);
@@ -122,12 +114,12 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // Picking one flows its line into the brain dump the same as typing it by
   // hand; the row itself is consumed only by a successful registration built
   // from it, or an explicit discard — never by merely selecting or backing out.
-  const [pendingDumps, setPendingDumps] = React.useState<RegisterScreenPendingDump[]>([]);
+  const [pendingDumps, setPendingDumps] = React.useState<WireContract['GET /api/pending-dumps']>([]);
   const [selectedDumpId, setSelectedDumpId] = React.useState<number | null>(null);
   const refreshPendingDumps = () =>
-    fetch('/api/pending-dumps').then((r) => r.json()).then(setPendingDumps).catch(() => {});
+    api('GET /api/pending-dumps').then(setPendingDumps).catch(() => {});
   React.useEffect(() => { refreshPendingDumps(); }, []);
-  const pickPendingDump = (d: RegisterScreenPendingDump) => {
+  const pickPendingDump = (d: WireContract['GET /api/pending-dumps'][number]) => {
     resetContent();
     setSelectedDumpId(d.id);
     setDump(d.line);
@@ -204,8 +196,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
       // retry) at a different issue than the one that was inspected.
       // webui/app.tsx の api() が投げる ApiError —— status / detail はここで開く
       if (rawErr instanceof ApiError && rawErr.status === 422 && rawErr.detail) {
+        const detail: WireContract['POST /api/tasks 422'] = rawErr.detail;
         setGate({
-          ...rawErr.detail,
+          ...detail,
           workspace: f.workspace,
           github_issue_number: f.github_issue_number,
         });
@@ -240,7 +233,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const draftFields = async () => {
     setDraftBusy(true);
     try {
-      const d = await api('/api/tasks/draft', { dump: dump.trim(), ...childExtras() });
+      const d = await api('POST /api/tasks/draft', { body: { dump: dump.trim(), ...childExtras() } });
       setTitle(d.title); setPurpose(d.purpose); setCriteria(d.completion_criteria);
       setAssignee(d.assignee ?? ''); setWorkspace(d.workspace ?? '');
       setRisk(!!d.risk_flag); setReview(!!d.review_flag);

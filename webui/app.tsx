@@ -47,23 +47,38 @@ interface AppCandidates {
 /** api() が 4xx/5xx で投げるエラー。catch (e) は unknown なので、素の Error に
  *  プロパティを生やす形では呼び手が `status` を撃たれない(#749 User Story 6)——
  *  instanceof で開ける class にしてある。`detail` はサーバの JSON 本文そのもので、
- *  形は端点ごとに違う(集合ごとの型は issue #352)。 */
+ *  形は端点ごとに違う —— 読む箇所で契約のエラー行(例 'POST /api/tasks 422')に受ける。 */
 class ApiError extends Error {
   status: number;
   detail: ServerJson;
-  constructor(message: string, status: number, detail: ServerJson) {
+  constructor(message: string, status: number, detail: unknown) {
     super(message);
     this.status = status;
     this.detail = detail;
   }
 }
 
+/** `api()` が受ける表のキー —— エラー応答の行('POST /api/tasks 422')は取得先ではないので外す。 */
+type ApiKey = Exclude<keyof WireContract, `${string} ${string} ${string}`>;
+/** キーの `:name` セグメントの名前 —— 'GET /api/tasks/:id' → 'id'。 */
+type KeyParams<K> = K extends `${string}:${infer P}/${infer R}` ? P | KeyParams<R> : K extends `${string}:${infer P}` ? P : never;
+/** `params` はキーの `:name` を埋め(動的セグメントを持つキーでは必須)、`query` は検索文字列になる。 */
+type ApiOpts<K> = { query?: Record<string, string>; body?: unknown }
+  & ([KeyParams<K>] extends [never] ? { params?: never } : { params: Record<KeyParams<K>, string> });
+
 // 表のキー('METHOD /path')で引けば契約の型が返る —— unknown から契約型への変換は
 // この overload の1点だけ(ADR 0138 決定3)。生のパスの形は表に載っていない端点のために残る。
-function api<K extends keyof WireContract>(key: K): Promise<WireContract[K]>;
+function api<K extends ApiKey>(key: K, ...opts: [KeyParams<K>] extends [never] ? [ApiOpts<K>?] : [ApiOpts<K>]): Promise<WireContract[K]>;
 function api(path: `/${string}`, body?: unknown, method?: string): Promise<ServerJson>;
-async function api(pathOrKey: string, body?: unknown, method = 'POST'): Promise<unknown> {
-  const [verb, path] = pathOrKey.startsWith('/') ? [method, pathOrKey] : (pathOrKey.split(' ') as [string, string]);
+async function api(pathOrKey: string, bodyOrOpts?: unknown, method = 'POST'): Promise<unknown> {
+  let [verb, path, body] = [method, pathOrKey, bodyOrOpts];
+  if (!pathOrKey.startsWith('/')) {
+    const { params = {}, query, body: optsBody } = (bodyOrOpts ?? {}) as { params?: Record<string, string>; query?: Record<string, string>; body?: unknown };
+    [verb, path] = pathOrKey.split(' ') as [string, string];
+    path = path.replace(/:(\w+)/g, (_, name: string) => encodeURIComponent(params[name]!));
+    if (query) path += `?${new URLSearchParams(query)}`;
+    body = optsBody;
+  }
   const res = await fetch(path, {
     method: verb,
     headers: { 'content-type': 'application/json' },
@@ -125,7 +140,7 @@ function paceTranslation(run: () => Promise<TpTranslation>, signal?: AbortSignal
 // each toggle's own catch renders inline. `signal` (ADR 0063 決定4) is
 // optional — only the log skim's fan-out passes one, to cancel unsent
 // requests when its switch is toggled off.
-const translateTarget: TpTranslateFn = (target, { signal } = {}) => paceTranslation(() => api('/api/translate', target), signal);
+const translateTarget: TpTranslateFn = (target, { signal } = {}) => paceTranslation(() => api('POST /api/translate', { body: target }), signal);
 
 // Web Push (issue #14): applicationServerKey wants raw bytes, the server
 // hands back the VAPID public key as URL-safe base64.
@@ -146,7 +161,7 @@ async function registerServiceWorker() {
 // an existing subscription rather than always minting a fresh one keeps a
 // re-visit from silently orphaning the previous device registration.
 async function subscribeToPush(registration: ServiceWorkerRegistration | undefined) {
-  const { publicKey } = await fetch('/api/push/vapid-public-key').then((r) => r.json());
+  const { publicKey } = await api('GET /api/push/vapid-public-key');
   if (!publicKey || !registration) return null;
   const existing = await registration.pushManager.getSubscription();
   const subscription = existing ?? await registration.pushManager.subscribe({
@@ -176,19 +191,24 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
-function toQuestionCardShape(q: ServerJson, icons: AppIcons): TpQuestion {
+function toQuestionCardShape(
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'registrant' | 'purpose' | 'question_items'>,
+  icons: AppIcons,
+): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
   // (never human: a question only ever comes from a non-human registrant)
-  const isBoard = q.registrant === 'tidepool';
+  // 盤面の行も task 詳細も registrant を必ず載せる(サーバ型の optional は内部の事情)
+  const registrant = q.registrant!;
+  const isBoard = registrant === 'tidepool';
   return {
     id: q.id, parent: q.parent_id,
-    agent: q.registrant,
-    agentIcon: isBoard ? undefined : icons[q.registrant],
+    agent: registrant,
+    agentIcon: isBoard ? undefined : icons[registrant],
     board: isBoard,
     context: q.purpose,
     // 1-4 items, each with its own title/detail/options (issue #30) — a
     // single-item bundle is the degenerate, most common case
-    items: (q.question_items ?? []).map((item: ServerJson) => ({
+    items: (q.question_items ?? []).map((item) => ({
       title: item.title, detail: item.detail,
       options: item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation })),
     })),
@@ -203,13 +223,13 @@ function toQuestionCardShape(q: ServerJson, icons: AppIcons): TpQuestion {
 // same read at the same instant, so no gap between two fetches can make the
 // rows and the slot line disagree.
 function mapData(
-  board: ServerJson[],
-  log: ServerJson,
-  pause: ServerJson,
-  icons: AppIcons = {},
-  triage: ServerJson = {},
-  queueEnvelope: WireContract['GET /api/queue'] = { halts: [], tasks: [] },
-  yourTasks: ServerJson[] = [],
+  board: WireContract['GET /api/tasks'],
+  log: WireContract['GET /api/log'],
+  pause: WireContract['GET /api/pause'],
+  icons: AppIcons,
+  triage: WireContract['GET /api/triage'],
+  queueEnvelope: WireContract['GET /api/queue'],
+  yourTasks: WireContract['GET /api/your-tasks'],
 ) {
   // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
   // ブラウザは並べ替えず、先頭を読んで kind 別コピーに写すだけ
@@ -242,17 +262,17 @@ function mapData(
   // split here by whether it belongs to the currently open session — the
   // sole fact `session_id` carries — into commit-pending vs. already-bundled.
   const openSessionId = triage.session?.id ?? null;
-  const logEntries: TpLogEntry[] = [...log.entries].reverse().map((e: ServerJson) => ({
+  const logEntries: TpLogEntry[] = [...log.entries].reverse().map((e) => ({
     id: e.id, time: fmtTime(e.created_at), taskId: e.task_id, agent: e.worker_id,
     agentIcon: icons[e.worker_id], human: e.worker_id === 'human',
-    kind: e.kind === 'task_completed' ? 'completion' : 'decision',
-    text: e.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
+    kind: e.payload.kind === 'task_completed' ? 'completion' : 'decision',
+    text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
     unread: e.unread,
-    handoffPresent: e.kind === 'task_completed' && !!e.payload.handoff_present,
+    handoffPresent: e.payload.kind === 'task_completed' && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
-    cause: e.cause ?? null,
-    pendingObjections: (e.objections ?? []).filter((o: ServerJson) => o.session_id === openSessionId).map((o: ServerJson) => o.comment),
-    bundledObjections: (e.objections ?? []).filter((o: ServerJson) => o.session_id !== openSessionId).map((o: ServerJson) => o.comment),
+    cause: e.cause ?? undefined,
+    pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+    bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
   }));
   // the queue is the todo order the slot walks, straight from /api/queue (ADR
   // 0068 決定6) — the server's own row set and its resource-scoped `skipped`,
@@ -292,7 +312,7 @@ function mapData(
       // API's own assertHumanDecomposable is the real gate) — kept separate
       // from `assignee` above, which is resolved for display and would
       // misrepresent an unset assignee here
-      status: t.status, rawAssignee: t.raw_assignee,
+      status: col, rawAssignee: t.raw_assignee,
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate
@@ -308,7 +328,7 @@ function mapData(
   // per-task state — resets_at is now the catch-up ("resumes") instant, and a
   // fable-only excess shows here while the board itself keeps flowing
   const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
-  const hitLines = ['session', 'week', 'fable'].filter((w) => throttleWindows[w]?.throttled);
+  const hitLines = (['session', 'week', 'fable'] as const).filter((w) => throttleWindows[w]?.throttled);
   const fableWindow = throttleWindows.fable;
   const fableThrottled = !!fableWindow?.throttled;
   const fableResumesAt =
@@ -421,11 +441,11 @@ function mapData(
       };
   return {
     questions, log: logEntries, queue, board: cols, icons,
-    scratchpad: (triage.scratchpad ?? []).map((line: ServerJson): TpScratchLine => ({ id: line.id, text: line.line })),
+    scratchpad: triage.scratchpad.map((line): TpScratchLine => ({ id: line.id, text: line.line })),
     // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
-    humanTasks: yourTasks.map((t) => ({ id: t.id as string, title: liveTitle(t), blocking: t.blocking as string | null })),
+    humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
@@ -434,19 +454,19 @@ function mapData(
     throttled,
     throttleRevalidating: !!throttle?.revalidating,
     fableThrottled, fableResumesAt,
-    lastLogId: log.entries.length ? log.entries[log.entries.length - 1].id : null,
+    lastLogId: log.entries.at(-1)?.id ?? null,
   };
 }
 
 async function fetchData() {
   const [board, log, pause, candidates, triage, queue, yourTasks] = await Promise.all([
-    fetch('/api/tasks').then((r) => r.json()),
-    fetch('/api/log').then((r) => r.json()),
-    fetch('/api/pause').then((r) => r.json()),
-    fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
-    fetch('/api/triage').then((r) => r.json()),
+    api('GET /api/tasks'),
+    api('GET /api/log'),
+    api('GET /api/pause'),
+    api('GET /api/registry/candidates').catch(() => ({ icons: {} })),
+    api('GET /api/triage'),
     api('GET /api/queue'),
-    fetch('/api/your-tasks').then((r) => r.json()),
+    api('GET /api/your-tasks'),
   ]);
   return mapData(board, log, pause, candidates.icons, triage, queue, yourTasks);
 }
@@ -490,12 +510,12 @@ function PortalDialog(props: import('../design-system/components/surfaces/Dialog
 // touching mock data, so front-insert + the immediate poll fire for real.
 function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
   questionId: string;
-  onDone: (answeredTask: ServerJson | null) => void;
+  onDone: (answeredTask: WireContract['GET /api/tasks/:id'] | null) => void;
   onTranslate?: TpTranslateFn;
 }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const [q, setQ] = React.useState<TpQuestion | null | undefined>(undefined); // undefined = loading, null = gone
-  const [rawTask, setRawTask] = React.useState<ServerJson>(null);
+  const [rawTask, setRawTask] = React.useState<WireContract['GET /api/tasks/:id'] | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
 
@@ -503,8 +523,8 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate }: {
     let cancelled = false;
     (async () => {
       const [task, candidates] = await Promise.all([
-        fetch(`/api/tasks/${questionId}`).then((r) => (r.ok ? r.json() : null)),
-        fetch('/api/registry/candidates').then((r) => r.json()).catch(() => ({ icons: {} })),
+        api('GET /api/tasks/:id', { params: { id: questionId } }).catch(() => null),
+        api('GET /api/registry/candidates').catch(() => ({ icons: {} })),
       ]);
       if (cancelled) return;
       if (!task || task.type !== 'question' || task.status !== 'todo') return setQ(null);
@@ -612,13 +632,13 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   say: AppSay;
 }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
-  const [full, setFull] = React.useState<ServerJson>(null);
+  const [full, setFull] = React.useState<WireContract['GET /api/tasks/:id'] | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [candidates, setCandidates] = React.useState<AppCandidates>({ assignees: [], workspaces: [] });
   const [fields, setFields] = React.useState<EditTaskFields | null>(null);
   React.useEffect(() => {
-    fetch('/api/registry/candidates').then((r) => r.json()).then(setCandidates).catch(() => {});
-    api(`/api/tasks/${taskCard.id}`, undefined, 'GET').then((t) => {
+    api('GET /api/registry/candidates').then(setCandidates).catch(() => {});
+    api('GET /api/tasks/:id', { params: { id: taskCard.id } }).then((t) => {
       setFull(t);
       setFields({
         title: t.title ?? '', purpose: t.purpose ?? '', completion_criteria: t.completion_criteria ?? '',
@@ -766,9 +786,9 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }: {
   const draft = async () => {
     setDrafting(true);
     try {
-      const d = await api(`/api/tasks/${task.id}/complete/draft`, { dump: dump.trim() });
+      const d = await api('POST /api/tasks/:id/complete/draft', { params: { id: task.id }, body: { dump: dump.trim() } });
       setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ''])));
-      setMissing(d.missing ?? []);
+      setMissing(d.missing);
     } catch (err) {
       say('info', 'no draft — fill it in yourself', String((err as Error).message || err));
     }
@@ -861,7 +881,7 @@ function App() {
   // fetch fails we keep the toggle (consistent with the Japanese default).
   const [translationEnabled, setTranslationEnabled] = React.useState(true);
   React.useEffect(() => {
-    api('/api/settings/display-language', undefined, 'GET')
+    api('GET /api/settings/display-language')
       .then(({ language }) => setTranslationEnabled(language !== 'English'))
       .catch(() => {});
   }, []);
@@ -888,7 +908,7 @@ function App() {
   // and only write back when it actually differs, so a stationary board
   // never sends a redundant POST on every load.
   React.useEffect(() => {
-    fetch('/api/settings/timezone').then((r) => r.json()).then(({ tz }) => {
+    api('GET /api/settings/timezone').then(({ tz }) => {
       const observed = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (observed && observed !== tz) return api('/api/settings/timezone', { tz: observed });
     }).catch(() => {});
@@ -1020,7 +1040,7 @@ function App() {
 
   const scratchAdd = async (text: string) => {
     try {
-      const l = await api('/api/triage/scratchpad', { line: text });
+      const l = await api('POST /api/triage/scratchpad', { body: { line: text } });
       return { id: l.id, text: l.line };
     } catch (err) {
       say('danger', 'scratchpad failed', String((err as Error).message || err));
@@ -1042,10 +1062,8 @@ function App() {
 
   // S3 — the server's staged preview: this session's front-inserts on top
   const loadPreview = async () => {
-    const res = await fetch('/api/triage');
-    if (!res.ok) throw new Error(res.statusText);
-    const { queue } = await res.json();
-    return (queue ?? []).map((t: ServerJson): QueueScreenTask => ({
+    const { queue } = await api('GET /api/triage');
+    return queue.map((t): QueueScreenTask => ({
       id: t.id, title: liveTitle(t), assignee: t.assignee ?? undefined,
       assigneeIcon: t.assignee ? data!.icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked', frontInserted: t.front_inserted,
@@ -1056,11 +1074,9 @@ function App() {
   // triage の data は フロー1回分の凍結 snapshot なので、この面に来るまでに打った
   // 異議は snapshot の注釈には映らない — merge 判断に入るたびに読み直す。
   const loadLanding = async () => {
-    const res = await fetch('/api/tasks');
-    if (!res.ok) throw new Error(res.statusText);
-    const board = await res.json();
+    const board = await api('GET /api/tasks');
     return Object.fromEntries(
-      board.filter((t: ServerJson) => t.type === 'question' && t.landing).map((t: ServerJson) => [t.id, t.landing]));
+      board.filter((t) => t.type === 'question' && t.landing).map((t) => [t.id, t.landing!]));
   };
 
   // Commit = close + cursor (ADR 0065 decision 2 / consequences): two calls,
@@ -1069,7 +1085,8 @@ function App() {
   // fire the immediate poll. The read cursor is the second call, advanced
   // after: a failed close never marks the skimmed lines as read, and a
   // failed cursor advance never masquerades as a failed commit.
-  const closeTriage = (body: ServerJson) => api('/api/triage/close', body);
+  const closeTriage = (body: { scratchpad?: { id: number; disposition: string }[]; close_only?: boolean }) =>
+    api('POST /api/triage/close', { body });
 
   const commitTriage = async (
     answers: Record<string, string[]>,
@@ -1115,7 +1132,7 @@ function App() {
       message = 'triage committed — session closed';
       outcomeNote = ' · immediate poll fired';
     } else if (result.outcome === 'already_closed_by_timeout') {
-      const closed = new Date(result.closed_at);
+      const closed = new Date(result.closed_at!);
       const hhmm = `${String(closed.getHours()).padStart(2, '0')}:${String(closed.getMinutes()).padStart(2, '0')}`;
       message = 'triage committed — session already timed out';
       outcomeNote = ` · session closed at ${hhmm}; staged steering was already applied`;
@@ -1253,15 +1270,13 @@ function App() {
   // to the deliverable (issue #5). a failed fetch surfaces in the expansion
   // via the kit's catch, not as a silent no-op.
   const loadHandoff = async (entry: TpLogEntry) => {
-    const res = await fetch(`/api/tasks/${entry.taskId}`);
-    if (!res.ok) throw new Error(res.statusText);
-    const task = await res.json();
+    const task = await api('GET /api/tasks/:id', { params: { id: entry.taskId } });
     return task.handoff_doc ?? '(no handoff doc)';
   };
 
   const register = async (fields: RegisterScreenFields) => {
     try {
-      const t = await api('/api/tasks', fields);
+      const t = await api('POST /api/tasks', { body: fields });
       runWash('Into the pool.', '🫧', () => {
         setTab('queue');
         say('info', 'registered — appended to queue tail', t.id);
@@ -1300,7 +1315,7 @@ function App() {
   // own union) shows up at once.
   const addChild = async (fields: RegisterScreenFields) => {
     try {
-      const t = await api('/api/tasks', fields);
+      const t = await api('POST /api/tasks', { body: fields });
       say(
         'info',
         t.type === 'question' ? 'sent for approval' : 'child added — appended to queue tail',
