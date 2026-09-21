@@ -102,9 +102,8 @@ export interface WorkerSessionSettings {
       /** The proxy filters on the `CONNECT` host string, not the address it
        *  resolves to — so a name pattern here does not reach traffic to an
        *  IP literal or to a name that merely *resolves into* a denied range.
-       *  tidepool puts nothing here: the network floor is the default-deny
-       *  side (`strictAllowlist`, anything outside `allowedDomains` is
-       *  refused), and a tailnet name is an ordinary allowlist value
+       *  tidepool puts nothing here: the network floor is the CLI proxy's
+       *  default deny, and a tailnet name is an ordinary allowlist value
        *  (ADR 0139). */
       deniedDomains: string[];
     };
