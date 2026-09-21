@@ -108,10 +108,7 @@ import {
   type Task,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
-import {
-  getProviderUsage,
-  getThrottleState,
-} from "./throttle.js";
+import { getProviderUsage } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
 import {
   TranslationTargetError,
@@ -1591,7 +1588,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
     setPaceOffsets(db, parsed.data);
     // どの window を変えたか・値が実際に変わったかによらず、保存成功後は即時再評価
-    // する。古い offset で立った throttle_state を tick 待ちにすると、緩和後も最大
+    // する。古い offset で立った Provider 使用量の判定を tick 待ちにすると、緩和後も最大
     // 1時間 pickup と表示が止まり続ける(issue #296)。
     pollNow();
     res.json(getPaceOffsets(db));
@@ -1761,15 +1758,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     return teardown ? { teardown } : {};
   }
 
-  // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。`throttle` は資源単位の
-  // 表示(windows / fable 詳細)に要る完全な形のまま残る — halts の throttle
-  // entry と一部重複するが、把握して受け入れた重複である
+  // 盤面全体の停止は列挙が1回で答える(ADR 0068 決定3)。throttle は資源単位なので
+  // 列挙に居ず、Provider ごとの使用量(providerUsage)が言う(ADR 0140 決定4)
   router.get("/pause", (_req, res) => {
-    const { resetsAt: resumesAt, ...throttle } = getThrottleState(db);
     res.json({
       halts: boardHalts(db),
       ...teardownJson(),
-      throttle: { ...throttle, resumesAt, revalidating: false },
       spendDown: spendDownJson(),
       ...providerUsageJson(),
     } satisfies WireContract["GET /api/pause"]);
@@ -1787,7 +1781,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       clearSpendDown(db, parsed.data.window);
     }
     // 有効化(今すぐ残りを燃やせ)も取り消しも即時再評価 — 取り消し側を tick 待ち
-    // にすると、spend-down 時代の throttle_state が最大1時間 UI に残る
+    // にすると、spend-down 時代の Provider 使用量の判定が最大1時間 UI に残る
     // (ADR 0028「fail-closed は可視化とセット」の可視化の延長)
     pollNow();
     res.json({ spendDown: spendDownJson() });

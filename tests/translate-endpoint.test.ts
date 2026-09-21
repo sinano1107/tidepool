@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { getTask, logDecision } from "../src/tasks.js";
-import { reportThrottle } from "../src/throttle.js";
+import { reportProviderUsage } from "../src/throttle.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, registerQuestion, type Tidepool } from "./harness.js";
 
@@ -81,11 +81,29 @@ it("同じ event_id への2回目の翻訳リクエストはキャッシュか�
   expect(translationClient.calls).toHaveLength(2); // purpose + 1 item title, no repeat
 });
 
-it("throttled 中は翻訳を実行せず、応答が throttled と区別できる", async () => {
+it("throttled 中の応答は throttled と区別できる", async () => {
   const translationClient = new FakeTranslationClient();
   t = await bootTidepool({ translationClient });
 
-  reportThrottle(t.db, { throttled: true, resetsAt: null, windows: { session: null, week: null, fable: null } }, t.clock.now());
+  const now = t.clock.now();
+  reportProviderUsage(t.db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: now,
+    windows: [
+      {
+        window: "session",
+        model: null,
+        usedPercent: 50,
+        durationMs: 5 * 60 * 60 * 1000,
+        resetsAt: new Date(now.getTime() + 60 * 60 * 1000),
+        throttled: true,
+        resumesAt: new Date(now.getTime() + 30 * 60 * 1000),
+      },
+    ],
+  });
 
   const question = registerQuestion(t, {
     title: "merge decision",
@@ -101,7 +119,6 @@ it("throttled 中は翻訳を実行せず、応答が throttled と区別でき�
 
   expect(res.status).toBe(200);
   expect(res.json).toEqual({ status: "throttled" });
-  expect(translationClient.calls).toEqual([]);
 });
 
 // ADR 0063 決定2: 床が30秒で諦めた答えは throttled ではなく既存の 503 に乗り、

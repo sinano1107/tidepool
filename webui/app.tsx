@@ -16,7 +16,6 @@ type HaltKind = import('../src/halt-kind').HaltKind;
 type AppIcons = Record<string, string | undefined>;
 /** サーバ応答の形の正本(ADR 0138)。`api()` がこの表のキーで引く。 */
 type WireContract = import('../src/wire-contract').WireContract;
-type AppBoardHalt = import('../src/wire-contract').BoardHalt;
 /** キュー画面のスロット行 —— 停止・後始末・空きが同じ1本を書き換える。 */
 interface AppSlot {
   color: string;
@@ -244,11 +243,8 @@ function mapData(
 ) {
   // 盤面全体の停止は queue の envelope が順序つきで1回答える (ADR 0068 決定1) —
   // ブラウザは並べ替えず、先頭を読んで kind 別コピーに写すだけ
-  const halts: AppBoardHalt[] = queueEnvelope.halts;
+  const halts = queueEnvelope.halts;
   const paused = halts.some((h) => h.kind === 'pause');
-  // 資源単位の表示に要る完全な throttle(windows / fable 詳細)は /pause から —
-  // halts の throttle entry と一部重複するが、把握して受け入れた重複である
-  const throttle = pause.throttle;
   // 後始末は停止の列挙とは**並んで**運ばれる (ADR 0109 決定2) — 枠がまだ空いていない
   // 状態であって、盤面全体の停止ではない
   const teardown = queueEnvelope.teardown;
@@ -298,7 +294,7 @@ function mapData(
       assigneeIcon: t.assignee ? icons[t.assignee] : undefined, risk: !!t.risk_flag,
       blocked: t.status === 'blocked',
       // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
-      // fable 線(ADR 0068 決定4)。盤面全体の停止はスロット行が1回で言う
+      // Provider / model の throttle(ADR 0068 決定4 / ADR 0098 決定6)。盤面全体の停止はスロット行が1回で言う
       skipped: t.status === 'skipped',
       frontInserted: RECENT_FRONTS.has(t.id), flash: RECENT_FRONTS.has(t.id),
     }));
@@ -334,16 +330,6 @@ function mapData(
   // 上限到達による中断では行が `in_progress` のまま残る。concurrency=1 なのでその行は
   // teardown の taskId そのもの。queue 画面の slot 状態も `data.running` 経由でここに従う
   const running = board.find((t) => t.status === 'in_progress' && t.id !== teardown?.taskId);
-  const throttled = !!throttle?.throttled;
-  // ADR 0030: which pace line is hit (session/week), and the fable line's own
-  // per-task state — resets_at is now the catch-up ("resumes") instant, and a
-  // fable-only excess shows here while the board itself keeps flowing
-  const throttleWindows = throttle?.windows ?? { session: null, week: null, fable: null };
-  const hitLines = (['session', 'week', 'fable'] as const).filter((w) => throttleWindows[w]?.throttled);
-  const fableWindow = throttleWindows.fable;
-  const fableThrottled = !!fableWindow?.throttled;
-  const fableResumesAt =
-    fableThrottled && fableWindow.resumeAt ? fmtTime(fableWindow.resumeAt) : null;
   const halt = (slot: AppSlot, kind: AppToastKind, msg: string, detail?: string) => ({ slot, toast: { kind, msg, detail } });
   // ADR 0068 決定1/決定7: the display priority now lives in the server's ordered
   // enumeration, not in a ternary chain here — this is a plain kind → copy map
@@ -366,44 +352,10 @@ function mapData(
     registryReachability: () => halt(
       { color: 'var(--coral-4)', line: 'registry remote unreachable · nothing starts', meta: 'see the repair question', taskId: null },
       'warn', 'moved to front — pickup blocked', 'registry remote is unreachable'),
-    // 再観測中は独立の kind ではなく throttle entry の属性 (ADR 0068 決定2) —
-    // 「観測中」と「観測結果」は同じ主題なので、分岐はこの1つの腕の中に閉じる。
-    // 鮮度(observedAt)と再開見込みは entry 自身が運ぶ
-    throttle: (entry: AppBoardHalt) => {
-      const observed = entry.observedAt ? fmtTime(entry.observedAt) : null;
-      const resumes = entry.resumesAt ? fmtTime(entry.resumesAt) : null;
-      if (entry.revalidating) {
-        return halt(
-          {
-            color: 'var(--sun-4)', line: 'usage re-evaluation in progress · nothing starts', taskId: null,
-            meta: observed ? `last observed ${observed}` : 'no observation yet',
-          },
-          'info', 'moved to front — usage is being re-evaluated', 'waiting for a fresh observation');
-      }
-      return halt(
-        {
-          color: 'var(--coral-4)', taskId: null,
-          ...(entry.failClosed
-            ? {
-                line: 'usage check unavailable · nothing starts',
-                meta: `fail-closed — check usage check logs${observed ? ` · observed ${observed}` : ''}`,
-              }
-            : {
-                line: 'usage pace · nothing starts',
-                // which line is hit (ADR 0030) — an old pre-window row (no
-                // windows persisted yet) falls back to the plain resume text
-                meta: `${hitLines.length ? `${hitLines.join(' + ')} line · ` : ''}resumes ${resumes}${observed ? ` · observed ${observed}` : ''}`,
-              }),
-        },
-        'warn', 'moved to front — pickup blocked',
-        entry.failClosed
-          ? 'usage check unavailable — nothing starts until a fresh reading arrives'
-          : `usage limit · resumes ${resumes}`);
-    },
     // 門そのもの (ADR 0133 決定3 / #749 User Story 8): HALT_KINDS に1つ足して
     // ここを更新しないと typecheck が落ちる。これがあるので下の引きに `?.` は要らない
-  } satisfies Record<HaltKind, (entry: AppBoardHalt) => { slot: AppSlot; toast: AppToast }>;
-  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind](halts[0]);
+  } satisfies Record<HaltKind, () => { slot: AppSlot; toast: AppToast }>;
+  const pickupHalt = halts[0] && HALT_COPY[halts[0].kind]();
   // 後始末行は1本のまま、待っている理由だけが経路で変わる。経路を導くのはサーバ
   // (`teardown.settlement`、ADR 0113 決定3)で、ここは HALT_COPY と同じ値 → コピーの
   // 写像だけを持つ —— 行の status から導き直せば写しが2本になる
@@ -415,10 +367,9 @@ function mapData(
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so
   // `line` stays free of raw ids for the busy and paused slot lines alike.
-  // a running task always wins the slot line — throttle_state only refreshes
-  // at pickup-decision time, so mid-run it may already be stale. Pause is the
-  // one halt that still speaks over a running task, because what it has to say
-  // is about that task's fate (issue #34): it finishes, nothing follows. これは
+  // a running task always wins the slot line. Pause is the one halt that still
+  // speaks over a running task, because what it has to say is about that
+  // task's fate (issue #34): it finishes, nothing follows. これは
   // かつて QueueScreen 側の pausedSlot が持っていた分岐で、画面がサーバ順序
   // (ADR 0068 決定1)を上書きしないようこちらへ移した。
   const slot = running
@@ -436,20 +387,7 @@ function mapData(
         line: 'session teardown · nothing new starts',
         meta: `${TEARDOWN_META[teardown.settlement]} · since ${fmtTime(teardown.startedAt)}`,
       }
-    : fableThrottled
-    ? {
-        // fable line only (ADR 0030): the board keeps flowing — fable-model
-        // tasks alone wait for their catch-up
-        color: 'var(--rock-3)', taskId: null,
-        line: 'slot free — fable tasks paced',
-        meta: fableResumesAt ? `fable line · resumes ${fableResumesAt}` : 'fable line',
-      }
-    : {
-        color: 'var(--rock-3)', line: 'slot free — nothing running', taskId: null,
-        // fable の観測状態を常時可視化 (ADR 0030): per-model 行の書式変更で
-        // 観測が黙って落ちたとき、Max プランの人間がここで気づける
-        meta: `concurrency=1 · fable ${fableWindow ? 'on pace' : 'not observed'}`,
-      };
+    : { color: 'var(--rock-3)', line: 'slot free — nothing running', taskId: null, meta: 'concurrency=1' };
   return {
     questions, log: logEntries, queue, board: cols, icons,
     scratchpad: triage.scratchpad.map((line): TpScratchLine => ({ id: line.id, text: line.line })),
@@ -462,9 +400,6 @@ function mapData(
     // Spend-down (ADR 0091) — window ごとの盤面状態応答から素通し
     spendDown: pause.spendDown ?? { session: null, week: null },
     providerUsage,
-    throttled,
-    throttleRevalidating: !!throttle?.revalidating,
-    fableThrottled, fableResumesAt,
     lastLogId: log.entries.at(-1)?.id ?? null,
   };
 }
@@ -1012,21 +947,6 @@ function App() {
     return fresh;
   };
 
-  // ADR 0058: only follow a JIT usage observation while the human is waiting
-  // for this specific result. The false response clears the interval; the
-  // ordinary 15s board refresh remains independent.
-  React.useEffect(() => {
-    if (!data?.throttleRevalidating) return;
-    const iv = setInterval(() => {
-      void refresh()
-        .then((fresh) => {
-          if (!fresh.throttleRevalidating) clearInterval(iv);
-        })
-        .catch(() => {});
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [data?.throttleRevalidating]);
-
   // S1 — the last tap in a bundle persists every item's answer atomically;
   // the unblocked parent is staged server-side (issue #30: `a` is one answer
   // per item, in item order)
@@ -1404,7 +1324,7 @@ function App() {
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>the pool refills as tasks come in.</div>
             </div>)}
         {tab === 'board' && <BoardScreen data={data} onOpenTask={openTask} />}
-        {tab === 'queue' && <QueueScreen data={data} slotState={data.running ? 'busy' : (data.throttled ? 'limit' : 'free')} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={doneHuman} onReorder={reorder} />}
+        {tab === 'queue' && <QueueScreen data={data} paused={data.paused} onTogglePause={togglePause} spendDown={data.spendDown} onSpendDown={setSpendDown} onFront={moveFront} onDoneHuman={doneHuman} onReorder={reorder} />}
         {tab === 'register' && <RegisterScreen onRegister={register} />}
         {tab === 'settings' && <SettingsScreen say={say} registerLeaveGuard={(fn: ((move: () => void) => boolean) | null) => { leaveGuard.current = fn; }} />}
         </div>

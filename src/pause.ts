@@ -1,8 +1,8 @@
 import type { Db } from "./db.js";
 
-/** Board-wide pickup pause (CONTEXT.md's Pause): a human-only toggle, same
- *  single-row shape as throttle_state, but with no auto-resume — clearing it
- *  is purely manual (issue #34). No row means never paused. */
+/** Board-wide pickup pause (CONTEXT.md's Pause): a human-only toggle, one row,
+ *  with no auto-resume — clearing it is purely manual (issue #34). No row means
+ *  never paused. */
 export function setPaused(db: Db, paused: boolean): void {
   db.prepare(
     `INSERT INTO pause_state (id, paused) VALUES (1, ?)

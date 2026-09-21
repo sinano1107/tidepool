@@ -1,7 +1,7 @@
 /** 盤面全体の停止の kind 語彙。並びは表示優先順位そのもので、出どころは1本ではない
- *  —— ADR 0068 決定1 が5つを順序ごと固定し、`failedTeardown` は ADR 0112 決定1 が
- *  containment の直後に足した6つ目である。順序つき列挙を返す唯一の場所は
- *  `board-halt.ts` のままで、ここが持つのは綴りだけである。
+ *  —— ADR 0068 決定1 が順序ごと固定し、`failedTeardown` は ADR 0112 決定1 が
+ *  containment の直後に足し、throttle は ADR 0140 決定1 が外した。順序つき列挙を
+ *  返す唯一の場所は `board-halt.ts` のままで、ここが持つのは綴りだけである。
  *
  *  依存ゼロの leaf module にしてあるのは、この語彙をブラウザ側のプログラムが
  *  `type HaltKind = import("../src/halt-kind").HaltKind;` で引くためである
@@ -14,6 +14,5 @@ export const HALT_KINDS = [
   "containment",
   "failedTeardown",
   "registryReachability",
-  "throttle",
 ] as const;
 export type HaltKind = (typeof HALT_KINDS)[number];
