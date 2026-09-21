@@ -33,6 +33,20 @@ it("result 文言に401があっても api_error_status が401でなければ認
   });
 });
 
+it("api_error_status: 401 と subtype: error_max_budget_usd が同時に立つ envelope は unauthorized を優先する(issue #737)", async () => {
+  const check = createClaudeCliAuthCheck(async () => ({
+    exitCode: 1,
+    stdout: JSON.stringify({
+      is_error: true,
+      api_error_status: 401,
+      subtype: "error_max_budget_usd",
+      result: "Failed to authenticate. API Error: 401 Invalid bearer token",
+    }),
+  }));
+
+  await expect(check()).resolves.toEqual({ status: "unauthorized", reason: "API returned 401" });
+});
+
 it("成功したJSON envelope は認証済みと判定する", async () => {
   const check = createClaudeCliAuthCheck(async () => ({
     exitCode: 0,
@@ -40,6 +54,20 @@ it("成功したJSON envelope は認証済みと判定する", async () => {
   }));
 
   await expect(check()).resolves.toEqual({ status: "authenticated" });
+});
+
+it("probe の予算は $0.025 — haiku 最小1ターンの実測($0.0114、issue #737)を $0.01 では必ず踏む", async () => {
+  let observedArgs: string[] | undefined;
+  const check = createClaudeCliAuthCheck(async (_command, args) => {
+    observedArgs = args;
+    return { exitCode: 0, stdout: JSON.stringify({ is_error: false, result: "OK" }) };
+  });
+
+  await check();
+
+  const flagIndex = observedArgs?.indexOf("--max-budget-usd") ?? -1;
+  expect(flagIndex).toBeGreaterThan(-1);
+  expect(observedArgs?.[flagIndex + 1]).toBe("0.025");
 });
 
 it("認証 probe は Board call の口を通り、口が答えを返さなければ(上限到達)判定不能に倒れる", async () => {
@@ -52,6 +80,22 @@ it("認証 probe は Board call の口を通り、口が答えを返さなけれ
   await clock.advance(60_000);
 
   await expect(result).resolves.toEqual({ status: "unknown", reason: "probe did not return a JSON envelope" });
+});
+
+it("error_max_budget_usd エンベロープは unknown のまま、予算超過と判る reason を返す(issue #737)", async () => {
+  const check = createClaudeCliAuthCheck(async () => ({
+    exitCode: 1,
+    stdout: JSON.stringify({
+      is_error: true,
+      subtype: "error_max_budget_usd",
+      result: "Reached max budget ($0.025)",
+    }),
+  }));
+
+  await expect(check()).resolves.toEqual({
+    status: "unknown",
+    reason: "probe hit its budget cap before returning an authentication verdict",
+  });
 });
 
 /** 上限到達による中断(ADR 0104 決定2)の述語。認証の述語と同じ場所・同じ確度で
