@@ -16,7 +16,7 @@
   void apiErrorDetail(null, 'GET /api/workspaces');
   // api() を経由しない生の fetch().json() は unknown のまま —— 欄を読むと型エラー
   // (webui/body-json.d.ts が Body.json() を Promise<unknown> に宣言し直している)
-  fetch('/api/no-such-route').then((r) => r.json()).then((j) => {
+  void fetch('/api/no-such-route').then((r) => r.json()).then((j) => {
     // @ts-expect-error
     void j.error;
   });
