@@ -2798,8 +2798,8 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     handoffPresent: e.payload.kind === "task_completed" && !!e.payload.handoff_present,
     workspace: e.workspace ?? null,
     cause: e.cause ?? void 0,
-    pendingObjections: (e.objections ?? []).filter((o) => o.session_id === openSessionId).map((o) => o.comment),
-    bundledObjections: (e.objections ?? []).filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
+    pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
+    bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
   }));
   const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
     id: t.id,
@@ -2963,7 +2963,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     queue,
     board: cols,
     icons,
-    scratchpad: (triage.scratchpad ?? []).map((line) => ({ id: line.id, text: line.line })),
+    scratchpad: triage.scratchpad.map((line) => ({ id: line.id, text: line.line })),
     // human 宛ての未決着タスクは /api/your-tasks が持つ (issue #301) — 実行キューと
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
@@ -3154,7 +3154,7 @@ function CompleteHumanTaskDialog({ task, onCompleted, onClose, say }) {
     try {
       const d = await api("POST /api/tasks/:id/complete/draft", { params: { id: task.id }, body: { dump: dump.trim() } });
       setFields(Object.fromEntries(HANDOFF_FIELDS.map(([f]) => [f, d[f] ?? ""])));
-      setMissing(d.missing ?? []);
+      setMissing(d.missing);
     } catch (err) {
       say("info", "no draft \u2014 fill it in yourself", String(err.message || err));
     }

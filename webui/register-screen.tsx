@@ -48,14 +48,6 @@ interface RegisterScreenGate {
   workspace?: string;
   github_issue_number?: number;
 }
-interface RegisterScreenIssue {
-  number: number;
-  title: string;
-}
-interface RegisterScreenPendingDump {
-  id: number;
-  line: string;
-}
 interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
   /** 子追加モード —— 未設定ならルート登録。 */
@@ -108,7 +100,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // `truncated` comes from the server (which owns the `--limit` it asked
   // `gh` for) rather than the UI comparing issues.length against a
   // hardcoded 100 of its own.
-  const [issues, setIssues] = React.useState<RegisterScreenIssue[]>([]);
+  const [issues, setIssues] = React.useState<WireContract['GET /api/github-issues']['issues']>([]);
   const [issuesFailed, setIssuesFailed] = React.useState(false);
   const [truncated, setTruncated] = React.useState(false);
   React.useEffect(() => {
@@ -122,12 +114,12 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // Picking one flows its line into the brain dump the same as typing it by
   // hand; the row itself is consumed only by a successful registration built
   // from it, or an explicit discard — never by merely selecting or backing out.
-  const [pendingDumps, setPendingDumps] = React.useState<RegisterScreenPendingDump[]>([]);
+  const [pendingDumps, setPendingDumps] = React.useState<WireContract['GET /api/pending-dumps']>([]);
   const [selectedDumpId, setSelectedDumpId] = React.useState<number | null>(null);
   const refreshPendingDumps = () =>
     api('GET /api/pending-dumps').then(setPendingDumps).catch(() => {});
   React.useEffect(() => { refreshPendingDumps(); }, []);
-  const pickPendingDump = (d: RegisterScreenPendingDump) => {
+  const pickPendingDump = (d: WireContract['GET /api/pending-dumps'][number]) => {
     resetContent();
     setSelectedDumpId(d.id);
     setDump(d.line);
