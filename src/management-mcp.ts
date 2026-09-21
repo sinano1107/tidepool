@@ -10,10 +10,7 @@ import {
 } from "./agent-create.js";
 import type { AttributionClient, BehaviorDraftClient } from "./attribution.js";
 import { boardHalts } from "./board-halt.js";
-import type { BoardStatePath } from "./board-state.js";
-import type { CliAuthCheck } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
-import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
 import { getLogCursor, listEvents, listLog } from "./events.js";
@@ -25,7 +22,6 @@ import {
   TIER_FIELD_DESCRIPTION,
 } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
-import type { HarnessContainmentCheck } from "./harness-containment.js";
 import {
   addIssueCommentThroughHumanDoor,
   cancelThroughHumanDoor,
@@ -54,6 +50,7 @@ import {
   TOKENIZER,
 } from "./memory.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
+import type { QuarantineChecks } from "./quarantine.js";
 import {
   type Harness,
   InvalidAgentDefinitionError,
@@ -66,7 +63,6 @@ import {
   isBuiltInAgentName,
   MERGE_DIAL_VALUES,
   type Provider,
-  type RegistryReachabilityCheck,
 } from "./registry.js";
 import { RepoAccessMissingError } from "./repo-access.js";
 import {
@@ -84,7 +80,7 @@ import {
   listQueue,
   listYourTasks,
 } from "./tasks.js";
-import { type FailedTeardownCheck, sessionInTeardown } from "./teardown.js";
+import { sessionInTeardown } from "./teardown.js";
 import { isFablePickupBlocked } from "./throttle.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -118,15 +114,10 @@ export interface ManagementMcpDeps {
   auditorName?: string;
   agentRegistered?: (name: string) => boolean;
   isProtectedWorkspace?: (name: string) => boolean;
-  containment?: ContainmentCheck;
-  harnessContainment?: HarnessContainmentCheck;
-  /** ADR 0099 決定3: 回収済み観測を待つ slot の門(WebUI 側と同じ配線)。 */
-  reclaim?: PendingReclaim;
-  registryReachability?: RegistryReachabilityCheck;
-  /** ADR 0112 決定3: 落ちた後始末の受理の門(WebUI 側と同じ配線)。 */
-  teardownQuarantine?: FailedTeardownCheck;
-  providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
-  boardState?: BoardStatePath[];
+  /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。 */
+  reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
+  /** ADR 0137 決定5: 解除の門の map(WebUI 側と同じ配線)。 */
+  quarantineChecks?: QuarantineChecks;
   fableAgents?: () => string[];
   /** ADR 0097 決定2 / issue #446: the names of the agents declared with one of
    *  the given providers — the pickup exclusion set `list_queue`'s `skipped`
@@ -806,14 +797,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
               resolveWorkspace: deps.resolveWorkspace,
               github: deps.github,
               landing: deps.landing,
-              agentRegistered: deps.agentRegistered,
-              containment: deps.containment,
-              harnessContainment: deps.harnessContainment,
               reclaim: deps.reclaim,
-              registryReachability: deps.registryReachability,
-              teardownQuarantine: deps.teardownQuarantine,
-              providerCliAuth: deps.providerCliAuth,
-              boardState: deps.boardState,
+              quarantineChecks: deps.quarantineChecks,
               attributionClient: deps.attributionClient,
               behaviorDraftClient: deps.behaviorDraftClient,
             },

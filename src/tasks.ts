@@ -1212,12 +1212,13 @@ export function assertAnswerable(question: Task, answers: string[]): void {
  *  only the failed task's subtree is cancelled. Its parent returns to the
  *  queue head only when no unfinished children it waits for remain, as before.
  *
- *  Quarantine resolution (issue #21): a Confirmation question (declared by
- *  `question_quarantine_kind`, system-internal) takes any answer at all
- *  as a repair confirmation — the caller has already verified the workspace's
- *  tree is clean before this runs (see human-verbs.ts). needs_human clears at once,
- *  reported back as `pickupResumed` so the caller fires the immediate poll,
- *  same as `parentUnblocked`. */
+ *  Quarantine resolution (ADR 0137 決定3・4): a Confirmation question (declared
+ *  by `question_quarantine_kind`, system-internal) takes any answer at all as a
+ *  repair confirmation — the caller has already run that kind's check and
+ *  refused the answer if it failed (see human-verbs.ts). The open question is
+ *  the quarantine's only state, so settling it is the release; every kind
+ *  records the same `quarantine_released` and reports `pickupResumed` so the
+ *  caller fires the immediate poll, same as `parentUnblocked`. */
 export function answerQuestion(
   db: Db,
   question: Task,
@@ -1260,104 +1261,13 @@ export function answerQuestion(
       at: now,
     });
 
-    const quarantineValue = question.question_quarantine_value;
-    if (question.question_quarantine_kind === "workspace") {
-      const wsName = quarantineValue!;
-      db.prepare("UPDATE workspace_state SET needs_human = 0 WHERE name = ?").run(wsName);
+    const quarantine = question.question_quarantine_kind;
+    if (quarantine) {
       appendEvent(db, {
         taskId: question.id,
         workerId: HUMAN_WORKER_ID,
         origin,
-        payload: { kind: "workspace_reinstated", workspace: wsName },
-        at: now,
-      });
-      pickupResumed = true;
-      return;
-    }
-
-    // the agent-name generalization of the workspace branch above (ADR 0012 /
-    // issue #36)
-    if (question.question_quarantine_kind === "agent") {
-      const agentName = quarantineValue!;
-      db.prepare("UPDATE agent_state SET needs_human = 0 WHERE name = ?").run(agentName);
-      appendEvent(db, {
-        taskId: question.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: { kind: "agent_reinstated", agent: agentName },
-        at: now,
-      });
-      pickupResumed = true;
-      return;
-    }
-
-    // issue #60 / ADR 0033: the host sandbox gate. There is no needs_human row
-    // to clear — the gate is the live capability check plus this question's own
-    // presence, so answering *is* the clearance (the caller has already re-run
-    // the check and refused the answer if it still fails, same posture as the
-    // tree-clean verification above).
-    if (question.question_quarantine_kind === "containment") {
-      appendEvent(db, {
-        taskId: question.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: { kind: "sandbox_reinstated" },
-        at: now,
-      });
-      pickupResumed = true;
-      return;
-    }
-
-    if (question.question_quarantine_kind === "registryReachability") {
-      appendEvent(db, {
-        taskId: question.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: { kind: "registry_reinstated" },
-        at: now,
-      });
-      pickupResumed = true;
-      return;
-    }
-
-    // ADR 0112 決定3: 解放の門は後始末の再実行そのものである。ここへ来た時点でそれは
-    // 完走している —— 呼び出し側が受理の直前に走らせ、まだ投げるなら回答を拒んでいる。
-    if (question.question_quarantine_kind === "failedTeardown") {
-      appendEvent(db, {
-        taskId: question.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: { kind: "teardown_reinstated" },
-        at: now,
-      });
-      pickupResumed = true;
-      return;
-    }
-
-    if (question.question_quarantine_kind === "providerAuth") {
-      appendEvent(db, {
-        taskId: question.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: {
-          kind: "provider_auth_reinstated",
-          provider: quarantineValue!,
-        },
-        at: now,
-      });
-      pickupResumed = true;
-      return;
-    }
-
-    if (question.question_quarantine_kind === "harnessContainment") {
-      appendEvent(db, {
-        taskId: question.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: {
-          kind: "harness_reinstated",
-          harness: quarantineValue as "claude-code" | "codex",
-        },
+        payload: { kind: "quarantine_released", quarantine, value: question.question_quarantine_value },
         at: now,
       });
       pickupResumed = true;
@@ -2354,8 +2264,9 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
  *  task's `workspace` column; `defaultRef` is the SQL expression (a bound
  *  param, named or positional) holding the board's default workspace name. */
 function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: string): string {
-  return `EXISTS (SELECT 1 FROM workspace_state w
-            WHERE w.name = COALESCE(${taskWorkspaceRef}, ${defaultRef}) AND w.needs_human = 1)`;
+  return `EXISTS (SELECT 1 FROM tasks qq
+            WHERE qq.question_quarantine_kind = 'workspace' AND qq.status = 'todo'
+              AND qq.question_quarantine_value = COALESCE(${taskWorkspaceRef}, ${defaultRef}))`;
 }
 
 /** The agent-name generalization of `workspaceQuarantinedSql` (ADR 0012 /
@@ -2368,8 +2279,9 @@ function workspaceQuarantinedSql(taskWorkspaceRef: string, defaultRef: string): 
  *  literally `human` when this runs (the caller excludes it beforehand), so
  *  no separate carve-out is needed here. */
 function agentQuarantinedSql(taskAssigneeRef: string, defaultRef: string): string {
-  return `EXISTS (SELECT 1 FROM agent_state a
-            WHERE a.name = COALESCE(${taskAssigneeRef}, ${defaultRef}) AND a.needs_human = 1)`;
+  return `EXISTS (SELECT 1 FROM tasks qq
+            WHERE qq.question_quarantine_kind = 'agent' AND qq.status = 'todo'
+              AND qq.question_quarantine_value = COALESCE(${taskAssigneeRef}, ${defaultRef}))`;
 }
 
 /** Resolve the execution agent for a task that can enter the slot

@@ -262,9 +262,6 @@ export function openDb(path: string): Db {
       created_at TEXT NOT NULL
     );
 
-    -- a workspace the slot-release tree rule failed on (conflict, broken
-    -- checkout): marked needs-human, its tasks stay out of the slot until a
-    -- human repairs it (issue #8)
     -- ADR 0064 決定6: ref_snapshot は pickup の瞬間に撮った全 ref の写像
     -- (for-each-ref のソート済み出力 = refname 順の "値 refname"。値は
     -- objectname だが、symref の行だけは指し先 "symref=<refname>" である ——
@@ -273,16 +270,7 @@ export function openDb(path: string): Db {
     -- 場所であることが要件なので git の ref ではなくここに置く。
     CREATE TABLE IF NOT EXISTS workspace_state (
       name         TEXT PRIMARY KEY,
-      needs_human  INTEGER NOT NULL DEFAULT 0,
       ref_snapshot TEXT
-    );
-
-    -- an agent name pickup could not resolve against the registry (ADR 0012 /
-    -- issue #36): marked needs-human, its tasks stay out of the slot until a
-    -- human repairs it — the agent-name generalization of workspace_state.
-    CREATE TABLE IF NOT EXISTS agent_state (
-      name        TEXT PRIMARY KEY,
-      needs_human INTEGER NOT NULL DEFAULT 0
     );
 
     -- Swell throttle (ADR 0008): one row, account-scoped (not per-task/

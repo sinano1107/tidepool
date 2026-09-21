@@ -25,7 +25,11 @@ const containmentQuestion = async (): Promise<any> =>
 async function unreclaimedSkillEnumeration() {
   const recorder = recordingSpawn();
   const runtime = new FakeContainerRuntime(recorder.spawn);
-  t = await bootTidepool({ containerRuntime: runtime, hostSkills: enumerateHostSkills });
+  t = await bootTidepool({
+    containerRuntime: runtime,
+    hostSkills: enumerateHostSkills,
+    harnessContainment: async () => ({ available: true }),
+  });
 
   const pending = api(t.baseUrl, "GET", "/api/skills");
   await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));

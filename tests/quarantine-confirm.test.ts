@@ -71,7 +71,7 @@ it("task の応答は quarantine を kind と value の2欄で運び、種類ご
 // directly against the running board's own sqlite file, same as
 // worker-failure.test.ts drops to the scheduler/tasks seam when the full
 // stack can't reach the scenario. Git itself is still real, never faked.
-it("同一 workspace への2度目の quarantine は quarantine question を増やさず、既存 question に再発火の cause イベントを追記する(needs_human は1のまま)", async () => {
+it("同一 workspace への2度目の quarantine は quarantine question を増やさず、既存 question に再発火の cause イベントを追記する", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
@@ -92,7 +92,7 @@ it("同一 workspace への2度目の quarantine は quarantine question を増�
   ).toBe(true);
 });
 
-it("quarantine question への回答はツリーが汚れたままだと拒否され、question は open のまま・needs_human も1のまま残る", async () => {
+it("quarantine question への回答はツリーが汚れたままだと拒否され、question は open のまま残り、その workspace は quarantine されたまま", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
@@ -109,18 +109,18 @@ it("quarantine question への回答はツリーが汚れたままだと拒否�
   const after = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(after.status).toBe("todo");
 
-  // needs-human は解除されておらず、この workspace の他タスクも止まったまま
+  // quarantine は解けておらず、この workspace の他タスクも止まったまま
   await registerWork(t, "still stalled");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work"]);
 });
 
-it("ツリーがクリーンだと確認されれば needs_human が解除され、question が done になり、pickup が即時再開する。自由記述の回答は question_answer に残る", async () => {
+it("ツリーがクリーンだと確認されれば question が done になり、pickup が即時再開する。自由記述の回答は question_answer に残る", async () => {
   const ws = await makeWorkspace(dirs, "sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
 
-  // needs-human の間に登録された別タスクは止まったまま
+  // quarantine の間に登録された別タスクは止まったまま
   await registerWork(t, "stalled work");
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work"]);

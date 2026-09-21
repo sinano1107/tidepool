@@ -9,7 +9,7 @@ import {
   type GitHubAuth,
   originRepo,
 } from "./github-auth.js";
-import { registerQuarantine } from "./quarantine.js";
+import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import {
   ownEntry,
   REGISTRY_BRANCH,
@@ -843,18 +843,16 @@ export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
   }
 }
 
+/** ADR 0137 決定3: the open Confirmation question is the only state. */
 export function workspaceNeedsHuman(db: Db, name: string): boolean {
-  const row = db
-    .prepare("SELECT needs_human FROM workspace_state WHERE name = ?")
-    .get(name) as { needs_human: number } | undefined;
-  return row?.needs_human === 1;
+  return openQuarantineQuestion(db, "workspace", name) !== undefined;
 }
 
-/** Tree-rule failure containment (quarantine, CONTEXT.md): mark the workspace
- *  needs-human (its tasks stay out of the slot) and put the repair in front of
- *  the human as a 1-choice Confirmation question (issue #21) — the answer
- *  isn't a choice between outcomes, it's a confirmation that repair happened,
- *  verified before it clears needs-human (see answerQuestion in tasks.ts).
+/** Tree-rule failure containment (quarantine, CONTEXT.md): put the repair in
+ *  front of the human as a 1-choice Confirmation question (issue #21) — its
+ *  tasks stay out of the slot while it is open. The answer isn't a choice
+ *  between outcomes, it's a confirmation that repair happened, verified before
+ *  it is accepted (see submitAnswer in human-verbs.ts).
  *  Name-only (issue #26 / ADR 0009): the trigger can be a tree-rule failure
  *  (path known, folded into `cause`'s message) or an unknown workspace name
  *  encountered at resolution time (no path to know) — both quarantine the
@@ -865,10 +863,6 @@ export function quarantineWorkspace(
   cause: unknown,
   now: Date,
 ): void {
-  db.prepare(
-    `INSERT INTO workspace_state (name, needs_human) VALUES (?, 1)
-     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(workspaceName);
   registerQuarantine(
     db,
     "workspace",

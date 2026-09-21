@@ -156,6 +156,10 @@ export const QUARANTINES = [
 
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
 
+/** 解除の門(ADR 0137 決定5): kind → 受理の直前に撃ち直す検査。不成立なら理由つきで
+ *  投げる。合成 root が組み、その kind の検査が無い盤面では回答を拒む。 */
+export type QuarantineChecks = Partial<Record<QuarantineKind, (value: string | null) => Promise<void>>>;
+
 /** その鍵の開いた確認型 question。NULL の value は `IS` でしか一致しない。 */
 export function openQuarantineQuestion(
   db: Db,

@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { registerQuarantine } from "./quarantine.js";
+import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import {
   type AgentDefinition,
   type AuthorityProfile,
@@ -63,23 +63,17 @@ export function resolveExecutionAgent(
   return { name, definition, profile };
 }
 
+/** ADR 0137 決定3: the open Confirmation question is the only state. */
 export function agentNeedsHuman(db: Db, name: string): boolean {
-  const row = db.prepare("SELECT needs_human FROM agent_state WHERE name = ?").get(name) as
-    | { needs_human: number }
-    | undefined;
-  return row?.needs_human === 1;
+  return openQuarantineQuestion(db, "agent", name) !== undefined;
 }
 
 /** The agent-name generalization of workspace.ts's quarantineWorkspace (ADR
- *  0012 / issue #36): mark the agent name needs-human (its tasks stay out of
- *  the slot) and put the repair in front of the human as a 1-choice
- *  Confirmation question — same shape, same "1 resource, at most 1 open
- *  question" dedup (CONTEXT.md's Quarantine). */
+ *  0012 / issue #36): put the repair in front of the human as a 1-choice
+ *  Confirmation question (its tasks stay out of the slot while it is open) —
+ *  same shape, same "1 resource, at most 1 open question" dedup (CONTEXT.md's
+ *  Quarantine). */
 export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: Date): void {
-  db.prepare(
-    `INSERT INTO agent_state (name, needs_human) VALUES (?, 1)
-     ON CONFLICT(name) DO UPDATE SET needs_human = 1`,
-  ).run(agentName);
   registerQuarantine(db, "agent", agentName, cause instanceof Error ? cause.message : String(cause), now);
 }
 

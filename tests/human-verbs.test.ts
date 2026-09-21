@@ -4,7 +4,7 @@ import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { registerThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
+import { quarantineChecks, registerThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
 import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import {
   BOARD_WORKER_ID,
@@ -577,7 +577,10 @@ it("workspace quarantine の回答は tree が clean と確認できるまで拒
       {
         db,
         pollNow: () => {},
-        resolveWorkspace: (name) => ({ name: name!, path: "/workspace/does-not-exist" }),
+        quarantineChecks: quarantineChecks({
+          db,
+          resolveWorkspace: (name) => ({ name: name!, path: "/workspace/does-not-exist" }),
+        }),
         landing: unusedLanding,
       },
       question,
@@ -617,7 +620,7 @@ it("agent quarantine の回答は registry 復帰か依存 task の解消まで�
       {
         db,
         pollNow: () => {},
-        agentRegistered: () => false,
+        quarantineChecks: quarantineChecks({ db, agentRegistered: () => false }),
         landing: unusedLanding,
       },
       question,
@@ -646,7 +649,10 @@ it("containment quarantine の回答は host 能力の再検査が通るまで�
       {
         db,
         pollNow: () => {},
-        containment: async () => ({ available: false, reason: "sandbox remains unavailable" }),
+        quarantineChecks: quarantineChecks({
+          db,
+          containment: async () => ({ available: false, reason: "sandbox remains unavailable" }),
+        }),
         landing: unusedLanding,
       },
       question,

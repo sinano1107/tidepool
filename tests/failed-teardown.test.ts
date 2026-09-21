@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
-import { submitAnswer } from "../src/human-verbs.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import type { Landing } from "../src/landing.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
@@ -132,7 +132,10 @@ const answer = (f: Fixture, question: Task, deps: TeardownDeps = f.deps) =>
       db: f.db,
       pollNow() {},
       landing: f.landing,
-      teardownQuarantine: (taskId: string) => acceptTeardownQuarantine(deps, taskId),
+      quarantineChecks: quarantineChecks({
+        db: f.db,
+        teardownQuarantine: (taskId: string) => acceptTeardownQuarantine(deps, taskId),
+      }),
     },
     question,
     ["repaired by hand"],

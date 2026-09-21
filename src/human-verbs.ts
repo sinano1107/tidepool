@@ -11,6 +11,7 @@ import type { HarnessContainmentCheck } from "./harness-containment.js";
 import { quarantinedHarnesses } from "./harness-containment.js";
 import { type Landing, type LandingVerdict, landingBlock } from "./landing.js";
 import { approveMemoryProposal, rejectMemoryProposal } from "./memory.js";
+import type { QuarantineChecks, QuarantineKind } from "./quarantine.js";
 import type { Harness, Provider, RegistryReachabilityCheck } from "./registry.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import {
@@ -361,27 +362,150 @@ export interface SubmitAnswerDeps {
    *  RCA 子なら帰責の第2回がここで走る。 */
   attributionClient?: AttributionClient;
   behaviorDraftClient?: BehaviorDraftClient;
-  agentRegistered?: (name: string) => boolean;
-  containment?: ContainmentCheck;
-  /** ADR 0099 決定3: 回収済み観測を待って止まっている slot の門。Containment
-   *  quarantine の確認回答の受理は、容器がまだ populated なら拒まれ、空を再観測
-   *  できたときだけ tree rule を走らせて slot を解放する。Absent → watchdog を
+  /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
+   *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
    *  持たない盤面(回収を待っている slot が存在しない)。 */
-  reclaim?: PendingReclaim;
+  reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
+  quarantineChecks?: QuarantineChecks;
+}
+
+/** 門の検査の材料。合成 root が一度だけ `quarantineChecks` に束ね、回答の口
+ *  (WebUI・管理 MCP)へは map だけが渡る。 */
+export interface QuarantineCheckDeps {
+  db: Db;
+  workspace?: WorkspaceConfig;
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  github?: GitHubClient;
+  boardState?: BoardStatePath[];
+  /** Whether an agent name is currently registered — one half of the agent
+   *  check; absent → only "no pending tasks remain" can clear it. */
+  agentRegistered?: (name: string) => boolean;
+  /** 封じ込め能力の合成後の検査(ADR 0033 / ADR 0036)。Absent → containment の
+   *  検査が組めず、その確認への回答は拒まれる。 */
+  containment?: ContainmentCheck;
+  /** ADR 0099 決定3: 回収済み観測を待って止まっている容器の帳簿。 */
+  reclaim?: Pick<PendingReclaim, "pendingReclaim">;
   registryReachability?: RegistryReachabilityCheck;
-  /** ADR 0112 決定3: 落ちた後始末の受理の門。検証すべき資源が無いので、検査は後始末を
-   *  **投げる版で**もう一度走らせることに一致する —— 通れば受理へ進み、まだ投げるなら
-   *  `DomainError` で回答を拒む。合成 root が `acceptTeardownQuarantine` を束ねて渡す
-   *  (人間 verb 側は後始末の deps 一式を知らない)。Absent → 後始末を持たない盤面。 */
+  /** ADR 0112 決定3: 後始末を**投げる版で**もう一度走らせる —— 検査が解放の門そのもの。 */
   teardownQuarantine?: FailedTeardownCheck;
-  /** ADR 0097 決定2 / issue #446: per-provider probes, re-run before accepting
-   *  a provider-auth Confirmation answer — the board never takes the human's
-   *  "repaired" at face value. Keyed by the provider the question stands in
-   *  for; absent that entry → the answer cannot be verified and is refused. */
+  /** ADR 0097 決定2 / issue #446: provider ごとの probe。その provider の口が無ければ拒む。 */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
-  boardState?: BoardStatePath[];
+}
+
+/** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
+ *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
+export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
+  const { containment, registryReachability, teardownQuarantine, providerCliAuth, harnessContainment } = deps;
+  return {
+    // resolve the named workspace fresh, then verify both its Git tree and its
+    // separation from the board's own state
+    workspace: async (value) => {
+      const quarantineWorkspaceName = value!;
+      const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+      let target: WorkspaceConfig;
+      try {
+        if (!resolve) throw new UnknownWorkspaceError(quarantineWorkspaceName);
+        target = resolve(quarantineWorkspaceName);
+      } catch (err) {
+        if (!(err instanceof UnknownWorkspaceError)) throw err;
+        throw new DomainError(
+          `no workspace configured for "${quarantineWorkspaceName}" — cannot verify repair`,
+        );
+      }
+      try {
+        verifyWorkspaceClean(target);
+      } catch (err) {
+        throw new DomainError(err instanceof Error ? err.message : String(err));
+      }
+      if (deps.boardState) {
+        const overlap = boardStateOverlap(target.path, deps.boardState);
+        if (overlap) throw new DomainError(overlap.reason);
+      }
+      // ADR 0067 決定2 の3つ目の扉。remote 正本を宣言した workspace だけが対象で、
+      // 「盤面は確認を鵜呑みにせず検証してから受理する」に1条件足すだけである ——
+      // 仲介が token を出せれば受理し、まだ出せなければ回答を拒んで question は開いた
+      // ままになる(ADR 0093 決定8)。ローカルの検査を先に済ませてから撃つので、
+      // purely-local な workspace では1つもネットワークに出ない。
+      const ref = parseGitHubRepo(target.repo);
+      if (deps.github && ref) {
+        const { guidance } = await repairRepoAccess(deps.github, ref);
+        if (guidance) throw new DomainError(guidance);
+      }
+    },
+    agent: async (value) => {
+      const quarantineAgentName = value!;
+      try {
+        verifyAgentRepaired(
+          deps.db,
+          quarantineAgentName,
+          deps.agentRegistered?.(quarantineAgentName) ?? false,
+        );
+      } catch (err) {
+        throw new DomainError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    ...(containment && {
+      containment: async () => {
+        const capability = await containment();
+        if (!capability.available) {
+          throw new DomainError(
+            `worker containment is still not established: ${capability.reason}`,
+          );
+        }
+        // ADR 0099 決定3: 回収失敗で立った Containment quarantine の解除は、容器の空を
+        // **回答時にもう一度観測して**から受理する。一回限りの process scan は観測に
+        // 数えないので、読むのは supervisor が持つ「空になった signal」の帳簿である。
+        // 読むのは worker session の容器だけではない: Board call の容器も同じ門を
+        // 通る(ADR 0136 決定6)ので、口が返すのは「どの容器か」を名乗る一句である。
+        const pendingReclaim = deps.reclaim?.pendingReclaim();
+        if (pendingReclaim !== undefined) {
+          throw new DomainError(
+            `${pendingReclaim} has still not been observed empty — processes from it may still be ` +
+              "running against this host and its workspaces. Kill them by hand, then answer again",
+          );
+        }
+      },
+    }),
+    // 検査そのものが後始末の再実行なので、投げれば question は開いたまま残り、人間は
+    // 直してもう一度答えられる。
+    ...(teardownQuarantine && { failedTeardown: (value) => teardownQuarantine(value!) }),
+    ...(registryReachability && {
+      registryReachability: async () => {
+        const reachability = await registryReachability();
+        if (!reachability.available) {
+          throw new DomainError(
+            `registry remote is still unreachable: ${reachability.reason ?? "refresh failed"}`,
+          );
+        }
+      },
+    }),
+    // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
+    // 再検証を回答受理の直前に撃つ(CONTEXT.md「Quarantine」の検証つき解除)。
+    ...(providerCliAuth && {
+      providerAuth: async (value) => {
+        const provider = value as Provider;
+        const check = providerCliAuth[provider];
+        if (!check) throw new DomainError(`${provider} authentication cannot be verified`);
+        const result = await check();
+        if (result.status !== "authenticated") {
+          throw new DomainError(`${provider} authentication is still unavailable: ${result.reason}`);
+        }
+      },
+    }),
+    ...(harnessContainment && {
+      harnessContainment: async (value) => {
+        const harness = value as Harness;
+        const capability = await harnessContainment(harness);
+        if (!capability.available) {
+          throw new DomainError(
+            `${harness} Harness containment is still not established: ${capability.reason}`,
+          );
+        }
+      },
+    }),
+  };
 }
 
 function resolveWorkspaceForAnswer(
@@ -692,120 +816,14 @@ export async function submitAnswer(
     await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr });
   }
 
-  // Quarantine confirmation is never taken on faith: resolve the named
-  // workspace fresh, then verify both its Git tree and its separation from
-  // the board's own state immediately before accepting the answer.
+  // Quarantine confirmation is never taken on faith (ADR 0137 決定5): the
+  // kind's check runs immediately before accepting, and a board that cannot
+  // check that kind refuses the answer rather than accepting it unverified.
   const quarantineKind = task.question_quarantine_kind;
-  const quarantineValue = task.question_quarantine_value;
-  if (quarantineKind === "workspace") {
-    const quarantineWorkspaceName = quarantineValue!;
-    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-    let target: WorkspaceConfig;
-    try {
-      if (!resolve) throw new UnknownWorkspaceError(quarantineWorkspaceName);
-      target = resolve(quarantineWorkspaceName);
-    } catch (err) {
-      if (!(err instanceof UnknownWorkspaceError)) throw err;
-      throw new DomainError(
-        `no workspace configured for "${quarantineWorkspaceName}" — cannot verify repair`,
-      );
-    }
-    try {
-      verifyWorkspaceClean(target);
-    } catch (err) {
-      throw new DomainError(err instanceof Error ? err.message : String(err));
-    }
-    if (deps.boardState) {
-      const overlap = boardStateOverlap(target.path, deps.boardState);
-      if (overlap) throw new DomainError(overlap.reason);
-    }
-    // ADR 0067 決定2 の3つ目の扉。remote 正本を宣言した workspace だけが対象で、
-    // 「盤面は確認を鵜呑みにせず検証してから受理する」に1条件足すだけである ——
-    // 仲介が token を出せれば受理し、まだ出せなければ回答を拒んで question は開いた
-    // ままになる(ADR 0093 決定8)。ローカルの検査を先に済ませてから撃つので、
-    // purely-local な workspace では1つもネットワークに出ない。
-    const ref = parseGitHubRepo(target.repo);
-    if (deps.github && ref) {
-      const { guidance } = await repairRepoAccess(deps.github, ref);
-      if (guidance) throw new DomainError(guidance);
-    }
-  }
-
-  if (quarantineKind === "agent") {
-    const quarantineAgentName = quarantineValue!;
-    try {
-      verifyAgentRepaired(
-        deps.db,
-        quarantineAgentName,
-        deps.agentRegistered?.(quarantineAgentName) ?? false,
-      );
-    } catch (err) {
-      throw new DomainError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  if (quarantineKind === "containment") {
-    const capability = await deps.containment?.();
-    if (capability && !capability.available) {
-      throw new DomainError(
-        `worker containment is still not established: ${capability.reason}`,
-      );
-    }
-    // ADR 0099 決定3: 回収失敗で立った Containment quarantine の解除は、容器の空を
-    // **回答時にもう一度観測して**から受理する。一回限りの process scan は観測に
-    // 数えないので、読むのは supervisor が持つ「空になった signal」の帳簿である。
-    // 読むのは worker session の容器だけではない: Board call の容器も同じ門を
-    // 通る(ADR 0136 決定6)ので、口が返すのは「どの容器か」を名乗る一句である。
-    const pendingReclaim = deps.reclaim?.pendingReclaim();
-    if (pendingReclaim !== undefined) {
-      throw new DomainError(
-        `${pendingReclaim} has still not been observed empty — processes from it may still be ` +
-          "running against this host and its workspaces. Kill them by hand, then answer again",
-      );
-    }
-  }
-
-  // 停止の列挙と同じ順で containment の直後(ADR 0112 決定1)。検査そのものが後始末の
-  // 再実行なので、投げれば question は開いたまま残り、人間は直してもう一度答えられる。
-  if (quarantineKind === "failedTeardown") {
-    if (!deps.teardownQuarantine) {
-      throw new DomainError("the failed teardown cannot be re-run on this board");
-    }
-    await deps.teardownQuarantine(quarantineValue!);
-  }
-
-  if (quarantineKind === "registryReachability" && deps.registryReachability) {
-    const reachability = await deps.registryReachability();
-    if (!reachability.available) {
-      throw new DomainError(
-        `registry remote is still unreachable: ${reachability.reason ?? "refresh failed"}`,
-      );
-    }
-  }
-
-  if (quarantineKind === "providerAuth") {
-    // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
-    // 再検証を回答受理の直前に撃つ(CONTEXT.md「Quarantine」の検証つき解除)。
-    const provider = quarantineValue as Provider;
-    const check = deps.providerCliAuth?.[provider];
-    if (!check) throw new DomainError(`${provider} authentication cannot be verified`);
-    const result = await check();
-    if (result.status !== "authenticated") {
-      throw new DomainError(`${provider} authentication is still unavailable: ${result.reason}`);
-    }
-  }
-
-  if (quarantineKind === "harnessContainment") {
-    const harness = quarantineValue as Harness;
-    if (!deps.harnessContainment) {
-      throw new DomainError(`${harness} Harness containment cannot be verified`);
-    }
-    const capability = await deps.harnessContainment(harness);
-    if (!capability.available) {
-      throw new DomainError(
-        `${harness} Harness containment is still not established: ${capability.reason}`,
-      );
-    }
+  if (quarantineKind) {
+    const check = deps.quarantineChecks?.[quarantineKind as QuarantineKind];
+    if (!check) throw new DomainError(`this board cannot verify a ${quarantineKind} repair`);
+    await check(task.question_quarantine_value);
   }
 
   // An answer during triage is durable immediately, but its parent unblock is
@@ -866,7 +884,7 @@ export async function submitAnswer(
   // 解放と対で走る。待っている回収を持たない Containment quarantine(ツール面のずれ
   // など)では no-op。
   if (quarantineKind === "containment") deps.reclaim?.acceptReclaimed();
-  // An unblocked parent or reinstated quarantined resource can make the queue
+  // An unblocked parent or a released quarantine can make the queue
   // head pickable immediately. During triage, staging keeps both flags false.
   if (parentUnblocked || pickupResumed) deps.pollNow();
   return question;
