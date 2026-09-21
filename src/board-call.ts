@@ -15,7 +15,9 @@ export interface BoardCallSpec {
   /** Board call の env(ADR 0044 決定3)。差分ではなく完全形。 */
   env: NodeJS.ProcessEnv;
   /** 時間上限。**省略できない**(ADR 0136 決定4): 上限の無い呼び出しは force を
-   *  撃つ契機を持たず、容器に入れても populated のまま残りうる。 */
+   *  撃つ契機を持たず、容器に入れても populated のまま残りうる。役は詰まりの検知で
+   *  あって通常の遅延を縛ることではない —— 切りすぎた上限は呼び出しを失敗側へ倒す
+   *  ので、値は冷えた CLI の起動込みの遅い側に広く取る。 */
   limitMs: number;
   /** 結果を回収済み観測のあとに返すか。既定は root の exit で返す —— 答えの
    *  正しさは残存の有無で変わらない。true にするのは workspace を cwd にする

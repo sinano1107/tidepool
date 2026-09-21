@@ -507,8 +507,7 @@ function configArgs(config: readonly string[]): string[] {
 }
 
 // 封じ込め能力 preflight の上限。失敗側が tool-surface probe と同じ封じ込め能力の不成立
-// なので値も同じにする。役は詰まりの検知であって通常の遅延を縛ることではない
-// (TOOL_SURFACE_PROBE_TIMEOUT_MS と同じ線)。
+// なので値も同じにする。
 const CODEX_PREFLIGHT_LIMIT_MS = 60_000;
 const PREFLIGHT_KIND = "Codex containment preflight";
 

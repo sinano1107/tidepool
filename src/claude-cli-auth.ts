@@ -23,8 +23,7 @@ export type CliAuthCommand = (
   options: { cwd: string; env: NodeJS.ProcessEnv },
 ) => Promise<CliAuthCommandResult>;
 
-// 認証 probe(Claude / moonshot)の上限。役は詰まりの検知であって通常の遅延を縛ることでは
-// ない(TOOL_SURFACE_PROBE_TIMEOUT_MS と同じ線)—— 最小1ターンのモデル呼び出しが冷えた
+// 認証 probe(Claude / moonshot)の上限 —— 最小1ターンのモデル呼び出しが冷えた
 // CLI の起動込みで収まる幅に取る。
 const CLI_AUTH_PROBE_LIMIT_MS = 60_000;
 

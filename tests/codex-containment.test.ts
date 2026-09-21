@@ -79,6 +79,34 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
   });
 });
 
+it("workspace を cwd にする preflight の呼び出しは、容器が空になるまで次へ進まない(ADR 0136 決定5)", async () => {
+  const spawn = recordingSpawn();
+  const runtime = new FakeContainerRuntime(spawn.spawn);
+  const clock = new FakeClock();
+  const { boardCall } = containerHarness(new ProcessContainers(runtime), clock);
+  const workspace = mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-"));
+  const capability = createCodexCapabilityCheck({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/nonexistent/codex-home",
+    workspace,
+    call: boardCall,
+  })();
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
+  spawn.emitExitAt(0, 0, null);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(2));
+  expect(spawn.calls[1]!.args.slice(0, 2)).toEqual(["debug", "prompt-input"]);
+  runtime.hold(runtime.created[1]!); // force では空にならないホスト
+  spawn.emitExitAt(1, 0, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(spawn.calls).toHaveLength(2);
+
+  runtime.fireEmpty(runtime.created[1]!);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(3));
+  await clock.advance(60_000);
+  expect((await capability).available).toBe(false);
+});
+
 it("宣言どおりの観測は封じ込めを成立させる", async () => {
   expect(await checkCodexCapability(async () => VALID, BOARD_HOOK_PATH)).toEqual({ available: true });
 });

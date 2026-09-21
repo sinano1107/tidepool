@@ -106,9 +106,8 @@ const initializeResponse = z.object({
   codexHome: z.string(),
 });
 
-// 使用量と認証を読む App Server probe の上限(値は据え置き)。役は詰まりの検知であって
-// 通常の遅延を縛ることではない(TOOL_SURFACE_PROBE_TIMEOUT_MS と同じ線)—— 応答は数秒で
-// 揃い、揃った時点で stdin を閉じて返る。
+// 使用量と認証を読む App Server probe の上限(値は据え置き)—— 応答は数秒で揃い、揃った
+// 時点で stdin を閉じて返る。
 export const CODEX_APP_SERVER_LIMIT_MS = 15_000;
 
 /** `CodexCliCommand` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。
@@ -129,9 +128,10 @@ export const codexCommandThrough =
         const until = options.until;
         if (until) {
           let open = true;
-          // readOutput の listener が先に張られているので、ここで読む stdout はこの chunk まで込み
-          proc.stdout.on("data", () => {
-            if (open && until(read(null).stdout)) {
+          let seen = "";
+          proc.stdout.on("data", (chunk: string) => {
+            seen += chunk;
+            if (open && until(seen)) {
               open = false;
               stdin.end();
             }
