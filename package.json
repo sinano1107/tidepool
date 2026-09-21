@@ -25,6 +25,7 @@
     "build:webui": "node scripts/build-webui-bundle.mjs",
     "build:ds-bundle": "node scripts/build-ds-bundle.mjs",
     "build:adr-index": "node scripts/build-adr-index.mjs",
+    "build:ds-sync-inputs": "node scripts/build-ds-sync-inputs.mjs",
     "preview:settings": "tsx scripts/preview-settings.ts"
   },
   "dependencies": {
