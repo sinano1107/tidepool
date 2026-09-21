@@ -2502,14 +2502,13 @@ export function listQueue(
   const rows = boardRows(
     db,
     `WHEN status = 'todo' AND type <> 'question' AND (
-       (? IS NOT NULL AND COALESCE(tasks.workspace, ?) IN (
+       (@defaultWorkspaceName IS NOT NULL AND COALESCE(tasks.workspace, @defaultWorkspaceName) IN (
            SELECT value FROM json_each(@stoppedWorkspaces)))
          OR COALESCE(tasks.assignee, ${fallback}) IN (SELECT value FROM json_each(@stoppedAssignees))
      ) THEN 'skipped'`,
     [
-      defaultWorkspaceName ?? null,
-      defaultWorkspaceName ?? null,
       {
+        defaultWorkspaceName: defaultWorkspaceName ?? null,
         defaultAgentName: defaultAgentName ?? null,
         auditorName: auditorName ?? null,
         stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),

@@ -190,7 +190,7 @@ export interface BootOptions {
   /** ADR 0097 決定2 / issue #446: names of the agents declared with one of the
    *  given providers, read fresh every poll by the scheduler's provider-auth
    *  gate. Absent → no provider quarantine skips anything. */
-  agentsSpeakingProviders?: (providers: readonly Provider[]) => string[];
+  agentsSpeakingProviders?: (providers: readonly string[]) => string[];
   openaiUsage?: CodexAppServerProbe;
   /** ADR 0116 決定4: moonshot の鍵ファイル / Codex の codexHome。渡した盤面だけが
    *  資格情報の不在を実ファイルの存否で観測する。Absent → 不在の観測なし。 */
@@ -203,7 +203,7 @@ export interface BootOptions {
   /** Adapter-owned sandbox/tool-surface capability seam. Passing it arms the
    *  shared container and human-surface checks too. */
   harnessContainment?: HarnessContainmentCheck;
-  agentsUsingHarnesses?: (harnesses: readonly Harness[]) => string[];
+  agentsUsingHarnesses?: (harnesses: readonly string[]) => string[];
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -290,13 +290,9 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
     fableAgents: options.fableAgents,
-    // 合成 root(server-options.ts の quarantineResolvers)と同じ形に畳む
     quarantineResolvers: {
-      providerAuth:
-        options.agentsSpeakingProviders &&
-        ((values) => options.agentsSpeakingProviders!(values as Provider[])),
-      harnessContainment:
-        options.agentsUsingHarnesses && ((values) => options.agentsUsingHarnesses!(values as Harness[])),
+      providerAuth: options.agentsSpeakingProviders,
+      harnessContainment: options.agentsUsingHarnesses,
     },
     openaiUsage: options.openaiUsage,
     credentialAbsence: {
