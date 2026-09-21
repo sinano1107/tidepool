@@ -101,6 +101,11 @@ interface MemorySettings {
   meta_review_period_days: number;
 }
 
+/** 承認 question の注釈(issue #757)。question 行にだけ載り、承認 question なら非 null。 */
+interface ApprovalAnnotation {
+  raises_parent_risk: boolean;
+}
+
 export interface WireContract {
   "GET /api/queue": {
     halts: BoardHalt[];
@@ -108,8 +113,14 @@ export interface WireContract {
     providerUsage?: ProviderUsage[];
     tasks: QueueTask[];
   };
-  "GET /api/tasks": Array<BoardTask & { landing?: { blocked_by: "attached_children" | "objections" | null } | null }>;
+  "GET /api/tasks": Array<
+    BoardTask & {
+      landing?: { blocked_by: "attached_children" | "objections" | null } | null;
+      approval?: ApprovalAnnotation | null;
+    }
+  >;
   "GET /api/tasks/:id": BoardTask & {
+    approval?: ApprovalAnnotation | null;
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;

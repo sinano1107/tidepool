@@ -91,6 +91,7 @@ import {
 } from "./scheduler.js";
 import { clearSpendDown, getSpendDown, setSpendDown } from "./spend-down.js";
 import {
+  approvalAnnotation,
   type BoardTask,
   countUnsettledTasksReferencing,
   DEFAULT_AUDITOR_NAME,
@@ -1985,7 +1986,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const board = await presentLive(listBoard(db, defaultAgentName, auditorName));
     res.json(
       board.map((task) =>
-        task.type === "question" ? { ...task, landing: landingAnnotation(db, task) } : task,
+        task.type === "question"
+          ? { ...task, landing: landingAnnotation(db, task), approval: approvalAnnotation(db, task) }
+          : task,
       ) satisfies WireContract["GET /api/tasks"],
     );
   });
@@ -2033,7 +2036,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       res.status(404).json({ error: "task not found" });
       return;
     }
-    res.json((await presentLive([presentTask(db, task)]))[0]! satisfies WireContract["GET /api/tasks/:id"]);
+    const [presented] = await presentLive([presentTask(db, task)]);
+    // push の単体ビューは親の行を持たない — 承認 question の判定は一覧と同じくここで載せる
+    res.json({
+      ...presented!,
+      ...(task.type === "question" && { approval: approvalAnnotation(db, task) }),
+    } satisfies WireContract["GET /api/tasks/:id"]);
   });
 
   return router;
