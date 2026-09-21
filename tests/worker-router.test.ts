@@ -32,8 +32,7 @@ function fakeWorker(id: string, usage: string): WorkerAdapter & {
   };
 }
 
-const task = (id: string, assignee: string): Task =>
-  ({ id, assignee } as Task);
+const task = (id: string): Task => ({ id }) as Task;
 
 // 温存中の anthropic を避けて openai が選ばれた、の形
 const openai: ExecutionSetting = {
@@ -54,7 +53,7 @@ function router() {
 it("盤面が選んだ実行設定の Provider の正準 Harness へ出し、設定をそのまま adapter へ渡す(ADR 0098 / ADR 0110 決定3)", () => {
   const { worker, claude, codex } = router();
 
-  worker.start(task("multi-entry-task", "deckhand"), openai);
+  worker.start(task("multi-entry-task"), openai);
 
   expect({ claude: claude.started, codex: codex.started, carried: codex.settings }).toEqual({
     claude: [],
@@ -66,7 +65,7 @@ it("盤面が選んだ実行設定の Provider の正準 Harness へ出し、設
 it("watchdog の畳み込み停止は実際に spawn した Harness の root process へ届く", () => {
   const { worker, claude, codex } = router();
 
-  worker.start(task("openai-task", "openai-agent"), openai);
+  worker.start(task("openai-task"), openai);
   worker.gracefulStop("openai-task");
 
   expect(codex.stopped).toEqual(["openai-task"]);
