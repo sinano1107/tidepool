@@ -28,7 +28,6 @@ import type { ProfileAdmin } from "../src/profile-create.js";
 import type { QuarantineResolvers } from "../src/quarantine.js";
 import type {
   AuthorityProfile,
-  Harness,
   Provider,
   RegistryCandidates,
   RegistryReachabilityCheck,
@@ -37,6 +36,7 @@ import type {
 } from "../src/registry.js";
 import type { TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
   BOARD_WORKER_ID,
   getTask,
@@ -184,12 +184,8 @@ export interface BootOptions {
    *  here so GET /api/skills is exercised without a real `claude` CLI (ADR
    *  0027). Absent → the route degrades to an empty candidate set. */
   hostSkills?: (call: BoardCall) => Promise<string[] | null>;
-  /** Agent names whose registry model is fable (ADR 0030) — read fresh every poll
-   *  by the scheduler's fable line and the queue view. Absent → no fable
-   *  model resolution, so the fable line never skips anything. */
-  fableAgents?: () => string[];
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(合成 root の map と同じ形)。
-   *  Absent → agent 名の行のほかは何も止めない。 */
+   *  直接 cancel の門が読む。Absent → agent 名の行のほかは何も止めない。 */
   quarantineResolvers?: QuarantineResolvers;
   openaiUsage?: CodexAppServerProbe;
   /** ADR 0116 決定4: moonshot の鍵ファイル / Codex の codexHome。渡した盤面だけが
@@ -197,9 +193,9 @@ export interface BootOptions {
   moonshotApiKeyFile?: string;
   codexHome?: string;
   /** ADR 0110 決定1/3 / issue #544: この task が走りうる実行設定を Provider 順位で
-   *  並べたもの(除外は未適用)。渡した盤面は Provider ごとの usage 観測を行う。 */
+   *  並べたもの(除外は未適用)。Absent → registry なしの盤面と同じ暗黙の entry
+   *  (合成 root の `implicitTaskExecutionCandidates`、ADR 0140 決定3)。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
-  resolveHarness?: (task: Task) => Harness;
   /** Adapter-owned sandbox/tool-surface capability seam. Passing it arms the
    *  shared container and human-surface checks too. */
   harnessContainment?: HarnessContainmentCheck;
@@ -288,15 +284,13 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     agentAdmin: options.agentAdmin,
     profileAdmin: options.profileAdmin,
     hostSkills: options.hostSkills,
-    fableAgents: options.fableAgents,
     quarantineResolvers: options.quarantineResolvers,
     openaiUsage: options.openaiUsage,
     credentialAbsence: {
       ...(options.moonshotApiKeyFile && { moonshot: () => moonshotKeyAbsence(options.moonshotApiKeyFile) }),
       ...(options.codexHome && { openai: () => codexLoginAbsence(options.codexHome!) }),
     },
-    taskExecutionCandidates: options.taskExecutionCandidates,
-    resolveHarness: options.resolveHarness,
+    taskExecutionCandidates: options.taskExecutionCandidates ?? implicitTaskExecutionCandidates(db),
     harnessContainment: options.harnessContainment,
     providerCliAuth: options.providerCliAuth,
     registryReachability: options.registryReachability,

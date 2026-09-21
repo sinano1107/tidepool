@@ -48,9 +48,8 @@ export { HALT_KINDS, type HaltKind } from "./halt-kind.js";
  *  `observedAt` が言う(issue #82)。scheduler はこの
  *  entry を消費せず常に再観測する(ADR 0008 の just-in-time / 決定5)。
  *
- *  `throttleRevalidating` は DB ではなく scheduler のメモリ内状態なので、合成
- *  root から明示的に注入される(ADR 0041)。注入されない盤面(scheduler を持た
- *  ない読み口)では再観測中は存在しない。 */
+ *  `throttleRevalidating` を注入する呼び手はもう無い(ADR 0140 決定3、引数ごとの
+ *  削除は #803)。 */
 export function boardHalts(
   db: Db,
   throttleRevalidating: () => boolean = () => false,

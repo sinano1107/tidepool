@@ -13,6 +13,7 @@ import {
 } from "../src/auth.js";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 
 let server: TidepoolServer | undefined;
@@ -117,8 +118,10 @@ async function bootWithTokenFile(tokenFile: string): Promise<TidepoolServer> {
   const dir = await tempDir();
   const clock = new FakeClock();
   const { credential } = openHumanCredential({ tokenFile, origins: ["http://127.0.0.1:4589"] });
+  const db = openDb(join(dir, "board.sqlite"));
   return startServer({
-    db: openDb(join(dir, "board.sqlite")),
+    db,
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     port: 0,
     mcpPort: 0,
     clock,

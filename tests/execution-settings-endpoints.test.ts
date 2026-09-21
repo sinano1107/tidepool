@@ -134,6 +134,17 @@ it("Provider 順位の変更は次の pickup から効く —— 「今週は Cl
   });
 });
 
+it("registry なしの盤面の暗黙の entry は Selector の表に追随する —— anthropic の行を差し替えると次の pickup はその model で走る(ADR 0140 決定3)", async () => {
+  t = await bootTidepool();
+  await api(t.baseUrl, "POST", "/api/settings/execution", {
+    setting: "row",
+    row: { provider: "anthropic", tier: "economy", model: "haiku", effort: "low", price_in: 1, price_out: 5 },
+  });
+  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "delete_row", provider: "anthropic", model: "sonnet" });
+  await registerWork(t, "runs on the replaced row");
+  expect(t.worker.startedSettings[0]).toMatchObject({ provider: "anthropic", model: "haiku", effort: "low" });
+});
+
 it("優先順位の既定を cost にすると、要求の無い task は最安の行で走り、行を消すとその行は候補から消える(ADR 0114 決定1・3)", async () => {
   t = await bootTidepool(boardWith(["anthropic", "openai"]));
   // economy の最安は openai の terra(out 12)ではなく anthropic の sonnet(out 10)なので、

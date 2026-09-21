@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { UnknownWorkspaceError, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
@@ -29,6 +30,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       worker,
       containers: fakeContainers(),
       onSpawnFailed: () => {},
+      taskExecutionCandidates: implicitTaskExecutionCandidates(db),
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];
@@ -66,6 +68,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       worker,
       containers: fakeContainers(),
       onSpawnFailed: () => {},
+      taskExecutionCandidates: implicitTaskExecutionCandidates(db),
       workspace: sandbox,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "sandbox"];
@@ -103,6 +106,7 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
       worker,
       containers: fakeContainers(),
       onSpawnFailed: () => {},
+      taskExecutionCandidates: implicitTaskExecutionCandidates(db),
       workspace: prod,
       resolveWorkspace: (name) => {
         const ws = registry[name ?? "prod"];

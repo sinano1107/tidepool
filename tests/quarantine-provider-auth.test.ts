@@ -32,6 +32,12 @@ const candidate = (provider: Provider, model: string): ExecutionSetting => ({
   source: { tier: "board", provider: "only" },
 });
 
+/** agent の entry 宣言を名前の列から組む(provider-scheduler.test.ts と同じ形)。 */
+const entries = (...names: string[]) => ({
+  provider: names.map((name) => ({ name, advisor: false })),
+  tier: undefined,
+});
+
 let t: Tidepool;
 afterEach(() => t?.stop());
 
@@ -45,7 +51,8 @@ function quarantineMoonshot(tidepool: Tidepool): void {
 
 it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthropic の worker は流れ続ける(確認型 question が立つ)", async () => {
   t = await bootTidepool({
-    quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t.db, task.assignee === "kipper" ? entries("moonshot") : entries("anthropic"), task),
   });
   quarantineMoonshot(t);
   const kimi = await registerWork(t, "kimi task waits for its provider", undefined, undefined, "kipper");
@@ -85,7 +92,8 @@ it("moonshot 失効中は moonshot agent の pickup のみが止まり、anthrop
 it("moonshot の確認回答は provider の再検証が通るまで受理されず、通れば moonshot agent の pickup が再開する", async () => {
   let authenticated = false;
   t = await bootTidepool({
-    quarantineResolvers: { providerAuth: (providers) => (providers.includes("moonshot") ? ["kipper"] : []) },
+    taskExecutionCandidates: (task) =>
+      executionSettingsFor(t.db, task.assignee === "kipper" ? entries("moonshot") : entries("anthropic"), task),
     providerCliAuth: {
       moonshot: async () =>
         authenticated
@@ -229,16 +237,8 @@ it("codexHome に auth.json が無い openai は probe を撃たずに absent �
 /* ------------------------------------------------------------------ *
  * entry 経路(server 境界): 開いた quarantine が外すのは Provider であって
  * agent ではない(ADR 0110 決定3 / issue #791)。候補は**実物の selector**
- * (`executionSettingsFor` + 盤面の表)から作る —— `quarantineResolvers` は
- * 渡さない。渡すと agent 名へ写る legacy 経路(`pickupStops`)を通ってしまい、
- * 別 Provider の entry を持つ agent まで道連れになる形を測れない。
+ * (`executionSettingsFor` + 盤面の表)から作る。
  * ------------------------------------------------------------------ */
-
-/** agent の entry 宣言を名前の列から組む(provider-scheduler.test.ts と同じ形)。 */
-const entries = (...names: string[]) => ({
-  provider: names.map((name) => ({ name, advisor: false })),
-  tier: undefined,
-});
 
 it("openai を quarantine 中でも openai と anthropic の entry を持つ agent の task は anthropic で走り、openai entry しか持たない agent の task だけが skipped —— queue 表示と pickup の判定は同じ式(ADR 0110 決定3・5)", async () => {
   t = await bootTidepool({

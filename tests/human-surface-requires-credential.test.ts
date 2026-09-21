@@ -19,6 +19,7 @@ function listRoutes(db: Db): { method: string; path: string }[] {
     clock: new FakeClock(),
     pollNow: () => {},
     landing: unusedLanding,
+    taskExecutionCandidates: () => [],
   });
   const stack = (
     router as unknown as {

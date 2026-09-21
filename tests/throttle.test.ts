@@ -1,4 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { registerTask } from "../src/tasks.js";
 import { healthyUsageText, usagePanelText } from "./fakes.js";
 import {
   api,
@@ -71,13 +72,14 @@ it("使用率+オフセットが100%を超えると catch-up はリセット時�
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
 });
 
-it("パース不能(観測不能)は fail-closed で pickup を skip し、次の hourly tick で再試行する", async () => {
+it("パース不能(観測不能)は fail-closed で暗黙の entry を外し(行は skipped、盤面全体の停止には現れない)、次の hourly tick で再試行する(ADR 0140 決定3)", async () => {
   t = await bootTidepool();
   const task = queueWork(t, "long haul");
 
   t.worker.scriptUsage(null); // simulates a checkUsage failure
   await t.clock.advance(HOUR);
   expect(t.worker.started).toEqual([]);
+  expect(await queueView(task)).toEqual({ status: "skipped", queueHalts: [], pauseHalts: [] });
 
   t.worker.scriptUsage(healthyUsageText(t.clock.now()));
   await t.clock.advance(HOUR);
@@ -110,41 +112,51 @@ it("ペース線超過の間も実行中タスクには決して触れない(常
   expect(t.worker.started.filter((x) => x.type === "work").map((x) => x.id)).toEqual([first.id, second.id]);
 });
 
-it("throttled の全体線は行に現れず、キューの envelope の halts が1回で答える(ADR 0068)", async () => {
+/** 盤面全体の停止の列挙(`GET /api/queue` と `GET /pause` の halts)に throttle が
+ *  居ないこと、と行の状態。 */
+async function queueView(task: { id: string }) {
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  const pause = (await api(t.baseUrl, "GET", "/api/pause")).json;
+  return {
+    status: queue.tasks.find((x: any) => x.id === task.id).status,
+    queueHalts: queue.halts.map((halt: any) => halt.kind),
+    pauseHalts: pause.halts.map((halt: any) => halt.kind),
+  };
+}
+
+it("registry なしの盤面でも Anthropic の Provider 全体の窓の throttle は暗黙の entry だけを外す —— pickup は起きず、行は skipped、盤面全体の停止には現れない(ADR 0140 決定1・3)", async () => {
   t = await bootTidepool();
   const task = queueWork(t, "long haul");
 
   const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
   t.worker.scriptUsage(overPace(resetsAt));
-  await t.clock.advance(HOUR); // drives one poll so the observation is persisted
+  await t.clock.advance(HOUR);
 
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board.find((x: any) => x.id === task.id).status).toBe("todo");
-
-  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
-  expect(queue.tasks.find((x: any) => x.id === task.id).status).toBe("todo");
-  // 鮮度は throttle entry だけが運ぶ(ADR 0068 決定2)
-  expect(queue.halts).toEqual([
-    {
-      kind: "throttle",
-      revalidating: false,
-      failClosed: false,
-      resumesAt: resetsAt.toISOString(),
-      observedAt: expect.any(String),
-    },
-  ]);
-
-  // once resets_at passes and /usage reports a fresh reading, the halt is gone
-  t.worker.scriptUsage(healthyUsageText(t.clock.now()));
-  await t.clock.advance(2 * HOUR);
-  expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([]);
+  expect(t.worker.started).toEqual([]);
+  expect(await queueView(task)).toEqual({ status: "skipped", queueHalts: [], pauseHalts: [] });
 });
 
-/** session/week は健全なまま、fable 線だけ超過している観測 (ADR 0030)。
+it("registry なしの盤面で窓が回復すると、元のキュー順の先頭が pickup される(ADR 0140 決定3)", async () => {
+  t = await bootTidepool();
+  const first = queueWork(t, "first in line");
+  queueWork(t, "second in line");
+
+  const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
+  t.worker.scriptUsage(overPace(resetsAt));
+  await t.clock.advance(HOUR);
+  expect(t.worker.started).toEqual([]);
+
+  // リセットの瞬間の再開タイマーが、hourly tick を待たずに撃ち直す
+  t.worker.scriptUsage(healthyUsageText(t.clock.now()));
+  await t.clock.advance(40 * MIN);
+  expect(t.worker.started.map((x) => x.id)).toEqual([first.id]);
+});
+
+/** session/week は健全なまま、fable 窓だけ超過している観測 (ADR 0030)。
  *  fable resets は12時間後 → 経過 92.9%、オフセット10で線は82.9 — 84% は超過。
  *  catch-up は経過94%の瞬間 = now + 1時間55分12秒後(hourly tick とずれた時刻)。
  *  session(+3h)の壁時計 reset が有効なうちに catch-up が来る数字にしてある —
- *  固定 panel 文字列は clock が session reset を跨ぐと逆算不整合で盤面ごと
+ *  固定 panel 文字列は clock が session reset を跨ぐと逆算不整合で Anthropic ごと
  *  fail-closed に化けるため。 */
 function fableOverPace(now: Date): string {
   return usagePanelText({
@@ -154,33 +166,17 @@ function fableOverPace(now: Date): string {
   });
 }
 
-it("fable 線の超過は fable モデルのタスクだけを skip し、他のタスクは流れ続ける — 盤面全体は止まらない(ADR 0030)", async () => {
-  t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
-  const fableTask = queueWork(t, "fable work", undefined, undefined, "fable-artisan");
-  const normalTask = queueWork(t, "normal work");
-
-  t.worker.scriptUsage(fableOverPace(t.clock.now()));
-  await t.clock.advance(HOUR);
-
-  // キュー先頭は fable タスクだが、skip されて後続の通常タスクが拾われる
-  expect(t.worker.started.map((x) => x.id)).toEqual([normalTask.id]);
-
-  // キュービューでは fable タスクだけが skipped(資源単位なので行に現れる)、
-  // 盤面(/api/tasks)は todo のまま。盤面全体は止まっていないので halts は空
-  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
-  expect(queue.halts).toEqual([]);
-  expect(queue.tasks.find((x: any) => x.id === fableTask.id).status).toBe("skipped");
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board.find((x: any) => x.id === fableTask.id).status).toBe("todo");
-});
-
-it("fable タスクしか無いキューは fable の catch-up 時刻で(hourly tick を待たず)再開する", async () => {
-  t = await bootTidepool({ fableAgents: () => ["fable-artisan"] });
-  const fableTask = queueWork(t, "fable work", undefined, undefined, "fable-artisan");
-
+it("registry なしの盤面で fable 窓に当たる task しか無いキューは、fable の catch-up 時刻で(hourly tick を待たず)再開する(ADR 0030 / ADR 0140 決定3)", async () => {
+  t = await bootTidepool();
+  // frontier を要求する task は表の fable 行に解決され、fable 窓が当たる
+  const fableTask = registerTask(
+    t.db,
+    { type: "work", title: "fable work", purpose: "p", completion_criteria: "c", tier: "frontier" },
+    t.clock.now(),
+  );
   t.worker.scriptUsage(fableOverPace(t.clock.now()));
 
-  // hourly tick(t=1h)が fable skip で候補ゼロを観測し、catch-up タイマーを張る
+  // hourly tick(t=1h)が fable 窓の除外で候補ゼロを観測し、catch-up タイマーを張る
   await t.clock.advance(HOUR + 50 * MIN); // t=1h50m: catch-up(1h55m)より手前
   expect(t.worker.started).toEqual([]);
 
@@ -207,118 +203,4 @@ it("盤面設定のオフセットが判定に効く: session オフセットを
 
   await t.clock.advance(HOUR);
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
-});
-
-it("throttled 中は GET /api/pause が throttle 状態(再開見込み時刻とウィンドウ別内訳)を運ぶ(issue #82 / ADR 0030)", async () => {
-  t = await bootTidepool();
-  queueWork(t, "long haul");
-
-  const resetsAt = new Date(t.clock.now().getTime() + 90 * MIN);
-  t.worker.scriptUsage(overPace(resetsAt));
-  await t.clock.advance(HOUR); // drives one poll so the observation is persisted
-
-  const res = await api(t.baseUrl, "GET", "/api/pause");
-  expect(res.json.throttle.throttled).toBe(true);
-  expect(res.json.throttle.observedAt).toBe(t.clock.now().toISOString());
-  // 85+20 ≥ 100% なので再開見込みはリセット時刻そのもの
-  expect(res.json.throttle.resumesAt).toBe(resetsAt.toISOString());
-  // どの線に当たっているかの内訳 (ADR 0030): session の線、week は健全
-  expect(res.json.throttle.windows.session).toEqual({
-    throttled: true,
-    resumeAt: resetsAt.toISOString(),
-  });
-  expect(res.json.throttle.windows.week).toEqual({ throttled: false, resumeAt: null });
-});
-
-it("usage 再評価を待たず GET /api/pause は revalidating=true を返し、観測完了後に false へ戻る(ADR 0058)", async () => {
-  t = await bootTidepool();
-  const task = queueWork(t, "waits for the usage observation");
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  t.worker.scriptUsageGate(gate);
-
-  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
-
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(true);
-  release();
-  await vi.waitFor(async () => {
-    expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(false);
-  });
-});
-
-it("pickup gate の実 await 中も GET /api/pause は revalidating=true を返し、停止後に false へ戻る(issue #297)", async () => {
-  let calls = 0;
-  let enterGate!: () => void;
-  let releaseGate!: () => void;
-  const gateEntered = new Promise<void>((resolve) => {
-    enterGate = resolve;
-  });
-  const gate = new Promise<void>((resolve) => {
-    releaseGate = resolve;
-  });
-  t = await bootTidepool({
-    resolveHarness: () => "claude-code",
-    harnessContainment: async (harness) => {
-      if (harness === "codex") return { available: true };
-      if (++calls === 1) return { available: true };
-      enterGate();
-      await gate;
-      return { available: false, reason: "tool surface is unavailable" };
-    },
-  });
-  const task = queueWork(t, "waits for the pickup gate");
-
-  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
-  await gateEntered;
-
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(true);
-  releaseGate();
-  await vi.waitFor(async () => {
-    expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(false);
-  });
-});
-
-it("usage 観測後の registry 検査中は GET /api/pause が revalidating=false を返す(ADR 0058)", async () => {
-  let enterRegistry!: () => void;
-  let releaseRegistry!: () => void;
-  const registryEntered = new Promise<void>((resolve) => {
-    enterRegistry = resolve;
-  });
-  const registryGate = new Promise<void>((resolve) => {
-    releaseRegistry = resolve;
-  });
-  t = await bootTidepool({
-    registryReachability: async () => {
-      enterRegistry();
-      await registryGate;
-      return { available: true };
-    },
-  });
-  const task = queueWork(t, "waits for the registry observation");
-
-  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
-  await registryEntered;
-
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.throttle.revalidating).toBe(false);
-  releaseRegistry();
-  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
-});
-
-it("観測不能(パース失敗)の間は GET /api/pause が throttled=true・resumesAt=null・内訳なしを運ぶ — fail-closed の可視化(issue #82)", async () => {
-  t = await bootTidepool();
-  queueWork(t, "long haul");
-
-  t.worker.scriptUsage(null); // simulates a checkUsage failure
-  await t.clock.advance(HOUR);
-
-  const res = await api(t.baseUrl, "GET", "/api/pause");
-  expect(res.json.throttle).toEqual({
-    throttled: true,
-    resumesAt: null,
-    observedAt: t.clock.now().toISOString(),
-    revalidating: false,
-    windows: { session: null, week: null, fable: null },
-  });
 });

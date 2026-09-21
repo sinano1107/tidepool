@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
 import { AUTH_HEADERS, TEST_CREDENTIAL } from "./harness.js";
 
@@ -21,8 +22,10 @@ afterEach(async () => {
 it("/mcp は web/api ポートでは待ち受けず、mcpPort 専用ポートでのみ待ち受ける(issue #37)", async () => {
   dir = await mkdtemp(join(tmpdir(), "tidepool-mcp-port-"));
   const bootClock = new FakeClock();
+  const db = openDb(join(dir, "board.sqlite"));
   server = await startServer({
-    db: openDb(join(dir, "board.sqlite")),
+    db,
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     port: 0,
     mcpPort: 0,
     clock: bootClock,

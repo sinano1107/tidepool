@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
 import { ensureTaskBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
@@ -43,8 +44,10 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
     seedDb.close();
 
     const bootClock = new FakeClock();
+    const db = openDb(dbPath);
     server = await startServer({
-      db: openDb(dbPath),
+      db,
+      taskExecutionCandidates: implicitTaskExecutionCandidates(db),
       port: 0,
       mcpPort: 0,
       clock: bootClock,

@@ -23,10 +23,9 @@ import { recordShadow } from "./learner.js";
 import { registerDueMetaReviews } from "./memory.js";
 import { getProviderPaceOffset } from "./pace-offsets.js";
 import type { ProcessContainers } from "./process-container.js";
-import { type QuarantineResolvers, quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
+import { quarantineExcludedProviders, quarantineStops } from "./quarantine.js";
 import {
   canonicalHarness,
-  type Harness,
   InvalidAgentDefinitionError,
   type Provider,
   type RegistryReachabilityCheck,
@@ -43,7 +42,6 @@ import {
   escalateTask,
   nextSlotTask,
   pickupTask,
-  type ResourceStops,
   resolveTaskAgent,
   type Task,
   type TaskContent,
@@ -53,7 +51,6 @@ import {
   evaluateAndReportProviderUsage,
   type ProviderUsageObservation,
   reportProviderUsage,
-  reportThrottle,
 } from "./throttle.js";
 import {
   evaluateThrottle,
@@ -87,9 +84,8 @@ export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => Execut
 export function allEntriesExcluded(
   task: ExecutionCandidateTarget,
   excluded: ExecutionExclusions,
-  candidates?: TaskExecutionCandidates,
+  candidates: TaskExecutionCandidates,
 ): boolean {
-  if (!candidates) return false;
   let settings: ExecutionSetting[];
   try {
     settings = candidates(task);
@@ -112,29 +108,10 @@ export function allEntriesExcluded(
  *  クロージャを書くと、片方だけが古い除外集合を読むようになる。 */
 export function entryExclusionPredicate(
   db: Db,
-  candidates?: TaskExecutionCandidates,
+  candidates: TaskExecutionCandidates,
 ): (task: ExecutionCandidateTarget) => boolean {
   const excluded = pickupExclusions(db);
   return (task) => allEntriesExcluded(task, excluded, candidates);
-}
-
-/** 資源単位の skip で pickup から外れる workspace / assignee 名 —— 開いた quarantine
- *  (ADR 0137 決定6、表の行の停止範囲から `quarantineStops` が畳む)と、legacy 経路の
- *  fable 線(ADR 0030)。pickup の述語とキューの skipped 表示が同じこの1つの式を見る。
- *
- *  **entry を持つ盤面は `resolvers` に空の map を渡す**(ADR 0110 決定3 / issue #544):
- *  provider / Harness から agent 名へ写して外すと、別の Provider の entry を持つ agent が
- *  道連れになる —— 「全 entry が除外されて初めて skipped」に反する。そちらは
- *  `pickupExclusions` + selector が答える。agent 名の行は写像が自分自身なので両経路で効く。 */
-export function pickupStops(
-  db: Db,
-  fableBlocked: boolean,
-  fableAgents?: () => string[],
-  resolvers?: QuarantineResolvers,
-): ResourceStops {
-  const stops = quarantineStops(db, resolvers);
-  const fable = fableBlocked && fableAgents ? fableAgents() : [];
-  return { workspaces: stops.workspaces, assignees: [...new Set([...fable, ...stops.assignees])] };
 }
 
 /** **pickup の除外条件を組む1つの式**(ADR 0110 決定3 / issue #544)。scheduler の
@@ -177,8 +154,7 @@ function withExclusion(
 }
 
 /** ADR 0008: usage only matters at the moment of a pickup decision — a fresh
- *  check every time there is a candidate, never a background poll. Persists
- *  the observation as a side effect so /api/queue reflects it immediately.
+ *  check every time there is a candidate, never a background poll.
  *  オフセットは盤面設定 (ADR 0030) を毎回読む — settings で変えた値が次の
  *  poll から効く。 */
 async function checkThrottle(
@@ -186,7 +162,6 @@ async function checkThrottle(
   clock: Clock,
   worker: WorkerAdapter,
   cliAuth?: CliAuthCheck,
-  persistLegacy = true,
 ): Promise<{ decision: ThrottleDecision; snapshot: UsageSnapshot }> {
   const resultText = await worker.checkUsage();
   // `null` is deliberately ambiguous (modal, renderer, marker, auth, …).
@@ -227,7 +202,6 @@ async function checkThrottle(
     clock.now(),
     spendDown,
   );
-  if (persistLegacy) reportThrottle(db, decision, clock.now());
   return { decision, snapshot };
 }
 
@@ -258,8 +232,6 @@ export interface Scheduler {
   /** Immediate poll, fired by every pickup trigger (CONTEXT.md「Pickup trigger」/ ADR 0119).
    *  Same poll as the hourly tick: a no-op while the slot is occupied. */
   pollNow: () => void;
-  /** Whether the just-in-time usage observation is currently running. */
-  isThrottleRevalidating: () => boolean;
 }
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
@@ -289,15 +261,6 @@ export function startScheduler(deps: {
    *  Absent → the gate is skipped and issue-backed tasks spawn with their
    *  "#N" placeholder (a board with no GitHub seam at all). */
   github?: GitHubClient;
-  /** Agent names whose registry model is fable (ADR 0030), read fresh every
-   *  poll — the assignee → registry → `model` resolution the fable line
-   *  skips tasks by (spawn 時と同じ経路の前倒し)。Absent → no registry
-   *  configured, so the fable line can't attribute tasks and skips nothing. */
-  fableAgents?: () => string[];
-  /** 資源単位の quarantine の値 → agent 名(`pickupStops`)。entry を持つ盤面
-   *  (`taskExecutionCandidates` あり)では読まない —— agent 名で外すと別 Provider の
-   *  entry まで道連れになる(ADR 0110 決定3)。 */
-  quarantineResolvers?: QuarantineResolvers;
   /** ADR 0098 / issue #454: structured OpenAI subscription observation. */
   openaiUsage?: CodexAppServerProbe;
   /** ADR 0116 決定4: Provider → 資格情報の不在の理由(置かれていれば undefined)。
@@ -306,14 +269,10 @@ export function startScheduler(deps: {
   /** この task が走りうる実行設定を Provider 順位で並べたもの(ADR 0110 決定1/3、
    *  issue #544)。除外は**当てずに**返す —— 除外は同じ poll の中で観測のたびに
    *  育つので、育つたびに selector を引き直すのはこの scheduler の仕事である。
-   *  Absent → Provider ごとの usage 観測を持たない盤面(legacy: 盤面全体の
-   *  Claude usage と fable 線だけ)。 */
-  taskExecutionCandidates?: TaskExecutionCandidates;
+   *  registry なしの盤面も合成の定義1つでこれを持つ(ADR 0140 決定3)。 */
+  taskExecutionCandidates: TaskExecutionCandidates;
   /** ADR 0098: candidate-scoped Harness safety check. A failed Harness is
-   *  excluded for this poll while another route remains eligible. legacy 経路
-   *  (`taskExecutionCandidates` 不在)だけが使う —— entry 経路では選ばれた
-   *  実行設定の Provider から正準 Harness が決まる。 */
-  resolveHarness?: (task: Task) => Harness;
+   *  excluded for this poll while another route remains eligible. */
   harnessContainment?: HarnessContainmentCheck;
   /** 封じ込め能力の fail-closed ゲート(ADR 0033 / ADR 0036): このホストで
    *  worker の封じ込めが成立しているか。pickup のたびに読み直す(依存の消滅・
@@ -347,12 +306,9 @@ export function startScheduler(deps: {
     resolveWorkspace,
     auditorName = DEFAULT_AUDITOR_NAME,
     github,
-    fableAgents,
-    quarantineResolvers,
     openaiUsage,
     credentialAbsence,
     taskExecutionCandidates,
-    resolveHarness,
     harnessContainment,
     containment,
     registryReachability,
@@ -361,9 +317,7 @@ export function startScheduler(deps: {
     registry,
   } = deps;
   let inFlight = false;
-  let throttleRevalidating = false;
   const resumeTimer = createResumeTimers(clock, pollNow);
-  if (taskExecutionCandidates) db.prepare("DELETE FROM throttle_state").run();
 
   async function pickupBlocked(): Promise<boolean> {
     // **順序の不変条件(ADR 0119 決定5)**: slot は最初の await より前に読み、候補(`nextSlotTask`)
@@ -426,7 +380,7 @@ export function startScheduler(deps: {
    *  捨てられる(ADR 0119 決定5)。 */
   async function pickup(
     task: Task,
-    setting: ExecutionSetting | undefined,
+    setting: ExecutionSetting,
     content: Partial<TaskContent>,
   ): Promise<(() => void) | void> {
     // assignee is never overwritten (ADR 0012 / issue #36) — the event's
@@ -607,13 +561,14 @@ export function startScheduler(deps: {
         now,
       );
     }
-    const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth, false);
+    const { decision, snapshot } = await checkThrottle(db, clock, worker, cliAuth);
     const definitions = [
       ["session", null, snapshot.session, decision.windows.session, 5 * HOURLY],
       ["week", null, snapshot.week, decision.windows.week, 7 * 24 * HOURLY],
       ["fable", "fable", snapshot.fable, decision.windows.fable, 7 * 24 * HOURLY],
     ] as const;
-    const observable = snapshot.session !== null && snapshot.week !== null;
+    // 判定の側で見る —— 読めても逆算が不整合な窓は判定が null(evaluateThrottle の fail-closed)
+    const observable = decision.windows.session !== null && decision.windows.week !== null;
     const observation: ProviderUsageObservation = {
       provider,
       status: observable ? "observed" : "unobservable",
@@ -649,43 +604,15 @@ export function startScheduler(deps: {
     // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
     let afterPoll: (() => void) | void;
-    // **`throttleRevalidating` も `pickupBlocked` より手前で立てる。** 同じ gate が
-    // 実 HTTP を待つ間、最後の throttle 観測値は stale でありうる。新しい観測へ
-    // 向かっている事実を `GET /pause` が先に出せなければ、古い throttle を現在の
-    // pickup block と誤読させる(issue #297)。
-    throttleRevalidating = true;
     try {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
       registerDueMetaReviews(db, clock.now());
-      // 上位 halt により観測へ至らないなら、再評価中ではない。その halt 自身が
-      // `GET /pause` の列挙に現れるので、ここで freshness を降ろす。
-      if (await pickupBlocked()) {
-        throttleRevalidating = false;
-        return;
-      }
-      let decision: ThrottleDecision | undefined;
-      if (!taskExecutionCandidates) {
-        decision = (await checkThrottle(db, clock, worker, cliAuth)).decision;
-        if (decision.throttled) {
-          if (decision.resetsAt) resumeTimer.schedule("legacy", decision.resetsAt);
-          throttleRevalidating = false;
-          return;
-        }
-      }
-      // fable 線 (ADR 0030) は盤面を止めず、fable モデルのタスクだけを候補から
-      // 外す — Quarantine と同じ「資源単位の停止」。entry 経路ではこれは model 窓の
-      // 除外として現れるので、agent 名の集合を使うのは legacy 経路だけである。
-      const fableWindow = decision?.windows.fable;
-      // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)—— と
-      // legacy 経路の fable 線 —— だけになった(ADR 0110 決定3 / issue #544)。
-      const stopped = pickupStops(
-        db,
-        fableWindow?.throttled ?? false,
-        fableAgents,
-        taskExecutionCandidates ? {} : quarantineResolvers,
-      );
+      if (await pickupBlocked()) return;
+      // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
+      // (ADR 0110 決定3 / issue #544)。
+      const stopped = quarantineStops(db);
       // ADR 0110 決定3: 除外が当たるのは**その task の entry**であって agent では
       // ない —— 要求ティアが task ごとに違う以上、agent を丸ごと外すと別のモデルで
       // 走るはずの兄弟まで止まり、別の Provider を持つ entry まで道連れになる。
@@ -700,30 +627,6 @@ export function startScheduler(deps: {
       let candidates: ExecutionSetting[] = [];
       while (head) {
         const assignee = resolveTaskAgent(head, worker.id, auditorName);
-        if (!taskExecutionCandidates) {
-          // legacy 経路: Provider ごとの観測を持たない盤面。Harness の封じ込めだけを
-          // agent 単位で見る(entry 経路ではこれも entry の除外条件に畳まれている)。
-          if (resolveHarness && harnessContainment) {
-            let harness: Harness;
-            try {
-              harness = resolveHarness(head);
-            } catch (error) {
-              if (!(error instanceof UnknownAgentError) && !(error instanceof InvalidAgentDefinitionError)) {
-                throw error;
-              }
-              quarantineAgent(db, assignee, error, clock.now());
-              stopped.assignees.push(assignee);
-              head = nextHead();
-              continue;
-            }
-            if (await harnessContainmentPickupBlocked(db, harness, harnessContainment, clock.now())) {
-              stopped.assignees.push(assignee);
-              head = nextHead();
-              continue;
-            }
-          }
-          break;
-        }
         try {
           candidates = taskExecutionCandidates(head);
         } catch (error) {
@@ -787,15 +690,7 @@ export function startScheduler(deps: {
         chosen = setting;
         break;
       }
-      throttleRevalidating = false;
-      if (!head) {
-        // 候補が fable skip で尽きたなら、fable の catch-up でこの poll を再燃
-        // させる — hourly tick 待ちの遊休を作らない(全体線のタイマーと同型)
-        if (fableWindow?.throttled && fableWindow.resumeAt) {
-          resumeTimer.schedule("legacy:fable", fableWindow.resumeAt);
-        }
-        return;
-      }
+      if (!head || !chosen) return;
       if (
         registryReachability &&
         (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))
@@ -805,9 +700,8 @@ export function startScheduler(deps: {
       if (!content) return;
       // 学習器の shadow 行(ADR 0110 決定4): work task の pickup ごとに、除外を当てた
       // 候補から「学習器ならこう選ぶ」を引いて selector の選択と並べる。review task は
-      // 学習器を参照しない(ADR 0111 決定3)。legacy 経路(`chosen` 無し)は候補の列を
-      // 持たないので行も無い。記録は選択に介入しない —— 学習器が倒れても pickup は進む
-      if (chosen && head.type === "work") {
+      // 学習器を参照しない(ADR 0111 決定3)。記録は選択に介入しない —— 学習器が倒れても pickup は進む
+      if (head.type === "work") {
         try {
           recordShadow(db, head, selectable(candidates, entryExcluded), chosen, clock.now());
         } catch (err) {
@@ -816,7 +710,6 @@ export function startScheduler(deps: {
       }
       afterPoll = await pickup(head, chosen, content);
     } finally {
-      throttleRevalidating = false;
       inFlight = false;
     }
     afterPoll?.();
@@ -833,6 +726,5 @@ export function startScheduler(deps: {
       resumeTimer.cancel();
     },
     pollNow,
-    isThrottleRevalidating: () => (taskExecutionCandidates ? false : throttleRevalidating),
   };
 }

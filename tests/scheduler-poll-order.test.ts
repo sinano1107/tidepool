@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { ContainmentCapability } from "../src/containment.js";
 import { openDb } from "../src/db.js";
 import { startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, fakeContainers, ScriptedWorker } from "./fakes.js";
@@ -21,6 +22,7 @@ it("poll が封じ込め検査の await に居る間に登録されたタスク�
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     containment: () => new Promise((resolve) => (release = resolve)),
   });
 

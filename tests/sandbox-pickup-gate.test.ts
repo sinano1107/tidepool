@@ -23,13 +23,6 @@ function flippableCapability(initial: SandboxCapability) {
   };
 }
 
-const CLAUDE_ROUTE = {
-  resolveHarness: () => "claude-code" as const,
-  quarantineResolvers: {
-    harnessContainment: (harnesses: string[]) => (harnesses.includes("claude-code") ? ["fake-worker"] : []),
-  },
-};
-
 const harnessCheck = (check: () => SandboxCapability) => async (harness: string) =>
   harness === "claude-code" ? check() : ({ available: true } as const);
 
@@ -38,7 +31,6 @@ const questions = async (t: Tidepool) =>
 
 it("Claude Harness の能力検査が不成立ならその pickup が止まり、確認型 question が立つ", async () => {
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(() => UNAVAILABLE),
   });
   await registerWork(t, "work that must not run unsandboxed");
@@ -58,7 +50,6 @@ it("Claude Harness の能力検査が不成立ならその pickup が止まり�
 
 it("止まっている間に何度 poll しても question は増えない(1つだけ立つ)", async () => {
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(() => UNAVAILABLE),
   });
   await registerWork(t, "work that must not run unsandboxed");
@@ -73,7 +64,6 @@ it("止まっている間に何度 poll しても question は増えない(1つ�
 it("回答は検証つき解除: 検査が依然不成立なら受理せず、question は open のまま残る", async () => {
   const gate = flippableCapability(UNAVAILABLE);
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(gate.capability),
   });
   await registerWork(t, "work that must not run unsandboxed");
@@ -94,7 +84,6 @@ it("回答は検証つき解除: 検査が依然不成立なら受理せず、qu
 it("検査が通るようになれば回答が受理され、pickup が再開する", async () => {
   const gate = flippableCapability(UNAVAILABLE);
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(gate.capability),
   });
   const task = await registerWork(t, "work that waited for a repaired sandbox");
@@ -115,7 +104,6 @@ it("検査が通るようになれば回答が受理され、pickup が再開す
 it("修理されただけでは再開しない — 人間の確認回答が解除の唯一の門(quarantine と同じ)", async () => {
   const gate = flippableCapability(UNAVAILABLE);
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(gate.capability),
   });
   await registerWork(t, "work that waited for a repaired sandbox");
@@ -129,7 +117,6 @@ it("修理されただけでは再開しない — 人間の確認回答が解�
 
 it("止まっている間、キューは対象 Harness の行だけ skipped にして盤面全体を止めない", async () => {
   t = await bootTidepool({
-    ...CLAUDE_ROUTE,
     harnessContainment: harnessCheck(() => UNAVAILABLE),
   });
   const task = await registerWork(t, "work that must not run unsandboxed");

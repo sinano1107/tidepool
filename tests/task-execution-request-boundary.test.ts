@@ -7,6 +7,7 @@ import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, FakeContainerRuntime, healthyUsageText } from "./fakes.js";
 import {
@@ -220,8 +221,10 @@ You are Tako.
   dirs.push(registryDir, boardDir, logDir);
   const clock = new FakeClock();
 
+  const boardDb = openDb(join(boardDir, "board.sqlite"));
   server = await startServer({
-    db: openDb(join(boardDir, "board.sqlite")),
+    db: boardDb,
+    taskExecutionCandidates: implicitTaskExecutionCandidates(boardDb),
     port: 0,
     mcpPort: 0,
     credential: TEST_CREDENTIAL,

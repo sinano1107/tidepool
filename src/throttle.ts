@@ -5,10 +5,10 @@ import type { Provider } from "./registry.js";
 import { getSpendDown } from "./spend-down.js";
 import type { ThrottleDecision, WindowDecision } from "./usage.js";
 
-/** Persists the scheduler's last just-in-time /usage decision (ADR 0008),
- *  extended by ADR 0030 with the per-window pace verdicts: which line is hit
- *  and its catch-up instant. A NULL *_throttled column records that the
- *  window went unobserved (fail-closed input), distinct from "not throttled". */
+/** 旧 throttle 状態の書き口。scheduler はもう書かない(ADR 0140 / issue #802)——
+ *  残る呼び手は、表とその読み口(#803 で消える)を検査するテストの setup だけである。
+ *  A NULL *_throttled column records that the window went unobserved
+ *  (fail-closed input), distinct from "not throttled". */
 export function reportThrottle(db: Db, decision: ThrottleDecision, observedAt: Date): void {
   db.prepare(
     `INSERT INTO throttle_state (
@@ -70,18 +70,6 @@ function readThrottleState(db: Db): ThrottleStateRow | undefined {
 export interface WindowThrottleState {
   throttled: boolean;
   resumeAt: string | null;
-}
-
-/** The fable line's own stored pickup gate (ADR 0030): true while the last
- *  observation has fable over its pace line and the catch-up instant hasn't
- *  passed. 資源単位なので盤面は止めず、fable モデルのタスクだけを行の skipped
- *  にする — the caller applies it per task. A missing fable observation (NULL column)
- *  is "no per-model limit", never blocked. */
-export function isFablePickupBlocked(db: Db, now: Date): boolean {
-  const row = readThrottleState(db);
-  if (!row || !row.fable_throttled) return false;
-  if (!row.fable_resume_at) return true;
-  return now.getTime() < new Date(row.fable_resume_at).getTime();
 }
 
 export interface ThrottleState {
