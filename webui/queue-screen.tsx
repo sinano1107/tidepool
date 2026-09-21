@@ -258,12 +258,12 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
                     <div key={`${window.window}:${window.model ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: window.throttled ? 'var(--coral-4)' : spend ? 'var(--text-body)' : 'var(--text-muted)' }}>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         {window.window}{window.model ? ` · ${window.model}` : ''} · {window.usedPercent ?? '?'}% · {spend
-                          ? '使い切り中 — 100% で止まり、リセットで解除'
+                          ? 'spend-down · 100% cap · expires at reset'
                           : `offset ${window.offset}pt · ${window.throttled ? `paced${window.resumesAt ? ` until ${new Date(window.resumesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : 'on pace'}`}
                       </span>
                       {spend !== undefined && (
                         <Button variant="secondary" size="sm" onClick={() => onSpendDown(usage.provider, window.window, !spend)}>
-                          {spend ? 'やめる' : '使い切る'}
+                          {spend ? 'cancel' : 'spend down'}
                         </Button>
                       )}
                     </div>

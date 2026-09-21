@@ -1174,12 +1174,12 @@ function App() {
       await api('/api/spend-down', { provider, window, active });
       await refresh();
       say(active ? 'warn' : 'info',
-        active ? `${provider} の ${window} を使い切ります` : `${provider} の ${window} の使い切りをやめました`,
+        active ? `spend-down armed · ${provider} ${window}` : `spend-down cancelled · ${provider} ${window}`,
         active
-          ? 'ペース線を外し、100% に届くまで流します。この窓がリセットされると自動で解除されます'
-          : 'ペース線に戻しました');
+          ? 'pace line off — burns to the 100% cap, expires at the window reset'
+          : 'pace line back on');
     } catch (err) {
-      say('danger', '使い切りを切り替えられませんでした', String((err as Error).message || err));
+      say('danger', 'spend-down failed', String((err as Error).message || err));
     }
   };
 
