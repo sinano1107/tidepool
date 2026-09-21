@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import type { WorkerFactory } from "../src/server.js";
+import { moveTask } from "../src/tasks.js";
 import { FakeContainerRuntime, healthyUsageText, recordingSpawn } from "./fakes.js";
 import {
   api,
@@ -163,18 +164,30 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
   t = await bootTidepool({ watchdog: WATCHDOG });
   const retried = queueWork(t, "retried");
   const abandoned = queueWork(t, "abandoned");
+  const busy = queueWork(t, "busy");
   await t.clock.advance(HOUR);
   t.worker.exitWith(retried.id, { exit_code: 0, signal: null, stderr_tail: null });
   await settle();
-  expect(started()).toEqual([retried.id, abandoned.id]);
   t.worker.exitWith(abandoned.id, { exit_code: 0, signal: null, stderr_tail: null });
   await settle();
+  expect(started()).toEqual([retried.id, abandoned.id, busy.id]);
+  // retry の回答より前に先頭へ置いた task —— 先頭復帰なら retried がこれを追い越す
+  const later = moveTask(t.db, queueWork(t, "later"), null, t.clock.now());
 
   const byTitle = Object.fromEntries((await exitedWithoutReport()).map((q: any) => [q.title, q]));
   await api(t.baseUrl, "POST", `/api/tasks/${byTitle["worker exited without reporting: abandoned"].id}/answer`, { answers: ["abandon"] });
   expect(await status(abandoned.id)).toBe("cancelled");
   await api(t.baseUrl, "POST", `/api/tasks/${byTitle["worker exited without reporting: retried"].id}/answer`, { answers: ["retry"] });
-  expect(started()).toEqual([retried.id, abandoned.id, retried.id]);
+
+  const client = await mcpClient(t.mcpBaseUrl, busy.id);
+  try {
+    await client.callTool({ name: "complete_task", arguments: { handoff: FULL_HANDOFF } });
+  } finally {
+    await client.close();
+  }
+  await settle();
+  expect(started()).toEqual([retried.id, abandoned.id, busy.id, retried.id]);
+  expect(await status(later.id)).toBe("todo");
 });
 
 // ── 実 adapter: 両 adapter で同じ結果になる ──────────────────────────────────
