@@ -201,8 +201,8 @@ export function evaluateAndReportProviderUsage(
   const spendDown = getSpendDown(db);
   // 逆算の不整合(今がリセット時刻 − 窓幅より前)の窓は観測から落とす。Provider 全体の窓なら
   // Provider ごと観測不能に倒す —— model 固有の窓の不在はプランの正常な姿でありうる(ADR 0144 決定3)
-  const inconsistent = (window: ProviderUsageWindow) =>
-    now.getTime() < window.resetsAt.getTime() - window.durationMs;
+  const startsAt = (window: ProviderUsageWindow) => window.resetsAt.getTime() - window.durationMs;
+  const inconsistent = (window: ProviderUsageWindow) => now.getTime() < startsAt(window);
   const unobservable =
     observation.status === "observed" &&
     observation.windows.some((window) => window.model === null && inconsistent(window));
@@ -212,13 +212,13 @@ export function evaluateAndReportProviderUsage(
       observation.provider,
       window.window,
     );
-    const startsAt = window.resetsAt.getTime() - window.durationMs;
-    const elapsed = (now.getTime() - startsAt) / window.durationMs;
-    const spendDownActive = isSpendDownActive(spendDown, observation.provider, window.window, startsAt);
+    const startsAtMs = startsAt(window);
+    const elapsed = (now.getTime() - startsAtMs) / window.durationMs;
+    const spendDownActive = isSpendDownActive(spendDown, observation.provider, window.window, startsAtMs);
     const throttled = spendDownActive
       ? window.usedPercent >= 100
       : window.usedPercent >= 100 || window.usedPercent > elapsed * 100 - offset;
-    const catchesUpAt = startsAt + ((window.usedPercent + offset) / 100) * window.durationMs;
+    const catchesUpAt = startsAtMs + ((window.usedPercent + offset) / 100) * window.durationMs;
     return {
       ...window,
       throttled,

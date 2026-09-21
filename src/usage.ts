@@ -180,14 +180,6 @@ export function claudeUsageObservation(
   };
 }
 
-/** ADR 0030: 人間の取り分の予約(pt)。盤面がペースからこの分だけ遅れて
- *  走ることで、空いた分が人間の対話利用に残る。 */
-export interface PaceOffsets {
-  session: number;
-  week: number;
-  fable: number;
-}
-
 /** The text between `label` and the next occurrence of `until` (or end of
  *  string if `until` is null/absent) — scopes percent/resets matching to one
  *  window so week's numbers can't be picked up while parsing session, and

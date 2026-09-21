@@ -57,7 +57,7 @@ export function getSpendDown(db: Db): SpendDownState {
 
 /** その窓の線を Spend-down が外すか: arm の時刻が窓の開始以降のときだけ当たる —— 前なら arm した
  *  窓はもうリセット済み。anthropic の fable は anthropic の week に従う(ADR 0091 決定2)。
- *  anthropic と Provider ごとの使用量の評価の両方がこの1つの述語を通る。 */
+ *  Provider を問わず、ペース線の評価器(ADR 0144)がこの1つの述語を通る。 */
 export function isSpendDownActive(
   state: SpendDownState,
   provider: Provider,

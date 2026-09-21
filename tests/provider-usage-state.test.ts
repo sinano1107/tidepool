@@ -264,20 +264,19 @@ it("使用率 + オフセットが100%以上なら、ウィンドウ内に catch
   db.close();
 });
 
-it("anthropic の spend-down(week) は week と fable の線を一緒に外す(同じ瞬間に失効する予算、ADR 0091 決定2)", () => {
+it("model 固有の窓のペース超過は Provider を止めない — 超過と catch-up はその窓にだけ載る(ADR 0030: 資源単位の絞り)", () => {
   const db = openDb(":memory:");
-  // 現 week ウィンドウ(開始 Jul 17 12:00)内の有効化
-  setSpendDown(db, "anthropic", "week", new Date("2026-07-21T12:00:00.000Z"));
 
-  // どちらもペース判定なら超過する観測(線は 61.4)
+  // fable 85 > 線 61.4 で超過。catch-up は経過95%の瞬間 = 開始 Jul 17 12:00 + 0.95 × 7d = Jul 24 03:36
   const observed = evaluate(db, [
-    { window: "week", model: null, usedPercent: 85, resetsAt: WEEK_RESETS },
+    { window: "week", model: null, usedPercent: 30, resetsAt: WEEK_RESETS },
     { window: "fable", model: "fable", usedPercent: 85, resetsAt: WEEK_RESETS },
   ]);
 
+  expect(observed.status).toBe("observed");
   expect(observed.windows).toEqual([
     expect.objectContaining({ window: "week", throttled: false }),
-    expect.objectContaining({ window: "fable", throttled: false }),
+    expect.objectContaining({ window: "fable", throttled: true, resumesAt: new Date("2026-07-24T03:36:00.000Z") }),
   ]);
   db.close();
 });
