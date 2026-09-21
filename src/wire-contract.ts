@@ -74,6 +74,33 @@ interface WindowThrottle {
   resumeAt: string | null;
 }
 
+/** 危険な値の確認の 409(ADR 0061 決定1)。理由コードは表示の表を引くだけで、知らない
+ *  コードは生の文字列で出す(settings-screen の DANGEROUS_REASON_LABEL)ので `string`。 */
+interface DangerousValuesConflict {
+  error: string;
+  confirm_required: true;
+  dangerous_values: string[];
+}
+
+/** 削除の 409(ADR 0087)。確認では買えない `blocked` の形も同じ status で来るので、
+ *  `confirm_required` は立たないことがある —— WebUI は立ったときだけ確認を開く。 */
+interface DeletionConflict {
+  error: string;
+  confirm_required?: true;
+}
+
+/** 設定面の1選択肢(src/registry.ts の PROVIDER_OPTIONS)。 */
+interface Option {
+  value: string;
+  label: string;
+}
+
+/** spawn 注入の上限と meta-review の間隔(src/memory.ts の MemorySettings)。 */
+interface MemorySettings {
+  injection_token_cap: number;
+  meta_review_period_days: number;
+}
+
 export interface WireContract {
   "GET /api/queue": {
     halts: BoardHalt[];
@@ -130,7 +157,15 @@ export interface WireContract {
   };
   "GET /api/registry/candidates": { assignees: string[]; workspaces: string[]; icons: Record<string, string> };
   "POST /api/translate":
-    | { status: "translated"; text?: string; purpose?: string; items?: Array<{ title: string; detail?: string }>; doc?: string }
+    | {
+        status: "translated";
+        /** memory_entry の訳は title と text で来る(src/translation.ts の translateMemoryEntry)。 */
+        title?: string;
+        text?: string;
+        purpose?: string;
+        items?: Array<{ title: string; detail?: string }>;
+        doc?: string;
+      }
     | { status: "throttled" };
   "POST /api/tasks": Pick<BoardTask, "id" | "type">;
   /** 登録の門の 422(src/human-verbs.ts の issue_rejected)。`api()` のキーには出ない。 */
@@ -153,4 +188,98 @@ export interface WireContract {
   "GET /api/settings/display-language": { language: string; options: readonly string[] };
   "GET /api/github-issues": { issues: Array<{ number: number; title: string }>; truncated: boolean };
   "GET /api/pending-dumps": ScratchpadLine[];
+  "GET /api/workspaces": {
+    workspaces: Array<{
+      name: string;
+      registrySelf: boolean;
+      path?: string;
+      repo?: string;
+      branch?: string;
+      notes?: string;
+      protected?: boolean;
+      review_allowed_commands?: string[];
+      allowed_domains?: string[];
+    }>;
+    /** 値集合の正本は src/workspace.ts の WorkspacesBaseDirSource(ADR 0082 決定1)。 */
+    workspacesBaseDir: { path: string; source: "configured" | "default" };
+  };
+  /** register の門(issue #383)。`clone_landing` は origin を持たない checkout では null。 */
+  "POST /api/workspaces 409": {
+    error: string;
+    confirm_required: true;
+    live_checkout_signals: string[];
+    clone_landing: string | null;
+  };
+  "PATCH /api/workspaces/:name 409": DangerousValuesConflict;
+  /** 残る checkout の場所(ADR 0087 決定4)。 */
+  "DELETE /api/workspaces/:name": { checkout: string };
+  "DELETE /api/workspaces/:name 409": DeletionConflict;
+  "GET /api/agents": {
+    agents: Array<{
+      name: string;
+      icon?: string;
+      description: string;
+      systemPrompt: string;
+      authority: string;
+      provider: string;
+      tier?: string;
+      advisor: boolean;
+      skills: string[];
+      builtin?: true;
+      shadowsBuiltIn?: true;
+    }>;
+    authorityProfiles: string[];
+    providers: readonly Option[];
+  };
+  "POST /api/agents": { shadows_built_in?: true };
+  "DELETE /api/agents/:name 409": DeletionConflict;
+  "GET /api/profiles": {
+    profiles: Array<{
+      name: string;
+      guidance: string;
+      assignable_to?: string[];
+      allowed_workspaces?: string[];
+      merge?: string;
+    }>;
+  };
+  "POST /api/profiles 409": DangerousValuesConflict;
+  "PATCH /api/profiles/:name 409": DangerousValuesConflict;
+  "DELETE /api/profiles/:name 409": DeletionConflict;
+  "GET /api/skills": { skills: string[]; degraded: boolean };
+  "GET /api/settings/quiet-hours": { start: string; end: string; tz: string };
+  "POST /api/settings/quiet-hours": { start: string; end: string };
+  "GET /api/settings/provider-pace-offsets": { offsets: Array<{ provider: string; window: string; offset: number }> };
+  "GET /api/settings/execution": {
+    table: ReadonlyArray<{ provider: string; tier: string; model: string; effort: string; price_in: number; price_out: number }>;
+    frontierAdvisor: boolean;
+    providerRank: readonly string[];
+    priority: string;
+    providers: readonly Option[];
+    tiers: readonly string[];
+    priorities: readonly string[];
+  };
+  "GET /api/settings/memory": MemorySettings;
+  "POST /api/settings/memory": MemorySettings;
+  "GET /api/settings/memory/entries": {
+    entries: Array<{
+      id: number;
+      /** 値集合の正本は src/memory.ts の MemoryEntryFields["kind"](移送は issue #352)。 */
+      kind: "knowledge" | "behavior" | "definition";
+      state: string;
+      scope: string | null;
+      path: string;
+      title: string;
+      text: string;
+      original: { title: string; text: string } | null;
+      author: { activity: string };
+      invalidation_reason: string | null;
+      successor_id: number | null;
+      cause: string | null;
+    }>;
+  };
+  "POST /api/settings/display-language": { language: string };
+  "GET /api/settings/github": { loggedIn: boolean };
+  "GET /api/translate/usage": {
+    records: Array<{ usage: { input_tokens: number; output_tokens: number; estimated_cost_usd: number } }>;
+  };
 }

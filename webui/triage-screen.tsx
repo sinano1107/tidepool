@@ -42,15 +42,8 @@ type TpTranslateFn = (
 ) => Promise<TpTranslation>;
 type TpTranslation =
   | { status: 'loading' }
-  | { status: 'throttled' }
   | { status: 'error'; message: string }
-  | {
-      status: 'translated';
-      purpose?: string;
-      items?: { title: string; detail?: string }[];
-      text?: string;
-      doc?: string;
-    };
+  | WireContract['POST /api/translate'];
 /** 流し読みの1行 —— LogEntry が受け取る形 + この画面が読む欄。 */
 type TpLogEntry = NonNullable<import('../design-system/components/board/LogEntry').LogEntryProps['entry']> & {
   id: number;

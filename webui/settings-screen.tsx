@@ -2,10 +2,7 @@
 // the workspace / agent / profile create forms — the name becomes a directory
 // or a file name in the registry, so the three share one rule. It drives the
 // disabled state only; the server's assertValid*Name stays the authority.
-/** 設定面が扱う形 —— レジストリの record はサーバ JSON そのままで、集合ごとの型の
- *  移送は issue #352 が持つ。
- *
- *  面全体で編集中のカードは高々1枚(issue #204 決定4)。その1枠を配る口。 */
+/** 面全体で編集中のカードは高々1枚(issue #204 決定4)。その1枠を配る口。 */
 interface SettingsEditSlot {
   isOpen: (id: string) => boolean;
   /** `prime` は下書きを record から満たす。parked なら人間が答えるまで走らない。 */
@@ -14,6 +11,14 @@ interface SettingsEditSlot {
   requestClose: () => boolean;
   setDirty: (dirty: boolean) => void;
 }
+
+/** 設定面が読むサーバ応答の行 —— 形の正本は wire の契約(ADR 0138)。 */
+type SettingsWorkspace = WireContract['GET /api/workspaces']['workspaces'][number];
+type SettingsBaseDir = WireContract['GET /api/workspaces']['workspacesBaseDir'];
+type SettingsAgent = WireContract['GET /api/agents']['agents'][number];
+type SettingsProfile = WireContract['GET /api/profiles']['profiles'][number];
+type SettingsExecution = WireContract['GET /api/settings/execution'];
+type SettingsExecutionRow = SettingsExecution['table'][number];
 
 function registryNameOk(name: string) {
   const v = name.trim();
@@ -135,7 +140,7 @@ function FreeEntryAllowlistInput({
 // types every time is itself the shape of consent. The board creates nothing
 // on GitHub: the repository is one the human prepared and invited the bot to.
 function PublishWorkspace({ ws, say, onPublished }: {
-  ws: ServerJson;
+  ws: SettingsWorkspace;
   say: AppSay;
   onPublished: () => Promise<void> | void;
 }) {
@@ -181,8 +186,8 @@ function PublishWorkspace({ ws, say, onPublished }: {
 // entry at a different checkout, which stays a manual registry edit, so they
 // are shown but never editable here.
 function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
-  ws: ServerJson;
-  baseDir: ServerJson;
+  ws: SettingsWorkspace;
+  baseDir: SettingsBaseDir | null;
   say: AppSay;
   onChanged: () => Promise<void>;
   edit: SettingsEditSlot;
@@ -214,11 +219,11 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
   // untouched fields must stay absent for pure-payload confirmation judgment
   // (ADR 0061 決定2 / ADR 0072).
   const save = () => {
-    const body: ServerJson = { notes: notes.trim() };
+    const body: { notes: string; protected?: boolean; review_allowed_commands?: string[]; allowed_domains?: string[] } = { notes: notes.trim() };
     if (prot !== !!ws.protected) body.protected = prot;
     if (!sameStrings(cmds, ws.review_allowed_commands ?? [])) body.review_allowed_commands = cmds;
     if (!sameStrings(domains, ws.allowed_domains ?? [])) body.allowed_domains = domains;
-    submit(`/api/workspaces/${encodeURIComponent(ws.name)}`, 'PATCH', body, 'updated', ws.name);
+    submit(async (confirm) => { await api(`/api/workspaces/${encodeURIComponent(ws.name)}`, { ...body, ...confirm }, 'PATCH'); }, 'updated', ws.name);
   };
 
   return (
@@ -334,14 +339,14 @@ interface SettingsOption {
   label: string;
 }
 
-function agentDraftOf(agent: ServerJson): AgentDraft {
+function agentDraftOf(agent: SettingsAgent): AgentDraft {
   return {
-    icon: agent.icon ?? '', description: agent.description ?? '',
-    systemPrompt: agent.systemPrompt ?? '', authority: agent.authority ?? '',
-    provider: agent.provider ?? '',
-    tier: agent.tier ?? '', advisor: agent.advisor === true,
+    icon: agent.icon ?? '', description: agent.description,
+    systemPrompt: agent.systemPrompt, authority: agent.authority,
+    provider: agent.provider,
+    tier: agent.tier ?? '', advisor: agent.advisor,
     // GET /api/agents already returns skills (ADR 0025)
-    skills: agent.skills ?? [],
+    skills: agent.skills,
   };
 }
 
@@ -406,7 +411,7 @@ const TIER_OPTIONS = [
 function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills, hostSkillsDegraded }: {
   draft: AgentDraft;
   set: (key: keyof AgentDraft, value: AgentDraftValue) => void;
-  authorityOptions: SettingsOption[];
+  authorityOptions: (string | SettingsOption)[];
   providerOptions: SettingsOption[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
@@ -436,8 +441,8 @@ function AgentFields({ draft, set, authorityOptions, providerOptions, hostSkills
 // prefilled from the GET /api/agents list. `name` is shown via AgentChip only —
 // renaming isn't offered here at all (it's the file name, parent issue #54).
 function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onChanged, edit }: {
-  agent: ServerJson;
-  authorityProfiles: ServerJson[];
+  agent: SettingsAgent;
+  authorityProfiles: string[];
   providerOptions: SettingsOption[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
@@ -490,18 +495,18 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
       )}
       {!open && (
         <React.Fragment>
-          <FieldRow label="description" kind={agent.description ? 'text' : 'unset'} value={agent.description ?? ''} unsetLabel="—" />
-          <FieldRow label="specialty" kind={agent.systemPrompt ? 'text' : 'unset'} value={agent.systemPrompt ?? ''}
+          <FieldRow label="description" kind={agent.description ? 'text' : 'unset'} value={agent.description} unsetLabel="—" />
+          <FieldRow label="specialty" kind={agent.systemPrompt ? 'text' : 'unset'} value={agent.systemPrompt}
             unsetLabel="no specialty — worker protocol only" />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <FieldRow label="authority" kind={agent.authority ? 'mono' : 'unset'} value={agent.authority ?? ''} unsetLabel="—" />
-            <FieldRow label="provider" kind={agent.provider ? 'mono' : 'unset'} value={agent.provider ?? ''} unsetLabel="—" />
+            <FieldRow label="authority" kind={agent.authority ? 'mono' : 'unset'} value={agent.authority} unsetLabel="—" />
+            <FieldRow label="provider" kind={agent.provider ? 'mono' : 'unset'} value={agent.provider} unsetLabel="—" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <FieldRow label="default tier" kind={agent.tier ? 'mono' : 'unset'} value={agent.tier ?? ''} unsetLabel="board default" />
             <FieldRow label="advisor" kind={agent.advisor ? 'mono' : 'unset'} value={agent.advisor ? 'yes' : ''} unsetLabel="no advisor" />
           </div>
-          <FieldRow label="skills" kind={(agent.skills ?? []).length ? 'tags' : 'unset'} tags={agent.skills ?? []}
+          <FieldRow label="skills" kind={agent.skills.length ? 'tags' : 'unset'} tags={agent.skills}
             scheme="skills" wildcardHint="every skill" unsetLabel="no skills allowed" />
         </React.Fragment>
       )}
@@ -764,19 +769,40 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
 // confirmation can buy (referenced by unsettled tasks, the board's default, the
 // registry clone itself); it lands on the ordinary failure toast, whose message
 // already spells out the count / agent names the server counted.
-/** 削除カードが読む section の欄だけ(SECTIONS の1エントリが構造的に満たす)。 */
-interface SettingsSectionDelete {
+/** registry 由来の3節(issue #204)。一覧・節・record の3段が同じ形で読む。 */
+type SettingsSectionKey = 'workspaces' | 'agents' | 'profiles';
+/** 3節の行が共有する欄 —— 段の側はこの形だけを読む。 */
+interface SettingsRecord {
+  name: string;
+  builtin?: true;
+}
+/** 1節の定義。関数値の欄をメソッド記法で書くのは、行の型が違う3節を
+ *  `SettingsSection<SettingsRecord>` の1つの形で受けるため(メソッドの引数は双変)。 */
+interface SettingsSection<R extends SettingsRecord> {
+  title: string;
   singular: string;
+  note: string;
+  items: R[] | null;
+  unavailable: boolean;
+  footnote: string;
+  indexSummary(items: R[]): string;
+  rowIdentity(item: R): { label?: string; agentName?: string; agentIcon?: string };
+  rowSummary(item: R): string;
+  record(rec: R): React.ReactNode;
+  createForm(): React.ReactNode;
+  reload(): Promise<void>;
   deleteNote: string;
   deleteLead: string;
-  deleteDetail?: (result: ServerJson, name: string) => string;
+  /** 削除の要求。既定は `DELETE /api/<節>/<name>` を送るだけで、応答を読む節だけが持つ。 */
+  remove?(confirm: Record<string, true>, name: string): Promise<string | void>;
 }
+
 function DeleteRecord({ section, sectionKey, name, say, onDeleted }: {
-  section: SettingsSectionDelete;
-  sectionKey: string;
+  section: SettingsSection<SettingsRecord>;
+  sectionKey: SettingsSectionKey;
   name: string;
   say: AppSay;
-  onDeleted: (result: ServerJson) => Promise<void> | void;
+  onDeleted: () => Promise<void> | void;
 }) {
   const { Button, Card } = window.TidepoolDesignSystem_8a0ead;
   const { busy, save, dialog } = useDangerousSave(say, onDeleted, {
@@ -787,8 +813,10 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }: {
     // ダイアログの本文がそのまま資源ごとの説明である
     dialogLead: section.deleteLead,
     confirmLabel: 'Delete',
-    successDetail: section.deleteDetail,
+    confirmOf: (err) => (apiErrorDetail(err, `DELETE /api/${sectionKey}/:name 409`)?.confirm_required ? { reasons: [] } : null),
   });
+  const remove = section.remove
+    ?? (async (confirm: Record<string, true>) => { await api(`/api/${sectionKey}/${encodeURIComponent(name)}`, confirm, 'DELETE'); });
   return (
     <Card>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -796,7 +824,7 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }: {
           {section.deleteNote}
         </p>
         <Button variant="danger" size="sm" disabled={busy}
-          onClick={() => save(`/api/${sectionKey}/${encodeURIComponent(name)}`, 'DELETE', {}, 'deleted', name)}>
+          onClick={() => save((confirm) => remove(confirm, name), 'deleted', name)}>
           Delete {section.singular}
         </Button>
       </div>
@@ -825,37 +853,38 @@ interface DangerousSaveOptions {
   confirmKey: string;
   dialogTitle: string;
   dialogLead: string;
-  successDetail?: (result: ServerJson, name: string) => string;
   confirmLabel?: string;
-  dialogNote?: (detail: ServerJson) => React.ReactNode;
   failDetail?: string;
-  reasonsKey?: string;
   labels?: Record<string, string>;
+  /** その扉の 409 を契約のエラー行で読む —— 確認で買える拒否なら、ダイアログが列挙する
+   *  理由コードと、その扉だけが持つ一行(issue #383 の clone 入口の着地先など)を返す。 */
+  confirmOf: (err: unknown) => { reasons: string[]; note?: React.ReactNode } | null;
 }
 function useDangerousSave(
   say: AppSay,
-  onDone: (result: ServerJson) => Promise<void> | void,
-  { noun, confirmKey, dialogTitle, dialogLead, successDetail, confirmLabel, dialogNote, failDetail, reasonsKey = 'dangerous_values', labels = DANGEROUS_REASON_LABEL }: DangerousSaveOptions,
+  onDone: () => Promise<void> | void,
+  { noun, confirmKey, dialogTitle, dialogLead, confirmLabel, failDetail, labels = DANGEROUS_REASON_LABEL, confirmOf }: DangerousSaveOptions,
 ) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const [busy, setBusy] = React.useState(false);
-  const [confirm, setConfirm] = React.useState<{ reasons: string[]; detail: ServerJson; resend: () => void } | null>(null); // null while safe
-  const save = async (path: `/${string}`, method: string, body: ServerJson, verb: string, name: string) => {
+  const [confirm, setConfirm] = React.useState<{ reasons: string[]; note?: React.ReactNode; resend: () => void } | null>(null); // null while safe
+  // `send` は扉ごとの要求そのもの(確認の旗を本文へ混ぜて出す)。返す文字列は完了表示の
+  // 名指し —— workspace の削除だけが「残る checkout の場所」を返す(ADR 0087 決定4)
+  const save = async (send: (confirm: Record<string, true>) => Promise<string | void>, verb: string, name: string) => {
     const attempt = async (confirmed: boolean) => {
       setBusy(true);
       try {
-        // 応答は捨てない: workspace の削除だけは「残る checkout の場所」を
-        // 返すので(ADR 0087 決定4)、完了表示がそれを名指しできる
-        const result = await api(path, confirmed ? { ...body, [confirmKey]: true } : body, method);
+        const detail = await send(confirmed ? { [confirmKey]: true } : {});
         setConfirm(null);
-        say('success', `${noun} ${verb} — committed to the registry`, successDetail ? successDetail(result, name) : name);
-        await onDone(result);
+        say('success', `${noun} ${verb} — committed to the registry`, detail || name);
+        await onDone();
       } catch (err) {
         // the #77 confirmation 409 is distinguished from any other failure
         // (bad input, a push that never landed — ADR 0052 決定1) by its
         // confirm_required flag — only that one opens the dialog for a resend
-        if (err instanceof ApiError && err.status === 409 && err.detail?.confirm_required) {
-          setConfirm({ reasons: err.detail[reasonsKey] ?? [], detail: err.detail, resend: () => attempt(true) });
+        const asked = confirmOf(err);
+        if (asked) {
+          setConfirm({ ...asked, resend: () => attempt(true) });
         } else {
           setConfirm(null);
           // `not ${verb}` であって `${verb} failed` ではない — verb は過去分詞
@@ -883,17 +912,26 @@ function useDangerousSave(
       </ul>
       {/* 理由コードの列挙の下に、その扉だけが持つ一行(issue #383 の clone 入口の
           着地先など)。出せるものが無ければ何も描かない */}
-      {confirm && dialogNote?.(confirm.detail)}
+      {confirm?.note}
     </PortalDialog>
   );
   return { busy, save, dialog };
 }
 
-function useProfileSave(say: AppSay, onDone: (result: ServerJson) => Promise<void> | void) {
+/** 危険な値の 409 を契約のその扉の行で読む(ADR 0061 決定1)。 */
+function dangerousValuesOf(key: 'PATCH /api/workspaces/:name 409' | 'POST /api/profiles 409' | 'PATCH /api/profiles/:name 409') {
+  return (err: unknown) => {
+    const detail = apiErrorDetail(err, key);
+    return detail?.confirm_required ? { reasons: detail.dangerous_values } : null;
+  };
+}
+
+function useProfileSave(say: AppSay, onDone: () => Promise<void> | void, conflict: 'POST /api/profiles 409' | 'PATCH /api/profiles/:name 409') {
   return useDangerousSave(say, onDone, {
     noun: 'profile', confirmKey: 'confirmDangerous',
     dialogTitle: 'Save a profile with broad power?',
     dialogLead: 'This profile grants broad power. Review before saving:',
+    confirmOf: dangerousValuesOf(conflict),
   });
 }
 
@@ -904,11 +942,12 @@ function useProfileSave(say: AppSay, onDone: (result: ServerJson) => Promise<voi
 // itself, which is exactly the single-source-on-the-server posture ADR 0027
 // and DANGEROUS_REASON_LABEL's own comment rule out. Every dangerous save now
 // round-trips through the same 409 the direct API gets.
-function useWorkspaceSave(say: AppSay, onDone: (result: ServerJson) => Promise<void> | void) {
+function useWorkspaceSave(say: AppSay, onDone: () => Promise<void> | void) {
   return useDangerousSave(say, onDone, {
     noun: 'workspace', confirmKey: 'confirm',
     dialogTitle: 'Save a change that widens what agents may do?',
     dialogLead: 'This change widens what agents may do here. Review before saving:',
+    confirmOf: dangerousValuesOf('PATCH /api/workspaces/:name 409'),
   });
 }
 
@@ -918,7 +957,7 @@ function useWorkspaceSave(say: AppSay, onDone: (result: ServerJson) => Promise<v
 // (authority/<name>.yaml), not renameable here, same as agents. No delete: an
 // agent referencing this profile would break at spawn (parent issue #55).
 function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }: {
-  profile: ServerJson;
+  profile: SettingsProfile;
   agentNames: string[];
   agentIcons: Record<string, string>;
   workspaceNames: string[];
@@ -929,17 +968,17 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const id = `profile:${profile.name}`;
   const open = edit.isOpen(id);
-  const [guidance, setGuidance] = React.useState(profile.guidance ?? '');
+  const [guidance, setGuidance] = React.useState(profile.guidance);
   const [assignableTo, setAssignableTo] = React.useState(profile.assignable_to ?? []);
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState(profile.allowed_workspaces ?? []);
   const [merge, setMerge] = React.useState(profile.merge ?? '');
-  const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onChanged(); });
+  const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onChanged(); }, 'PATCH /api/profiles/:name 409');
 
   // Per-field, because the wire body carries exactly the changed fields
   // (ADR 0086 決定4) — one source for the dirty flag and for what travels, so
   // an untouched value can never sneak into the danger judgment.
   const changed = {
-    guidance: guidance !== (profile.guidance ?? ''),
+    guidance: guidance !== profile.guidance,
     assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
     allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
     merge: (merge || '') !== (profile.merge ?? ''),
@@ -948,19 +987,19 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   useDirtySignal(edit, open, dirty);
 
   const startEdit = () => edit.open(id, () => {
-    setGuidance(profile.guidance ?? '');
+    setGuidance(profile.guidance);
     setAssignableTo(profile.assignable_to ?? []);
     setAllowedWorkspaces(profile.allowed_workspaces ?? []);
     setMerge(profile.merge ?? '');
   });
 
   const submit = () => {
-    const body: ServerJson = {};
+    const body: Partial<Record<'guidance' | 'merge', string> & Record<'assignable_to' | 'allowed_workspaces', string[]>> = {};
     if (changed.guidance) body.guidance = guidance;
     if (changed.assignable_to) body.assignable_to = assignableTo;
     if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
     if (changed.merge) body.merge = merge;
-    save(`/api/profiles/${encodeURIComponent(profile.name)}`, 'PATCH', body, 'updated', profile.name);
+    save(async (confirm) => { await api(`/api/profiles/${encodeURIComponent(profile.name)}`, { ...body, ...confirm }, 'PATCH'); }, 'updated', profile.name);
   };
 
   return (
@@ -970,7 +1009,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
       </RecordCardHead>
       {!open && (
         <React.Fragment>
-          <FieldRow label="guidance" kind={profile.guidance ? 'text' : 'unset'} value={profile.guidance ?? ''} unsetLabel="—" />
+          <FieldRow label="guidance" kind={profile.guidance ? 'text' : 'unset'} value={profile.guidance} unsetLabel="—" />
           <FieldRow label="assignable to" kind={(profile.assignable_to ?? []).length ? 'tags' : 'unset'}
             tags={profile.assignable_to ?? []} agentIcons={agentIcons} wildcardHint="any agent"
             unsetLabel="nobody — this authority can't be delegated" />
@@ -1035,7 +1074,7 @@ function GitHubLoginCard({ loggedIn }: { loggedIn: boolean | null }) {
 // second copy of its numbers kept here.
 // `records` null means the read failed: a face put here to catch a silent
 // regression must not itself go silent, so the card stays and says so.
-function TranslateUsageCard({ records }: { records: ServerJson[] | null }) {
+function TranslateUsageCard({ records }: { records: WireContract['GET /api/translate/usage']['records'] | null }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const last = records?.at(-1);
   return (
@@ -1045,7 +1084,7 @@ function TranslateUsageCard({ records }: { records: ServerJson[] | null }) {
         <React.Fragment>
           <FieldRow label="translations" kind="mono" value={`${records!.length} generated`} />
           <FieldRow label="estimated cost" kind="mono"
-            value={`$${records!.reduce((sum: number, r: ServerJson) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`} />
+            value={`$${records!.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`} />
           <FieldRow label="last call" kind="mono"
             value={`${last.usage.input_tokens} in / ${last.usage.output_tokens} out`} />
         </React.Fragment>
@@ -1077,7 +1116,7 @@ function DisplayLanguageCard({ language, options, say, onSaved, edit }: {
     try {
       // the select can only hold a canonical value, so POST sends it verbatim —
       // no trimming/normalization here (that lives at the write boundary)
-      const { language: saved } = await api('/api/settings/display-language', { language: draft });
+      const { language: saved } = await api('POST /api/settings/display-language', { body: { language: draft } });
       say('success', 'display language saved', saved);
       edit.close();
       await onSaved();
@@ -1131,7 +1170,7 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }: {
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api('/api/settings/quiet-hours', { start: draftStart, end: draftEnd });
+      const saved = await api('POST /api/settings/quiet-hours', { body: { start: draftStart, end: draftEnd } });
       say('success', 'quiet hours saved', `${saved.start}–${saved.end}`);
       edit.close();
       await onSaved();
@@ -1177,7 +1216,7 @@ function QuietHoursCard({ start, end, tz, say, onSaved, edit }: {
 // share (pt) per usage window — the board runs this far behind the elapsed-time
 // pace.
 function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
-  offsets: ServerJson[];
+  offsets: WireContract['GET /api/settings/provider-pace-offsets']['offsets'];
   say: AppSay;
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
@@ -1185,7 +1224,8 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
   const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:provider-pace-offsets';
   const open = edit.isOpen(id);
-  const asDraft = (values: ServerJson[]): Record<string, ServerJson> => Object.fromEntries(
+  // 下書きは入力欄の文字列だが、初期値はサーバの数値のまま —— 比較も検査も String() を通す
+  const asDraft = (values: typeof offsets): Record<string, string | number> => Object.fromEntries(
     values.map((value) => [`${value.provider}:${value.window}`, value.offset]),
   );
   const [draft, setDraft] = React.useState(() => asDraft(offsets));
@@ -1195,7 +1235,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
   const dirty = keys.some((key) => String(draft[key]) !== String(current[key]));
   // the API rejects non-integers / out-of-range at the entry (ADR 0030) — the
   // form mirrors that check so the button only enables on a sendable value
-  const validOffset = (v: ServerJson) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
+  const validOffset = (v: string | number | undefined) => /^\d{1,3}$/.test(String(v).trim()) && Number(v) <= 100;
   const ok = keys.every((key) => validOffset(draft[key]));
   useDirtySignal(edit, open, dirty);
 
@@ -1256,7 +1296,7 @@ function PaceOffsetsCard({ offsets, say, onSaved, edit }: {
 // Memory (issue #592 / spec #586 C) as a record card: the token cap on the
 // memory section injected into a worker at spawn.
 function MemorySettingsCard({ settings, say, onSaved, edit }: {
-  settings: ServerJson;
+  settings: WireContract['GET /api/settings/memory'];
   say: AppSay;
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
@@ -1277,9 +1317,8 @@ function MemorySettingsCard({ settings, say, onSaved, edit }: {
   const save = async () => {
     setBusy(true);
     try {
-      const saved = await api('/api/settings/memory', {
-        injection_token_cap: Number(draft.trim()),
-        meta_review_period_days: Number(periodDraft.trim()),
+      const saved = await api('POST /api/settings/memory', {
+        body: { injection_token_cap: Number(draft.trim()), meta_review_period_days: Number(periodDraft.trim()) },
       });
       say('success', 'memory settings saved', `${saved.injection_token_cap} tokens · every ${saved.meta_review_period_days} days`);
       edit.close();
@@ -1331,19 +1370,19 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
 }) {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const [filter, setFilter] = React.useState({ workspace: '', kind: '', state: '' });
-  const [entries, setEntries] = React.useState<ServerJson[] | null>(null); // null → still loading
-  const [translations, setTranslations] = React.useState<Record<number, ServerJson>>({});
+  const [entries, setEntries] = React.useState<WireContract['GET /api/settings/memory/entries']['entries'] | null>(null); // null → still loading
+  const [translations, setTranslations] = React.useState<Record<number, Extract<TpTranslation, { status: 'translated' }>>>({});
   const load = async () => {
-    const query = new URLSearchParams();
-    if (filter.workspace === '(board)') query.set('board_wide', 'true');
-    else if (filter.workspace) query.set('workspace', filter.workspace);
-    if (filter.kind) query.set('kind', filter.kind);
-    if (filter.state) query.set('state', filter.state);
+    const query: Record<string, string> = {};
+    if (filter.workspace === '(board)') query.board_wide = 'true';
+    else if (filter.workspace) query.workspace = filter.workspace;
+    if (filter.kind) query.kind = filter.kind;
+    if (filter.state) query.state = filter.state;
     try {
-      const loaded = (await api(`/api/settings/memory/entries?${query}`, undefined, 'GET')).entries;
+      const loaded = (await api('GET /api/settings/memory/entries', { query })).entries;
       setEntries(loaded);
       if (language === 'English') return;
-      for (const entry of loaded.filter((e: ServerJson) => e.original === null)) {
+      for (const entry of loaded.filter((e) => e.original === null)) {
         translateTarget({ type: 'memory_entry', entry_id: entry.id })
           .then((out) => out.status === 'translated' && setTranslations((t) => ({ ...t, [entry.id]: out })))
           .catch(() => {});
@@ -1532,7 +1571,7 @@ function MemoryEntriesCard({ workspaceNames, language, say, edit }: {
 // rank, the default priority and the frontier-advisor flag. Each differing
 // value is one POST — the API takes one change per request.
 function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
-  settings: ServerJson;
+  settings: SettingsExecution;
   say: AppSay;
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
@@ -1584,12 +1623,12 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
         {open && (
           <React.Fragment>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-              {draft.rank.map((provider: string, i: number) => (
-                <Select key={i} label={`Rank ${i + 1}`} options={settings.providers} value={provider}
-                  onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p: string, j: number) => (j === i ? (e.target as HTMLInputElement).value : p)) })} />
+              {draft.rank.map((provider, i) => (
+                <Select key={i} label={`Rank ${i + 1}`} options={[...settings.providers]} value={provider}
+                  onChange={(e) => setDraft({ ...draft, rank: draft.rank.map((p, j) => (j === i ? (e.target as HTMLInputElement).value : p)) })} />
               ))}
             </div>
-            <Select label="Default priority" options={settings.priorities} value={draft.priority}
+            <Select label="Default priority" options={[...settings.priorities]} value={draft.priority}
               onChange={(e) => setDraft({ ...draft, priority: (e.target as HTMLInputElement).value })} />
             <Checkbox testId="execution-frontier-advisor" checked={draft.advisor}
               label="frontier advisor — an advisor may use the frontier row even when the main model is a lower tier"
@@ -1611,7 +1650,7 @@ function ExecutionDefaultsCard({ settings, say, onSaved, edit }: {
 // model rows keyed by provider + model. Save diffs the draft against the
 // current table — rows gone → delete_row, rows new or changed → row upsert.
 function ExecutionTableCard({ settings, say, onSaved, edit }: {
-  settings: ServerJson;
+  settings: SettingsExecution;
   say: AppSay;
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
@@ -1619,19 +1658,21 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-table';
   const open = edit.isOpen(id);
-  const rowKey = (row: ServerJson) => `${row.provider}:${row.model}`;
-  const asDraft = (table: ServerJson[]) => table.map((row: ServerJson) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
+  const rowKey = (row: Pick<SettingsExecutionRow, 'provider' | 'model'>) => `${row.provider}:${row.model}`;
+  // 下書きの行は価格を入力欄の文字列で持つ —— サーバの行と下書きの行を toRow で同じ形に揃えて比べる
+  type DraftRow = Omit<SettingsExecutionRow, 'price_in' | 'price_out'> & { key: string; price_in: string; price_out: string };
+  const asDraft = (table: SettingsExecution['table']): DraftRow[] => table.map((row) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
-  const current = new Map<string, ServerJson>(settings.table.map((row: ServerJson) => [rowKey(row), row]));
-  const toRow = (d: ServerJson) => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
-  const same = (a: ServerJson, b: ServerJson) => a && b && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
+  const current = new Map(settings.table.map((row) => [rowKey(row), row]));
+  const toRow = (d: DraftRow): SettingsExecutionRow => ({ provider: d.provider, tier: d.tier, model: d.model.trim(), effort: d.effort.trim(), price_in: Number(d.price_in), price_out: Number(d.price_out) });
+  const same = (a: SettingsExecutionRow | undefined, b: SettingsExecutionRow) => a && a.tier === b.tier && a.effort === b.effort && a.price_in === b.price_in && a.price_out === b.price_out;
   const upserts = draft.map(toRow).filter((row) => !same(current.get(rowKey(row)), row));
-  const deletes = [...current.values()].filter((row) => !draft.some((d: ServerJson) => rowKey(toRow(d)) === rowKey(row)));
+  const deletes = [...current.values()].filter((row) => !draft.some((d) => rowKey(toRow(d)) === rowKey(row)));
   const dirty = upserts.length > 0 || deletes.length > 0;
-  const validPrice = (v: ServerJson) => /^\d+(\.\d+)?$/.test(String(v).trim());
-  const ok = draft.every((d: ServerJson) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out))
-    && new Set(draft.map((d: ServerJson) => rowKey(toRow(d)))).size === draft.length;
+  const validPrice = (v: string) => /^\d+(\.\d+)?$/.test(v.trim());
+  const ok = draft.every((d) => d.model.trim() && d.effort.trim() && validPrice(d.price_in) && validPrice(d.price_out))
+    && new Set(draft.map((d) => rowKey(toRow(d)))).size === draft.length;
   useDirtySignal(edit, open, dirty);
 
   const save = async () => {
@@ -1647,9 +1688,9 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
     }
     setBusy(false);
   };
-  const update = (i: number, patch: ServerJson) => setDraft(draft.map((d: ServerJson, j: number) => (j === i ? { ...d, ...patch } : d)));
+  const update = (i: number, patch: Partial<DraftRow>) => setDraft(draft.map((d, j) => (j === i ? { ...d, ...patch } : d)));
   const addRow = () => setDraft([...draft, {
-    key: 'new', provider: settings.providers[0].value, tier: settings.tiers[0], model: '', effort: 'high', price_in: '', price_out: '',
+    key: 'new', provider: settings.providers[0]!.value, tier: settings.tiers[0]!, model: '', effort: 'high', price_in: '', price_out: '',
   }]);
 
   return (
@@ -1658,7 +1699,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
         <RecordCardHead editing={open} onEdit={() => edit.open(id, () => setDraft(asDraft(settings.table)))}>
           <span style={settingsCardLabel}>execution table</span>
         </RecordCardHead>
-        {!open && settings.table.map((row: ServerJson) => (
+        {!open && settings.table.map((row) => (
           <div key={rowKey(row)} style={{ display: 'flex', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
             <span style={{ color: 'var(--text-muted)', minWidth: 140 }}>{row.provider} · {row.tier}</span>
             <span>{row.model} · {row.effort} · ${row.price_in} / ${row.price_out}</span>
@@ -1666,11 +1707,11 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
         ))}
         {open && (
           <React.Fragment>
-            {draft.map((d: ServerJson, i: number) => (
+            {draft.map((d, i) => (
               <div key={d.key} data-testid={`execution-row-${d.key}`}
                 style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end', paddingBottom: 8, borderBottom: '1px solid var(--border-default)' }}>
-                <Select label="Provider" options={settings.providers.map((p: SettingsOption) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: (e.target as HTMLInputElement).value })} />
-                <Select label="Tier" options={settings.tiers} value={d.tier} onChange={(e) => update(i, { tier: (e.target as HTMLInputElement).value })} />
+                <Select label="Provider" options={settings.providers.map((p) => p.value)} value={d.provider} onChange={(e) => update(i, { provider: (e.target as HTMLInputElement).value })} />
+                <Select label="Tier" options={[...settings.tiers]} value={d.tier} onChange={(e) => update(i, { tier: (e.target as HTMLInputElement).value })} />
                 <Input label="Model" mono value={d.model} onChange={(e) => update(i, { model: (e.target as HTMLInputElement).value })} placeholder="alias or model id" />
                 <Input label="Effort" mono value={d.effort} onChange={(e) => update(i, { effort: (e.target as HTMLInputElement).value })} placeholder="high" />
                 <Input label="Price in" mono value={d.price_in} onChange={(e) => update(i, { price_in: (e.target as HTMLInputElement).value })} placeholder="USD / MTok" />
@@ -1697,7 +1738,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
 // screen (#204 決定7) — it takes the same single edit slot a record card does,
 // and saves and cancels by the same rules.
 function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
-  baseDir: ServerJson;
+  baseDir: SettingsBaseDir | null;
   say: AppSay;
   onCreated: () => Promise<void> | void;
   edit: SettingsEditSlot;
@@ -1721,28 +1762,35 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
     confirmKey: 'confirm',
     dialogTitle: 'Register a checkout someone is working in?',
     dialogLead: 'This path looks like a human\'s live development checkout:',
-    dialogNote: (detail) =>
-      detail?.clone_landing ? (
-        <p style={{ margin: '8px 0 0', fontSize: 'var(--text-sm)' }}>
-          The clone entrance would give the board its own checkout at{' '}
-          <span style={{ fontFamily: 'var(--font-mono)' }}>{detail.clone_landing}</span> instead —
-          one repository, two checkouts.
-        </p>
-      ) : null,
+    confirmOf: (err) => {
+      const detail = apiErrorDetail(err, 'POST /api/workspaces 409');
+      return detail?.confirm_required ? {
+        reasons: detail.live_checkout_signals,
+        note: detail.clone_landing ? (
+          <p style={{ margin: '8px 0 0', fontSize: 'var(--text-sm)' }}>
+            The clone entrance would give the board its own checkout at{' '}
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{detail.clone_landing}</span> instead —
+            one repository, two checkouts.
+          </p>
+        ) : null,
+      } : null;
+    },
     confirmLabel: 'Register anyway',
-    reasonsKey: 'live_checkout_signals',
     labels: LIVE_CHECKOUT_SIGNAL_LABEL,
     // creation is idempotent server-side — a failed attempt leaves only
     // orphans the registry never saw, so "just press it again" is honest
     failDetail: 'safe to retry as-is',
   });
   const submit = () =>
-    save('/api/workspaces', 'POST', {
-      mode, name: name.trim(),
-      ...(mode === 'clone' ? { repo: repo.trim() } : {}),
-      ...(mode === 'register' ? { path: path.trim() } : {}),
-      ...(notes.trim() ? { notes: notes.trim() } : {}),
-      ...(prot ? { protected: true } : {}),
+    save(async (confirm) => {
+      await api('/api/workspaces', {
+        mode, name: name.trim(),
+        ...(mode === 'clone' ? { repo: repo.trim() } : {}),
+        ...(mode === 'register' ? { path: path.trim() } : {}),
+        ...(notes.trim() ? { notes: notes.trim() } : {}),
+        ...(prot ? { protected: true } : {}),
+        ...confirm,
+      });
     }, 'added', name.trim());
   const modeOptions = [
     { value: 'clone', label: 'clone a repository' },
@@ -1795,7 +1843,7 @@ function NewWorkspaceForm({ baseDir, say, onCreated, edit }: {
 // field — it becomes agents/<name>.md and is never editable afterwards; the
 // rest is the same draft the record card edits.
 function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkillsDegraded, say, onCreated, edit }: {
-  authorityProfiles: ServerJson[];
+  authorityProfiles: string[];
   providerOptions: SettingsOption[];
   hostSkills: string[];
   hostSkillsDegraded: boolean;
@@ -1821,10 +1869,10 @@ function NewAgentForm({ authorityProfiles, providerOptions, hostSkills, hostSkil
   const submit = async () => {
     setBusy(true);
     try {
-      const created = await api('/api/agents', { name: name.trim(), ...agentBody(draft) });
+      const created = await api('POST /api/agents', { body: { name: name.trim(), ...agentBody(draft) } });
       // 静かな shadow は作らない(ADR 0117 決定2): 告げるのは応答で、判定ではない
       say('success', 'agent added — committed to the registry',
-        created?.shadows_built_in
+        created.shadows_built_in
           ? `${name.trim()} — shadows the board's built-in agent of the same name`
           : name.trim());
       edit.close();
@@ -1865,15 +1913,16 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
   const [assignableTo, setAssignableTo] = React.useState<string[]>([]);
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState<string[]>([]);
   const [merge, setMerge] = React.useState('');
-  const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onCreated(); });
+  const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onCreated(); }, 'POST /api/profiles 409');
   const dirty = !!name.trim() || !!guidance.trim() || assignableTo.length > 0
     || allowedWorkspaces.length > 0 || !!merge;
   useDirtySignal(edit, true, dirty);
 
   // 作成扉は4フィールドすべてを常に載せる(ADR 0079 決定1 / ADR 0086 決定3)
   const submit = () => save(
-    '/api/profiles', 'POST',
-    { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge },
+    async (confirm) => {
+      await api('/api/profiles', { name: name.trim(), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
+    },
     'created', name.trim(),
   );
 
@@ -1917,9 +1966,9 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   const [displayLanguageOptions, setDisplayLanguageOptions] = React.useState<string[]>([]);
   const [displayLanguageLoaded, setDisplayLanguageLoaded] = React.useState(false);
   const loadDisplayLanguage = async () => {
-    const { language, options } = await api('/api/settings/display-language', undefined, 'GET');
+    const { language, options } = await api('GET /api/settings/display-language');
     setDisplayLanguage(language);
-    setDisplayLanguageOptions(options);
+    setDisplayLanguageOptions([...options]);
     setDisplayLanguageLoaded(true);
   };
   React.useEffect(() => { loadDisplayLanguage(); }, []);
@@ -1931,7 +1980,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   const [quietHoursTz, setQuietHoursTz] = React.useState('');
   const [quietHoursLoaded, setQuietHoursLoaded] = React.useState(false);
   const loadQuietHours = async () => {
-    const { start, end, tz } = await api('/api/settings/quiet-hours', undefined, 'GET');
+    const { start, end, tz } = await api('GET /api/settings/quiet-hours');
     setQuietHoursStart(start);
     setQuietHoursEnd(end);
     setQuietHoursTz(tz);
@@ -1939,23 +1988,23 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   };
   React.useEffect(() => { loadQuietHours(); }, []);
 
-  const [paceOffsets, setPaceOffsets] = React.useState<ServerJson[] | null>(null); // null → still loading
+  const [paceOffsets, setPaceOffsets] = React.useState<WireContract['GET /api/settings/provider-pace-offsets']['offsets'] | null>(null); // null → still loading
   const loadPaceOffsets = async () => {
-    const result = await api('/api/settings/provider-pace-offsets', undefined, 'GET');
+    const result = await api('GET /api/settings/provider-pace-offsets');
     setPaceOffsets(result.offsets);
   };
   React.useEffect(() => { loadPaceOffsets(); }, []);
 
   // execution settings (issue #545): table + defaults + the option lists, one GET
-  const [executionSettings, setExecutionSettings] = React.useState<ServerJson>(null); // null → still loading
+  const [executionSettings, setExecutionSettings] = React.useState<SettingsExecution | null>(null); // null → still loading
   const loadExecutionSettings = async () => {
-    setExecutionSettings(await api('/api/settings/execution', undefined, 'GET'));
+    setExecutionSettings(await api('GET /api/settings/execution'));
   };
   React.useEffect(() => { loadExecutionSettings(); }, []);
 
-  const [memorySettings, setMemorySettings] = React.useState<ServerJson>(null); // null → still loading
+  const [memorySettings, setMemorySettings] = React.useState<WireContract['GET /api/settings/memory'] | null>(null); // null → still loading
   const loadMemorySettings = async () => {
-    setMemorySettings(await api('/api/settings/memory', undefined, 'GET'));
+    setMemorySettings(await api('GET /api/settings/memory'));
   };
   React.useEffect(() => { loadMemorySettings(); }, []);
 
@@ -1963,32 +2012,32 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   // the board has answered, so "not logged in" is never shown speculatively.
   const [githubLoggedIn, setGithubLoggedIn] = React.useState<boolean | null>(null);
   React.useEffect(() => {
-    api('/api/settings/github', undefined, 'GET')
-      .then(({ loggedIn }) => setGithubLoggedIn(!!loggedIn))
+    api('GET /api/settings/github')
+      .then(({ loggedIn }) => setGithubLoggedIn(loggedIn))
       .catch(() => setGithubLoggedIn(null));
   }, []);
 
   // issue #273: 末尾の loading… カスケードには足さない —— これが読めなくても残りの
   // 設定は読めるので、board 全体を loading… に張り付かせない([] は「生成ゼロ」)
-  const [translateUsage, setTranslateUsage] = React.useState<ServerJson[] | null>(null); // null → still loading
+  const [translateUsage, setTranslateUsage] = React.useState<WireContract['GET /api/translate/usage']['records'] | null>(null); // null → still loading
   // 失敗はカードを消さずに面へ出す —— 読めなかったことが見えないと、この顔を
   // 足した理由(記録があることと検知されることは別)がそのまま欠ける
   const [translateUsageFailed, setTranslateUsageFailed] = React.useState(false);
   React.useEffect(() => {
-    api('/api/translate/usage', undefined, 'GET')
+    api('GET /api/translate/usage')
       .then(({ records }) => setTranslateUsage(records))
       .catch(() => setTranslateUsageFailed(true));
   }, []);
 
 
-  const [workspaces, setWorkspaces] = React.useState<ServerJson[] | null>(null); // null → still loading
+  const [workspaces, setWorkspaces] = React.useState<SettingsWorkspace[] | null>(null); // null → still loading
   // ADR 0082 決定1: 規約導出の着地先を合成するための基点 — { path, source }。
   // 読めていないうち(ロード中・503)は null で、着地先は一切見せない
-  const [baseDir, setBaseDir] = React.useState<ServerJson>(null);
+  const [baseDir, setBaseDir] = React.useState<SettingsBaseDir | null>(null);
   const [unavailable, setUnavailable] = React.useState(false); // 503 — no registry configured
   const load = async () => {
     try {
-      const res = await api('/api/workspaces', undefined, 'GET');
+      const res = await api('GET /api/workspaces');
       setWorkspaces(res.workspaces);
       setBaseDir(res.workspacesBaseDir);
     } catch {
@@ -2000,18 +2049,18 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   };
   React.useEffect(() => { load(); }, []);
 
-  const [agents, setAgents] = React.useState<ServerJson[] | null>(null); // null → still loading
-  const [authorityProfiles, setAuthorityProfiles] = React.useState<ServerJson[]>([]);
+  const [agents, setAgents] = React.useState<SettingsAgent[] | null>(null); // null → still loading
+  const [authorityProfiles, setAuthorityProfiles] = React.useState<string[]>([]);
   // the provider select's value+label options, server-supplied on the same GET
   // (registry.ts's PROVIDER_OPTIONS) so the client never hard-codes the enum
   const [providerOptions, setProviderOptions] = React.useState<SettingsOption[]>([]);
   const [agentsUnavailable, setAgentsUnavailable] = React.useState(false);
   const loadAgents = async () => {
     try {
-      const res = await api('/api/agents', undefined, 'GET');
+      const res = await api('GET /api/agents');
       setAgents(res.agents);
       setAuthorityProfiles(res.authorityProfiles);
-      setProviderOptions(res.providers ?? []);
+      setProviderOptions([...res.providers]);
     } catch {
       setAgentsUnavailable(true);
       setAgents([]);
@@ -2019,11 +2068,11 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   };
   React.useEffect(() => { loadAgents(); }, []);
 
-  const [profiles, setProfiles] = React.useState<ServerJson[] | null>(null); // null → still loading
+  const [profiles, setProfiles] = React.useState<SettingsProfile[] | null>(null); // null → still loading
   const [profilesUnavailable, setProfilesUnavailable] = React.useState(false);
   const loadProfiles = async () => {
     try {
-      const res = await api('/api/profiles', undefined, 'GET');
+      const res = await api('GET /api/profiles');
       setProfiles(res.profiles);
     } catch {
       setProfilesUnavailable(true);
@@ -2036,13 +2085,13 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   // @host skills, loaded once for both the create form and every AgentCard.
   // Degrades to an empty list — the picker still works on scope words + free
   // entry, so a failed enumeration never blocks editing an agent's skills.
-  const [hostSkills, setHostSkills] = React.useState([]);
+  const [hostSkills, setHostSkills] = React.useState<string[]>([]);
   const [hostSkillsDegraded, setHostSkillsDegraded] = React.useState(false);
   const loadSkills = async () => {
     try {
-      const res = await api('/api/skills', undefined, 'GET');
-      setHostSkills(res.skills ?? []);
-      setHostSkillsDegraded(!!res.degraded);
+      const res = await api('GET /api/skills');
+      setHostSkills(res.skills);
+      setHostSkillsDegraded(res.degraded);
     } catch {
       setHostSkills([]);
       setHostSkillsDegraded(true);
@@ -2062,7 +2111,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
 
   // name → icon, for rendering an assignable_to entry as the agent's own chip
   const agentIcons: Record<string, string> = {};
-  (agents ?? []).forEach((a: ServerJson) => { if (a.icon) agentIcons[a.name] = a.icon; });
+  (agents ?? []).forEach((a) => { if (a.icon) agentIcons[a.name] = a.icon; });
 
   // --- drilldown navigation (issue #204) ----------------------------------
   // stack: [] the index · ['board'] · ['<section>'] · ['<section>', '<name>'].
@@ -2112,35 +2161,42 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   // The three registry-backed sections, in one shape so the index, the list
   // level and the record level all read a section the same way — including
   // which card it renders, so no level re-tests which section it is in.
-  const SECTIONS = {
+  const SECTIONS: {
+    workspaces: SettingsSection<SettingsWorkspace>;
+    agents: SettingsSection<SettingsAgent>;
+    profiles: SettingsSection<SettingsProfile>;
+  } = {
     workspaces: {
       title: 'Workspaces', singular: 'workspace', note: 'where tasks run',
       items: workspaces, unavailable,
       footnote: 'edits commit to the registry',
-      indexSummary: (items: ServerJson[]) => `${items.length} · ${items.filter((w: ServerJson) => w.protected).length} protected`,
-      rowIdentity: (w: ServerJson) => ({ label: w.name }),
-      rowSummary: (w: ServerJson) => w.repo || w.path || '—',
-      record: (rec: ServerJson) => <WorkspaceRecord ws={rec} baseDir={baseDir} say={say} onChanged={load} edit={edit} />,
+      indexSummary: (items) => `${items.length} · ${items.filter((w) => w.protected).length} protected`,
+      rowIdentity: (w) => ({ label: w.name }),
+      rowSummary: (w) => w.repo || w.path || '—',
+      record: (rec) => <WorkspaceRecord ws={rec} baseDir={baseDir} say={say} onChanged={load} edit={edit} />,
       createForm: () => <NewWorkspaceForm baseDir={baseDir} say={say} onCreated={load} edit={edit} />,
       reload: load,
       deleteNote: 'removes the registry entry only — the checkout on this host is left where it is',
       deleteLead:
         'This workspace is being removed from the registry. The checkout on the host is left untouched — the board just stops knowing about it.',
       // ADR 0087 決定4: 残る checkout の場所は応答が運ぶ(WebUI が組み立てない)
-      deleteDetail: (result: ServerJson, name: string) => (result?.checkout ? `checkout remains at ${result.checkout}` : name),
+      remove: async (confirm, name) => {
+        const { checkout } = await api('DELETE /api/workspaces/:name', { params: { name }, body: confirm });
+        return `checkout remains at ${checkout}`;
+      },
     },
     agents: {
       title: 'Agents', singular: 'agent', note: 'who does the work',
       items: agents, unavailable: agentsUnavailable,
       footnote: 'edits commit to agents/<name>.md in the registry',
-      indexSummary: (items: ServerJson[]) => `${items.length} agents`,
-      rowIdentity: (a: ServerJson) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
+      indexSummary: (items) => `${items.length} agents`,
+      rowIdentity: (a) => ({ agentName: a.name, agentIcon: a.icon ?? '' }),
       // the built-in / shadows built-in mark (ADR 0117 決定2) — server-derived
       // (GET /api/agents), never decided here: the display only mirrors which
       // fugu the machine resolves. A built-in has no registry profile to show.
-      rowSummary: (a: ServerJson) =>
+      rowSummary: (a) =>
         a.builtin ? 'built-in' : a.shadowsBuiltIn ? `${a.authority} · shadows built-in` : a.authority,
-      record: (rec: ServerJson) => (
+      record: (rec) => (
         <AgentRecord agent={rec} authorityProfiles={authorityProfiles} providerOptions={providerOptions}
           hostSkills={hostSkills}
           hostSkillsDegraded={hostSkillsDegraded} say={say} onChanged={loadAgents} edit={edit} />
@@ -2160,10 +2216,10 @@ function SettingsScreen({ say, registerLeaveGuard }: {
       note: 'what the work is allowed to do',
       items: profiles, unavailable: profilesUnavailable,
       footnote: 'edits commit to authority/<name>.yaml in the registry',
-      indexSummary: (items: ServerJson[]) => `${items.length} profiles`,
-      rowIdentity: (p: ServerJson) => ({ label: p.name }),
-      rowSummary: (p: ServerJson) => (p.assignable_to ?? []).join(', ') || '—',
-      record: (rec: ServerJson) => (
+      indexSummary: (items) => `${items.length} profiles`,
+      rowIdentity: (p) => ({ label: p.name }),
+      rowSummary: (p) => (p.assignable_to ?? []).join(', ') || '—',
+      record: (rec) => (
         <ProfileRecord profile={rec} agentNames={agentNames} agentIcons={agentIcons}
           workspaceNames={workspaceNames} say={say} onChanged={refreshAfterProfile} edit={edit} />
       ),
@@ -2179,16 +2235,14 @@ function SettingsScreen({ say, registerLeaveGuard }: {
   };
   // one cascade for "unreachable / still loading / here is the count", read by
   // the index (which counts its own way per section) and by each section header
-  type SettingsSectionKey = keyof typeof SECTIONS;
-  type SettingsSection = (typeof SECTIONS)[SettingsSectionKey];
-  const sectionSummary = (s: SettingsSection, count: (items: ServerJson[]) => string = (items) => `${items.length} registered`) =>
+  const sectionSummary = (s: SettingsSection<SettingsRecord>, count: (items: SettingsRecord[]) => string = (items) => `${items.length} registered`) =>
     s.unavailable ? 'no registry configured'
       : s.items === null ? 'loading…'
         : count(s.items);
 
   const sectionKey = stack[0]!;
   const recordName = stack[1]!;
-  const sec = SECTIONS[sectionKey as SettingsSectionKey];
+  const sec: SettingsSection<SettingsRecord> | undefined = SECTIONS[sectionKey as SettingsSectionKey];
   const addId = `new:${sectionKey}`;
   const adding = editing === addId;
 
@@ -2204,11 +2258,10 @@ function SettingsScreen({ say, registerLeaveGuard }: {
           ? `${displayLanguage} · ${quietHoursStart}–${quietHoursEnd}`
           : 'loading…',
       },
-      ...(Object.keys(SECTIONS) as SettingsSectionKey[]).map((key) => ({
-        key, label: SECTIONS[key].title,
-        summary: sectionSummary(SECTIONS[key], SECTIONS[key].indexSummary),
-        alert: SECTIONS[key].unavailable,
-      })),
+      ...(Object.keys(SECTIONS) as SettingsSectionKey[]).map((key) => {
+        const s: SettingsSection<SettingsRecord> = SECTIONS[key];
+        return { key, label: s.title, summary: sectionSummary(s, s.indexSummary), alert: s.unavailable };
+      }),
     ];
     body = (
       <React.Fragment>
@@ -2333,7 +2386,7 @@ function SettingsScreen({ say, registerLeaveGuard }: {
         {/* 組み込みは registry のエントリではないので削除の扉も出さない
             (ADR 0117 決定2)— サーバ側の門は残るが、通らない扉は見せない */}
         {rec && editing === null && !rec.builtin && (
-          <DeleteRecord section={sec} sectionKey={sectionKey} name={recordName} say={say}
+          <DeleteRecord section={sec} sectionKey={sectionKey as SettingsSectionKey} name={recordName} say={say}
             onDeleted={async () => { await sec.reload(); go([sectionKey]); }} />
         )}
         <p style={settingsFootnote}>{sec.footnote}</p>
