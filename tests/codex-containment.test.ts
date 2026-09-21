@@ -131,6 +131,64 @@ it("preflight の permission probe は workspace の allowed_domains を network
   expect((await capability).available).toBe(false);
 });
 
+/** preflight を work の app-server 呼び出し(6本目)まで進める。先の5本(--version・prompt-input・
+ *  features list・sandbox 2本)は exit 0 で通す。prompt-input だけは JSON を読まれるので空の列を返す。 */
+async function preflightToWorkAppServer() {
+  const spawn = recordingSpawn();
+  const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
+  const capability = createCodexCapabilityCheck({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: mkdtempSync(join(tmpdir(), "tidepool-codex-home-")),
+    workspace: mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-ws-")),
+    allowedDomains: [],
+    call: boardCall,
+  })();
+  for (const i of [0, 1, 2, 3, 4]) {
+    await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
+    if (i === 1) spawn.stdout.write("[]");
+    spawn.emitExitAt(i, 0, null);
+  }
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(6));
+  return { spawn, capability };
+}
+
+/** work の app-server 呼び出し(hooks/list)を受理させ、review の呼び出し(7本目)まで進める。 */
+async function preflightToReviewAppServer() {
+  const { spawn, capability } = await preflightToWorkAppServer();
+  spawn.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
+  spawn.emitExitAt(5, 0, null);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(7));
+  return { spawn, capability };
+}
+
+it("preflight の app-server 呼び出しは work / review とも --strict-config を app-server に付ける(ADR 0142 決定4)", async () => {
+  const { spawn, capability } = await preflightToReviewAppServer();
+
+  for (const call of [spawn.calls[5]!, spawn.calls[6]!]) {
+    expect(call.args[0]).toBe("app-server");
+    expect(call.args).toContain("--strict-config");
+  }
+  spawn.emitExitAt(6, 1, null);
+  expect((await capability).available).toBe(false);
+});
+
+it.each([
+  ["work", preflightToWorkAppServer, 5],
+  ["review", preflightToReviewAppServer, 6],
+] as const)("%s の設定を app-server が未知キーで拒否すると、キーを名指した could not run で封じ込めを倒す(ADR 0142 決定5)", async (_, drive, index) => {
+  const { spawn, capability } = await drive();
+
+  spawn.stderr.write("Error: unknown configuration field `mcp_servers.tidepool.enabled_tool`\n");
+  spawn.emitExitAt(index, 1, null);
+
+  const result = await capability;
+  expect(result.available).toBe(false);
+  if (!result.available) {
+    expect(result.reason).toContain("could not run");
+    expect(result.reason).toContain("mcp_servers.tidepool.enabled_tool");
+  }
+});
+
 it("宣言どおりの観測は封じ込めを成立させる", async () => {
   expect(await checkCodexCapability(async () => VALID, BOARD_HOOK_PATH)).toEqual({ available: true });
 });
