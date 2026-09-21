@@ -32,10 +32,11 @@ const btnHover = {
   danger:    { background: 'var(--coral-2)' },
 };
 
-export function Button({ variant = 'primary', size = 'md', full = false, disabled = false, children, onClick, style }) {
+export function Button({ variant = 'primary', size = 'md', full = false, disabled = false, children, onClick, style, ...rest }) {
   const [hover, setHover] = React.useState(false);
   return (
     <button
+      {...rest}
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       onMouseEnter={() => setHover(true)}

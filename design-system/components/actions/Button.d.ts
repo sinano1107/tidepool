@@ -3,7 +3,7 @@
  * secondary/ghost for everything else; danger for objections and destructive ops.
  * @startingPoint section="Actions" subtitle="Primary / secondary / ghost / danger button" viewport="700x220"
  */
-export interface ButtonProps {
+export interface ButtonProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'style' | 'disabled' | 'children'> {
   /** Visual weight. One primary per view. */
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   /** lg = 44px, the mobile hit-target size. */
