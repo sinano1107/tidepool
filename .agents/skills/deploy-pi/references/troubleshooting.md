@@ -14,7 +14,7 @@ console.log(db.prepare('select * from provider_usage_observations').all(), db.pr
 \""
 ```
 
-If the `anthropic` row shows `status: 'unobservable'`, the Swell usage-limit gate (ADR-0008, `src/usage.ts`) is fail-closed and every Anthropic entry is excluded from pickup. This happens **silently** — `checkThrottle` swallows any parse failure into `{session: null, week: null}` → `evaluateThrottle` → null window verdicts → an `unobservable` observation, with no exception and no log line. It is not a board-wide halt (ADR 0140), so the UI shows it only as `skipped` rows and the Provider usage card; nothing is picked up again until a fresh `/usage` call parses cleanly.
+If the `anthropic` row shows `status: 'unobservable'`, the Swell usage-limit gate (ADR-0008, `src/usage.ts`) is fail-closed and every Anthropic entry is excluded from pickup. This happens **silently** — `readClaudeUsage` (`src/scheduler.ts`) swallows any parse failure into `{session: null, week: null}` → `claudeUsageObservation` turns that into an `unobservable` observation → the Provider usage evaluator reports it, with no exception and no log line. It is not a board-wide halt (ADR 0140), so the UI shows it only as `skipped` rows and the Provider usage card; nothing is picked up again until a fresh `/usage` call parses cleanly.
 
 Root cause is always the same shape: `checkUsage` (`src/claude-worker.ts`) hands `parseUsage` (`src/usage.ts`) something it can't read, so the snapshot comes back `{session: null, week: null}`. Since issue #81 / ADR-0028, `checkUsage` **no longer runs `claude -p "/usage"`** (that path is broken on current CLIs — `-p` treats `/usage` as a prompt string, not a slash command). It now drives an **interactive** `claude --safe-mode` session over a PTY (node-pty): waits for the input placeholder, sends `/usage`, scrapes the rendered panel, tears the session down (Ctrl-C×2 + SIGKILL). That adds several interactive-only ways to fail-close silently, all with the same `status: 'unobservable'` symptom:
 
@@ -76,7 +76,7 @@ cd /opt/tidepool && node --import tsx _ts.mjs; rm -f /opt/tidepool/_ts.mjs'
 
 `raw null? true` → the scrape itself failed (modal / marker / timeout — one of the first three causes); inspect the printed raw to see which. `raw` non-null but `parseUsage` returns nulls → a renderer or format-drift problem (last two causes). It must run in `/opt/tidepool` (the trusted, service cwd) — the `cd` above handles that.
 
-To recover once the code is fixed and deployed: nothing extra needed, the very next pickup attempt (registering a task triggers one — see below) runs `checkThrottle` fresh and replaces the Provider usage observation.
+To recover once the code is fixed and deployed: nothing extra needed, the very next pickup attempt (registering a task triggers one — see below) runs `readClaudeUsage` fresh and replaces the Provider usage observation.
 
 ## A registered task is not picked up
 
