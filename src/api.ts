@@ -1745,8 +1745,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   }
 
   // 返り値型は wire の契約から —— 呼び手は spread で合成するので、ここで照らさないと
-  // 欄の改名が satisfies をすり抜ける(spread された欄は excess property 検査の外)
-  function providerUsageJson(): Pick<WireContract["GET /api/queue"], "providerUsage"> {
+  // 欄の改名が satisfies をすり抜ける(spread された欄は excess property 検査の外)。
+  // queue と pause の両方が spread するので、両方の行に照らす
+  function providerUsageJson(): Pick<WireContract["GET /api/queue"], "providerUsage"> &
+    Pick<WireContract["GET /api/pause"], "providerUsage"> {
     const providerUsage = getProviderUsage(db);
     return providerUsage.length === 0 ? {} : { providerUsage };
   }

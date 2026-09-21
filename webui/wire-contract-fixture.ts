@@ -8,4 +8,7 @@
   // エラー応答の行は表にあっても取得先ではない
   // @ts-expect-error
   void api('POST /api/tasks 422');
+  // 動的セグメントを持つキーは params を省けない
+  // @ts-expect-error
+  void api('GET /api/tasks/:id');
 }

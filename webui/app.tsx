@@ -60,21 +60,20 @@ class ApiError extends Error {
 
 /** `api()` が受ける表のキー —— エラー応答の行('POST /api/tasks 422')は取得先ではないので外す。 */
 type ApiKey = Exclude<keyof WireContract, `${string} ${string} ${string}`>;
-/** `params` はキーの `:name` を埋め、`query` は検索文字列になる。 */
-interface ApiOpts {
-  params?: Record<string, string>;
-  query?: Record<string, string>;
-  body?: unknown;
-}
+/** キーの `:name` セグメントの名前 —— 'GET /api/tasks/:id' → 'id'。 */
+type KeyParams<K> = K extends `${string}:${infer P}/${infer R}` ? P | KeyParams<R> : K extends `${string}:${infer P}` ? P : never;
+/** `params` はキーの `:name` を埋め(動的セグメントを持つキーでは必須)、`query` は検索文字列になる。 */
+type ApiOpts<K> = { query?: Record<string, string>; body?: unknown }
+  & ([KeyParams<K>] extends [never] ? { params?: never } : { params: Record<KeyParams<K>, string> });
 
 // 表のキー('METHOD /path')で引けば契約の型が返る —— unknown から契約型への変換は
 // この overload の1点だけ(ADR 0138 決定3)。生のパスの形は表に載っていない端点のために残る。
-function api<K extends ApiKey>(key: K, opts?: ApiOpts): Promise<WireContract[K]>;
+function api<K extends ApiKey>(key: K, ...opts: [KeyParams<K>] extends [never] ? [ApiOpts<K>?] : [ApiOpts<K>]): Promise<WireContract[K]>;
 function api(path: `/${string}`, body?: unknown, method?: string): Promise<ServerJson>;
 async function api(pathOrKey: string, bodyOrOpts?: unknown, method = 'POST'): Promise<unknown> {
   let [verb, path, body] = [method, pathOrKey, bodyOrOpts];
   if (!pathOrKey.startsWith('/')) {
-    const { params = {}, query, body: optsBody } = (bodyOrOpts ?? {}) as ApiOpts;
+    const { params = {}, query, body: optsBody } = (bodyOrOpts ?? {}) as { params?: Record<string, string>; query?: Record<string, string>; body?: unknown };
     [verb, path] = pathOrKey.split(' ') as [string, string];
     path = path.replace(/:(\w+)/g, (_, name: string) => encodeURIComponent(params[name]!));
     if (query) path += `?${new URLSearchParams(query)}`;
