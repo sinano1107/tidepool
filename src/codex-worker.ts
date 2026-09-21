@@ -420,7 +420,7 @@ function permissionConfig(
   };
   const network = {
     enabled: true,
-    // ADR 0072 決定6: workspace の allowed_domains。文法は registry が検証済み
+    // ADR 0072 決定1: workspace の allowed_domains。文法は registry が検証済み
     domains: Object.fromEntries([...allowedDomains, "127.0.0.1"].map((domain) => [domain, "allow"])),
     unix_sockets: { [taskTemp]: "allow" },
     allow_local_binding: true,

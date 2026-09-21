@@ -165,7 +165,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('\":root\"=\"deny\"');
     expect(config).toContain('\":slash_tmp\"=\"deny\"');
     expect(config).toContain("permissions.tidepool-work.workspace_roots=");
-    // workspace の allowed_domains が network の許可に載る(ADR 0072 決定6 / issue #763)
+    // workspace の allowed_domains が network の許可に載る(ADR 0072 決定1 / issue #763)
     expect(config).toContain('\"api.github.com\"=\"allow\"');
     // 既定拒否(ADR 0135 決定1): snapshot が "false" の名前は全部 `-c` に載る
     const closed = Object.entries(CODEX_FEATURE_SNAPSHOT).filter(([, state]) => state === "false");
