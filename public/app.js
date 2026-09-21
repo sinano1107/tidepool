@@ -701,14 +701,12 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setDump(d.line);
   };
   const discardPendingDump = async (id) => {
-    if (id === selectedDumpId) {
-      setSelectedDumpId(null);
-    }
     try {
       await api(`/api/pending-dumps/${id}`, {}, "DELETE");
     } catch {
       return;
     }
+    setSelectedDumpId((cur) => cur === id ? null : cur);
     refreshPendingDumps();
   };
   const issueListHintStyle = { fontSize: "var(--text-sm)", color: "var(--text-secondary)" };
