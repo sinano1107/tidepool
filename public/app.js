@@ -1094,14 +1094,14 @@ function AgentIconPicker({ value, onChange }) {
 function agentDraftOf(agent) {
   return {
     icon: agent.icon ?? "",
-    description: agent.description ?? "",
-    systemPrompt: agent.systemPrompt ?? "",
-    authority: agent.authority ?? "",
-    provider: agent.provider ?? "",
+    description: agent.description,
+    systemPrompt: agent.systemPrompt,
+    authority: agent.authority,
+    provider: agent.provider,
     tier: agent.tier ?? "",
-    advisor: agent.advisor === true,
+    advisor: agent.advisor,
     // GET /api/agents already returns skills (ADR 0025)
-    skills: agent.skills ?? []
+    skills: agent.skills
   };
 }
 const NEW_AGENT_DRAFT = {
@@ -1196,20 +1196,20 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
       kind: "text",
       value: agent.builtin ? "built-in \u2014 no registry file; create an agent with this name to shadow it" : "shadows built-in \u2014 this entry wins; delete it to fall back to the board's own"
     }
-  ), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "description", kind: agent.description ? "text" : "unset", value: agent.description ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
+  ), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "description", kind: agent.description ? "text" : "unset", value: agent.description, unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "specialty",
       kind: agent.systemPrompt ? "text" : "unset",
-      value: agent.systemPrompt ?? "",
+      value: agent.systemPrompt,
       unsetLabel: "no specialty \u2014 worker protocol only"
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "authority", kind: agent.authority ? "mono" : "unset", value: agent.authority ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "provider", kind: agent.provider ? "mono" : "unset", value: agent.provider ?? "", unsetLabel: "\u2014" })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "default tier", kind: agent.tier ? "mono" : "unset", value: agent.tier ?? "", unsetLabel: "board default" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor", kind: agent.advisor ? "mono" : "unset", value: agent.advisor ? "yes" : "", unsetLabel: "no advisor" })), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "authority", kind: agent.authority ? "mono" : "unset", value: agent.authority, unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "provider", kind: agent.provider ? "mono" : "unset", value: agent.provider, unsetLabel: "\u2014" })), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: "default tier", kind: agent.tier ? "mono" : "unset", value: agent.tier ?? "", unsetLabel: "board default" }), /* @__PURE__ */ React.createElement(FieldRow, { label: "advisor", kind: agent.advisor ? "mono" : "unset", value: agent.advisor ? "yes" : "", unsetLabel: "no advisor" })), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "skills",
-      kind: (agent.skills ?? []).length ? "tags" : "unset",
-      tags: agent.skills ?? [],
+      kind: agent.skills.length ? "tags" : "unset",
+      tags: agent.skills,
       scheme: "skills",
       wildcardHint: "every skill",
       unsetLabel: "no skills allowed"
@@ -1473,7 +1473,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const id = `profile:${profile.name}`;
   const open = edit.isOpen(id);
-  const [guidance, setGuidance] = React.useState(profile.guidance ?? "");
+  const [guidance, setGuidance] = React.useState(profile.guidance);
   const [assignableTo, setAssignableTo] = React.useState(profile.assignable_to ?? []);
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState(profile.allowed_workspaces ?? []);
   const [merge, setMerge] = React.useState(profile.merge ?? "");
@@ -1482,7 +1482,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
     await onChanged();
   }, "PATCH /api/profiles/:name 409");
   const changed = {
-    guidance: guidance !== (profile.guidance ?? ""),
+    guidance: guidance !== profile.guidance,
     assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
     allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
     merge: (merge || "") !== (profile.merge ?? "")
@@ -1490,7 +1490,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const dirty = Object.values(changed).some(Boolean);
   useDirtySignal(edit, open, dirty);
   const startEdit = () => edit.open(id, () => {
-    setGuidance(profile.guidance ?? "");
+    setGuidance(profile.guidance);
     setAssignableTo(profile.assignable_to ?? []);
     setAllowedWorkspaces(profile.allowed_workspaces ?? []);
     setMerge(profile.merge ?? "");
@@ -1505,7 +1505,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
       await api(`/api/profiles/${encodeURIComponent(profile.name)}`, { ...body, ...confirm }, "PATCH");
     }, "updated", profile.name);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, profile.name)), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "guidance", kind: profile.guidance ? "text" : "unset", value: profile.guidance ?? "", unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: startEdit }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "var(--text-sm)" } }, profile.name)), !open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "guidance", kind: profile.guidance ? "text" : "unset", value: profile.guidance, unsetLabel: "\u2014" }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "assignable to",

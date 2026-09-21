@@ -341,12 +341,12 @@ interface SettingsOption {
 
 function agentDraftOf(agent: SettingsAgent): AgentDraft {
   return {
-    icon: agent.icon ?? '', description: agent.description ?? '',
-    systemPrompt: agent.systemPrompt ?? '', authority: agent.authority ?? '',
-    provider: agent.provider ?? '',
-    tier: agent.tier ?? '', advisor: agent.advisor === true,
+    icon: agent.icon ?? '', description: agent.description,
+    systemPrompt: agent.systemPrompt, authority: agent.authority,
+    provider: agent.provider,
+    tier: agent.tier ?? '', advisor: agent.advisor,
     // GET /api/agents already returns skills (ADR 0025)
-    skills: agent.skills ?? [],
+    skills: agent.skills,
   };
 }
 
@@ -495,18 +495,18 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, hostSkills, ho
       )}
       {!open && (
         <React.Fragment>
-          <FieldRow label="description" kind={agent.description ? 'text' : 'unset'} value={agent.description ?? ''} unsetLabel="—" />
-          <FieldRow label="specialty" kind={agent.systemPrompt ? 'text' : 'unset'} value={agent.systemPrompt ?? ''}
+          <FieldRow label="description" kind={agent.description ? 'text' : 'unset'} value={agent.description} unsetLabel="—" />
+          <FieldRow label="specialty" kind={agent.systemPrompt ? 'text' : 'unset'} value={agent.systemPrompt}
             unsetLabel="no specialty — worker protocol only" />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <FieldRow label="authority" kind={agent.authority ? 'mono' : 'unset'} value={agent.authority ?? ''} unsetLabel="—" />
-            <FieldRow label="provider" kind={agent.provider ? 'mono' : 'unset'} value={agent.provider ?? ''} unsetLabel="—" />
+            <FieldRow label="authority" kind={agent.authority ? 'mono' : 'unset'} value={agent.authority} unsetLabel="—" />
+            <FieldRow label="provider" kind={agent.provider ? 'mono' : 'unset'} value={agent.provider} unsetLabel="—" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <FieldRow label="default tier" kind={agent.tier ? 'mono' : 'unset'} value={agent.tier ?? ''} unsetLabel="board default" />
             <FieldRow label="advisor" kind={agent.advisor ? 'mono' : 'unset'} value={agent.advisor ? 'yes' : ''} unsetLabel="no advisor" />
           </div>
-          <FieldRow label="skills" kind={(agent.skills ?? []).length ? 'tags' : 'unset'} tags={agent.skills ?? []}
+          <FieldRow label="skills" kind={agent.skills.length ? 'tags' : 'unset'} tags={agent.skills}
             scheme="skills" wildcardHint="every skill" unsetLabel="no skills allowed" />
         </React.Fragment>
       )}
@@ -968,7 +968,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const id = `profile:${profile.name}`;
   const open = edit.isOpen(id);
-  const [guidance, setGuidance] = React.useState(profile.guidance ?? '');
+  const [guidance, setGuidance] = React.useState(profile.guidance);
   const [assignableTo, setAssignableTo] = React.useState(profile.assignable_to ?? []);
   const [allowedWorkspaces, setAllowedWorkspaces] = React.useState(profile.allowed_workspaces ?? []);
   const [merge, setMerge] = React.useState(profile.merge ?? '');
@@ -978,7 +978,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   // (ADR 0086 決定4) — one source for the dirty flag and for what travels, so
   // an untouched value can never sneak into the danger judgment.
   const changed = {
-    guidance: guidance !== (profile.guidance ?? ''),
+    guidance: guidance !== profile.guidance,
     assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
     allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
     merge: (merge || '') !== (profile.merge ?? ''),
@@ -987,7 +987,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   useDirtySignal(edit, open, dirty);
 
   const startEdit = () => edit.open(id, () => {
-    setGuidance(profile.guidance ?? '');
+    setGuidance(profile.guidance);
     setAssignableTo(profile.assignable_to ?? []);
     setAllowedWorkspaces(profile.allowed_workspaces ?? []);
     setMerge(profile.merge ?? '');
@@ -1009,7 +1009,7 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
       </RecordCardHead>
       {!open && (
         <React.Fragment>
-          <FieldRow label="guidance" kind={profile.guidance ? 'text' : 'unset'} value={profile.guidance ?? ''} unsetLabel="—" />
+          <FieldRow label="guidance" kind={profile.guidance ? 'text' : 'unset'} value={profile.guidance} unsetLabel="—" />
           <FieldRow label="assignable to" kind={(profile.assignable_to ?? []).length ? 'tags' : 'unset'}
             tags={profile.assignable_to ?? []} agentIcons={agentIcons} wildcardHint="any agent"
             unsetLabel="nobody — this authority can't be delegated" />
