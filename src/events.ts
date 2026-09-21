@@ -222,10 +222,9 @@ export type EventPayload =
       harness: "claude-code" | "codex";
       cli_version: string;
     }
-  // issue #21: a workspace already needs-human failed the tree rule again
-  // before its open Confirmation question was answered — recorded on that
-  // same question rather than opening a second one (CONTEXT.md's Quarantine:
-  // "1 workspace につき確認は最大1枚")
+  // ADR 0137: a quarantine key that already has an open Confirmation question
+  // fired again — recorded on that same question rather than opening a second
+  // one (CONTEXT.md's Quarantine: 1資源につき確認は最大1枚)
   | { kind: "quarantine_refired"; cause: string }
   // ADR 0137 決定4: a quarantine Confirmation question's answer passed its
   // kind's check and was accepted — pickup resumes for what that kind stops

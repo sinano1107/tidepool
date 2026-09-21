@@ -60,6 +60,7 @@ describe.each(QUARANTINES.map((row) => row.kind))("%s の確認型 question へ�
     await q.answer({ [kind]: async (value: string | null) => { checked.push(value); } });
 
     expect(checked).toEqual(["x"]);
+    expect(openQuarantineQuestion(q.db, kind, "x")).toBeUndefined();
     expect(listEvents(q.db, q.question.id).at(-1)?.payload).toEqual({
       kind: "quarantine_released",
       quarantine: kind,
