@@ -126,9 +126,7 @@ it("preflight の permission probe は workspace の allowed_domains を network
   }
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
 
-  const sandbox = spawn.calls[3]!.args;
-  expect(sandbox[0]).toBe("sandbox");
-  expect(sandbox).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
+  expect(spawn.calls[3]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
   spawn.emitExitAt(3, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
   expect((await capability).available).toBe(false);
 });

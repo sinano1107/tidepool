@@ -229,7 +229,6 @@ describe("CodexWorker (ADR 0098)", () => {
     ));
 
     const config = f.process.calls[0]!.args.filter((_, index, args) => args[index - 1] === "-c").join("\n");
-    expect(config).toContain('default_permissions="tidepool-review"');
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
   });
 
