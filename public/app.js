@@ -2840,7 +2840,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     risk: !!t.risk_flag,
     blocked: t.status === "blocked",
     // 資源単位の停止だけが行に現れる — workspace / agent の quarantine と
-    // Provider / model の throttle(ADR 0068 決定4)。盤面全体の停止はスロット行が1回で言う
+    // Provider / model の throttle(ADR 0068 決定4 / ADR 0098 決定6)。盤面全体の停止はスロット行が1回で言う
     skipped: t.status === "skipped",
     frontInserted: RECENT_FRONTS.has(t.id),
     flash: RECENT_FRONTS.has(t.id)

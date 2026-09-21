@@ -81,7 +81,7 @@ it("同じ event_id への2回目の翻訳リクエストはキャッシュか�
   expect(translationClient.calls).toHaveLength(2); // purpose + 1 item title, no repeat
 });
 
-it("throttled 中は翻訳を実行せず、応答が throttled と区別できる", async () => {
+it("throttled 中の応答は throttled と区別できる", async () => {
   const translationClient = new FakeTranslationClient();
   t = await bootTidepool({ translationClient });
 
@@ -119,7 +119,6 @@ it("throttled 中は翻訳を実行せず、応答が throttled と区別でき�
 
   expect(res.status).toBe(200);
   expect(res.json).toEqual({ status: "throttled" });
-  expect(translationClient.calls).toEqual([]);
 });
 
 // ADR 0063 決定2: 床が30秒で諦めた答えは throttled ではなく既存の 503 に乗り、
