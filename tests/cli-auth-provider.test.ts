@@ -137,7 +137,7 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
 
     await expect(check()).resolves.toEqual({
       status: "unknown",
-      reason: "probe exceeded its budget cap before authenticating",
+      reason: "probe hit its budget cap before returning an authentication verdict",
     });
   });
 
